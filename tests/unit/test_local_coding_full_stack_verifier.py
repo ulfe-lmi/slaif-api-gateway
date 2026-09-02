@@ -148,12 +148,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155aa_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155ab_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155aa-head"
+    current_head = "current-155ab-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-z-exact-second-request-error-and-decisive-closure.md"
+    report_path = "oap/reports/155-aa-input-item-branch-and-hook-free-acceptance.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -163,7 +163,7 @@ def test_155aa_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-aa-input-item-branch-and-hook-free-acceptance.md"
+            return "oap/active\noap/orders/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -195,14 +195,14 @@ def test_155aa_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155aa_topology_anchors_are_the_155z_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "c8dff50ea60d4e4f515d970751508e9630455eda"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "65d20cf5d9ed58db95847f8f60f6a122dc3ec77f"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "d5730b1d981562585a0951e4b490444eb7b0f9f0"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-z-exact-second-request-error-and-decisive-closure.md"
+def test_155ab_topology_anchors_are_the_155aa_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "9b99c0c52e2786598efba23767aa2635ffde080a"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "d4fbb42447409d7e7bca0843a8a2b70008c957f9"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "21a96484847cdef769df1dced7c39c037cad811e"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-aa-input-item-branch-and-hook-free-acceptance.md"
 
 
-def test_155aa_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155ab_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
@@ -1409,7 +1409,160 @@ def test_input_item_error_projection_is_closed_over_parameter_shapes(
         "index_in_range",
         "selected_item_object",
         "rejected_field_present",
+        "reasoning_item_type_is_reasoning",
+        "reasoning_id_state",
+        "reasoning_content_state",
+        "reasoning_summary_state",
+        "reasoning_encrypted_content_state",
+        "reasoning_unexpected_semantic_fields_present",
+        "reasoning_exact_allowed_key_set_match",
+        "reasoning_exactly_one_candidate_placeholder",
+        "reasoning_placeholder_precedes_function_pair",
+        "exact_empty_reasoning_placeholder",
     }
+
+
+def test_reasoning_placeholder_positive_is_value_free_and_pair_bound() -> None:
+    pair = [{"type": "function_call"}, {"type": "function_call_output"}]
+    for identifier in ("absent", "null"):
+        placeholder: dict[str, object] = {
+            "type": "reasoning",
+            "content": [],
+            "summary": [],
+            "encrypted_content": None,
+        }
+        if identifier == "null":
+            placeholder["id"] = None
+        body = json.dumps({"input": [placeholder, *pair]}).encode()
+        projection = verifier._safe_input_item_error_projection("input[0]", body)
+        assert projection["reasoning_item_type_is_reasoning"] is True
+        assert projection["reasoning_id_state"] == identifier
+        assert projection["reasoning_content_state"] == "empty_array"
+        assert projection["reasoning_summary_state"] == "empty_array"
+        assert projection["reasoning_encrypted_content_state"] == "null"
+        assert projection["reasoning_unexpected_semantic_fields_present"] is False
+        assert projection["reasoning_exact_allowed_key_set_match"] is True
+        assert projection["reasoning_exactly_one_candidate_placeholder"] is True
+        assert projection["reasoning_placeholder_precedes_function_pair"] is True
+        assert projection["exact_empty_reasoning_placeholder"] is True
+        assert "reasoning-id-canary" not in json.dumps(projection)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "state"),
+    [
+        ("content", ["nonempty-canary"], "nonempty_array"),
+        ("content", {"unexpected": "private-state-canary"}, "malformed"),
+        ("content", None, "malformed"),
+        ("summary", ["nonempty-canary"], "nonempty_array"),
+        ("summary", {"unexpected": "private-state-canary"}, "malformed"),
+        ("summary", None, "malformed"),
+        ("encrypted_content", "opaque-canary", "non_null"),
+        ("encrypted_content", {"unexpected": "private-state-canary"}, "malformed"),
+    ],
+)
+def test_reasoning_placeholder_states_fail_closed_without_values(
+    field: str, value: object, state: str
+) -> None:
+    placeholder: dict[str, object] = {
+        "type": "reasoning",
+        "content": [],
+        "summary": [],
+        "encrypted_content": None,
+    }
+    placeholder[field] = value
+    body = json.dumps(
+        {"input": [placeholder, {"type": "function_call"}, {"type": "function_call_output"}]}
+    ).encode()
+    projection = verifier._safe_input_item_error_projection("input[0]", body)
+    assert projection[f"reasoning_{field}_state"] == state
+    assert projection["exact_empty_reasoning_placeholder"] is False
+    rendered = json.dumps(projection, sort_keys=True)
+    assert "private-state-canary" not in rendered
+    assert "nonempty-canary" not in rendered
+    assert "opaque-canary" not in rendered
+
+
+def test_reasoning_placeholder_records_absent_and_invalid_state_classes() -> None:
+    base = {"type": "reasoning", "content": [], "summary": []}
+    cases = [
+        (base, "absent", "empty_array", "empty_array", "absent", False),
+        ({"type": "reasoning", "encrypted_content": None}, "absent", "absent", "absent", "null", False),
+        ({**base, "encrypted_content": None, "id": "id-canary"}, "other", "empty_array", "empty_array", "null", True),
+        ({"type": "message", "content": [], "summary": [], "encrypted_content": None}, "absent", "empty_array", "empty_array", "null", True),
+        ({"type": "reasoning", "content": [], "summary": [], "encrypted_content": None, "extra": "private-canary"}, "absent", "empty_array", "empty_array", "null", False),
+    ]
+    for item, id_state, content_state, summary_state, encrypted_state, exact_keys in cases:
+        body = json.dumps(
+            {"input": [item, {"type": "function_call"}, {"type": "function_call_output"}]}
+        ).encode()
+        projection = verifier._safe_input_item_error_projection("input[0]", body)
+        assert projection["reasoning_id_state"] == id_state
+        assert projection["reasoning_content_state"] == content_state
+        assert projection["reasoning_summary_state"] == summary_state
+        assert projection["reasoning_encrypted_content_state"] == encrypted_state
+        assert projection["reasoning_exact_allowed_key_set_match"] is exact_keys
+        assert projection["exact_empty_reasoning_placeholder"] is False
+        assert "id-canary" not in json.dumps(projection)
+        assert "private-canary" not in json.dumps(projection)
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [
+            {"type": "reasoning", "content": [], "summary": [], "encrypted_content": None, "status": "in_progress"},
+            {"type": "function_call"},
+            {"type": "function_call_output"},
+        ],
+        [
+            {"type": "message", "content": [], "summary": [], "encrypted_content": None},
+            {"type": "function_call"},
+            {"type": "function_call_output"},
+        ],
+        [
+            {"type": "reasoning", "content": [], "summary": [], "encrypted_content": None},
+            {"type": "function_call_output"},
+            {"type": "function_call"},
+        ],
+        [
+            {"type": "reasoning", "content": [], "summary": [], "encrypted_content": None},
+            {"type": "function_call"},
+            {"type": "function_call_output"},
+            {"type": "function_call"},
+            {"type": "function_call_output"},
+        ],
+        [
+            {"type": "reasoning", "content": [], "summary": [], "encrypted_content": None},
+            {"type": "custom_tool_call"},
+            {"type": "custom_tool_call_output"},
+        ],
+        [
+            {"type": "reasoning", "content": [], "summary": [], "encrypted_content": None},
+            {"type": "reasoning", "content": [], "summary": [], "encrypted_content": None},
+            {"type": "function_call"},
+            {"type": "function_call_output"},
+        ],
+    ],
+)
+def test_reasoning_placeholder_requires_one_exact_candidate_and_function_pair(
+    items: list[dict[str, object]],
+) -> None:
+    projection = verifier._safe_input_item_error_projection(
+        "input[0]", json.dumps({"input": items}).encode()
+    )
+    assert projection["exact_empty_reasoning_placeholder"] is False
+
+
+def test_reasoning_placeholder_rejects_missing_and_malformed_input_selection() -> None:
+    for param, body in (
+        ("input[0]", b'{"input":[null]}'),
+        ("input[999]", b'{"input":[{"type":"reasoning"}]}'),
+        ("input[x]", b'{"input":[{"type":"reasoning"}]}'),
+        ("input[0].content.text", b'{"input":[{"type":"reasoning"}]}'),
+    ):
+        projection = verifier._safe_input_item_error_projection(param, body)
+        assert projection["exact_empty_reasoning_placeholder"] is False
 
 
 def test_input_item_error_summary_is_ordinal_and_rejects_duplicate_fields() -> None:
@@ -1449,6 +1602,10 @@ def test_input_item_error_summary_is_ordinal_and_rejects_duplicate_fields() -> N
     ]
     with pytest.raises(verifier.VerificationError, match="qualification_summary_invalid"):
         verifier._sanitize_preclassification_summary(unaligned)
+    invalid_state = json.loads(json.dumps(summary))
+    invalid_state["gateway_input_item_error_projections"][1]["reasoning_id_state"] = "private"
+    with pytest.raises(verifier.VerificationError, match="qualification_summary_invalid"):
+        verifier._sanitize_preclassification_summary(invalid_state)
 
 
 @pytest.mark.parametrize(

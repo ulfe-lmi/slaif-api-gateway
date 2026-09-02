@@ -13,7 +13,7 @@ ORDERS_DIR = OAP_ROOT / "orders"
 ACTIVE_FILE = OAP_ROOT / "active"
 AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 PROTOCOL_FILE = REPO_ROOT / "OAP-COMMUNICATION-coding-agent.md"
-_ACTIVE_IDENTIFIER_RE = re.compile(rb"(?:[0-9]{3}-[a-z]|155-aa)\n?")
+_ACTIVE_IDENTIFIER_RE = re.compile(rb"(?:[0-9]{3}-[a-z]|155-aa|155-ab)\n?")
 
 
 def _active_identifier() -> str:
@@ -27,13 +27,14 @@ def _active_identifier() -> str:
     [
         (b"001-a\n", True),
         (b"155-aa\n", True),
-        (b"155-ab\n", False),
+        (b"155-ab\n", True),
+        (b"155-ac\n", False),
         (b"156-aa\n", False),
         (b"155-abc\n", False),
-        (b"155-aa-extra\n", False),
+        (b"155-ab-extra\n", False),
     ],
 )
-def test_active_identifier_has_only_the_explicit_155aa_exception(
+def test_active_identifier_has_only_the_explicit_155aa_and_155ab_exceptions(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     payload: bytes,
@@ -43,7 +44,7 @@ def test_active_identifier_has_only_the_explicit_155aa_exception(
     active.write_bytes(payload)
     monkeypatch.setattr(sys.modules[__name__], "ACTIVE_FILE", active)
     if accepted:
-        assert _active_identifier() in {"001-a", "155-aa"}
+        assert _active_identifier() in {"001-a", "155-aa", "155-ab"}
     else:
         with pytest.raises(AssertionError):
             _active_identifier()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-aa verifier for exact input-item error branch and closure.
+"""Bounded 155-ab verifier for proven-empty reasoning canonicalization and closure.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -33,10 +33,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "c8dff50ea60d4e4f515d970751508e9630455eda"
-GATEWAY_IMPLEMENTATION_HEAD = "65d20cf5d9ed58db95847f8f60f6a122dc3ec77f"
-GATEWAY_ACTIVATION_HEAD = "d5730b1d981562585a0951e4b490444eb7b0f9f0"
-GATEWAY_REPORT_PATH = "oap/reports/155-z-exact-second-request-error-and-decisive-closure.md"
+GATEWAY_REPORT_HEAD = "9b99c0c52e2786598efba23767aa2635ffde080a"
+GATEWAY_IMPLEMENTATION_HEAD = "d4fbb42447409d7e7bca0843a8a2b70008c957f9"
+GATEWAY_ACTIVATION_HEAD = "21a96484847cdef769df1dced7c39c037cad811e"
+GATEWAY_REPORT_PATH = "oap/reports/155-aa-input-item-branch-and-hook-free-acceptance.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -52,8 +52,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-aa-input-item-branch-and-hook-free-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155aa_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155ab_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -253,7 +253,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-aa-input-item-branch-and-hook-free-acceptance.md",
+        "oap/orders/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -304,11 +304,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-aa-input-item-branch-and-hook-free-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-aa\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ab\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1208,17 +1208,7 @@ def _safe_summary_field_types(value: object) -> list[dict[str, str]]:
 
 def _safe_summary_input_item_error_projection(value: object) -> dict[str, object]:
     """Rebuild one input-error observation from a fixed, value-free schema."""
-    default = {
-        "input_item_error_shape_class": "other",
-        "item_json_type_class": "other",
-        "item_type_class": "other",
-        "rejected_item_fields": [],
-        "rejected_field_name_class": "other",
-        "index_syntactically_bounded": False,
-        "index_in_range": False,
-        "selected_item_object": False,
-        "rejected_field_present": False,
-    }
+    default = _empty_input_item_error_projection()
     if not isinstance(value, dict):
         return default
     shape = value.get("input_item_error_shape_class")
@@ -1270,8 +1260,22 @@ def _safe_summary_input_item_error_projection(value: object) -> dict[str, object
         "index_in_range",
         "selected_item_object",
         "rejected_field_present",
+        "reasoning_item_type_is_reasoning",
+        "reasoning_unexpected_semantic_fields_present",
+        "reasoning_exact_allowed_key_set_match",
+        "reasoning_exactly_one_candidate_placeholder",
+        "reasoning_placeholder_precedes_function_pair",
+        "exact_empty_reasoning_placeholder",
     ):
         default[name] = value.get(name) is True
+    for name, allowed in (
+        ("reasoning_id_state", _SAFE_REASONING_ID_STATES),
+        ("reasoning_content_state", _SAFE_REASONING_ARRAY_STATES),
+        ("reasoning_summary_state", _SAFE_REASONING_ARRAY_STATES),
+        ("reasoning_encrypted_content_state", _SAFE_REASONING_ENCRYPTED_STATES),
+    ):
+        candidate = value.get(name)
+        default[name] = candidate if isinstance(candidate, str) and candidate in allowed else "other"
     return default
 
 
@@ -1589,6 +1593,16 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         "index_in_range",
         "selected_item_object",
         "rejected_field_present",
+        "reasoning_item_type_is_reasoning",
+        "reasoning_id_state",
+        "reasoning_content_state",
+        "reasoning_summary_state",
+        "reasoning_encrypted_content_state",
+        "reasoning_unexpected_semantic_fields_present",
+        "reasoning_exact_allowed_key_set_match",
+        "reasoning_exactly_one_candidate_placeholder",
+        "reasoning_placeholder_precedes_function_pair",
+        "exact_empty_reasoning_placeholder",
     }
     for projection in input_error_projections:
         if not isinstance(projection, dict) or set(projection) != expected_input_error_keys:
@@ -1599,6 +1613,10 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
             or projection["item_type_class"] not in _SAFE_INPUT_ITEM_TYPES
             or projection["rejected_field_name_class"] not in _SAFE_INPUT_ITEM_FIELDS
             | {"none", "other"}
+            or projection["reasoning_id_state"] not in _SAFE_REASONING_ID_STATES
+            or projection["reasoning_content_state"] not in _SAFE_REASONING_ARRAY_STATES
+            or projection["reasoning_summary_state"] not in _SAFE_REASONING_ARRAY_STATES
+            or projection["reasoning_encrypted_content_state"] not in _SAFE_REASONING_ENCRYPTED_STATES
             or any(
                 type(projection[name]) is not bool
                 for name in (
@@ -1606,6 +1624,12 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
                     "index_in_range",
                     "selected_item_object",
                     "rejected_field_present",
+                    "reasoning_item_type_is_reasoning",
+                    "reasoning_unexpected_semantic_fields_present",
+                    "reasoning_exact_allowed_key_set_match",
+                    "reasoning_exactly_one_candidate_placeholder",
+                    "reasoning_placeholder_precedes_function_pair",
+                    "exact_empty_reasoning_placeholder",
                 )
             )
         ):
@@ -1868,6 +1892,17 @@ _SAFE_INPUT_ITEM_FIELDS = frozenset(
     }
 )
 _SAFE_INPUT_ERROR_SHAPES = frozenset({"item", "field", "other"})
+_SAFE_REASONING_PLACEHOLDER_BASE_FIELDS = frozenset(
+    {"type", "content", "summary", "encrypted_content"}
+)
+_SAFE_REASONING_PLACEHOLDER_FIELDS = _SAFE_REASONING_PLACEHOLDER_BASE_FIELDS | {"id"}
+_SAFE_REASONING_ID_STATES = frozenset({"absent", "null", "other"})
+_SAFE_REASONING_ARRAY_STATES = frozenset(
+    {"empty_array", "nonempty_array", "absent", "malformed"}
+)
+_SAFE_REASONING_ENCRYPTED_STATES = frozenset(
+    {"null", "absent", "non_null", "malformed"}
+)
 
 
 def _safe_json_type_class(value: object) -> str:
@@ -1915,7 +1950,118 @@ def _empty_input_item_error_projection() -> dict[str, object]:
         "index_in_range": False,
         "selected_item_object": False,
         "rejected_field_present": False,
+        "reasoning_item_type_is_reasoning": False,
+        "reasoning_id_state": "other",
+        "reasoning_content_state": "malformed",
+        "reasoning_summary_state": "malformed",
+        "reasoning_encrypted_content_state": "malformed",
+        "reasoning_unexpected_semantic_fields_present": False,
+        "reasoning_exact_allowed_key_set_match": False,
+        "reasoning_exactly_one_candidate_placeholder": False,
+        "reasoning_placeholder_precedes_function_pair": False,
+        "exact_empty_reasoning_placeholder": False,
     }
+
+
+def _safe_reasoning_array_state(item: dict[str, object], field: str) -> str:
+    if field not in item:
+        return "absent"
+    value = item[field]
+    if not isinstance(value, list):
+        return "malformed"
+    return "empty_array" if not value else "nonempty_array"
+
+
+def _safe_reasoning_placeholder_facts(item: object) -> dict[str, object]:
+    if not isinstance(item, dict):
+        return {
+            "reasoning_item_type_is_reasoning": False,
+            "reasoning_id_state": "other",
+            "reasoning_content_state": "malformed",
+            "reasoning_summary_state": "malformed",
+            "reasoning_encrypted_content_state": "malformed",
+            "reasoning_unexpected_semantic_fields_present": False,
+            "reasoning_exact_allowed_key_set_match": False,
+            "exact_empty_reasoning_placeholder": False,
+        }
+    item_type_is_reasoning = item.get("type") == "reasoning"
+    if "id" not in item:
+        id_state = "absent"
+    elif item.get("id") is None:
+        id_state = "null"
+    else:
+        id_state = "other"
+    if "encrypted_content" not in item:
+        encrypted_state = "absent"
+    elif item.get("encrypted_content") is None:
+        encrypted_state = "null"
+    elif isinstance(item.get("encrypted_content"), str):
+        encrypted_state = "non_null"
+    else:
+        encrypted_state = "malformed"
+    unexpected = bool(set(item) - _SAFE_REASONING_PLACEHOLDER_FIELDS)
+    exact_keys = set(item) in {
+        _SAFE_REASONING_PLACEHOLDER_BASE_FIELDS,
+        _SAFE_REASONING_PLACEHOLDER_FIELDS,
+    }
+    exact = (
+        item_type_is_reasoning
+        and id_state in {"absent", "null"}
+        and _safe_reasoning_array_state(item, "content") == "empty_array"
+        and _safe_reasoning_array_state(item, "summary") == "empty_array"
+        and encrypted_state == "null"
+        and exact_keys
+    )
+    return {
+        "reasoning_item_type_is_reasoning": item_type_is_reasoning,
+        "reasoning_id_state": id_state,
+        "reasoning_content_state": _safe_reasoning_array_state(item, "content"),
+        "reasoning_summary_state": _safe_reasoning_array_state(item, "summary"),
+        "reasoning_encrypted_content_state": encrypted_state,
+        "reasoning_unexpected_semantic_fields_present": unexpected,
+        "reasoning_exact_allowed_key_set_match": exact_keys,
+        "exact_empty_reasoning_placeholder": exact,
+    }
+
+
+def _reasoning_placeholder_candidate_indexes(items: object) -> list[int]:
+    if not isinstance(items, list):
+        return []
+    return [
+        index
+        for index, item in enumerate(items)
+        if _safe_reasoning_placeholder_facts(item)["exact_empty_reasoning_placeholder"]
+    ]
+
+
+def _reasoning_adjacent_function_pair_indexes(items: object) -> list[int]:
+    if not isinstance(items, list):
+        return []
+    return [
+        index
+        for index in range(len(items) - 1)
+        if (
+            isinstance(items[index], dict)
+            and items[index].get("type") == "function_call"
+            and isinstance(items[index + 1], dict)
+            and items[index + 1].get("type") == "function_call_output"
+        )
+    ]
+
+
+def _reasoning_adjacent_custom_pair_indexes(items: object) -> list[int]:
+    if not isinstance(items, list):
+        return []
+    return [
+        index
+        for index in range(len(items) - 1)
+        if (
+            isinstance(items[index], dict)
+            and items[index].get("type") == "custom_tool_call"
+            and isinstance(items[index + 1], dict)
+            and items[index + 1].get("type") == "custom_tool_call_output"
+        )
+    ]
 
 
 def _safe_input_item_error_projection(
@@ -1955,6 +2101,7 @@ def _safe_input_item_error_projection(
         selected = items[index]
     result["selected_item_object"] = isinstance(selected, dict)
     result["item_json_type_class"] = _safe_json_type_class(selected)
+    selected_reasoning_facts = _empty_input_item_error_projection()
     if isinstance(selected, dict):
         item_type = selected.get("type")
         result["item_type_class"] = (
@@ -1984,6 +2131,26 @@ def _safe_input_item_error_projection(
             result["rejected_field_present"] = field_name in selected
         else:
             result["rejected_field_name_class"] = "none"
+        reasoning_facts = _safe_reasoning_placeholder_facts(selected)
+        result.update(reasoning_facts)
+        selected_reasoning_facts = reasoning_facts
+    candidate_indexes = _reasoning_placeholder_candidate_indexes(items)
+    pair_indexes = _reasoning_adjacent_function_pair_indexes(items)
+    custom_pair_indexes = _reasoning_adjacent_custom_pair_indexes(items)
+    result["reasoning_exactly_one_candidate_placeholder"] = len(candidate_indexes) == 1
+    result["reasoning_placeholder_precedes_function_pair"] = (
+        len(candidate_indexes) == 1
+        and len(pair_indexes) == 1
+        and not custom_pair_indexes
+        and candidate_indexes[0] + 1 == pair_indexes[0]
+    )
+    result["exact_empty_reasoning_placeholder"] = (
+        selected_reasoning_facts["exact_empty_reasoning_placeholder"] is True
+        and len(candidate_indexes) == 1
+        and len(pair_indexes) == 1
+        and not custom_pair_indexes
+        and candidate_indexes[0] + 1 == pair_indexes[0]
+    )
     return result
 
 
@@ -4865,14 +5032,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155aa-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155ab-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155aa-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ab-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -4891,7 +5058,7 @@ def _start_fake_qwen(
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155aa-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ab-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -7422,7 +7589,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155aa-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ab-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7530,7 +7697,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155aa-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ab-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7689,7 +7856,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155aa-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ab-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -7791,7 +7958,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-            with tempfile.TemporaryDirectory(prefix="slaif-155aa-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="slaif-155ab-", dir="/tmp") as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
                 stage = "local_config_preflight"
@@ -7865,7 +8032,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155aa-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155ab-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
