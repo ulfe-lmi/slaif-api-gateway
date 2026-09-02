@@ -7652,6 +7652,16 @@ def _run_composed_codex_tool_roundtrip(
                     _safe_gateway_error_param_class(value)
                     for value in gateway_status.get("error_param_classes", [])
                 ],
+                "gateway_error_param_field_classes": [
+                    value
+                    if value in _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS
+                    else "other"
+                    for value in gateway_status.get("error_param_field_classes", [])
+                ],
+                "gateway_input_item_error_projections": [
+                    _safe_summary_input_item_error_projection(value)
+                    for value in gateway_status.get("input_item_error_projections", [])
+                ],
                 "accounting": {
                     "reservation_finalized": accounting_statuses.get(
                         "reservation_finalized", 0
