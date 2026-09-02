@@ -217,10 +217,10 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155ae_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155af_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155ae-head"
+    current_head = "current-155af-head"
     local_head = verifier.LOCAL_REPORT_HEAD
     report_path = "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
 
@@ -232,7 +232,7 @@ def test_155ae_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-ae-codex-0149-idless-visible-reasoning-and-final-acceptance.md"
+            return "oap/active\noap/orders/155-af-null-encrypted-replay-detector-and-final-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -264,14 +264,14 @@ def test_155ae_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155ae_topology_anchors_are_the_155ad_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "22a15fd65c24f655448d1547bdb275634483c8e9"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "407f75fe38643c0cfe8cf30a615449b91cf614ec"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "1420934e6d7df67f930bdc3cd6a8e1ffa32b6701"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
+def test_155af_topology_anchors_are_the_155ae_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "1a7c8c51a01d4abcb8b8529e1b9ec272baaa20d6"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "956ec1e08b5f951f482ae12d0bbd265219bcadef"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "d5020665b92c320b8a1634998604c3ee133ae176"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ae-codex-0149-idless-visible-reasoning-and-final-acceptance.md"
 
 
-def test_155ae_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155af_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
@@ -1434,6 +1434,9 @@ def test_summary_preserves_every_known_codex_failure_category(
 @pytest.mark.parametrize(
     ("reservations", "ledgers", "turn_count", "expected"),
     [
+        ([], [], 0, True),
+        (["finalized"], ["finalized"], 1, True),
+        (["finalized", "finalized"], ["finalized", "finalized"], 2, True),
         (["released"], ["failed"], 1, True),
         (["finalized", "released"], ["finalized", "failed"], 2, True),
         (["finalized"], ["estimated"], 1, True),
@@ -1442,6 +1445,8 @@ def test_summary_preserves_every_known_codex_failure_category(
         (["finalized"], ["failed"], 1, False),
         (["finalized", "released"], ["failed", "failed"], 2, False),
         (["pending"], ["pending"], 1, False),
+        (["finalized"], ["finalized"], 2, False),
+        (["released", "finalized"], ["failed", "finalized"], 2, False),
     ],
 )
 def test_qualification_accounting_accepts_only_coherent_terminal_pairs(

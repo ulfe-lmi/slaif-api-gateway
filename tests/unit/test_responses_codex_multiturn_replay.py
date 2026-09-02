@@ -31,6 +31,7 @@ from slaif_gateway.services.input_token_estimation import canonical_json_bytes
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_replay_request_candidates,
+    responses_codex_encrypted_reasoning_replay_requested,
 )
 
 
@@ -86,6 +87,69 @@ def test_0149_source_contract_fixture_is_canonical_and_pinned() -> None:
     )
     assert fixture["contract"]["content_part_types"] == ["reasoning_text", "text"]
     assert fixture["contract"]["encrypted_content"]["idless_allowed"] is False
+
+
+def test_0149_null_encrypted_presence_no_longer_triggers_replay_guard() -> None:
+    item = _visible_reasoning(id_marker="absent")
+    item["summary"] = []
+    item["encrypted_content"] = None
+    body = _body([item])
+
+    assert responses_codex_encrypted_reasoning_replay_requested(body) is False
+    result = _policy_0149(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_encrypted_reasoning_replay=False,
+    )
+    assert result.effective_body["input"][0] == item
+
+
+def test_0149_null_encrypted_reasoning_is_visible_after_detector_fix() -> None:
+    item = _visible_reasoning(id_marker="absent")
+    item["summary"] = []
+    item["encrypted_content"] = None
+    body = _body([item])
+
+    assert responses_codex_encrypted_reasoning_replay_requested(body) is False
+    result = _policy_0149(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_encrypted_reasoning_replay=False,
+    )
+
+    assert result.effective_body["input"][0] == item
+    assert "id" not in result.effective_body["input"][0]
+    assert result.effective_body["input"][0]["encrypted_content"] is None
+
+
+def test_0149_non_null_encrypted_reasoning_still_hits_capability_guard() -> None:
+    item = _visible_reasoning(id_marker="absent")
+    item["encrypted_content"] = "opaque-ciphertext"
+    body = _body([item])
+
+    assert responses_codex_encrypted_reasoning_replay_requested(body) is True
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _policy_0149(Settings()).apply(
+            body,
+            allow_codex_request_envelope=True,
+            allow_codex_encrypted_reasoning_replay=False,
+        )
+
+    assert exc_info.value.error_code == "responses_codex_encrypted_reasoning_replay_not_allowed"
+
+
+def test_0149_non_null_malformed_encrypted_reasoning_stays_strict_with_capability() -> None:
+    item = _visible_reasoning(id_marker="absent")
+    item["encrypted_content"] = 42
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _policy_0149(Settings()).apply(
+            _body([item]),
+            allow_codex_request_envelope=True,
+            allow_codex_encrypted_reasoning_replay=True,
+        )
+
+    assert exc_info.value.error_code == "responses_codex_encrypted_reasoning_replay_invalid"
 
 
 @pytest.mark.parametrize("id_marker", ["absent", "null", "rs_visible"])

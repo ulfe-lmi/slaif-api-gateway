@@ -1498,7 +1498,7 @@ class ResponsesRequestPolicy:
             )
         item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
         encrypted_content = item.get("encrypted_content")
-        if encrypted_content is not None and (not isinstance(encrypted_content, str) or not encrypted_content):
+        if not isinstance(encrypted_content, str) or not encrypted_content:
             _raise(
                 f"{param}.encrypted_content",
                 "responses_codex_encrypted_reasoning_replay_invalid",
@@ -4130,6 +4130,7 @@ def responses_codex_encrypted_reasoning_replay_requested(body: Mapping[str, Any]
         isinstance(item, Mapping)
         and item.get("type") == "reasoning"
         and "encrypted_content" in item
+        and item.get("encrypted_content") is not None
         for item in input_value
     )
 
