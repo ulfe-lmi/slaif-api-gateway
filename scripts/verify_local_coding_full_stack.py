@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-ac verifier for pinned executable provenance and stabilization.
+"""Bounded 155-ad verifier for Local rejection-stage and tool-choice diagnosis.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -8,6 +8,7 @@ task-local evidence tool, not a deployment or production runner.
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import base64
 import hashlib
@@ -34,10 +35,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "a0701a3db477e8c34d7c4db981a5216aa7d7ac0b"
-GATEWAY_IMPLEMENTATION_HEAD = "1664a53a6dc6ce36a0cb05420901d352c08dabeb"
-GATEWAY_ACTIVATION_HEAD = "17993c2cba0bc225b89abffa8a78b6900f57862c"
-GATEWAY_REPORT_PATH = "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
+GATEWAY_REPORT_HEAD = "1708eea898d6f1403518dd78897a119366a62652"
+GATEWAY_IMPLEMENTATION_HEAD = "b32c50b92cccba229b37a9abb642611f3f8dc588"
+GATEWAY_ACTIVATION_HEAD = "b0441d943ca858681615244408a1178ebdb67a3d"
+GATEWAY_REPORT_PATH = "oap/reports/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -55,8 +56,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
-TASK_DB = "slaif_gateway_oap_155ac_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
+TASK_DB = "slaif_gateway_oap_155ad_local_diagnostic"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -80,6 +81,119 @@ QUALIFICATION_DECLARED_TOOL_CLASSES = frozenset({"none", "bounded", "many"})
 QUALIFICATION_WEB_SEARCH_CLASSES = frozenset({"none", "bounded", "other"})
 QUALIFICATION_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 QUALIFICATION_EVENT_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
+
+# This is a verifier-owned projection of the immutable Local 005-m response
+# vocabulary.  The values are safe only because they are closed and source-
+# checked below; arbitrary Local error text never crosses this boundary.
+_LOCAL_FIXED_ERROR_CODE_TO_STAGE = {
+    "invalid_service_authorization": "service_auth",
+    "service_authorization_denied": "service_auth",
+    "service_auth_unavailable": "service_auth",
+    "signed_identity_headers_invalid": "signed_identity",
+    "signed_identity_field_invalid": "signed_identity",
+    "signed_identity_path_invalid": "signed_identity",
+    "signed_identity_method_invalid": "signed_identity",
+    "signed_identity_version_invalid": "signed_identity",
+    "signed_identity_timestamp_invalid": "signed_identity",
+    "signed_identity_nonce_invalid": "signed_identity",
+    "signed_identity_signature_invalid": "signed_identity",
+    "signed_identity_clock_unavailable": "signed_identity",
+    "signed_identity_timestamp_out_of_window": "signed_identity",
+    "signed_identity_secret_unavailable": "signed_identity",
+    "signed_identity_signature_mismatch": "signed_identity",
+    "signed_identity_replayed": "signed_identity",
+    "signed_identity_route_mismatch": "signed_identity",
+    "metrics_disabled": "json_route_image",
+    "unsupported_endpoint": "json_route_image",
+    "request_too_large": "json_route_image",
+    "json_nesting_too_deep": "json_route_image",
+    "invalid_json": "json_route_image",
+    "missing_model": "json_route_image",
+    "unknown_route": "json_route_image",
+    "ambiguous_image_shape": "json_route_image",
+    "image_limit_exceeded": "json_route_image",
+    "image_policy_failed": "json_route_image",
+    "responses_tool_policy_invalid": "tool_policy",
+    "responses_disabled_tool_choice": "tool_policy",
+    "upstream_unavailable": "upstream",
+    "upstream_timeout": "upstream",
+    "upstream_error": "upstream",
+    "upstream_response_too_large": "upstream",
+}
+_LOCAL_CONSTITUTION_INJECTION_SUFFIXES = frozenset(
+    {"unsupported_shape", "malformed_marker", "conflicting_marker", "duplicate_marker", "bounds_exceeded"}
+)
+_LOCAL_ERROR_CODE_CLASSES = frozenset(
+    {
+        "none",
+        "other",
+        *_LOCAL_FIXED_ERROR_CODE_TO_STAGE,
+        *(f"constitution_{suffix}" for suffix in _LOCAL_CONSTITUTION_INJECTION_SUFFIXES),
+    }
+)
+_LOCAL_REJECTION_STAGES = frozenset(
+    {"service_auth", "signed_identity", "json_route_image", "tool_policy", "observation_constitution", "upstream", "other"}
+)
+_LOCAL_BOUNDARY_STATES = frozenset(
+    {"not_reached", "entered", "transformed", "rejected", "succeeded", "unknown"}
+)
+_LOCAL_TOOL_CHOICE_CLASSES = frozenset(
+    {"absent", "automatic_none", "required", "explicit_disabled_search", "explicit_retained_local", "malformed_other"}
+)
+_LOCAL_TOOL_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+_LOCAL_SOURCE_FILES = (
+    "src/slaif_local_coding/app.py",
+    "src/slaif_local_coding/gateway_identity.py",
+    "src/slaif_local_coding/tool_policy.py",
+    "src/slaif_local_coding/constitution/injection.py",
+)
+_LOCAL_SOURCE_CODE_GROUPS = (
+    (
+        "src/slaif_local_coding/app.py",
+        frozenset(_LOCAL_FIXED_ERROR_CODE_TO_STAGE)
+        - {
+            "signed_identity_headers_invalid",
+            "signed_identity_field_invalid",
+            "signed_identity_path_invalid",
+            "signed_identity_method_invalid",
+            "signed_identity_version_invalid",
+            "signed_identity_timestamp_invalid",
+            "signed_identity_nonce_invalid",
+            "signed_identity_signature_invalid",
+            "signed_identity_clock_unavailable",
+            "signed_identity_timestamp_out_of_window",
+            "signed_identity_secret_unavailable",
+            "signed_identity_signature_mismatch",
+            "signed_identity_replayed",
+            "responses_tool_policy_invalid",
+            "responses_disabled_tool_choice",
+        },
+    ),
+    (
+        "src/slaif_local_coding/gateway_identity.py",
+        frozenset(
+            {
+                "signed_identity_headers_invalid",
+                "signed_identity_field_invalid",
+                "signed_identity_path_invalid",
+                "signed_identity_method_invalid",
+                "signed_identity_version_invalid",
+                "signed_identity_timestamp_invalid",
+                "signed_identity_nonce_invalid",
+                "signed_identity_signature_invalid",
+                "signed_identity_clock_unavailable",
+                "signed_identity_timestamp_out_of_window",
+                "signed_identity_secret_unavailable",
+                "signed_identity_signature_mismatch",
+                "signed_identity_replayed",
+            }
+        ),
+    ),
+    (
+        "src/slaif_local_coding/tool_policy.py",
+        frozenset({"responses_tool_policy_invalid", "responses_disabled_tool_choice"}),
+    ),
+)
 
 
 class VerificationError(RuntimeError):
@@ -342,6 +456,150 @@ def _git(*args: str, cwd: Path = REPO_ROOT) -> str:
         raise VerificationError("git_output_invalid") from exc
 
 
+def _local_source_string_literals(relative_path: str) -> set[str]:
+    """Read only source literals needed to pin the Local error vocabulary."""
+    path = LOCAL_ROOT / relative_path
+    try:
+        tree = ast.parse(path.read_bytes(), filename=str(path))
+    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+        raise VerificationError("local_source_contract_invalid") from exc
+    return {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+def _verify_local_error_source_contract() -> None:
+    """Prove the closed Local vocabulary still comes from the pinned source."""
+    literals: set[str] = set()
+    for relative_path in _LOCAL_SOURCE_FILES:
+        literals.update(_local_source_string_literals(relative_path))
+    for relative_path, expected_codes in _LOCAL_SOURCE_CODE_GROUPS:
+        if not expected_codes.issubset(_local_source_string_literals(relative_path)):
+            raise VerificationError("local_source_error_vocabulary_drift")
+    injection_literals = _local_source_string_literals(
+        "src/slaif_local_coding/constitution/injection.py"
+    )
+    if not _LOCAL_CONSTITUTION_INJECTION_SUFFIXES.issubset(injection_literals):
+        raise VerificationError("local_source_constitution_vocabulary_drift")
+
+
+def _safe_local_error_code_class(value: object) -> str:
+    """Return one source-reviewed Local code, never arbitrary provider text."""
+    if not isinstance(value, str):
+        return "other"
+    if value in _LOCAL_FIXED_ERROR_CODE_TO_STAGE:
+        return value
+    if value.startswith("constitution_"):
+        suffix = value.removeprefix("constitution_")
+        if suffix in _LOCAL_CONSTITUTION_INJECTION_SUFFIXES:
+            return value
+    return value if value in {"none", "other"} else "other"
+
+
+def _safe_local_rejection_stage(value: object) -> str:
+    """Map one safe Local code to the immutable Local execution stage."""
+    code = _safe_local_error_code_class(value)
+    if code.startswith("constitution_"):
+        return "observation_constitution"
+    return _LOCAL_FIXED_ERROR_CODE_TO_STAGE.get(code, "other")
+
+
+def _safe_local_error_classes(value: object, response_statuses: object) -> list[str]:
+    """Align Local code classes to response ordinals and totalize malformed input."""
+    statuses = response_statuses if isinstance(response_statuses, list) else []
+    raw = value if isinstance(value, list) else []
+    if len(raw) != len(statuses):
+        raw = [
+            "none" if type(status) is int and status < 400 else "other"
+            for status in statuses
+        ]
+    return [_safe_local_error_code_class(item) for item in raw[:2]]
+
+
+def _safe_local_stage_classes(value: object, response_statuses: object) -> list[str]:
+    statuses = response_statuses if isinstance(response_statuses, list) else []
+    raw = value if isinstance(value, list) else []
+    if len(raw) != len(statuses):
+        raw = [
+            "other" if type(status) is int and status < 400 else "other"
+            for status in statuses
+        ]
+    result = []
+    for item in raw[:2]:
+        stage = item if isinstance(item, str) and item in _LOCAL_REJECTION_STAGES else "other"
+        result.append(stage)
+    return result
+
+
+def _safe_local_boundary_states(value: object) -> dict[str, str]:
+    """Rebuild only the four fixed Local boundary states."""
+    names = ("tool_policy", "observation", "constitution", "upstream")
+    if not isinstance(value, dict):
+        return {name: "unknown" for name in names}
+    return {
+        name: value.get(name)
+        if isinstance(value.get(name), str) and value.get(name) in _LOCAL_BOUNDARY_STATES
+        else "unknown"
+        for name in names
+    }
+
+
+def _safe_local_boundary_states_from_codes(
+    codes: object,
+    response_statuses: object,
+    metrics_before: object | None = None,
+    metrics_after: object | None = None,
+) -> dict[str, str]:
+    """Project Local boundary progress from codes and existing metric deltas."""
+    states = {
+        "tool_policy": "not_reached",
+        "observation": "not_reached",
+        "constitution": "not_reached",
+        "upstream": "not_reached",
+    }
+    safe_codes = [
+        _safe_local_error_code_class(item) for item in codes
+    ] if isinstance(codes, list) else []
+    failing_code = next((item for item in reversed(safe_codes) if item not in {"none"}), None)
+    if failing_code is not None:
+        stage = _safe_local_rejection_stage(failing_code)
+        if stage == "tool_policy":
+            states["tool_policy"] = "rejected"
+        elif stage == "observation_constitution":
+            states["observation"] = "entered"
+            states["constitution"] = "rejected"
+        elif stage == "upstream":
+            states["upstream"] = "rejected"
+        elif stage == "other":
+            states = {name: "unknown" for name in states}
+        return states
+
+    def delta(name: str) -> int | None:
+        before = getattr(metrics_before, name, None)
+        after = getattr(metrics_after, name, None)
+        if type(before) is int and type(after) is int and after >= before:
+            return after - before
+        return None
+
+    if (delta("tool_policy_drops") or 0) > 0:
+        states["tool_policy"] = "transformed"
+    if any((delta(name) or 0) > 0 for name in (
+        "compiler_attempts", "cache_hits", "cache_misses", "rehydration_hits",
+        "rehydration_injected",
+    )):
+        states["observation"] = "entered"
+    if (delta("compiler_attempts") or 0) > 0:
+        states["constitution"] = "entered"
+    statuses = response_statuses if isinstance(response_statuses, list) else []
+    if statuses and all(type(status) is int and status < 400 for status in statuses):
+        states["upstream"] = "succeeded"
+        if states["tool_policy"] == "not_reached":
+            states["tool_policy"] = "succeeded"
+    return states
+
+
 def _checks_are_green(output: bytes) -> bool:
     try:
         lines = [line for line in output.decode("utf-8").splitlines() if line.strip()]
@@ -364,7 +622,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md",
+        "oap/orders/155-ad-local-error-stage-and-tool-choice-diagnostic.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -393,6 +651,7 @@ def _verify_commit_topology() -> None:
         raise VerificationError("local_report_not_report_only")
     if _run(["git", "merge-base", "--is-ancestor", LOCAL_SIGNED_CONTRACT_HEAD, LOCAL_REPORT_HEAD], cwd=LOCAL_ROOT).returncode != 0:
         raise VerificationError("local_signed_contract_ancestry_failed")
+    _verify_local_error_source_contract()
     for pr, expected in (("291", current_head), ("7", LOCAL_REPORT_HEAD)):
         result = _run(["gh", "pr", "view", pr, "--repo", "ulfe-lmi/slaif-api-gateway" if pr == "291" else "ulfe-lmi/slaif-local-coding", "--json", "state,isDraft,headRefOid,mergeStateStatus,autoMergeRequest"])
         if result.returncode != 0:
@@ -415,11 +674,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ac\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ad\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1171,6 +1430,10 @@ _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS = frozenset(
         "other",
     }
 )
+_SUMMARY_LOCAL_ERROR_CODE_CLASSES = _LOCAL_ERROR_CODE_CLASSES
+_SUMMARY_LOCAL_REJECTION_STAGES = _LOCAL_REJECTION_STAGES
+_SUMMARY_LOCAL_BOUNDARY_STATES = _LOCAL_BOUNDARY_STATES
+_SUMMARY_TOOL_CHOICE_CLASSES = _LOCAL_TOOL_CHOICE_CLASSES
 _SUMMARY_TOOL_TYPES = frozenset(
     {"function", "custom", "namespace", "tool_search", "web_search", "other"}
 )
@@ -1543,6 +1806,12 @@ def _safe_preclassification_summary(
         "first_request_top_level_tool_type_counts": _safe_summary_tool_counts(
             first_projection.get("top_level_tool_type_counts")
         ),
+        "first_request_tool_choice_class": (
+            first_projection.get("tool_choice_class")
+            if isinstance(first_projection.get("tool_choice_class"), str)
+            and first_projection.get("tool_choice_class") in _SUMMARY_TOOL_CHOICE_CLASSES
+            else "malformed_other"
+        ),
         "gateway_error_code_classes": _safe_summary_error_classes(
             gateway.get("error_code_classes"),
             gateway.get("response_statuses"),
@@ -1563,9 +1832,13 @@ def _safe_preclassification_summary(
             gateway.get("response_statuses"),
         ),
         "local_error_code_classes": _safe_summary_error_classes(
-            local.get("error_code_classes"),
+            local.get("local_error_code_classes"),
             local.get("response_statuses"),
-            _SUMMARY_GATEWAY_ERROR_CODE_CLASSES,
+            _SUMMARY_LOCAL_ERROR_CODE_CLASSES,
+        ),
+        "local_error_stage_classes": _safe_local_stage_classes(
+            local.get("local_error_stage_classes"),
+            local.get("response_statuses"),
         ),
         "local_error_param_classes": _safe_summary_error_classes(
             local.get("error_param_classes"),
@@ -1576,6 +1849,9 @@ def _safe_preclassification_summary(
             local.get("error_param_field_classes"),
             local.get("response_statuses"),
             _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS,
+        ),
+        "local_boundary_states": _safe_local_boundary_states(
+            local.get("local_boundary_states")
         ),
         "second_request_input_item_type_sequence": [
             item
@@ -1626,12 +1902,14 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         "gateway_error_param_classes", "gateway_error_param_field_classes",
         "gateway_input_item_error_projections",
         "local_error_code_classes", "local_error_param_classes",
-        "local_error_param_field_classes",
+        "local_error_param_field_classes", "local_error_stage_classes",
+        "local_boundary_states",
         "second_request_input_item_type_sequence",
         "second_request_top_level_tool_type_counts", "second_function_call_fields",
         "second_function_call_output_fields", "qualification_rejection", "accounting",
         "first_request_input_item_type_sequence",
         "first_request_top_level_tool_type_counts",
+        "first_request_tool_choice_class",
     }:
         raise VerificationError("qualification_summary_invalid")
     if value["schema"] != _SUMMARY_SCHEMA:
@@ -1652,6 +1930,8 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         )
     ):
         raise VerificationError("qualification_summary_invalid")
+    if value["first_request_tool_choice_class"] not in _SUMMARY_TOOL_CHOICE_CLASSES:
+        raise VerificationError("qualification_summary_invalid")
     for field, allowed, boundary in (
         (
             "gateway_error_code_classes",
@@ -1668,7 +1948,8 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
             _SUMMARY_GATEWAY_ERROR_PARAM_FIELDS,
             "gateway",
         ),
-        ("local_error_code_classes", _SUMMARY_GATEWAY_ERROR_CODE_CLASSES, "local"),
+        ("local_error_code_classes", _SUMMARY_LOCAL_ERROR_CODE_CLASSES, "local"),
+        ("local_error_stage_classes", _SUMMARY_LOCAL_REJECTION_STAGES, "local"),
         ("local_error_param_classes", _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES, "local"),
         (
             "local_error_param_field_classes",
@@ -1840,6 +2121,13 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
             raise VerificationError("qualification_summary_invalid")
         if any(type(section.get(name)) is not bool for name in ("disconnect", "truncated", "handler_error")):
             raise VerificationError("qualification_summary_invalid")
+    boundary_states = value["local_boundary_states"]
+    if (
+        not isinstance(boundary_states, dict)
+        or set(boundary_states) != {"tool_policy", "observation", "constitution", "upstream"}
+        or any(state not in _SUMMARY_LOCAL_BOUNDARY_STATES for state in boundary_states.values())
+    ):
+        raise VerificationError("qualification_summary_invalid")
     qwen = value["qwen"]
     if not isinstance(qwen, dict) or set(qwen) != {
         "inference_count", "status_classes", "content_type_classes", "path_error",
@@ -2052,6 +2340,70 @@ def _safe_function_projection_fields(item: object) -> list[dict[str, str]]:
         if isinstance(name, str)
     ]
     return sorted(fields, key=lambda field: (field["name"], field["type"]))[:32]
+
+
+def _classify_local_tool_choice(payload: object) -> str:
+    """Classify only the bounded top-level Responses tool_choice shape."""
+    if not isinstance(payload, dict):
+        return "malformed_other"
+    if "tool_choice" not in payload:
+        return "absent"
+    choice = payload.get("tool_choice")
+    if isinstance(choice, str):
+        if choice in {"auto", "none"}:
+            return "automatic_none"
+        if choice == "required":
+            return "required"
+        if choice in {"tool_search", "web_search"}:
+            return "explicit_disabled_search"
+        return "malformed_other"
+    if not isinstance(choice, dict):
+        return "malformed_other"
+
+    # Choices are intentionally exact-shape, rather than recursively walking an
+    # arbitrary object that could smuggle a second authority source.
+    if set(choice) in ({"type"}, {"type", "mode"}):
+        choice_type = choice.get("type")
+        mode = choice.get("mode")
+        if set(choice) == {"type"} and choice_type == "required":
+            return "required"
+        if choice_type in {"auto", "none"} and (
+            set(choice) == {"type"}
+            or (set(choice) == {"type", "mode"} and mode in {"auto", "none"})
+        ):
+            return "automatic_none"
+        if set(choice) == {"type"} and choice_type in {"tool_search", "web_search"}:
+            return "explicit_disabled_search"
+        if choice_type == "allowed_tools" and mode in {"auto", "none"}:
+            return "automatic_none"
+        return "malformed_other"
+
+    if set(choice) != {"type", "name"}:
+        return "malformed_other"
+    choice_type = choice.get("type")
+    choice_name = choice.get("name")
+    if choice_type not in {"function", "custom"} or not isinstance(choice_name, str):
+        return "malformed_other"
+    if not _LOCAL_TOOL_NAME_RE.fullmatch(choice_name):
+        return "malformed_other"
+    tools = payload.get("tools")
+    if not isinstance(tools, list) or len(tools) > 128:
+        return "malformed_other"
+    matches = 0
+    for tool in tools:
+        if not isinstance(tool, dict):
+            return "malformed_other"
+        tool_type = tool.get("type")
+        if tool_type in {"function", "custom"} and (
+            not isinstance(tool.get("name"), str)
+            or not _LOCAL_TOOL_NAME_RE.fullmatch(tool["name"])
+        ):
+            return "malformed_other"
+        if tool_type == choice_type and tool.get("name") == choice_name:
+            matches += 1
+        elif tool_type not in {"function", "custom", "tool_search", "web_search"}:
+            return "malformed_other"
+    return "explicit_retained_local" if matches == 1 else "malformed_other"
 
 
 def _empty_input_item_error_projection() -> dict[str, object]:
@@ -2285,6 +2637,7 @@ def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
             "top_level_tool_type_counts": {},
             "input_item_type_sequence": [],
             "stream_class": "invalid",
+            "tool_choice_class": "malformed_other",
             "function_call_fields": [],
             "function_call_output_fields": [],
         }
@@ -2293,6 +2646,7 @@ def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
             "top_level_tool_type_counts": {},
             "input_item_type_sequence": [],
             "stream_class": "invalid",
+            "tool_choice_class": "malformed_other",
             "function_call_fields": [],
             "function_call_output_fields": [],
         }
@@ -2353,6 +2707,7 @@ def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
         "stream_class": (
             "true" if stream is True else "false" if stream is False else "other"
         ),
+        "tool_choice_class": _classify_local_tool_choice(payload),
     }
 
 
@@ -3761,6 +4116,8 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
         self.error_param_classes: list[str] = []
         self.error_param_field_classes: list[str] = []
         self.input_item_error_projections: list[dict[str, object]] = []
+        self.local_error_code_classes: list[str] = []
+        self.local_error_stage_classes: list[str] = []
         self.forwarded = 0
         self.rejected = 0
         self.downstream_closed_early = False
@@ -3810,6 +4167,10 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
             self.error_param_classes.append(param_class)
             self.error_param_field_classes.append(param_field_class)
             self.input_item_error_projections.append(input_item_projection)
+            if self.boundary_class == "local_output":
+                local_code = _safe_local_error_code_class(error.get("code"))
+                self.local_error_code_classes.append(local_code)
+                self.local_error_stage_classes.append(_safe_local_rejection_stage(local_code))
 
     def remember_no_error(self) -> None:
         with self._capture_lock:
@@ -3817,6 +4178,9 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
             self.error_param_classes.append("none")
             self.error_param_field_classes.append("none")
             self.input_item_error_projections.append(_empty_input_item_error_projection())
+            if self.boundary_class == "local_output":
+                self.local_error_code_classes.append("none")
+                self.local_error_stage_classes.append("other")
 
     def mark_downstream_closed_early(self) -> None:
         with self._capture_lock:
@@ -3843,6 +4207,21 @@ class _ForwardingRelay(http.server.ThreadingHTTPServer):
                 "input_item_error_projections": [
                     dict(projection) for projection in self.input_item_error_projections
                 ],
+                "local_error_code_classes": _safe_local_error_classes(
+                    self.local_error_code_classes,
+                    self.response_statuses,
+                ),
+                "local_error_stage_classes": _safe_local_stage_classes(
+                    self.local_error_stage_classes,
+                    self.response_statuses,
+                ),
+                "local_boundary_states": _safe_local_boundary_states_from_codes(
+                    _safe_local_error_classes(
+                        self.local_error_code_classes,
+                        self.response_statuses,
+                    ),
+                    self.response_statuses,
+                ),
                 "downstream_closed_early": self.downstream_closed_early,
                 "upstream_truncated": self.upstream_truncated,
                 "handler_error": self.handler_error,
@@ -5147,14 +5526,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155ac-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155ad-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155ac-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ad-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -5173,7 +5552,7 @@ def _start_fake_qwen(
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155ac-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ad-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -6181,7 +6560,7 @@ def _run_composed_impl(
         tracker.set("gateway_health")
         _wait_http(f"http://127.0.0.1:{gateway_port}/healthz")
         gateway_facing_relay, gateway_facing_relay_thread = _start_relay(
-            gateway_port, capture_requests=False
+            gateway_port, capture_requests=False, boundary_class="gateway_output"
         )
         client = OpenAI(api_key=key_one.plaintext, base_url=f"http://127.0.0.1:{gateway_port}/v1", max_retries=0)
         session_a = str(uuid.uuid4())
@@ -6712,6 +7091,7 @@ def _run_composed_codex_tool_roundtrip(
     gateway_output: _ForwardingRelay,
     fake_qwen_server: _FakeQwenServer | None,
     qwen_port: int,
+    local_port: int,
     service_token: str,
     tracker: StageTracker,
     qualification_hook: bool = False,
@@ -6734,6 +7114,10 @@ def _run_composed_codex_tool_roundtrip(
         environment=environment,
         model=CODEX_MODEL,
     )
+    try:
+        local_metrics_before = _local_metrics(local_port)
+    except VerificationError:
+        local_metrics_before = None
     tracker.set("tool_codex_execution")
     result = _run(
         capture._exec_command_0149(
@@ -6762,6 +7146,16 @@ def _run_composed_codex_tool_roundtrip(
         gateway_requests = gateway_output.snapshot()
         tracker.set("tool_roundtrip_local_snapshot")
         local_status = relay.status()
+        try:
+            local_metrics_after = _local_metrics(local_port)
+        except VerificationError:
+            local_metrics_after = None
+        local_status["local_boundary_states"] = _safe_local_boundary_states_from_codes(
+            local_status.get("local_error_code_classes"),
+            local_status.get("response_statuses"),
+            local_metrics_before,
+            local_metrics_after,
+        )
         local_requests_snapshot = relay.snapshot()
         tracker.set("tool_roundtrip_qwen_projection")
         qwen_status = _qwen_relay_status(qwen_port)
@@ -7020,6 +7414,16 @@ def _run_composed_codex_tool_roundtrip(
 
     tracker.set("tool_roundtrip_sse_validation")
     local_status = relay.status()
+    try:
+        local_metrics_after = _local_metrics(local_port)
+    except VerificationError:
+        local_metrics_after = None
+    local_status["local_boundary_states"] = _safe_local_boundary_states_from_codes(
+        local_status.get("local_error_code_classes"),
+        local_status.get("response_statuses"),
+        local_metrics_before,
+        local_metrics_after,
+    )
     gateway_status = gateway_output.status()
     qwen_status = _qwen_relay_status(qwen_port)
     fake_status = fake_qwen_server.status() if fake_qwen_server is not None else {}
@@ -7524,6 +7928,7 @@ def _run_composed_stream_diagnostic(
                 gateway_output=gateway_output,
                 fake_qwen_server=fake_qwen_server,
                 qwen_port=qwen_port,
+                local_port=local_port,
                 service_token=service_token,
                 tracker=tracker,
                 qualification_hook=qualification_hook,
@@ -7707,7 +8112,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ac-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ad-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7817,7 +8222,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155ac-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ad-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7976,7 +8381,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ac-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ad-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -8078,7 +8483,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-            with tempfile.TemporaryDirectory(prefix="slaif-155ac-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="slaif-155ad-", dir="/tmp") as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
                 stage = "local_config_preflight"
@@ -8152,7 +8557,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155ac-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155ad-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)

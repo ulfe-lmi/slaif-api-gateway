@@ -164,10 +164,10 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155ac_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155ad_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155ac-head"
+    current_head = "current-155ad-head"
     local_head = verifier.LOCAL_REPORT_HEAD
     report_path = "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
 
@@ -179,7 +179,7 @@ def test_155ac_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
+            return "oap/active\noap/orders/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -211,19 +211,144 @@ def test_155ac_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155ac_topology_anchors_are_the_155ab_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "a0701a3db477e8c34d7c4db981a5216aa7d7ac0b"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "1664a53a6dc6ce36a0cb05420901d352c08dabeb"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "17993c2cba0bc225b89abffa8a78b6900f57862c"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
+def test_155ad_topology_anchors_are_the_155ac_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "1708eea898d6f1403518dd78897a119366a62652"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "b32c50b92cccba229b37a9abb642611f3f8dc588"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "b0441d943ca858681615244408a1178ebdb67a3d"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
 
 
-def test_155ac_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155ad_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
     assert verifier.LOCAL_SIGNED_CONTRACT_HEAD == "356be8345dd71d6fddf829278651d18e485731d4"
     assert verifier.LOCAL_REPORT_PATH == "oap/reports/005-m-gateway-155r-real-codex-matrix-and-cutover-closure.md"
+
+
+def test_local_error_vocabulary_is_pinned_to_immutable_local_source() -> None:
+    verifier._verify_local_error_source_contract()
+    assert verifier._safe_local_error_code_class("responses_tool_policy_invalid") == (
+        "responses_tool_policy_invalid"
+    )
+    assert verifier._safe_local_error_code_class("constitution_bounds_exceeded") == (
+        "constitution_bounds_exceeded"
+    )
+    assert verifier._safe_local_error_code_class("responses_codex_tool_roundtrip_invalid") == "other"
+    assert verifier._safe_local_error_code_class("private-local-code") == "other"
+    assert verifier._safe_local_error_code_class(None) == "other"
+
+
+@pytest.mark.parametrize(
+    ("code", "stage"),
+    [
+        ("invalid_service_authorization", "service_auth"),
+        ("signed_identity_signature_mismatch", "signed_identity"),
+        ("signed_identity_route_mismatch", "signed_identity"),
+        ("invalid_json", "json_route_image"),
+        ("image_limit_exceeded", "json_route_image"),
+        ("responses_disabled_tool_choice", "tool_policy"),
+        ("constitution_duplicate_marker", "observation_constitution"),
+        ("upstream_timeout", "upstream"),
+        ("other", "other"),
+    ],
+)
+def test_local_error_stage_mapping_is_closed_and_cross_class_safe(
+    code: str, stage: str
+) -> None:
+    assert verifier._safe_local_rejection_stage(code) == stage
+    assert verifier._safe_local_rejection_stage("responses_codex_tool_roundtrip_invalid") == "other"
+
+
+@pytest.mark.parametrize(
+    ("choice", "expected"),
+    [
+        (None, "absent"),
+        ("auto", "automatic_none"),
+        ("none", "automatic_none"),
+        ("required", "required"),
+        ("tool_search", "explicit_disabled_search"),
+        ("web_search", "explicit_disabled_search"),
+        ({"type": "auto"}, "automatic_none"),
+        ({"type": "allowed_tools", "mode": "none"}, "automatic_none"),
+        ({"type": "function", "name": "lookup"}, "explicit_retained_local"),
+        ({"type": "custom", "name": "emit"}, "explicit_retained_local"),
+        ({"type": "mcp"}, "malformed_other"),
+        ({"type": "function", "name": "missing"}, "malformed_other"),
+        ({"type": "tool_search", "mode": "required"}, "malformed_other"),
+        (["required"], "malformed_other"),
+    ],
+)
+def test_local_tool_choice_classifier_is_bounded(
+    choice: object, expected: str
+) -> None:
+    payload: dict[str, object] = {
+        "tools": [
+            {"type": "function", "name": "lookup"},
+            {"type": "custom", "name": "emit"},
+        ]
+    }
+    if choice is not None:
+        payload["tool_choice"] = choice
+    assert verifier._classify_local_tool_choice(payload) == expected
+
+
+def test_local_tool_choice_classifier_rejects_ambiguous_duplicate_declarations() -> None:
+    payload = {
+        "tools": [
+            {"type": "function", "name": "lookup"},
+            {"type": "function", "name": "lookup"},
+        ],
+        "tool_choice": {"type": "function", "name": "lookup"},
+    }
+    assert verifier._classify_local_tool_choice(payload) == "malformed_other"
+
+
+@pytest.mark.parametrize(
+    ("codes", "statuses", "expected"),
+    [
+        (["responses_tool_policy_invalid"], [422], {"tool_policy": "rejected"}),
+        (["constitution_duplicate_marker"], [422], {"constitution": "rejected", "observation": "entered"}),
+        (["upstream_error"], [502], {"upstream": "rejected"}),
+        (["none"], [200], {"upstream": "succeeded", "tool_policy": "succeeded"}),
+        (["not-a-local-code"], [500], {"tool_policy": "unknown", "upstream": "unknown"}),
+    ],
+)
+def test_local_boundary_state_projection_is_fail_closed(
+    codes: list[str], statuses: list[int], expected: dict[str, str]
+) -> None:
+    states = verifier._safe_local_boundary_states_from_codes(codes, statuses)
+    for name, state in expected.items():
+        assert states[name] == state
+    assert set(states) == {"tool_policy", "observation", "constitution", "upstream"}
+
+
+def test_local_boundary_state_projection_uses_only_existing_metric_deltas() -> None:
+    before = verifier.LocalMetrics(1, 2, 3, 4, 5, 6, 7, 8)
+    after = verifier.LocalMetrics(1, 3, 3, 4, 5, 6, 8, 8)
+    states = verifier._safe_local_boundary_states_from_codes(
+        ["none"], [200], before, after
+    )
+    assert states == {
+        "tool_policy": "transformed",
+        "observation": "entered",
+        "constitution": "entered",
+        "upstream": "succeeded",
+    }
+
+
+def test_local_relay_retains_only_source_reviewed_code_and_stage() -> None:
+    relay = verifier._ForwardingRelay(("127.0.0.1", 0), 1)
+    relay.remember_error_body(
+        b'{"error":{"code":"responses_disabled_tool_choice"}}',
+        request_body=b'{}',
+    )
+    relay.remember_response(422, "/v1/responses")
+    status = relay.status()
+    assert status["local_error_code_classes"] == ["responses_disabled_tool_choice"]
+    assert status["local_error_stage_classes"] == ["tool_policy"]
+    assert status["local_boundary_states"]["tool_policy"] == "rejected"
+    assert verifier._safe_local_error_code_class("responses_codex_tool_roundtrip_invalid") == "other"
 
 
 def test_codex_provenance_accepts_only_task_local_exact_package(
@@ -1357,6 +1482,7 @@ def test_composed_roundtrip_request_projection_retains_only_safe_shape() -> None
             {"name": "type", "type": "string"},
         ],
         "stream_class": "true",
+        "tool_choice_class": "absent",
     }
     assert (
         verifier._safe_roundtrip_projection_class(projection)
@@ -1827,6 +1953,40 @@ def test_summary_sanitizer_rejects_duplicate_fields_and_unaligned_error_ordinals
     unaligned["gateway_error_code_classes"] = ["none"]
     with pytest.raises(verifier.VerificationError, match="qualification_summary_invalid"):
         verifier._sanitize_preclassification_summary(unaligned)
+
+
+def test_summary_keeps_local_vocabulary_separate_from_gateway_vocabulary() -> None:
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_failure_decision",
+        codex_failure_category="turn_failed",
+        gateway_requests=1,
+        gateway_status={"response_statuses": [422], "error_code_classes": ["request_policy_invalid"]},
+        local_requests=1,
+        local_status={
+            "response_statuses": [422],
+            "local_error_code_classes": ["responses_disabled_tool_choice"],
+            "local_error_stage_classes": ["tool_policy"],
+            "local_boundary_states": {
+                "tool_policy": "rejected",
+                "observation": "not_reached",
+                "constitution": "not_reached",
+                "upstream": "not_reached",
+            },
+        },
+        qwen_status={"inference_calls": 0, "inference_statuses": []},
+        request_projections=[{"tool_choice_class": "explicit_disabled_search"}],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    assert summary["local_error_code_classes"] == ["responses_disabled_tool_choice"]
+    assert summary["local_error_stage_classes"] == ["tool_policy"]
+    assert summary["first_request_tool_choice_class"] == "explicit_disabled_search"
+    assert verifier._sanitize_preclassification_summary(summary) == summary
+    tampered = json.loads(json.dumps(summary))
+    tampered["local_error_code_classes"] = ["responses_codex_tool_roundtrip_invalid"]
+    with pytest.raises(verifier.VerificationError, match="qualification_summary_invalid"):
+        verifier._sanitize_preclassification_summary(tampered)
 
 
 def test_composed_evidence_rejects_placeholder_counts() -> None:
