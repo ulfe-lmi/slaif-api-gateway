@@ -15,7 +15,8 @@ from slaif_gateway.modules.contracts import (
 )
 
 CODEX_0149_CLIENT_MODULE_ID = "codex-0.149-responses-v1"
-CODEX_0149_CLIENT_MODULE_VERSION = "4"
+CODEX_0149_CLIENT_MODULE_VERSION = "3"
+CODEX_0149_REASONING_DIALECT_VERSION = "4"
 CODEX_0149_CLI_VERSION = "0.149.0"
 CODEX_0149_FIXTURE_SHA256 = "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
 CODEX_0149_FIXTURE_RELATIVE_PATH = "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
@@ -35,6 +36,7 @@ _PROFILE_FACTS = MappingProxyType(
         "source_contract_tag": CODEX_0149_SOURCE_CONTRACT_TAG,
         "source_contract_commit": CODEX_0149_SOURCE_CONTRACT_COMMIT,
         "source_contract_fixture_sha256": CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256,
+        "reasoning_dialect_version": CODEX_0149_REASONING_DIALECT_VERSION,
     }
 )
 _SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")

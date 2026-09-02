@@ -147,6 +147,7 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
         "source_contract_tag": "rust-v0.149.0",
         "source_contract_commit": "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0",
         "source_contract_fixture_sha256": "d24178dc3467dfaf276b015dcf8298fcc1ddc35bc6c6dcd615f101c3e1cd76df",
+        "reasoning_dialect_version": "4",
     }
     assert CODEX_0149_CLIENT_MODULE.policy_spec is CODEX_0149_POLICY_SPEC
 
