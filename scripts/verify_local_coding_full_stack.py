@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-af verifier for Codex 0.149 null-encrypted replay acceptance.
+"""Bounded 155-ag verifier for Codex 0.149 ID-less tool-call replay acceptance.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -36,10 +36,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "1a7c8c51a01d4abcb8b8529e1b9ec272baaa20d6"
-GATEWAY_IMPLEMENTATION_HEAD = "956ec1e08b5f951f482ae12d0bbd265219bcadef"
-GATEWAY_ACTIVATION_HEAD = "d5020665b92c320b8a1634998604c3ee133ae176"
-GATEWAY_REPORT_PATH = "oap/reports/155-ae-codex-0149-idless-visible-reasoning-and-final-acceptance.md"
+GATEWAY_REPORT_HEAD = "37e923304cf4b1cdb4fb9f8faefe4a7b2fb6db6e"
+GATEWAY_IMPLEMENTATION_HEAD = "34ab5afd09af026286779838db21cddad1717877"
+GATEWAY_ACTIVATION_HEAD = "a570d6087ca488bc7fb1ec9a9ed0e51266b52b15"
+GATEWAY_REPORT_PATH = "oap/reports/155-af-null-encrypted-replay-detector-and-final-acceptance.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -57,8 +57,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-af-null-encrypted-replay-detector-and-final-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155af_null_encrypted"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155ag_idless_tool"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -872,7 +872,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-af-null-encrypted-replay-detector-and-final-acceptance.md",
+        "oap/orders/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -924,11 +924,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-af-null-encrypted-replay-detector-and-final-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-af\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ag\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -2988,11 +2988,54 @@ def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
         function_call_output_fields = _safe_function_projection_fields(
             safe_items[pair_index + 1]
         )
+    function_call = (
+        safe_items[pair_indices[0]]
+        if len(pair_indices) == 1 and isinstance(safe_items[pair_indices[0]], dict)
+        else None
+    )
+    function_output = (
+        safe_items[pair_indices[0] + 1]
+        if len(pair_indices) == 1 and isinstance(safe_items[pair_indices[0] + 1], dict)
+        else None
+    )
+    function_item_id = function_call.get("id") if isinstance(function_call, dict) else None
+    call_id = function_call.get("call_id") if isinstance(function_call, dict) else None
+    output_call_id = function_output.get("call_id") if isinstance(function_output, dict) else None
     return {
         "top_level_tool_type_counts": dict(sorted(counts.items())),
         "input_item_type_sequence": item_types,
         "function_call_fields": function_call_fields,
         "function_call_output_fields": function_call_output_fields,
+        "function_item_id_state": (
+            "present"
+            if isinstance(function_item_id, str)
+            else "null"
+            if function_item_id is None and isinstance(function_call, dict) and "id" in function_call
+            else "absent"
+            if function_call is not None
+            else "none"
+        ),
+        "function_item_id_prefix_class": (
+            "codex_prefixed"
+            if isinstance(function_item_id, str)
+            and function_item_id.partition("_")[0]
+            and function_item_id.partition("_")[2]
+            else "other"
+            if isinstance(function_item_id, str)
+            else "none"
+        ),
+        "function_call_id_state": (
+            "present_valid"
+            if isinstance(call_id, str) and 1 <= len(call_id) <= 256
+            else "absent_or_invalid"
+            if function_call is not None
+            else "none"
+        ),
+        "adjacent_matching_output": (
+            isinstance(call_id, str)
+            and call_id == output_call_id
+            and isinstance(function_output, dict)
+        ),
         "stream_class": (
             "true" if stream is True else "false" if stream is False else "other"
         ),
@@ -4712,12 +4755,14 @@ class _FakeQwenServer(http.server.ThreadingHTTPServer):
         tool_roundtrip_mode: bool = False,
         qualification_rejection_mode: bool = False,
         provider_failure_mode: bool = False,
+        non_prefixed_tool_id: bool = False,
     ) -> None:
         super().__init__(server_address, _FakeQwenHandler)
         self.token = token
         self.tool_roundtrip_mode = tool_roundtrip_mode
         self.qualification_rejection_mode = qualification_rejection_mode
         self.provider_failure_mode = provider_failure_mode
+        self.non_prefixed_tool_id = non_prefixed_tool_id
         self.calls = 0
         self.compiler_calls = 0
         self.inference_calls = 0
@@ -5035,6 +5080,9 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
             self._json(400, {"error": {"code": "known_local_tool_missing"}})
             return
         arguments = self._function_arguments(payload, tool_name=tool_name)
+        stream_item_id = (
+            "function1" if self.server.non_prefixed_tool_id else "function_1"
+        )
         events = (
             (
                 "response.created",
@@ -5070,7 +5118,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                     "sequence_number": 2,
                     "item": {
                         "type": "function_call",
-                        "id": "function_1",
+                        "id": stream_item_id,
                         "status": "in_progress",
                         "namespace": None,
                         "name": tool_name,
@@ -5084,7 +5132,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "response.function_call_arguments.delta",
                 {
                     "type": "response.function_call_arguments.delta",
-                    "item_id": "function_1",
+                    "item_id": stream_item_id,
                     "output_index": 0,
                     "sequence_number": 3,
                     "delta": arguments,
@@ -5094,7 +5142,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                 "response.function_call_arguments.done",
                 {
                     "type": "response.function_call_arguments.done",
-                    "item_id": "function_1",
+                    "item_id": stream_item_id,
                     "output_index": 0,
                     "sequence_number": 4,
                     "name": tool_name,
@@ -5109,7 +5157,7 @@ class _FakeQwenHandler(http.server.BaseHTTPRequestHandler):
                     "sequence_number": 5,
                     "item": {
                         "type": "function_call",
-                        "id": "function_1",
+                        "id": stream_item_id,
                         "status": "completed",
                         "namespace": None,
                         "name": tool_name,
@@ -5872,6 +5920,7 @@ def _start_fake_qwen(
     tool_roundtrip_mode: bool = False,
     qualification_rejection_mode: bool = False,
     provider_failure_mode: bool = False,
+    non_prefixed_tool_id: bool = False,
 ) -> tuple[_FakeQwenServer, threading.Thread, str]:
     token = "fake-qwen-token"
     server = _FakeQwenServer(
@@ -5880,6 +5929,7 @@ def _start_fake_qwen(
         tool_roundtrip_mode=tool_roundtrip_mode,
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
+        non_prefixed_tool_id=non_prefixed_tool_id,
     )
     thread = threading.Thread(target=server.serve_forever, name="155af-fake-qwen", daemon=True)
     thread.start()
@@ -7566,6 +7616,54 @@ def _run_composed_codex_tool_roundtrip(
             fake_status=fake_status,
             accounting_statuses=accounting_statuses,
         )
+        if non_prefixed_tool_id:
+            second_projection = (
+                request_projections[1]
+                if len(request_projections) > 1
+                else {}
+            )
+            return {
+                "codex_exit_success": False,
+                "failure_code": failure_code,
+                "gateway_request_count": len(gateway_requests),
+                "local_request_count": len(local_requests_snapshot),
+                "qwen_inference_count": qwen_status.get("inference_calls"),
+                "selected_tool_call": {
+                    "tool_type": "function",
+                    "item_id_state": second_projection.get(
+                        "function_item_id_state", "other"
+                    ),
+                    "item_id_prefix_class": second_projection.get(
+                        "function_item_id_prefix_class", "other"
+                    ),
+                    "call_id_state": second_projection.get(
+                        "function_call_id_state", "other"
+                    ),
+                    "adjacent_matching_output": second_projection.get(
+                        "adjacent_matching_output", False
+                    ),
+                },
+                "gateway_error_code_classes": [
+                    _safe_gateway_error_code_class(value)
+                    for value in gateway_status.get("error_code_classes", [])
+                ],
+                "gateway_error_param_classes": [
+                    _safe_gateway_error_param_class(value)
+                    for value in gateway_status.get("error_param_classes", [])
+                ],
+                "accounting": {
+                    "reservation_finalized": accounting_statuses.get(
+                        "reservation_finalized", 0
+                    ),
+                    "reservation_released": accounting_statuses.get(
+                        "reservation_released", 0
+                    ),
+                    "ledger_finalized": accounting_statuses.get("ledger_finalized", 0),
+                    "ledger_failed": accounting_statuses.get("ledger_failed", 0),
+                    "pending": accounting_statuses.get("reservation_pending", 0)
+                    + accounting_statuses.get("ledger_pending", 0),
+                },
+            }
         if qualification_hook:
             local_requests = local_requests_snapshot
             turn_counts = (
@@ -8108,6 +8206,7 @@ def _run_composed_stream_diagnostic(
     codex_binary: Path | None = None,
     tracker: StageTracker | None = None,
     qualification_hook: bool = False,
+    non_prefixed_tool_id: bool = False,
 ) -> dict[str, object]:
     from openai import OpenAI
 
@@ -8167,6 +8266,7 @@ def _run_composed_stream_diagnostic(
                 tool_roundtrip_mode=tool_roundtrip_mode,
                 qualification_rejection_mode=qualification_rejection_mode,
                 provider_failure_mode=provider_failure_mode,
+                non_prefixed_tool_id=non_prefixed_tool_id,
             )
         previous_environment = os.environ.copy()
         tracker.set("database_seed")
@@ -8449,6 +8549,24 @@ def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str
     )
     result["codex_provenance"] = provenance
     return result
+
+
+def run_codex_tool_roundtrip_non_prefixed_reproduction() -> dict[str, object]:
+    """Reproduce Codex 0.149 ID stripping against the uncorrected Gateway."""
+    _verify_commit_topology()
+    _verify_fixtures()
+    with tempfile.TemporaryDirectory(prefix="slaif-155ag-reproduction-", dir="/tmp") as temporary:
+        root = Path(temporary)
+        root.chmod(0o700)
+        codex_binary = _install_codex(root)
+        return _run_composed_stream_diagnostic(
+            root,
+            None,
+            fake_qwen=True,
+            tool_roundtrip_mode=True,
+            codex_binary=codex_binary,
+            non_prefixed_tool_id=True,
+        )
 
 
 def _run_dedicated_codex_tool_roundtrip(
