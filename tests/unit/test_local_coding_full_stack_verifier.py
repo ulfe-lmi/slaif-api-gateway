@@ -279,7 +279,19 @@ def test_155ad_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_REPORT_PATH == "oap/reports/005-m-gateway-155r-real-codex-matrix-and-cutover-closure.md"
 
 
-def test_local_error_vocabulary_is_pinned_to_immutable_local_source() -> None:
+def test_local_error_vocabulary_is_pinned_to_immutable_local_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for relative_path in verifier._LOCAL_SOURCE_FILES:
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            repr(sorted(verifier._LOCAL_FIXED_ERROR_CODE_TO_STAGE))
+            + "\n"
+            + repr(sorted(verifier._LOCAL_CONSTITUTION_INJECTION_SUFFIXES)),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(verifier, "LOCAL_ROOT", tmp_path)
     verifier._verify_local_error_source_contract()
     assert verifier._safe_local_error_code_class("responses_tool_policy_invalid") == (
         "responses_tool_policy_invalid"
