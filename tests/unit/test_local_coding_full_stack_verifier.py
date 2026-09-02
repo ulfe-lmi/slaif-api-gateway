@@ -232,7 +232,7 @@ def test_155af_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-af-null-encrypted-replay-detector-and-final-acceptance.md"
+            return "oap/active\noap/orders/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -264,11 +264,11 @@ def test_155af_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155af_topology_anchors_are_the_155ae_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "1a7c8c51a01d4abcb8b8529e1b9ec272baaa20d6"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "956ec1e08b5f951f482ae12d0bbd265219bcadef"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "d5020665b92c320b8a1634998604c3ee133ae176"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ae-codex-0149-idless-visible-reasoning-and-final-acceptance.md"
+def test_155ag_topology_anchors_are_the_155af_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "37e923304cf4b1cdb4fb9f8faefe4a7b2fb6db6e"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "34ab5afd09af026286779838db21cddad1717877"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "a570d6087ca488bc7fb1ec9a9ed0e51266b52b15"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-af-null-encrypted-replay-detector-and-final-acceptance.md"
 
 
 def test_155af_topology_anchors_exact_local_report_parent_and_path() -> None:
@@ -1703,6 +1703,10 @@ def test_composed_roundtrip_request_projection_retains_only_safe_shape() -> None
             {"name": "output", "type": "string"},
             {"name": "type", "type": "string"},
         ],
+        "function_item_id_state": "present",
+        "function_item_id_prefix_class": "other",
+        "function_call_id_state": "absent_or_invalid",
+        "adjacent_matching_output": False,
         "stream_class": "true",
         "tool_choice_class": "absent",
     }
