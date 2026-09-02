@@ -19,6 +19,22 @@ import pytest
 from scripts import verify_local_coding_full_stack as verifier
 
 
+def _fake_codex_provenance() -> dict[str, object]:
+    return {
+        "source_class": "task_local_exact_npm",
+        "requested_package_class": "@openai/codex",
+        "requested_version_class": "0.149.0",
+        "package_version_class": "0.149.0",
+        "raw_version_class": "0.149.0",
+        "invoked_version_class": "0.149.0",
+        "task_local_under_root": True,
+        "verified_binary_is_invoked": True,
+        "catalog_and_command_binary_same": True,
+        "host_default_version_class": "0.149.1",
+        "host_default_matches_pinned": False,
+    }
+
+
 def test_safe_uuid_is_canonical_without_exposing_values() -> None:
     assert verifier._safe_uuid("123e4567-e89b-12d3-a456-426614174000")
     assert not verifier._safe_uuid("123E4567-e89b-12d3-a456-426614174000")
@@ -148,12 +164,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155ab_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155ac_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155ab-head"
+    current_head = "current-155ac-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-aa-input-item-branch-and-hook-free-acceptance.md"
+    report_path = "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -163,7 +179,7 @@ def test_155ab_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
+            return "oap/active\noap/orders/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -195,19 +211,108 @@ def test_155ab_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155ab_topology_anchors_are_the_155aa_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "9b99c0c52e2786598efba23767aa2635ffde080a"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "d4fbb42447409d7e7bca0843a8a2b70008c957f9"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "21a96484847cdef769df1dced7c39c037cad811e"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-aa-input-item-branch-and-hook-free-acceptance.md"
+def test_155ac_topology_anchors_are_the_155ab_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "a0701a3db477e8c34d7c4db981a5216aa7d7ac0b"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "1664a53a6dc6ce36a0cb05420901d352c08dabeb"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "17993c2cba0bc225b89abffa8a78b6900f57862c"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
 
 
-def test_155ab_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155ac_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"
     assert verifier.LOCAL_SIGNED_CONTRACT_HEAD == "356be8345dd71d6fddf829278651d18e485731d4"
     assert verifier.LOCAL_REPORT_PATH == "oap/reports/005-m-gateway-155r-real-codex-matrix-and-cutover-closure.md"
+
+
+def test_codex_provenance_accepts_only_task_local_exact_package(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path
+    install = root / "codex-install"
+    package = install / "node_modules" / "@openai" / "codex"
+    binary = install / "node_modules" / ".bin" / "codex"
+    package.mkdir(parents=True)
+    binary.parent.mkdir(parents=True)
+    (package / "package.json").write_text(
+        json.dumps({"name": "@openai/codex", "version": "0.149.0"}),
+        encoding="utf-8",
+    )
+    binary.write_text("task-local executable", encoding="utf-8")
+
+    def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raw = b"codex-cli 0.149.1\n" if argv[0] == "/usr/bin/codex" else b"codex-cli 0.149.0\n"
+        return subprocess.CompletedProcess(argv, 0, raw, b"")
+
+    monkeypatch.setattr(verifier, "_run", fake_run)
+    monkeypatch.setattr(verifier.shutil, "which", lambda _name: "/usr/bin/codex")
+    facts = verifier._verify_codex_task_local_provenance(root, binary)
+    assert facts == {
+        "source_class": "task_local_exact_npm",
+        "requested_package_class": "@openai/codex",
+        "requested_version_class": "0.149.0",
+        "package_version_class": "0.149.0",
+        "raw_version_class": "0.149.0",
+        "invoked_version_class": "0.149.0",
+        "task_local_under_root": True,
+        "verified_binary_is_invoked": True,
+        "catalog_and_command_binary_same": True,
+        "host_default_version_class": "0.149.1",
+        "host_default_matches_pinned": False,
+    }
+    assert verifier._safe_codex_provenance(facts) == facts
+
+
+@pytest.mark.parametrize("mutation", ["version", "binary"])
+def test_codex_provenance_rejects_package_mismatch_and_host_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mutation: str
+) -> None:
+    root = tmp_path
+    install = root / "codex-install"
+    package = install / "node_modules" / "@openai" / "codex"
+    binary = install / "node_modules" / ".bin" / "codex"
+    package.mkdir(parents=True)
+    binary.parent.mkdir(parents=True)
+    (package / "package.json").write_text(
+        json.dumps(
+            {
+                "name": "@openai/codex",
+                "version": "0.149.1" if mutation == "version" else "0.149.0",
+            }
+        ),
+        encoding="utf-8",
+    )
+    binary.write_text("task-local executable", encoding="utf-8")
+    monkeypatch.setattr(
+        verifier,
+        "_run",
+        lambda argv, **_kwargs: subprocess.CompletedProcess(
+            argv, 0, b"codex-cli 0.149.0\n", b""
+        ),
+    )
+    monkeypatch.setattr(verifier.shutil, "which", lambda _name: None)
+    target = binary if mutation == "version" else Path("/usr/bin/codex")
+    expected = "codex_package_version_mismatch" if mutation == "version" else "codex_binary_not_task_local"
+    with pytest.raises(verifier.VerificationError, match=expected):
+        verifier._verify_codex_task_local_provenance(root, target)
+
+
+def test_codex_catalog_and_command_use_the_same_binary_variable() -> None:
+    tree = ast.parse(Path(verifier.__file__).read_text(encoding="utf-8"))
+    matching_calls: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in {"_write_0149_model_catalog", "_exec_command_0149"}:
+            continue
+        if node.args and isinstance(node.args[0], ast.Name):
+            matching_calls.append(node.args[0].id)
+    assert matching_calls
+    assert set(matching_calls) == {"codex_binary"}
+    source = Path(verifier.__file__).read_text(encoding="utf-8")
+    assert "CODEX_PACKAGE_SPEC" in source
+    assert "@openai/codex@" not in source
 
 
 def test_155r_parses_immutable_direct_baseline_with_independent_verdicts() -> None:
@@ -606,6 +711,7 @@ def test_sanitized_rejection_survives_composed_cleanup_and_absent_reread(
     monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
     monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
     monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+    monkeypatch.setattr(verifier, "_verify_codex_task_local_provenance", lambda *_args: _fake_codex_provenance())
     summary = verifier._safe_preclassification_summary(
         stage="tool_roundtrip_failure_decision",
         codex_failure_category="unclassified",
@@ -891,6 +997,7 @@ def test_outer_dedicated_runner_retains_summary_after_localizer_exception(
     monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
     monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
     monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+    monkeypatch.setattr(verifier, "_verify_codex_task_local_provenance", lambda *_args: _fake_codex_provenance())
 
     def fail_after_summary(root: Path, *_args: object, **_kwargs: object) -> dict[str, object]:
         verifier._write_preclassification_summary(root, summary)
@@ -935,6 +1042,7 @@ def test_outer_dedicated_runner_adopts_summary_from_normal_failure_return(
     monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
     monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
     monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+    monkeypatch.setattr(verifier, "_verify_codex_task_local_provenance", lambda *_args: _fake_codex_provenance())
     monkeypatch.setattr(
         verifier,
         "_run_composed_stream_diagnostic",

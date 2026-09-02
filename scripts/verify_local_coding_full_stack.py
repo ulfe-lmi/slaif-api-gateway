@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-ab verifier for proven-empty reasoning canonicalization and closure.
+"""Bounded 155-ac verifier for pinned executable provenance and stabilization.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import socket
 import stat
 import subprocess
@@ -33,15 +34,17 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "9b99c0c52e2786598efba23767aa2635ffde080a"
-GATEWAY_IMPLEMENTATION_HEAD = "d4fbb42447409d7e7bca0843a8a2b70008c957f9"
-GATEWAY_ACTIVATION_HEAD = "21a96484847cdef769df1dced7c39c037cad811e"
-GATEWAY_REPORT_PATH = "oap/reports/155-aa-input-item-branch-and-hook-free-acceptance.md"
+GATEWAY_REPORT_HEAD = "a0701a3db477e8c34d7c4db981a5216aa7d7ac0b"
+GATEWAY_IMPLEMENTATION_HEAD = "1664a53a6dc6ce36a0cb05420901d352c08dabeb"
+GATEWAY_ACTIVATION_HEAD = "17993c2cba0bc225b89abffa8a78b6900f57862c"
+GATEWAY_REPORT_PATH = "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
 LOCAL_REPORT_PATH = "oap/reports/005-m-gateway-155r-real-codex-matrix-and-cutover-closure.md"
 CODEX_VERSION = "0.149.0"
+CODEX_PACKAGE_NAME = "@openai/codex"
+CODEX_PACKAGE_SPEC = f"{CODEX_PACKAGE_NAME}@{CODEX_VERSION}"
 CODEX_MODEL = "qwen3.8-27b"
 FAILURE_MODEL = "155f-synthetic-provider-failure"
 CODEX_MODULE_ID = "codex-0.149-responses-v1"
@@ -52,8 +55,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155ab_tool_stream"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
+TASK_DB = "slaif_gateway_oap_155ac_tool_stream"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -81,6 +84,114 @@ QUALIFICATION_EVENT_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
 
 class VerificationError(RuntimeError):
     """A fixed verifier failure that cannot reflect private values."""
+
+
+def _codex_version_class(raw: bytes) -> str:
+    if raw == f"codex-cli {CODEX_VERSION}\n".encode("ascii"):
+        return CODEX_VERSION
+    if raw == b"codex-cli 0.149.1\n":
+        return "0.149.1"
+    return "other"
+
+
+def _verify_codex_task_local_provenance(
+    root: Path, binary: Path
+) -> dict[str, object]:
+    """Verify the exact disposable Codex executable without retaining paths/output."""
+    install = (root / "codex-install").resolve()
+    expected_binary = install / "node_modules/.bin/codex"
+    try:
+        if binary.absolute() != expected_binary:
+            raise VerificationError("codex_binary_not_task_local")
+        if os.path.commonpath((str(install), str(root.resolve()))) != str(root.resolve()):
+            raise VerificationError("codex_binary_not_task_local")
+        resolved_binary = binary.resolve(strict=True)
+        if not resolved_binary.is_file() or os.path.commonpath(
+            (str(resolved_binary), str(root.resolve()))
+        ) != str(root.resolve()):
+            raise VerificationError("codex_binary_not_task_local")
+        metadata_path = install / "node_modules/@openai/codex/package.json"
+        metadata = json.loads(metadata_path.read_bytes())
+    except VerificationError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise VerificationError("codex_package_metadata_invalid") from exc
+    if (
+        not isinstance(metadata, dict)
+        or metadata.get("name") != CODEX_PACKAGE_NAME
+        or metadata.get("version") != CODEX_VERSION
+    ):
+        raise VerificationError("codex_package_version_mismatch")
+    version_result = _run([str(binary), "--version"], timeout=10)
+    if version_result.returncode != 0 or _codex_version_class(version_result.stdout) != CODEX_VERSION:
+        raise VerificationError("codex_version_mismatch")
+
+    host_default_version_class = "other"
+    host_binary = shutil.which("codex")
+    if host_binary is not None:
+        host_result = _run([host_binary, "--version"], timeout=10)
+        if host_result.returncode == 0:
+            host_default_version_class = _codex_version_class(host_result.stdout)
+    return _safe_codex_provenance(
+        {
+            "source_class": "task_local_exact_npm",
+            "requested_package_class": CODEX_PACKAGE_NAME,
+            "requested_version_class": CODEX_VERSION,
+            "package_version_class": metadata["version"],
+            "raw_version_class": CODEX_VERSION,
+            "invoked_version_class": CODEX_VERSION,
+            "task_local_under_root": True,
+            "verified_binary_is_invoked": True,
+            "catalog_and_command_binary_same": True,
+            "host_default_version_class": host_default_version_class,
+            "host_default_matches_pinned": host_default_version_class == CODEX_VERSION,
+        }
+    )
+
+
+def _safe_codex_provenance(value: object) -> dict[str, object]:
+    expected_keys = {
+        "source_class",
+        "requested_package_class",
+        "requested_version_class",
+        "package_version_class",
+        "raw_version_class",
+        "invoked_version_class",
+        "task_local_under_root",
+        "verified_binary_is_invoked",
+        "catalog_and_command_binary_same",
+        "host_default_version_class",
+        "host_default_matches_pinned",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise VerificationError("codex_provenance_invalid")
+    if (
+        value["source_class"] != "task_local_exact_npm"
+        or value["requested_package_class"] != CODEX_PACKAGE_NAME
+        or any(
+            value[name] != CODEX_VERSION
+            for name in (
+                "requested_version_class",
+                "package_version_class",
+                "raw_version_class",
+                "invoked_version_class",
+            )
+        )
+        or any(
+            type(value[name]) is not bool or value[name] is not True
+            for name in (
+                "task_local_under_root",
+                "verified_binary_is_invoked",
+                "catalog_and_command_binary_same",
+            )
+        )
+        or value["host_default_version_class"] not in {"0.149.0", "0.149.1", "other"}
+        or type(value["host_default_matches_pinned"]) is not bool
+        or value["host_default_matches_pinned"]
+        != (value["host_default_version_class"] == CODEX_VERSION)
+    ):
+        raise VerificationError("codex_provenance_invalid")
+    return dict(value)
 
 
 COMPOSITION_STAGES = (
@@ -253,7 +364,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md",
+        "oap/orders/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -304,11 +415,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ab\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ac\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -506,7 +617,11 @@ def _install_codex(root: Path) -> Path:
     result = _run(["npm", "init", "-y"], cwd=install, timeout=30)
     if result.returncode != 0:
         raise VerificationError("codex_install_failed")
-    result = _run(["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", f"@openai/codex@{CODEX_VERSION}"], cwd=install, timeout=180)
+    result = _run(
+        ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", CODEX_PACKAGE_SPEC],
+        cwd=install,
+        timeout=180,
+    )
     if result.returncode != 0:
         raise VerificationError("codex_install_failed")
     binary = install / "node_modules/.bin/codex"
@@ -5032,14 +5147,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155ab-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155ac-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155ab-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ac-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -5058,7 +5173,7 @@ def _start_fake_qwen(
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155ab-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ac-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -7566,13 +7681,16 @@ def _run_composed_stream_diagnostic(
 
 def run_codex_tool_roundtrip_fake(*, root: Path, codex_binary: Path) -> dict[str, object]:
     """Required fake gate: Codex through Gateway, Local, relay, and fake Qwen."""
-    return _run_composed_stream_diagnostic(
+    provenance = _verify_codex_task_local_provenance(root, codex_binary)
+    result = _run_composed_stream_diagnostic(
         root,
         None,
         fake_qwen=True,
         tool_roundtrip_mode=True,
         codex_binary=codex_binary,
     )
+    result["codex_provenance"] = provenance
+    return result
 
 
 def _run_dedicated_codex_tool_roundtrip(
@@ -7589,11 +7707,12 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ab-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ac-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
         codex_binary = _install_codex(root)
+        codex_provenance = _verify_codex_task_local_provenance(root, codex_binary)
         try:
             result = _run_composed_stream_diagnostic(
                 root,
@@ -7619,6 +7738,7 @@ def _run_dedicated_codex_tool_roundtrip(
                 if isinstance(exception, VerificationError):
                     raise
                 raise VerificationError(_safe_qualification_failure_code(exception)) from None
+        result["codex_provenance"] = codex_provenance
         reread_rejection = _read_qualification_rejection(root)
         reread_summary = _read_preclassification_summary(root) if qualification_hook else None
         retained_summary = result.get("qualification_summary")
@@ -7697,7 +7817,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155ab-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ac-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -7856,7 +7976,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ab-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ac-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -7958,7 +8078,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-            with tempfile.TemporaryDirectory(prefix="slaif-155ab-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="slaif-155ac-", dir="/tmp") as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
                 stage = "local_config_preflight"
@@ -8032,7 +8152,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155ab-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155ac-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
@@ -8078,6 +8198,10 @@ def main() -> int:
                     ),
                     "summary": summary,
                 }
+                if "codex_provenance" in result:
+                    evidence["codex_provenance"] = _safe_codex_provenance(
+                        result["codex_provenance"]
+                    )
                 if rejection is not None:
                     evidence["rejection"] = _sanitize_qualification_rejection(rejection)
                 outcome = "REJECTED" if rejection is not None else "FAILED"
