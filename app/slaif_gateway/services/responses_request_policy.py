@@ -936,9 +936,9 @@ class ResponsesRequestPolicy:
                 codex_client_tool_taxonomy=codex_client_tool_taxonomy,
             )
             if canonical_item.get("type") == "reasoning":
-                encrypted_value = canonical_item["encrypted_content"]
-                assert isinstance(encrypted_value, str)
-                encrypted_reasoning_bytes += len(encrypted_value.encode("utf-8"))
+                encrypted_value = canonical_item.get("encrypted_content")
+                if isinstance(encrypted_value, str):
+                    encrypted_reasoning_bytes += len(encrypted_value.encode("utf-8"))
                 if encrypted_reasoning_bytes > self._codex_spec.max_encrypted_reasoning_request_bytes:
                     _raise(
                         "input",
@@ -1047,6 +1047,21 @@ class ResponsesRequestPolicy:
             return self._validate_codex_additional_tools_item(
                 item, param=param, codex_client_tool_taxonomy=codex_client_tool_taxonomy
             )
+        if (
+            item_type == "reasoning"
+            and self._codex_spec is not None
+            and self._codex_spec.reasoning_visible_id_optional
+            and not allow_codex_request_envelope
+        ):
+            _raise(
+                f"{param}.type",
+                "responses_codex_envelope_not_allowed",
+                "Visible Codex reasoning requires the request-envelope capability.",
+            )
+        if item_type == "reasoning" and self._codex_spec is not None and self._codex_spec.reasoning_visible_id_optional and (
+            "encrypted_content" not in item or item.get("encrypted_content") is None
+        ):
+            return self._validate_codex_visible_reasoning_item(item, param=param)
         if item_type == "reasoning" and (
             "encrypted_content" in item or allow_codex_encrypted_reasoning_replay
         ):
@@ -1550,6 +1565,145 @@ class ResponsesRequestPolicy:
         text_bytes = len(encrypted_content.encode("utf-8")) + summary_bytes
         material_bytes = len(canonical_json_bytes(canonical))
         return canonical, text_bytes, material_bytes, 0, 0, 0, 0
+
+    def _validate_codex_visible_reasoning_item(
+        self,
+        item: Mapping[str, Any],
+        *,
+        param: str,
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
+        """Validate the version-owned visible reasoning dialect."""
+        assert self._codex_spec is not None
+        if set(item) - self._codex_spec.reasoning_replay_fields:
+            _raise(
+                param,
+                "responses_codex_reasoning_visible_invalid",
+                "The visible Codex reasoning item contains an unsupported field.",
+            )
+        if item.get("type") != "reasoning":
+            _raise(
+                f"{param}.type",
+                "responses_codex_reasoning_visible_invalid",
+                "Visible Codex reasoning requires type reasoning.",
+            )
+
+        canonical: dict[str, Any] = {"type": "reasoning"}
+        if "id" in item:
+            item_id = item["id"]
+            if item_id is not None:
+                item_id = self._validate_codex_message_id(item_id, param=f"{param}.id")
+            canonical["id"] = item_id
+
+        summary = item.get("summary")
+        if not isinstance(summary, list) or len(summary) > self._codex_spec.max_reasoning_summary_parts:
+            _raise(
+                f"{param}.summary",
+                "responses_codex_reasoning_visible_invalid",
+                "Visible Codex reasoning summaries must be bounded arrays.",
+            )
+        canonical_summary: list[dict[str, str]] = []
+        visible_bytes = 0
+        for summary_index, part in enumerate(summary):
+            part_param = f"{param}.summary[{summary_index}]"
+            if not isinstance(part, Mapping) or set(part) != self._codex_spec.reasoning_summary_fields:
+                _raise(
+                    part_param,
+                    "responses_codex_reasoning_visible_invalid",
+                    "Visible Codex reasoning summaries require exact fields.",
+                )
+            if part.get("type") != "summary_text" or not isinstance(part.get("text"), str):
+                _raise(
+                    part_param,
+                    "responses_codex_reasoning_visible_invalid",
+                    "Visible Codex reasoning summaries require summary_text strings.",
+                )
+            text_value = part["text"]
+            assert isinstance(text_value, str)
+            try:
+                part_bytes = len(text_value.encode("utf-8"))
+            except UnicodeEncodeError:
+                _raise(
+                    f"{part_param}.text",
+                    "responses_codex_reasoning_visible_invalid",
+                    "Visible Codex reasoning text is not valid Unicode.",
+                )
+            visible_bytes += part_bytes
+            canonical_summary.append({"type": "summary_text", "text": text_value})
+        if visible_bytes > self._codex_spec.max_reasoning_summary_bytes:
+            _raise(
+                f"{param}.summary",
+                "responses_codex_reasoning_visible_too_large",
+                "Visible Codex reasoning summaries exceed the size limit.",
+            )
+        canonical["summary"] = canonical_summary
+
+        if "content" in item:
+            content = item["content"]
+            if content is not None and not isinstance(content, list):
+                _raise(
+                    f"{param}.content",
+                    "responses_codex_reasoning_visible_invalid",
+                    "Visible Codex reasoning content must be an array or null.",
+                )
+            if content is None:
+                canonical["content"] = None
+            else:
+                if len(content) > self._codex_spec.max_reasoning_visible_parts:
+                    _raise(
+                        f"{param}.content",
+                        "responses_codex_reasoning_visible_too_large",
+                        "Visible Codex reasoning content has too many parts.",
+                    )
+                canonical_content: list[dict[str, str]] = []
+                for content_index, part in enumerate(content):
+                    part_param = f"{param}.content[{content_index}]"
+                    if (
+                        not isinstance(part, Mapping)
+                        or set(part) != self._codex_spec.reasoning_visible_content_fields
+                        or not isinstance(part.get("type"), str)
+                        or part.get("type") not in self._codex_spec.reasoning_visible_content_types
+                        or not isinstance(part.get("text"), str)
+                    ):
+                        _raise(
+                            part_param,
+                            "responses_codex_reasoning_visible_invalid",
+                            "Visible Codex reasoning content requires exact text parts.",
+                        )
+                    text_value = part["text"]
+                    assert isinstance(text_value, str)
+                    try:
+                        part_bytes = len(text_value.encode("utf-8"))
+                    except UnicodeEncodeError:
+                        _raise(
+                            f"{part_param}.text",
+                            "responses_codex_reasoning_visible_invalid",
+                            "Visible Codex reasoning text is not valid Unicode.",
+                        )
+                    if part_bytes > self._codex_spec.max_reasoning_visible_part_bytes:
+                        _raise(
+                            f"{part_param}.text",
+                            "responses_codex_reasoning_visible_too_large",
+                            "Visible Codex reasoning content part exceeds the size limit.",
+                        )
+                    visible_bytes += part_bytes
+                    canonical_content.append({"type": part["type"], "text": text_value})
+                canonical["content"] = canonical_content
+        if "encrypted_content" in item:
+            if item["encrypted_content"] is not None:
+                _raise(
+                    f"{param}.encrypted_content",
+                    "responses_codex_reasoning_visible_invalid",
+                    "Visible Codex reasoning permits only null encrypted content.",
+                )
+            canonical["encrypted_content"] = None
+        if visible_bytes > self._codex_spec.max_reasoning_visible_bytes:
+            _raise(
+                param,
+                "responses_codex_reasoning_visible_too_large",
+                "Visible Codex reasoning exceeds the size limit.",
+            )
+        material_bytes = len(canonical_json_bytes(canonical))
+        return canonical, visible_bytes, material_bytes, 0, 0, 0, 0
 
     def _validate_codex_compaction_replay_item(
         self,

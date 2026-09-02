@@ -67,6 +67,13 @@ class ResponsesClientPolicySpec:
     taxonomy_for: Callable[[object], tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None]
     taxonomy_0148: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
     taxonomy_id_0148: str
+    reasoning_visible_id_optional: bool = False
+    reasoning_visible_content_fields: frozenset[str] = frozenset()
+    reasoning_visible_content_types: frozenset[str] = frozenset()
+    max_reasoning_visible_parts: int = 0
+    max_reasoning_visible_part_bytes: int = 0
+    max_reasoning_visible_bytes: int = 0
+    allow_idless_encrypted_reasoning: bool = False
 
 
 @dataclass(frozen=True, slots=True)

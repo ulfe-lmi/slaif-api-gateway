@@ -201,8 +201,11 @@ Static client/server module architecture is implemented for the ordinary
 OpenAI-compatible Chat and Responses create paths, the qualified Codex 0.147
 client/server pair, the exact Codex 0.149 -> Local Coding pair, and the
 existing built-in, generic, and facial-scoring server descriptors. Codex 0.149
-remains structural/default-denied and unqualified; no hosted authority or
-general pair/plugin machinery is added.
+remains structural/default-denied outside that exact pair; its pinned
+rust-v0.149.0 visible-reasoning dialect permits bounded absent/null reasoning
+IDs only there, preserves valid UTF-8 visible parts transiently, and does not
+grant hosted authority or general pair/plugin machinery. Live qualification
+remains separately required.
 
 ## Historical real-provider transport evidence — Objective 140
 

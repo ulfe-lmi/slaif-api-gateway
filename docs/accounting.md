@@ -110,6 +110,11 @@ facts, and no hosted-tool fee/hold metadata for both Gateway keys.
   suppresses normal completion without releasing or reversing charged usage.
   Missing usage, malformed/error events, and disconnects create no usable
   replay reference. Reference rows are control metadata, never billing truth.
+- The exact Codex rust-v0.149.0 Local pair may transiently carry bounded visible
+  reasoning with an absent or null item ID. Its UTF-8 summary/content bytes are
+  included in normal input estimation and accounting bounds, but visible text,
+  IDs, and derived replay material are never stored in ledger, audit, metrics,
+  or exports. ID-less encrypted reasoning remains outside this dialect.
 - Fully gated Codex admission replaces only the injected ordinary 1,024 output
   default with the strict route default (32,768 in the qualification profile),
   then enforces route/operator output and context bounds before Redis, pricing,

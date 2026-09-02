@@ -1,0 +1,59 @@
+{
+  "contract": {
+    "client_family": "codex-cli",
+    "client_version": "0.149.0",
+    "content_part_types": [
+      "reasoning_text",
+      "text"
+    ],
+    "encrypted_content": {
+      "idless_allowed": false,
+      "mode": "optional-null-visible-or-nonempty-id-bound-encrypted"
+    },
+    "reasoning_item_fields": {
+      "content": "optional_array",
+      "encrypted_content": "optional_nullable_string",
+      "id": "optional_nullable_response_item_id",
+      "summary": "array",
+      "type": "reasoning"
+    },
+    "summary_part": {
+      "fields": [
+        "text",
+        "type"
+      ],
+      "type": "summary_text"
+    }
+  },
+  "schema_version": "codex_reasoning_dialect_v1",
+  "source": {
+    "commit": "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0",
+    "paths": {
+      "input_type": "codex-rs/protocol/src/models.rs",
+      "request_input": "codex-rs/codex-api/src/common.rs",
+      "request_preparation": "codex-rs/core/src/client.rs"
+    },
+    "repository": "openai/codex",
+    "tag": "rust-v0.149.0"
+  },
+  "synthetic_vectors": [
+    {
+      "content": "nonempty_bounded_visible_parts",
+      "encrypted_content": "absent",
+      "expected": "accepted_without_id_generation",
+      "id": "absent"
+    },
+    {
+      "content": "nonempty_bounded_visible_parts",
+      "encrypted_content": "null",
+      "expected": "accepted_without_id_generation",
+      "id": "null"
+    },
+    {
+      "content": "nonempty_bounded_visible_parts",
+      "encrypted_content": "absent",
+      "expected": "accepted_unchanged",
+      "id": "present"
+    }
+  ]
+}

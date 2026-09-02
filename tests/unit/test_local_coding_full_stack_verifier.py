@@ -217,10 +217,10 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155ad_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155ae_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155ad-head"
+    current_head = "current-155ae-head"
     local_head = verifier.LOCAL_REPORT_HEAD
     report_path = "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
 
@@ -232,7 +232,7 @@ def test_155ad_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
+            return "oap/active\noap/orders/155-ae-codex-0149-idless-visible-reasoning-and-final-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -264,14 +264,14 @@ def test_155ad_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155ad_topology_anchors_are_the_155ac_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "1708eea898d6f1403518dd78897a119366a62652"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "b32c50b92cccba229b37a9abb642611f3f8dc588"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "b0441d943ca858681615244408a1178ebdb67a3d"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
+def test_155ae_topology_anchors_are_the_155ad_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "22a15fd65c24f655448d1547bdb275634483c8e9"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "407f75fe38643c0cfe8cf30a615449b91cf614ec"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "1420934e6d7df67f930bdc3cd6a8e1ffa32b6701"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
 
 
-def test_155ad_topology_anchors_exact_local_report_parent_and_path() -> None:
+def test_155ae_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
     assert verifier.LOCAL_REPORT_PARENT == "258ae2ebad39651076937b9f027e60831b8d2786"

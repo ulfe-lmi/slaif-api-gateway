@@ -15,17 +15,26 @@ from slaif_gateway.modules.contracts import (
 )
 
 CODEX_0149_CLIENT_MODULE_ID = "codex-0.149-responses-v1"
-CODEX_0149_CLIENT_MODULE_VERSION = "3"
+CODEX_0149_CLIENT_MODULE_VERSION = "4"
 CODEX_0149_CLI_VERSION = "0.149.0"
 CODEX_0149_FIXTURE_SHA256 = "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
 CODEX_0149_FIXTURE_RELATIVE_PATH = "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
 CODEX_0149_PROFILE_ID = "responses-session-relationship-v3"
+CODEX_0149_SOURCE_CONTRACT_TAG = "rust-v0.149.0"
+CODEX_0149_SOURCE_CONTRACT_COMMIT = "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0"
+CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256 = "d24178dc3467dfaf276b015dcf8298fcc1ddc35bc6c6dcd615f101c3e1cd76df"
+CODEX_0149_SOURCE_CONTRACT_FIXTURE_RELATIVE_PATH = (
+    "tests/fixtures/codex/0.149.0/responses-reasoning-dialect-v1.json"
+)
 
 _PROFILE_FACTS = MappingProxyType(
     {
         "client_module_id": CODEX_0149_CLIENT_MODULE_ID,
         "client_module_version": CODEX_0149_CLIENT_MODULE_VERSION,
         "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+        "source_contract_tag": CODEX_0149_SOURCE_CONTRACT_TAG,
+        "source_contract_commit": CODEX_0149_SOURCE_CONTRACT_COMMIT,
+        "source_contract_fixture_sha256": CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256,
     }
 )
 _SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
@@ -223,6 +232,13 @@ CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
     taxonomy_for=_codex_0149_taxonomy_for,
     taxonomy_0148=(),
     taxonomy_id_0148="codex_0_149",
+    reasoning_visible_id_optional=True,
+    reasoning_visible_content_fields=frozenset({"type", "text"}),
+    reasoning_visible_content_types=frozenset({"reasoning_text", "text"}),
+    max_reasoning_visible_parts=64,
+    max_reasoning_visible_part_bytes=8_192,
+    max_reasoning_visible_bytes=65_536,
+    allow_idless_encrypted_reasoning=False,
 )
 _CAPTURED_FIELD_VALUE_CLASSES = MappingProxyType(
     {

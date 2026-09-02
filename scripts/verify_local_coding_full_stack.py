@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-ad verifier for Local rejection-stage and tool-choice diagnosis.
+"""Bounded 155-ae verifier for Codex 0.149 visible-reasoning acceptance.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -36,10 +36,10 @@ import httpx
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "1708eea898d6f1403518dd78897a119366a62652"
-GATEWAY_IMPLEMENTATION_HEAD = "b32c50b92cccba229b37a9abb642611f3f8dc588"
-GATEWAY_ACTIVATION_HEAD = "b0441d943ca858681615244408a1178ebdb67a3d"
-GATEWAY_REPORT_PATH = "oap/reports/155-ac-pinned-provenance-first-turn-stabilization-and-predicate.md"
+GATEWAY_REPORT_HEAD = "22a15fd65c24f655448d1547bdb275634483c8e9"
+GATEWAY_IMPLEMENTATION_HEAD = "407f75fe38643c0cfe8cf30a615449b91cf614ec"
+GATEWAY_ACTIVATION_HEAD = "1420934e6d7df67f930bdc3cd6a8e1ffa32b6701"
+GATEWAY_REPORT_PATH = "oap/reports/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -57,8 +57,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
-TASK_DB = "slaif_gateway_oap_155ad_local_diagnostic"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-ae-codex-0149-idless-visible-reasoning-and-final-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155ae_reasoning_dialect"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -872,7 +872,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-ad-local-error-stage-and-tool-choice-diagnostic.md",
+        "oap/orders/155-ae-codex-0149-idless-visible-reasoning-and-final-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -924,11 +924,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ad-local-error-stage-and-tool-choice-diagnostic.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ae-codex-0149-idless-visible-reasoning-and-final-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ad\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ae\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -5855,14 +5855,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155ad-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155ae-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155ad-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ae-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -5881,7 +5881,7 @@ def _start_fake_qwen(
         qualification_rejection_mode=qualification_rejection_mode,
         provider_failure_mode=provider_failure_mode,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155ad-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ae-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -6313,9 +6313,9 @@ async def _safe_roundtrip_accounting_status_counts(
 
 
 async def _verify_qualification_accounting(
-    database_url: str, key: SeededKey, turn_count: int
+    database_url: str, key: SeededKey, admitted_turn_count: int
 ) -> dict[str, int | bool]:
-    """Verify terminal rows while allowing a rejected terminal to release."""
+    """Verify rows for admitted turns, not raw Gateway request attempts."""
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
     from slaif_gateway.db.models import GatewayKey, QuotaReservation, UsageLedger
@@ -6330,6 +6330,7 @@ async def _verify_qualification_accounting(
         "reservation_released": 0,
         "ledger_finalized": 0,
         "ledger_failed": 0,
+        "ledger_estimated": 0,
         "reservation_pending": 0,
         "ledger_pending": 0,
     }
@@ -6358,11 +6359,15 @@ async def _verify_qualification_accounting(
             result["ledger_rows"] = len(ledgers)
             if (
                 gateway_key is None
-                or len(reservations) != turn_count
-                or len(ledgers) != turn_count
+                or admitted_turn_count not in (0, 1, 2)
+                or len(reservations) != admitted_turn_count
+                or len(ledgers) != admitted_turn_count
                 or len(reservations) != len(ledgers)
                 or gateway_key.tokens_reserved_total != 0
             ):
+                return result
+            if admitted_turn_count == 0:
+                result["query_ok"] = True
                 return result
             for reservation in reservations:
                 if reservation.status == "finalized":
@@ -6387,7 +6392,7 @@ async def _verify_qualification_accounting(
             if not _qualification_terminal_sequence_valid(
                 [reservation.status for reservation in reservations],
                 [ledger.accounting_status for ledger in ledgers],
-                turn_count,
+                admitted_turn_count,
             ) or any(
                 reservation.quota_mode != "strict_bounded"
                 or reservation.external_tool_capabilities != []
@@ -6408,7 +6413,7 @@ def _qualification_terminal_sequence_valid(
 ) -> bool:
     """Accept finalized or released/failed terminal outcomes, never pending rows."""
     if (
-        turn_count not in (1, 2)
+        turn_count not in (0, 1, 2)
         or len(reservation_statuses) != turn_count
         or len(ledger_statuses) != turn_count
         or any(status not in {"finalized", "released"} for status in reservation_statuses)
@@ -6420,6 +6425,8 @@ def _qualification_terminal_sequence_valid(
         != turn_count
     ):
         return False
+    if turn_count == 0:
+        return True
     if not all(
         reservation_statuses[index] == "finalized"
         and ledger_statuses[index] == "finalized"
@@ -7599,7 +7606,7 @@ def _run_composed_codex_tool_roundtrip(
                 _verify_qualification_accounting(
                     postgres_url,
                     key,
-                    turn_counts[0],
+                    turn_counts[1],
                 )
             )
             if (
@@ -8457,7 +8464,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ad-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ae-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -8567,7 +8574,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155ad-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ae-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -8726,7 +8733,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ad-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ae-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -8828,7 +8835,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-            with tempfile.TemporaryDirectory(prefix="slaif-155ad-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="slaif-155ae-", dir="/tmp") as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
                 stage = "local_config_preflight"
@@ -8902,7 +8909,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155ad-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155ae-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)

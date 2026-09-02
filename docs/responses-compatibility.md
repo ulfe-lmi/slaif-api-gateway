@@ -21,10 +21,19 @@ registered default-denied with exactly one `local-coding-v1` server pair.
 Codex 0.149's observed `web_search` and `tool_search` declarations are
 transient adapter-managed candidate facts only; they never
 set the hosted web-search admission path, external-tool fence, pricing, or
-accounting state. Its v3 identity contract requires equal canonical UUID
+accounting state. Its existing identity contract requires equal canonical UUID
 aliases in `client_metadata.session_id` and `client_metadata.thread_id`, then
 exposes only one transient `session_id` namespace hint. No raw Codex
 identity/session/workspace metadata is retained.
+
+The exact `codex-0.149-responses-v1 -> local-coding-v1` pair also carries the
+version-owned rust-v0.149.0 visible-reasoning dialect. Its reasoning `id` may be
+absent or null, while bounded `summary_text`, `reasoning_text`, and `text`
+parts are preserved as valid UTF-8, including ordinary newline and tab
+characters. No ID is generated, visible reasoning is transient, and an
+ID-less encrypted item remains denied. Ordinary OpenAI Responses and Codex
+0.147 retain the required reasoning ID; this narrow dialect does not broaden
+hosted tools, replay authority, or other client/server pairs.
 
 The full-stack acceptance verifier is a disposable qualification attempt for
 the exact open Gateway and Local Coding heads. It does not broaden the
