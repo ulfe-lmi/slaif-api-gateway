@@ -7487,6 +7487,7 @@ def _run_composed_codex_tool_roundtrip(
     signing_secret: str,
     tracker: StageTracker,
     qualification_hook: bool = False,
+    non_prefixed_tool_id: bool = False,
 ) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
 
@@ -8385,6 +8386,7 @@ def _run_composed_stream_diagnostic(
                 signing_secret=signing_secret,
                 tracker=tracker,
                 qualification_hook=qualification_hook,
+                non_prefixed_tool_id=non_prefixed_tool_id,
             )
         client = OpenAI(
             api_key=key.plaintext,
