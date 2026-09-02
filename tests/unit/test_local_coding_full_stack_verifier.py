@@ -35,6 +35,59 @@ def _fake_codex_provenance() -> dict[str, object]:
     }
 
 
+def _signed_local_request(
+    *,
+    body: bytes = b'{"model":"qwen3.8-27b"}',
+    service_token: str = "service-token",
+    signing_secret: str = "signing-secret",
+    session: str = "session-opaque",
+    route: str = verifier.LOCAL_CODING_ROUTE_NAME,
+    timestamp: str = "1700000000",
+    nonce: str = "1234567890abcdef",
+    path: str = "/v1/responses",
+    method: str = "POST",
+    header_name_counts: tuple[tuple[str, int], ...] | None = None,
+) -> verifier.CapturedRequest:
+    parts = verifier.urlsplit(path)
+    query = parts.query.encode("ascii")
+    values = {
+        "x-slaif-identity-version": "v1",
+        "x-slaif-principal": "principal-opaque",
+        "x-slaif-session": session,
+        "x-slaif-repository": "repository-opaque",
+        "x-slaif-route": route,
+        "x-slaif-timestamp": timestamp,
+        "x-slaif-nonce": nonce,
+    }
+    canonical = "\n".join(
+        (
+            "slaif-local-coding-identity-v1",
+            method,
+            parts.path,
+            hashlib.sha256(query).hexdigest(),
+            hashlib.sha256(body).hexdigest(),
+            values["x-slaif-principal"],
+            values["x-slaif-session"],
+            values["x-slaif-repository"],
+            values["x-slaif-route"],
+            timestamp,
+            nonce,
+        )
+    ).encode()
+    headers = {"authorization": f"Bearer {service_token}", **values}
+    headers["x-slaif-signature"] = "v1=" + verifier.hmac.new(
+        signing_secret.encode(), canonical, hashlib.sha256
+    ).hexdigest()
+    counts = header_name_counts or tuple(sorted((name, 1) for name in headers))
+    return verifier.CapturedRequest(
+        path=path,
+        body=body,
+        headers=headers,
+        method=method,
+        header_name_counts=counts,
+    )
+
+
 def test_safe_uuid_is_canonical_without_exposing_values() -> None:
     assert verifier._safe_uuid("123e4567-e89b-12d3-a456-426614174000")
     assert not verifier._safe_uuid("123E4567-e89b-12d3-a456-426614174000")
@@ -349,6 +402,158 @@ def test_local_relay_retains_only_source_reviewed_code_and_stage() -> None:
     assert status["local_error_stage_classes"] == ["tool_policy"]
     assert status["local_boundary_states"]["tool_policy"] == "rejected"
     assert verifier._safe_local_error_code_class("responses_codex_tool_roundtrip_invalid") == "other"
+
+
+def test_signed_local_request_projection_verifies_exact_body_and_headers() -> None:
+    request = _signed_local_request(path="/v1/responses?bounded=1")
+    facts = verifier._safe_signed_identity_projection(
+        request,
+        service_token="service-token",
+        signing_secret="signing-secret",
+    )
+    assert facts == {
+        "service_bearer_equal": True,
+        "required_header_cardinality_class": "exact",
+        "canonical_bytes_reconstructed": True,
+        "raw_body_canonical_participates": True,
+        "signature_verifies": True,
+        "route_matches": True,
+        "method_path_query_valid": True,
+        "version_shape_valid": True,
+        "timestamp_shape_valid": True,
+        "nonce_shape_valid": True,
+        "no_extra_internal_headers": True,
+        "signed_identity_class": "verified",
+    }
+    rendered = json.dumps(facts, sort_keys=True)
+    assert "service-token" not in rendered
+    assert "signing-secret" not in rendered
+    assert "session-opaque" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_cardinality"),
+    [
+        ({"header_name_counts": tuple()}, "exact"),
+        ({"header_name_counts": (("x-slaif-session", 2),)}, "duplicate"),
+        ({"header_name_counts": (("x-slaif-session", 1),)}, "missing"),
+        ({"header_name_counts": (("x-slaif-extra", 1),)}, "extra"),
+    ],
+)
+def test_signed_local_request_projection_does_not_collapse_header_cardinality(
+    kwargs: dict[str, object], expected_cardinality: str
+) -> None:
+    if expected_cardinality == "extra":
+        base = _signed_local_request()
+        kwargs = {
+            **kwargs,
+            "header_name_counts": (*base.header_name_counts, ("x-slaif-extra", 1)),
+        }
+    request = _signed_local_request(**kwargs)
+    facts = verifier._safe_signed_identity_projection(
+        request,
+        service_token="service-token",
+        signing_secret="signing-secret",
+    )
+    assert facts["required_header_cardinality_class"] == expected_cardinality
+    if expected_cardinality != "exact":
+        assert facts["signed_identity_class"] == "invalid"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_false"),
+    [
+        ("service", "service_bearer_equal"),
+        ("body", "signature_verifies"),
+        ("route", "route_matches"),
+        ("timestamp", "timestamp_shape_valid"),
+        ("nonce", "nonce_shape_valid"),
+        ("internal", "no_extra_internal_headers"),
+    ],
+)
+def test_signed_local_request_projection_negative_facts_fail_closed(
+    mutation: str, expected_false: str
+) -> None:
+    request = _signed_local_request()
+    headers = dict(request.headers)
+    body = request.body
+    counts = request.header_name_counts
+    if mutation == "service":
+        headers["authorization"] = "Bearer wrong-service"
+    elif mutation == "body":
+        body += b" "
+    elif mutation == "route":
+        request = _signed_local_request(route="wrong-route")
+        headers = request.headers
+    elif mutation == "timestamp":
+        request = _signed_local_request(timestamp="01")
+        headers = request.headers
+    elif mutation == "nonce":
+        request = _signed_local_request(nonce="short")
+        headers = request.headers
+    elif mutation == "internal":
+        headers["x-internal-canary"] = "present"
+        counts = tuple(sorted((*counts, ("x-internal-canary", 1))))
+    mutated = verifier.CapturedRequest(
+        path=request.path,
+        body=body,
+        headers=headers,
+        method=request.method,
+        header_name_counts=counts,
+    )
+    facts = verifier._safe_signed_identity_projection(
+        mutated,
+        service_token="service-token",
+        signing_secret="signing-secret",
+    )
+    assert facts[expected_false] is False
+    assert facts["signed_identity_class"] == "invalid"
+
+
+def test_qwen_relay_keeps_compiler_and_inference_statuses_separate() -> None:
+    relay = verifier._QwenRelayServer(
+        ("127.0.0.1", 0),
+        endpoint="http://127.0.0.1:1/v1",
+        relay_token="relay-token",
+        qwen_token="qwen-token",
+    )
+    relay.record_upstream_status(200, compiler=True)
+    relay.record_upstream_status(503, inference=True)
+    relay.remember_content_type("application/json", compiler=True)
+    relay.remember_content_type("text/event-stream", inference=True)
+    status = relay.status()
+    assert status["compiler_statuses"] == [200]
+    assert status["inference_statuses"] == [503]
+    assert status["compiler_content_type_classes"] == ["json"]
+    assert status["inference_content_type_classes"] == ["sse"]
+
+
+def test_summary_retains_compiler_status_alongside_inference_status() -> None:
+    summary = verifier._safe_preclassification_summary(
+        stage="tool_roundtrip_qwen_projection",
+        codex_failure_category="turn_failed",
+        gateway_requests=1,
+        gateway_status={"response_statuses": [200]},
+        local_requests=1,
+        local_status={"response_statuses": [200]},
+        qwen_status={
+            "compiler_calls": 1,
+            "compiler_statuses": [200],
+            "compiler_content_type_classes": ["json"],
+            "inference_calls": 1,
+            "inference_statuses": [503],
+            "inference_content_type_classes": ["json"],
+        },
+        request_projections=[{}],
+        accounting_statuses={"query_ok": False},
+        qualification_rejection=None,
+        artifact_equal=False,
+    )
+    assert summary["qwen"]["compiler_count"] == "1"
+    assert summary["qwen"]["compiler_status_classes"] == ["2xx"]
+    assert summary["qwen"]["inference_count"] == "1"
+    assert summary["qwen"]["status_classes"] == ["5xx"]
+    assert verifier._sanitize_preclassification_summary(summary) == summary
 
 
 def test_codex_provenance_accepts_only_task_local_exact_package(

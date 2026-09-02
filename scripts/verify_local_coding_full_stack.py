@@ -12,6 +12,7 @@ import ast
 import asyncio
 import base64
 import hashlib
+import hmac
 import http.server
 import json
 import os
@@ -194,6 +195,37 @@ _LOCAL_SOURCE_CODE_GROUPS = (
         frozenset({"responses_tool_policy_invalid", "responses_disabled_tool_choice"}),
     ),
 )
+_LOCAL_SIGNED_HEADER_NAMES = (
+    "x-slaif-identity-version",
+    "x-slaif-principal",
+    "x-slaif-session",
+    "x-slaif-repository",
+    "x-slaif-route",
+    "x-slaif-timestamp",
+    "x-slaif-nonce",
+    "x-slaif-signature",
+)
+_LOCAL_SIGNED_IDENTITY_FACT_KEYS = frozenset(
+    {
+        "service_bearer_equal",
+        "required_header_cardinality_class",
+        "canonical_bytes_reconstructed",
+        "raw_body_canonical_participates",
+        "signature_verifies",
+        "route_matches",
+        "method_path_query_valid",
+        "version_shape_valid",
+        "timestamp_shape_valid",
+        "nonce_shape_valid",
+        "no_extra_internal_headers",
+        "signed_identity_class",
+    }
+)
+_LOCAL_SIGNED_HEADER_CARDINALITY_CLASSES = frozenset(
+    {"exact", "missing", "duplicate", "extra", "other"}
+)
+_LOCAL_SIGNED_IDENTITY_CLASSES = frozenset({"verified", "invalid", "other"})
+LOCAL_CODING_ROUTE_NAME = "qwen38-vision-codex"
 
 
 class VerificationError(RuntimeError):
@@ -546,6 +578,65 @@ def _safe_local_boundary_states(value: object) -> dict[str, str]:
     }
 
 
+def _empty_signed_identity_projection() -> dict[str, object]:
+    return {
+        "service_bearer_equal": False,
+        "required_header_cardinality_class": "other",
+        "canonical_bytes_reconstructed": False,
+        "raw_body_canonical_participates": False,
+        "signature_verifies": False,
+        "route_matches": False,
+        "method_path_query_valid": False,
+        "version_shape_valid": False,
+        "timestamp_shape_valid": False,
+        "nonce_shape_valid": False,
+        "no_extra_internal_headers": False,
+        "signed_identity_class": "other",
+    }
+
+
+def _safe_signed_identity_projections(
+    value: object, response_statuses: object
+) -> list[dict[str, object]]:
+    statuses = response_statuses if isinstance(response_statuses, list) else []
+    raw = value if isinstance(value, list) else []
+    if len(raw) != len(statuses):
+        raw = [_empty_signed_identity_projection() for _ in statuses]
+    result: list[dict[str, object]] = []
+    for item in raw[:2]:
+        safe = _empty_signed_identity_projection()
+        if isinstance(item, dict):
+            for name in (
+                "service_bearer_equal",
+                "canonical_bytes_reconstructed",
+                "raw_body_canonical_participates",
+                "signature_verifies",
+                "route_matches",
+                "method_path_query_valid",
+                "version_shape_valid",
+                "timestamp_shape_valid",
+                "nonce_shape_valid",
+                "no_extra_internal_headers",
+            ):
+                safe[name] = item.get(name) is True
+            cardinality = item.get("required_header_cardinality_class")
+            safe["required_header_cardinality_class"] = (
+                cardinality
+                if isinstance(cardinality, str)
+                and cardinality in _LOCAL_SIGNED_HEADER_CARDINALITY_CLASSES
+                else "other"
+            )
+            identity_class = item.get("signed_identity_class")
+            safe["signed_identity_class"] = (
+                identity_class
+                if isinstance(identity_class, str)
+                and identity_class in _LOCAL_SIGNED_IDENTITY_CLASSES
+                else "other"
+            )
+        result.append(safe)
+    return result
+
+
 def _safe_local_boundary_states_from_codes(
     codes: object,
     response_statuses: object,
@@ -598,6 +689,165 @@ def _safe_local_boundary_states_from_codes(
         if states["tool_policy"] == "not_reached":
             states["tool_policy"] = "succeeded"
     return states
+
+
+def _safe_signed_identity_projection(
+    request: CapturedRequest,
+    *,
+    service_token: str,
+    signing_secret: str,
+    expected_route: str = LOCAL_CODING_ROUTE_NAME,
+) -> dict[str, object]:
+    """Verify one captured Local request, retaining only fixed safe facts."""
+    safe: dict[str, object] = {
+        "service_bearer_equal": False,
+        "required_header_cardinality_class": "other",
+        "canonical_bytes_reconstructed": False,
+        "raw_body_canonical_participates": False,
+        "signature_verifies": False,
+        "route_matches": False,
+        "method_path_query_valid": False,
+        "version_shape_valid": False,
+        "timestamp_shape_valid": False,
+        "nonce_shape_valid": False,
+        "no_extra_internal_headers": False,
+        "signed_identity_class": "other",
+    }
+    headers = request.headers if isinstance(request.headers, dict) else {}
+    counts: dict[str, int] = {}
+    raw_counts = request.header_name_counts
+    if isinstance(raw_counts, tuple) and raw_counts:
+        for item in raw_counts:
+            if (
+                not isinstance(item, tuple)
+                or len(item) != 2
+                or not isinstance(item[0], str)
+                or type(item[1]) is not int
+                or item[1] < 1
+            ):
+                return safe
+            name = item[0].lower()
+            counts[name] = counts.get(name, 0) + item[1]
+    else:
+        for name in headers:
+            if isinstance(name, str):
+                lowered = name.lower()
+                counts[lowered] = counts.get(lowered, 0) + 1
+            else:
+                return safe
+    required = set(_LOCAL_SIGNED_HEADER_NAMES)
+    missing = any(counts.get(name, 0) == 0 for name in required)
+    duplicate = any(counts.get(name, 0) > 1 for name in required)
+    extra = any(
+        (
+            name.startswith("x-slaif-") and name not in required
+        )
+        or name.startswith("x-internal-")
+        for name in counts
+    )
+    if duplicate:
+        cardinality = "duplicate"
+    elif missing:
+        cardinality = "missing"
+    elif extra:
+        cardinality = "extra"
+    elif all(counts.get(name) == 1 for name in required):
+        cardinality = "exact"
+    else:
+        cardinality = "other"
+    safe["required_header_cardinality_class"] = cardinality
+    safe["no_extra_internal_headers"] = not extra
+    safe["service_bearer_equal"] = (
+        counts.get("authorization") == 1
+        and headers.get("authorization") == f"Bearer {service_token}"
+    )
+
+    try:
+        parsed = urlsplit(request.path)
+        query = parsed.query.encode("ascii")
+        path = parsed.path
+        method = request.method
+        identity_values = [headers[name] for name in _LOCAL_SIGNED_HEADER_NAMES[:-1]]
+        signature = headers[_LOCAL_SIGNED_HEADER_NAMES[-1]]
+        if not all(isinstance(value, str) for value in identity_values):
+            raise ValueError
+        if not isinstance(signature, str) or not isinstance(request.body, bytes):
+            raise ValueError
+        safe["method_path_query_valid"] = (
+            method == "POST"
+            and path == "/v1/responses"
+            and not parsed.fragment
+            and len(query) <= 256
+        )
+        safe["version_shape_valid"] = identity_values[0] == "v1"
+        safe["timestamp_shape_valid"] = re.fullmatch(
+            r"(?:0|[1-9][0-9]{0,19})", identity_values[5]
+        ) is not None
+        safe["nonce_shape_valid"] = (
+            16 <= len(identity_values[6]) <= 128
+            and re.fullmatch(r"[A-Za-z0-9_-]+", identity_values[6]) is not None
+        )
+        safe["route_matches"] = identity_values[4] == expected_route
+        canonical = "\n".join(
+            (
+                "slaif-local-coding-identity-v1",
+                method,
+                path,
+                hashlib.sha256(query).hexdigest(),
+                hashlib.sha256(request.body).hexdigest(),
+                *identity_values[1:5],
+                identity_values[5],
+                identity_values[6],
+            )
+        ).encode("utf-8")
+        safe["canonical_bytes_reconstructed"] = True
+        expected = "v1=" + hmac.new(
+            signing_secret.encode("utf-8"), canonical, hashlib.sha256
+        ).hexdigest()
+        safe["signature_verifies"] = bool(
+            re.fullmatch(r"v1=[0-9a-f]{64}", signature)
+            and hmac.compare_digest(signature, expected)
+        )
+        altered_canonical = "\n".join(
+            (
+                "slaif-local-coding-identity-v1",
+                method,
+                path,
+                hashlib.sha256(query).hexdigest(),
+                hashlib.sha256(request.body + b" ").hexdigest(),
+                *identity_values[1:5],
+                identity_values[5],
+                identity_values[6],
+            )
+        ).encode("utf-8")
+        altered_expected = "v1=" + hmac.new(
+            signing_secret.encode("utf-8"), altered_canonical, hashlib.sha256
+        ).hexdigest()
+        safe["raw_body_canonical_participates"] = (
+            safe["signature_verifies"]
+            and not hmac.compare_digest(signature, altered_expected)
+        )
+    except (KeyError, TypeError, UnicodeEncodeError, ValueError):
+        pass
+    if all(
+        safe[name] is True
+        for name in (
+            "service_bearer_equal",
+            "canonical_bytes_reconstructed",
+            "raw_body_canonical_participates",
+            "signature_verifies",
+            "route_matches",
+            "method_path_query_valid",
+            "version_shape_valid",
+            "timestamp_shape_valid",
+            "nonce_shape_valid",
+            "no_extra_internal_headers",
+        )
+    ) and safe["required_header_cardinality_class"] == "exact":
+        safe["signed_identity_class"] = "verified"
+    else:
+        safe["signed_identity_class"] = "invalid"
+    return safe
 
 
 def _checks_are_green(output: bytes) -> bool:
@@ -1704,6 +1954,7 @@ def _safe_preclassification_summary(
     accounting_statuses: object,
     qualification_rejection: object,
     artifact_equal: object,
+    signed_identity_facts: object = None,
 ) -> dict[str, object]:
     gateway = gateway_status if isinstance(gateway_status, dict) else {}
     local = local_status if isinstance(local_status, dict) else {}
@@ -1783,11 +2034,18 @@ def _safe_preclassification_summary(
         ),
         "qwen": {
             "inference_count": _safe_summary_count(qwen.get("inference_calls")),
+            "compiler_count": _safe_summary_count(qwen.get("compiler_calls")),
             "status_classes": _safe_summary_status_classes(
                 qwen.get("inference_statuses")
             ),
+            "compiler_status_classes": _safe_summary_status_classes(
+                qwen.get("compiler_statuses")
+            ),
             "content_type_classes": _safe_summary_content_classes(
                 qwen.get("inference_content_type_classes")
+            ),
+            "compiler_content_type_classes": _safe_summary_content_classes(
+                qwen.get("compiler_content_type_classes")
             ),
             "path_error": qwen.get("path_rejections") not in (0, False),
             "normal_close": qwen.get("stream_normal_close") is True,
@@ -1853,6 +2111,10 @@ def _safe_preclassification_summary(
         "local_boundary_states": _safe_local_boundary_states(
             local.get("local_boundary_states")
         ),
+        "local_signed_identity_facts": _safe_signed_identity_projections(
+            signed_identity_facts,
+            local.get("response_statuses"),
+        ),
         "second_request_input_item_type_sequence": [
             item
             if isinstance(item, str) and item in _SUMMARY_INPUT_TYPES
@@ -1904,6 +2166,7 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         "local_error_code_classes", "local_error_param_classes",
         "local_error_param_field_classes", "local_error_stage_classes",
         "local_boundary_states",
+        "local_signed_identity_facts",
         "second_request_input_item_type_sequence",
         "second_request_top_level_tool_type_counts", "second_function_call_fields",
         "second_function_call_output_fields", "qualification_rejection", "accounting",
@@ -2128,15 +2391,35 @@ def _sanitize_preclassification_summary(value: object) -> dict[str, object]:
         or any(state not in _SUMMARY_LOCAL_BOUNDARY_STATES for state in boundary_states.values())
     ):
         raise VerificationError("qualification_summary_invalid")
+    signed_identity_facts = value["local_signed_identity_facts"]
+    if not isinstance(signed_identity_facts, list) or len(signed_identity_facts) > 2:
+        raise VerificationError("qualification_summary_invalid")
+    for fact in signed_identity_facts:
+        if not isinstance(fact, dict) or set(fact) != _LOCAL_SIGNED_IDENTITY_FACT_KEYS:
+            raise VerificationError("qualification_summary_invalid")
+        if any(
+            type(fact[name]) is not bool
+            for name in _LOCAL_SIGNED_IDENTITY_FACT_KEYS
+            if name not in {"required_header_cardinality_class", "signed_identity_class"}
+        ):
+            raise VerificationError("qualification_summary_invalid")
+        if fact["required_header_cardinality_class"] not in _LOCAL_SIGNED_HEADER_CARDINALITY_CLASSES:
+            raise VerificationError("qualification_summary_invalid")
+        if fact["signed_identity_class"] not in _LOCAL_SIGNED_IDENTITY_CLASSES:
+            raise VerificationError("qualification_summary_invalid")
     qwen = value["qwen"]
     if not isinstance(qwen, dict) or set(qwen) != {
-        "inference_count", "status_classes", "content_type_classes", "path_error",
-        "normal_close", "handler_error", "truncated",
+        "inference_count", "compiler_count", "status_classes",
+        "compiler_status_classes", "content_type_classes",
+        "compiler_content_type_classes", "path_error", "normal_close",
+        "handler_error", "truncated",
     }:
         raise VerificationError("qualification_summary_invalid")
-    if qwen["inference_count"] not in {"0", "1", "2", "other"} or any(
+    if qwen["inference_count"] not in {"0", "1", "2", "other"} or qwen["compiler_count"] not in {"0", "1", "2", "other"} or any(
         item not in _SUMMARY_STATUS_CLASSES for item in qwen["status_classes"]
-    ) or any(item not in _SUMMARY_CONTENT_TYPES for item in qwen["content_type_classes"]):
+    ) or any(item not in _SUMMARY_STATUS_CLASSES for item in qwen["compiler_status_classes"]
+    ) or any(item not in _SUMMARY_CONTENT_TYPES for item in qwen["content_type_classes"]
+    ) or any(item not in _SUMMARY_CONTENT_TYPES for item in qwen["compiler_content_type_classes"]):
         raise VerificationError("qualification_summary_invalid")
     if any(type(qwen[name]) is not bool for name in ("path_error", "normal_close", "handler_error", "truncated")):
         raise VerificationError("qualification_summary_invalid")
@@ -2626,6 +2909,8 @@ class CapturedRequest:
     path: str
     body: bytes
     headers: dict[str, str]
+    method: str = "POST"
+    header_name_counts: tuple[tuple[str, int], ...] = ()
 
 
 def _safe_roundtrip_request_projection(body: bytes) -> dict[str, object]:
@@ -4253,7 +4538,22 @@ class _RelayHandler(http.server.BaseHTTPRequestHandler):
             for key, value in self.headers.items()
             if key.lower() not in {"host", "content-length", "connection"}
         }
-        captured = CapturedRequest(path=self.path, body=body, headers=headers)
+        raw_header_items = (
+            self.headers.raw_items()
+            if hasattr(self.headers, "raw_items")
+            else self.headers.items()
+        )
+        header_counts: dict[str, int] = {}
+        for name, _value in raw_header_items:
+            lowered = name.lower()
+            header_counts[lowered] = header_counts.get(lowered, 0) + 1
+        captured = CapturedRequest(
+            path=self.path,
+            body=body,
+            headers=headers,
+            method=self.command,
+            header_name_counts=tuple(sorted(header_counts.items())),
+        )
         if self.server.capture_requests:
             self.server.remember(captured)
         response_status: int | None = None
@@ -5112,6 +5412,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.request_path_classes: set[str] = set()
         self.upstream_statuses: list[int] = []
         self.inference_statuses: list[int] = []
+        self.compiler_statuses: list[int] = []
         self.path_rejections = 0
         self.path_rejection_classes: set[str] = set()
         self.sse_structures: list[dict[str, object]] = []
@@ -5119,6 +5420,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         self.stream_normal_close = False
         self.sse_content_type_classes: list[str] = []
         self.inference_content_type_classes: list[str] = []
+        self.compiler_content_type_classes: list[str] = []
         self.downstream_closed_early = False
         self.upstream_truncated = False
         self.handler_error = False
@@ -5166,11 +5468,19 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
             )
             self.auth_replaced = self.auth_replaced or headers.get("authorization") != f"Bearer {self.qwen_token}"
 
-    def record_upstream_status(self, status: int, *, inference: bool = False) -> None:
+    def record_upstream_status(
+        self,
+        status: int,
+        *,
+        inference: bool = False,
+        compiler: bool = False,
+    ) -> None:
         with self._lock:
             self.upstream_statuses.append(status)
             if inference:
                 self.inference_statuses.append(status)
+            if compiler:
+                self.compiler_statuses.append(status)
 
     def record_path_rejection(self, path: str) -> None:
         with self._lock:
@@ -5216,7 +5526,13 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
         with self._lock:
             self.sse_structures.append(structure)
 
-    def remember_content_type(self, content_type: str, *, inference: bool = False) -> None:
+    def remember_content_type(
+        self,
+        content_type: str,
+        *,
+        inference: bool = False,
+        compiler: bool = False,
+    ) -> None:
         with self._lock:
             content_type_class = (
                 "sse"
@@ -5228,6 +5544,8 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
             self.sse_content_type_classes.append(content_type_class)
             if inference:
                 self.inference_content_type_classes.append(content_type_class)
+            if compiler:
+                self.compiler_content_type_classes.append(content_type_class)
 
     def status(self) -> dict[str, object]:
         with self._lock:
@@ -5247,6 +5565,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "request_path_classes": sorted(self.request_path_classes),
                 "upstream_statuses": list(self.upstream_statuses),
                 "inference_statuses": list(self.inference_statuses),
+                "compiler_statuses": list(self.compiler_statuses),
                 "path_rejections": self.path_rejections,
                 "path_rejection_classes": sorted(self.path_rejection_classes),
                 "first_event_before_upstream_completion": self.stream_first_event_before_upstream_completion,
@@ -5254,6 +5573,7 @@ class _QwenRelayServer(http.server.ThreadingHTTPServer):
                 "sse_structures": list(self.sse_structures),
                 "sse_content_type_classes": list(self.sse_content_type_classes),
                 "inference_content_type_classes": list(self.inference_content_type_classes),
+                "compiler_content_type_classes": list(self.compiler_content_type_classes),
                 "downstream_closed_early": self.downstream_closed_early,
                 "upstream_truncated": self.upstream_truncated,
                 "handler_error": self.handler_error,
@@ -5334,6 +5654,7 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
                     self.server.remember_content_type(
                         response.headers.get("content-type", "").lower(),
                         inference=inference,
+                        compiler=method == "POST" and not inference,
                     )
                     recorder = (
                         _SSEStructuralRecorder()
@@ -5385,13 +5706,17 @@ class _QwenRelayHandler(http.server.BaseHTTPRequestHandler):
                                 recorder.mark_downstream_closed_early()
                             self.server.remember_sse_structure(recorder.snapshot())
                     self.server.record_upstream_status(
-                        response.status_code, inference=inference
+                        response.status_code,
+                        inference=inference,
+                        compiler=method == "POST" and not inference,
                     )
         except httpx.HTTPError:
             self.server.record_upstream_truncated()
             if response_status is not None:
                 self.server.record_upstream_status(
-                    response_status, inference=inference
+                    response_status,
+                    inference=inference,
+                    compiler=method == "POST" and not inference,
                 )
             if not headers_sent and downstream_open:
                 try:
@@ -7093,6 +7418,7 @@ def _run_composed_codex_tool_roundtrip(
     qwen_port: int,
     local_port: int,
     service_token: str,
+    signing_secret: str,
     tracker: StageTracker,
     qualification_hook: bool = False,
 ) -> dict[str, object]:
@@ -7157,6 +7483,14 @@ def _run_composed_codex_tool_roundtrip(
             local_metrics_after,
         )
         local_requests_snapshot = relay.snapshot()
+        signed_identity_facts = [
+            _safe_signed_identity_projection(
+                request,
+                service_token=service_token,
+                signing_secret=signing_secret,
+            )
+            for request in local_requests_snapshot[:2]
+        ]
         tracker.set("tool_roundtrip_qwen_projection")
         qwen_status = _qwen_relay_status(qwen_port)
         fake_status = fake_qwen_server.status() if fake_qwen_server is not None else {}
@@ -7198,6 +7532,7 @@ def _run_composed_codex_tool_roundtrip(
                 accounting_statuses=accounting_statuses,
                 qualification_rejection=qualification_rejection,
                 artifact_equal=qualification_rejection is not None,
+                signed_identity_facts=signed_identity_facts,
             )
             _write_preclassification_summary(root, summary)
         tracker.set("tool_roundtrip_failure_decision")
@@ -7930,6 +8265,7 @@ def _run_composed_stream_diagnostic(
                 qwen_port=qwen_port,
                 local_port=local_port,
                 service_token=service_token,
+                signing_secret=signing_secret,
                 tracker=tracker,
                 qualification_hook=qualification_hook,
             )
