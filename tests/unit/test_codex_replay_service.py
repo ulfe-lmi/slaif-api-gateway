@@ -121,6 +121,16 @@ def _idless_tool() -> Candidate:
     )
 
 
+def _idless_custom_tool() -> Candidate:
+    return Candidate(
+        item_kind="custom_tool_call",
+        item_id=None,
+        call_id="custom_call_1",
+        tool_namespace="functions",
+        tool_name="exec",
+    )
+
+
 def _compaction(*, content: str = "opaque-value") -> Candidate:
     return Candidate(
         item_kind="compaction",
@@ -541,6 +551,90 @@ async def test_hmac_rotation_verifies_old_rows_and_new_rows_by_row_version(
     )
     assert len(new_authorization.references) == 1
     assert {row.hmac_key_version for row in repository.rows} == {1, 2}
+
+
+@pytest.mark.asyncio
+async def test_hmac_rotation_new_v2_function_present_and_idless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "unit-replay-secret")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V2", "unit-replay-secret-v2")
+    repository = FakeRepository()
+    service = CodexReplayService(
+        repository=repository,
+        settings=Settings(APP_ENV="development", ACTIVE_HMAC_KEY_VERSION="2"),
+    )
+    key_id = uuid.uuid4()
+    route_id = uuid.uuid4()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    stored = Candidate(
+        item_kind="function_call",
+        item_id="fc_rotation_v2",
+        call_id="function_call_v2",
+        tool_namespace="functions",
+        tool_name="exec",
+    )
+    await service.persist_validated_references(
+        candidates=(stored,), gateway_key_id=key_id, usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_rotation_v2_function", provider="local-coding",
+        route_id=route_id, upstream_model="qwen-test", now=now,
+    )
+    present = await service.verify_owned_replay(
+        candidates=(stored,), gateway_key_id=key_id, now=now + timedelta(minutes=1)
+    )
+    idless = await service.verify_owned_replay(
+        candidates=(Candidate(
+            item_kind="function_call", item_id=None,
+            call_id="function_call_v2", tool_namespace="functions", tool_name="exec",
+        ),),
+        gateway_key_id=key_id, now=now + timedelta(minutes=1),
+        allow_idless_tool_call_replay=True,
+    )
+    assert len(present.references) == 1
+    assert len(idless.references) == 1
+    assert present.references[0].item_kind == idless.references[0].item_kind == "function_call"
+
+
+@pytest.mark.asyncio
+async def test_hmac_rotation_new_v2_custom_present_and_idless(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "unit-replay-secret")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V2", "unit-replay-secret-v2")
+    repository = FakeRepository()
+    service = CodexReplayService(
+        repository=repository,
+        settings=Settings(APP_ENV="development", ACTIVE_HMAC_KEY_VERSION="2"),
+    )
+    key_id = uuid.uuid4()
+    route_id = uuid.uuid4()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    stored = Candidate(
+        item_kind="custom_tool_call",
+        item_id="custom_rotation_v2",
+        call_id="custom_call_1",
+        tool_namespace="functions",
+        tool_name="exec",
+    )
+    await service.persist_validated_references(
+        candidates=(stored,), gateway_key_id=key_id, usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_rotation_v2_custom", provider="local-coding",
+        route_id=route_id, upstream_model="qwen-test", now=now,
+    )
+    present = await service.verify_owned_replay(
+        candidates=(stored,), gateway_key_id=key_id, now=now + timedelta(minutes=1)
+    )
+    idless = await service.verify_owned_replay(
+        candidates=(Candidate(
+            item_kind="custom_tool_call", item_id=None,
+            call_id="custom_call_1", tool_namespace="functions", tool_name="exec",
+        ),),
+        gateway_key_id=key_id, now=now + timedelta(minutes=1),
+        allow_idless_tool_call_replay=True,
+    )
+    assert len(present.references) == 1
+    assert len(idless.references) == 1
+    assert present.references[0].item_kind == idless.references[0].item_kind == "custom_tool_call"
 
 
 @pytest.mark.asyncio
