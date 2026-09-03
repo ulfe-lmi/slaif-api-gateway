@@ -52,6 +52,15 @@ closed before HTTP. Core identity derivation is boundary-tested from
 authenticated owner/Gateway-key/session/repository/route facts, while adapter and pinned
 application conformance remains separate from any Codex-composed E2E claim.
 
+For the exact signed `local-coding-v1` contract, each derived principal,
+session, and repository value is an unconditional `h`-prefixed, unpadded
+base64url encoding of the complete 256-bit HMAC digest. The prefix guarantees
+the Local-v1 alphanumeric-leading grammar without reducing digest entropy;
+HMAC pseudonymization is not anonymity. Signed route names use the same
+`[A-Za-z0-9][A-Za-z0-9_-]{0,255}` grammar and are rejected before signing or
+forwarding when invalid. Static route parsing retains its existing route-name
+grammar.
+
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
 `POST /v1/embeddings` are implemented separately, while the bounded Realtime

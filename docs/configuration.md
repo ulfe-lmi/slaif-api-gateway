@@ -69,6 +69,11 @@ and rejects equality with either identity secret or a known core/provider
 secret as `local_coding_secret_roles_not_separate`; secret values are never
 included in that error. Static mode does not require identity secrets, but
 configured optional values are still checked for role separation.
+Signed Local-v1 derived principal, session, and repository fields use an
+unconditional `h` prefix followed by the complete unpadded base64url HMAC
+digest, so every value satisfies the pinned alphanumeric-leading peer grammar
+without truncation. Invalid signed route names are rejected before signing or
+forwarding; static route parsing keeps its existing route-name rules.
 The route contract selects `identity_mode=static` or
 `identity_mode=signed_identity_v1`, declares the signed replay bounds, and
 requires `deployment_mode=single_worker` for signed mode. Version 1 supports a

@@ -40,6 +40,10 @@ Core invariants:
   The Codex 0.149 thread namespace is transient and never an accounting,
   replay, or idempotency key. Successful requests using it remain ordinary
   `strict_bounded` reservations finalized from provider usage.
+  Signed Local-v1 principal, session, and repository values are unconditional
+  `h`-prefixed encodings of the full 256-bit HMAC digest, preserving all digest
+  bytes while satisfying the peer grammar; this is HMAC pseudonymization, not
+  anonymity.
 
 The disposable full-stack verifier additionally checks one terminal ledger
 outcome per admitted public request, zero pending counters, empty external
