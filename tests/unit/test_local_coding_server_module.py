@@ -226,8 +226,9 @@ def test_signed_identity_signer_rejects_invalid_hand_built_fields() -> None:
             timestamp="1700000000",
             nonce="1234567890abcdef",
         )
+    valid_identity = replace(identity, principal="principal-opaque")
     for field in ("session", "repository", "route"):
-        invalid_identity = replace(identity, **{field: "-invalid"})
+        invalid_identity = replace(valid_identity, **{field: "-invalid"})
         with pytest.raises(ValueError, match=f"Local Coding {field} is invalid"):
             sign_identity(
                 signing_secret=SIGNING_SECRET.encode(),

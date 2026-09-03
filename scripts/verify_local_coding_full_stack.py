@@ -1185,7 +1185,6 @@ def _verify_fixtures() -> None:
         raise VerificationError("session_source_mismatch")
     if fixture["relationships"]["same_session_stability"] is not True or fixture["relationships"]["cross_session_isolation"] is not True:
         raise VerificationError("session_relationship_missing")
-    _verify_local_signed_identity_matrix()
 
 
 def _read_pinned_direct_baseline() -> dict[str, object]:
@@ -9513,6 +9512,7 @@ def _run_dedicated_codex_tool_roundtrip(
     runtime = None if fake_qwen else _read_runtime_reference()
     _verify_fixtures()
     if not fake_qwen:
+        _verify_local_signed_identity_matrix()
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
     with tempfile.TemporaryDirectory(prefix="slaif-155ai-qualification-", dir="/tmp") as temporary:
