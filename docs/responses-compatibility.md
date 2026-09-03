@@ -239,6 +239,15 @@ unknown fields, orphan/reordered/cross-type pairs, and linkage mismatches remain
 denied. Raw output IDs are transient provider input and never enter safe
 evidence or persistence.
 
+For the exact `codex-0.149-responses-v1` -> `local-coding-v1` pair only, the
+pinned Codex 0.149 client may omit or send `null` for a function/custom
+tool-call item `id`. The mandatory `call_id` remains the authentication anchor:
+the gateway performs a same-key, same-kind, unexpired HMAC lookup, requires one
+row and exact HMAC-key-version binding, then checks the stored tool and route
+facts before admission. It never invents an item ID or falls back from a
+present malformed/wrong item ID. Other clients, Codex 0.147, reasoning, compact
+history, hosted routes, and unreviewed server pairings remain strict.
+
 The pinned V1 compact request does not carry `max_output_tokens`. SLAIF keeps
 that field absent in the provider request while using the validated Codex route
 maximum (128,000 for the qualification profile) as effective/requested output

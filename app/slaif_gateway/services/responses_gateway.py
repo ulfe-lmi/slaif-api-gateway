@@ -157,6 +157,7 @@ from slaif_gateway.services.responses_request_policy import (
     conversation_requested,
     previous_response_id_requested,
     responses_codex_client_tools_allowed,
+    responses_codex_0149_tool_roundtrip_requested,
     responses_codex_client_tools_requested,
     responses_codex_compaction_allowed,
     responses_codex_compaction_replay_requested,
@@ -168,7 +169,6 @@ from slaif_gateway.services.responses_request_policy import (
     responses_codex_request_envelope_requested,
     responses_codex_streaming_tool_events_allowed,
     responses_codex_streaming_tool_events_requested,
-    responses_codex_tool_roundtrip_requested,
     responses_custom_tools_requested,
     responses_file_input_requested,
     responses_function_tools_requested,
@@ -1159,7 +1159,7 @@ async def handle_response_create(
             and allow_codex_request_envelope
             and allow_codex_client_tools
             and allow_codex_streaming_tool_events
-            and responses_codex_tool_roundtrip_requested(body)
+            and responses_codex_0149_tool_roundtrip_requested(body)
         )
         else None
     )
@@ -1208,15 +1208,27 @@ async def handle_response_create(
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
+    allow_idless_tool_call_replay = bool(
+        client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+        and client_module.policy_spec is not None
+        and client_module.policy_spec.allow_idless_tool_call_replay
+    )
     replay_candidates = codex_replay_request_candidates(
         policy_result.effective_body,
+        allow_idless_tool_call_replay=allow_idless_tool_call_replay,
         top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
     )
-    replay_authorization = await _verify_owned_codex_replay_references(
-        candidates=replay_candidates,
-        authenticated_key=authenticated_key,
-        settings=settings,
-        request=request,
+    defer_idless_replay = any(candidate.item_id is None for candidate in replay_candidates)
+    replay_authorization = (
+        CodexReplayAuthorization(references=())
+        if defer_idless_replay
+        else await _verify_owned_codex_replay_references(
+            candidates=replay_candidates,
+            authenticated_key=authenticated_key,
+            settings=settings,
+            request=request,
+            allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+        )
     )
     request_id = _request_id_from_request(request)
     route = await _resolve_responses_route(
@@ -1255,6 +1267,21 @@ async def handle_response_create(
         route=route,
         settings=settings,
     )
+    if defer_idless_replay:
+        if local_coding_server_context is None:
+            raise OpenAICompatibleError(
+                "The selected client and server modules are not compatible.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="incompatible_client_server_pair",
+            )
+        replay_authorization = await _verify_owned_codex_replay_references(
+            candidates=replay_candidates,
+            authenticated_key=authenticated_key,
+            settings=settings,
+            request=request,
+            allow_idless_tool_call_replay=True,
+        )
     pair_local_codex_top_level_tools, pair_local_codex_streaming_tools = (
         _derive_pair_local_codex_top_level_profile(
             client_module_id=client_module.module_id,
@@ -2218,6 +2245,7 @@ async def _verify_owned_codex_replay_references(
     authenticated_key: AuthenticatedGatewayKey,
     settings: Settings,
     request: Request | None,
+    allow_idless_tool_call_replay: bool = False,
 ) -> CodexReplayAuthorization:
     if not candidates:
         return CodexReplayAuthorization(references=())
@@ -2235,6 +2263,7 @@ async def _verify_owned_codex_replay_references(
             return await service.verify_owned_replay(
                 candidates=candidates,
                 gateway_key_id=authenticated_key.gateway_key_id,
+                allow_idless_tool_call_replay=allow_idless_tool_call_replay,
             )
         except CodexReplayReferenceError as exc:
             raise _openai_error_from_codex_replay_error(exc) from exc

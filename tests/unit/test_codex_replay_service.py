@@ -55,6 +55,16 @@ class FakeRepository:
             and row.expires_at > now
         ]
 
+    async def list_active_by_call_digests(self, *, gateway_key_id, call_digests, now):
+        allowed = set(call_digests)
+        return [
+            row
+            for row in self.rows
+            if row.gateway_key_id == gateway_key_id
+            and (row.item_kind, row.call_id_hmac) in allowed
+            and row.expires_at > now
+        ]
+
     async def upsert_many(self, records):
         self.upsert_calls += 1
         for record in records:
@@ -95,6 +105,16 @@ def _tool() -> Candidate:
     return Candidate(
         item_kind="custom_tool_call",
         item_id="ctc_1",
+        call_id="call_1",
+        tool_namespace="functions",
+        tool_name="exec",
+    )
+
+
+def _idless_tool() -> Candidate:
+    return Candidate(
+        item_kind="function_call",
+        item_id=None,
         call_id="call_1",
         tool_namespace="functions",
         tool_name="exec",
@@ -354,3 +374,105 @@ async def test_digest_lookup_failure_has_no_private_exception_chain() -> None:
     assert exc_info.value.error_code == "responses_codex_replay_reference_not_found"
     assert exc_info.value.__cause__ is None
     assert private_canary not in repr(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_idless_function_call_uses_exact_same_key_call_hmac_row() -> None:
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    key_id = uuid.uuid4()
+    route_id = uuid.uuid4()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    stored = Candidate(
+        item_kind="function_call",
+        item_id="fc_prefixed_1",
+        call_id="call_1",
+        tool_namespace="functions",
+        tool_name="exec",
+    )
+    await service.persist_validated_references(
+        candidates=(stored,),
+        gateway_key_id=key_id,
+        usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_idless",
+        provider="local-coding",
+        route_id=route_id,
+        upstream_model="qwen-test",
+        now=now,
+    )
+
+    authorization = await service.verify_owned_replay(
+        candidates=(_idless_tool(),),
+        gateway_key_id=key_id,
+        now=now + timedelta(minutes=1),
+        allow_idless_tool_call_replay=True,
+    )
+    assert len(authorization.references) == 1
+    assert authorization.references[0].item_kind == "function_call"
+    assert authorization.references[0].tool_name == "exec"
+    service.verify_route_compatibility(
+        authorization,
+        provider="local-coding",
+        route_id=route_id,
+        upstream_model="qwen-test",
+    )
+
+    with pytest.raises(CodexReplayReferenceError):
+        await service.verify_owned_replay(
+            candidates=(
+                Candidate(
+                    item_kind="function_call",
+                    item_id="fc_wrong_1",
+                    call_id="call_1",
+                    tool_namespace="functions",
+                    tool_name="exec",
+                ),
+            ),
+            gateway_key_id=key_id,
+            now=now + timedelta(minutes=1),
+        )
+
+    with pytest.raises(CodexReplayReferenceError):
+        await service.verify_owned_replay(
+            candidates=(_idless_tool(),),
+            gateway_key_id=uuid.uuid4(),
+            now=now + timedelta(minutes=1),
+            allow_idless_tool_call_replay=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_idless_call_digest_ambiguity_is_not_collapsed() -> None:
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    key_id = uuid.uuid4()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    stored = Candidate(
+        item_kind="function_call",
+        item_id="fc_prefixed_1",
+        call_id="call_1",
+        tool_namespace="functions",
+        tool_name="exec",
+    )
+    await service.persist_validated_references(
+        candidates=(stored,),
+        gateway_key_id=key_id,
+        usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_ambiguous_call",
+        provider="local-coding",
+        route_id=uuid.uuid4(),
+        upstream_model="qwen-test",
+        now=now,
+    )
+    duplicate = SimpleNamespace(**repository.rows[0].__dict__)
+    duplicate.item_id_hmac = "0" * 64
+    repository.rows.append(duplicate)
+
+    with pytest.raises(CodexReplayReferenceError) as exc_info:
+        await service.verify_owned_replay(
+            candidates=(_idless_tool(),),
+            gateway_key_id=key_id,
+            now=now + timedelta(minutes=1),
+            allow_idless_tool_call_replay=True,
+        )
+    assert exc_info.value.error_code == "responses_codex_replay_reference_not_found"

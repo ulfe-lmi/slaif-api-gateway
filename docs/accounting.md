@@ -115,6 +115,12 @@ facts, and no hosted-tool fee/hold metadata for both Gateway keys.
   included in normal input estimation and accounting bounds, but visible text,
   IDs, and derived replay material are never stored in ledger, audit, metrics,
   or exports. ID-less encrypted reasoning remains outside this dialect.
+- The same exact Codex 0.149 Local pair may authenticate an absent/null
+  function or custom tool-call item ID through one existing same-key call-ID
+  HMAC reference. This is replay control metadata, not billing truth: it is
+  checked before reservation/provider work, and no raw call/item ID or digest
+  is persisted or exposed. Other clients and replayable item kinds retain the
+  existing item-ID requirement.
 - Fully gated Codex admission replaces only the injected ordinary 1,024 output
   default with the strict route default (32,768 in the qualification profile),
   then enforces route/operator output and context bounds before Redis, pricing,

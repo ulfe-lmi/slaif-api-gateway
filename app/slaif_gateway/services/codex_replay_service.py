@@ -30,7 +30,7 @@ class CodexReplayCandidate(Protocol):
     """Transient validated ID fields accepted by the immediate HMAC step."""
 
     item_kind: str
-    item_id: str
+    item_id: str | None
     call_id: str | None
     tool_namespace: str | None
     tool_name: str | None
@@ -58,6 +58,14 @@ class _CodexReplayRepository(Protocol):
         *,
         gateway_key_id: uuid.UUID,
         item_digests: Sequence[tuple[str, str]],
+        now: datetime,
+    ) -> list[CodexReplayReference]: ...
+
+    async def list_active_by_call_digests(
+        self,
+        *,
+        gateway_key_id: uuid.UUID,
+        call_digests: Sequence[tuple[str, str]],
         now: datetime,
     ) -> list[CodexReplayReference]: ...
 
@@ -111,10 +119,14 @@ class CodexReplayService:
         candidates: Sequence[CodexReplayCandidate],
         gateway_key_id: uuid.UUID,
         now: datetime | None = None,
+        allow_idless_tool_call_replay: bool = False,
     ) -> CodexReplayAuthorization:
         """Prove same-key active ownership before route or quota side effects."""
 
-        checked = _validated_candidates(candidates)
+        checked = _validated_candidates(
+            candidates,
+            allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+        )
         if not checked:
             return CodexReplayAuthorization(references=())
         checked_now = now or datetime.now(UTC)
@@ -139,31 +151,57 @@ class CodexReplayService:
                 )
             secrets[version] = secret
 
-        digest_candidates: list[tuple[str, str]] = []
+        item_digest_candidates: list[tuple[str, str]] = []
+        call_digest_candidates: list[tuple[str, str]] = []
         for candidate in checked:
             for secret in secrets.values():
-                digest_candidates.append(
-                    (candidate.item_kind, _item_digest(candidate, secret=secret))
-                )
+                if candidate.item_id is not None:
+                    item_digest_candidates.append(
+                        (candidate.item_kind, _item_digest(candidate, secret=secret))
+                    )
+                if candidate.item_kind in {"function_call", "custom_tool_call"}:
+                    call_digest = _call_digest(candidate, secret=secret)
+                    assert call_digest is not None
+                    call_digest_candidates.append((candidate.item_kind, call_digest))
         try:
-            rows = await self._repository.list_active_by_item_digests(
+            item_rows = await self._repository.list_active_by_item_digests(
                 gateway_key_id=gateway_key_id,
-                item_digests=digest_candidates,
+                item_digests=item_digest_candidates,
+                now=checked_now,
+            )
+            call_rows = await self._repository.list_active_by_call_digests(
+                gateway_key_id=gateway_key_id,
+                call_digests=call_digest_candidates,
                 now=checked_now,
             )
         except Exception:
             raise _ownership_error() from None
-        rows_by_digest = {(row.item_kind, row.item_id_hmac): row for row in rows}
 
         authorized: list[AuthorizedCodexReplayReference] = []
         for candidate in checked:
-            matches = []
-            for version, secret in secrets.items():
-                row = rows_by_digest.get(
-                    (candidate.item_kind, _item_digest(candidate, secret=secret))
-                )
-                if row is not None and row.hmac_key_version == version:
-                    matches.append((row, secret))
+            matches: list[tuple[CodexReplayReference, str]] = []
+            if candidate.item_id is None:
+                for version, secret in secrets.items():
+                    expected_digest = _call_digest(candidate, secret=secret)
+                    assert expected_digest is not None
+                    for row in call_rows:
+                        if (
+                            row.item_kind == candidate.item_kind
+                            and row.call_id_hmac is not None
+                            and hmac.compare_digest(row.call_id_hmac, expected_digest)
+                            and row.hmac_key_version == version
+                        ):
+                            matches.append((row, secret))
+            else:
+                for version, secret in secrets.items():
+                    expected_digest = _item_digest(candidate, secret=secret)
+                    for row in item_rows:
+                        if (
+                            row.item_kind == candidate.item_kind
+                            and row.item_id_hmac == expected_digest
+                            and row.hmac_key_version == version
+                        ):
+                            matches.append((row, secret))
             if len(matches) != 1:
                 raise _ownership_error()
             row, secret = matches[0]
@@ -303,6 +341,8 @@ class CodexReplayService:
 
 def _validated_candidates(
     candidates: Sequence[CodexReplayCandidate],
+    *,
+    allow_idless_tool_call_replay: bool = False,
 ) -> tuple[CodexReplayCandidate, ...]:
     checked = tuple(candidates)
     seen_items: set[tuple[str, str]] = set()
@@ -310,12 +350,19 @@ def _validated_candidates(
     for candidate in checked:
         if candidate.item_kind not in CODEX_REPLAY_ITEM_KINDS:
             raise _ownership_error()
-        if _IDENTIFIER_RE.fullmatch(candidate.item_id) is None:
-            raise _ownership_error()
-        item_key = (candidate.item_kind, candidate.item_id)
-        if item_key in seen_items:
-            raise _ownership_error()
-        seen_items.add(item_key)
+        if candidate.item_id is None:
+            if (
+                not allow_idless_tool_call_replay
+                or candidate.item_kind not in {"function_call", "custom_tool_call"}
+            ):
+                raise _ownership_error()
+        else:
+            if _IDENTIFIER_RE.fullmatch(candidate.item_id) is None:
+                raise _ownership_error()
+            item_key = (candidate.item_kind, candidate.item_id)
+            if item_key in seen_items:
+                raise _ownership_error()
+            seen_items.add(item_key)
         if candidate.item_kind in {"reasoning", "compaction"}:
             if any(
                 value is not None

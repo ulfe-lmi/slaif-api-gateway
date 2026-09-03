@@ -1660,6 +1660,9 @@ _SUMMARY_GATEWAY_ERROR_CODE_CLASSES = frozenset(
         "replay_route_mismatch",
         "route_capability_not_supported",
         "request_policy_invalid",
+        "encrypted_reasoning_replay_not_allowed",
+        "reasoning_visible_invalid",
+        "reasoning_visible_too_large",
         "other",
     }
 )
@@ -3052,6 +3055,12 @@ def _safe_gateway_error_code_class(value: object) -> str:
         return "replay_reference_not_found"
     if value == "responses_codex_replay_route_mismatch":
         return "replay_route_mismatch"
+    if value == "responses_codex_encrypted_reasoning_replay_not_allowed":
+        return "encrypted_reasoning_replay_not_allowed"
+    if value == "responses_codex_reasoning_visible_invalid":
+        return "reasoning_visible_invalid"
+    if value == "responses_codex_reasoning_visible_too_large":
+        return "reasoning_visible_too_large"
     if value in {
         "responses_route_capability_not_supported",
         "responses_route_capability_missing",
@@ -3191,6 +3200,9 @@ _SAFE_GATEWAY_ERROR_CODE_CLASSES = frozenset(
         "replay_route_mismatch",
         "route_capability_not_supported",
         "request_policy_invalid",
+        "encrypted_reasoning_replay_not_allowed",
+        "reasoning_visible_invalid",
+        "reasoning_visible_too_large",
         "other",
     }
 )

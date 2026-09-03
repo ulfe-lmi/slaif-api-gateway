@@ -160,7 +160,7 @@ class CodexReplayRequestCandidate:
     """Transient validated replay identifiers for the immediate HMAC lookup."""
 
     item_kind: str
-    item_id: str
+    item_id: str | None
     call_id: str | None
     tool_namespace: str | None
     tool_name: str | None
@@ -265,7 +265,7 @@ class ResponsesRequestPolicy:
                 and allow_codex_client_tools
                 and allow_codex_streaming_tool_events
                 and effective_body.get("stream") is True
-                and _input_contains_codex_tool_roundtrip(effective_body.get("input"))
+                and _input_contains_codex_0149_tool_roundtrip(effective_body.get("input"))
             )
             else None
         )
@@ -297,6 +297,10 @@ class ResponsesRequestPolicy:
             )
         if codex_replay_request_candidates(
             effective_body,
+            allow_idless_tool_call_replay=(
+                self._codex_spec is not None
+                and self._codex_spec.allow_idless_tool_call_replay
+            ),
             top_level_tool_taxonomy=continuation_taxonomy,
         ) and (
             "conversation" in effective_body or "previous_response_id" in effective_body
@@ -346,7 +350,11 @@ class ResponsesRequestPolicy:
         if (
             effective_body.get("stream") is True
             and function_tools_requested
-            and not (codex_streaming_tool_events_requested or adapter_managed_streaming_allowed)
+            and not (
+                codex_streaming_tool_events_requested
+                or adapter_managed_streaming_allowed
+                or continuation_taxonomy is not None
+            )
         ):
             _raise(
                 "tools",
@@ -356,7 +364,11 @@ class ResponsesRequestPolicy:
         if (
             effective_body.get("stream") is True
             and custom_tools_requested
-            and not (codex_streaming_tool_events_requested or adapter_managed_streaming_allowed)
+            and not (
+                codex_streaming_tool_events_requested
+                or adapter_managed_streaming_allowed
+                or continuation_taxonomy is not None
+            )
         ):
             _raise(
                 "tools",
@@ -1812,12 +1824,23 @@ class ResponsesRequestPolicy:
             )
         item_id_value = item.get("id")
         if item_id_value is None:
-            _raise(
-                f"{param}.id",
-                "responses_codex_tool_roundtrip_invalid",
-                "Codex tool-call continuation requires a bounded item ID.",
+            idless_allowed = (
+                self._codex_spec is not None
+                and (
+                    self._codex_spec.custom_tool_call_item_id_optional
+                    if custom
+                    else self._codex_spec.function_call_item_id_optional
+                )
             )
-        item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
+            if not idless_allowed:
+                _raise(
+                    f"{param}.id",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex tool-call continuation requires a bounded item ID.",
+                )
+            item_id = None
+        else:
+            item_id = self._validate_codex_message_id(item_id_value, param=f"{param}.id")
         text_field = "input" if custom else "arguments"
         text_value = item.get(text_field)
         if not isinstance(text_value, str):
@@ -1841,7 +1864,8 @@ class ResponsesRequestPolicy:
             "call_id": call_id,
             "name": name,
         }
-        canonical["id"] = item_id
+        if "id" in item:
+            canonical["id"] = item_id
         if status is not None:
             canonical["status"] = status
         if namespace is not None:
@@ -4165,6 +4189,7 @@ def codex_replay_request_candidates(
     body: Mapping[str, Any],
     *,
     top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
+    allow_idless_tool_call_replay: bool = False,
 ) -> tuple[CodexReplayRequestCandidate | CodexCompactionReplayCandidate, ...]:
     """Extract only validated IDs and approved identities from canonical input."""
 
@@ -4230,7 +4255,7 @@ def codex_replay_request_candidates(
             and (namespace is None or declaration[0] == namespace)
         ]
         if (
-            isinstance(item_id, str)
+            (isinstance(item_id, str) or (item_id is None and allow_idless_tool_call_replay))
             and isinstance(call_id, str)
             and isinstance(name, str)
             and len(matches) == 1
@@ -4716,9 +4741,38 @@ def _input_contains_codex_tool_roundtrip(value: Any) -> bool:
     return function_pair_count == 1 and custom_pair_count == 0
 
 
+def _input_contains_codex_0149_tool_roundtrip(value: Any) -> bool:
+    if not isinstance(value, list):
+        return False
+    item_types = [
+        item.get("type")
+        for item in value
+        if isinstance(item, Mapping)
+    ]
+    function_pair_count = sum(
+        item_types[index : index + 2] == ["function_call", "function_call_output"]
+        for index in range(len(item_types) - 1)
+    )
+    custom_pair_count = sum(
+        item_types[index : index + 2]
+        == ["custom_tool_call", "custom_tool_call_output"]
+        for index in range(len(item_types) - 1)
+    )
+    return (function_pair_count == 1 and custom_pair_count == 0) or (
+        function_pair_count == 0 and custom_pair_count == 1
+    )
+
+
 def responses_codex_tool_roundtrip_requested(body: Mapping[str, Any]) -> bool:
     """Detect one adjacent Codex call/output continuation pair."""
     return body.get("stream") is True and _input_contains_codex_tool_roundtrip(body.get("input"))
+
+
+def responses_codex_0149_tool_roundtrip_requested(body: Mapping[str, Any]) -> bool:
+    """Detect one function or custom pair for the exact 0.149 dialect only."""
+    return body.get("stream") is True and _input_contains_codex_0149_tool_roundtrip(
+        body.get("input")
+    )
 
 
 def _input_contains_custom_tool_call_output(value: Any) -> bool:

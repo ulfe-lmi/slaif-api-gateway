@@ -27,7 +27,7 @@ from slaif_gateway.services.codex_replay_service import (
 @dataclass(frozen=True, slots=True, repr=False)
 class Candidate:
     item_kind: str
-    item_id: str
+    item_id: str | None
     call_id: str | None = None
     tool_namespace: str | None = None
     tool_name: str | None = None
@@ -148,6 +148,37 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
         route_id=route.id,
         upstream_model=route.upstream_model,
     )
+    idless_authorization = await service.verify_owned_replay(
+        candidates=(
+            Candidate(
+                item_kind="custom_tool_call",
+                item_id=None,
+                call_id="call_private_raw_id",
+                tool_namespace="functions",
+                tool_name="exec",
+            ),
+        ),
+        gateway_key_id=key.id,
+        now=now + timedelta(minutes=1),
+        allow_idless_tool_call_replay=True,
+    )
+    assert len(idless_authorization.references) == 1
+    assert idless_authorization.references[0].item_kind == "custom_tool_call"
+    with pytest.raises(CodexReplayReferenceError):
+        await service.verify_owned_replay(
+            candidates=(
+                Candidate(
+                    item_kind="custom_tool_call",
+                    item_id=None,
+                    call_id="call_private_raw_id",
+                    tool_namespace="functions",
+                    tool_name="exec",
+                ),
+            ),
+            gateway_key_id=other_key.id,
+            now=now + timedelta(minutes=1),
+            allow_idless_tool_call_replay=True,
+        )
     for gateway_key_id, checked_now in (
         (other_key.id, now + timedelta(minutes=1)),
         (key.id, now + timedelta(hours=24)),
