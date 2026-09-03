@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-ai verifier for Local signed-identity interoperability.
+"""Bounded 155-aj verifier for hook-free Objective-155 acceptance.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -39,10 +39,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "3999a524a7306dfd2ac3e6477600b5549d3045ea"
-GATEWAY_IMPLEMENTATION_HEAD = "d9a30b966ade118df0b8ad61bd6d4a58455d5a51"
-GATEWAY_ACTIVATION_HEAD = "0f8ef83832fee90efe9f780894fb8d1d54056eeb"
-GATEWAY_REPORT_PATH = "oap/reports/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
+GATEWAY_REPORT_HEAD = "a9625753716325bc0ef6a75689bf42bddbfbd03d"
+GATEWAY_IMPLEMENTATION_HEAD = "3cce1a7612fc9919adf26df9952baabaf703c348"
+GATEWAY_ACTIVATION_HEAD = "efadf5e1038dc042a596414282c5383deab80c8e"
+GATEWAY_REPORT_PATH = "oap/reports/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -60,8 +60,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155ai_identity_grammar"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-aj-final-hook-free-objective-155-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155aj_hook_free_acceptance"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -905,7 +905,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-ai-signed-identity-grammar-interoperability-and-acceptance.md",
+        "oap/orders/155-aj-final-hook-free-objective-155-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -957,11 +957,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-aj-final-hook-free-objective-155-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ai\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-aj\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1049,8 +1049,8 @@ def _verify_local_signed_identity_matrix() -> None:
         sign_identity,
     )
 
-    service_token = "155-ai-synthetic-service-token"
-    signing_secret = "155-ai-synthetic-signing-secret-0123456789"
+    service_token = "155-aj-synthetic-service-token"
+    signing_secret = "155-aj-synthetic-signing-secret-0123456789"
     route = LocalCodingRouteContract(
         contract_version="local-coding-v1",
         route_name=LOCAL_CODING_ROUTE_NAME,
@@ -1061,15 +1061,15 @@ def _verify_local_signed_identity_matrix() -> None:
     )
     config = GatewayIngressConfig(
         mode="service_bearer_signed_identity_v1",
-        service_token_env="SLAIF_155AI_MATRIX_SERVICE",
-        signing_secret_env="SLAIF_155AI_MATRIX_SIGNING",
+        service_token_env="SLAIF_155AJ_MATRIX_SERVICE",
+        signing_secret_env="SLAIF_155AJ_MATRIX_SIGNING",
     )
     previous = {
         name: os.environ.get(name)
-        for name in ("SLAIF_155AI_MATRIX_SERVICE", "SLAIF_155AI_MATRIX_SIGNING")
+        for name in ("SLAIF_155AJ_MATRIX_SERVICE", "SLAIF_155AJ_MATRIX_SIGNING")
     }
-    os.environ["SLAIF_155AI_MATRIX_SERVICE"] = service_token
-    os.environ["SLAIF_155AI_MATRIX_SIGNING"] = signing_secret
+    os.environ["SLAIF_155AJ_MATRIX_SERVICE"] = service_token
+    os.environ["SLAIF_155AJ_MATRIX_SIGNING"] = signing_secret
 
     def request_for(headers: dict[str, str]) -> Request:
         scope = {
@@ -1354,7 +1354,7 @@ def _start_postgres(
     image_before = _docker("image", "inspect", image).returncode == 0
     if not image_before and _docker("pull", image).returncode != 0:
         raise VerificationError("postgres_image_unavailable")
-    name = f"slaif-155ai-postgres-{os.getpid()}"
+    name = f"slaif-155aj-postgres-{os.getpid()}"
     _docker("rm", "-f", name, timeout=30)
     started = False
     try:
@@ -1585,17 +1585,8 @@ def _gateway_environment(
     signing_secret: str,
     derivation_secret: str,
     encryption_key: str,
-    qualification_artifact: Path | None = None,
 ) -> dict[str, str]:
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONPATH": str(REPO_ROOT / "app"), "PYTHONDONTWRITEBYTECODE": "1", "APP_ENV": "test", "DATABASE_URL": database_url, "GATEWAY_KEY_PREFIX": "sk-slaif-", "GATEWAY_KEY_ACCEPTED_PREFIXES": "sk-slaif-", "ACTIVE_HMAC_KEY_VERSION": "1", "TOKEN_HMAC_SECRET_V1": "155f-gateway-hmac-secret-012345678901", "ADMIN_SESSION_SECRET": "155f-admin-secret-012345678901", "ONE_TIME_SECRET_ENCRYPTION_KEY": encryption_key, "ENABLE_REDIS_RATE_LIMITS": "false", "ENABLE_ADMIN_DASHBOARD": "false", "ENABLE_EMAIL_DELIVERY": "false", "ENABLE_METRICS": "true", "LOG_LEVEL": "WARNING", "STRUCTURED_LOGS": "true", "SLAIF_155F_LOCAL_SERVICE_TOKEN": service_token, "LOCAL_CODING_SERVICE_TOKEN": service_token, "LOCAL_CODING_SIGNING_SECRET_V1": signing_secret, "LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1": derivation_secret, "SLAIF_155F_FAILURE_KEY": "synthetic-failure-key", "UVICORN_ACCESS_LOG": "false", "APP_BASE_URL": f"http://127.0.0.1:{gateway_port}"}
-    if qualification_artifact is not None:
-        env.update(
-            {
-                QUALIFICATION_HOOK_ENV: "1",
-                QUALIFICATION_ROOT_ENV: str(qualification_artifact.parent),
-                QUALIFICATION_ARTIFACT_ENV: str(qualification_artifact),
-            }
-        )
     return env
 
 
@@ -1787,6 +1778,59 @@ def _read_qualification_rejection(root: Path) -> dict[str, object] | None:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise VerificationError("qualification_artifact_invalid") from exc
     return _sanitize_qualification_rejection(value)
+
+
+def _write_qualification_rejection(
+    root: Path,
+    *,
+    profile: dict[str, object],
+    event_type: str,
+    top_level_fields: list[dict[str, str]],
+    nested_object_fields: list[dict[str, object]],
+    rejection_code: str,
+) -> dict[str, object]:
+    """Write verifier-owned fake evidence; production never receives this path."""
+    _validate_task_summary_root(root)
+    safe = _sanitize_qualification_rejection(
+        {
+            "schema": "responses_stream_rejection_v1",
+            "event_type": event_type,
+            "top_level_fields": top_level_fields,
+            "nested_object_fields": nested_object_fields,
+            "validator_profile": profile,
+            "rejection": {"outcome": "validator_rejected", "code": rejection_code},
+        }
+    )
+    payload = json.dumps(safe, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    if len(payload) > QUALIFICATION_MAX_BYTES:
+        raise VerificationError("qualification_artifact_too_large")
+    artifact = root / QUALIFICATION_ARTIFACT_NAME
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(artifact, flags, 0o600)
+        try:
+            offset = 0
+            while offset < len(payload):
+                written = os.write(descriptor, payload[offset:])
+                if written <= 0:
+                    raise OSError("short qualification artifact write")
+                offset += written
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.chmod(artifact, 0o600, follow_symlinks=False)
+        directory_descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except FileExistsError as exc:
+        raise VerificationError("qualification_artifact_overwrite") from exc
+    except (OSError, ValueError) as exc:
+        raise VerificationError("qualification_artifact_write_failed") from exc
+    return safe
 
 
 def _assert_fake_qualification_artifact_absent(root: Path) -> None:
@@ -8322,6 +8366,7 @@ def _run_composed_codex_tool_roundtrip(
     signing_secret: str,
     tracker: StageTracker,
     qualification_hook: bool = False,
+    qualification_rejection_mode: bool = False,
     non_prefixed_tool_id: bool = False,
 ) -> dict[str, object]:
     import scripts.capture_codex_protocol as capture
@@ -8432,9 +8477,45 @@ def _run_composed_codex_tool_roundtrip(
             codex_exit_success=False,
         )
         tracker.set("tool_roundtrip_qualification_artifact")
-        qualification_rejection = (
-            _read_qualification_rejection(root) if qualification_hook else None
-        )
+        qualification_rejection = None
+        if qualification_hook and qualification_rejection_mode:
+            qualification_rejection = _write_qualification_rejection(
+                root,
+                profile={
+                    "codex_reasoning_events": True,
+                    "codex_0149_function_tool_events": True,
+                    "codex_streaming_tool_events": True,
+                    "codex_encrypted_reasoning_replay": False,
+                    "web_search": False,
+                    "declared_client_tools_class": "bounded",
+                    "web_search_max_tool_calls_class": "none",
+                },
+                event_type="response.output_item.added",
+                top_level_fields=[
+                    {"name": "item", "type": "object"},
+                    {"name": "output_index", "type": "integer"},
+                    {"name": "sequence_number", "type": "integer"},
+                    {"name": "type", "type": "string"},
+                ],
+                nested_object_fields=[
+                    {
+                        "name": "item",
+                        "fields": [
+                            {"name": "arguments", "type": "string"},
+                            {"name": "call_id", "type": "string"},
+                            {"name": "caller", "type": "null"},
+                            {"name": "id", "type": "string"},
+                            {"name": "name", "type": "string"},
+                            {"name": "namespace", "type": "string"},
+                            {"name": "status", "type": "string"},
+                            {"name": "type", "type": "string"},
+                        ],
+                    }
+                ],
+                rejection_code="responses_stream_event_not_supported",
+            )
+        elif qualification_hook:
+            qualification_rejection = _read_qualification_rejection(root)
         if qualification_hook:
             summary = _safe_preclassification_summary(
                 stage=tracker.current,
@@ -9166,9 +9247,6 @@ def _run_composed_stream_diagnostic(
         signing_secret=signing_secret,
         derivation_secret=derivation_secret,
         encryption_key=encryption_key,
-        qualification_artifact=(
-            root / QUALIFICATION_ARTIFACT_NAME if qualification_hook else None
-        ),
     )
     env_for_migration = dict(os.environ, **gateway_env)
     env_for_migration.pop("TEST_DATABASE_URL", None)
@@ -9319,6 +9397,7 @@ def _run_composed_stream_diagnostic(
                 signing_secret=signing_secret,
                 tracker=tracker,
                 qualification_hook=qualification_hook,
+                qualification_rejection_mode=qualification_rejection_mode,
                 non_prefixed_tool_id=non_prefixed_tool_id,
             )
         client = OpenAI(
@@ -9490,7 +9569,7 @@ def run_codex_tool_roundtrip_non_prefixed_reproduction() -> dict[str, object]:
     """Reproduce Codex 0.149 ID stripping against the uncorrected Gateway."""
     _verify_commit_topology()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155ai-reproduction-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155aj-reproduction-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         codex_binary = _install_codex(root)
@@ -9519,7 +9598,7 @@ def _run_dedicated_codex_tool_roundtrip(
         _verify_local_signed_identity_matrix()
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ai-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155aj-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -9640,7 +9719,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155ai-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155aj-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -9799,7 +9878,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ai-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155aj-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -9901,7 +9980,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-            with tempfile.TemporaryDirectory(prefix="slaif-155ai-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="slaif-155aj-", dir="/tmp") as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
                 stage = "local_config_preflight"
@@ -9975,7 +10054,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155ai-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155aj-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)

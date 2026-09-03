@@ -217,10 +217,10 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155ai_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155aj_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155ai-head"
+    current_head = "current-155aj-head"
     local_head = verifier.LOCAL_REPORT_HEAD
     report_path = verifier.GATEWAY_REPORT_PATH
 
@@ -232,7 +232,7 @@ def test_155ai_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
+            return "oap/active\noap/orders/155-aj-final-hook-free-objective-155-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -264,11 +264,11 @@ def test_155ai_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155ai_topology_anchors_are_the_155ah_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "3999a524a7306dfd2ac3e6477600b5549d3045ea"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "d9a30b966ade118df0b8ad61bd6d4a58455d5a51"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "0f8ef83832fee90efe9f780894fb8d1d54056eeb"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
+def test_155aj_topology_anchors_are_the_155ai_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "a9625753716325bc0ef6a75689bf42bddbfbd03d"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "3cce1a7612fc9919adf26df9952baabaf703c348"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "efadf5e1038dc042a596414282c5383deab80c8e"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
 
 
 def test_155af_topology_anchors_exact_local_report_parent_and_path() -> None:
@@ -909,96 +909,76 @@ def test_forced_fake_rejection_emits_full_bounded_function_item() -> None:
         fake.server_close()
 
 
-def test_qualification_hook_is_exact_profile_scoped_write_once_and_no_follow(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_production_responses_gateway_has_no_155x_qualification_writer() -> None:
+    source = Path(verifier.REPO_ROOT / "app/slaif_gateway/services/responses_gateway.py").read_text(
+        encoding="utf-8"
+    )
+    assert "SLAIF_155X_" not in source
+    assert "_record_qualification_rejection" not in source
+    tree = ast.parse(source)
+    assert not any(
+        isinstance(node, (ast.Call, ast.Import, ast.ImportFrom))
+        and "qualification" in ast.dump(node).lower()
+        for node in ast.walk(tree)
+    )
+
+
+def test_verifier_owned_qualification_evidence_is_bounded_and_write_once(
+    tmp_path: Path,
 ) -> None:
-    from slaif_gateway.providers.streaming import ResponsesStreamValidationProfile
-    from slaif_gateway.services import responses_gateway
-
-    exact_root = tmp_path / "exact"
-    ordinary_root = tmp_path / "ordinary"
-    hosted_root = tmp_path / "hosted"
-    symlink_root = tmp_path / "symlink"
-    for root in (exact_root, ordinary_root, hosted_root, symlink_root):
-        root.mkdir()
-        root.chmod(0o700)
-    artifact = exact_root / verifier.QUALIFICATION_ARTIFACT_NAME
-    monkeypatch.setenv(verifier.QUALIFICATION_HOOK_ENV, "1")
-    monkeypatch.setenv(verifier.QUALIFICATION_ROOT_ENV, str(exact_root))
-    monkeypatch.setenv(verifier.QUALIFICATION_ARTIFACT_ENV, str(artifact))
-    exact = ResponsesStreamValidationProfile(
-        codex_reasoning_events=True,
-        codex_0149_function_tool_events=True,
-        codex_streaming_tool_events=True,
-        declared_client_tools=frozenset({("functions", "shell_command", "function")}),
-        web_search=False,
-    )
-    event = {
-        "type": "response.output_item.added",
-        "sequence_number": 1,
-        "output_index": 0,
-        "item": {
-            "type": "function_call",
-            "id": "qualification_function",
-            "status": "in_progress",
-            "name": "shell_command",
-            "arguments": "synthetic-argument-canary",
-            "call_id": "qualification_call",
-            "caller": None,
-            "namespace": "functions",
+    root = tmp_path / "evidence"
+    root.mkdir()
+    root.chmod(0o700)
+    safe = verifier._write_qualification_rejection(
+        root,
+        profile={
+            "codex_reasoning_events": True,
+            "codex_0149_function_tool_events": True,
+            "codex_streaming_tool_events": True,
+            "codex_encrypted_reasoning_replay": False,
+            "web_search": False,
+            "declared_client_tools_class": "bounded",
+            "web_search_max_tool_calls_class": "none",
         },
-    }
-    responses_gateway._record_qualification_rejection(
-        event, profile=exact, rejection_code="responses_stream_event_not_supported"
+        event_type="response.output_item.added",
+        top_level_fields=[
+            {"name": "item", "type": "object"},
+            {"name": "output_index", "type": "integer"},
+            {"name": "sequence_number", "type": "integer"},
+            {"name": "type", "type": "string"},
+        ],
+        nested_object_fields=[
+            {
+                "name": "item",
+                "fields": [
+                    {"name": "arguments", "type": "string"},
+                    {"name": "call_id", "type": "string"},
+                    {"name": "caller", "type": "null"},
+                    {"name": "id", "type": "string"},
+                    {"name": "name", "type": "string"},
+                    {"name": "namespace", "type": "string"},
+                    {"name": "status", "type": "string"},
+                    {"name": "type", "type": "string"},
+                ],
+            }
+        ],
+        rejection_code="responses_stream_event_not_supported",
     )
+    artifact = root / verifier.QUALIFICATION_ARTIFACT_NAME
     assert artifact.stat().st_mode & 0o777 == 0o600
-    first = artifact.read_bytes()
-    assert b"shell_command" not in first
-    assert b"qualification_function" not in first
-    assert b"qualification_call" not in first
-    assert b"synthetic-argument-canary" not in first
-    assert b"printf" not in first
-    responses_gateway._record_qualification_rejection(
-        {**event, "type": "response.other"},
-        profile=exact,
-        rejection_code="responses_stream_provider_failure",
-    )
-    assert artifact.read_bytes() == first
-
-    ordinary = ResponsesStreamValidationProfile()
-    ordinary_artifact = ordinary_root / verifier.QUALIFICATION_ARTIFACT_NAME
-    monkeypatch.setenv(verifier.QUALIFICATION_ROOT_ENV, str(ordinary_root))
-    monkeypatch.setenv(verifier.QUALIFICATION_ARTIFACT_ENV, str(ordinary_artifact))
-    responses_gateway._record_qualification_rejection(
-        event, profile=ordinary, rejection_code="responses_stream_event_not_supported"
-    )
-    assert not ordinary_artifact.exists()
-
-    hosted = ResponsesStreamValidationProfile(
-        codex_reasoning_events=True,
-        codex_0149_function_tool_events=True,
-        codex_streaming_tool_events=True,
-        declared_client_tools=exact.declared_client_tools,
-        web_search=True,
-    )
-    hosted_artifact = hosted_root / verifier.QUALIFICATION_ARTIFACT_NAME
-    monkeypatch.setenv(verifier.QUALIFICATION_ROOT_ENV, str(hosted_root))
-    monkeypatch.setenv(verifier.QUALIFICATION_ARTIFACT_ENV, str(hosted_artifact))
-    responses_gateway._record_qualification_rejection(
-        event, profile=hosted, rejection_code="responses_stream_event_not_supported"
-    )
-    assert not hosted_artifact.exists()
-
-    symlink_target = symlink_root / "target.json"
-    symlink_target.write_bytes(b"unchanged")
-    symlink = symlink_root / verifier.QUALIFICATION_ARTIFACT_NAME
-    symlink.symlink_to(symlink_target)
-    monkeypatch.setenv(verifier.QUALIFICATION_ROOT_ENV, str(symlink_root))
-    monkeypatch.setenv(verifier.QUALIFICATION_ARTIFACT_ENV, str(symlink))
-    responses_gateway._record_qualification_rejection(
-        event, profile=exact, rejection_code="responses_stream_event_not_supported"
-    )
-    assert symlink_target.read_bytes() == b"unchanged"
+    assert verifier._read_qualification_rejection(root) == safe
+    payload = artifact.read_bytes()
+    assert b"shell_command" not in payload
+    assert b"qualification_function" not in payload
+    with pytest.raises(verifier.VerificationError, match="qualification_artifact_overwrite"):
+        verifier._write_qualification_rejection(
+            root,
+            profile=safe["validator_profile"],
+            event_type=safe["event_type"],
+            top_level_fields=safe["top_level_fields"],
+            nested_object_fields=safe["nested_object_fields"],
+            rejection_code=safe["rejection"]["code"],
+        )
 
 
 def test_qualification_reader_rejects_foreign_owner(
