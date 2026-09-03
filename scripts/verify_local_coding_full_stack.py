@@ -217,6 +217,14 @@ _155AK_REQUIRED_TEST_NODES = tuple(
         "tests/unit/test_codex_replay_service.py::test_idless_call_digest_ambiguity_is_not_collapsed",
         "tests/unit/test_codex_replay_service.py::test_hmac_rotation_new_v2_function_present_and_idless",
         "tests/unit/test_codex_replay_service.py::test_hmac_rotation_new_v2_custom_present_and_idless",
+        "tests/unit/test_codex_replay_service.py::test_cross_version_call_digest_ambiguity_is_not_collapsed",
+        "tests/unit/test_codex_replay_service.py::test_present_item_id_with_matching_call_id_never_downgrades",
+        *(
+            "tests/unit/test_codex_replay_service.py::test_replay_scope_mismatches_fail_closed_independently["
+            f"{mismatch}]"
+            for mismatch in ("route", "provider", "model", "tool")
+        ),
+        "tests/unit/test_codex_replay_service.py::test_replay_privacy_excludes_raw_values_from_exception_log_and_evidence",
         "tests/unit/test_codex_replay_service.py::test_hmac_rotation_fails_closed_when_old_secret_is_unavailable",
         "tests/unit/test_codex_replay_service.py::test_unavailable_stored_hmac_version_is_refused",
         "tests/unit/test_codex_replay_service.py::test_cross_key_expiry_name_and_route_mismatches_fail_closed",
@@ -1186,14 +1194,85 @@ def _verify_155aj_obligation_manifest() -> dict[str, object]:
     if missing:
         raise VerificationError("obligation_manifest_missing")
     run_pytest(execution_command)
+    obligations: dict[str, str] = {
+        f"snapshot_predicate_{case}": (
+            f"tests/unit/test_local_coding_full_stack_verifier.py::test_155ak_snapshot_predicate_matrix[{case}]"
+        )
+        for case in _155AK_SNAPSHOT_CASE_IDS
+    }
+    obligations.update(
+        {
+            f"outcome_{case}": (
+                "tests/unit/test_local_coding_full_stack_verifier.py::"
+                "test_155aj_snapshot_outcome_matrix_has_all_seven_closed_values["
+                f"{case}]"
+            )
+            for case in _155AK_OUTCOME_CASE_IDS
+        }
+    )
+    obligations.update(
+        {
+            "hmac_old_v1_present_and_idless_success": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_hmac_rotation_verifies_old_rows_and_new_rows_by_row_version"
+            ),
+            "hmac_old_v1_present_and_idless_failure": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_hmac_rotation_fails_closed_when_old_secret_is_unavailable"
+            ),
+            "hmac_new_v2_function_present_and_idless": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_hmac_rotation_new_v2_function_present_and_idless"
+            ),
+            "hmac_new_v2_custom_present_and_idless": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_hmac_rotation_new_v2_custom_present_and_idless"
+            ),
+            "hmac_cross_version_ambiguity": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_cross_version_call_digest_ambiguity_is_not_collapsed"
+            ),
+            "hmac_no_present_id_downgrade": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_present_item_id_with_matching_call_id_never_downgrades"
+            ),
+            "hmac_stored_version": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_unavailable_stored_hmac_version_is_refused"
+            ),
+            "hmac_scope_route_mismatch": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_replay_scope_mismatches_fail_closed_independently[route]"
+            ),
+            "hmac_scope_provider_mismatch": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_replay_scope_mismatches_fail_closed_independently[provider]"
+            ),
+            "hmac_scope_model_mismatch": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_replay_scope_mismatches_fail_closed_independently[model]"
+            ),
+            "hmac_scope_tool_mismatch": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_replay_scope_mismatches_fail_closed_independently[tool]"
+            ),
+            "hmac_privacy": (
+                "tests/unit/test_codex_replay_service.py::"
+                "test_replay_privacy_excludes_raw_values_from_exception_log_and_evidence"
+            ),
+        }
+    )
+    mapped_nodes = set(obligations.values())
+    for node in _155AK_REQUIRED_TEST_NODES:
+        if node not in mapped_nodes:
+            test_id = node.split("::", 1)[1]
+            obligations[f"supporting_{test_id}"] = node
     return {
         "missing": [],
+        "required_node_count": len(_155AK_REQUIRED_TEST_NODES),
         "collected_node_count": len(collected),
         "executed_node_count": len(_155AK_REQUIRED_TEST_NODES),
-        "obligations": {
-            f"obligation_{index}": node
-            for index, node in enumerate(_155AK_REQUIRED_TEST_NODES)
-        },
+        "obligations": obligations,
     }
 
 
