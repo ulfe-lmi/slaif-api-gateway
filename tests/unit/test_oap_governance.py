@@ -94,6 +94,10 @@ def test_active_identifier_resolves_exactly_one_matching_order() -> None:
     assert order_text.splitlines()[0] == f"# OAP Work Order — {identifier}"
 
 
+def test_active_155_ak_selector_is_the_authorized_continuation() -> None:
+    assert ACTIVE_FILE.read_bytes() == b"155-ak\n"
+
+
 def test_initial_round_declares_new_pr_and_one_objective_one_pr() -> None:
     identifier, _order_path, order_text = _active_order()
 
