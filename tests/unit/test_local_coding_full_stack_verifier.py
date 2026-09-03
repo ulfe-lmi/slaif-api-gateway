@@ -271,6 +271,54 @@ def test_155aj_topology_anchors_are_the_155ai_report_and_activation() -> None:
     assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
 
 
+def test_155aj_discrepancy_inventory_is_source_and_collection_derived() -> None:
+    inventory = verifier._verify_155aj_discrepancy_inventory()
+    assert inventory == {
+        "reasoning_names_missing": 4,
+        "frozen_local_matrix_rows": 8,
+        "claimed_snapshot_outcome_case_count": 2,
+        "hmac_rotation_gap": "new_v2_function_and_idless_case_not_created_by_cited_test",
+        "baseline_stage": "postgres_start_failed",
+        "strategic_stage": "second_mocked_request_timeout",
+    }
+
+
+def test_155aj_local_matrix_declares_fixed_legacy_punctuation_rows() -> None:
+    assert len(verifier.LOCAL_MATRIX_INDICES) >= 16
+    assert verifier.LOCAL_LEGACY_PUNCTUATION_ROWS == {
+        6: "_", 26: "-", 94: "-", 121: "_"
+    }
+    assert set(verifier.LOCAL_LEGACY_PUNCTUATION_ROWS) <= set(verifier.LOCAL_MATRIX_INDICES)
+
+
+def test_155aj_reasoning_vocabulary_is_exact_and_closed() -> None:
+    expected = {
+        "response.reasoning_part.added",
+        "response.reasoning_text.delta",
+        "response.reasoning_text.done",
+        "response.reasoning_part.done",
+    }
+    assert expected <= verifier._SAFE_SSE_EVENT_TYPES
+    assert "response.reasoning_summary.delta" not in verifier._SAFE_SSE_EVENT_TYPES
+    assert "response.reasoning_part.added.extra" not in verifier._SAFE_SSE_EVENT_TYPES
+    source = Path(verifier.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_SAFE_SSE_EVENT_TYPES" for target in node.targets)
+    )
+    assert isinstance(assignment.value, ast.Call)
+    assert isinstance(assignment.value.args[0], ast.Set)
+    literals = {
+        item.value
+        for item in assignment.value.args[0].elts
+        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+    }
+    assert expected <= literals
+
+
 def test_155af_topology_anchors_exact_local_report_parent_and_path() -> None:
     assert verifier.LOCAL_ROOT == Path("/home/ubuntu/codex-work/slaif-local-coding-005m")
     assert verifier.LOCAL_REPORT_HEAD == "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
@@ -1295,6 +1343,85 @@ def test_boundary_snapshot_classification_has_fixed_downstream_outcomes(
         accounting_statuses={},
     )
     assert verifier._classify_boundary_snapshot(snapshot, assertion_failed=True) == expected
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "local_turn2_rejected_before_qwen",
+        "local_invoked_qwen_turn2_qwen_rejected_or_failed",
+        "qwen_turn2_completed_local_stream_invalid",
+        "local_qwen_turn2_completed_gateway_stream_invalid",
+        "producer_boundaries_valid_verifier_expectation_wrong",
+        "full_two_turn_path_succeeded",
+        "other",
+    ],
+)
+def test_155aj_snapshot_outcome_matrix_has_all_seven_closed_values(case: str) -> None:
+    good = verifier._PINNED_CAPTURE_SSE_STRUCTURE
+    bad = verifier.json.loads(verifier.json.dumps(good))
+    bad["invalid"] = True
+    if case == "local_turn2_rejected_before_qwen":
+        snapshot = verifier._safe_boundary_snapshot(
+            gateway_status={"response_statuses": [200, 200], "sse_structures": [good, good]},
+            gateway_request_count=2,
+            local_status={"response_statuses": [200, 400], "sse_structures": [good, good]},
+            local_request_count=2,
+            qwen_status={"inference_calls": 1, "successful_calls": 1, "inference_statuses": [200], "sse_structures": [good]},
+            accounting_statuses={},
+        )
+        assertion_failed = True
+    elif case == "local_invoked_qwen_turn2_qwen_rejected_or_failed":
+        snapshot = verifier._safe_boundary_snapshot(
+            gateway_status={"response_statuses": [200, 502], "sse_structures": [good, good]},
+            gateway_request_count=2,
+            local_status={"response_statuses": [200, 200], "sse_structures": [good, good]},
+            local_request_count=2,
+            qwen_status={"inference_calls": 2, "successful_calls": 1, "inference_statuses": [200, 503], "sse_structures": [good, good]},
+            accounting_statuses={},
+        )
+        assertion_failed = True
+    elif case == "qwen_turn2_completed_local_stream_invalid":
+        snapshot = verifier._safe_boundary_snapshot(
+            gateway_status={"response_statuses": [200, 200], "sse_structures": [good, good]},
+            gateway_request_count=2,
+            local_status={"response_statuses": [200, 200], "sse_structures": [good, bad]},
+            local_request_count=2,
+            qwen_status={"inference_calls": 2, "successful_calls": 2, "inference_statuses": [200, 200], "sse_structures": [good, good]},
+            accounting_statuses={},
+        )
+        assertion_failed = True
+    elif case == "local_qwen_turn2_completed_gateway_stream_invalid":
+        snapshot = verifier._safe_boundary_snapshot(
+            gateway_status={"response_statuses": [200, 200], "sse_structures": [good, bad]},
+            gateway_request_count=2,
+            local_status={"response_statuses": [200, 200], "sse_structures": [good, good]},
+            local_request_count=2,
+            qwen_status={"inference_calls": 2, "successful_calls": 2, "inference_statuses": [200, 200], "sse_structures": [good, good]},
+            accounting_statuses={},
+        )
+        assertion_failed = True
+    elif case in {"producer_boundaries_valid_verifier_expectation_wrong", "full_two_turn_path_succeeded"}:
+        snapshot = verifier._safe_boundary_snapshot(
+            gateway_status={"response_statuses": [200, 200], "sse_structures": [good, good]},
+            gateway_request_count=2,
+            local_status={"response_statuses": [200, 200], "sse_structures": [good, good]},
+            local_request_count=2,
+            qwen_status={"inference_calls": 2, "successful_calls": 2, "inference_statuses": [200, 200], "sse_structures": [good, good]},
+            accounting_statuses={},
+        )
+        assertion_failed = case == "producer_boundaries_valid_verifier_expectation_wrong"
+    else:
+        snapshot = verifier._safe_boundary_snapshot(
+            gateway_status={"response_statuses": [200], "sse_structures": [good]},
+            gateway_request_count=1,
+            local_status={"response_statuses": [200], "sse_structures": [good]},
+            local_request_count=1,
+            qwen_status={"inference_calls": 1, "successful_calls": 1, "inference_statuses": [200], "sse_structures": [good]},
+            accounting_statuses={},
+        )
+        assertion_failed = True
+    assert verifier._classify_boundary_snapshot(snapshot, assertion_failed=assertion_failed) == case
 
 
 def test_dedicated_runner_preserves_boundary_snapshot_after_temp_cleanup(

@@ -86,6 +86,51 @@ QUALIFICATION_WEB_SEARCH_CLASSES = frozenset({"none", "bounded", "other"})
 QUALIFICATION_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 QUALIFICATION_EVENT_RE = re.compile(r"^[a-z][a-z0-9_.]{0,127}$")
 
+LOCAL_MATRIX_INDICES = tuple(range(16)) + (26, 94, 121)
+LOCAL_LEGACY_PUNCTUATION_ROWS = {6: "_", 26: "-", 94: "-", 121: "_"}
+
+_155AJ_DISCREPANCY_MANIFEST = {
+    "report": "155-aj-final-hook-free-objective-155-acceptance.md",
+    "frozen_candidate": "e503f9647cb1ef9d2fef5cebe159c84e5a9c1ed4",
+    "reasoning_names_missing_from_frozen_verifier": (
+        "response.reasoning_part.added",
+        "response.reasoning_text.delta",
+        "response.reasoning_text.done",
+        "response.reasoning_part.done",
+    ),
+    "frozen_local_matrix_rows": 8,
+    "required_local_matrix_rows": 16,
+    "claimed_snapshot_outcome_test": "test_boundary_snapshot_classification_has_fixed_downstream_outcomes",
+    "claimed_snapshot_outcome_case_count": 2,
+    "hmac_rotation_gap": "new_v2_function_and_idless_case_not_created_by_cited_test",
+    "baseline_stage": "postgres_start_failed",
+    "strategic_stage": "second_mocked_request_timeout",
+}
+
+_155AJ_OBLIGATION_TESTS = {
+    "reasoning_vocabulary": "test_155aj_reasoning_vocabulary_is_exact_and_closed",
+    "snapshot_outcomes": "test_155aj_snapshot_outcome_matrix_has_all_seven_closed_values",
+    "snapshot_sanitization": "test_boundary_snapshot_rejects_raw_or_malformed_nested_facts",
+    "snapshot_completion": "test_stream_completion_gate_rejects_missing_or_false_safe_facts",
+    "snapshot_transport": "test_forwarding_relay_records_upstream_truncation_without_normal_close",
+    "snapshot_failure_survival": "test_dedicated_runner_preserves_boundary_snapshot_after_temp_cleanup",
+    "snapshot_cli": "test_qualification_cli_direct_stdout_is_one_bounded_line",
+    "hmac_rotation": "test_hmac_rotation_verifies_old_rows_and_new_rows_by_row_version",
+    "hmac_idless": "test_idless_function_call_uses_exact_same_key_call_hmac_row",
+    "hmac_ambiguity": "test_idless_call_digest_ambiguity_is_not_collapsed",
+    "hmac_unavailable": "test_hmac_rotation_fails_closed_when_old_secret_is_unavailable",
+    "hmac_version": "test_unavailable_stored_hmac_version_is_refused",
+    "hmac_scope": "test_cross_key_expiry_name_and_route_mismatches_fail_closed",
+    "hmac_privacy": "test_digest_lookup_failure_has_no_private_exception_chain",
+    "local_matrix": "test_155aj_local_matrix_declares_fixed_legacy_punctuation_rows",
+    "local_identity": "test_signed_local_request_projection_verifies_exact_body_and_headers",
+    "fake_roundtrip": "test_fake_qwen_tool_roundtrip_mode_is_dedicated_and_allowlisted",
+    "fake_provider_failure": "test_fake_provider_failure_mode_is_opt_in_and_counts_inference_only",
+    "fake_validator_failure": "test_verifier_owned_qualification_evidence_is_bounded_and_write_once",
+    "hook_absent": "test_production_responses_gateway_has_no_155x_qualification_writer",
+    "pinned_candidate": "test_candidate_is_exact_and_unregistered",
+}
+
 # This is a verifier-owned projection of the immutable Local 005-m response
 # vocabulary.  The values are safe only because they are closed and source-
 # checked below; arbitrary Local error text never crosses this boundary.
@@ -894,6 +939,126 @@ def _checks_are_green(output: bytes) -> bool:
     )
 
 
+def _verify_155aj_discrepancy_inventory() -> dict[str, object]:
+    """Prove the bounded defects recorded before the 155-aj repair."""
+    def read_blob(path: str) -> str:
+        try:
+            result = subprocess.run(
+                [
+                    "git",
+                    "show",
+                    f"{_155AJ_DISCREPANCY_MANIFEST['frozen_candidate']}:{path}",
+                ],
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise VerificationError("discrepancy_inventory_source_unavailable") from exc
+        if result.returncode != 0 or len(result.stdout) > 2 * 1024 * 1024:
+            raise VerificationError("discrepancy_inventory_source_invalid")
+        try:
+            return result.stdout.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise VerificationError("discrepancy_inventory_source_invalid") from exc
+
+    frozen_verifier = read_blob("scripts/verify_local_coding_full_stack.py")
+    frozen_tests = read_blob("tests/unit/test_local_coding_full_stack_verifier.py")
+    try:
+        tree = ast.parse(frozen_verifier)
+        safe_types: set[str] = set()
+        for node in tree.body:
+            if not isinstance(node, ast.Assign) or not any(
+                isinstance(target, ast.Name) and target.id == "_SAFE_SSE_EVENT_TYPES"
+                for target in node.targets
+            ):
+                continue
+            value = node.value
+            if (
+                not isinstance(value, ast.Call)
+                or not isinstance(value.func, ast.Name)
+                or value.func.id != "frozenset"
+                or len(value.args) != 1
+                or not isinstance(value.args[0], ast.Set)
+            ):
+                break
+            safe_types = {
+                item.value
+                for item in value.args[0].elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            }
+            break
+        missing_reasoning = tuple(
+            name
+            for name in _155AJ_DISCREPANCY_MANIFEST[
+                "reasoning_names_missing_from_frozen_verifier"
+            ]
+            if name not in safe_types
+        )
+        frozen_matrix_rows = 8 if "for index in range(8):" in frozen_verifier else None
+        snapshot_case_count = 0
+        for node in ast.parse(frozen_tests).body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or node.name != _155AJ_DISCREPANCY_MANIFEST["claimed_snapshot_outcome_test"]:
+                continue
+            for decorator in node.decorator_list:
+                if (
+                    not isinstance(decorator, ast.Call)
+                    or not isinstance(decorator.func, ast.Attribute)
+                    or decorator.func.attr != "parametrize"
+                    or len(decorator.args) < 2
+                ):
+                    continue
+                values = decorator.args[1]
+                if isinstance(values, (ast.List, ast.Tuple)):
+                    snapshot_case_count = len(values.elts)
+        expected_reasoning = _155AJ_DISCREPANCY_MANIFEST[
+            "reasoning_names_missing_from_frozen_verifier"
+        ]
+        if (
+            missing_reasoning != expected_reasoning
+            or frozen_matrix_rows != _155AJ_DISCREPANCY_MANIFEST["frozen_local_matrix_rows"]
+            or snapshot_case_count != _155AJ_DISCREPANCY_MANIFEST["claimed_snapshot_outcome_case_count"]
+        ):
+            raise VerificationError("discrepancy_inventory_changed")
+    except (SyntaxError, TypeError, ValueError) as exc:
+        raise VerificationError("discrepancy_inventory_invalid") from exc
+    return {
+        "reasoning_names_missing": len(missing_reasoning),
+        "frozen_local_matrix_rows": frozen_matrix_rows,
+        "claimed_snapshot_outcome_case_count": snapshot_case_count,
+        "hmac_rotation_gap": _155AJ_DISCREPANCY_MANIFEST["hmac_rotation_gap"],
+        "baseline_stage": _155AJ_DISCREPANCY_MANIFEST["baseline_stage"],
+        "strategic_stage": _155AJ_DISCREPANCY_MANIFEST["strategic_stage"],
+    }
+
+
+def _verify_155aj_obligation_manifest() -> dict[str, object]:
+    """Require every 155-ak obligation to have a collected concrete test."""
+    test_paths = (
+        REPO_ROOT / "tests/unit/test_local_coding_full_stack_verifier.py",
+        REPO_ROOT / "tests/unit/test_codex_replay_service.py",
+        REPO_ROOT / "tests/unit/test_qwen38_text_codex_candidate.py",
+    )
+    names: set[str] = set()
+    try:
+        for path in test_paths:
+            tree = ast.parse(path.read_bytes(), filename=str(path))
+            names.update(
+                node.name
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name.startswith("test_")
+            )
+    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
+        raise VerificationError("obligation_manifest_unavailable") from exc
+    missing = sorted(set(_155AJ_OBLIGATION_TESTS.values()) - names)
+    if missing:
+        raise VerificationError("obligation_manifest_missing")
+    return {"missing": [], "obligations": dict(_155AJ_OBLIGATION_TESTS)}
+
+
 def _verify_commit_topology() -> None:
     current_head = _git("rev-parse", "HEAD")
     if _git("status", "--porcelain", cwd=REPO_ROOT):
@@ -1089,7 +1254,7 @@ def _verify_local_signed_identity_matrix() -> None:
         return Request(scope)
 
     try:
-        for index in range(8):
+        for index in LOCAL_MATRIX_INDICES:
             owner_id = uuid.UUID(f"00000000-0000-4000-8000-{index:012d}")
             gateway_key_id = uuid.UUID(f"10000000-0000-4000-8000-{index:012d}")
             session = f"20000000-0000-4000-8000-{index:012d}"
@@ -1103,6 +1268,32 @@ def _verify_local_signed_identity_matrix() -> None:
             )
             if identity is None:
                 raise VerificationError("local_signed_identity_matrix_derivation")
+            if index in LOCAL_LEGACY_PUNCTUATION_ROWS:
+                legacy_owner = str(owner_id)
+                legacy_principal = base64.urlsafe_b64encode(
+                    hmac.new(
+                        signing_secret.encode("ascii"),
+                        f"slaif-local-coding:principal:v1\n{legacy_owner}".encode("ascii"),
+                        hashlib.sha256,
+                    ).digest()
+                ).decode("ascii").rstrip("=")
+                legacy_session = base64.urlsafe_b64encode(
+                    hmac.new(
+                        signing_secret.encode("ascii"),
+                        (
+                            "slaif-local-coding:session:v2\n"
+                            f"{legacy_principal}\n{gateway_key_id}\n{session}"
+                        ).encode("ascii"),
+                        hashlib.sha256,
+                    ).digest()
+                ).decode("ascii").rstrip("=")
+                legacy_value = (
+                    legacy_principal
+                    if index in {6, 26}
+                    else legacy_session
+                )
+                if not legacy_value.startswith(LOCAL_LEGACY_PUNCTUATION_ROWS[index]):
+                    raise VerificationError("local_signed_identity_matrix_legacy_vector")
             body = json.dumps(
                 {"model": CODEX_MODEL, "input": [{"type": "message"}]},
                 separators=(",", ":"),
@@ -1189,6 +1380,7 @@ def _verify_fixtures() -> None:
         raise VerificationError("session_source_mismatch")
     if fixture["relationships"]["same_session_stability"] is not True or fixture["relationships"]["cross_session_isolation"] is not True:
         raise VerificationError("session_relationship_missing")
+    _verify_155aj_obligation_manifest()
 
 
 def _read_pinned_direct_baseline() -> dict[str, object]:
@@ -1894,6 +2086,10 @@ _BOUNDARY_EVENT_CLASSES = frozenset(
     {
         "response.created",
         "response.in_progress",
+        "response.reasoning_part.added",
+        "response.reasoning_text.delta",
+        "response.reasoning_text.done",
+        "response.reasoning_part.done",
         "response.completed",
         "response.output_item.added",
         "response.output_item.done",
@@ -3425,6 +3621,10 @@ _SAFE_SSE_EVENT_TYPES = frozenset(
         "response.created",
         "response.completed",
         "response.in_progress",
+        "response.reasoning_part.added",
+        "response.reasoning_text.delta",
+        "response.reasoning_text.done",
+        "response.reasoning_part.done",
         "response.output_item.added",
         "response.output_item.done",
         "response.function_call_arguments.delta",
