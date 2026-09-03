@@ -644,8 +644,15 @@ async def test_hmac_rotation_fails_closed_when_old_secret_is_unavailable(
     repository = FakeRepository()
     key_id = uuid.uuid4()
     service = CodexReplayService(repository=repository, settings=_settings())
+    stored_function = Candidate(
+        item_kind="function_call",
+        item_id="fc_rotation_missing_v1",
+        call_id="call_rotation_missing_v1",
+        tool_namespace="functions",
+        tool_name="exec",
+    )
     await service.persist_validated_references(
-        candidates=(_reasoning(),),
+        candidates=(_reasoning(), stored_function),
         gateway_key_id=key_id,
         usage_ledger_id=uuid.uuid4(),
         source_request_id="req_rotation_missing_v1",
@@ -665,5 +672,18 @@ async def test_hmac_rotation_fails_closed_when_old_secret_is_unavailable(
     with pytest.raises(CodexReplayReferenceError) as exc_info:
         await rotated_without_old_key.verify_owned_replay(
             candidates=(_reasoning(),), gateway_key_id=key_id
+        )
+    assert exc_info.value.error_code == "responses_codex_replay_hmac_unavailable"
+    with pytest.raises(CodexReplayReferenceError) as exc_info:
+        await rotated_without_old_key.verify_owned_replay(
+            candidates=(Candidate(
+                item_kind="function_call",
+                item_id=None,
+                call_id="call_rotation_missing_v1",
+                tool_namespace="functions",
+                tool_name="exec",
+            ),),
+            gateway_key_id=key_id,
+            allow_idless_tool_call_replay=True,
         )
     assert exc_info.value.error_code == "responses_codex_replay_hmac_unavailable"

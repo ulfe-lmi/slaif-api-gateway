@@ -161,6 +161,76 @@ _155AJ_OBLIGATION_TESTS = {
     "pinned_candidate": "test_candidate_is_exact_and_unregistered",
 }
 
+_155AK_SNAPSHOT_CASE_IDS = (
+    "missing_collection", "non_list_collection", "one_structure",
+    "excess_structures", "absent_ordinal_0", "absent_ordinal_1", "invalid_flag",
+    "created_missing", "created_duplicate", "completed_missing", "completed_duplicate",
+    "response_id_relationship", "created_status", "completed_status", "model_mismatch",
+    "terminal_output_missing", "terminal_output_invalid", "usage_missing", "usage_invalid",
+    "unknown_event", "error_event", "trace_overflow", "abnormal_close",
+    "downstream_early_close", "handler_error", "upstream_truncated",
+    "reasoning_lifecycle", "function_lifecycle", "message_lifecycle",
+)
+_155AK_OUTCOME_CASE_IDS = (
+    "local_turn2_rejected_before_qwen",
+    "local_invoked_qwen_turn2_qwen_rejected_or_failed",
+    "qwen_turn2_completed_local_stream_invalid",
+    "local_qwen_turn2_completed_gateway_stream_invalid",
+    "producer_boundaries_valid_verifier_expectation_wrong",
+    "full_two_turn_path_succeeded",
+    "other",
+)
+_155AK_REQUIRED_TEST_NODES = tuple(
+    [
+        f"tests/unit/test_local_coding_full_stack_verifier.py::test_155ak_snapshot_predicate_matrix[{case}]"
+        for case in _155AK_SNAPSHOT_CASE_IDS
+    ]
+    + [
+        f"tests/unit/test_local_coding_full_stack_verifier.py::test_155aj_snapshot_outcome_matrix_has_all_seven_closed_values[{case}]"
+        for case in _155AK_OUTCOME_CASE_IDS
+    ]
+    + [
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_155aj_reasoning_vocabulary_is_exact_and_closed",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_155ak_reasoning_lifecycle_matches_production_active_profile",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_155ak_snapshot_outcome_case_ids_match_validator_enum_exactly",
+        *(
+            "tests/unit/test_local_coding_full_stack_verifier.py::test_boundary_snapshot_rejects_raw_or_malformed_nested_facts[<lambda>"
+            f"{index}]"
+            for index in range(6)
+        ),
+        *(
+            "tests/unit/test_local_coding_full_stack_verifier.py::test_stream_completion_gate_rejects_missing_or_false_safe_facts["
+            f"{field}]"
+            for field in (
+                "response_id_relation", "completed_status_completed", "model_matches",
+                "completed_usage_valid", "first_event_before_upstream_completion", "normal_close",
+            )
+        ),
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_forwarding_relay_records_upstream_truncation_without_normal_close",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_forwarding_relay_drains_upstream_after_downstream_reset",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_relay_handle_error_is_safe_and_fail_closed",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_safe_stream_summary_records_handler_and_truncation_without_private_text",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_dedicated_runner_preserves_boundary_snapshot_after_temp_cleanup",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_qualification_cli_direct_stdout_is_one_bounded_line",
+        "tests/unit/test_codex_replay_service.py::test_hmac_rotation_verifies_old_rows_and_new_rows_by_row_version",
+        "tests/unit/test_codex_replay_service.py::test_idless_function_call_uses_exact_same_key_call_hmac_row",
+        "tests/unit/test_codex_replay_service.py::test_idless_call_digest_ambiguity_is_not_collapsed",
+        "tests/unit/test_codex_replay_service.py::test_hmac_rotation_new_v2_function_present_and_idless",
+        "tests/unit/test_codex_replay_service.py::test_hmac_rotation_new_v2_custom_present_and_idless",
+        "tests/unit/test_codex_replay_service.py::test_hmac_rotation_fails_closed_when_old_secret_is_unavailable",
+        "tests/unit/test_codex_replay_service.py::test_unavailable_stored_hmac_version_is_refused",
+        "tests/unit/test_codex_replay_service.py::test_cross_key_expiry_name_and_route_mismatches_fail_closed",
+        "tests/unit/test_codex_replay_service.py::test_digest_lookup_failure_has_no_private_exception_chain",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_155aj_local_matrix_declares_fixed_legacy_punctuation_rows",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_signed_local_request_projection_verifies_exact_body_and_headers",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_fake_qwen_tool_roundtrip_mode_is_dedicated_and_allowlisted",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_fake_provider_failure_mode_is_opt_in_and_counts_inference_only",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_verifier_owned_qualification_evidence_is_bounded_and_write_once",
+        "tests/unit/test_local_coding_full_stack_verifier.py::test_production_responses_gateway_has_no_155x_qualification_writer",
+        "tests/unit/test_qwen38_text_codex_candidate.py::test_candidate_is_exact_and_unregistered",
+    ]
+)
+
 # This is a verifier-owned projection of the immutable Local 005-m response
 # vocabulary.  The values are safe only because they are closed and source-
 # checked below; arbitrary Local error text never crosses this boundary.
@@ -1065,29 +1135,66 @@ def _verify_155aj_discrepancy_inventory() -> dict[str, object]:
 
 
 def _verify_155aj_obligation_manifest() -> dict[str, object]:
-    """Require every 155-ak obligation to have a collected concrete test."""
-    test_paths = (
-        REPO_ROOT / "tests/unit/test_local_coding_full_stack_verifier.py",
-        REPO_ROOT / "tests/unit/test_codex_replay_service.py",
-        REPO_ROOT / "tests/unit/test_responses_codex_streaming_tools.py",
-        REPO_ROOT / "tests/unit/test_qwen38_text_codex_candidate.py",
+    """Require every 155-ak node to be collected and successfully executed."""
+    test_paths = tuple(
+        sorted(
+            {
+                node.split("::", 1)[0]
+                for node in _155AK_REQUIRED_TEST_NODES
+            }
+        )
     )
-    names: set[str] = set()
-    try:
-        for path in test_paths:
-            tree = ast.parse(path.read_bytes(), filename=str(path))
-            names.update(
-                node.name
-                for node in ast.walk(tree)
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name.startswith("test_")
+    collection_command = [
+        sys.executable, "-m", "pytest", "--collect-only", "-q", "-o", "addopts=", *test_paths
+    ]
+    execution_command = [
+        sys.executable, "-m", "pytest", "-q", "-o", "addopts=", *_155AK_REQUIRED_TEST_NODES
+    ]
+    environment = os.environ.copy()
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["PYTHONPATH"] = f"{REPO_ROOT}:{REPO_ROOT / 'app'}"
+
+    def run_pytest(command: list[str]) -> bytes:
+        try:
+            result = subprocess.run(
+                command,
+                cwd=REPO_ROOT,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=300,
+                check=False,
             )
-    except (OSError, SyntaxError, UnicodeDecodeError) as exc:
-        raise VerificationError("obligation_manifest_unavailable") from exc
-    missing = sorted(set(_155AJ_OBLIGATION_TESTS.values()) - names)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise VerificationError("obligation_manifest_unavailable") from exc
+        if len(result.stdout) > 2 * 1024 * 1024:
+            raise VerificationError("obligation_manifest_output_exceeded")
+        if result.returncode != 0:
+            raise VerificationError("obligation_manifest_execution_failed")
+        return result.stdout
+
+    try:
+        collected_output = run_pytest(collection_command).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise VerificationError("obligation_manifest_collection_invalid") from exc
+    collected = {
+        line.strip()
+        for line in collected_output.splitlines()
+        if "::test_" in line and not line.startswith("<")
+    }
+    missing = sorted(set(_155AK_REQUIRED_TEST_NODES) - collected)
     if missing:
         raise VerificationError("obligation_manifest_missing")
-    return {"missing": [], "obligations": dict(_155AJ_OBLIGATION_TESTS)}
+    run_pytest(execution_command)
+    return {
+        "missing": [],
+        "collected_node_count": len(collected),
+        "executed_node_count": len(_155AK_REQUIRED_TEST_NODES),
+        "obligations": {
+            f"obligation_{index}": node
+            for index, node in enumerate(_155AK_REQUIRED_TEST_NODES)
+        },
+    }
 
 
 def _verify_commit_topology() -> None:
@@ -1411,7 +1518,6 @@ def _verify_fixtures() -> None:
         raise VerificationError("session_source_mismatch")
     if fixture["relationships"]["same_session_stability"] is not True or fixture["relationships"]["cross_session_isolation"] is not True:
         raise VerificationError("session_relationship_missing")
-    _verify_155aj_obligation_manifest()
 
 
 def _read_pinned_direct_baseline() -> dict[str, object]:
@@ -2110,6 +2216,7 @@ _BOUNDARY_COUNT_CLASSES = frozenset({"0", "1", "2", "other"})
 _BOUNDARY_STATUS_CLASSES = frozenset({"1xx", "2xx", "3xx", "4xx", "5xx", "other"})
 _BOUNDARY_CONTENT_CLASSES = frozenset({"sse", "json", "other", "none"})
 _BOUNDARY_TERMINAL_SHAPES = frozenset({"empty_array", "nonempty_array", "missing", "other"})
+_BOUNDARY_USAGE_SHAPES = frozenset({"valid", "missing", "invalid", "other"})
 _BOUNDARY_STATES = frozenset(
     {"not_reached", "entered", "transformed", "rejected", "succeeded", "unknown"}
 )
@@ -4177,6 +4284,7 @@ class _SafeSSEOrdinal:
     model_matches: bool
     terminal_output_shape: str
     completed_usage_valid: bool
+    completed_usage_shape: str
     duplicates: bool
     unknown_events: bool
     error_event: bool
@@ -4203,6 +4311,7 @@ class _SafeSSEOrdinal:
             "model_matches": self.model_matches,
             "terminal_output_shape": self.terminal_output_shape,
             "completed_usage_valid": self.completed_usage_valid,
+            "completed_usage_shape": self.completed_usage_shape,
             "duplicates": self.duplicates,
             "unknown_events": self.unknown_events,
             "error_event": self.error_event,
@@ -4358,7 +4467,7 @@ def _safe_sse_ordinal(
     if not isinstance(structures, list) or index >= len(structures) or not isinstance(structures[index], dict):
         return _SafeSSEOrdinal(
             False, False, False, (), (), False, False, False, False, False, False,
-            False, "missing", False, False, False, False, False, False, handler_error,
+            False, "missing", False, "missing", False, False, False, False, False, handler_error,
             upstream_truncated,
         )
     structure = structures[index]
@@ -4377,10 +4486,21 @@ def _safe_sse_ordinal(
         structure.get("created_status_in_progress") is True,
         structure.get("completed_status_completed") is True,
         structure.get("model_matches") is True,
-        structure.get("terminal_output_shape")
-        if structure.get("terminal_output_shape") in _BOUNDARY_TERMINAL_SHAPES
-        else "other",
+        (
+            "missing"
+            if "terminal_output_shape" not in structure
+            else structure.get("terminal_output_shape")
+            if structure.get("terminal_output_shape") in _BOUNDARY_TERMINAL_SHAPES
+            else "other"
+        ),
         structure.get("completed_usage_valid") is True,
+        (
+            "missing"
+            if "completed_usage_valid" not in structure
+            else "valid"
+            if structure.get("completed_usage_valid") is True
+            else "invalid"
+        ),
         structure.get("duplicates") is True,
         structure.get("unknown_events") is True,
         structure.get("error_event") is True,
@@ -4661,12 +4781,14 @@ def _safe_boundary_snapshot_validate(value: object) -> dict[str, object]:
                 "present", "invalid", "valid_completion", "event_counts", "event_trace",
                 "event_trace_overflow", "created_exactly_once", "completed_exactly_once",
                 "response_id_relation", "created_status_in_progress", "completed_status_completed",
-                "model_matches", "terminal_output_shape", "completed_usage_valid", "duplicates",
+                "model_matches", "terminal_output_shape", "completed_usage_valid", "completed_usage_shape", "duplicates",
                 "unknown_events", "error_event", "normal_close", "downstream_closed_early",
                 "handler_error", "upstream_truncated",
             }:
                 raise VerificationError("boundary_snapshot_invalid")
             if ordinal["terminal_output_shape"] not in _BOUNDARY_TERMINAL_SHAPES:
+                raise VerificationError("boundary_snapshot_invalid")
+            if ordinal["completed_usage_shape"] not in _BOUNDARY_USAGE_SHAPES:
                 raise VerificationError("boundary_snapshot_invalid")
             if not isinstance(ordinal["event_counts"], dict) or len(ordinal["event_counts"]) > _SSE_EVENT_RUN_LIMIT:
                 raise VerificationError("boundary_snapshot_invalid")
@@ -4695,7 +4817,7 @@ def _safe_boundary_snapshot_validate(value: object) -> dict[str, object]:
                 for item in ordinal["event_trace"]
             ):
                 raise VerificationError("boundary_snapshot_invalid")
-            if any(not isinstance(item, bool) for key, item in ordinal.items() if key not in {"event_counts", "event_trace", "terminal_output_shape"}):
+            if any(not isinstance(item, bool) for key, item in ordinal.items() if key not in {"event_counts", "event_trace", "terminal_output_shape", "completed_usage_shape"}):
                 raise VerificationError("boundary_snapshot_invalid")
     qwen = value["qwen"]
     if not isinstance(qwen, dict) or set(qwen) != {
@@ -10349,6 +10471,7 @@ def main() -> int:
         return 0
     if arguments.tool_roundtrip_protected or arguments.tool_roundtrip_protected_fake:
         try:
+            _verify_155aj_obligation_manifest()
             result = run_codex_tool_roundtrip_protected(
                 fake_qwen=arguments.tool_roundtrip_protected_fake
             )

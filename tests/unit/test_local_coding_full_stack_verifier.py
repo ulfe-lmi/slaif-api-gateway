@@ -317,6 +317,123 @@ def test_155aj_reasoning_vocabulary_is_exact_and_closed() -> None:
         if isinstance(item, ast.Constant) and isinstance(item.value, str)
     }
     assert expected <= literals
+    production = Path(verifier.REPO_ROOT / "app/slaif_gateway/providers/streaming.py").read_text(
+        encoding="utf-8"
+    )
+    production_tree = ast.parse(production)
+    validator_class = next(
+        node for node in production_tree.body
+        if isinstance(node, ast.ClassDef)
+        and node.name == "ResponsesStreamEventValidator"
+    )
+    validate_method = next(
+        node for node in validator_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "validate"
+    )
+    reasoning_branch = next(
+        node for node in ast.walk(validate_method)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "self._profile.codex_reasoning_events"
+    )
+    branch_literals = {
+        node.value for node in ast.walk(reasoning_branch)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+    assert expected <= branch_literals
+
+
+def test_155ak_reasoning_lifecycle_matches_production_active_profile() -> None:
+    from slaif_gateway.providers.streaming import (
+        ResponsesStreamEventValidator,
+        ResponsesStreamValidationProfile,
+    )
+
+    response_id = "resp_ak_reasoning"
+    item_id = "reasoning_ak"
+    created = {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {
+            "id": response_id,
+            "object": "response",
+            "status": "in_progress",
+            "model": verifier.CODEX_MODEL,
+        },
+    }
+    added = {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {
+            "type": "reasoning", "id": item_id, "summary": [],
+            "content": None, "encrypted_content": None, "status": "in_progress",
+        },
+    }
+    part_added = {
+        "type": "response.reasoning_part.added", "item_id": item_id,
+        "output_index": 0, "content_index": 0, "sequence_number": 2,
+        "part": {"type": "reasoning_text", "text": ""},
+    }
+    delta = {
+        "type": "response.reasoning_text.delta", "item_id": item_id,
+        "output_index": 0, "content_index": 0, "sequence_number": 3,
+        "delta": "bounded",
+    }
+    text_done = {
+        "type": "response.reasoning_text.done", "item_id": item_id,
+        "output_index": 0, "content_index": 0, "sequence_number": 4,
+        "text": "bounded",
+    }
+    part_done = {
+        "type": "response.reasoning_part.done", "item_id": item_id,
+        "output_index": 0, "content_index": 0, "sequence_number": 5,
+        "part": {"type": "reasoning_text", "text": "bounded"},
+    }
+    item_done = {
+        "type": "response.output_item.done", "sequence_number": 6,
+        "output_index": 0,
+        "item": {
+            "type": "reasoning", "id": item_id, "summary": [],
+            "content": [{"type": "reasoning_text", "text": "bounded"}],
+            "encrypted_content": None, "status": "completed",
+        },
+    }
+    completed = {
+        "type": "response.completed", "sequence_number": 7,
+        "response": {
+            "id": response_id, "object": "response", "status": "completed",
+            "model": verifier.CODEX_MODEL,
+            "output": [{
+                "type": "reasoning", "id": "parser_reasoning_ak", "summary": [],
+                "content": [{"type": "reasoning_text", "text": "bounded"}],
+                "encrypted_content": None, "status": None,
+            }],
+            "usage": {
+                "input_tokens": 1,
+                "input_tokens_details": {
+                    "cached_tokens": 0, "input_tokens_per_turn": [1],
+                    "cached_tokens_per_turn": [0],
+                },
+                "output_tokens": 1,
+                "output_tokens_details": {
+                    "reasoning_tokens": 1, "tool_output_tokens": 0,
+                    "output_tokens_per_turn": [1], "tool_output_tokens_per_turn": [0],
+                },
+                "total_tokens": 2,
+            },
+        },
+    }
+    validator = ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    )
+    assert all(validator.validate(event) for event in (
+        created, added, part_added, delta, text_done, part_done, item_done, completed
+    ))
+    evidence = validator.safe_evidence()["event_counts"]
+    assert all(evidence[name] == 1 for name in (
+        "response.reasoning_part.added", "response.reasoning_text.delta",
+        "response.reasoning_text.done", "response.reasoning_part.done",
+    ))
 
 
 def test_155af_topology_anchors_exact_local_report_parent_and_path() -> None:
@@ -1343,6 +1460,220 @@ def test_boundary_snapshot_classification_has_fixed_downstream_outcomes(
         accounting_statuses={},
     )
     assert verifier._classify_boundary_snapshot(snapshot, assertion_failed=True) == expected
+
+
+@pytest.mark.parametrize(
+    "case",
+    verifier._155AK_SNAPSHOT_CASE_IDS,
+    ids=verifier._155AK_SNAPSHOT_CASE_IDS,
+)
+def test_155ak_snapshot_predicate_matrix(case: str) -> None:
+    good = verifier.json.loads(verifier.json.dumps(verifier._PINNED_CAPTURE_SSE_STRUCTURE))
+    structures: object = [good, verifier.json.loads(verifier.json.dumps(good))]
+    gateway_status: dict[str, object] = {
+        "response_statuses": [200, 200],
+        "response_content_type_classes": ["sse", "sse"],
+        "sse_structures": structures,
+    }
+
+    if case == "missing_collection":
+        gateway_status.pop("sse_structures")
+    elif case == "non_list_collection":
+        gateway_status["sse_structures"] = {"unexpected": "collection"}
+    elif case == "one_structure":
+        gateway_status["sse_structures"] = [good]
+    elif case == "excess_structures":
+        gateway_status["sse_structures"] = [good, good, good]
+    elif case == "absent_ordinal_0":
+        gateway_status["sse_structures"] = [None, good]
+    elif case == "absent_ordinal_1":
+        gateway_status["sse_structures"] = [good, None]
+    else:
+        structure = structures[0]
+        assert isinstance(structure, dict)
+        if case == "invalid_flag":
+            structure["invalid"] = True
+        elif case in {"created_missing", "created_duplicate"}:
+            structure["event_counts"]["response.created"] = 0 if case.endswith("missing") else 2
+        elif case in {"completed_missing", "completed_duplicate"}:
+            structure["event_counts"]["response.completed"] = 0 if case.endswith("missing") else 2
+        elif case == "response_id_relationship":
+            structure["response_id_relation"] = False
+        elif case == "created_status":
+            structure["created_status_in_progress"] = False
+        elif case == "completed_status":
+            structure["completed_status_completed"] = False
+        elif case == "model_mismatch":
+            structure["model_matches"] = False
+        elif case == "terminal_output_missing":
+            structure.pop("terminal_output_shape")
+        elif case == "terminal_output_invalid":
+            structure["terminal_output_shape"] = "other"
+        elif case == "usage_missing":
+            structure.pop("completed_usage_valid")
+        elif case == "usage_invalid":
+            structure["completed_usage_valid"] = False
+        elif case == "unknown_event":
+            structure["event_counts"] = {
+                "response.created": 1,
+                "response.completed": 1,
+                "unrecognized.event": 1,
+            }
+            structure["unknown_events"] = True
+        elif case == "error_event":
+            structure["error_event"] = True
+        elif case == "trace_overflow":
+            structure["event_trace_overflow"] = True
+        elif case == "abnormal_close":
+            structure["normal_close"] = False
+        elif case == "downstream_early_close":
+            structure["downstream_closed_early"] = True
+        elif case == "handler_error":
+            gateway_status["handler_error"] = True
+        elif case == "upstream_truncated":
+            gateway_status["upstream_truncated"] = True
+        elif case in {"reasoning_lifecycle", "function_lifecycle", "message_lifecycle"}:
+            from slaif_gateway.providers.streaming import (
+                ResponsesStreamEventValidator,
+                ResponsesStreamValidationProfile,
+            )
+
+            if case == "reasoning_lifecycle":
+                event = {
+                    "type": "response.reasoning_text.delta",
+                    "item_id": "reasoning-orphan",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "sequence_number": 1,
+                    "delta": "orphan",
+                }
+                profile = ResponsesStreamValidationProfile(codex_reasoning_events=True)
+            elif case == "function_lifecycle":
+                event = {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "function-orphan",
+                    "output_index": 0,
+                    "sequence_number": 1,
+                    "delta": "{}",
+                }
+                profile = ResponsesStreamValidationProfile(
+                    codex_reasoning_events=True,
+                    codex_streaming_tool_events=True,
+                    codex_0149_function_tool_events=True,
+                    declared_client_tools=frozenset({("functions", "wait", "function")}),
+                )
+            else:
+                event = {
+                    "type": "response.output_text.delta",
+                    "item_id": "message-orphan",
+                    "output_index": 0,
+                    "content_index": 0,
+                    "sequence_number": 1,
+                    "delta": "orphan",
+                }
+                profile = ResponsesStreamValidationProfile(codex_reasoning_events=True)
+            assert ResponsesStreamEventValidator(profile).validate(event) is False
+            structure["invalid"] = True
+
+    snapshot = verifier._safe_boundary_snapshot(
+        gateway_status=gateway_status,
+        gateway_request_count=2,
+        local_status={
+            "response_statuses": [200, 200],
+            "response_content_type_classes": ["sse", "sse"],
+            "sse_structures": [good, good],
+        },
+        local_request_count=2,
+        qwen_status={
+            "inference_calls": 2,
+            "successful_calls": 2,
+            "compiler_calls": 0,
+            "inference_statuses": [200, 200],
+            "inference_content_type_classes": ["sse", "sse"],
+            "sse_structures": [good, good],
+        },
+        accounting_statuses={},
+    ).to_dict(outcome="other", assertion_class="other")
+    assert verifier._safe_boundary_snapshot_validate(snapshot) == snapshot
+    section = snapshot["gateway"]
+    assert isinstance(section, dict)
+    if case in {"missing_collection", "non_list_collection"}:
+        assert section["sse_structure_count"] == "other"
+        assert section["ordinals"] == []
+    elif case == "one_structure":
+        assert section["sse_structure_count"] == "1"
+        assert len(section["ordinals"]) == 1
+        assert section["ordinals"][0]["present"] is True
+    elif case == "excess_structures":
+        assert section["sse_structure_count"] == "other"
+        assert len(section["ordinals"]) == 2
+        assert all(item["present"] is True for item in section["ordinals"])
+    elif case == "absent_ordinal_0":
+        assert section["sse_structure_count"] == "2"
+        assert [item["present"] for item in section["ordinals"]] == [False, True]
+    elif case == "absent_ordinal_1":
+        assert section["sse_structure_count"] == "2"
+        assert [item["present"] for item in section["ordinals"]] == [True, False]
+    else:
+        ordinal = section["ordinals"][0]
+        if case == "invalid_flag" or case in {"reasoning_lifecycle", "function_lifecycle", "message_lifecycle"}:
+            assert ordinal["invalid"] is True
+        elif case in {"created_missing", "created_duplicate"}:
+            assert ordinal["event_counts"]["response.created"] == (0 if case.endswith("missing") else 2)
+        elif case in {"completed_missing", "completed_duplicate"}:
+            assert ordinal["event_counts"]["response.completed"] == (0 if case.endswith("missing") else 2)
+        elif case == "response_id_relationship":
+            assert ordinal["response_id_relation"] is False
+        elif case == "created_status":
+            assert ordinal["created_status_in_progress"] is False
+        elif case == "completed_status":
+            assert ordinal["completed_status_completed"] is False
+        elif case == "model_mismatch":
+            assert ordinal["model_matches"] is False
+        elif case == "terminal_output_missing":
+            assert ordinal["terminal_output_shape"] == "missing"
+        elif case == "terminal_output_invalid":
+            assert ordinal["terminal_output_shape"] == "other"
+        elif case == "usage_missing":
+            assert ordinal["completed_usage_shape"] == "missing"
+            assert ordinal["completed_usage_valid"] is False
+        elif case == "usage_invalid":
+            assert ordinal["completed_usage_shape"] == "invalid"
+            assert ordinal["completed_usage_valid"] is False
+        elif case == "unknown_event":
+            assert ordinal["unknown_events"] is True
+            assert ordinal["invalid"] is False
+            assert ordinal["event_counts"]["other"] == 1
+        elif case == "error_event":
+            assert ordinal["error_event"] is True
+        elif case == "trace_overflow":
+            assert ordinal["event_trace_overflow"] is True
+        elif case == "abnormal_close":
+            assert ordinal["normal_close"] is False
+        elif case == "downstream_early_close":
+            assert ordinal["downstream_closed_early"] is True
+            assert ordinal["invalid"] is False
+        elif case == "handler_error":
+            assert section["handler_error"] is True
+            assert ordinal["handler_error"] is True
+        elif case == "upstream_truncated":
+            assert section["upstream_truncated"] is True
+            assert ordinal["upstream_truncated"] is True
+
+
+def test_155ak_snapshot_outcome_case_ids_match_validator_enum_exactly() -> None:
+    expected = {
+        "local_turn2_rejected_before_qwen",
+        "local_invoked_qwen_turn2_qwen_rejected_or_failed",
+        "qwen_turn2_completed_local_stream_invalid",
+        "local_qwen_turn2_completed_gateway_stream_invalid",
+        "producer_boundaries_valid_verifier_expectation_wrong",
+        "full_two_turn_path_succeeded",
+        "other",
+    }
+    assert set(verifier._155AK_OUTCOME_CASE_IDS) == expected
+    source = Path(verifier.__file__).read_text(encoding="utf-8")
+    assert all(outcome in source for outcome in expected)
 
 
 @pytest.mark.parametrize(
