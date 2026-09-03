@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-ag verifier for Codex 0.149 ID-less tool-call replay acceptance.
+"""Bounded 155-ah verifier for post-forwarding Codex boundary diagnosis.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -11,6 +11,7 @@ import argparse
 import ast
 import asyncio
 import base64
+from collections.abc import Callable
 import hashlib
 import hmac
 import http.server
@@ -38,10 +39,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "37e923304cf4b1cdb4fb9f8faefe4a7b2fb6db6e"
-GATEWAY_IMPLEMENTATION_HEAD = "34ab5afd09af026286779838db21cddad1717877"
-GATEWAY_ACTIVATION_HEAD = "a570d6087ca488bc7fb1ec9a9ed0e51266b52b15"
-GATEWAY_REPORT_PATH = "oap/reports/155-af-null-encrypted-replay-detector-and-final-acceptance.md"
+GATEWAY_REPORT_HEAD = "855a89b3c14c54da83798914dbc8ea077b122d07"
+GATEWAY_IMPLEMENTATION_HEAD = "b171ada9ed3320c57186283ed4ce6ffd4389a7c3"
+GATEWAY_ACTIVATION_HEAD = "7fc1b5a7cf9b9cce8677b64c4639f7a0ea0f97c1"
+GATEWAY_REPORT_PATH = "oap/reports/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -59,8 +60,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155ag_idless_tool"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
+TASK_DB = "slaif_gateway_oap_155ah_boundary_diagnostic"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -874,7 +875,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md",
+        "oap/orders/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -926,11 +927,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ag\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ah\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1648,6 +1649,31 @@ _SUMMARY_FAILURE_CATEGORIES = frozenset(
         "error_event",
         "nonzero_after_turn_completed",
         "unclassified",
+        "other",
+    }
+)
+
+_BOUNDARY_COUNT_CLASSES = frozenset({"0", "1", "2", "other"})
+_BOUNDARY_STATUS_CLASSES = frozenset({"1xx", "2xx", "3xx", "4xx", "5xx", "other"})
+_BOUNDARY_CONTENT_CLASSES = frozenset({"sse", "json", "other", "none"})
+_BOUNDARY_TERMINAL_SHAPES = frozenset({"empty_array", "nonempty_array", "missing", "other"})
+_BOUNDARY_STATES = frozenset(
+    {"not_reached", "entered", "transformed", "rejected", "succeeded", "unknown"}
+)
+_BOUNDARY_EVENT_CLASSES = frozenset(
+    {
+        "response.created",
+        "response.in_progress",
+        "response.completed",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.content_part.added",
+        "response.content_part.done",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "error",
         "other",
     }
 )
@@ -3670,6 +3696,555 @@ def _stream_observation_is_ambiguous(observation: dict[str, object]) -> bool:
             and observation.get("valid_completion") is not True
         )
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _SafeSSEOrdinal:
+    """Immutable, content-free projection of one bounded SSE ordinal."""
+
+    present: bool
+    invalid: bool
+    valid_completion: bool
+    event_counts: tuple[tuple[str, int | str], ...]
+    event_trace: tuple[tuple[str, int | str], ...]
+    event_trace_overflow: bool
+    created_exactly_once: bool
+    completed_exactly_once: bool
+    response_id_relation: bool
+    created_status_in_progress: bool
+    completed_status_completed: bool
+    model_matches: bool
+    terminal_output_shape: str
+    completed_usage_valid: bool
+    duplicates: bool
+    unknown_events: bool
+    error_event: bool
+    normal_close: bool
+    downstream_closed_early: bool
+    handler_error: bool
+    upstream_truncated: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "present": self.present,
+            "invalid": self.invalid,
+            "valid_completion": self.valid_completion,
+            "event_counts": dict(self.event_counts),
+            "event_trace": [
+                {"event": event, "count": count} for event, count in self.event_trace
+            ],
+            "event_trace_overflow": self.event_trace_overflow,
+            "created_exactly_once": self.created_exactly_once,
+            "completed_exactly_once": self.completed_exactly_once,
+            "response_id_relation": self.response_id_relation,
+            "created_status_in_progress": self.created_status_in_progress,
+            "completed_status_completed": self.completed_status_completed,
+            "model_matches": self.model_matches,
+            "terminal_output_shape": self.terminal_output_shape,
+            "completed_usage_valid": self.completed_usage_valid,
+            "duplicates": self.duplicates,
+            "unknown_events": self.unknown_events,
+            "error_event": self.error_event,
+            "normal_close": self.normal_close,
+            "downstream_closed_early": self.downstream_closed_early,
+            "handler_error": self.handler_error,
+            "upstream_truncated": self.upstream_truncated,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _SafeBoundarySection:
+    request_count: str
+    response_count: str
+    response_status_classes: tuple[str, ...]
+    content_type_classes: tuple[str, ...]
+    sse_structure_count: str
+    ordinals: tuple[_SafeSSEOrdinal, ...]
+    handler_error: bool
+    upstream_truncated: bool
+    downstream_closed_early: bool
+    normal_close: bool
+    error_code_classes: tuple[str, ...] = ()
+    error_param_classes: tuple[str, ...] = ()
+    error_stage_classes: tuple[str, ...] = ()
+    boundary_states: tuple[tuple[str, str], ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "request_count": self.request_count,
+            "response_count": self.response_count,
+            "response_status_classes": list(self.response_status_classes),
+            "content_type_classes": list(self.content_type_classes),
+            "sse_structure_count": self.sse_structure_count,
+            "ordinals": [ordinal.to_dict() for ordinal in self.ordinals],
+            "handler_error": self.handler_error,
+            "upstream_truncated": self.upstream_truncated,
+            "downstream_closed_early": self.downstream_closed_early,
+            "normal_close": self.normal_close,
+            "error_code_classes": list(self.error_code_classes),
+            "error_param_classes": list(self.error_param_classes),
+            "error_stage_classes": list(self.error_stage_classes),
+            "boundary_states": dict(self.boundary_states),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _SafeBoundarySnapshot:
+    """Deep-sanitized immutable snapshot retained across verifier assertions."""
+
+    gateway: _SafeBoundarySection
+    local: _SafeBoundarySection
+    qwen: _SafeBoundarySection
+    qwen_inference_count: str
+    qwen_successful_count: str
+    qwen_compiler_count: str
+    accounting: tuple[tuple[str, str | bool], ...]
+    codex_exit_success: bool
+    codex_provenance_class: str
+
+    def to_dict(self, *, outcome: str, assertion_class: str) -> dict[str, object]:
+        return {
+            "schema": "composed_boundary_snapshot_v1",
+            "outcome": outcome,
+            "assertion_class": assertion_class,
+            "gateway": self.gateway.to_dict(),
+            "local": self.local.to_dict(),
+            "qwen": {
+                **self.qwen.to_dict(),
+                "inference_count": self.qwen_inference_count,
+                "successful_count": self.qwen_successful_count,
+                "compiler_count": self.qwen_compiler_count,
+            },
+            "accounting": dict(self.accounting),
+            "codex": {
+                "exit_success": self.codex_exit_success,
+                "provenance_class": self.codex_provenance_class,
+            },
+        }
+
+
+class _BoundaryDiagnosticError(VerificationError):
+    """Verification failure carrying only a previously sanitized snapshot."""
+
+    def __init__(self, code: str, snapshot: _SafeBoundarySnapshot) -> None:
+        self.code = code
+        self.snapshot = snapshot
+        super().__init__(code)
+
+
+def _safe_count_class(value: object) -> str:
+    return str(value) if type(value) is int and 0 <= value <= 2 else "other"
+
+
+def _safe_boundary_status_classes(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or len(value) > 2:
+        return ("other",) if value else ()
+    result: list[str] = []
+    for status in value:
+        result.append(
+            f"{status // 100}xx"
+            if type(status) is int and 100 <= status <= 599
+            else "other"
+        )
+    return tuple(result)
+
+
+def _safe_boundary_content_classes(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list) or len(value) > 2:
+        return ("other",) if value else ()
+    return tuple(
+        content if isinstance(content, str) and content in _BOUNDARY_CONTENT_CLASSES else "other"
+        for content in value
+    )
+
+
+def _safe_snapshot_event_entries(value: object) -> tuple[tuple[str, int | str], ...]:
+    if not isinstance(value, dict) or len(value) > _SSE_EVENT_RUN_LIMIT:
+        return (("other", "other"),) if value else ()
+    entries: list[tuple[str, int | str]] = []
+    for event, count in sorted(value.items(), key=lambda item: str(item[0])):
+        safe_event = event if isinstance(event, str) and event in _BOUNDARY_EVENT_CLASSES else "other"
+        safe_count = count if type(count) is int and 0 <= count <= _SSE_EVENT_COUNT_LIMIT else "other"
+        entries.append((safe_event, safe_count))
+    return tuple(entries)
+
+
+def _safe_snapshot_trace(value: object) -> tuple[tuple[str, int | str], ...]:
+    if not isinstance(value, list) or len(value) > _SSE_EVENT_RUN_LIMIT:
+        return (("other", "other"),) if value else ()
+    entries: list[tuple[str, int | str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            entries.append(("other", "other"))
+            continue
+        event = item.get("event")
+        count = item.get("count")
+        safe_event = event if isinstance(event, str) and event in _BOUNDARY_EVENT_CLASSES else "other"
+        safe_count = count if type(count) is int and 0 <= count <= _SSE_EVENT_COUNT_LIMIT else "other"
+        entries.append((safe_event, safe_count))
+    return tuple(entries)
+
+
+def _safe_sse_ordinal(
+    structures: object,
+    index: int,
+    *,
+    handler_error: bool = False,
+    upstream_truncated: bool = False,
+) -> _SafeSSEOrdinal:
+    if not isinstance(structures, list) or index >= len(structures) or not isinstance(structures[index], dict):
+        return _SafeSSEOrdinal(
+            False, False, False, (), (), False, False, False, False, False, False,
+            False, "missing", False, False, False, False, False, False, handler_error,
+            upstream_truncated,
+        )
+    structure = structures[index]
+    counts = structure.get("event_counts")
+    count_map = counts if isinstance(counts, dict) else {}
+    return _SafeSSEOrdinal(
+        True,
+        structure.get("invalid") is True,
+        _stream_has_valid_completion(structure),
+        _safe_snapshot_event_entries(counts),
+        _safe_snapshot_trace(structure.get("event_trace")),
+        structure.get("event_trace_overflow") is True,
+        count_map.get("response.created") == 1,
+        count_map.get("response.completed") == 1,
+        structure.get("response_id_relation") is True,
+        structure.get("created_status_in_progress") is True,
+        structure.get("completed_status_completed") is True,
+        structure.get("model_matches") is True,
+        structure.get("terminal_output_shape")
+        if structure.get("terminal_output_shape") in _BOUNDARY_TERMINAL_SHAPES
+        else "other",
+        structure.get("completed_usage_valid") is True,
+        structure.get("duplicates") is True,
+        structure.get("unknown_events") is True,
+        structure.get("error_event") is True,
+        structure.get("normal_close") is True,
+        structure.get("downstream_closed_early") is True,
+        handler_error,
+        upstream_truncated,
+    )
+
+
+def _safe_boundary_class_list(
+    value: object, mapper: Callable[[object], str]
+) -> tuple[str, ...]:
+    raw = value if isinstance(value, (list, tuple)) else ()
+    return tuple(mapper(item) for item in raw[:2])
+
+
+def _qwen_inference_boundary_status(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    result = dict(value)
+    result["response_statuses"] = value.get("inference_statuses", [])
+    result["response_content_type_classes"] = value.get(
+        "inference_content_type_classes", []
+    )
+    return result
+
+
+def _safe_boundary_section(
+    status: object,
+    request_count: object,
+    *,
+    local_boundary: bool = False,
+    error_code_classes: object = (),
+    error_param_classes: object = (),
+    error_stage_classes: object = (),
+    boundary_states: object = (),
+) -> _SafeBoundarySection:
+    value = status if isinstance(status, dict) else {}
+    structures = value.get("sse_structures")
+    structure_count = len(structures) if isinstance(structures, list) else "other"
+    return _SafeBoundarySection(
+        _safe_count_class(request_count),
+        _safe_count_class(
+            len(value.get("response_statuses"))
+            if isinstance(value.get("response_statuses"), list)
+            else "other"
+        ),
+        _safe_boundary_status_classes(value.get("response_statuses")),
+        _safe_boundary_content_classes(value.get("response_content_type_classes")),
+        _safe_count_class(structure_count),
+        tuple(
+            _safe_sse_ordinal(
+                structures,
+                index,
+                handler_error=value.get("handler_error") is True,
+                upstream_truncated=value.get("upstream_truncated") is True,
+            )
+            for index in range(min(2, len(structures) if isinstance(structures, list) else 0))
+        ),
+        value.get("handler_error") is True,
+        value.get("upstream_truncated") is True,
+        value.get("downstream_closed_early") is True,
+        value.get("stream_normal_close") is True,
+        _safe_boundary_class_list(
+            error_code_classes,
+            _safe_local_error_code_class
+            if local_boundary
+            else _safe_gateway_error_code_class,
+        ),
+        _safe_boundary_class_list(error_param_classes, _safe_gateway_error_param_class),
+        _safe_boundary_class_list(error_stage_classes, _safe_local_rejection_stage),
+        tuple(
+            (name, state if state in _BOUNDARY_STATES else "unknown")
+            for name in ("tool_policy", "observation", "constitution", "upstream")
+            for state in (
+                boundary_states.get(name, "unknown")
+                if isinstance(boundary_states, dict)
+                else "unknown",
+            )
+        ),
+    )
+
+
+def _safe_boundary_snapshot(
+    *,
+    gateway_status: object,
+    gateway_request_count: object,
+    local_status: object,
+    local_request_count: object,
+    qwen_status: object,
+    accounting_statuses: object,
+    codex_provenance: object = None,
+    codex_exit_success: bool = False,
+) -> _SafeBoundarySnapshot:
+    gateway = gateway_status if isinstance(gateway_status, dict) else {}
+    local = local_status if isinstance(local_status, dict) else {}
+    qwen = _qwen_inference_boundary_status(qwen_status)
+    accounting = accounting_statuses if isinstance(accounting_statuses, dict) else {}
+    accounting_values: list[tuple[str, str | bool]] = []
+    for name in (
+        "reservation_finalized", "reservation_released", "reservation_pending",
+        "ledger_finalized", "ledger_failed", "ledger_estimated", "ledger_pending",
+    ):
+        accounting_values.append((name, _safe_count_class(accounting.get(name))))
+    accounting_values.extend(
+        (
+            ("query_ok", accounting.get("query_ok") is True),
+            (
+                "zero_pending",
+                accounting.get("reservation_pending") == 0
+                and accounting.get("ledger_pending") == 0,
+            ),
+        )
+    )
+    provenance_class = "unknown"
+    if isinstance(codex_provenance, dict):
+        provenance_class = (
+            "task_local_exact_npm"
+            if codex_provenance.get("source_class") == "task_local_exact_npm"
+            and codex_provenance.get("verified_binary_is_invoked") is True
+            else "other"
+        )
+    return _SafeBoundarySnapshot(
+        _safe_boundary_section(
+            gateway,
+            gateway_request_count,
+            error_code_classes=gateway.get("error_code_classes"),
+            error_param_classes=gateway.get("error_param_classes"),
+        ),
+        _safe_boundary_section(
+            local,
+            local_request_count,
+            local_boundary=True,
+            error_code_classes=local.get("local_error_code_classes"),
+            error_param_classes=local.get("error_param_classes"),
+            error_stage_classes=local.get("local_error_stage_classes"),
+            boundary_states=local.get("local_boundary_states"),
+        ),
+        _safe_boundary_section(qwen, qwen.get("inference_calls")),
+        _safe_count_class(qwen.get("inference_calls")),
+        _safe_count_class(qwen.get("successful_calls")),
+        _safe_count_class(qwen.get("compiler_calls")),
+        tuple(accounting_values),
+        codex_exit_success,
+        provenance_class,
+    )
+
+
+def _safe_boundary_snapshot_validate(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema", "outcome", "assertion_class", "gateway", "local", "qwen", "accounting", "codex"
+    } or value["schema"] != "composed_boundary_snapshot_v1":
+        raise VerificationError("boundary_snapshot_invalid")
+    if value["outcome"] not in {
+        "local_turn2_rejected_before_qwen",
+        "local_invoked_qwen_turn2_qwen_rejected_or_failed",
+        "qwen_turn2_completed_local_stream_invalid",
+        "local_qwen_turn2_completed_gateway_stream_invalid",
+        "producer_boundaries_valid_verifier_expectation_wrong",
+        "full_two_turn_path_succeeded",
+        "other",
+    }:
+        raise VerificationError("boundary_snapshot_invalid")
+    if not isinstance(value["assertion_class"], str) or value["assertion_class"] not in {
+        "none", "gateway_sse_invalid", "local_sse_invalid", "qwen_sse_invalid",
+        "lifecycle_invalid", "boundary_invalid", "accounting_invalid", "other",
+    }:
+        raise VerificationError("boundary_snapshot_invalid")
+    # Rebuild only fixed, bounded keys; reject any extra or malformed nested data.
+    for section_name in ("gateway", "local", "qwen"):
+        section = value[section_name]
+        if not isinstance(section, dict):
+            raise VerificationError("boundary_snapshot_invalid")
+        required = {
+            "request_count", "response_count", "response_status_classes", "content_type_classes",
+            "sse_structure_count", "ordinals", "handler_error", "upstream_truncated",
+            "downstream_closed_early", "normal_close", "error_code_classes", "error_param_classes",
+            "error_stage_classes", "boundary_states",
+        }
+        if section_name == "qwen":
+            required |= {"inference_count", "successful_count", "compiler_count"}
+        if set(section) != required:
+            raise VerificationError("boundary_snapshot_invalid")
+        for key in ("request_count", "response_count", "sse_structure_count"):
+            if section[key] not in _BOUNDARY_COUNT_CLASSES:
+                raise VerificationError("boundary_snapshot_invalid")
+        for key in ("response_status_classes", "content_type_classes", "error_code_classes", "error_param_classes", "error_stage_classes"):
+            if not isinstance(section[key], list) or len(section[key]) > 2 or any(not isinstance(item, str) for item in section[key]):
+                raise VerificationError("boundary_snapshot_invalid")
+        if any(item not in _BOUNDARY_STATUS_CLASSES for item in section["response_status_classes"]):
+            raise VerificationError("boundary_snapshot_invalid")
+        if any(item not in _BOUNDARY_CONTENT_CLASSES for item in section["content_type_classes"]):
+            raise VerificationError("boundary_snapshot_invalid")
+        if any(item not in (_SUMMARY_GATEWAY_ERROR_CODE_CLASSES | _SUMMARY_LOCAL_ERROR_CODE_CLASSES) for item in section["error_code_classes"]):
+            raise VerificationError("boundary_snapshot_invalid")
+        if any(item not in _SUMMARY_GATEWAY_ERROR_PARAM_CLASSES for item in section["error_param_classes"]):
+            raise VerificationError("boundary_snapshot_invalid")
+        if any(item not in _SUMMARY_LOCAL_REJECTION_STAGES for item in section["error_stage_classes"]):
+            raise VerificationError("boundary_snapshot_invalid")
+        if any(
+            type(section[name]) is not bool
+            for name in (
+                "handler_error",
+                "upstream_truncated",
+                "downstream_closed_early",
+                "normal_close",
+            )
+        ):
+            raise VerificationError("boundary_snapshot_invalid")
+        if not isinstance(section["boundary_states"], dict) or set(section["boundary_states"]) - {
+            "tool_policy", "observation", "constitution", "upstream"
+        }:
+            raise VerificationError("boundary_snapshot_invalid")
+        if any(state not in _BOUNDARY_STATES for state in section["boundary_states"].values()):
+            raise VerificationError("boundary_snapshot_invalid")
+        if not isinstance(section["ordinals"], list) or len(section["ordinals"]) > 2:
+            raise VerificationError("boundary_snapshot_invalid")
+        for ordinal in section["ordinals"]:
+            if not isinstance(ordinal, dict) or set(ordinal) != {
+                "present", "invalid", "valid_completion", "event_counts", "event_trace",
+                "event_trace_overflow", "created_exactly_once", "completed_exactly_once",
+                "response_id_relation", "created_status_in_progress", "completed_status_completed",
+                "model_matches", "terminal_output_shape", "completed_usage_valid", "duplicates",
+                "unknown_events", "error_event", "normal_close", "downstream_closed_early",
+                "handler_error", "upstream_truncated",
+            }:
+                raise VerificationError("boundary_snapshot_invalid")
+            if ordinal["terminal_output_shape"] not in _BOUNDARY_TERMINAL_SHAPES:
+                raise VerificationError("boundary_snapshot_invalid")
+            if not isinstance(ordinal["event_counts"], dict) or len(ordinal["event_counts"]) > _SSE_EVENT_RUN_LIMIT:
+                raise VerificationError("boundary_snapshot_invalid")
+            if any(
+                not isinstance(event, str)
+                or event not in _BOUNDARY_EVENT_CLASSES
+                or not (
+                    type(count) is int
+                    and 0 <= count <= _SSE_EVENT_COUNT_LIMIT
+                    or count == "other"
+                )
+                for event, count in ordinal["event_counts"].items()
+            ):
+                raise VerificationError("boundary_snapshot_invalid")
+            if not isinstance(ordinal["event_trace"], list) or len(ordinal["event_trace"]) > _SSE_EVENT_RUN_LIMIT:
+                raise VerificationError("boundary_snapshot_invalid")
+            if any(
+                not isinstance(item, dict)
+                or set(item) != {"event", "count"}
+                or item["event"] not in _BOUNDARY_EVENT_CLASSES
+                or not (
+                    type(item["count"]) is int
+                    and 0 <= item["count"] <= _SSE_EVENT_COUNT_LIMIT
+                    or item["count"] == "other"
+                )
+                for item in ordinal["event_trace"]
+            ):
+                raise VerificationError("boundary_snapshot_invalid")
+            if any(not isinstance(item, bool) for key, item in ordinal.items() if key not in {"event_counts", "event_trace", "terminal_output_shape"}):
+                raise VerificationError("boundary_snapshot_invalid")
+    qwen = value["qwen"]
+    if not isinstance(qwen, dict) or set(qwen) != {
+        "request_count", "response_count", "response_status_classes", "content_type_classes",
+        "sse_structure_count", "ordinals", "handler_error", "upstream_truncated",
+        "downstream_closed_early", "normal_close", "error_code_classes", "error_param_classes",
+        "error_stage_classes", "boundary_states", "inference_count", "successful_count", "compiler_count",
+    }:
+        raise VerificationError("boundary_snapshot_invalid")
+    for key in ("inference_count", "successful_count", "compiler_count"):
+        if qwen[key] not in _BOUNDARY_COUNT_CLASSES:
+            raise VerificationError("boundary_snapshot_invalid")
+    accounting = value["accounting"]
+    if not isinstance(accounting, dict) or set(accounting) != {
+        "reservation_finalized", "reservation_released", "reservation_pending", "ledger_finalized",
+        "ledger_failed", "ledger_estimated", "ledger_pending", "query_ok", "zero_pending",
+    } or any(accounting[key] not in _BOUNDARY_COUNT_CLASSES for key in set(accounting) - {"query_ok", "zero_pending"}) or any(type(accounting[key]) is not bool for key in ("query_ok", "zero_pending")):
+        raise VerificationError("boundary_snapshot_invalid")
+    codex = value["codex"]
+    if not isinstance(codex, dict) or set(codex) != {"exit_success", "provenance_class"} or type(codex["exit_success"]) is not bool or codex["provenance_class"] not in {"task_local_exact_npm", "unknown", "other"}:
+        raise VerificationError("boundary_snapshot_invalid")
+    return json.loads(json.dumps(value, separators=(",", ":"), sort_keys=True))
+
+
+def _classify_boundary_snapshot(snapshot: _SafeBoundarySnapshot, *, assertion_failed: bool) -> str:
+    gateway_second = snapshot.gateway.ordinals[1] if len(snapshot.gateway.ordinals) > 1 else None
+    local_second = snapshot.local.ordinals[1] if len(snapshot.local.ordinals) > 1 else None
+    qwen_second = snapshot.qwen.ordinals[1] if len(snapshot.qwen.ordinals) > 1 else None
+    local_second_failed = (
+        len(snapshot.local.response_status_classes) > 1
+        and snapshot.local.response_status_classes[1] in {"4xx", "5xx"}
+    )
+    qwen_second_failed = (
+        len(snapshot.qwen.response_status_classes) > 1
+        and snapshot.qwen.response_status_classes[1] in {"4xx", "5xx"}
+    )
+    if local_second_failed and snapshot.qwen_inference_count in {"0", "1"}:
+        return "local_turn2_rejected_before_qwen"
+    if qwen_second_failed:
+        return "local_invoked_qwen_turn2_qwen_rejected_or_failed"
+    local_valid = local_second is not None and local_second.valid_completion
+    qwen_valid = qwen_second is not None and qwen_second.valid_completion
+    gateway_valid = gateway_second is not None and gateway_second.valid_completion
+    if qwen_valid and not local_valid:
+        return "qwen_turn2_completed_local_stream_invalid"
+    if local_valid and qwen_valid and not gateway_valid:
+        return "local_qwen_turn2_completed_gateway_stream_invalid"
+    if local_valid and qwen_valid and gateway_valid and assertion_failed:
+        return "producer_boundaries_valid_verifier_expectation_wrong"
+    if local_valid and qwen_valid and gateway_valid and not assertion_failed:
+        return "full_two_turn_path_succeeded"
+    return "other"
+
+
+def _safe_boundary_assertion_class(code: object) -> str:
+    if code in {
+        "composed_tool_roundtrip_gateway_sse_invalid",
+        "composed_tool_roundtrip_gateway_lifecycle_invalid",
+    }:
+        return "gateway_sse_invalid" if code.endswith("sse_invalid") else "lifecycle_invalid"
+    if code == "composed_tool_roundtrip_local_sse_invalid":
+        return "local_sse_invalid"
+    if code == "composed_tool_roundtrip_qwen_sse_invalid":
+        return "qwen_sse_invalid"
+    if code == "composed_tool_roundtrip_boundary_invalid":
+        return "boundary_invalid"
+    if code == "composed_tool_roundtrip_accounting_rows":
+        return "accounting_invalid"
+    return "none" if code is None else "other"
 
 
 def _terminal_completion_valid(observation: dict[str, object]) -> bool:
@@ -5917,14 +6492,14 @@ def _start_relay(
         capture_requests=capture_requests,
         boundary_class=boundary_class,
     )
-    thread = threading.Thread(target=relay.serve_forever, name="155af-relay", daemon=True)
+    thread = threading.Thread(target=relay.serve_forever, name="155ah-relay", daemon=True)
     thread.start()
     return relay, thread
 
 
 def _start_failure_server() -> tuple[_FailureServer, threading.Thread]:
     server = _FailureServer(("127.0.0.1", 0))
-    thread = threading.Thread(target=server.serve_forever, name="155af-failure", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ah-failure", daemon=True)
     thread.start()
     return server, thread
 
@@ -5945,7 +6520,7 @@ def _start_fake_qwen(
         provider_failure_mode=provider_failure_mode,
         non_prefixed_tool_id=non_prefixed_tool_id,
     )
-    thread = threading.Thread(target=server.serve_forever, name="155af-fake-qwen", daemon=True)
+    thread = threading.Thread(target=server.serve_forever, name="155ah-fake-qwen", daemon=True)
     thread.start()
     return server, thread, token
 
@@ -7596,6 +8171,19 @@ def _run_composed_codex_tool_roundtrip(
                 "ledger_estimated": 0,
                 "ledger_pending": 0,
             }
+        boundary_snapshot = _safe_boundary_snapshot(
+            gateway_status=gateway_status,
+            gateway_request_count=len(gateway_requests),
+            local_status=local_status,
+            local_request_count=len(local_requests_snapshot),
+            qwen_status=qwen_status,
+            accounting_statuses=accounting_statuses,
+            codex_provenance={
+                "source_class": "task_local_exact_npm",
+                "verified_binary_is_invoked": codex_binary is not None,
+            },
+            codex_exit_success=False,
+        )
         tracker.set("tool_roundtrip_qualification_artifact")
         qualification_rejection = (
             _read_qualification_rejection(root) if qualification_hook else None
@@ -7753,6 +8341,12 @@ def _run_composed_codex_tool_roundtrip(
                 ],
                 "accounting_ledger_failed": qualification_accounting["ledger_failed"],
                 "failure_code": failure_code,
+                "boundary_snapshot": boundary_snapshot.to_dict(
+                    outcome=_classify_boundary_snapshot(
+                        boundary_snapshot, assertion_failed=True
+                    ),
+                    assertion_class=_safe_boundary_assertion_class(failure_code),
+                ),
                 "qualification_summary": (
                     _read_preclassification_summary(root)
                     if qualification_hook
@@ -7760,19 +8354,70 @@ def _run_composed_codex_tool_roundtrip(
                 ),
             }
         del accounting_statuses, codex_failure_category, request_projections
-        raise VerificationError(failure_code)
+        return {
+            "codex_exit_success": False,
+            "failure_code": failure_code,
+            "boundary_snapshot": boundary_snapshot.to_dict(
+                outcome=_classify_boundary_snapshot(
+                    boundary_snapshot, assertion_failed=True
+                ),
+                assertion_class=_safe_boundary_assertion_class(failure_code),
+            ),
+        }
 
     tracker.set("tool_roundtrip_boundary_capture")
     gateway_requests = gateway_output.snapshot()
     local_requests = relay.snapshot()
+    gateway_status = gateway_output.status()
+    local_status = relay.status()
+    try:
+        local_metrics_after = _local_metrics(local_port)
+    except VerificationError:
+        local_metrics_after = None
+    local_status["local_boundary_states"] = _safe_local_boundary_states_from_codes(
+        local_status.get("local_error_code_classes"),
+        local_status.get("response_statuses"),
+        local_metrics_before,
+        local_metrics_after,
+    )
+    qwen_status = _qwen_relay_status(qwen_port)
+    accounting_statuses: dict[str, int | bool]
+    try:
+        accounting_statuses = asyncio.run(_safe_roundtrip_accounting_status_counts(postgres_url, key))
+    except Exception:
+        accounting_statuses = {
+            "query_ok": False,
+            "reservation_finalized": 0,
+            "reservation_pending": 0,
+            "reservation_released": 0,
+            "ledger_finalized": 0,
+            "ledger_failed": 0,
+            "ledger_estimated": 0,
+            "ledger_pending": 0,
+        }
+    boundary_snapshot = _safe_boundary_snapshot(
+        gateway_status=gateway_status,
+        gateway_request_count=len(gateway_requests),
+        local_status=local_status,
+        local_request_count=len(local_requests),
+        qwen_status=qwen_status,
+        accounting_statuses=accounting_statuses,
+        codex_provenance={
+            "source_class": "task_local_exact_npm",
+            "verified_binary_is_invoked": codex_binary is not None,
+        },
+        codex_exit_success=True,
+    )
     if len(local_requests) != 2 or len(gateway_requests) != 2:
-        raise VerificationError("composed_tool_roundtrip_request_count")
+        raise _BoundaryDiagnosticError("composed_tool_roundtrip_request_count", boundary_snapshot)
     tool_result_counts: list[int] = []
     for request in local_requests:
         try:
             payload = json.loads(request.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise VerificationError("composed_tool_roundtrip_body_invalid") from exc
+            raise _BoundaryDiagnosticError(
+                "composed_tool_roundtrip_body_invalid", boundary_snapshot
+            ) from exc
         items = payload.get("input") if isinstance(payload, dict) else None
         tool_result_counts.append(
             sum(
@@ -7785,7 +8430,7 @@ def _run_composed_codex_tool_roundtrip(
         )
         del payload
     if tool_result_counts != [0, 1]:
-        raise VerificationError("composed_tool_roundtrip_tool_result_count")
+        raise _BoundaryDiagnosticError("composed_tool_roundtrip_tool_result_count", boundary_snapshot)
 
     tracker.set("tool_roundtrip_privacy_aliases")
     raw_aliases_by_turn: list[dict[str, set[str]]] = []
@@ -7794,7 +8439,9 @@ def _run_composed_codex_tool_roundtrip(
         try:
             payload = json.loads(request.body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise VerificationError("composed_tool_roundtrip_gateway_body_invalid") from exc
+            raise _BoundaryDiagnosticError(
+                "composed_tool_roundtrip_gateway_body_invalid", boundary_snapshot
+            ) from exc
         aliases_by_class: dict[str, set[str]] = {}
         metadata = payload.get("client_metadata") if isinstance(payload, dict) else None
         if isinstance(metadata, dict):
@@ -7834,16 +8481,24 @@ def _run_composed_codex_tool_roundtrip(
             )
             or alias_class not in set(_SAFE_RAW_METADATA_KEY_CLASSES.values())
         ):
-            raise VerificationError("composed_tool_roundtrip_privacy_invalid")
-        raise VerificationError(
+            raise _BoundaryDiagnosticError(
+                "composed_tool_roundtrip_privacy_invalid", boundary_snapshot
+            )
+        raise _BoundaryDiagnosticError(
             f"composed_tool_roundtrip_privacy_source_{source_turn}_target_{target_turn}_"
-            f"{location}_{body_path if location == 'other_json_body_path' else 'none'}_{alias_class}"
+            f"{location}_{body_path if location == 'other_json_body_path' else 'none'}_{alias_class}",
+            boundary_snapshot,
         )
-    _assert_local_bound_privacy(
-        local_requests,
-        raw_aliases=raw_aliases,
-        service_token=service_token,
-    )
+    try:
+        _assert_local_bound_privacy(
+            local_requests,
+            raw_aliases=raw_aliases,
+            service_token=service_token,
+        )
+    except VerificationError:
+        raise _BoundaryDiagnosticError(
+            "composed_tool_roundtrip_privacy_invalid", boundary_snapshot
+        ) from None
     del privacy_findings, raw_aliases, raw_aliases_by_turn
     tracker.set("tool_roundtrip_signed_identity_headers")
     signed_header_facts = [
@@ -7876,7 +8531,9 @@ def _run_composed_codex_tool_roundtrip(
         or fact["signature_header_class"] != "v1_hex"
         for fact in signed_header_facts
     ):
-        raise VerificationError("composed_tool_roundtrip_signed_headers_invalid")
+        raise _BoundaryDiagnosticError(
+            "composed_tool_roundtrip_signed_headers_invalid", boundary_snapshot
+        )
     del signed_header_facts
     tracker.set("tool_roundtrip_signed_key_forwarding")
     if any(
@@ -7884,42 +8541,34 @@ def _run_composed_codex_tool_roundtrip(
         or key.plaintext in request.headers.get("authorization", "")
         for request in local_requests
     ):
-        raise VerificationError("composed_tool_roundtrip_gateway_key_forwarded")
+        raise _BoundaryDiagnosticError(
+            "composed_tool_roundtrip_gateway_key_forwarded", boundary_snapshot
+        )
 
     tracker.set("tool_roundtrip_sse_validation")
-    local_status = relay.status()
-    try:
-        local_metrics_after = _local_metrics(local_port)
-    except VerificationError:
-        local_metrics_after = None
-    local_status["local_boundary_states"] = _safe_local_boundary_states_from_codes(
-        local_status.get("local_error_code_classes"),
-        local_status.get("response_statuses"),
-        local_metrics_before,
-        local_metrics_after,
-    )
-    gateway_status = gateway_output.status()
-    qwen_status = _qwen_relay_status(qwen_port)
     fake_status = fake_qwen_server.status() if fake_qwen_server is not None else {}
-    _assert_two_turn_sse_structures(
-        gateway_status.get("sse_structures"),
-        error_code="composed_tool_roundtrip_gateway_sse_invalid",
-    )
-    if fake_qwen_server is not None:
-        _assert_function_then_message_structure(gateway_status.get("sse_structures"))
-    else:
-        _assert_protected_function_then_message_structure(
-            gateway_status.get("sse_structures")
+    try:
+        _assert_two_turn_sse_structures(
+            gateway_status.get("sse_structures"),
+            error_code="composed_tool_roundtrip_gateway_sse_invalid",
         )
-    _assert_two_turn_sse_structures(
-        local_status.get("sse_structures"),
-        error_code="composed_tool_roundtrip_local_sse_invalid",
-    )
-    tracker.set("tool_roundtrip_qwen_boundary")
-    _assert_two_turn_sse_structures(
-        qwen_status.get("sse_structures"),
-        error_code="composed_tool_roundtrip_qwen_sse_invalid",
-    )
+        if fake_qwen_server is not None:
+            _assert_function_then_message_structure(gateway_status.get("sse_structures"))
+        else:
+            _assert_protected_function_then_message_structure(
+                gateway_status.get("sse_structures")
+            )
+        _assert_two_turn_sse_structures(
+            local_status.get("sse_structures"),
+            error_code="composed_tool_roundtrip_local_sse_invalid",
+        )
+        tracker.set("tool_roundtrip_qwen_boundary")
+        _assert_two_turn_sse_structures(
+            qwen_status.get("sse_structures"),
+            error_code="composed_tool_roundtrip_qwen_sse_invalid",
+        )
+    except VerificationError as exc:
+        raise _BoundaryDiagnosticError(str(exc), boundary_snapshot) from None
     if (
         local_status.get("response_statuses") != [200, 200]
         or gateway_status.get("response_statuses") != [200, 200]
@@ -7945,11 +8594,11 @@ def _run_composed_codex_tool_roundtrip(
             )
         )
     ):
-        raise VerificationError("composed_tool_roundtrip_boundary_invalid")
+        raise _BoundaryDiagnosticError("composed_tool_roundtrip_boundary_invalid", boundary_snapshot)
     tracker.set("tool_roundtrip_accounting")
     accounting_rows = asyncio.run(_verify_accounting(postgres_url, (key,), ()))
     if accounting_rows != 2:
-        raise VerificationError("composed_tool_roundtrip_accounting_rows")
+        raise _BoundaryDiagnosticError("composed_tool_roundtrip_accounting_rows", boundary_snapshot)
     return {
         "codex_exit_success": True,
         "gateway_to_local_turns": 2,
@@ -7958,6 +8607,10 @@ def _run_composed_codex_tool_roundtrip(
         "function_lifecycle_count": 1,
         "message_lifecycle_count": 1,
         "accounting_rows": accounting_rows,
+        "boundary_snapshot": boundary_snapshot.to_dict(
+            outcome="full_two_turn_path_succeeded",
+            assertion_class="none",
+        ),
     }
 
 
@@ -8609,7 +9262,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155af-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ah-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -8627,6 +9280,17 @@ def _run_dedicated_codex_tool_roundtrip(
                 qualification_hook=qualification_hook,
                 tracker=StageTracker(),
             )
+        except _BoundaryDiagnosticError as exception:
+            result = {
+                "codex_exit_success": False,
+                "failure_code": exception.code,
+                "boundary_snapshot": exception.snapshot.to_dict(
+                    outcome=_classify_boundary_snapshot(
+                        exception.snapshot, assertion_failed=True
+                    ),
+                    assertion_class=_safe_boundary_assertion_class(exception.code),
+                ),
+            }
         except Exception as exception:
             summary = _read_preclassification_summary(root) if qualification_hook else None
             if qualification_hook and summary is not None:
@@ -8719,7 +9383,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155af-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ah-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -8878,7 +9542,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155af-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ah-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -8980,7 +9644,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-            with tempfile.TemporaryDirectory(prefix="slaif-155af-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="slaif-155ah-", dir="/tmp") as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
                 stage = "local_config_preflight"
@@ -9054,7 +9718,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155af-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155ah-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
@@ -9121,9 +9785,23 @@ def main() -> int:
             result = run_codex_tool_roundtrip_protected(
                 fake_qwen=arguments.tool_roundtrip_protected_fake
             )
-            if result.get("codex_exit_success") is not True:
-                raise VerificationError("protected_tool_roundtrip_incomplete")
-            print("PROTECTED_TOOL_ROUNDTRIP=OK turns=2 function=1 message=1 accounting_rows=2")
+            if result.get("codex_exit_success") is True:
+                print("PROTECTED_TOOL_ROUNDTRIP=OK turns=2 function=1 message=1 accounting_rows=2")
+            else:
+                snapshot = _safe_boundary_snapshot_validate(
+                    result.get("boundary_snapshot")
+                )
+                evidence = {
+                    "failure_code": _safe_qualification_failure_code(
+                        VerificationError(str(result.get("failure_code", "protected_tool_roundtrip_failed")))
+                    ),
+                    "boundary_snapshot": snapshot,
+                }
+                print(
+                    "PROTECTED_TOOL_ROUNDTRIP=FAILED "
+                    + json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+                )
+                return 1
         except VerificationError as exc:
             print(f"RESULT=BLOCKED code={exc}")
             return 1

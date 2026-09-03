@@ -476,3 +476,100 @@ async def test_idless_call_digest_ambiguity_is_not_collapsed() -> None:
             allow_idless_tool_call_replay=True,
         )
     assert exc_info.value.error_code == "responses_codex_replay_reference_not_found"
+
+
+@pytest.mark.asyncio
+async def test_hmac_rotation_verifies_old_rows_and_new_rows_by_row_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeRepository()
+    key_id = uuid.uuid4()
+    now = datetime(2026, 8, 18, 10, 0, tzinfo=UTC)
+    route_id = uuid.uuid4()
+    service_v1 = CodexReplayService(repository=repository, settings=_settings())
+    stored_function = Candidate(
+        item_kind="function_call",
+        item_id="fc_rotation_1",
+        call_id="call_1",
+        tool_namespace="functions",
+        tool_name="exec",
+    )
+    await service_v1.persist_validated_references(
+        candidates=(_reasoning(), stored_function),
+        gateway_key_id=key_id,
+        usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_rotation_v1",
+        provider="local-coding",
+        route_id=route_id,
+        upstream_model="qwen-test",
+        now=now,
+    )
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V1", "unit-replay-secret")
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V2", "unit-replay-secret-v2")
+    service_v2 = CodexReplayService(
+        repository=repository,
+        settings=Settings(
+            APP_ENV="development",
+            ACTIVE_HMAC_KEY_VERSION="2",
+        ),
+    )
+    old_item_authorization = await service_v2.verify_owned_replay(
+        candidates=(_reasoning(),), gateway_key_id=key_id, now=now + timedelta(minutes=1)
+    )
+    assert len(old_item_authorization.references) == 1
+    old_call_authorization = await service_v2.verify_owned_replay(
+        candidates=(_idless_tool(),),
+        gateway_key_id=key_id,
+        now=now + timedelta(minutes=1),
+        allow_idless_tool_call_replay=True,
+    )
+    assert len(old_call_authorization.references) == 1
+
+    new_item = Candidate(item_kind="reasoning", item_id="rs_reasoning_v2")
+    await service_v2.persist_validated_references(
+        candidates=(new_item,),
+        gateway_key_id=key_id,
+        usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_rotation_v2",
+        provider="local-coding",
+        route_id=route_id,
+        upstream_model="qwen-test",
+        now=now,
+    )
+    new_authorization = await service_v2.verify_owned_replay(
+        candidates=(new_item,), gateway_key_id=key_id, now=now + timedelta(minutes=1)
+    )
+    assert len(new_authorization.references) == 1
+    assert {row.hmac_key_version for row in repository.rows} == {1, 2}
+
+
+@pytest.mark.asyncio
+async def test_hmac_rotation_fails_closed_when_old_secret_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository = FakeRepository()
+    key_id = uuid.uuid4()
+    service = CodexReplayService(repository=repository, settings=_settings())
+    await service.persist_validated_references(
+        candidates=(_reasoning(),),
+        gateway_key_id=key_id,
+        usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_rotation_missing_v1",
+        provider="local-coding",
+        route_id=uuid.uuid4(),
+        upstream_model="qwen-test",
+    )
+    monkeypatch.delenv("TOKEN_HMAC_SECRET_V1", raising=False)
+    monkeypatch.setenv("TOKEN_HMAC_SECRET_V2", "unit-replay-secret-v2")
+    rotated_without_old_key = CodexReplayService(
+        repository=repository,
+        settings=Settings(
+            APP_ENV="development",
+            ACTIVE_HMAC_KEY_VERSION="2",
+        ),
+    )
+    with pytest.raises(CodexReplayReferenceError) as exc_info:
+        await rotated_without_old_key.verify_owned_replay(
+            candidates=(_reasoning(),), gateway_key_id=key_id
+        )
+    assert exc_info.value.error_code == "responses_codex_replay_hmac_unavailable"

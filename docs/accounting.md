@@ -105,7 +105,7 @@ facts, and no hosted-tool fee/hold metadata for both Gateway keys.
   input, while provider final usage/cost remains authoritative. After a stream
   supplies final usage, the gateway finalizes PostgreSQL accounting first,
   verifies the same finalized key/request ledger row, then writes 24-hour
-  HMAC-only item/call ownership references before releasing the held
+  versioned HMAC item/call ownership references before releasing the held
   `response.completed`. Reference-persistence failure emits safe failure and
   suppresses normal completion without releasing or reversing charged usage.
   Missing usage, malformed/error events, and disconnects create no usable
@@ -118,8 +118,9 @@ facts, and no hosted-tool fee/hold metadata for both Gateway keys.
 - The same exact Codex 0.149 Local pair may authenticate an absent/null
   function or custom tool-call item ID through one existing same-key call-ID
   HMAC reference. This is replay control metadata, not billing truth: it is
-  checked before reservation/provider work, and no raw call/item ID or digest
-  is persisted or exposed. Other clients and replayable item kinds retain the
+  checked before reservation/provider work; raw call/item IDs are never
+  persisted or exposed, while only the versioned HMAC digest is persisted in
+  the replay-reference row. Other clients and replayable item kinds retain the
   existing item-ID requirement.
 - Fully gated Codex admission replaces only the injected ordinary 1,024 output
   default with the strict route default (32,768 in the qualification profile),

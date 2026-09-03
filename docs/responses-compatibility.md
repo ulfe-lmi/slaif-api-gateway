@@ -237,7 +237,8 @@ immediately preceding matching HMAC-owned call and `call_id`. Absent IDs retain
 the prior canonical shape. Ordinary outputs, malformed or duplicate IDs,
 unknown fields, orphan/reordered/cross-type pairs, and linkage mismatches remain
 denied. Raw output IDs are transient provider input and never enter safe
-evidence or persistence.
+evidence or persistence; replay-reference rows contain only versioned HMAC
+digests and bounded ownership metadata.
 
 For the exact `codex-0.149-responses-v1` -> `local-coding-v1` pair only, the
 pinned Codex 0.149 client may omit or send `null` for a function/custom
@@ -246,7 +247,9 @@ the gateway performs a same-key, same-kind, unexpired HMAC lookup, requires one
 row and exact HMAC-key-version binding, then checks the stored tool and route
 facts before admission. It never invents an item ID or falls back from a
 present malformed/wrong item ID. Other clients, Codex 0.147, reasoning, compact
-history, hosted routes, and unreviewed server pairings remain strict.
+history, hosted routes, and unreviewed server pairings remain strict. The
+versioned HMAC digest is private replay-control metadata; raw IDs and digests
+are never logged or exposed.
 
 The pinned V1 compact request does not carry `max_output_tokens`. SLAIF keeps
 that field absent in the provider request while using the validated Codex route

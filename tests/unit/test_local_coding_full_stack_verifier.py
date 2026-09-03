@@ -232,7 +232,7 @@ def test_155af_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
+            return "oap/active\noap/orders/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -264,11 +264,11 @@ def test_155af_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155ag_topology_anchors_are_the_155af_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "37e923304cf4b1cdb4fb9f8faefe4a7b2fb6db6e"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "34ab5afd09af026286779838db21cddad1717877"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "a570d6087ca488bc7fb1ec9a9ed0e51266b52b15"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-af-null-encrypted-replay-detector-and-final-acceptance.md"
+def test_155ah_topology_anchors_are_the_155ag_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "855a89b3c14c54da83798914dbc8ea077b122d07"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "b171ada9ed3320c57186283ed4ce6ffd4389a7c3"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "7fc1b5a7cf9b9cce8677b64c4639f7a0ea0f97c1"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
 
 
 def test_155af_topology_anchors_exact_local_report_parent_and_path() -> None:
@@ -1212,6 +1212,142 @@ def test_preclassification_summary_write_read_handles_short_writes_and_qwen_stre
     assert verifier._read_preclassification_summary(tmp_path) == summary
     assert summary["qwen"]["normal_close"] is True
     assert summary["qwen"]["content_type_classes"] == ["sse", "json"]
+
+
+def _boundary_snapshot_fixture(
+    *,
+    local_statuses: list[int] | None = None,
+    qwen_statuses: list[int] | None = None,
+    local_structures: list[dict[str, object]] | None = None,
+    qwen_structures: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    structure = verifier._PINNED_CAPTURE_SSE_STRUCTURE
+    local_statuses = local_statuses or [200, 200]
+    qwen_statuses = qwen_statuses or [200, 200]
+    local_structures = local_structures or [structure, structure]
+    qwen_structures = qwen_structures or [structure, structure]
+    return verifier._safe_boundary_snapshot(
+        gateway_status={
+            "response_statuses": [200, 200],
+            "response_content_type_classes": ["sse", "sse"],
+            "sse_structures": [structure, structure],
+        },
+        gateway_request_count=2,
+        local_status={
+            "response_statuses": local_statuses,
+            "response_content_type_classes": ["sse"] * len(local_statuses),
+            "sse_structures": local_structures,
+        },
+        local_request_count=len(local_statuses),
+        qwen_status={
+            "inference_calls": len(qwen_statuses),
+            "successful_calls": sum(status < 400 for status in qwen_statuses),
+            "compiler_calls": 0,
+            "inference_statuses": qwen_statuses,
+            "inference_content_type_classes": ["sse"] * len(qwen_statuses),
+            "sse_structures": qwen_structures,
+        },
+        accounting_statuses={
+            "query_ok": True,
+            "reservation_finalized": 2,
+            "reservation_released": 0,
+            "reservation_pending": 0,
+            "ledger_finalized": 2,
+            "ledger_failed": 0,
+            "ledger_estimated": 0,
+            "ledger_pending": 0,
+        },
+        codex_provenance={
+            "source_class": "task_local_exact_npm",
+            "verified_binary_is_invoked": True,
+        },
+        codex_exit_success=False,
+    ).to_dict(outcome="other", assertion_class="other")
+
+
+def test_boundary_snapshot_is_strictly_sanitized_and_uses_inference_statuses() -> None:
+    value = _boundary_snapshot_fixture()
+    assert verifier._safe_boundary_snapshot_validate(value) == value
+    assert value["qwen"]["response_status_classes"] == ["2xx", "2xx"]
+    assert "private" not in json.dumps(value)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value["gateway"].update(extra="raw"),
+        lambda value: value["gateway"]["response_status_classes"].__setitem__(0, "raw-status"),
+        lambda value: value["gateway"]["ordinals"][0]["event_counts"].update(raw_event=1),
+        lambda value: value["gateway"]["ordinals"][0]["event_trace"].append({"event": "raw", "count": 1}),
+        lambda value: value["local"]["boundary_states"].update(raw_state="private"),
+        lambda value: value["codex"].update(raw="private"),
+    ],
+)
+def test_boundary_snapshot_rejects_raw_or_malformed_nested_facts(
+    mutation: object,
+) -> None:
+    value = _boundary_snapshot_fixture()
+    mutation(value)
+    with pytest.raises(verifier.VerificationError, match="boundary_snapshot_invalid"):
+        verifier._safe_boundary_snapshot_validate(value)
+
+
+@pytest.mark.parametrize(
+    ("local_statuses", "qwen_statuses", "expected"),
+    [
+        ([200, 400], [200], "local_turn2_rejected_before_qwen"),
+        ([200, 502], [200, 503], "local_invoked_qwen_turn2_qwen_rejected_or_failed"),
+    ],
+)
+def test_boundary_snapshot_classification_has_fixed_downstream_outcomes(
+    local_statuses: list[int], qwen_statuses: list[int], expected: str
+) -> None:
+    snapshot = verifier._safe_boundary_snapshot(
+        gateway_status={"response_statuses": [200, 400], "sse_structures": [verifier._PINNED_CAPTURE_SSE_STRUCTURE] * 2},
+        gateway_request_count=2,
+        local_status={"response_statuses": local_statuses, "sse_structures": [verifier._PINNED_CAPTURE_SSE_STRUCTURE] * len(local_statuses)},
+        local_request_count=len(local_statuses),
+        qwen_status={"inference_calls": len(qwen_statuses), "inference_statuses": qwen_statuses, "sse_structures": [verifier._PINNED_CAPTURE_SSE_STRUCTURE] * len(qwen_statuses)},
+        accounting_statuses={},
+    )
+    assert verifier._classify_boundary_snapshot(snapshot, assertion_failed=True) == expected
+
+
+def test_dedicated_runner_preserves_boundary_snapshot_after_temp_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = verifier._safe_boundary_snapshot(
+        gateway_status={"response_statuses": [200], "sse_structures": []},
+        gateway_request_count=1,
+        local_status={"response_statuses": [400], "sse_structures": []},
+        local_request_count=1,
+        qwen_status={"inference_calls": 0, "inference_statuses": [], "sse_structures": []},
+        accounting_statuses={},
+    )
+    monkeypatch.setattr(verifier, "_verify_commit_topology", lambda: None)
+    monkeypatch.setattr(verifier, "_verify_fixtures", lambda: None)
+    monkeypatch.setattr(verifier, "_validate_local_config", lambda *_args: Path("config"))
+    monkeypatch.setattr(verifier, "_install_codex", lambda _root: Path("codex"))
+    monkeypatch.setattr(
+        verifier,
+        "_verify_codex_task_local_provenance",
+        lambda *_args: _fake_codex_provenance(),
+    )
+
+    def fail_with_snapshot(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise verifier._BoundaryDiagnosticError(
+            "composed_tool_roundtrip_gateway_sse_invalid", snapshot
+        )
+
+    monkeypatch.setattr(verifier, "_run_composed_stream_diagnostic", fail_with_snapshot)
+    result = verifier._run_dedicated_codex_tool_roundtrip(
+        fake_qwen=True, qualification_hook=False
+    )
+    assert result["codex_exit_success"] is False
+    assert result["failure_code"] == "composed_tool_roundtrip_gateway_sse_invalid"
+    safe = verifier._safe_boundary_snapshot_validate(result["boundary_snapshot"])
+    assert safe["outcome"] == "other"
+    assert safe["codex"]["provenance_class"] == "unknown"
 
 
 @pytest.mark.parametrize(
