@@ -11,6 +11,7 @@ LOCAL_CODING_SERVER_MODULE_VERSION = "1"
 LOCAL_CODING_ROUTE_CAPABILITY_KEY = "local_coding"
 LOCAL_CODING_TOOL_POLICY_VERSION = "responses-tool-policy-v1"
 _SAFE_ROUTE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_LOCAL_V1_SIGNED_ROUTE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$")
 _ALLOWED_FIELDS = frozenset(
     {
         "contract_version",
@@ -76,6 +77,8 @@ def parse_local_coding_route_contract(
     identity_mode = raw.get("identity_mode")
     if identity_mode not in {"static", "signed_identity_v1"}:
         raise ValueError("Local Coding identity mode is unsupported")
+    if identity_mode == "signed_identity_v1" and _LOCAL_V1_SIGNED_ROUTE_NAME.fullmatch(route_name) is None:
+        raise ValueError("Local Coding signed route name is invalid")
     if raw.get("replay_mode") != "process_local_ttl_lru":
         raise ValueError("Local Coding replay mode is unsupported")
     if raw.get("deployment_mode") != "single_worker":

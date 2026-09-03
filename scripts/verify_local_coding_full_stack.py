@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-ah verifier for post-forwarding Codex boundary diagnosis.
+"""Bounded 155-ai verifier for Local signed-identity interoperability.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -39,10 +39,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "855a89b3c14c54da83798914dbc8ea077b122d07"
-GATEWAY_IMPLEMENTATION_HEAD = "b171ada9ed3320c57186283ed4ce6ffd4389a7c3"
-GATEWAY_ACTIVATION_HEAD = "7fc1b5a7cf9b9cce8677b64c4639f7a0ea0f97c1"
-GATEWAY_REPORT_PATH = "oap/reports/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
+GATEWAY_REPORT_HEAD = "3999a524a7306dfd2ac3e6477600b5549d3045ea"
+GATEWAY_IMPLEMENTATION_HEAD = "d9a30b966ade118df0b8ad61bd6d4a58455d5a51"
+GATEWAY_ACTIVATION_HEAD = "0f8ef83832fee90efe9f780894fb8d1d54056eeb"
+GATEWAY_REPORT_PATH = "oap/reports/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -60,8 +60,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
-TASK_DB = "slaif_gateway_oap_155ah_boundary_diagnostic"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155ai_identity_grammar"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -212,6 +212,10 @@ _LOCAL_SIGNED_IDENTITY_FACT_KEYS = frozenset(
     {
         "service_bearer_equal",
         "required_header_cardinality_class",
+        "principal_grammar_valid",
+        "session_grammar_valid",
+        "repository_grammar_valid",
+        "route_grammar_valid",
         "canonical_bytes_reconstructed",
         "raw_body_canonical_participates",
         "signature_verifies",
@@ -585,6 +589,10 @@ def _empty_signed_identity_projection() -> dict[str, object]:
     return {
         "service_bearer_equal": False,
         "required_header_cardinality_class": "other",
+        "principal_grammar_valid": False,
+        "session_grammar_valid": False,
+        "repository_grammar_valid": False,
+        "route_grammar_valid": False,
         "canonical_bytes_reconstructed": False,
         "raw_body_canonical_participates": False,
         "signature_verifies": False,
@@ -611,6 +619,10 @@ def _safe_signed_identity_projections(
         if isinstance(item, dict):
             for name in (
                 "service_bearer_equal",
+                "principal_grammar_valid",
+                "session_grammar_valid",
+                "repository_grammar_valid",
+                "route_grammar_valid",
                 "canonical_bytes_reconstructed",
                 "raw_body_canonical_participates",
                 "signature_verifies",
@@ -705,6 +717,10 @@ def _safe_signed_identity_projection(
     safe: dict[str, object] = {
         "service_bearer_equal": False,
         "required_header_cardinality_class": "other",
+        "principal_grammar_valid": False,
+        "session_grammar_valid": False,
+        "repository_grammar_valid": False,
+        "route_grammar_valid": False,
         "canonical_bytes_reconstructed": False,
         "raw_body_canonical_participates": False,
         "signature_verifies": False,
@@ -783,6 +799,16 @@ def _safe_signed_identity_projection(
             and len(query) <= 256
         )
         safe["version_shape_valid"] = identity_values[0] == "v1"
+        grammar_valid = [
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,255}", value) is not None
+            for value in identity_values[1:5]
+        ]
+        (
+            safe["principal_grammar_valid"],
+            safe["session_grammar_valid"],
+            safe["repository_grammar_valid"],
+            safe["route_grammar_valid"],
+        ) = grammar_valid
         safe["timestamp_shape_valid"] = re.fullmatch(
             r"(?:0|[1-9][0-9]{0,19})", identity_values[5]
         ) is not None
@@ -836,6 +862,10 @@ def _safe_signed_identity_projection(
         safe[name] is True
         for name in (
             "service_bearer_equal",
+            "principal_grammar_valid",
+            "session_grammar_valid",
+            "repository_grammar_valid",
+            "route_grammar_valid",
             "canonical_bytes_reconstructed",
             "raw_body_canonical_participates",
             "signature_verifies",
@@ -875,7 +905,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md",
+        "oap/orders/155-ai-signed-identity-grammar-interoperability-and-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -927,11 +957,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ah\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ai\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -988,6 +1018,158 @@ def _source_qwen_credential_only_for_local(runtime: RuntimeReference) -> None:
         raise VerificationError("protected_qwen_credential_unavailable")
 
 
+def _verify_local_signed_identity_matrix() -> None:
+    """Exercise the actual pinned Local verifier with bounded synthetic rows."""
+    local_source = str(LOCAL_ROOT / "src")
+    inserted = local_source not in sys.path
+    if inserted:
+        sys.path.insert(0, local_source)
+    try:
+        from fastapi import Request
+        from slaif_local_coding.config import GatewayIngressConfig
+        from slaif_local_coding.gateway_identity import (
+            ReplayProtector,
+            SignedIdentityError,
+            verify_signed_identity,
+        )
+    except (ImportError, OSError) as exc:
+        raise VerificationError("local_signed_identity_matrix_unavailable") from exc
+    finally:
+        if inserted:
+            sys.path.remove(local_source)
+
+    from slaif_gateway.modules.servers.local_coding.contract import (
+        LocalCodingRouteContract,
+    )
+    from slaif_gateway.modules.servers.local_coding.identity import (
+        derive_request_identity,
+        sign_identity,
+    )
+
+    service_token = "155-ai-synthetic-service-token"
+    signing_secret = "155-ai-synthetic-signing-secret-0123456789"
+    route = LocalCodingRouteContract(
+        contract_version="local-coding-v1",
+        route_name=LOCAL_CODING_ROUTE_NAME,
+        tool_policy_version="responses-tool-policy-v1",
+        identity_mode="signed_identity_v1",
+        replay_mode="process_local_ttl_lru",
+        deployment_mode="single_worker",
+    )
+    config = GatewayIngressConfig(
+        mode="service_bearer_signed_identity_v1",
+        service_token_env="SLAIF_155AI_MATRIX_SERVICE",
+        signing_secret_env="SLAIF_155AI_MATRIX_SIGNING",
+    )
+    previous = {
+        name: os.environ.get(name)
+        for name in ("SLAIF_155AI_MATRIX_SERVICE", "SLAIF_155AI_MATRIX_SIGNING")
+    }
+    os.environ["SLAIF_155AI_MATRIX_SERVICE"] = service_token
+    os.environ["SLAIF_155AI_MATRIX_SIGNING"] = signing_secret
+
+    def request_for(headers: dict[str, str]) -> Request:
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "raw_path": b"/v1/responses",
+            "query_string": b"",
+            "headers": [
+                (name.lower().encode("ascii"), value.encode("ascii"))
+                for name, value in {
+                    "authorization": f"Bearer {service_token}",
+                    **headers,
+                }.items()
+            ],
+        }
+        return Request(scope)
+
+    try:
+        for index in range(8):
+            owner_id = uuid.UUID(f"00000000-0000-4000-8000-{index:012d}")
+            gateway_key_id = uuid.UUID(f"10000000-0000-4000-8000-{index:012d}")
+            session = f"20000000-0000-4000-8000-{index:012d}"
+            identity = derive_request_identity(
+                owner_id=owner_id,
+                gateway_key_id=gateway_key_id,
+                identity_hints={"session_id": session},
+                repository_scope=f"repo-{index}",
+                route=route,
+                derivation_secret=signing_secret.encode("ascii"),
+            )
+            if identity is None:
+                raise VerificationError("local_signed_identity_matrix_derivation")
+            body = json.dumps(
+                {"model": CODEX_MODEL, "input": [{"type": "message"}]},
+                separators=(",", ":"),
+            ).encode("ascii")
+            headers = sign_identity(
+                signing_secret=signing_secret.encode("ascii"),
+                identity=identity,
+                body=body,
+                route=route,
+                timestamp="1700000000",
+                nonce=f"nonce-{index:08d}-abcdef",
+            )
+            replay = ReplayProtector(ttl_seconds=120, max_entries=32)
+            returned = verify_signed_identity(
+                request_for(headers), body, config, replay, now=1700000000
+            )
+            if (
+                returned.principal != identity.principal
+                or returned.session != identity.session
+                or returned.repository != identity.repository
+                or returned.route != identity.route
+            ):
+                raise VerificationError("local_signed_identity_matrix_relation")
+            tampered_body = body + b" "
+            try:
+                verify_signed_identity(
+                    request_for(headers), tampered_body, config,
+                    ReplayProtector(ttl_seconds=120, max_entries=32), now=1700000000,
+                )
+            except SignedIdentityError as exc:
+                if exc.code != "signed_identity_signature_mismatch":
+                    raise VerificationError("local_signed_identity_matrix_body_tamper") from None
+            else:
+                raise VerificationError("local_signed_identity_matrix_body_tamper")
+            altered_headers = dict(headers)
+            signature = altered_headers["X-SLAIF-Signature"]
+            altered_headers["X-SLAIF-Signature"] = signature[:-1] + (
+                "0" if signature[-1] != "0" else "1"
+            )
+            try:
+                verify_signed_identity(
+                    request_for(altered_headers), body, config,
+                    ReplayProtector(ttl_seconds=120, max_entries=32), now=1700000000,
+                )
+            except SignedIdentityError as exc:
+                if exc.code != "signed_identity_signature_mismatch":
+                    raise VerificationError("local_signed_identity_matrix_signature_tamper") from None
+            else:
+                raise VerificationError("local_signed_identity_matrix_signature_tamper")
+            try:
+                verify_signed_identity(
+                    request_for(headers), body, config, replay, now=1700000000
+                )
+            except SignedIdentityError as exc:
+                if exc.code != "signed_identity_replayed":
+                    raise VerificationError("local_signed_identity_matrix_replay") from None
+            else:
+                raise VerificationError("local_signed_identity_matrix_replay")
+    except VerificationError:
+        raise
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        raise VerificationError("local_signed_identity_matrix_failed") from exc
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+
 def _verify_fixtures() -> None:
     import scripts.capture_codex_protocol as capture
 
@@ -1003,6 +1185,7 @@ def _verify_fixtures() -> None:
         raise VerificationError("session_source_mismatch")
     if fixture["relationships"]["same_session_stability"] is not True or fixture["relationships"]["cross_session_isolation"] is not True:
         raise VerificationError("session_relationship_missing")
+    _verify_local_signed_identity_matrix()
 
 
 def _read_pinned_direct_baseline() -> dict[str, object]:
@@ -1168,7 +1351,7 @@ def _start_postgres(
     image_before = _docker("image", "inspect", image).returncode == 0
     if not image_before and _docker("pull", image).returncode != 0:
         raise VerificationError("postgres_image_unavailable")
-    name = f"slaif-155f-postgres-{os.getpid()}"
+    name = f"slaif-155ai-postgres-{os.getpid()}"
     _docker("rm", "-f", name, timeout=30)
     started = False
     try:
@@ -3768,6 +3951,7 @@ class _SafeBoundarySection:
     error_param_classes: tuple[str, ...] = ()
     error_stage_classes: tuple[str, ...] = ()
     boundary_states: tuple[tuple[str, str], ...] = ()
+    signed_identity_facts: tuple[tuple[tuple[str, object], ...], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -3785,6 +3969,7 @@ class _SafeBoundarySection:
             "error_param_classes": list(self.error_param_classes),
             "error_stage_classes": list(self.error_stage_classes),
             "boundary_states": dict(self.boundary_states),
+            "signed_identity_facts": [dict(facts) for facts in self.signed_identity_facts],
         }
 
 
@@ -3935,6 +4120,44 @@ def _safe_boundary_class_list(
     return tuple(mapper(item) for item in raw[:2])
 
 
+def _safe_boundary_identity_facts(value: object) -> tuple[tuple[tuple[str, object], ...], ...]:
+    raw = value if isinstance(value, list) else ()
+    result: list[tuple[tuple[str, object], ...]] = []
+    for item in raw[:2]:
+        facts: dict[str, object] = {
+            name: False
+            for name in _LOCAL_SIGNED_IDENTITY_FACT_KEYS
+            if name not in {"required_header_cardinality_class", "signed_identity_class"}
+        }
+        facts["required_header_cardinality_class"] = "other"
+        facts["signed_identity_class"] = "other"
+        if isinstance(item, dict):
+            for name in facts:
+                if name in {"required_header_cardinality_class", "signed_identity_class"}:
+                    continue
+                facts[name] = item.get(name) is True
+            cardinality = item.get("required_header_cardinality_class")
+            facts["required_header_cardinality_class"] = (
+                cardinality
+                if cardinality in _LOCAL_SIGNED_HEADER_CARDINALITY_CLASSES
+                else "other"
+            )
+            identity_class = item.get("signed_identity_class")
+            facts["signed_identity_class"] = (
+                identity_class
+                if identity_class in _LOCAL_SIGNED_IDENTITY_CLASSES
+                else "other"
+            )
+        result.append(tuple(sorted(facts.items())))
+    return tuple(result)
+
+
+def _safe_boundary_stage_class(value: object) -> str:
+    if isinstance(value, str) and value in _LOCAL_REJECTION_STAGES:
+        return value
+    return _safe_local_rejection_stage(value)
+
+
 def _qwen_inference_boundary_status(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
@@ -3955,6 +4178,7 @@ def _safe_boundary_section(
     error_param_classes: object = (),
     error_stage_classes: object = (),
     boundary_states: object = (),
+    signed_identity_facts: object = (),
 ) -> _SafeBoundarySection:
     value = status if isinstance(status, dict) else {}
     structures = value.get("sse_structures")
@@ -3989,7 +4213,7 @@ def _safe_boundary_section(
             else _safe_gateway_error_code_class,
         ),
         _safe_boundary_class_list(error_param_classes, _safe_gateway_error_param_class),
-        _safe_boundary_class_list(error_stage_classes, _safe_local_rejection_stage),
+        _safe_boundary_class_list(error_stage_classes, _safe_boundary_stage_class),
         tuple(
             (name, state if state in _BOUNDARY_STATES else "unknown")
             for name in ("tool_policy", "observation", "constitution", "upstream")
@@ -3999,6 +4223,7 @@ def _safe_boundary_section(
                 else "unknown",
             )
         ),
+        _safe_boundary_identity_facts(signed_identity_facts),
     )
 
 
@@ -4056,6 +4281,7 @@ def _safe_boundary_snapshot(
             error_param_classes=local.get("error_param_classes"),
             error_stage_classes=local.get("local_error_stage_classes"),
             boundary_states=local.get("local_boundary_states"),
+            signed_identity_facts=local.get("signed_identity_facts"),
         ),
         _safe_boundary_section(qwen, qwen.get("inference_calls")),
         _safe_count_class(qwen.get("inference_calls")),
@@ -4096,7 +4322,7 @@ def _safe_boundary_snapshot_validate(value: object) -> dict[str, object]:
             "request_count", "response_count", "response_status_classes", "content_type_classes",
             "sse_structure_count", "ordinals", "handler_error", "upstream_truncated",
             "downstream_closed_early", "normal_close", "error_code_classes", "error_param_classes",
-            "error_stage_classes", "boundary_states",
+            "error_stage_classes", "boundary_states", "signed_identity_facts",
         }
         if section_name == "qwen":
             required |= {"inference_count", "successful_count", "compiler_count"}
@@ -4134,6 +4360,22 @@ def _safe_boundary_snapshot_validate(value: object) -> dict[str, object]:
             raise VerificationError("boundary_snapshot_invalid")
         if any(state not in _BOUNDARY_STATES for state in section["boundary_states"].values()):
             raise VerificationError("boundary_snapshot_invalid")
+        signed_identity_facts = section["signed_identity_facts"]
+        if not isinstance(signed_identity_facts, list) or len(signed_identity_facts) > 2:
+            raise VerificationError("boundary_snapshot_invalid")
+        for fact in signed_identity_facts:
+            if not isinstance(fact, dict) or set(fact) != _LOCAL_SIGNED_IDENTITY_FACT_KEYS:
+                raise VerificationError("boundary_snapshot_invalid")
+            if any(
+                type(fact[name]) is not bool
+                for name in _LOCAL_SIGNED_IDENTITY_FACT_KEYS
+                if name not in {"required_header_cardinality_class", "signed_identity_class"}
+            ):
+                raise VerificationError("boundary_snapshot_invalid")
+            if fact["required_header_cardinality_class"] not in _LOCAL_SIGNED_HEADER_CARDINALITY_CLASSES:
+                raise VerificationError("boundary_snapshot_invalid")
+            if fact["signed_identity_class"] not in _LOCAL_SIGNED_IDENTITY_CLASSES:
+                raise VerificationError("boundary_snapshot_invalid")
         if not isinstance(section["ordinals"], list) or len(section["ordinals"]) > 2:
             raise VerificationError("boundary_snapshot_invalid")
         for ordinal in section["ordinals"]:
@@ -4182,7 +4424,8 @@ def _safe_boundary_snapshot_validate(value: object) -> dict[str, object]:
         "request_count", "response_count", "response_status_classes", "content_type_classes",
         "sse_structure_count", "ordinals", "handler_error", "upstream_truncated",
         "downstream_closed_early", "normal_close", "error_code_classes", "error_param_classes",
-        "error_stage_classes", "boundary_states", "inference_count", "successful_count", "compiler_count",
+        "error_stage_classes", "boundary_states", "signed_identity_facts",
+        "inference_count", "successful_count", "compiler_count",
     }:
         raise VerificationError("boundary_snapshot_invalid")
     for key in ("inference_count", "successful_count", "compiler_count"):
@@ -8147,6 +8390,7 @@ def _run_composed_codex_tool_roundtrip(
             )
             for request in local_requests_snapshot[:2]
         ]
+        local_status["signed_identity_facts"] = signed_identity_facts
         tracker.set("tool_roundtrip_qwen_projection")
         qwen_status = _qwen_relay_status(qwen_port)
         fake_status = fake_qwen_server.status() if fake_qwen_server is not None else {}
@@ -8380,6 +8624,15 @@ def _run_composed_codex_tool_roundtrip(
         local_metrics_before,
         local_metrics_after,
     )
+    signed_identity_facts = [
+        _safe_signed_identity_projection(
+            request,
+            service_token=service_token,
+            signing_secret=signing_secret,
+        )
+        for request in local_requests[:2]
+    ]
+    local_status["signed_identity_facts"] = signed_identity_facts
     qwen_status = _qwen_relay_status(qwen_port)
     accounting_statuses: dict[str, int | bool]
     try:
@@ -9234,7 +9487,7 @@ def run_codex_tool_roundtrip_non_prefixed_reproduction() -> dict[str, object]:
     """Reproduce Codex 0.149 ID stripping against the uncorrected Gateway."""
     _verify_commit_topology()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155ag-reproduction-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ai-reproduction-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         codex_binary = _install_codex(root)
@@ -9262,7 +9515,7 @@ def _run_dedicated_codex_tool_roundtrip(
     if not fake_qwen:
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ah-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ai-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -9383,7 +9636,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155ah-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ai-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -9542,7 +9795,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155ah-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ai-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -9644,7 +9897,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-            with tempfile.TemporaryDirectory(prefix="slaif-155ah-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="slaif-155ai-", dir="/tmp") as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
                 stage = "local_config_preflight"
@@ -9718,7 +9971,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155ah-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155ai-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)

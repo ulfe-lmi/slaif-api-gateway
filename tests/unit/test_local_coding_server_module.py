@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import json
+import re
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -23,6 +26,7 @@ from slaif_gateway.modules.servers.local_coding.identity import (
     derive_request_identity,
     expected_signature,
 )
+import slaif_gateway.modules.servers.local_coding.identity as identity_module
 from slaif_gateway.modules.servers.registry import resolve_server_module
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
@@ -145,6 +149,112 @@ def test_identity_derivation_is_opaque_and_requires_trusted_repository_and_sessi
                 route=contract,
                 derivation_secret=DERIVATION_SECRET.encode(),
             )
+
+
+def test_codex_0149_identity_prefix_repairs_legacy_leading_punctuation_vectors() -> None:
+    secret = b"155-ai-synthetic-secret-0123456789"
+    for index, expected_leading_character in ((27, "-"), (170, "_")):
+        legacy_message = f"slaif-local-coding:principal:v1\nowner-{index}".encode()
+        digest = hmac.new(secret, legacy_message, hashlib.sha256).digest()
+        legacy = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+        assert legacy.startswith(expected_leading_character)
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,255}", legacy) is None
+
+        corrected = identity_module._opaque_hmac(
+            secret, "slaif-local-coding:principal:v1", f"owner-{index}"
+        )
+        assert corrected.startswith("h")
+        assert re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,255}", corrected)
+        assert base64.urlsafe_b64decode(corrected[1:] + "=") == digest
+
+
+def test_codex_0149_identity_matrix_is_stable_injective_and_local_grammar_safe() -> None:
+    contract = parse_local_coding_route_contract(ROUTE_CAPABILITIES)
+    assert contract is not None
+    identities = []
+    for owner_index in range(4):
+        identity = derive_request_identity(
+            owner_id=uuid.UUID(f"00000000-0000-4000-8000-{owner_index:012d}"),
+            gateway_key_id=uuid.UUID(f"10000000-0000-4000-8000-{owner_index:012d}"),
+            identity_hints={"session_id": f"20000000-0000-4000-8000-{owner_index:012d}"},
+            repository_scope=f"repo-{owner_index}",
+            route=contract,
+            derivation_secret=DERIVATION_SECRET.encode(),
+        )
+        assert identity is not None
+        identities.append(identity)
+        assert all(
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,255}", value)
+            for value in (
+                identity.principal,
+                identity.session,
+                identity.repository,
+                identity.route,
+            )
+        )
+        assert identity == derive_request_identity(
+            owner_id=uuid.UUID(f"00000000-0000-4000-8000-{owner_index:012d}"),
+            gateway_key_id=uuid.UUID(f"10000000-0000-4000-8000-{owner_index:012d}"),
+            identity_hints={"session_id": f"20000000-0000-4000-8000-{owner_index:012d}"},
+            repository_scope=f"repo-{owner_index}",
+            route=contract,
+            derivation_secret=DERIVATION_SECRET.encode(),
+        )
+    assert len({identity.principal for identity in identities}) == len(identities)
+    assert len({identity.session for identity in identities}) == len(identities)
+    assert len({identity.repository for identity in identities}) == len(identities)
+
+
+def test_signed_identity_signer_rejects_invalid_hand_built_fields() -> None:
+    identity = LocalCodingRequestIdentity(
+        principal="-invalid",
+        session="session-opaque",
+        repository="repository-opaque",
+        route="vision",
+        identity_mode="signed_identity_v1",
+    )
+    contract = parse_local_coding_route_contract(ROUTE_CAPABILITIES)
+    assert contract is not None
+    with pytest.raises(ValueError, match="Local Coding principal is invalid"):
+        from slaif_gateway.modules.servers.local_coding.identity import sign_identity
+
+        sign_identity(
+            signing_secret=SIGNING_SECRET.encode(),
+            identity=identity,
+            body=b"{}",
+            route=contract,
+            timestamp="1700000000",
+            nonce="1234567890abcdef",
+        )
+    for field in ("session", "repository", "route"):
+        invalid_identity = replace(identity, **{field: "-invalid"})
+        with pytest.raises(ValueError, match=f"Local Coding {field} is invalid"):
+            sign_identity(
+                signing_secret=SIGNING_SECRET.encode(),
+                identity=invalid_identity,
+                body=b"{}",
+                route=contract,
+                timestamp="1700000000",
+                nonce="1234567890abcdef",
+            )
+
+
+@pytest.mark.parametrize("route_name", ["-bad", "_bad", "dotted.route"])
+def test_signed_local_route_uses_pinned_peer_grammar(route_name: str) -> None:
+    with pytest.raises(ValueError, match="route name is invalid"):
+        parse_local_coding_route_contract(
+            {"local_coding": {**ROUTE_CAPABILITIES["local_coding"], "route_name": route_name}}
+        )
+    for valid in ("qwen38-vision-codex", "internal_name", "internal-name"):
+        parsed = parse_local_coding_route_contract(
+            {"local_coding": {**ROUTE_CAPABILITIES["local_coding"], "route_name": valid}}
+        )
+        assert parsed is not None and parsed.route_name == valid
+    if route_name == "dotted.route":
+        static = parse_local_coding_route_contract(
+            {"local_coding": {**ROUTE_CAPABILITIES["local_coding"], "route_name": route_name, "identity_mode": "static"}}
+        )
+        assert static is not None
 
 
 @pytest.mark.asyncio

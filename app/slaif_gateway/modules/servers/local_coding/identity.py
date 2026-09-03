@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import math
+import re
 import secrets
 import uuid
 from collections.abc import Mapping
@@ -16,12 +17,20 @@ from slaif_gateway.modules.servers.local_coding.contract import LocalCodingRoute
 _SESSION_KEYS = ("session_id", "thread_id", "turn_id", "root_turn_id")
 _CANONICAL_SESSION_KEY = "session_id"
 _OPAQUE = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")
+_LOCAL_V1_SIGNED_FIELD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,255}$")
+_LOCAL_V1_IDENTITY_PREFIX = "h"
 
 
 def _bounded_identity_input(value: object, label: str) -> str:
     if not isinstance(value, str) or not value or len(value.encode("utf-8")) > 256:
         raise ValueError(f"Local Coding {label} is invalid")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"Local Coding {label} is invalid")
+    return value
+
+
+def _validate_local_v1_signed_field(value: object, label: str) -> str:
+    if not isinstance(value, str) or _LOCAL_V1_SIGNED_FIELD_RE.fullmatch(value) is None:
         raise ValueError(f"Local Coding {label} is invalid")
     return value
 
@@ -38,7 +47,8 @@ class LocalCodingRequestIdentity:
 def _opaque_hmac(secret: bytes, domain: str, *values: str) -> str:
     message = "\n".join((domain, *values)).encode("utf-8")
     digest = hmac.new(secret, message, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return _LOCAL_V1_IDENTITY_PREFIX + encoded
 
 
 def derive_request_identity(
@@ -142,6 +152,12 @@ def sign_identity(
     timestamp: str,
     nonce: str,
 ) -> dict[str, str]:
+    if identity.identity_mode != "signed_identity_v1":
+        raise ValueError("Local Coding identity mode is not signed")
+    _validate_local_v1_signed_field(identity.principal, "principal")
+    _validate_local_v1_signed_field(identity.session, "session")
+    _validate_local_v1_signed_field(identity.repository, "repository")
+    _validate_local_v1_signed_field(identity.route, "route")
     if not math.isfinite(float(timestamp)) or not timestamp.isdigit():
         raise ValueError("Local Coding timestamp is invalid")
     if identity.route != route.route_name:
@@ -170,6 +186,4 @@ def sign_identity(
         "X-SLAIF-Nonce": nonce,
         "X-SLAIF-Signature": signature,
     }
-    if identity.identity_mode != "signed_identity_v1":
-        raise ValueError("Local Coding identity mode is not signed")
     return headers

@@ -217,12 +217,12 @@ def test_docker_requires_direct_or_passwordless_sudo_boundary(monkeypatch: pytes
         ("path", "gateway_report_not_report_only"),
     ],
 )
-def test_155af_topology_enforces_exact_prior_report_parent_and_report_only_path(
+def test_155ai_topology_enforces_exact_prior_report_parent_and_report_only_path(
     monkeypatch: pytest.MonkeyPatch, bad_field: str, expected: str
 ) -> None:
-    current_head = "current-155af-head"
+    current_head = "current-155ai-head"
     local_head = verifier.LOCAL_REPORT_HEAD
-    report_path = "oap/reports/155-ab-proven-empty-reasoning-canonicalization-and-acceptance.md"
+    report_path = verifier.GATEWAY_REPORT_PATH
 
     def fake_git(*args: str, cwd: Path = verifier.REPO_ROOT) -> str:
         if args == ("rev-parse", "HEAD"):
@@ -232,7 +232,7 @@ def test_155af_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
+            return "oap/active\noap/orders/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -264,11 +264,11 @@ def test_155af_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155ah_topology_anchors_are_the_155ag_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "855a89b3c14c54da83798914dbc8ea077b122d07"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "b171ada9ed3320c57186283ed4ce6ffd4389a7c3"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "7fc1b5a7cf9b9cce8677b64c4639f7a0ea0f97c1"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ag-codex-0149-idless-tool-call-replay-and-final-acceptance.md"
+def test_155ai_topology_anchors_are_the_155ah_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "3999a524a7306dfd2ac3e6477600b5549d3045ea"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "d9a30b966ade118df0b8ad61bd6d4a58455d5a51"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "0f8ef83832fee90efe9f780894fb8d1d54056eeb"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ah-local-turn2-boundary-diagnostic-and-evidence-closure.md"
 
 
 def test_155af_topology_anchors_exact_local_report_parent_and_path() -> None:
@@ -426,6 +426,10 @@ def test_signed_local_request_projection_verifies_exact_body_and_headers() -> No
     assert facts == {
         "service_bearer_equal": True,
         "required_header_cardinality_class": "exact",
+        "principal_grammar_valid": True,
+        "session_grammar_valid": True,
+        "repository_grammar_valid": True,
+        "route_grammar_valid": True,
         "canonical_bytes_reconstructed": True,
         "raw_body_canonical_participates": True,
         "signature_verifies": True,
