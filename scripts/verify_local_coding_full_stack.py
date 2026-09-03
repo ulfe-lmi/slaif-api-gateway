@@ -1020,6 +1020,8 @@ def _source_qwen_credential_only_for_local(runtime: RuntimeReference) -> None:
 
 def _verify_local_signed_identity_matrix() -> None:
     """Exercise the actual pinned Local verifier with bounded synthetic rows."""
+    previous_dont_write_bytecode = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     local_source = str(LOCAL_ROOT / "src")
     inserted = local_source not in sys.path
     if inserted:
@@ -1033,6 +1035,7 @@ def _verify_local_signed_identity_matrix() -> None:
             verify_signed_identity,
         )
     except (ImportError, OSError) as exc:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
         raise VerificationError("local_signed_identity_matrix_unavailable") from exc
     finally:
         if inserted:
@@ -1163,6 +1166,7 @@ def _verify_local_signed_identity_matrix() -> None:
     except (TypeError, ValueError, KeyError, AttributeError) as exc:
         raise VerificationError("local_signed_identity_matrix_failed") from exc
     finally:
+        sys.dont_write_bytecode = previous_dont_write_bytecode
         for name, value in previous.items():
             if value is None:
                 os.environ.pop(name, None)
