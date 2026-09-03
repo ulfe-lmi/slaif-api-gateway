@@ -34,6 +34,8 @@ from urllib.parse import urlsplit
 import httpx
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
 GATEWAY_REPORT_HEAD = "37e923304cf4b1cdb4fb9f8faefe4a7b2fb6db6e"
