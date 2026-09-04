@@ -703,6 +703,77 @@ def validate_0149_production_path(request: ParsedHttpRequest) -> tuple[str, ...]
         ) from exc
 
 
+def validate_0149_canonical_profile(request: ParsedHttpRequest) -> dict[str, object]:
+    """Project the fresh raw request into bounded production profile facts."""
+
+    try:
+        payload = json.loads(request.body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CaptureError("Codex 0.149 canonical profile input was not valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise CaptureError("Codex 0.149 canonical profile input was not an object.")
+    try:
+        from slaif_gateway.config import Settings
+        from slaif_gateway.modules.clients.codex_0149 import (
+            CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+            codex_0149_declared_tool_taxonomy,
+            codex_0149_streaming_tool_events_requested,
+        )
+        from slaif_gateway.modules.clients.registry import CODEX_0149_CLIENT_MODULE
+        from slaif_gateway.services import responses_request_policy
+        from slaif_gateway.services.responses_gateway import _codex_reasoning_events_enabled
+
+        normalized = CODEX_0149_CLIENT_MODULE.normalize_responses(payload)
+        candidates = tuple(normalized.adapter_managed_declaration_candidates)
+        policy_spec = CODEX_0149_CLIENT_MODULE.policy_spec
+        if policy_spec is None:
+            raise CaptureError("Codex 0.149 production policy spec is unavailable.")
+        policy_result = responses_request_policy.ResponsesRequestPolicy(
+            Settings(), client_spec=policy_spec
+        ).apply(
+            normalized.body,
+            allow_codex_request_envelope=True,
+            allow_codex_client_tools=True,
+            allow_codex_streaming_tool_events=True,
+            adapter_managed_declaration_candidates=frozenset(candidates),
+            adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+            allow_external_tool_request=False,
+        )
+        declarations = codex_0149_declared_tool_taxonomy(policy_result.effective_body)
+        declaration_types = frozenset(item[2] for item in declarations)
+        if not declarations or not declaration_types.issubset({"function", "custom"}):
+            raise CaptureError("Codex 0.149 canonical declared-tool taxonomy is missing.")
+        stream_requested = codex_0149_streaming_tool_events_requested(
+            policy_result.effective_body
+        )
+        if not stream_requested:
+            raise CaptureError("Codex 0.149 canonical stream-tool gate is inactive.")
+        profile_enabled = _codex_reasoning_events_enabled(
+            client_module_id=CODEX_0149_CLIENT_MODULE.module_id,
+            server_context={"local_coding": True},
+        )
+        if not profile_enabled:
+            raise CaptureError("Codex 0.149 Local profile helper did not activate.")
+        return {
+            "adapter_managed_candidate_types": list(candidates),
+            "declared_tool_count_class": (
+                "bounded" if len(declarations) <= 32 else "many"
+            ),
+            "declared_tool_type_classes": sorted(declaration_types),
+            "streaming_tool_gate_requested": True,
+            "exact_local_pair_profile_enabled": True,
+            "hosted_tool_admission": False,
+        }
+    except CaptureError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        error_code = getattr(exc, "error_code", "unknown")
+        raise CaptureError(
+            "Codex 0.149 canonical profile projection failed "
+            f"({type(exc).__name__}:{error_code})."
+        ) from exc
+
+
 def sanitize_model_catalog(catalog: Any, *, model: str) -> dict[str, object]:
     if not isinstance(catalog, dict) or not isinstance(catalog.get("models"), list):
         raise CaptureError("Bundled Codex model catalog has an unexpected shape.")
@@ -1582,6 +1653,7 @@ def _exec_command_0149(
     model_catalog: Path,
     output_path: Path,
     ephemeral: bool = True,
+    instruction: str = "Return the word synthetic.",
 ) -> list[str]:
     base_url = f'"http://127.0.0.1:{port}/v1"'
     command = [
@@ -1608,9 +1680,13 @@ def _exec_command_0149(
         f"model_catalog_json={json.dumps(str(model_catalog))}",
         "-c",
         "check_for_update_on_startup=false",
+        "-c",
+        "model_providers.slaif-capture.request_max_retries=0",
+        "-c",
+        "model_providers.slaif-capture.stream_max_retries=0",
         "-o",
         str(output_path),
-        "Return the word synthetic.",
+        instruction,
     ]
     if ephemeral:
         command.insert(5, "--ephemeral")
@@ -1855,6 +1931,7 @@ def capture_live_0149(
         if server.request is None:
             server.result()
         production_candidates = validate_0149_production_path(server.request)
+        validate_0149_canonical_profile(server.request)
         sanitized_request = sanitize_0149_request(server.request)
         del server.request
 

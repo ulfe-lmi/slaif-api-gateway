@@ -16,16 +16,27 @@ from slaif_gateway.modules.contracts import (
 
 CODEX_0149_CLIENT_MODULE_ID = "codex-0.149-responses-v1"
 CODEX_0149_CLIENT_MODULE_VERSION = "3"
+CODEX_0149_REASONING_DIALECT_VERSION = "4"
 CODEX_0149_CLI_VERSION = "0.149.0"
 CODEX_0149_FIXTURE_SHA256 = "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
 CODEX_0149_FIXTURE_RELATIVE_PATH = "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
 CODEX_0149_PROFILE_ID = "responses-session-relationship-v3"
+CODEX_0149_SOURCE_CONTRACT_TAG = "rust-v0.149.0"
+CODEX_0149_SOURCE_CONTRACT_COMMIT = "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0"
+CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256 = "d24178dc3467dfaf276b015dcf8298fcc1ddc35bc6c6dcd615f101c3e1cd76df"
+CODEX_0149_SOURCE_CONTRACT_FIXTURE_RELATIVE_PATH = (
+    "tests/fixtures/codex/0.149.0/responses-reasoning-dialect-v1.json"
+)
 
 _PROFILE_FACTS = MappingProxyType(
     {
         "client_module_id": CODEX_0149_CLIENT_MODULE_ID,
         "client_module_version": CODEX_0149_CLIENT_MODULE_VERSION,
         "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+        "source_contract_tag": CODEX_0149_SOURCE_CONTRACT_TAG,
+        "source_contract_commit": CODEX_0149_SOURCE_CONTRACT_COMMIT,
+        "source_contract_fixture_sha256": CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256,
+        "reasoning_dialect_version": CODEX_0149_REASONING_DIALECT_VERSION,
     }
 )
 _SAFE_TOKEN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
@@ -114,6 +125,7 @@ _CODEX_0149_CLIENT_METADATA_KEYS = frozenset(
 )
 _CODEX_0149_MESSAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _CODEX_0149_TOOL_CALL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+CODEX_0149_DECLARED_TOOL_NAMESPACE = "functions"
 
 
 def _codex_0149_taxonomy_for(
@@ -121,6 +133,48 @@ def _codex_0149_taxonomy_for(
 ) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None:
     _ = value
     return None
+
+
+def codex_0149_declared_tool_taxonomy(
+    body: Mapping[str, object],
+) -> frozenset[tuple[str, str, str]]:
+    """Return the bounded taxonomy of observed top-level local tools."""
+
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return frozenset()
+    declarations: set[tuple[str, str, str]] = set()
+    for tool in tools:
+        if not isinstance(tool, Mapping):
+            continue
+        tool_type = tool.get("type")
+        if tool_type not in {"function", "custom"}:
+            continue
+        name = tool.get("name")
+        if not isinstance(name, str) or not _SAFE_TOKEN.fullmatch(name):
+            raise _error(
+                "The Codex 0.149 local tool declaration has no bounded name",
+                "codex_0149_tool_declaration",
+            )
+        declaration = (CODEX_0149_DECLARED_TOOL_NAMESPACE, name, str(tool_type))
+        if declaration in declarations:
+            raise _error(
+                "The Codex 0.149 local tool declaration is duplicated",
+                "codex_0149_tool_declaration",
+            )
+        declarations.add(declaration)
+    if len(declarations) > 32:
+        raise _error(
+            "The Codex 0.149 local tool declaration set is too large",
+            "codex_0149_tool_declaration",
+        )
+    return frozenset(declarations)
+
+
+def codex_0149_streaming_tool_events_requested(body: Mapping[str, object]) -> bool:
+    """Require the exact 0.149 local declarations on a streaming request."""
+
+    return body.get("stream") is True and bool(codex_0149_declared_tool_taxonomy(body))
 
 
 CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
@@ -180,6 +234,13 @@ CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
     taxonomy_for=_codex_0149_taxonomy_for,
     taxonomy_0148=(),
     taxonomy_id_0148="codex_0_149",
+    reasoning_visible_id_optional=True,
+    reasoning_visible_content_fields=frozenset({"type", "text"}),
+    reasoning_visible_content_types=frozenset({"reasoning_text", "text"}),
+    max_reasoning_visible_parts=64,
+    max_reasoning_visible_part_bytes=8_192,
+    max_reasoning_visible_bytes=65_536,
+    allow_idless_encrypted_reasoning=False,
 )
 _CAPTURED_FIELD_VALUE_CLASSES = MappingProxyType(
     {

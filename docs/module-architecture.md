@@ -75,8 +75,12 @@ Bearer and, in signed mode, derived opaque HMAC identity fields. Its
 process-local TTL/LRU replay boundary requires the reviewed single-worker
 deployment contract. The observed `tool_search` and `web_search` declarations
 remain bounded adapter-managed candidates and never grant hosted authority.
-Advanced Codex reasoning, function/message stream lifecycles, visible
-reasoning, and ID-less replay are not implemented by this objective.
+The exact Codex 0.149 Local pair additionally owns the bounded visible-
+reasoning request dialect and the strict reasoning/function/message stream
+profile. Visible reasoning may omit or explicitly null its item ID without
+fabrication; encrypted reasoning remains independently ID-bound and gated.
+ID-less tool replay and second-turn request behavior are not part of this
+client-module contract.
 
 Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. Identity hints from Codex metadata are transient

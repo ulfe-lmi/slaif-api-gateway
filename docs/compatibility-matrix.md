@@ -13,6 +13,15 @@ For the canonical RC2 target classification, see
 implemented behavior only; a green harness on current `main` means
 verification-clean for this implemented scope, not feature-full RC2.
 
+Codex 0.149 visible reasoning is a version-owned request dialect on the exact
+`codex-0.149-responses-v1 -> local-coding-v1` pair. Reasoning IDs may be
+absent or explicitly null without fabrication; summary and visible content use
+only the source-derived bounded text shapes and limits. Absent/null
+`encrypted_content` is visible state, while non-null encrypted reasoning keeps
+the independent ID-bound capability gate. Other clients, servers, and hosted
+routes retain their existing strict behavior. This is source-derived/mock
+regression evidence, not protected or second-turn acceptance.
+
 | Feature / endpoint / field | Current support | Provider coverage | Notes | Test coverage |
 | --- | --- | --- | --- | --- |
 | `GET /v1/models` | Implemented | Local route/provider metadata | Returns enabled, visible routes allowed for the authenticated key; `allow_all_models=false` with empty `allowed_models` returns an empty OpenAI-shaped list. Each public model object remains exactly `id`, `object`, `created`, and `owned_by`; route-local Codex qualification metadata is never exposed | Unit, API route, qualification-metadata regression, integration, and mocked official-client E2E model catalog tests |

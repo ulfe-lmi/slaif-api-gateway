@@ -64,6 +64,11 @@ fence, pricing rule, quota reservation, accounting category, or external
 authority. No raw Codex installation, session, thread, turn, workspace, or
 request-content metadata is stored, logged, audited, exported, hashed, or
 forwarded.
+The exact Codex 0.149 Local pair additionally permits the source-derived
+visible-reasoning dialect: an absent or null reasoning item ID is preserved as
+such, never fabricated, and visible summary/content text is bounded and
+transient. `encrypted_content: null` is not encrypted replay; a non-null
+encrypted value still requires the existing independently gated ID-bound path.
 Provider catalog proposal tooling follows the same rule: it reads official
 provider docs/APIs and writes proposal artifacts to the operator's output
 directory only. It does not write raw provider pages/responses to PostgreSQL,
@@ -890,6 +895,11 @@ namespaces, and call linkage. Provider failure/error terminals and any unknown,
 orphan, duplicate, mismatched, oversized, hosted-authority, or undeclared shape
 fail closed to a safe gateway event. The successful completed event is held
 until final accounting and any required replay-reference persistence.
+
+Visible reasoning is not replay authority. Its optional/null ID and bounded
+UTF-8 summary/content are ordinary request material for the exact 0.149
+dialect only; OpenAI/default and Codex 0.147 paths retain their existing ID
+requirements.
 
 Replay accepts only an exact encrypted reasoning item or an exact declared
 function call / `functions.exec` custom call with one immediately adjacent
