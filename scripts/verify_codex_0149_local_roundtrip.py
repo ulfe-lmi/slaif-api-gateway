@@ -79,6 +79,10 @@ _PERMANENT_FIXTURE_BLOBS = {
     "tests/fixtures/local_coding/responses_tool_filter_vectors.json": "cdd33cb5c52377f80282803f53005074df091fc8",
     "tests/fixtures/local_coding/signed_identity_v1_vectors.json": "e1e4c43e10318ff3170859876dc4d8f6f7d5bdb9",
 }
+_UNCHANGED_BLOBS = {
+    "tests/unit/test_oap_governance.py": "8ff65fc27e89c6d432a8128619b4e53a3bcedf21",
+    "AGENTIC_CLIENT_INTEGRATION.md": "7c48c679d14aa127f0c31fc3260e4a3fb01ee25f",
+}
 
 
 def _git_blob_hash(path: Path) -> str:
@@ -131,15 +135,9 @@ def evaluate_obligations() -> list[str]:
     )
     if "SLAIF_155X_" in app_text:
         missing.append("historical_app_qualification_symbols_absent")
-    for path_text in ("tests/unit/test_oap_governance.py", "AGENTIC_CLIENT_INTEGRATION.md"):
-        result = subprocess.run(
-            ["git", "diff", "--exit-code", "d625af9eb3df45c163342a05e03cda2d3dd0d7c4", "--", path_text],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            check=False,
-            timeout=10,
-        )
-        if result.returncode != 0:
+    for path_text, expected in _UNCHANGED_BLOBS.items():
+        path = REPO_ROOT / path_text
+        if not path.is_file() or _git_blob_hash(path) != expected:
             missing.append(f"unchanged:{path_text}")
     doctrine = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
     for link in (
