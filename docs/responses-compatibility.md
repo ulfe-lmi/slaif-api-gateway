@@ -5,6 +5,9 @@
 
 Status: limited foundation implemented on current `main`.
 
+See [the detailed normative agentic-client integration contract](../AGENTIC_CLIENT_INTEGRATION.md)
+for the versioned Codex client-dialect and client/server-pair rules.
+
 Codex CLI wire compatibility is tracked separately in
 [`codex-compatibility.md`](codex-compatibility.md). The pinned Codex CLI 0.147.0
 `gpt-5.6-sol` API-key Responses profile has **PARTIAL STREAMING CLIENT-TOOL
@@ -18,10 +21,10 @@ Responses client selection is versioned and server-side: ordinary traffic
 uses `openai-default`, the qualified legacy Codex profile uses
 `codex-0.147-responses-v1`, and the structurally captured Codex 0.149 module is
 registered default-denied with no compatible server pair. Codex 0.149's
-observed `web_search` declaration is a transient adapter-managed candidate fact
-only; unobserved `tool_search` remains rejected. It never
-set the hosted web-search admission path, external-tool fence, pricing, or
-accounting state. No raw Codex identity/session/workspace metadata is retained.
+observed `tool_search` and `web_search` declarations are transient
+adapter-managed candidate facts only. They never set the hosted web-search
+admission path, external-tool fence, pricing, or accounting state. No raw Codex
+identity/session/workspace metadata is retained.
 
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and

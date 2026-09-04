@@ -1,0 +1,119 @@
+{
+  "capture": {
+    "subprocess": {
+      "binary_version_output": "codex-cli 0.149.0",
+      "cli_exit_status": "synthetic_rejection",
+      "home_scope": "private_disposable",
+      "model_call": "not_performed",
+      "provider_key": "not_configured",
+      "server": "loopback_fake_responses",
+      "workspace": "empty"
+    },
+    "transport": {
+      "method": "POST",
+      "path": "/v1/responses",
+      "wire_api": "responses"
+    },
+    "variants": [
+      {
+        "flags": {
+          "search": false
+        },
+        "request": {
+          "field_types": {
+            "client_metadata": "object",
+            "include": "array",
+            "input": "array",
+            "instructions": "string",
+            "model": "string",
+            "parallel_tool_calls": "boolean",
+            "prompt_cache_key": "string",
+            "reasoning": "object",
+            "store": "boolean",
+            "stream": "boolean",
+            "text": "object",
+            "tool_choice": "string",
+            "tools": "array"
+          },
+          "tool_choice": {
+            "type": "string",
+            "value_class": "auto"
+          },
+          "tool_declarations": {
+            "count": 8,
+            "shapes": [
+              {
+                "count": 1,
+                "field_names": [
+                  "description",
+                  "format",
+                  "name",
+                  "type"
+                ],
+                "type": "custom"
+              },
+              {
+                "count": 5,
+                "field_names": [
+                  "description",
+                  "name",
+                  "parameters",
+                  "strict",
+                  "type"
+                ],
+                "type": "function"
+              },
+              {
+                "count": 1,
+                "field_names": [
+                  "description",
+                  "execution",
+                  "parameters",
+                  "type"
+                ],
+                "type": "tool_search"
+              },
+              {
+                "count": 1,
+                "field_names": [
+                  "external_web_access",
+                  "search_content_types",
+                  "type"
+                ],
+                "type": "web_search"
+              }
+            ],
+            "type": "array"
+          }
+        },
+        "variant_id": "default"
+      }
+    ]
+  },
+  "findings": {
+    "adapter_managed_candidate_types": [
+      "tool_search",
+      "web_search"
+    ],
+    "built_in_search_is_not_gateway_authority": true,
+    "identity_hints_transient": true,
+    "no_raw_request_content_retained": true,
+    "search_flag_did_not_change_captured_shape": false
+  },
+  "gateway_compatibility": {
+    "compatible_server_pairs": [
+      "codex-0.149-responses-v1->local-coding-v1"
+    ],
+    "module_status": "structural_capture_and_pair_reviewed_default_denied",
+    "provider_e2e": false,
+    "qualification": "none"
+  },
+  "identity": {
+    "cli_family": "codex-cli",
+    "cli_version": "0.149.0",
+    "model": "qwen3.8-27b",
+    "profile": "responses-structural-capture-v2",
+    "source_tag": "npm-@openai/codex-0.149.0"
+  },
+  "schema_version": 1
+}

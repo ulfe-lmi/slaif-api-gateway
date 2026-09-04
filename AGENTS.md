@@ -1657,6 +1657,45 @@ code changes:
 - `docs/provider-routing.md`, if present
 - `README.md`, for top-level current status, quickstart, and operator-facing
   truth
+- `AGENTIC_CLIENT_INTEGRATION.md`, for the detailed normative contract for
+  adding or changing agentic-client integrations. The concise section below is
+  the implementation constitution/reminder for that subject. If they diverge,
+  the detailed contract governs agentic-client integration, subject to the
+  existing human/OAP authority hierarchy.
+
+### Agentic client integrations
+
+`AGENTIC_CLIENT_INTEGRATION.md` is authoritative for adding or changing support
+for Codex, OpenCode, Antigravity, Claude Code, Gemini CLI, Aider, or any other
+agentic client.
+
+A product/brand or “OpenAI-compatible” claim is never a compatibility key.
+Support must be pinned to one exact executable/distribution version, source
+contract where available, model/catalog/config profile, structural fixtures,
+client-module version, and explicit client/server pairing.
+
+Client modules are pure, static, non-authoritative dialect decoders. They must
+not authenticate, route, grant tools, access PostgreSQL/Redis, perform HTTP, or
+own quota/accounting. Server modules are exact downstream transports and must
+not own public authentication or policy. The Gateway core retains all
+authority.
+
+Client-specific reasoning, metadata, tool, identifier, replay, and SSE behavior
+must remain version-owned and default-false. Do not globally relax the ordinary
+OpenAI contract. Do not fabricate item IDs, treat null as non-null state, infer
+hosted authority from tool names, or accept ID-less replay without a
+cryptographically authenticated same-key fallback and no-downgrade proof.
+
+Every agentic profile requires exact-client structural capture, natural
+two-turn fake conformance, producer-against-actual-consumer tests, executed
+PostgreSQL replay/accounting tests, a machine-checked `missing=[]` obligation
+manifest, and an explicitly authorized hook-free protected multi-turn run.
+Reports are immutable claims, not proof; strategic review must inspect actual
+test collection/execution and GitHub state.
+
+Temporary production diagnostic hooks must be removed before acceptance.
+After acceptance, freeze behavior and decompose/review the evidence branch
+before adding another client.
 
 #### README brand header preservation
 

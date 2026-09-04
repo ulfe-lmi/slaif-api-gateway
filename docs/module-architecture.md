@@ -8,6 +8,9 @@ modules while the Gateway core remains the sole authority for authentication,
 effective policy, routing, quota, accounting, Redis controls, pricing, audit,
 privacy, and failure behavior.
 
+See [the detailed normative agentic-client integration contract](../AGENTIC_CLIENT_INTEGRATION.md)
+for the versioned client/server boundaries and qualification rules.
+
 ```text
 client → client module → Gateway core → server module → upstream
 ```
@@ -67,8 +70,8 @@ Codex 0.149 client syntax is structurally captured and registered, but has no
 qualification, provider/model E2E, Local Coding server module, or compatible
 pair. Local Coding and OpenCode remain planned follow-on work. The 0.149
 module may return only bounded candidate facts for the observed adapter-managed
-`web_search` declaration; unobserved `tool_search` remains rejected. It cannot enter hosted-tool policy,
-accounting, routing, or provider forwarding.
+`tool_search` and `web_search` declarations. Those candidates cannot enter
+hosted-tool policy, accounting, routing, or provider forwarding.
 
 Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. Identity hints from Codex metadata are transient
