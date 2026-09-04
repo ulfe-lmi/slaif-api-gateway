@@ -6,6 +6,11 @@ import pytest
 
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
+from slaif_gateway.modules.clients.codex_0149 import (
+    CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+    CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
+    CODEX_0149_POLICY_SPEC,
+)
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
@@ -16,6 +21,12 @@ from slaif_gateway.services.responses_request_policy import (
 
 def _policy(settings: Settings) -> ResponsesRequestPolicy:
     return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
+
+
+def _0149_policy(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0149_POLICY_SPEC)
+
+
 def _body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "model": "gpt-test",
@@ -24,6 +35,88 @@ def _body(**overrides: object) -> dict[str, object]:
     }
     body.update(overrides)
     return body
+
+
+def _0149_candidate_body() -> dict[str, object]:
+    return _body(
+        tools=[
+            {
+                "type": "tool_search",
+                "description": "synthetic candidate",
+                "execution": "client",
+                "parameters": {},
+            },
+            {
+                "type": "web_search",
+                "external_web_access": False,
+                "search_content_types": ["text", "image"],
+            },
+        ],
+        tool_choice="auto",
+    )
+
+
+def test_0149_candidates_are_preserved_only_when_explicitly_supplied_by_module() -> None:
+    body = _0149_candidate_body()
+    result = _0149_policy(Settings()).apply(
+        body,
+        adapter_managed_declaration_candidates=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
+        adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+    )
+    assert result.effective_body["tools"] == body["tools"]
+
+
+def test_0149_candidates_are_not_general_hosted_tool_authority() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _0149_policy(Settings()).apply(_0149_candidate_body())
+    assert exc_info.value.error_code == "responses_hosted_tool_not_supported"
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        {
+            "type": "tool_search",
+            "description": "safe",
+            "execution": "client",
+            "parameters": {},
+            "headers": {},
+        },
+        {
+            "type": "web_search",
+            "external_web_access": False,
+            "search_content_types": ["text"],
+            "server_url": "https://example.invalid",
+        },
+    ],
+)
+def test_0149_candidate_authority_or_shape_mutation_rejects(tool: dict[str, object]) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _0149_policy(Settings()).apply(
+            _body(tools=[tool]),
+            adapter_managed_declaration_candidates=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
+            adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+        )
+    assert exc_info.value.error_code in {
+        "responses_adapter_managed_tool_invalid",
+        "responses_adapter_managed_tool_authority_not_supported",
+    }
+
+
+def test_0149_candidate_url_value_rejects_even_with_the_captured_shape() -> None:
+    tool = {
+        "type": "tool_search",
+        "description": "https://authority.invalid",
+        "execution": "client",
+        "parameters": {},
+    }
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _0149_policy(Settings()).apply(
+            _body(tools=[tool]),
+            adapter_managed_declaration_candidates=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES,
+            adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
+        )
+    assert exc_info.value.error_code == "responses_adapter_managed_tool_authority_not_supported"
 
 
 def test_valid_string_input_injects_store_false_and_preserves_supported_fields() -> None:

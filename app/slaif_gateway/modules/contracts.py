@@ -79,6 +79,7 @@ class CanonicalClientRequest:
     body: Mapping[str, object]
     capability_intents: tuple[str, ...] = ()
     adapter_managed_declaration_candidates: tuple[str, ...] = ()
+    adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     stream_profile: str | None = None
     profile_facts: Mapping[str, str] = field(default_factory=dict)
     identity_hints: Mapping[str, str] = field(default_factory=dict)

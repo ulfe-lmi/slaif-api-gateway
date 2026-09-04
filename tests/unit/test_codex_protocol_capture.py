@@ -16,6 +16,16 @@ FIXTURE = (
     capture.REPO_ROOT
     / "tests/fixtures/codex/0.147.0/gpt-5.6-sol-api-key-responses.json"
 )
+FIXTURE_0149 = (
+    capture.REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
+)
+SESSION_FIXTURE_0149 = (
+    capture.REPO_ROOT
+    / "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
+)
+HISTORICAL_0149 = (
+    capture.REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural.json"
+)
 APPROVED_FIXTURE_SHA256 = (
     "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
 )
@@ -275,6 +285,134 @@ def test_fixture_contains_no_prompt_token_secret_client_or_description_canaries(
         b"model_messages",
     )
     assert all(value not in payload for value in forbidden)
+
+
+def test_0149_fixture_is_separate_and_exactly_capture_derived() -> None:
+    raw = FIXTURE_0149.read_bytes()
+    fixture = json.loads(raw)
+    capture.validate_0149_fixture(fixture)
+    assert raw == capture.canonical_json_bytes(fixture)
+    assert hashlib.sha256(raw).hexdigest() == capture.APPROVED_0149_CANONICAL_FIXTURE_SHA256
+    assert hashlib.sha256(HISTORICAL_0149.read_bytes()).hexdigest() == (
+        "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
+    )
+    shapes = fixture["capture"]["variants"][0]["request"]["tool_declarations"]["shapes"]
+    assert {shape["type"] for shape in shapes} == {
+        "function",
+        "custom",
+        "tool_search",
+        "web_search",
+    }
+    assert fixture["findings"]["adapter_managed_candidate_types"] == [
+        "tool_search",
+        "web_search",
+    ]
+
+
+def test_0149_session_fixture_is_exactly_sanitized_relationship_evidence() -> None:
+    raw = SESSION_FIXTURE_0149.read_bytes()
+    fixture = json.loads(raw)
+    capture.validate_0149_session_fixture(fixture)
+    assert raw == capture.canonical_json_bytes(fixture)
+    assert hashlib.sha256(raw).hexdigest() == (
+        "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
+    )
+    assert fixture["capture"]["requests"] == 3
+    assert fixture["capture"]["subprocess"]["session_a"] == "explicit_resume"
+    assert fixture["relationships"]["selected_source"] == {
+        "canonical_key": "session_id",
+        "value_type": "string",
+        "byte_bound": 36,
+        "canonical_uuid": True,
+    }
+    assert fixture["relationships"]["corroborating_alias"]["key"] == "thread_id"
+    assert fixture["relationships"]["same_session_stability"] is True
+    assert fixture["relationships"]["cross_session_isolation"] is True
+    assert fixture["relationships"]["same_installation"] is True
+    assert fixture["cleanup"]["provider_calls"] == 0
+    assert hashlib.sha256(FIXTURE_0149.read_bytes()).hexdigest() == (
+        "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
+    )
+
+
+def test_0149_production_path_returns_only_candidate_types_without_raw_values() -> None:
+    body = {
+        "model": capture.PINNED_0149_MODEL,
+        "input": [{"type": "message", "role": "user", "content": "raw-canary"}],
+        "tools": [
+            {
+                "type": "tool_search",
+                "description": "candidate-description-canary",
+                "execution": "client",
+                "parameters": {},
+            },
+            {
+                "type": "web_search",
+                "external_web_access": False,
+                "search_content_types": ["text"],
+            },
+        ],
+        "tool_choice": "auto",
+    }
+    candidates = capture.validate_0149_production_path(_request(body))
+    assert candidates == ("tool_search", "web_search")
+    safe = capture.canonical_json_bytes({"candidate_types": candidates})
+    assert b"raw-canary" not in safe
+    assert b"candidate-description-canary" not in safe
+    source = Path(capture.__file__).read_text(encoding="utf-8")
+    assert "from slaif_gateway.modules.clients.registry import CODEX_0149_CLIENT_MODULE" in source
+    assert "from slaif_gateway.services import responses_request_policy" in source
+    assert "responses_request_policy.ResponsesRequestPolicy" in source
+
+
+def test_0149_request_sanitizer_retains_only_observed_structural_facts() -> None:
+    request = _request(
+        {
+            "model": "qwen3.8-27b",
+            "input": [{"type": "message", "content": "synthetic"}],
+            "instructions": "private prompt",
+            "tools": [
+                {
+                    "type": "tool_search",
+                    "description": "private description",
+                    "execution": "client",
+                    "parameters": {"type": "object"},
+                },
+                {
+                    "type": "web_search",
+                    "external_web_access": False,
+                    "search_content_types": ["text", "image"],
+                },
+            ],
+            "tool_choice": "auto",
+        }
+    )
+    safe = capture.sanitize_0149_request(request)
+    encoded = capture.canonical_json_bytes(safe)
+    assert safe["tool_declarations"]["count"] == 2
+    assert b"private prompt" not in encoded
+    assert b"private description" not in encoded
+    assert b"qwen3.8-27b" not in encoded
+
+
+def test_0149_request_sanitizer_rejects_authority_fields_without_echo() -> None:
+    request = _request(
+        {
+            "model": "qwen3.8-27b",
+            "tools": [
+                {
+                    "type": "tool_search",
+                    "description": "safe",
+                    "execution": "client",
+                    "parameters": {"authorization": "secret-canary"},
+                }
+            ],
+            "tool_choice": "auto",
+        }
+    )
+    with pytest.raises(capture.CaptureError) as error:
+        capture.sanitize_0149_request(request)
+    assert "secret-canary" not in str(error.value)
 
 
 def test_compatibility_diff_is_reproducible_and_not_compatible() -> None:

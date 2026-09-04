@@ -1,0 +1,131 @@
+{
+  "capture": {
+    "requests": 3,
+    "subprocess": {
+      "binary_version_output": "codex-cli 0.149.0",
+      "cli_exit_statuses": [
+        "synthetic_completed",
+        "synthetic_completed",
+        "synthetic_completed"
+      ],
+      "home_scope": "one_private_disposable_installation",
+      "model_call": "not_performed",
+      "provider_key": "not_configured",
+      "server": "loopback_fake_responses",
+      "session_a": "explicit_resume",
+      "session_b": "separate_exec_same_installation",
+      "workspace": "empty"
+    },
+    "transport": {
+      "method": "POST",
+      "path": "/v1/responses",
+      "response": "fixed_synthetic_completed_sse",
+      "wire_api": "responses"
+    }
+  },
+  "cleanup": {
+    "listeners_removed": true,
+    "provider_calls": 0,
+    "temporary_home_workspace_outputs_removed": true
+  },
+  "identity": {
+    "cli_family": "codex-cli",
+    "cli_version": "0.149.0",
+    "model": "qwen3.8-27b",
+    "profile": "responses-session-relationship-v3",
+    "source_tag": "npm-@openai/codex-0.149.0"
+  },
+  "provenance": {
+    "prior_structural_fixture_sha256": "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
+  },
+  "relationships": {
+    "cli_thread_uuid": {
+      "canonical_uuid": true,
+      "different_session_b": true,
+      "equal_to_request_aliases": true,
+      "same_session_a1_a2": true,
+      "value_type": "string"
+    },
+    "corroborating_alias": {
+      "canonical_uuid": true,
+      "different_session_b": true,
+      "equal_within_each_request": true,
+      "key": "thread_id",
+      "same_session_a1_a2": true,
+      "value_type": "string"
+    },
+    "cross_session_isolation": true,
+    "installation_identity": {
+      "different_session_b": false,
+      "max_value_bytes": 36,
+      "present_on_all_requests": true,
+      "same_session_a1_a2": true,
+      "value_type": "string",
+      "within_256_byte_bound": true
+    },
+    "rejected_source_categories": {
+      "input_item_ids": {
+        "accepted_as_session": false,
+        "changes_across_resume": true,
+        "present_on_all_requests": true,
+        "same_session_a1_a2": false,
+        "value_type": "array_of_strings"
+      },
+      "prompt_cache_key": {
+        "accepted_as_session": false,
+        "changes_across_resume": false,
+        "present_on_all_requests": true,
+        "same_session_a1_a2": true,
+        "value_type": "string"
+      },
+      "root_turn_id": {
+        "accepted_as_session": false,
+        "changes_across_resume": true,
+        "different_session_b": true,
+        "max_value_bytes": 36,
+        "present_on_all_requests": true,
+        "same_session_a1_a2": false,
+        "value_type": "string",
+        "within_256_byte_bound": true
+      },
+      "turn_id": {
+        "accepted_as_session": false,
+        "changes_across_resume": true,
+        "different_session_b": true,
+        "max_value_bytes": 36,
+        "present_on_all_requests": true,
+        "same_session_a1_a2": false,
+        "value_type": "string",
+        "within_256_byte_bound": true
+      },
+      "x-codex-installation-id": {
+        "accepted_as_session": false,
+        "different_session_b": false,
+        "max_value_bytes": 36,
+        "present_on_all_requests": true,
+        "same_session_a1_a2": true,
+        "value_type": "string",
+        "within_256_byte_bound": true
+      },
+      "x-codex-turn-metadata": {
+        "accepted_as_session": false,
+        "changes_across_resume": true,
+        "different_session_b": true,
+        "max_value_bytes": 570,
+        "present_on_all_requests": true,
+        "same_session_a1_a2": false,
+        "value_type": "string",
+        "within_256_byte_bound": false
+      }
+    },
+    "same_installation": true,
+    "same_session_stability": true,
+    "selected_source": {
+      "byte_bound": 36,
+      "canonical_key": "session_id",
+      "canonical_uuid": true,
+      "value_type": "string"
+    }
+  },
+  "schema_version": 1
+}
