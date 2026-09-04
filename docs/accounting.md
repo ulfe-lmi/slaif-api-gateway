@@ -97,6 +97,11 @@ Core invariants:
   transient upstream history only: it creates no separate replay/HMAC
   reference and never enters ledger metadata, safe evidence, logs, audits,
   metrics, or exports. Ordinary function/custom outputs continue to reject it.
+  Under the exact 0.149 Local pair, an omitted item ID is also accepted only
+  after the mandatory call ID resolves to one same-key HMAC replay reference;
+  this ownership check completes before reservation/provider work. Each
+  admitted continuation still has its own ordinary reservation and ledger row,
+  and failed continuations leave zero pending state.
 - Provider-encrypted Codex reasoning generation/replay requires the independent
   default-off `codex_encrypted_reasoning_replay` key and route capability.
   Encrypted and summary bytes are bounded and counted conservatively as model
