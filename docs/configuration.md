@@ -59,6 +59,9 @@ visible-ASCII secret material and kept distinct from provider, Gateway-key,
 admin-session, and one-time-secret roles. The signed contract is
 `single_worker` with process-local `process_local_ttl_lru` replay state; it does
 not claim restart-persistent or multi-worker replay protection.
+The corresponding version labels are `LOCAL_CODING_SIGNING_KEY_VERSION` and
+`LOCAL_CODING_IDENTITY_KEY_VERSION`; both remain explicitly versioned as `1`
+for this contract.
 
 ## Generating Local Runtime Secrets
 
