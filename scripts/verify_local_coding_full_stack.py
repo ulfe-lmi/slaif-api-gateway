@@ -27,6 +27,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -1065,10 +1067,24 @@ def _verify_155aj_discrepancy_inventory() -> dict[str, object]:
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise VerificationError("discrepancy_inventory_source_unavailable") from exc
-        if result.returncode != 0 or len(result.stdout) > 2 * 1024 * 1024:
+        if result.returncode == 0 and len(result.stdout) <= 2 * 1024 * 1024:
+            try:
+                return result.stdout.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise VerificationError("discrepancy_inventory_source_invalid") from exc
+        source_url = (
+            "https://raw.githubusercontent.com/ulfe-lmi/slaif-api-gateway/"
+            f"{_155AJ_DISCREPANCY_MANIFEST['frozen_candidate']}/{path}"
+        )
+        try:
+            with urllib.request.urlopen(source_url, timeout=30) as response:
+                blob = response.read(2 * 1024 * 1024 + 1)
+        except (OSError, urllib.error.URLError, urllib.error.HTTPError) as exc:
+            raise VerificationError("discrepancy_inventory_source_invalid") from exc
+        if len(blob) > 2 * 1024 * 1024:
             raise VerificationError("discrepancy_inventory_source_invalid")
         try:
-            return result.stdout.decode("utf-8")
+            return blob.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise VerificationError("discrepancy_inventory_source_invalid") from exc
 
