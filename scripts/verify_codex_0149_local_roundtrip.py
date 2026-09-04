@@ -33,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_PACKAGE = "@openai/codex@0.149.0"
 CODEX_VERSION = "0.149.0"
 CODEX_MODEL = "codex-0149-roundtrip-model"
-LOCAL_SERVICE_TOKEN = "local-roundtrip-service-token"
+LOCAL_SERVICE_TOKEN = "local-roundtrip-service-token-160d-v1-accepted"
 LOCAL_SIGNING_SECRET = "local-roundtrip-signing-secret-0123456789"
 LOCAL_DERIVATION_SECRET = "local-roundtrip-derivation-secret-0123456789"
 GATEWAY_HMAC_SECRET = "roundtrip-gateway-hmac-secret-0123456789"
@@ -268,6 +268,7 @@ _GATEWAY_ERROR_CODES = frozenset(
         "incompatible_client_server_pair",
         "local_coding_identity_unavailable",
         "local_coding_endpoint_not_supported",
+        "local_coding_service_credential_invalid",
         "provider_configuration_error",
         "provider_request_error",
         "provider_response_invalid",
@@ -971,10 +972,13 @@ def run_roundtrip() -> str:
                 capture_environment["APP_ENV"] = "test"
                 gateway_errors = _GatewayExceptionObservation()
                 logging.getLogger().addHandler(gateway_errors)
+                previous_logging_disable = logging.root.manager.disable
+                logging.disable(logging.CRITICAL)
                 try:
                     with _run_uvicorn_server(gateway_observation, gateway_port):
                         result = _run(command, cwd=work, env=capture_environment, timeout=180)
                 finally:
+                    logging.disable(previous_logging_disable)
                     logging.getLogger().removeHandler(gateway_errors)
                 stdout, stderr = result.stdout, result.stderr
                 if result.returncode != 0:

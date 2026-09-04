@@ -29,6 +29,36 @@ def test_codex_command_uses_task_local_zero_retry_responses_profile(tmp_path) ->
     assert "--resume" not in command
 
 
+def test_synthetic_credential_roles_match_source_contract_and_stay_distinct() -> None:
+    credentials = (
+        verifier.LOCAL_SERVICE_TOKEN,
+        verifier.LOCAL_SIGNING_SECRET,
+        verifier.LOCAL_DERIVATION_SECRET,
+    )
+    assert all(32 <= len(value.encode("ascii")) <= 4096 for value in credentials)
+    assert all(all(32 <= ord(char) <= 126 for char in value) for value in credentials)
+    assert len(set(credentials)) == 3
+
+
+def test_service_credential_error_is_allowlisted_and_unknown_is_other() -> None:
+    known = SimpleNamespace(
+        request_count=1,
+        response_statuses=[503],
+        error_codes=["local_coding_service_credential_invalid"],
+        error_shapes=["error_server"],
+        request_shapes=["stream_true_tools_function[name,type]_input_message"],
+    )
+    assert "error_local_coding_service_credential_invalid" in verifier._safe_gateway_failure_code(known)
+    unknown = SimpleNamespace(
+        request_count=1,
+        response_statuses=[503],
+        error_codes=["unreviewed_code"],
+        error_shapes=["error_server"],
+        request_shapes=["stream_true_tools_function[name,type]_input_message"],
+    )
+    assert "error_other" in verifier._safe_gateway_failure_code(unknown)
+
+
 def test_obligation_manifest_is_complete_and_bounded() -> None:
     assert set(verifier.OBLIGATION_MANIFEST) == {
         "app/codex_replay_repository",
