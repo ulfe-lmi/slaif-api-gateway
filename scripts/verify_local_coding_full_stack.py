@@ -1448,7 +1448,7 @@ def _verify_local_signed_identity_matrix() -> None:
     )
 
     service_token = "155-ak-synthetic-service-token"
-    signing_secret = "155-ak-synthetic-signing-secret-0123456789"
+    signing_secret = "155-aj-synthetic-signing-secret-0123456789"
     route = LocalCodingRouteContract(
         contract_version="local-coding-v1",
         route_name=LOCAL_CODING_ROUTE_NAME,
