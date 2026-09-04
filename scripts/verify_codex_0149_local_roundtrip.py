@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import http.client
 import http.server
@@ -55,6 +56,101 @@ OBLIGATION_MANIFEST = {
     "fake_codex_two_turn": "scripts-and-unit-test",
     "historical_155_machinery": "absent",
 }
+
+_PRODUCTION_BLOBS = {
+    "app/slaif_gateway/db/repositories/codex_replay.py": "2e5ddd592c3a3f39ffef789c442dba884444919c",
+    "app/slaif_gateway/modules/clients/codex_0149.py": "9f773ea74f9aeb7e6ed651f34fc85466fbbd7a4d",
+    "app/slaif_gateway/modules/contracts.py": "b24a19901445483d18c6799b55e89fb73d1fa73f",
+    "app/slaif_gateway/services/codex_replay_service.py": "c0813d120c67474785bb1ddad971dd2cd4dcdec6",
+    "app/slaif_gateway/services/responses_gateway.py": "c280af6354904ebcb831f75023373b1fecfdb700",
+    "app/slaif_gateway/services/responses_request_policy.py": "e2197a3184ee028f95e0a72dbe8857954cad45bd",
+}
+_PERMANENT_TEST_BLOBS = {
+    "tests/integration/test_codex_replay_references_postgres.py": "7810a949e00b7c89c290ba79ac246fa145d5c651",
+    "tests/unit/test_codex_client_modules.py": "ba14d1e8a9953cdc885918c1fa867cf23deba630",
+    "tests/unit/test_codex_replay_service.py": "29a9b11195670f933d83ffef4f23673e92801893",
+    "tests/unit/test_responses_codex_multiturn_replay.py": "f91038cf946aeb097b6de91886bcd21490115e47",
+    "tests/unit/test_responses_codex_streaming_tools.py": "f872fa53820687a3a6612c8131d4fddb73521757",
+}
+_PERMANENT_FIXTURE_BLOBS = {
+    "tests/fixtures/codex/0.149.0/responses-reasoning-dialect-v1.json": "5b90402eb3fd1a968fd5ab54774bcaf0575f3c9c",
+    "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json": "a0073a638b82750b3752ac5b78f5df91f97d7d56",
+    "tests/fixtures/codex/0.149.0/responses-structural-v2.json": "c182dd195312368d58c80f25c915e83e8474a470",
+    "tests/fixtures/local_coding/responses_tool_filter_vectors.json": "cdd33cb5c52377f80282803f53005074df091fc8",
+    "tests/fixtures/local_coding/signed_identity_v1_vectors.json": "e1e4c43e10318ff3170859876dc4d8f6f7d5bdb9",
+}
+
+
+def _git_blob_hash(path: Path) -> str:
+    data = path.read_bytes()
+    return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
+
+
+def _git_ref(ref: str) -> str | None:
+    result = subprocess.run(
+        ["git", "rev-parse", ref],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.decode("ascii", errors="ignore").strip()
+
+
+def evaluate_obligations() -> list[str]:
+    """Return only fixed missing obligation names from local repository state."""
+    missing: list[str] = []
+    if _git_ref("HEAD:app") != "bd536a282362cc549cc0c5518db8e743af667b63":
+        missing.append("app_tree")
+    for group in (_PRODUCTION_BLOBS, _PERMANENT_TEST_BLOBS, _PERMANENT_FIXTURE_BLOBS):
+        for path_text, expected in group.items():
+            path = REPO_ROOT / path_text
+            if not path.is_file() or _git_blob_hash(path) != expected:
+                missing.append(path_text)
+    required_paths = (
+        "scripts/verify_codex_0149_local_roundtrip.py",
+        "tests/unit/test_codex_0149_local_roundtrip.py",
+        "tests/unit/test_responses_codex_multiturn_replay.py",
+        "tests/unit/test_responses_codex_streaming_tools.py",
+        "tests/integration/test_codex_replay_references_postgres.py",
+    )
+    for path_text in required_paths:
+        if not (REPO_ROOT / path_text).is_file():
+            missing.append(path_text)
+    for path_text in (
+        "scripts/verify_local_coding_full_stack.py",
+        "tests/unit/test_local_coding_full_stack_verifier.py",
+    ):
+        if (REPO_ROOT / path_text).exists():
+            missing.append(f"historical_absent:{path_text}")
+    app_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (REPO_ROOT / "app").rglob("*.py")
+    )
+    if "SLAIF_155X_" in app_text:
+        missing.append("historical_app_qualification_symbols_absent")
+    for path_text in ("tests/unit/test_oap_governance.py", "AGENTIC_CLIENT_INTEGRATION.md"):
+        result = subprocess.run(
+            ["git", "diff", "--exit-code", "d625af9eb3df45c163342a05e03cda2d3dd0d7c4", "--", path_text],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            missing.append(f"unchanged:{path_text}")
+    doctrine = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    for link in (
+        "AGENTIC_CLIENT_INTEGRATION.md",
+        "docs/responses-compatibility.md",
+        "docs/provider-forwarding-contract.md",
+        "docs/security-model.md",
+    ):
+        if link not in doctrine:
+            missing.append(f"doctrine_link:{link}")
+    return missing
 
 
 class VerificationError(RuntimeError):
@@ -607,23 +703,6 @@ class _GatewayObservation:
                 self.error_codes.append(code)
                 self.error_shapes.append(shape)
 
-
-class _GatewayExceptionObservation(logging.Handler):
-    """Retain only exception class names from the in-process server logger."""
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.ERROR)
-        self.exception_classes: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        if record.exc_info is None:
-            return
-        name = record.exc_info[0].__name__
-        if name in {"TypeError", "KeyError", "ValueError", "IndexError", "AttributeError"}:
-            self.exception_classes.append(name)
-        else:
-            self.exception_classes.append("other")
-
     def _record_request_shape(self, body: bytes) -> None:
         try:
             decoded = json.loads(body)
@@ -640,7 +719,7 @@ class _GatewayExceptionObservation(logging.Handler):
                         if not isinstance(tool, dict):
                             tool_classes.append("other")
                         elif tool.get("type") in {"function", "custom", "web_search"}:
-                                field_names = set(tool) & {
+                            field_names = set(tool) & {
                                 "type",
                                 "name",
                                 "description",
@@ -649,22 +728,22 @@ class _GatewayExceptionObservation(logging.Handler):
                                 "format",
                                 "external_web_access",
                                 "search_content_types",
-                                    "execution",
-                                }
-                                nested_class = "none"
-                                if isinstance(tool.get("format"), dict):
-                                    nested_type = tool["format"].get("type")
-                                    nested_class = (
-                                        nested_type
-                                        if nested_type in {"text", "grammar"}
-                                        else "other"
-                                    )
-                                tool_classes.append(
-                                    f"{tool['type']}[{','.join(sorted(field_names))}]"
-                                    f"_format_{nested_class}"
-                                    f"_description_{_safe_type_class(tool.get('description'))}"
-                                    f"_{_safe_size_class(tool.get('description'))}"
+                                "execution",
+                            }
+                            nested_class = "none"
+                            if isinstance(tool.get("format"), dict):
+                                nested_type = tool["format"].get("type")
+                                nested_class = (
+                                    nested_type
+                                    if nested_type in {"text", "grammar"}
+                                    else "other"
                                 )
+                            tool_classes.append(
+                                f"{tool['type']}[{','.join(sorted(field_names))}]"
+                                f"_format_{nested_class}"
+                                f"_description_{_safe_type_class(tool.get('description'))}"
+                                f"_{_safe_size_class(tool.get('description'))}"
+                            )
                         else:
                             tool_classes.append("other")
                 items = decoded.get("input")
@@ -674,7 +753,8 @@ class _GatewayExceptionObservation(logging.Handler):
                         value = item.get("type") if isinstance(item, dict) else None
                         item_classes.append(
                             value
-                            if value in {"function_call", "function_call_output", "message", "reasoning"}
+                            if value
+                            in {"function_call", "function_call_output", "message", "reasoning"}
                             else "other"
                         )
                 shape = (
@@ -685,6 +765,22 @@ class _GatewayExceptionObservation(logging.Handler):
         with self._lock:
             self.request_shapes.append(shape)
 
+
+class _GatewayExceptionObservation(logging.Handler):
+    """Retain only exception class names from the in-process server logger."""
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.ERROR)
+        self.exception_classes: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.exc_info is None:
+            return
+        name = record.exc_info[0].__name__
+        if name in {"TypeError", "KeyError", "ValueError", "IndexError", "AttributeError"}:
+            self.exception_classes.append(name)
+        else:
+            self.exception_classes.append("other")
 
 @contextlib.contextmanager
 def _temporary_environment(values: dict[str, str]) -> Iterator[None]:

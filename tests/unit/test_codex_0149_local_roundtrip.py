@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import http.client
 import json
 import sys
@@ -46,6 +47,60 @@ def test_obligation_manifest_is_complete_and_bounded() -> None:
         "historical_155_machinery",
     }
     assert all(isinstance(value, str) and value for value in verifier.OBLIGATION_MANIFEST.values())
+
+
+def test_obligation_evaluator_reports_exact_empty_missing_list() -> None:
+    assert verifier.evaluate_obligations() == []
+    assert f"missing={verifier.evaluate_obligations()}" == "missing=[]"
+
+
+def test_gateway_observer_owns_request_projection() -> None:
+    assert "_record_request_shape" in verifier._GatewayObservation.__dict__
+    assert "_record_request_shape" not in verifier._GatewayExceptionObservation.__dict__
+
+    sent: list[dict[str, object]] = []
+
+    async def app(scope, receive, send) -> None:
+        assert scope["path"] == "/v1/responses"
+        while True:
+            message = await receive()
+            if not message.get("more_body"):
+                break
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok", "more_body": False})
+
+    body = json.dumps(
+        {
+            "stream": True,
+            "tools": [{"type": "function", "name": "safe", "description": "x"}],
+            "input": [{"type": "message"}],
+        }
+    ).encode()
+    messages = iter(
+        (
+            {"type": "http.request", "body": body, "more_body": False},
+        )
+    )
+
+    async def receive() -> dict[str, object]:
+        return next(messages)
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    observer = verifier._GatewayObservation(app)
+    asyncio.run(
+        observer(
+            {"type": "http", "method": "POST", "path": "/v1/responses"},
+            receive,
+            send,
+        )
+    )
+    assert observer.request_count == 1
+    assert observer.request_shapes == [
+        "stream_true_tools_function[description,name,type]_format_none_description_string_bounded_input_message"
+    ]
+    assert sent[-1]["type"] == "http.response.body"
 
 
 def test_fake_streams_are_two_bounded_ordered_lifecycles() -> None:
