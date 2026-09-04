@@ -232,7 +232,7 @@ def test_155aj_topology_enforces_exact_prior_report_parent_and_report_only_path(
         if args == ("rev-parse", f"{verifier.GATEWAY_ACTIVATION_HEAD}^1"):
             return verifier.GATEWAY_REPORT_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_ACTIVATION_HEAD):
-            return "oap/active\noap/orders/155-aj-final-hook-free-objective-155-acceptance.md"
+            return "oap/active\noap/orders/155-ak-conformance-repair-and-final-acceptance.md"
         if args == ("rev-parse", f"{verifier.GATEWAY_REPORT_HEAD}^1"):
             return "wrong-parent" if bad_field == "parent" else verifier.GATEWAY_IMPLEMENTATION_HEAD
         if args == ("diff-tree", "--no-commit-id", "--name-only", "-r", verifier.GATEWAY_REPORT_HEAD):
@@ -264,11 +264,11 @@ def test_155aj_topology_enforces_exact_prior_report_parent_and_report_only_path(
         verifier._verify_commit_topology()
 
 
-def test_155aj_topology_anchors_are_the_155ai_report_and_activation() -> None:
-    assert verifier.GATEWAY_REPORT_HEAD == "a9625753716325bc0ef6a75689bf42bddbfbd03d"
-    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "3cce1a7612fc9919adf26df9952baabaf703c348"
-    assert verifier.GATEWAY_ACTIVATION_HEAD == "efadf5e1038dc042a596414282c5383deab80c8e"
-    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
+def test_155ak_topology_anchors_are_the_155aj_report_and_activation() -> None:
+    assert verifier.GATEWAY_REPORT_HEAD == "c2c8f01c25c7f63701b85e8cd4d55e0055931f3b"
+    assert verifier.GATEWAY_IMPLEMENTATION_HEAD == "e503f9647cb1ef9d2fef5cebe159c84e5a9c1ed4"
+    assert verifier.GATEWAY_ACTIVATION_HEAD == "a926e49a1255b33683b1ada10b9abfc6508c347f"
+    assert verifier.GATEWAY_REPORT_PATH == "oap/reports/155-aj-final-hook-free-objective-155-acceptance.md"
 
 
 def test_155aj_discrepancy_inventory_is_source_and_collection_derived() -> None:

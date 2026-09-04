@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded 155-aj verifier for hook-free Objective-155 acceptance.
+"""Bounded 155-ak verifier for hook-free Objective-155 acceptance.
 
 The verifier is deliberately fail-closed and emits only fixed facts.  It is a
 task-local evidence tool, not a deployment or production runner.
@@ -41,10 +41,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 LOCAL_ROOT = Path("/home/ubuntu/codex-work/slaif-local-coding-005m").resolve()
 RUNTIME_REFERENCE = Path("/tmp/slaif-155f-runtime.env")
-GATEWAY_REPORT_HEAD = "a9625753716325bc0ef6a75689bf42bddbfbd03d"
-GATEWAY_IMPLEMENTATION_HEAD = "3cce1a7612fc9919adf26df9952baabaf703c348"
-GATEWAY_ACTIVATION_HEAD = "efadf5e1038dc042a596414282c5383deab80c8e"
-GATEWAY_REPORT_PATH = "oap/reports/155-ai-signed-identity-grammar-interoperability-and-acceptance.md"
+GATEWAY_REPORT_HEAD = "c2c8f01c25c7f63701b85e8cd4d55e0055931f3b"
+GATEWAY_IMPLEMENTATION_HEAD = "e503f9647cb1ef9d2fef5cebe159c84e5a9c1ed4"
+GATEWAY_ACTIVATION_HEAD = "a926e49a1255b33683b1ada10b9abfc6508c347f"
+GATEWAY_REPORT_PATH = "oap/reports/155-aj-final-hook-free-objective-155-acceptance.md"
 LOCAL_REPORT_HEAD = "4d3ab2fd97d249710f952dd3d2c28936138cc8fa"
 LOCAL_REPORT_PARENT = "258ae2ebad39651076937b9f027e60831b8d2786"
 LOCAL_SIGNED_CONTRACT_HEAD = "356be8345dd71d6fddf829278651d18e485731d4"
@@ -62,8 +62,8 @@ HISTORICAL_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structu
 V2_FIXTURE = REPO_ROOT / "tests/fixtures/codex/0.149.0/responses-structural-v2.json"
 HISTORICAL_FIXTURE_SHA256 = "0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d"
 V2_FIXTURE_SHA256 = "baba5403949d44900d8bd3cdef3f7c65bf6abd5109b78bda0b67f3f9787118d1"
-ORDER_PATH = REPO_ROOT / "oap/orders/155-aj-final-hook-free-objective-155-acceptance.md"
-TASK_DB = "slaif_gateway_oap_155aj_hook_free_acceptance"
+ORDER_PATH = REPO_ROOT / "oap/orders/155-ak-conformance-repair-and-final-acceptance.md"
+TASK_DB = "slaif_gateway_oap_155ak_conformance_repair_and_final_acceptance"
 DIRECT_BASELINE_REPORT = REPO_ROOT / "oap/reports/155-l-total-safe-stream-normalization-and-single-diagnostic.md"
 SERVICE_TOKEN_ENV = "SLAIF_155F_LOCAL_SERVICE_TOKEN"
 SIGNING_SECRET_ENV = "SLAIF_155F_LOCAL_SIGNING_SECRET"
@@ -1303,7 +1303,7 @@ def _verify_commit_topology() -> None:
     )
     if activation_changed.splitlines() != [
         "oap/active",
-        "oap/orders/155-aj-final-hook-free-objective-155-acceptance.md",
+        "oap/orders/155-ak-conformance-repair-and-final-acceptance.md",
     ]:
         raise VerificationError("gateway_activation_not_order_only")
     if _run(
@@ -1355,11 +1355,11 @@ def _verify_commit_topology() -> None:
     if report_diff.returncode != 0:
         raise VerificationError("gateway_report_diff_failed")
     strategic_order = Path(
-        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-aj-final-hook-free-objective-155-acceptance.md"
+        "/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/155-ak-conformance-repair-and-final-acceptance.md"
     )
     if ORDER_PATH.read_bytes() != strategic_order.read_bytes():
         raise VerificationError("order_bytes_mismatch")
-    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-aj\n":
+    if (REPO_ROOT / "oap/active").read_text(encoding="utf-8") != "155-ak\n":
         raise VerificationError("active_selector_mismatch")
 
 
@@ -1447,8 +1447,8 @@ def _verify_local_signed_identity_matrix() -> None:
         sign_identity,
     )
 
-    service_token = "155-aj-synthetic-service-token"
-    signing_secret = "155-aj-synthetic-signing-secret-0123456789"
+    service_token = "155-ak-synthetic-service-token"
+    signing_secret = "155-ak-synthetic-signing-secret-0123456789"
     route = LocalCodingRouteContract(
         contract_version="local-coding-v1",
         route_name=LOCAL_CODING_ROUTE_NAME,
@@ -1778,7 +1778,7 @@ def _start_postgres(
     image_before = _docker("image", "inspect", image).returncode == 0
     if not image_before and _docker("pull", image).returncode != 0:
         raise VerificationError("postgres_image_unavailable")
-    name = f"slaif-155aj-postgres-{os.getpid()}"
+    name = f"slaif-155ak-postgres-{os.getpid()}"
     _docker("rm", "-f", name, timeout=30)
     started = False
     try:
@@ -10017,7 +10017,7 @@ def run_codex_tool_roundtrip_non_prefixed_reproduction() -> dict[str, object]:
     """Reproduce Codex 0.149 ID stripping against the uncorrected Gateway."""
     _verify_commit_topology()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155aj-reproduction-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ak-reproduction-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         codex_binary = _install_codex(root)
@@ -10046,7 +10046,7 @@ def _run_dedicated_codex_tool_roundtrip(
         _verify_local_signed_identity_matrix()
         _source_qwen_credential_only_for_local(runtime)
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155aj-qualification-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ak-qualification-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -10167,7 +10167,7 @@ def run_stream_differential() -> dict[str, object]:
     _verify_commit_topology()
     runtime = _read_runtime_reference()
     _verify_fixtures()
-    with tempfile.TemporaryDirectory(prefix="slaif-155aj-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ak-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         _validate_local_config(root, runtime)
@@ -10326,7 +10326,7 @@ def _run_composed_only_impl(
     if not fake_qwen:
         tracker.set("protected_postcheck")
         _verify_protected_model_health(runtime)
-    with tempfile.TemporaryDirectory(prefix="slaif-155aj-", dir="/tmp") as temporary:
+    with tempfile.TemporaryDirectory(prefix="slaif-155ak-", dir="/tmp") as temporary:
         root = Path(temporary)
         root.chmod(0o700)
         tracker.set("local_config")
@@ -10428,7 +10428,7 @@ def run(*, fake_qwen: bool = False) -> dict[str, object]:
         if not fake_qwen:
             _verify_protected_model_health(runtime)
             _source_qwen_credential_only_for_local(runtime)
-            with tempfile.TemporaryDirectory(prefix="slaif-155aj-", dir="/tmp") as temporary:
+            with tempfile.TemporaryDirectory(prefix="slaif-155ak-", dir="/tmp") as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
                 stage = "local_config_preflight"
@@ -10502,7 +10502,7 @@ def main() -> int:
         try:
             _verify_commit_topology()
             with tempfile.TemporaryDirectory(
-                prefix="slaif-155aj-tool-roundtrip-", dir="/tmp"
+                prefix="slaif-155ak-tool-roundtrip-", dir="/tmp"
             ) as temporary:
                 root = Path(temporary)
                 root.chmod(0o700)
