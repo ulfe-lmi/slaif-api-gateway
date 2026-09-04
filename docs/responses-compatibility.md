@@ -32,10 +32,12 @@ transport. It substitutes a distinct provider-row service Bearer, signs the
 exact canonical UTF-8 request bytes with bounded derived HMAC identities when
 the route selects signed mode, and accepts only the reviewed single-worker,
 process-local TTL/LRU replay contract. Local Coding tool filtering and
-accounting remain independent Gateway-core decisions. This objective proves
-mocked official-client behavior and cross-contract conformance only; it does
-not implement advanced Codex reasoning/function/message streams, visible
-reasoning, ID-less replay, or protected model qualification.
+accounting remain independent Gateway-core decisions. The exact pair also
+validates the reviewed Codex 0.149 reasoning, local function-call, and
+assistant-message SSE lifecycle with strict event order, coordinates, terminal
+output, and detailed usage. This remains mocked/state-machine conformance
+only: it does not add second-turn admission, replay ownership, visible-
+reasoning replay, or protected model qualification.
 
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
@@ -301,10 +303,11 @@ function-tool follow-up requests; image/file outputs in tool-result items remain
 rejected. Input item arrays use the same Responses text/stateless route
 capability as string input; image input additionally requires
 `capabilities.responses.image_input=true`, and file input additionally requires
-`capabilities.responses.file_input=true`. They compose with plain text streaming,
-non-streaming structured `text.format`, and local function tools; structured
-streaming and ordinary top-level function-tool streaming remain rejected. The
-separately gated Codex declaration/event/replay slice is described below.
+`capabilities.responses.file_input=true`. They compose with plain text streaming
+and non-streaming structured `text.format`. Structured streaming and ordinary
+top-level function-tool streaming remain rejected outside the exact Codex 0.149
+Local pair, whose separately gated reasoning/function/message event profile is
+described below.
 
 Responses local function tools are supported only as caller-side intent. SLAIF
 forwards bounded function definitions shaped as
@@ -383,6 +386,16 @@ It enforces bounded IDs, indexes, deltas, cumulative values, sequence, exact
 request declarations, and call/item linkage frame by frame. Unknown events,
 orphan/duplicate/mismatched calls, hosted authority, and provider failure/error
 terminals become a safe gateway error rather than unchecked passthrough.
+
+For the exact `codex-0.149-responses-v1 -> local-coding-v1` pair, the profile
+is stricter than this generic validator. It accepts only the reviewed response,
+reasoning, one declared local function-call, and assistant-message lifecycles.
+Each event has its exact bounded field set and coordinates; terminal
+`response.output` and detailed usage are validated independently, and
+completion is refused while an item or part remains active. Unknown, reordered,
+duplicate, smuggled hosted/MCP, malformed, or oversized events fail closed.
+Streamed content, arguments, identifiers, and raw events are transient and are
+not persisted or logged.
 
 A next stateless request may replay only the exact validated declared function
 or `functions.exec` custom call with one immediately following matching output.
