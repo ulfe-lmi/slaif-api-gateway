@@ -85,6 +85,11 @@ Core invariants:
   streams follow the existing rollback/interrupted-estimate law and never
   become a normal successful ledger row. Validator state is transient and
   contains no persisted content, identifiers, or raw provider events.
+- Source-derived visible Codex 0.149 reasoning is ordinary bounded input
+  material. Its optional/null ID, summary, and visible text bytes contribute
+  only to the transient request estimate; they do not create replay ownership
+  or enter ledger, audit, metric, export, or error data. Non-null encrypted
+  reasoning remains on its existing separately gated ID-bound path.
 - Fully gated Codex function/custom output items may carry the pinned optional
   bounded `id`. When present, its complete canonical bytes are included in
   model-input admission and cost estimation, including the existing item-ID

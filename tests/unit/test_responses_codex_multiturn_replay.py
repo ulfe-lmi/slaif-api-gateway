@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
+from slaif_gateway.modules.clients.codex_0149 import (
+    CODEX_0149_POLICY_SPEC,
+    CODEX_0149_SOURCE_CONTRACT_COMMIT,
+    CODEX_0149_SOURCE_CONTRACT_FIXTURE_RELATIVE_PATH,
+    CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256,
+    CODEX_0149_SOURCE_CONTRACT_TAG,
+)
 from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.schemas.openai import ResponsesCreateRequest
 from slaif_gateway.services.codex_replay_service import (
@@ -22,15 +31,222 @@ from slaif_gateway.services.input_token_estimation import canonical_json_bytes
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_replay_request_candidates,
+    responses_codex_encrypted_reasoning_replay_requested,
 )
 
 
 _INTERNAL_CHAT_METADATA_FIELD = "internal_chat_message_metadata_passthrough"
 _PRIVATE_METADATA_CANARY = "PRIVATE-REPLAY-METADATA-CANARY"
+_SOURCE_CONTRACT_FIXTURE = Path(CODEX_0149_SOURCE_CONTRACT_FIXTURE_RELATIVE_PATH)
 
 
 def _policy(settings: Settings) -> ResponsesRequestPolicy:
     return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
+
+
+def _policy_0149(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0149_POLICY_SPEC)
+
+
+def _visible_reasoning(
+    *, id_marker: object = "present", content: object | None = None
+) -> dict[str, object]:
+    item: dict[str, object] = {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "safe summary"}],
+        "content": content
+        if content is not None
+        else [{"type": "reasoning_text", "text": "safe visible reasoning"}],
+    }
+    if id_marker != "absent":
+        item["id"] = None if id_marker == "null" else id_marker
+    return item
+
+
+def _apply_0149_visible(item: dict[str, object]):
+    return _policy_0149(Settings()).apply(
+        _body([item]),
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        allow_codex_encrypted_reasoning_replay=True,
+    )
+
+
+def test_0149_source_contract_fixture_is_canonical_and_pinned() -> None:
+    raw = _SOURCE_CONTRACT_FIXTURE.read_bytes()
+    fixture = json.loads(raw)
+    canonical = (json.dumps(fixture, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
+
+    assert raw == canonical
+    assert hashlib.sha256(raw).hexdigest() == CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256
+    assert fixture["source"]["tag"] == CODEX_0149_SOURCE_CONTRACT_TAG
+    assert fixture["source"]["commit"] == CODEX_0149_SOURCE_CONTRACT_COMMIT
+    assert fixture["contract"]["reasoning_item_fields"]["id"] == (
+        "optional_nullable_response_item_id"
+    )
+    assert fixture["contract"]["content_part_types"] == ["reasoning_text", "text"]
+    assert fixture["contract"]["encrypted_content"]["idless_allowed"] is False
+
+
+def test_0149_null_encrypted_presence_no_longer_triggers_replay_guard() -> None:
+    item = _visible_reasoning(id_marker="absent")
+    item["summary"] = []
+    item["encrypted_content"] = None
+    body = _body([item])
+
+    assert responses_codex_encrypted_reasoning_replay_requested(body) is False
+    result = _policy_0149(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_encrypted_reasoning_replay=False,
+    )
+    assert result.effective_body["input"][0] == item
+
+
+def test_0149_null_encrypted_reasoning_is_visible_after_detector_fix() -> None:
+    item = _visible_reasoning(id_marker="absent")
+    item["summary"] = []
+    item["encrypted_content"] = None
+    body = _body([item])
+
+    assert responses_codex_encrypted_reasoning_replay_requested(body) is False
+    result = _policy_0149(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_encrypted_reasoning_replay=False,
+    )
+
+    assert result.effective_body["input"][0] == item
+    assert "id" not in result.effective_body["input"][0]
+    assert result.effective_body["input"][0]["encrypted_content"] is None
+
+
+def test_0149_non_null_encrypted_reasoning_still_hits_capability_guard() -> None:
+    item = _visible_reasoning(id_marker="absent")
+    item["encrypted_content"] = "opaque-ciphertext"
+    body = _body([item])
+
+    assert responses_codex_encrypted_reasoning_replay_requested(body) is True
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _policy_0149(Settings()).apply(
+            body,
+            allow_codex_request_envelope=True,
+            allow_codex_encrypted_reasoning_replay=False,
+        )
+
+    assert exc_info.value.error_code == "responses_codex_encrypted_reasoning_replay_not_allowed"
+
+
+def test_0149_non_null_malformed_encrypted_reasoning_stays_strict_with_capability() -> None:
+    item = _visible_reasoning(id_marker="absent")
+    item["encrypted_content"] = 42
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _policy_0149(Settings()).apply(
+            _body([item]),
+            allow_codex_request_envelope=True,
+            allow_codex_encrypted_reasoning_replay=True,
+        )
+
+    assert exc_info.value.error_code == "responses_codex_encrypted_reasoning_replay_invalid"
+
+
+@pytest.mark.parametrize("id_marker", ["absent", "null", "rs_visible"])
+def test_0149_visible_reasoning_preserves_optional_id_and_content(id_marker: str) -> None:
+    item = _visible_reasoning(id_marker=id_marker)
+    result = _apply_0149_visible(item)
+
+    assert result.effective_body["input"][0] == item
+    if id_marker == "absent":
+        assert "id" not in result.effective_body["input"][0]
+    else:
+        assert result.effective_body["input"][0]["id"] == (
+            None if id_marker == "null" else id_marker
+        )
+
+
+def test_0149_visible_reasoning_preserves_newlines_tabs_and_both_content_types() -> None:
+    item = _visible_reasoning(
+        id_marker="absent",
+        content=[
+            {"type": "reasoning_text", "text": "first line\nsecond\tline"},
+            {"type": "text", "text": "third\n\tline"},
+        ],
+    )
+    item["summary"] = [{"type": "summary_text", "text": "summary\n\ttext"}]
+
+    result = _apply_0149_visible(item)
+
+    assert result.effective_body["input"][0] == item
+    assert codex_replay_request_candidates(result.effective_body) == ()
+
+
+def test_0149_visible_reasoning_requires_request_envelope_gate() -> None:
+    body = _body([_visible_reasoning(id_marker="absent")])
+    body.pop("include")
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _policy_0149(Settings()).apply(body)
+
+    assert exc_info.value.error_code == "responses_codex_envelope_not_allowed"
+
+
+def test_default_responses_policy_rejects_visible_reasoning_without_public_id() -> None:
+    body = {
+        "model": "ordinary-model",
+        "input": [_visible_reasoning(id_marker="absent")],
+    }
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings()).apply(body)
+
+    assert exc_info.value.error_code == "responses_input_item_type_not_supported"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error_code"),
+    [
+        (lambda item: item.update(summary=[{"type": "summary_text", "text": 1}]), "responses_codex_reasoning_visible_invalid"),
+        (lambda item: item["content"].__setitem__(0, {"type": "unknown", "text": "x"}), "responses_codex_reasoning_visible_invalid"),
+        (lambda item: item["content"].__setitem__(0, {"type": "reasoning_text", "text": "\ud800"}), "responses_codex_reasoning_visible_invalid"),
+        (lambda item: item.update(encrypted_content="opaque"), "responses_codex_encrypted_reasoning_replay_invalid"),
+    ],
+)
+def test_0149_visible_reasoning_malformed_and_idless_encrypted_shapes_fail_closed(
+    mutation, error_code: str
+) -> None:
+    item = _visible_reasoning(id_marker="absent")
+    mutation(item)
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply_0149_visible(item)
+
+    assert exc_info.value.error_code == error_code
+
+
+def test_0149_visible_reasoning_bounds_are_enforced() -> None:
+    too_many_parts = _visible_reasoning(
+        content=[{"type": "text", "text": "x"}] * 65,
+    )
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply_0149_visible(too_many_parts)
+    assert exc_info.value.error_code == "responses_codex_reasoning_visible_too_large"
+
+    oversized_part = _visible_reasoning(
+        content=[{"type": "text", "text": "x" * 8193}],
+    )
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply_0149_visible(oversized_part)
+    assert exc_info.value.error_code == "responses_codex_reasoning_visible_too_large"
+
+
+def test_0147_visible_reasoning_without_id_remains_strict() -> None:
+    item = _reasoning()
+    item.pop("id")
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply_reasoning(_body([item]))
+    assert exc_info.value.error_code == "responses_codex_encrypted_reasoning_replay_invalid"
 def _function(name: str) -> dict[str, object]:
     return {
         "type": "function",

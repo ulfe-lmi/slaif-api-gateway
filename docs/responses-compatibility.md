@@ -39,6 +39,14 @@ output, and detailed usage. This remains mocked/state-machine conformance
 only: it does not add second-turn admission, replay ownership, visible-
 reasoning replay, or protected model qualification.
 
+The Codex 0.149 client module also recognizes the source-derived visible
+reasoning dialect on its exact Local pair. A reasoning item may have an absent
+or null ID, bounded `summary`, and bounded visible `content` containing only
+the reviewed text-part types; the gateway never fabricates an ID. An absent or
+null `encrypted_content` value is visible state, not encrypted replay. A
+non-null encrypted value remains on the independent ID-bound encrypted-replay
+path, and OpenAI/default/0.147 clients retain their existing strict rules.
+
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
 `POST /v1/embeddings` are implemented separately, while the bounded Realtime
