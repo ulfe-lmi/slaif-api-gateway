@@ -19,6 +19,9 @@ This does not rotate user gateway keys.
 
 - `OPENAI_UPSTREAM_API_KEY`
 - `OPENROUTER_API_KEY`
+- the provider-row service Bearer environment variable for `local-coding-v1`
+- `LOCAL_CODING_SIGNING_SECRET_V1` and
+  `LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1` for signed Local routes
 - Any `provider_configs.api_key_env_var` value referenced by enabled provider
   config rows.
 
@@ -74,6 +77,13 @@ This does not rotate user gateway keys.
    docker compose run --rm api slaif-gateway providers list --json
    docker compose run --rm api slaif-gateway routes list --json
    ```
+
+For `local-coding-v1`, rotate the service Bearer separately from the signing
+and identity-derivation secrets. Validate the complete route contract and
+secret-role separation before restarting the API. The signed mode uses
+process-local TTL/LRU replay protection under the single-worker contract;
+rotation does not establish restart-persistent or multi-worker replay
+guarantees.
 
 ## Rollback
 

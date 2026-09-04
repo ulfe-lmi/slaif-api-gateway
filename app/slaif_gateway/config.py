@@ -24,6 +24,21 @@ _PLACEHOLDER_SECRET_SUBSTRINGS = (
     "example",
     "dummy",
 )
+
+
+def validate_local_coding_secret(value: str, label: str) -> bytes:
+    if not isinstance(value, str):
+        raise TypeError(f"Local Coding {label} secret is invalid")
+    try:
+        encoded = value.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"Local Coding {label} secret is invalid") from exc
+    if not 32 <= len(encoded) <= 4096 or any(not 0x21 <= byte <= 0x7E for byte in encoded):
+        raise ValueError(f"Local Coding {label} secret is invalid")
+    return encoded
+
+
+_validate_local_coding_secret = validate_local_coding_secret
 _SUPPORTED_CHAT_AUDIO_INPUT_FORMATS = frozenset({"wav", "mp3"})
 _SUPPORTED_CHAT_AUDIO_OUTPUT_FORMATS = frozenset({"wav", "aac", "mp3", "flac", "opus", "pcm16"})
 _SUPPORTED_CHAT_AUDIO_OUTPUT_VOICES = frozenset(
@@ -126,6 +141,11 @@ class Settings(BaseSettings):
     TOKEN_HMAC_SECRET_V1: str | None = None
     TOKEN_HMAC_SECRET: str | None = None
     ADMIN_SESSION_SECRET: str | None = None
+
+    LOCAL_CODING_SIGNING_KEY_VERSION: str = "1"
+    LOCAL_CODING_SIGNING_SECRET_V1: str | None = None
+    LOCAL_CODING_IDENTITY_KEY_VERSION: str = "1"
+    LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1: str | None = None
 
     ONE_TIME_SECRET_ENCRYPTION_KEY: str | None = None
     ONE_TIME_SECRET_KEY_VERSION: str = "v1"
@@ -393,12 +413,70 @@ class Settings(BaseSettings):
         self._validate_calibration_settings()
         self.get_external_tool_operator_ceilings()
         self._validate_request_id_header()
+        self._validate_local_coding_secret_settings()
         self._validate_database_settings()
         self._validate_redis_rate_limit_settings()
         self._validate_admin_session_settings()
         self._validate_email_settings()
         self._validate_reconciliation_settings()
         return self
+
+    def local_coding_signing_secret(self) -> bytes:
+        """Return the dedicated active Local Coding signing secret."""
+        version = self.LOCAL_CODING_SIGNING_KEY_VERSION.strip()
+        if version != "1":
+            raise ValueError("Local Coding signing key version is unsupported")
+        value = self.LOCAL_CODING_SIGNING_SECRET_V1
+        if not value:
+            raise ValueError("Local Coding signing secret is unavailable")
+        return _validate_local_coding_secret(value, "signing")
+
+    def local_coding_identity_derivation_secret(self) -> bytes:
+        """Return the dedicated active Local Coding identity derivation secret."""
+        version = self.LOCAL_CODING_IDENTITY_KEY_VERSION.strip()
+        if version != "1":
+            raise ValueError("Local Coding identity key version is unsupported")
+        value = self.LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1
+        if not value:
+            raise ValueError("Local Coding identity derivation secret is unavailable")
+        return _validate_local_coding_secret(value, "identity derivation")
+
+    def _validate_local_coding_secret_settings(self) -> None:
+        if self.LOCAL_CODING_SIGNING_KEY_VERSION.strip() != "1":
+            raise ValueError("LOCAL_CODING_SIGNING_KEY_VERSION must be 1")
+        if self.LOCAL_CODING_IDENTITY_KEY_VERSION.strip() != "1":
+            raise ValueError("LOCAL_CODING_IDENTITY_KEY_VERSION must be 1")
+        signing = (
+            validate_local_coding_secret(self.LOCAL_CODING_SIGNING_SECRET_V1, "signing")
+            if self.LOCAL_CODING_SIGNING_SECRET_V1
+            else None
+        )
+        derivation = (
+            validate_local_coding_secret(
+                self.LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1,
+                "identity derivation",
+            )
+            if self.LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1
+            else None
+        )
+        forbidden = {
+            value
+            for value in (
+                self.TOKEN_HMAC_SECRET_V1,
+                self.TOKEN_HMAC_SECRET,
+                self.ADMIN_SESSION_SECRET,
+                self.ONE_TIME_SECRET_ENCRYPTION_KEY,
+                self.OPENAI_UPSTREAM_API_KEY,
+                self.OPENROUTER_API_KEY,
+            )
+            if value
+        }
+        if signing is not None and signing.decode("ascii") in forbidden:
+            raise ValueError("Local Coding signing secret must be separate")
+        if derivation is not None and derivation.decode("ascii") in forbidden:
+            raise ValueError("Local Coding identity derivation secret must be separate")
+        if signing is not None and derivation is not None and signing == derivation:
+            raise ValueError("Local Coding signing and identity secrets must be separate")
 
     def get_external_tool_operator_ceilings(self):
         """Return validated external-tool ceilings without enabling runtime tools."""

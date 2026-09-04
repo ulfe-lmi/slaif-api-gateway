@@ -39,6 +39,12 @@ Core invariants:
   metadata.
 - Missing streaming usage is not normal success. It must not be treated as
   zero-cost success or followed by a normal successful terminal marker.
+- A Local Coding public Responses request uses one ordinary
+  `strict_bounded` PostgreSQL reservation and one terminal ledger outcome.
+  Local internal compiler/governance capacity does not create Gateway
+  accounting rows. Local adapter-managed `tool_search` and `web_search`
+  candidates create no hosted-tool fee, external capability or destination,
+  fence, hold, provider, or route accounting facts.
 - Dual-gated Codex request-envelope admission counts the approved
   provider-forwarded envelope and message-ID material conservatively. Safe
   estimation evidence may contain field names and aggregate byte/token counts,

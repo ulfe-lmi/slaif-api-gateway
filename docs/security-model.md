@@ -71,6 +71,27 @@ audit rows, cookies, sessions, or logs, and it uses
 `OPENAI_ADMIN_DISCOVERY_API_KEY` for optional OpenAI admin discovery instead of
 `OPENAI_API_KEY`.
 
+## Local Coding identity and transport boundary
+
+The exact `codex-0.149-responses-v1` -> `local-coding-v1` pair is a static,
+non-authorizing selection. Gateway authentication, route/capability policy,
+quota, pricing, accounting, and privacy remain authoritative in core
+services. The Local adapter receives a separate provider-row service Bearer;
+it does not receive or forward the public Gateway Bearer, cookies, caller
+headers, or arbitrary internal headers.
+
+Signed mode derives principal, session, and repository values with
+domain-separated HMACs from authenticated owner/key truth, a corroborated
+transient Codex session namespace, and server-side repository scope. Each
+value is an unconditional `h` plus the complete unpadded base64url SHA-256
+digest and is checked against the Local peer grammar before signing. The
+signature covers the exact method, path, raw query, exact body bytes, derived
+fields, timestamp, and nonce. Derivation, signing, and service credentials
+are separate roles and are never stored or logged as values. Replay protection
+is process-local TTL/LRU under the reviewed single-worker contract; restart
+and multi-worker guarantees are not claimed. The evidence here is mocked and
+cross-contract only, not protected or production qualification.
+
 In production, enabled built-in OpenAI/OpenRouter providers require configured,
 non-placeholder upstream provider secrets. The server treats `OPENAI_API_KEY` as
 a client-facing gateway-key variable, not as the upstream OpenAI provider secret;

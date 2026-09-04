@@ -33,10 +33,10 @@ The initial default client module is the immutable `openai-default` module for
 ordinary Chat Completions and Responses create traffic. Versioned Codex client
 modules are separate static entries: `codex-0.147-responses-v1` owns the
 qualified legacy profile, while `codex-0.149-responses-v1` owns only its
-bounded structural request facts and is default-denied. The latter has no
-server-module pair. Pair metadata is finite compatibility data; it does not
-grant an endpoint, model, route, provider, capability, pricing mode, hosted
-tool, or key permission.
+bounded structural request facts and is default-denied except for the one
+reviewed `codex-0.149-responses-v1` → `local-coding-v1` pair. Pair metadata is
+finite compatibility data; it does not grant an endpoint, model, route,
+provider, capability, pricing mode, hosted tool, or key permission.
 
 ## Static registration
 
@@ -66,12 +66,17 @@ non-streaming Chat image adapter. Its fixture packaging, hashes, dimensions,
 manifest provenance, zero-EUR request pricing, authentication, accounting,
 privacy, retry, and error behavior are unchanged.
 
-Codex 0.149 client syntax is structurally captured and registered, but has no
-qualification, provider/model E2E, Local Coding server module, or compatible
-pair. Local Coding and OpenCode remain planned follow-on work. The 0.149
-module may return only bounded candidate facts for the observed adapter-managed
-`tool_search` and `web_search` declarations. Those candidates cannot enter
-hosted-tool policy, accounting, routing, or provider forwarding.
+Codex 0.149 client syntax is structurally captured and registered with exactly
+one static Local Coding server pair. The pair is non-authorizing: endpoint,
+model, route, provider, capability, pricing, quota, accounting, identity, and
+tool decisions remain Gateway-core facts. The Local Coding server module is a
+Responses-create/Responses-SSE transport only; it uses a separate service
+Bearer and, in signed mode, derived opaque HMAC identity fields. Its
+process-local TTL/LRU replay boundary requires the reviewed single-worker
+deployment contract. The observed `tool_search` and `web_search` declarations
+remain bounded adapter-managed candidates and never grant hosted authority.
+Advanced Codex reasoning, function/message stream lifecycles, visible
+reasoning, and ID-less replay are not implemented by this objective.
 
 Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. Identity hints from Codex metadata are transient

@@ -20,11 +20,22 @@ provider/client authority.
 Responses client selection is versioned and server-side: ordinary traffic
 uses `openai-default`, the qualified legacy Codex profile uses
 `codex-0.147-responses-v1`, and the structurally captured Codex 0.149 module is
-registered default-denied with no compatible server pair. Codex 0.149's
-observed `tool_search` and `web_search` declarations are transient
-adapter-managed candidate facts only. They never set the hosted web-search
-admission path, external-tool fence, pricing, or accounting state. No raw Codex
-identity/session/workspace metadata is retained.
+registered default-denied except for exactly one
+`codex-0.149-responses-v1 -> local-coding-v1` pair. Codex 0.149's observed
+`tool_search` and `web_search` declarations are transient adapter-managed
+candidate facts only. They never set hosted web-search admission, external-tool
+fence, pricing, or accounting state. No raw Codex identity/session/workspace
+metadata is retained.
+
+The `local-coding-v1` pair is a non-authorizing, Responses-only server
+transport. It substitutes a distinct provider-row service Bearer, signs the
+exact canonical UTF-8 request bytes with bounded derived HMAC identities when
+the route selects signed mode, and accepts only the reviewed single-worker,
+process-local TTL/LRU replay contract. Local Coding tool filtering and
+accounting remain independent Gateway-core decisions. This objective proves
+mocked official-client behavior and cross-contract conformance only; it does
+not implement advanced Codex reasoning/function/message streams, visible
+reasoning, ID-less replay, or protected model qualification.
 
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and

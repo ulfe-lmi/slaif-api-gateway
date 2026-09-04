@@ -47,6 +47,19 @@ retain every encryption key version needed by unconsumed rows during rotation.
 Rotate any provider or SMTP secret that is accidentally committed, logged, or
 shared.
 
+## Local Coding route configuration
+
+The exact `local-coding-v1` route is selected only when its complete route
+contract is present and the provider kind is `openai_compatible`. The provider
+row references a separate Local service Bearer through its environment-variable
+name; the public Gateway Bearer is never reused. Signed routes additionally
+use distinct `LOCAL_CODING_SIGNING_SECRET_V1` and
+`LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1` values, each validated as bounded
+visible-ASCII secret material and kept distinct from provider, Gateway-key,
+admin-session, and one-time-secret roles. The signed contract is
+`single_worker` with process-local `process_local_ttl_lru` replay state; it does
+not claim restart-persistent or multi-worker replay protection.
+
 ## Generating Local Runtime Secrets
 
 For local setup or initial self-hosted bootstrap, use the CLI to generate one

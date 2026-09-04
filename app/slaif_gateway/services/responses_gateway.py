@@ -56,6 +56,11 @@ from slaif_gateway.modules.clients.registry import (
     resolve_responses_client_module,
 )
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
+from slaif_gateway.modules.servers.local_coding.contract import (
+    LOCAL_CODING_SERVER_MODULE_ID,
+    parse_local_coding_route_contract,
+)
+from slaif_gateway.modules.servers.local_coding.identity import derive_request_identity
 from slaif_gateway.modules.servers.registry import (
     ensure_client_module_has_server_pair,
     ensure_client_server_pair,
@@ -303,6 +308,56 @@ def _build_safe_responses_input_tokens_upstream_body(
             error_type="invalid_request_error",
             code="upstream_payload_not_approved",
         ) from exc
+
+
+def _build_local_coding_server_context(
+    *,
+    client_request,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    settings: Settings,
+) -> dict[str, object] | None:
+    try:
+        descriptor = resolve_server_module(
+            route.provider,
+            getattr(route, "provider_kind", None),
+            getattr(route, "capabilities", None),
+        )
+        if descriptor.module_id != LOCAL_CODING_SERVER_MODULE_ID:
+            return None
+        contract = parse_local_coding_route_contract(route.capabilities)
+        if contract is None:
+            raise ValueError("Local Coding route contract is unavailable")
+        policy = authenticated_key.responses_policy
+        repository_scope = policy.get("local_coding_repository_scope") if isinstance(policy, Mapping) else None
+        identity = derive_request_identity(
+            owner_id=authenticated_key.owner_id,
+            gateway_key_id=authenticated_key.gateway_key_id,
+            identity_hints=getattr(client_request, "identity_hints", {}),
+            repository_scope=repository_scope if isinstance(repository_scope, str) else None,
+            route=contract,
+            derivation_secret=(
+                settings.local_coding_identity_derivation_secret()
+                if contract.identity_mode == "signed_identity_v1"
+                else None
+            ),
+        )
+    except (ProviderConfigurationError, TypeError, ValueError) as exc:
+        raise OpenAICompatibleError(
+            "The Local Coding identity contract is unavailable for this request.",
+            status_code=503,
+            error_type="server_error",
+            code="local_coding_identity_unavailable",
+        ) from exc
+    if identity is None:
+        return {"identity_mode": "static", "route": contract.route_name}
+    return {
+        "identity_mode": identity.identity_mode,
+        "principal": identity.principal,
+        "session": identity.session,
+        "repository": identity.repository,
+        "route": identity.route,
+    }
 
 
 def _build_safe_responses_compact_upstream_body(
@@ -692,6 +747,7 @@ async def handle_response_compact(
         request=request,
     )
     _ensure_client_server_pair(client_module.module_id, route)
+    _reject_local_coding_auxiliary_endpoint(route)
     if codex_compaction_requested:
         try:
             policy_result = apply_codex_route_limits(
@@ -902,6 +958,12 @@ async def handle_response_create(
             allow_codex_compaction_replay=allow_codex_compaction,
             codex_client_tool_taxonomy=codex_client_tool_taxonomy,
             allow_external_tool_request=allow_external_tool_request,
+            adapter_managed_declaration_candidates=frozenset(
+                normalized_client_request.adapter_managed_declaration_candidates
+            ),
+            adapter_managed_declaration_shapes=(
+                normalized_client_request.adapter_managed_declaration_shapes
+            ),
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
@@ -944,6 +1006,12 @@ async def handle_response_create(
         request=request,
     )
     _ensure_client_server_pair(client_module.module_id, route)
+    local_coding_server_context = _build_local_coding_server_context(
+        client_request=normalized_client_request,
+        authenticated_key=authenticated_key,
+        route=route,
+        settings=settings,
+    )
     try:
         enforce_openai_compatible_request_boundary(
             policy_result.effective_body,
@@ -1108,6 +1176,7 @@ async def handle_response_create(
                     ),
                     external_web_search_admission=external_web_search_admission,
                     external_tool_pricing=quota.external_tool_pricing,
+                    server_context=local_coding_server_context,
                 )
                 return response
             except ProviderError as exc:
@@ -1160,6 +1229,7 @@ async def handle_response_create(
             endpoint=RESPONSES_PROVIDER_ENDPOINT,
             body=upstream_body,
             request_id=request_id,
+            server_context=local_coding_server_context,
         )
         provider_started = False
         try:
@@ -1876,7 +1946,11 @@ def _openai_error_from_client_module_error(exc: ModuleSelectionError) -> OpenAIC
 
 def _ensure_client_server_pair(client_module_id: str, route: RouteResolutionResult) -> None:
     try:
-        descriptor = resolve_server_module(route.provider, getattr(route, "provider_kind", None))
+        descriptor = resolve_server_module(
+            route.provider,
+            getattr(route, "provider_kind", None),
+            getattr(route, "capabilities", None),
+        )
         ensure_client_server_pair(client_module_id, descriptor.module_id)
     except ProviderConfigurationError as exc:
         raise OpenAICompatibleError(
@@ -1897,6 +1971,29 @@ def _ensure_client_module_pair_exists(client_module_id: str) -> None:
             error_type="invalid_request_error",
             code="incompatible_client_server_pair",
         ) from exc
+
+
+def _reject_local_coding_auxiliary_endpoint(route: RouteResolutionResult) -> None:
+    try:
+        descriptor = resolve_server_module(
+            route.provider,
+            getattr(route, "provider_kind", None),
+            getattr(route, "capabilities", None),
+        )
+    except ProviderConfigurationError as exc:
+        raise OpenAICompatibleError(
+            "The selected server module is unavailable for this endpoint.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="local_coding_endpoint_not_supported",
+        ) from exc
+    if descriptor.module_id == LOCAL_CODING_SERVER_MODULE_ID:
+        raise OpenAICompatibleError(
+            "The Local Coding server module supports Responses create only.",
+            status_code=400,
+            error_type="invalid_request_error",
+            code="local_coding_endpoint_not_supported",
+        )
 
 
 def _verify_codex_replay_route(
@@ -2284,6 +2381,7 @@ def _streaming_responses_response(
     stream_validation_profile: ResponsesStreamValidationProfile | None = None,
     external_web_search_admission=None,
     external_tool_pricing=None,
+    server_context: Mapping[str, object] | None = None,
 ) -> StreamingResponse:
     adapter = get_provider_adapter(route, settings)
     provider_request = ProviderRequest(
@@ -2292,6 +2390,7 @@ def _streaming_responses_response(
         endpoint=RESPONSES_PROVIDER_ENDPOINT,
         body=upstream_body,
         request_id=request_id,
+        server_context=server_context,
     )
 
     async def _events():
