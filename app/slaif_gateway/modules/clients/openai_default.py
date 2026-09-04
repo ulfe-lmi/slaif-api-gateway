@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from dataclasses import replace
 
 from slaif_gateway.modules.contracts import (
     CanonicalClientRequest,
@@ -52,7 +53,8 @@ class OpenAIDefaultClientModule:
         self,
         body: Mapping[str, object],
     ) -> CanonicalClientRequest:
-        return self.normalize("/v1/responses", body)
+        request = self.normalize("/v1/responses", body)
+        return replace(request, identity_hints=_identity_hints(body.get("client_metadata")))
 
     def stream_profile(self, body: Mapping[str, object]) -> str | None:
         _ = body
@@ -61,3 +63,14 @@ class OpenAIDefaultClientModule:
     def encrypted_reasoning_output_requested(self, body: Mapping[str, object]) -> bool:
         _ = body
         return False
+
+
+def _identity_hints(value: object) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        return {}
+    allowed = {"session_id", "thread_id", "turn_id", "root_turn_id"}
+    return {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str) and key in allowed and isinstance(item, str) and item
+    }

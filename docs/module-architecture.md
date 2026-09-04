@@ -30,8 +30,9 @@ The initial default client module is the immutable `openai-default` module for
 ordinary Chat Completions and Responses create traffic. Versioned Codex client
 modules are separate static entries: `codex-0.147-responses-v1` owns the
 qualified legacy profile, while `codex-0.149-responses-v1` owns only its
-bounded structural request facts and is default-denied. The latter has no
-server-module pair. Pair metadata is finite compatibility data; it does not
+bounded structural request facts and is default-denied. The latter has exactly
+one reviewed `local-coding-v1` server-module pair. Pair metadata is finite
+compatibility data; it does not
 grant an endpoint, model, route, provider, capability, pricing mode, hosted
 tool, or key permission.
 
@@ -64,13 +65,40 @@ manifest provenance, zero-EUR request pricing, authentication, accounting,
 privacy, retry, and error behavior are unchanged.
 
 Codex 0.149 client syntax is structurally captured and registered, but has no
-qualification, provider/model E2E, Local Coding server module, or compatible
-pair. Local Coding and OpenCode remain planned follow-on work. The 0.149
-module may return only bounded candidate facts for the observed adapter-managed
-`web_search` declaration; unobserved `tool_search` remains rejected. It cannot enter hosted-tool policy,
-accounting, routing, or provider forwarding.
+qualification or provider/model E2E. Its only compatible pair is the static
+`codex-0.149-responses-v1` → `local-coding-v1` entry, and that pair still
+requires the exact server-side key metadata and route contract. The static
+`local-coding-v1` server module is now implemented for an exact
+`openai_compatible` route contract with deterministic/mock-conformance only;
+its adapter owns only Responses create and Responses streaming and rejects
+every other ProviderAdapter operation before HTTP. OpenCode remains planned
+follow-on work. The 0.149 module may return only bounded candidate facts for
+the exact captured `web_search` and `tool_search` declaration shapes; those
+facts reach only the exact Local Coding adapter after core pair/route gates.
+They cannot enter hosted-tool policy, hosted accounting, or provider authority.
+
+Local Coding is the only server module permitted to construct the reviewed
+private service Bearer and signed-identity-v1 headers. It receives only the
+core-resolved provider request and opaque derived identity facts; it cannot
+authenticate public keys, select routes, reserve quota, or persist identity.
+Its signed mode is explicitly single-worker/process-local replay protection.
+The core identity boundary is tested with authenticated owner UUID, transient
+session hint, server-side repository scope, exact resolved route contract, and
+dedicated derivation secret; this is not a Codex-composed E2E qualification.
 
 Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. Identity hints from Codex metadata are transient
 untrusted input and are never stored, logged, audited, exported, hashed, or
 forwarded.
+
+For the Codex 0.149 v3 module, `client_metadata.session_id` and
+`client_metadata.thread_id` must be canonical equal UUID aliases. The module
+exposes only the transient internal `session_id` hint; installation, root-turn,
+turn, cache, item, and other metadata are dropped. Local Coding derives its
+opaque session from authenticated owner and Gateway-key facts plus this
+corroborated thread namespace under a domain-separated derivation version.
+
+The 155-f acceptance verifier composes only the reviewed static Gateway and
+Local Coding modules with the exact open PR heads. It does not introduce a
+new module, endpoint, header, session store, or provider authority; the real
+Codex thread remains a namespace below the authenticated Gateway owner/key.

@@ -24,7 +24,8 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
     """Return an adapter for a configured provider or resolved route."""
     normalized = _provider_name(provider)
     provider_kind = _provider_kind(provider)
-    descriptor = resolve_server_module(normalized, provider_kind)
+    route_capabilities = _first_attr(provider, "capabilities", "route_capabilities")
+    descriptor = resolve_server_module(normalized, provider_kind, route_capabilities)
     ensure_client_server_pair(DEFAULT_CLIENT_MODULE_ID, descriptor.module_id)
 
     base_url = _provider_base_url(provider)
@@ -47,10 +48,10 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
             error_code="invalid_provider_configuration",
         )
         _validate_module_base_url(base_url)
-    elif descriptor.module_id == "openai-compatible":
+    elif descriptor.module_id in {"openai-compatible", "local-coding-v1"}:
         if not base_url:
             raise ProviderConfigurationError(
-                "Generic OpenAI-compatible provider requires a base URL",
+                "OpenAI-compatible server module requires a base URL",
                 provider=normalized,
                 error_code="invalid_provider_configuration",
             )
@@ -68,6 +69,9 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
         base_url=base_url,
         timeout_seconds=timeout_seconds,
         max_retries=max_retries or 0,
+        route_capabilities=(
+            route_capabilities if isinstance(route_capabilities, dict) else None
+        ),
     )
 
 

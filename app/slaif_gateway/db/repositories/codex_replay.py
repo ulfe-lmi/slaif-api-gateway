@@ -98,6 +98,27 @@ class CodexReplayReferencesRepository:
         )
         return list(result.scalars().all())
 
+    async def list_active_by_call_digests(
+        self,
+        *,
+        gateway_key_id: uuid.UUID,
+        call_digests: Sequence[tuple[str, str]],
+        now: datetime,
+    ) -> list[CodexReplayReference]:
+        if not call_digests:
+            return []
+        result = await self._session.execute(
+            select(CodexReplayReference).where(
+                CodexReplayReference.gateway_key_id == gateway_key_id,
+                CodexReplayReference.expires_at > now,
+                tuple_(
+                    CodexReplayReference.item_kind,
+                    CodexReplayReference.call_id_hmac,
+                ).in_(list(call_digests)),
+            )
+        )
+        return list(result.scalars().all())
+
     async def upsert_many(
         self,
         records: Sequence[CodexReplayReferenceInsert],

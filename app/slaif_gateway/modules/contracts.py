@@ -67,6 +67,16 @@ class ResponsesClientPolicySpec:
     taxonomy_for: Callable[[object], tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None]
     taxonomy_0148: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
     taxonomy_id_0148: str
+    function_call_item_id_optional: bool = False
+    custom_tool_call_item_id_optional: bool = False
+    allow_idless_tool_call_replay: bool = False
+    reasoning_visible_id_optional: bool = False
+    reasoning_visible_content_fields: frozenset[str] = frozenset()
+    reasoning_visible_content_types: frozenset[str] = frozenset()
+    max_reasoning_visible_parts: int = 0
+    max_reasoning_visible_part_bytes: int = 0
+    max_reasoning_visible_bytes: int = 0
+    allow_idless_encrypted_reasoning: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +89,7 @@ class CanonicalClientRequest:
     body: Mapping[str, object]
     capability_intents: tuple[str, ...] = ()
     adapter_managed_declaration_candidates: tuple[str, ...] = ()
+    adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     stream_profile: str | None = None
     profile_facts: Mapping[str, str] = field(default_factory=dict)
     identity_hints: Mapping[str, str] = field(default_factory=dict)

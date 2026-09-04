@@ -59,11 +59,35 @@ keys, token hashes, prompts, completions, or raw request/response bodies.
 Versioned client modules are also trust-limited. Module ID/version/fixture
 digest are reviewed server-side facts; malformed or mismatched metadata fails
 closed. Codex 0.149 identity hints remain transient and untrusted, while its
-search declaration candidates cannot select a route, provider, hosted-tool
-fence, pricing rule, quota reservation, accounting category, or external
-authority. No raw Codex installation, session, thread, turn, workspace, or
+search declaration candidates cannot select or widen a route, provider,
+hosted-tool fence, pricing rule, quota reservation, accounting category, or
+external authority. They can reach only the exact statically selected Local
+Coding server adapter after the core gates pass. No raw Codex installation, session, thread, turn, workspace, or
 request-content metadata is stored, logged, audited, exported, hashed, or
-forwarded.
+forwarded. The Codex 0.149 v3 module accepts only canonical equal
+`session_id`/`thread_id` UUID aliases and exposes one transient `session_id`
+namespace hint. The authenticated owner and Gateway key remain authoritative;
+the client thread cannot authenticate, select tenancy, own accounting, prove
+replay, or act as an idempotency key. Local Coding's opaque session derivation
+is domain-separated and includes the authenticated Gateway key, while
+installation-wide and per-turn metadata fail closed as session context.
+
+The 155-f verifier may source the protected credential privately for the
+Local Coding-to-Qwen process only. It never passes that value to Gateway or
+Codex, and it emits no endpoint, credential, body, identity, nonce, signature,
+prompt, source, or model-output values.
+Local Coding adds three separate roles: the public Gateway bearer, the
+configured Local Coding service Bearer, and dedicated versioned identity
+derivation/signing secrets. The roles are validated as distinct and are never
+logged, persisted, forwarded as a client credential, or reused for one
+another. Signed identity contains only derived opaque principal/session/
+repository values; raw owner, key, email, workspace, and client hints remain
+transient. Signed v1 replay protection is process-local TTL/LRU and the route
+must declare single-worker deployment; overlapping key rotation and
+multi-worker/restart-persistent replay protection are not claimed. The service
+role is also rejected when it equals a known Gateway/admin/one-time/provider
+secret. The core derivation boundary is tested independently of adapter and
+pinned-app conformance, and no Codex-composed E2E authority is implied.
 Provider catalog proposal tooling follows the same rule: it reads official
 provider docs/APIs and writes proposal artifacts to the operator's output
 directory only. It does not write raw provider pages/responses to PostgreSQL,

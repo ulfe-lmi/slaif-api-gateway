@@ -9,6 +9,13 @@ Rotate the upstream provider key used by the gateway to call OpenAI,
 OpenRouter, or a provider config row that references an environment variable.
 This does not rotate user gateway keys.
 
+For `local-coding-v1`, rotate the provider-row service Bearer separately from
+`LOCAL_CODING_SIGNING_SECRET_V1` and
+`LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1`. Signed identity v1 has no key ID;
+use a coordinated drain, disable, update, restart, re-enable procedure. Do
+not claim overlapping rotation or multi-worker/restart-persistent replay
+protection.
+
 ## When To Use
 
 - An upstream provider key may have leaked.

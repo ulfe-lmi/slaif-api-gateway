@@ -1,0 +1,28 @@
+{
+  "source": {
+    "repository": "ulfe-lmi/slaif-local-coding",
+    "commit": "356be8345dd71d6fddf829278651d18e485731d4",
+    "source_fixture_sha256": "58ff37d43778895b198f687aa4c54cbe41953809db8af97e7357c5d791c111e6"
+  },
+  "contract": {
+    "schema": "gateway-local-coding-responses-tool-filter-v1",
+    "codex_version": "0.149.0",
+    "observed_top_level_tool_types": ["function", "custom", "tool_search", "web_search", "namespace"],
+    "gateway_precondition": {
+      "exact_authenticated_local_coding_route_may_pass_bounded_codex_envelope": true,
+      "provider_hosted_web_search_execution_granted": false,
+      "other_providers_or_routes_allowed": false
+    },
+    "adapter_postcondition": {
+      "policy_version": "responses-tool-policy-v1",
+      "drop_exact_types_before_qwen": ["tool_search", "web_search"],
+      "preserve_function_custom_and_local_tools": true,
+      "preserve_tool_calls_and_results": true,
+      "explicit_dropped_tool_choice_rejected": true
+    },
+    "accounting": {
+      "public_request_reservation_and_ledger_rows": 1,
+      "compiler_calls_are_internal_capacity_only": true
+    }
+  }
+}

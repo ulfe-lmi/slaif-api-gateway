@@ -15,11 +15,41 @@ This document describes implemented forwarding behavior only.
 
 Responses client modules are selected from reviewed server-side key/profile
 metadata before provider construction. `codex-0.147-responses-v1` has one
-explicit OpenAI server pair. `codex-0.149-responses-v1` has no compatible
-server pair and therefore cannot reach this forwarding contract. Its
-The observed adapter-managed `web_search` candidate is never converted into
-hosted-tool admission, external-tool pricing, or provider payload authority by
-the Gateway; unobserved `tool_search` remains rejected.
+explicit OpenAI server pair. `codex-0.149-responses-v1` has exactly one
+explicit `local-coding-v1` pair and reaches this forwarding contract only when
+the server-side module metadata and exact Local Coding route contract match.
+Its observed adapter-managed `web_search` and `tool_search` candidates are
+transient declarations for that adapter only; they are never converted into
+hosted-tool admission, external-tool pricing, or provider authority by the
+Gateway.
+
+`local-coding-v1` is a distinct static server module selected only for an exact
+top-level `local_coding` route contract and provider kind
+`openai_compatible`. It serializes the final canonical Responses mapping once
+as deterministic UTF-8 JSON, signs the SHA-256 of those exact bytes when the
+route uses signed identity v1, and sends the same bytes with `content=...`.
+It constructs a separate Local Coding service Bearer from the provider row and
+never forwards caller Authorization, cookies, `X-SLAIF-*`, or other internal
+headers. It does not add a global header allowlist or create a hosted
+provider/accounting path for Codex 0.149. The adapter is Responses-create-only:
+both non-streaming
+`/v1/responses` and Responses SSE are supported, while Chat, input-token,
+compact, stored-response, Conversations, Audio, Embeddings, Realtime, and all
+other ProviderAdapter operations fail before HTTP. Construction rejects a
+service Bearer that equals a signing, derivation, or known core secret using
+the bounded `local_coding_secret_roles_not_separate` configuration error.
+Core-derived signed identity is boundary-tested from authenticated owner truth,
+authenticated Gateway-key truth, the one corroborated Codex 0.149 thread
+namespace, server-side repository scope, and resolved route facts. The client
+thread remains an untrusted namespace below Gateway authority and is not a
+Codex-composed E2E claim. The request's raw client metadata is dropped before
+the canonical provider body is built.
+
+The bounded 155-f composition uses the exact `codex-0.149-responses-v1` to
+`local-coding-v1` pair and the protected Qwen route only through task-local
+configuration. The verifier keeps the Gateway, Local Coding, and protected
+provider credentials in separate process roles and records only safe transport
+and accounting facts.
 
 Operator-defined generic backend discovery is a separate explicit operator
 workflow. It issues one bounded `GET <base_url>/models` using the configured

@@ -4,15 +4,26 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
-
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.facial_scoring import FacialScoringAdapter
+from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
 from slaif_gateway.providers.openai_compatible import OpenAICompatibleProviderAdapter
 from slaif_gateway.providers.openrouter import OpenRouterProviderAdapter
 from slaif_gateway.schemas.routing import RouteResolutionResult
+
+LOCAL_CODING_ROUTE_CAPABILITIES = {
+    "local_coding": {
+        "contract_version": "local-coding-v1",
+        "route_name": "factory-test",
+        "tool_policy_version": "responses-tool-policy-v1",
+        "identity_mode": "signed_identity_v1",
+        "replay_mode": "process_local_ttl_lru",
+        "deployment_mode": "single_worker",
+    }
+}
 
 
 def test_factory_returns_openai_adapter() -> None:
@@ -163,6 +174,33 @@ def test_factory_builds_generic_adapter_with_operator_slug(monkeypatch) -> None:
     assert adapter.provider_name == "lan-qwen-text"
     assert adapter._base_url == "http://qwen.lan:8000/v1"
     assert adapter._api_key == "operator-key"
+
+
+def test_factory_builds_local_coding_responses_only_adapter_from_route_metadata(monkeypatch) -> None:
+    service_secret = "factory-local-coding-service-bearer-secret-0123456789"
+    monkeypatch.setenv("FACTORY_LOCAL_CODING_KEY", service_secret)
+    route = SimpleNamespace(
+        provider="local-model",
+        provider_kind="openai_compatible",
+        provider_base_url="http://local-coding.lan/v1",
+        provider_api_key_env_var="FACTORY_LOCAL_CODING_KEY",
+        provider_timeout_seconds=12,
+        provider_max_retries=0,
+        capabilities=LOCAL_CODING_ROUTE_CAPABILITIES,
+    )
+
+    adapter = get_provider_adapter(
+        route,
+        Settings(
+            LOCAL_CODING_SIGNING_SECRET_V1="factory-local-coding-signing-secret-0123456789",
+            LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1="factory-local-coding-derivation-secret-0123456789",
+        ),
+    )
+
+    assert isinstance(adapter, LocalCodingAdapter)
+    assert not isinstance(adapter, OpenAIProviderAdapter)
+    assert adapter._api_key == service_secret
+    assert adapter._base_url == "http://local-coding.lan/v1"
 
 
 def test_factory_rejects_generic_bad_url_and_client_env_name(monkeypatch) -> None:

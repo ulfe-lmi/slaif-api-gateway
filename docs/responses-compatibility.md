@@ -17,11 +17,49 @@ provider/client authority.
 Responses client selection is versioned and server-side: ordinary traffic
 uses `openai-default`, the qualified legacy Codex profile uses
 `codex-0.147-responses-v1`, and the structurally captured Codex 0.149 module is
-registered default-denied with no compatible server pair. Codex 0.149's
-observed `web_search` declaration is a transient adapter-managed candidate fact
-only; unobserved `tool_search` remains rejected. It never
+registered default-denied with exactly one `local-coding-v1` server pair.
+Codex 0.149's observed `web_search` and `tool_search` declarations are
+transient adapter-managed candidate facts only; they never
 set the hosted web-search admission path, external-tool fence, pricing, or
-accounting state. No raw Codex identity/session/workspace metadata is retained.
+accounting state. Its existing identity contract requires equal canonical UUID
+aliases in `client_metadata.session_id` and `client_metadata.thread_id`, then
+exposes only one transient `session_id` namespace hint. No raw Codex
+identity/session/workspace metadata is retained.
+
+The exact `codex-0.149-responses-v1 -> local-coding-v1` pair also carries the
+version-owned rust-v0.149.0 visible-reasoning dialect. Its reasoning `id` may be
+absent or null, while bounded `summary_text`, `reasoning_text`, and `text`
+parts are preserved as valid UTF-8, including ordinary newline and tab
+characters. No ID is generated, visible reasoning is transient, and an
+ID-less encrypted item remains denied. Ordinary OpenAI Responses and Codex
+0.147 retain the required reasoning ID; this narrow dialect does not broaden
+hosted tools, replay authority, or other client/server pairs.
+
+The full-stack acceptance verifier is a disposable qualification attempt for
+the exact open Gateway and Local Coding heads. It does not broaden the
+Responses compatibility claim to persistent replay, production deployment,
+hostile same-key isolation, release readiness, or certification.
+
+The `local-coding-v1` server module is a separate exact-route transport
+foundation. It is default-denied unless the resolved route has the complete
+versioned Local Coding contract and provider kind `openai_compatible`. Its
+signed identity is bound to exact method/path/raw-query/body bytes and is
+verified by the pinned Local Coding contract. The Codex 0.149 pair does not
+authorize hosted tool execution or hosted-tool accounting. The Local Coding adapter is
+Responses-create-only: non-streaming create and typed Responses streaming are
+the only transport operations; every other ProviderAdapter operation fails
+closed before HTTP. Core identity derivation is boundary-tested from
+authenticated owner/Gateway-key/session/repository/route facts, while adapter and pinned
+application conformance remains separate from any Codex-composed E2E claim.
+
+For the exact signed `local-coding-v1` contract, each derived principal,
+session, and repository value is an unconditional `h`-prefixed, unpadded
+base64url encoding of the complete 256-bit HMAC digest. The prefix guarantees
+the Local-v1 alphanumeric-leading grammar without reducing digest entropy;
+HMAC pseudonymization is not anonymity. Signed route names use the same
+`[A-Za-z0-9][A-Za-z0-9_-]{0,255}` grammar and are rejected before signing or
+forwarding when invalid. Static route parsing retains its existing route-name
+grammar.
 
 This document defines the RC2-beta support boundary for Responses API work.
 It does not define feature-full RC2 by itself; standalone `/v1/audio/*` and
@@ -208,7 +246,19 @@ immediately preceding matching HMAC-owned call and `call_id`. Absent IDs retain
 the prior canonical shape. Ordinary outputs, malformed or duplicate IDs,
 unknown fields, orphan/reordered/cross-type pairs, and linkage mismatches remain
 denied. Raw output IDs are transient provider input and never enter safe
-evidence or persistence.
+evidence or persistence; replay-reference rows contain only versioned HMAC
+digests and bounded ownership metadata.
+
+For the exact `codex-0.149-responses-v1` -> `local-coding-v1` pair only, the
+pinned Codex 0.149 client may omit or send `null` for a function/custom
+tool-call item `id`. The mandatory `call_id` remains the authentication anchor:
+the gateway performs a same-key, same-kind, unexpired HMAC lookup, requires one
+row and exact HMAC-key-version binding, then checks the stored tool and route
+facts before admission. It never invents an item ID or falls back from a
+present malformed/wrong item ID. Other clients, Codex 0.147, reasoning, compact
+history, hosted routes, and unreviewed server pairings remain strict. The
+versioned HMAC digest is private replay-control metadata; raw IDs and digests
+are never logged or exposed.
 
 The pinned V1 compact request does not carry `max_output_tokens`. SLAIF keeps
 that field absent in the provider request while using the validated Codex route

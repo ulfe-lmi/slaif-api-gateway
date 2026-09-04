@@ -7,7 +7,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.clients.registry import (
     CLIENT_MODULE_REGISTRY,
@@ -48,8 +47,10 @@ def test_module_registries_are_literal_and_fail_closed() -> None:
         "openrouter",
         "openai-compatible",
         "facial_scoring",
+        "local-coding-v1",
     }
     assert ClientServerPair("openai-default", FACIAL_SCORING_SERVER_MODULE_ID) in CLIENT_SERVER_COMPATIBILITY
+    assert ClientServerPair("openai-default", "local-coding-v1") in CLIENT_SERVER_COMPATIBILITY
     with pytest.raises(TypeError):
         CLIENT_MODULE_REGISTRY["dynamic"] = DEFAULT_CLIENT_MODULE  # type: ignore[index]
     with pytest.raises(ModuleSelectionError):
@@ -213,7 +214,7 @@ def test_server_modules_have_no_gateway_authority_imports_or_dynamic_loading() -
 
 
 def test_default_client_helper_uses_registry_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
-    import slaif_gateway.modules.clients.registry as registry
+    from slaif_gateway.modules.clients import registry
 
     calls: list[str] = []
 
@@ -263,6 +264,29 @@ def test_provider_factory_owns_server_registry_callsite() -> None:
         "get_module_adapter",
     }
     assert called_names.isdisjoint(forbidden_direct_construction)
+
+
+def test_local_coding_server_is_responses_only_and_does_not_reuse_openai_transport() -> None:
+    path = ROOT / "app/slaif_gateway/modules/servers/local_coding/adapter.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported_modules = _imported_modules(path)
+    assert "slaif_gateway.providers.openai" not in imported_modules
+    assert "slaif_gateway.providers.base" in imported_modules
+    called_names = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert called_names.isdisjoint({"_post_json", "_stream_sse"})
+    adapter_classes = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "LocalCodingAdapter"
+    ]
+    assert len(adapter_classes) == 1
+    assert [
+        base.id for base in adapter_classes[0].bases if isinstance(base, ast.Name)
+    ] == ["ProviderAdapter"]
 
 
 def test_ignored_cache_files_are_absent_from_git_diff() -> None:

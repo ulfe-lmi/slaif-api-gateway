@@ -16,12 +16,16 @@ from tests.e2e.test_openai_python_client_chat import (
     FAKE_OPENAI_UPSTREAM_KEY,
     _configure_runtime_environment,
     _free_port,
-    _load_accounting_state,
     _load_accounting_side_effect_counts,
+    _load_accounting_state,
     _run_uvicorn_server,
     _test_database_url,
 )
 from tests.integration.db_test_utils import run_alembic_upgrade_head
+from slaif_gateway.modules.clients.codex_0149 import (
+    CODEX_0149_CLIENT_MODULE_VERSION,
+    CODEX_0149_FIXTURE_SHA256,
+)
 
 TEST_RESPONSES_MODEL = "gpt-responses-text-test"
 RESPONSES_ENDPOINT = "/v1/responses"
@@ -41,6 +45,149 @@ OUTPUT_TEXT = "Hello from mocked Responses upstream"
 
 def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
+def _codex_vllm_usage(input_tokens: int, output_tokens: int) -> dict[str, object]:
+    return {
+        "input_tokens": input_tokens,
+        "input_tokens_details": {
+            "cached_tokens": 0,
+            "input_tokens_per_turn": [input_tokens],
+            "cached_tokens_per_turn": [0],
+        },
+        "output_tokens": output_tokens,
+        "output_tokens_details": {
+            "reasoning_tokens": 0,
+            "tool_output_tokens": 0,
+            "output_tokens_per_turn": [output_tokens],
+            "tool_output_tokens_per_turn": [0],
+        },
+        "total_tokens": input_tokens + output_tokens,
+    }
+
+
+def _codex_standard_stream(response: dict[str, object]) -> str:
+    response_id = response["id"]
+    stream_item_id = "stream_message_1"
+    return "".join(
+        _sse(event)
+        for event in (
+            {
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {"id": response_id, "status": "in_progress"},
+            },
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": stream_item_id,
+                    "status": "in_progress",
+                    "role": "assistant",
+                    "content": [],
+                    "phase": None,
+                },
+            },
+            {
+                "type": "response.content_part.added",
+                "sequence_number": 2,
+                "item_id": stream_item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": "",
+                    "annotations": [],
+                    "logprobs": [],
+                },
+            },
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 3,
+                "item_id": stream_item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "answer",
+                "logprobs": [],
+            },
+            {
+                "type": "response.output_text.done",
+                "sequence_number": 4,
+                "item_id": stream_item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "text": "answer",
+                "logprobs": [],
+            },
+            {
+                "type": "response.content_part.done",
+                "sequence_number": 5,
+                "item_id": stream_item_id,
+                "output_index": 0,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": "answer",
+                    "annotations": [],
+                    "logprobs": None,
+                },
+            },
+            {
+                "type": "response.output_item.done",
+                "sequence_number": 6,
+                "output_index": 0,
+                "item": {
+                    "type": "message",
+                    "id": stream_item_id,
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "answer",
+                            "annotations": [],
+                            "logprobs": None,
+                        }
+                    ],
+                    "phase": None,
+                    "summary": [],
+                },
+            },
+            {
+                "type": "response.completed",
+                "sequence_number": 7,
+                "response": response,
+            },
+        )
+    )
+
+
+def _assert_strict_bounded_no_external_facts(state: object) -> None:
+    reservation = state.reservation
+    assert reservation.quota_mode == "strict_bounded"
+    assert reservation.external_tool_capabilities == []
+    assert reservation.external_tool_destination_ids == []
+    assert reservation.external_tool_provider is None
+    assert reservation.external_tool_route_id is None
+    assert state.gateway_key.external_tool_fence_state == "none"
+    assert state.gateway_key.external_tool_fence_reservation_id is None
+
+    def keys(value: object):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield str(key).lower()
+                yield from keys(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from keys(child)
+
+    metadata_keys = set(keys(state.usage_ledger.response_metadata))
+    assert not any(
+        "external_tool" in key or "tool_fee" in key or "hold" in key
+        for key in metadata_keys
+    )
 
 
 async def _create_responses_test_data(
@@ -65,11 +212,22 @@ async def _create_responses_test_data(
     compact: bool = False,
     conversations: bool = False,
     external_web_search: bool = False,
+    local_coding_contract: dict[str, object] | None = None,
+    responses_policy: dict[str, object] | None = None,
+    codex_request_envelope: bool = False,
+    codex_client_tools: bool = False,
+    codex_streaming_tool_events: bool = False,
     endpoint: str = RESPONSES_ENDPOINT,
     allowed_endpoints: list[str] | None = None,
 ):
     from slaif_gateway.config import Settings
-    from slaif_gateway.db.models import GatewayKey, ModelRoute, PricingRule, QuotaReservation, UsageLedger
+    from slaif_gateway.db.models import (
+        GatewayKey,
+        ModelRoute,
+        PricingRule,
+        QuotaReservation,
+        UsageLedger,
+    )
     from slaif_gateway.db.repositories.audit import AuditRepository
     from slaif_gateway.db.repositories.cohorts import CohortsRepository
     from slaif_gateway.db.repositories.institutions import InstitutionsRepository
@@ -189,6 +347,9 @@ async def _create_responses_test_data(
             capabilities["list_input_items"] = list_input_items
             capabilities["compact"] = compact
             capabilities["conversations"] = conversations
+            capabilities["codex_request_envelope"] = codex_request_envelope
+            capabilities["codex_client_tools"] = codex_client_tools
+            capabilities["codex_streaming_tool_events"] = codex_streaming_tool_events
             external_tool_route_policy = {
                     "version": 1,
                     "supported_capabilities": ["provider_web_search"],
@@ -210,6 +371,7 @@ async def _create_responses_test_data(
                 supports_streaming=streaming,
                 capabilities={
                     "responses": capabilities,
+                    **({"local_coding": local_coding_contract} if local_coding_contract else {}),
                     **(
                         {"external_tools": external_tool_route_policy}
                         if external_web_search
@@ -270,6 +432,7 @@ async def _create_responses_test_data(
                         else None
                     ),
                     confirm_external_tool_fenced=external_web_search,
+                    responses_policy=responses_policy,
                     note="Responses E2E key",
                 )
             )
@@ -277,6 +440,534 @@ async def _create_responses_test_data(
             return created_key
     finally:
         await engine.dispose()
+
+
+@pytest.mark.e2e
+def test_openai_python_client_codex_0149_signed_thread_namespace_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    monkeypatch.setenv("LOCAL_CODING_SERVICE_TOKEN", "synthetic-local-coding-service-bearer")
+    monkeypatch.setenv("LOCAL_CODING_SIGNING_SECRET_V1", "local-coding-signing-secret-012345678901")
+    monkeypatch.setenv("LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1", "local-coding-derivation-secret-0123456789")
+    local_model = "codex-0149-signed-thread-test"
+    local_port = _free_port()
+    session_a = "123e4567-e89b-12d3-a456-426614174000"
+    session_b = "123e4567-e89b-12d3-a456-426614174001"
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            provider="local-coding",
+            model=local_model,
+            upstream_model="qwen3.8-27b",
+            base_url=f"http://127.0.0.1:{local_port}/v1",
+            api_key_env_var="LOCAL_CODING_SERVICE_TOKEN",
+            streaming=True,
+            local_coding_contract={
+                "contract_version": "local-coding-v1",
+                "route_name": "vision",
+                "tool_policy_version": "responses-tool-policy-v1",
+                "identity_mode": "signed_identity_v1",
+                "replay_mode": "process_local_ttl_lru",
+                "deployment_mode": "single_worker",
+            },
+            responses_policy={
+                "version": 1,
+                "local_coding_repository_scope": "signed-thread-repository",
+                "allowed_capabilities": [
+                    "codex_request_envelope",
+                    "codex_client_tools",
+                    "codex_streaming_tool_events",
+                ],
+                "client_module": {
+                    "id": "codex-0.149-responses-v1",
+                    "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                    "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+                },
+            },
+            codex_request_envelope=True,
+            codex_client_tools=True,
+            codex_streaming_tool_events=True,
+        )
+    )
+
+    async def create_second_key():
+        from slaif_gateway.config import Settings
+        from slaif_gateway.db.repositories.audit import AuditRepository
+        from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+        from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
+        from slaif_gateway.schemas.keys import CreateGatewayKeyInput
+        from slaif_gateway.services.key_service import KeyService
+
+        engine = create_async_engine(database_url, future=True)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with session_factory() as session:
+                key_service = KeyService(
+                    settings=Settings(),
+                    gateway_keys_repository=GatewayKeysRepository(session),
+                    one_time_secrets_repository=OneTimeSecretsRepository(session),
+                    audit_repository=AuditRepository(session),
+                )
+                result = await key_service.create_gateway_key(
+                    CreateGatewayKeyInput(
+                        owner_id=created.owner_id,
+                        valid_from=datetime.now(UTC) - timedelta(minutes=5),
+                        valid_until=datetime.now(UTC) + timedelta(days=1),
+                        cost_limit_eur=Decimal("10.000000000"),
+                        token_limit_total=100_000,
+                        request_limit_total=100,
+                        allowed_models=[local_model],
+                        allowed_endpoints=[RESPONSES_ENDPOINT],
+                        responses_policy={
+                            "version": 1,
+                            "local_coding_repository_scope": "signed-thread-repository",
+                            "allowed_capabilities": [
+                                "codex_request_envelope",
+                                "codex_client_tools",
+                                "codex_streaming_tool_events",
+                            ],
+                            "client_module": {
+                                "id": "codex-0.149-responses-v1",
+                                "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                                "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+                            },
+                        },
+                        note="Responses E2E second Gateway key",
+                    )
+                )
+                await session.commit()
+                return result
+        finally:
+            await engine.dispose()
+
+    second_key = asyncio.run(create_second_key())
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    get_settings.cache_clear()
+    gateway_port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{gateway_port}/v1")
+    app = create_app(get_settings())
+    completed = {
+        "id": "codex-0149-signed-response",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "qwen3.8-27b",
+        "output": [
+            {
+                "type": "message",
+                "id": "parser_message_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [],
+                        "logprobs": None,
+                    }
+                ],
+                "phase": None,
+            }
+        ],
+        "usage": _codex_vllm_usage(3, 2),
+        "store": False,
+    }
+    sse = _codex_standard_stream(completed)
+    tools = [
+        {
+            "type": "tool_search",
+            "description": "synthetic candidate",
+            "execution": "client",
+            "parameters": {},
+        },
+        {
+            "type": "web_search",
+            "external_web_access": False,
+            "search_content_types": ["text"],
+        },
+    ]
+
+    def metadata(session: str, turn: str) -> dict[str, str]:
+        return {
+            "session_id": session,
+            "thread_id": session,
+            "root_turn_id": turn,
+            "turn_id": turn,
+            "x-codex-installation-id": "123e4567-e89b-12d3-a456-426614174002",
+            "x-codex-window-id": "123e4567-e89b-12d3-a456-426614174003",
+        }
+
+    with _run_uvicorn_server(app, gateway_port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            local_route = router.post(f"http://127.0.0.1:{local_port}/v1/responses").mock(
+                side_effect=lambda request: httpx.Response(
+                    200,
+                    content=sse.encode() if json.loads(request.content).get("stream") else json.dumps(completed).encode(),
+                    headers={
+                        "content-type": "text/event-stream"
+                        if json.loads(request.content).get("stream")
+                        else "application/json"
+                    },
+                )
+            )
+            router.route(host="127.0.0.1").pass_through()
+            client = OpenAI()
+            first = client.responses.create(
+                model=local_model,
+                input=[{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "signed namespace A1"}]}],
+                tools=tools,
+                extra_body={"client_metadata": metadata(session_a, "123e4567-e89b-12d3-a456-426614174010")},
+            )
+            second = client.responses.create(
+                model=local_model,
+                input=[{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "signed namespace A2"}]}],
+                stream=True,
+                tools=tools,
+                extra_body={"client_metadata": metadata(session_a, "123e4567-e89b-12d3-a456-426614174011")},
+            )
+            second_events = list(second)
+            third = client.responses.create(
+                model=local_model,
+                input=[{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "signed namespace B"}]}],
+                tools=tools,
+                extra_body={"client_metadata": metadata(session_b, "123e4567-e89b-12d3-a456-426614174012")},
+            )
+            second_client = OpenAI(
+                api_key=second_key.plaintext_key,
+                base_url=f"http://127.0.0.1:{gateway_port}/v1",
+            )
+            fourth = second_client.responses.create(
+                model=local_model,
+                input=[{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "signed namespace A key two"}]}],
+                tools=tools,
+                extra_body={"client_metadata": metadata(session_a, "123e4567-e89b-12d3-a456-426614174013")},
+            )
+
+    assert first.id == third.id == fourth.id == "codex-0149-signed-response"
+    assert [event.type for event in second_events] == [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert len(local_route.calls) == 4
+    observed = [call.request for call in local_route.calls]
+    sessions = [request.headers["x-slaif-session"] for request in observed]
+    assert sessions[0] == sessions[1] != sessions[2]
+    assert sessions[3] != sessions[0]
+    assert len({request.headers["x-slaif-nonce"] for request in observed}) == 4
+    assert len({request.headers["x-slaif-signature"] for request in observed}) == 4
+    for request in observed:
+        body = json.loads(request.content)
+        assert "client_metadata" not in body
+        assert session_a not in request.content.decode()
+        assert session_b not in request.content.decode()
+        assert "x-codex-installation-id" not in request.content.decode()
+    state = asyncio.run(_load_accounting_state(database_url, created.gateway_key_id, provider="local-coding"))
+    assert state.gateway_key.requests_used_total == 3
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.total_tokens == 5
+    _assert_strict_bounded_no_external_facts(state)
+    assert asyncio.run(_load_accounting_side_effect_counts(database_url, created.gateway_key_id)) == (3, 3)
+    second_state = asyncio.run(
+        _load_accounting_state(database_url, second_key.gateway_key_id, provider="local-coding")
+    )
+    assert second_state.gateway_key.requests_used_total == 1
+    assert second_state.gateway_key.tokens_reserved_total == 0
+    assert second_state.usage_ledger.total_tokens == 5
+    _assert_strict_bounded_no_external_facts(second_state)
+    assert asyncio.run(_load_accounting_side_effect_counts(database_url, second_key.gateway_key_id)) == (1, 1)
+
+
+def test_openai_python_client_local_coding_server_module_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    local_model = "local-coding-responses-test"
+    local_port = _free_port()
+    monkeypatch.setenv("LOCAL_CODING_SERVICE_TOKEN", "synthetic-local-coding-service-bearer")
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            provider="local-coding",
+            model=local_model,
+            upstream_model="qwen3.8-27b",
+            base_url=f"http://127.0.0.1:{local_port}/v1",
+            api_key_env_var="LOCAL_CODING_SERVICE_TOKEN",
+            streaming=False,
+            local_coding_contract={
+                "contract_version": "local-coding-v1",
+                "route_name": "vision",
+                "tool_policy_version": "responses-tool-policy-v1",
+                "identity_mode": "static",
+                "replay_mode": "process_local_ttl_lru",
+                "deployment_mode": "single_worker",
+            },
+            responses_policy={
+                "version": 1,
+                "allowed_capabilities": [
+                    "codex_request_envelope",
+                    "codex_client_tools",
+                    "codex_streaming_tool_events",
+                ],
+                "client_module": {
+                    "id": "codex-0.149-responses-v1",
+                    "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                    "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+                }
+            },
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    gateway_port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{gateway_port}/v1")
+    app = create_app(get_settings())
+    upstream_payload = {
+        "id": "local-coding-response",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "qwen3.8-27b",
+        "output": [],
+        "usage": {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5},
+        "store": False,
+    }
+
+    with _run_uvicorn_server(app, gateway_port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            local_route = router.post(
+                f"http://127.0.0.1:{local_port}/v1/responses"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    json=upstream_payload,
+                    headers={"x-request-id": "local-coding-response-request"},
+                )
+            )
+            router.route(host="127.0.0.1").pass_through()
+            response = OpenAI().responses.create(
+                model=local_model,
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "synthetic local coding request"}],
+                    }
+                ],
+                max_output_tokens=32,
+                tools=[
+                    {
+                        "type": "tool_search",
+                        "description": "synthetic candidate",
+                        "execution": "client",
+                        "parameters": {},
+                    },
+                    {
+                        "type": "web_search",
+                        "external_web_access": False,
+                        "search_content_types": ["text", "image"],
+                    },
+                ],
+            )
+
+    assert response.id == "local-coding-response"
+    assert len(local_route.calls) == 1
+    request = local_route.calls[0].request
+    assert request.headers["authorization"] == "Bearer synthetic-local-coding-service-bearer"
+    assert request.headers["authorization"] != f"Bearer {created.plaintext_key}"
+    body = json.loads(request.content)
+    assert body["model"] == "qwen3.8-27b"
+    assert body["input"][0]["content"][0]["text"] == "synthetic local coding request"
+    assert body["tools"] == [
+        {
+            "type": "tool_search",
+            "description": "synthetic candidate",
+            "execution": "client",
+            "parameters": {},
+        },
+        {
+            "type": "web_search",
+            "external_web_access": False,
+            "search_content_types": ["text", "image"],
+        },
+    ]
+    assert "x-slaif-principal" not in {name.lower() for name in request.headers}
+    state = asyncio.run(
+        _load_accounting_state(
+            database_url,
+            created.gateway_key_id,
+            provider="local-coding",
+        )
+    )
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.total_tokens == 5
+    _assert_strict_bounded_no_external_facts(state)
+
+
+@pytest.mark.e2e
+def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    local_model = "codex-0149-local-coding-stream-test"
+    local_port = _free_port()
+    monkeypatch.setenv("LOCAL_CODING_SERVICE_TOKEN", "synthetic-local-coding-service-bearer")
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            provider="local-coding",
+            model=local_model,
+            upstream_model="qwen3.8-27b",
+            base_url=f"http://127.0.0.1:{local_port}/v1",
+            api_key_env_var="LOCAL_CODING_SERVICE_TOKEN",
+            streaming=True,
+            local_coding_contract={
+                "contract_version": "local-coding-v1",
+                "route_name": "vision",
+                "tool_policy_version": "responses-tool-policy-v1",
+                "identity_mode": "static",
+                "replay_mode": "process_local_ttl_lru",
+                "deployment_mode": "single_worker",
+            },
+            responses_policy={
+                "version": 1,
+                "allowed_capabilities": [
+                    "codex_request_envelope",
+                    "codex_client_tools",
+                    "codex_streaming_tool_events",
+                ],
+                "client_module": {
+                    "id": "codex-0.149-responses-v1",
+                    "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                    "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+                }
+            },
+        )
+    )
+
+    from openai import OpenAI
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    gateway_port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{gateway_port}/v1")
+    app = create_app(get_settings())
+    completed = {
+        "id": "codex-0149-stream-response",
+        "object": "response",
+        "created_at": 123,
+        "status": "completed",
+        "model": "qwen3.8-27b",
+        "output": [
+            {
+                "type": "message",
+                "id": "parser_message_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [],
+                        "logprobs": None,
+                    }
+                ],
+                "phase": None,
+            }
+        ],
+        "usage": _codex_vllm_usage(4, 3),
+        "store": False,
+    }
+    sse = _codex_standard_stream(completed)
+
+    with _run_uvicorn_server(app, gateway_port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            local_route = router.post(
+                f"http://127.0.0.1:{local_port}/v1/responses"
+            ).mock(
+                return_value=httpx.Response(
+                    200,
+                    content=sse.encode(),
+                    headers={"content-type": "text/event-stream"},
+                )
+            )
+            router.route(host="127.0.0.1").pass_through()
+            stream = OpenAI().responses.create(
+                model=local_model,
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "synthetic stream"}],
+                    }
+                ],
+                tools=[
+                    {
+                        "type": "tool_search",
+                        "description": "synthetic candidate",
+                        "execution": "client",
+                        "parameters": {},
+                    },
+                    {
+                        "type": "web_search",
+                        "external_web_access": False,
+                        "search_content_types": ["text"],
+                    },
+                ],
+                stream=True,
+            )
+            events = list(stream)
+
+    assert [event.type for event in events] == [
+        "response.created",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert events[-1].response.usage.total_tokens == 7
+    assert len(local_route.calls) == 1
+    upstream_body = json.loads(local_route.calls[0].request.content)
+    assert upstream_body["stream"] is True
+    assert upstream_body["tools"][0]["type"] == "tool_search"
+    assert upstream_body["tools"][1]["type"] == "web_search"
+    state = asyncio.run(
+        _load_accounting_state(
+            database_url,
+            created.gateway_key_id,
+            provider="local-coding",
+        )
+    )
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.total_tokens == 7
+    _assert_strict_bounded_no_external_facts(state)
 
 
 @pytest.mark.e2e

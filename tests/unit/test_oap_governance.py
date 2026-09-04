@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -10,12 +13,57 @@ ORDERS_DIR = OAP_ROOT / "orders"
 ACTIVE_FILE = OAP_ROOT / "active"
 AGENTS_FILE = REPO_ROOT / "AGENTS.md"
 PROTOCOL_FILE = REPO_ROOT / "OAP-COMMUNICATION-coding-agent.md"
+_ACTIVE_IDENTIFIER_RE = re.compile(rb"(?:[0-9]{3}-[a-z]|155-aa|155-ab|155-ac|155-ad|155-ae|155-af|155-ag|155-ah|155-ai|155-aj|155-ak)\n?")
 
 
 def _active_identifier() -> str:
     payload = ACTIVE_FILE.read_bytes()
-    assert re.fullmatch(rb"[0-9]{3}-[a-z]\n?", payload)
+    assert _ACTIVE_IDENTIFIER_RE.fullmatch(payload)
     return payload.decode("ascii").removesuffix("\n")
+
+
+@pytest.mark.parametrize(
+    ("payload", "accepted"),
+    [
+        (b"001-a\n", True),
+        (b"155-aa\n", True),
+        (b"155-ab\n", True),
+        (b"155-ac\n", True),
+        (b"155-ad\n", True),
+        (b"155-ae\n", True),
+        (b"155-af\n", True),
+        (b"155-ag\n", True),
+        (b"155-ah\n", True),
+        (b"155-ai\n", True),
+        (b"155-aj\n", True),
+        (b"155-ak\n", True),
+        (b"156-aa\n", False),
+        (b"155-abc\n", False),
+        (b"155-ac-extra\n", False),
+        (b"155-ad-extra\n", False),
+        (b"155-ae-extra\n", False),
+        (b"155-ae-\n", False),
+        (b"155-af-extra\n", False),
+        (b"155-ag-extra\n", False),
+        (b"155-ah-extra\n", False),
+        (b"155-aj-extra\n", False),
+        (b"155-al\n", False),
+    ],
+)
+def test_active_identifier_has_only_the_explicit_multiletter_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    payload: bytes,
+    accepted: bool,
+) -> None:
+    active = tmp_path / "active"
+    active.write_bytes(payload)
+    monkeypatch.setattr(sys.modules[__name__], "ACTIVE_FILE", active)
+    if accepted:
+                assert _active_identifier() in {"001-a", "155-aa", "155-ab", "155-ac", "155-ad", "155-ae", "155-af", "155-ag", "155-ah", "155-ai", "155-aj", "155-ak"}
+    else:
+        with pytest.raises(AssertionError):
+            _active_identifier()
 
 
 def _active_order() -> tuple[str, Path, str]:
@@ -44,6 +92,10 @@ def test_active_identifier_resolves_exactly_one_matching_order() -> None:
 
     assert order_path.name.startswith(f"{identifier}-")
     assert order_text.splitlines()[0] == f"# OAP Work Order — {identifier}"
+
+
+def test_active_155_ak_selector_is_the_authorized_continuation() -> None:
+    assert ACTIVE_FILE.read_bytes() == b"155-ak\n"
 
 
 def test_initial_round_declares_new_pr_and_one_objective_one_pr() -> None:

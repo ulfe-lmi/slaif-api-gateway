@@ -1,0 +1,42 @@
+{
+  "source": {
+    "repository": "ulfe-lmi/slaif-local-coding",
+    "commit": "356be8345dd71d6fddf829278651d18e485731d4",
+    "source_fixture_sha256": "92c09c03a40dbdf5e6e08b9e5d7f5c6e2c777e14467845d351f219cbb9a66588"
+  },
+  "contract": {
+    "schema": "signed-identity-v1",
+    "secret": {
+      "identifier": "fixture-only-synthetic-signing-secret",
+      "value": "synthetic-signing-secret-value-0123456789"
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/responses",
+      "raw_query": "b=2&a=1",
+      "body_sha256": "074829ef5ac79be9d95d558d95d67d83de5ed5565982d62deff8018f447affd2",
+      "principal": "principal-a",
+      "session": "session-a",
+      "repository": "repository-a",
+      "route": "vision",
+      "timestamp": "1700000000",
+      "nonce": "nonce-0123456789"
+    },
+    "canonical_string_sha256": "114d9cdf46796bd95026dc693a52d85096f7ff0672d8f5923fe789dff72bc2dc",
+    "expected_hmac": "v1=48e4138dcf58caadf6f0f071848977ca7344aed2cd7148d4a4e4a8cae6472b3b",
+    "cases": {
+      "accept": ["exact", "timestamp_at_past_skew_edge", "timestamp_at_future_skew_edge"],
+      "reject": [
+        "body_tampered",
+        "query_order_tampered",
+        "path_tampered",
+        "method_tampered",
+        "identity_tampered",
+        "route_tampered",
+        "stale_timestamp",
+        "future_timestamp",
+        "replayed_nonce"
+      ]
+    }
+  }
+}

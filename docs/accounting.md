@@ -25,6 +25,30 @@ Current authoritative contracts:
 
 Core invariants:
 
+- A Local Coding request is one public Gateway reservation and one terminal
+  ledger outcome. Local Coding compiler/governance calls are internal service
+  capacity and never create additional Gateway rows.
+- Local Coding service-auth, signed-identity, timestamp, replay, HTTP, parse,
+  and stream failures use the existing provider failure law; no pending
+  reservation may remain. Provider usage returned by Local Coding remains
+  authoritative for finalization.
+- Local Coding signed identity and exact-byte hashes are transient transport
+  facts only; they are not stored in ledger, audit, request metadata, or
+  metrics. Codex 0.149 adapter-managed candidates use the ordinary bounded
+  Responses reservation/finalization path after the exact Local Coding pair
+  gate; hosted-tool fence/hold accounting and hosted-search fees are not used.
+  The Codex 0.149 thread namespace is transient and never an accounting,
+  replay, or idempotency key. Successful requests using it remain ordinary
+  `strict_bounded` reservations finalized from provider usage.
+  Signed Local-v1 principal, session, and repository values are unconditional
+  `h`-prefixed encodings of the full 256-bit HMAC digest, preserving all digest
+  bytes while satisfying the peer grammar; this is HMAC pseudonymization, not
+  anonymity.
+
+The disposable full-stack verifier additionally checks one terminal ledger
+outcome per admitted public request, zero pending counters, empty external
+facts, and no hosted-tool fee/hold metadata for both Gateway keys.
+
 - PostgreSQL is authoritative for hard quota, reservations, usage counters,
   ledger rows, and reconciliation state.
 - Redis is temporary operational state only. Redis must not become the only
@@ -85,11 +109,23 @@ Core invariants:
   input, while provider final usage/cost remains authoritative. After a stream
   supplies final usage, the gateway finalizes PostgreSQL accounting first,
   verifies the same finalized key/request ledger row, then writes 24-hour
-  HMAC-only item/call ownership references before releasing the held
+  versioned HMAC item/call ownership references before releasing the held
   `response.completed`. Reference-persistence failure emits safe failure and
   suppresses normal completion without releasing or reversing charged usage.
   Missing usage, malformed/error events, and disconnects create no usable
   replay reference. Reference rows are control metadata, never billing truth.
+- The exact Codex rust-v0.149.0 Local pair may transiently carry bounded visible
+  reasoning with an absent or null item ID. Its UTF-8 summary/content bytes are
+  included in normal input estimation and accounting bounds, but visible text,
+  IDs, and derived replay material are never stored in ledger, audit, metrics,
+  or exports. ID-less encrypted reasoning remains outside this dialect.
+- The same exact Codex 0.149 Local pair may authenticate an absent/null
+  function or custom tool-call item ID through one existing same-key call-ID
+  HMAC reference. This is replay control metadata, not billing truth: it is
+  checked before reservation/provider work; raw call/item IDs are never
+  persisted or exposed, while only the versioned HMAC digest is persisted in
+  the replay-reference row. Other clients and replayable item kinds retain the
+  existing item-ID requirement.
 - Fully gated Codex admission replaces only the injected ordinary 1,024 output
   default with the strict route default (32,768 in the qualification profile),
   then enforces route/operator output and context bounds before Redis, pricing,

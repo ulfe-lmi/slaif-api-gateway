@@ -47,6 +47,40 @@ retain every encryption key version needed by unconsumed rows during rotation.
 Rotate any provider or SMTP secret that is accidentally committed, logged, or
 shared.
 
+## Local Coding server-module secrets
+
+The disabled-by-default Local Coding route uses separate roles and versioned
+environment inputs:
+
+```env
+LOCAL_CODING_SIGNING_KEY_VERSION=1
+LOCAL_CODING_SIGNING_SECRET_V1=<dedicated signing secret>
+LOCAL_CODING_IDENTITY_KEY_VERSION=1
+LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1=<dedicated derivation secret>
+```
+
+The provider row's `api_key_env_var` supplies the Local Coding service Bearer;
+it is distinct from both Local Coding secrets and from the public Gateway
+Bearer. Do not reuse `TOKEN_HMAC_SECRET`, `ADMIN_SESSION_SECRET`,
+`ONE_TIME_SECRET_ENCRYPTION_KEY`, a provider credential, or a client key.
+The service Bearer and configured Local Coding secrets must be printable ASCII
+values of 32–4096 bytes. Adapter construction compares roles in constant time
+and rejects equality with either identity secret or a known core/provider
+secret as `local_coding_secret_roles_not_separate`; secret values are never
+included in that error. Static mode does not require identity secrets, but
+configured optional values are still checked for role separation.
+Signed Local-v1 derived principal, session, and repository fields use an
+unconditional `h` prefix followed by the complete unpadded base64url HMAC
+digest, so every value satisfies the pinned alphanumeric-leading peer grammar
+without truncation. Invalid signed route names are rejected before signing or
+forwarding; static route parsing keeps its existing route-name rules.
+The route contract selects `identity_mode=static` or
+`identity_mode=signed_identity_v1`, declares the signed replay bounds, and
+requires `deployment_mode=single_worker` for signed mode. Version 1 supports a
+coordinated drain/disable/update/restart/re-enable rotation only; it does not
+claim overlapping key rotation, multi-worker replay exclusion, or
+restart-persistent replay state.
+
 ## Generating Local Runtime Secrets
 
 For local setup or initial self-hosted bootstrap, use the CLI to generate one

@@ -12,8 +12,15 @@ from pathlib import Path
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0149 import (
+    CODEX_0149_CLIENT_MODULE_ID,
+    CODEX_0149_POLICY_SPEC,
+    codex_0149_declared_tool_taxonomy,
+)
 from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
+from slaif_gateway.modules.contracts import ModuleSelectionError
 from slaif_gateway.providers.errors import ProviderError
+from slaif_gateway.providers import streaming as streaming_module
 from slaif_gateway.providers.streaming import (
     RESPONSES_CODEX_STREAM_EVENT_TYPES,
     ResponsesStreamEventValidator,
@@ -26,7 +33,19 @@ from slaif_gateway.services.codex_replay_service import CodexReplayReferenceErro
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_client_tool_declarations,
+    codex_replay_request_candidates,
     responses_codex_streaming_tool_events_allowed,
+)
+from slaif_gateway.services.responses_gateway import (
+    _build_safe_responses_upstream_body,
+    _codex_local_pair_omits_prompt_cache_key,
+    _codex_reasoning_events_enabled,
+    _derive_pair_local_codex_top_level_profile,
+)
+from slaif_gateway.services.responses_request_policy import (
+    responses_codex_client_tools_requested,
+    responses_codex_streaming_tool_events_requested,
+    responses_codex_tool_roundtrip_requested,
 )
 from slaif_gateway.services.responses_route_capabilities import (
     default_responses_capabilities,
@@ -59,6 +78,10 @@ DECLARATIONS = frozenset(
 
 def _policy(settings: Settings) -> ResponsesRequestPolicy:
     return ResponsesRequestPolicy(settings, client_spec=CODEX_0147_POLICY_SPEC)
+
+
+def _policy_0149(settings: Settings) -> ResponsesRequestPolicy:
+    return ResponsesRequestPolicy(settings, client_spec=CODEX_0149_POLICY_SPEC)
 def _function(name: str) -> dict[str, object]:
     return {
         "type": "function",
@@ -147,6 +170,1162 @@ def _encrypted_profile() -> ResponsesStreamValidationProfile:
         codex_encrypted_reasoning_replay=True,
         declared_client_tools=DECLARATIONS,
     )
+
+
+def _reasoning_added_event() -> dict[str, object]:
+    return {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "sequence_number": 1,
+        "item": {
+            "type": "reasoning",
+            "id": "reasoning_1",
+            "summary": [],
+            "content": None,
+            "encrypted_content": None,
+            "status": "in_progress",
+        },
+    }
+
+
+def _reasoning_part_event(event_type: str, sequence_number: int, text: str = "") -> dict[str, object]:
+    return {
+        "type": event_type,
+        "item_id": "reasoning_1",
+        "output_index": 0,
+        "content_index": 0,
+        "sequence_number": sequence_number,
+        "part": {"type": "reasoning_text", "text": text},
+    }
+
+
+def _reasoning_text_event(
+    event_type: str, sequence_number: int, *, delta: str | None = None, text: str | None = None
+) -> dict[str, object]:
+    event: dict[str, object] = {
+        "type": event_type,
+        "item_id": "reasoning_1",
+        "output_index": 0,
+        "content_index": 0,
+        "sequence_number": sequence_number,
+    }
+    if delta is not None:
+        event["delta"] = delta
+    if text is not None:
+        event["text"] = text
+    return event
+
+
+def _reasoning_done_event(sequence_number: int, *, text: str = "bounded") -> dict[str, object]:
+    event = _reasoning_added_event()
+    event["type"] = "response.output_item.done"
+    event["sequence_number"] = sequence_number
+    event["item"] = {
+        "type": "reasoning",
+        "id": "reasoning_1",
+        "summary": [],
+        "content": [{"type": "reasoning_text", "text": text}],
+        "encrypted_content": None,
+        "status": "completed",
+    }
+    return event
+
+
+def _strict_reasoning_validator() -> ResponsesStreamEventValidator:
+    return ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    )
+
+
+def test_codex_0149_reasoning_stream_is_contained_to_the_local_server_pair() -> None:
+    local_context = {"identity_mode": "static"}
+    assert _codex_reasoning_events_enabled(
+        client_module_id="codex-0.149-responses-v1", server_context=local_context
+    )
+    assert not _codex_reasoning_events_enabled(
+        client_module_id="codex-0.149-responses-v1",
+        server_context=None,
+    )
+    assert not _codex_reasoning_events_enabled(
+        client_module_id="openai-default", server_context=local_context
+    )
+
+
+def test_codex_0149_local_pair_drops_only_prompt_cache_key_for_upstream() -> None:
+    policy_result = SimpleNamespace(
+        effective_body={
+            "model": "classroom-codex",
+            "input": "bounded input",
+            "instructions": "bounded instructions",
+            "prompt_cache_key": "bounded-cache-key",
+            "stream": True,
+        }
+    )
+    original = copy.deepcopy(policy_result.effective_body)
+    generic_body = _build_safe_responses_upstream_body(
+        policy_result=policy_result,
+        upstream_model="classroom-codex",
+    )
+    local_body = _build_safe_responses_upstream_body(
+        policy_result=policy_result,
+        upstream_model="classroom-codex",
+        omit_prompt_cache_key=True,
+    )
+    assert policy_result.effective_body == original
+    assert local_body == {
+        key: value
+        for key, value in generic_body.items()
+        if key != "prompt_cache_key"
+    }
+    assert generic_body["prompt_cache_key"] == "bounded-cache-key"
+    assert _codex_local_pair_omits_prompt_cache_key(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context={"identity_mode": "static"},
+    )
+    assert not _codex_local_pair_omits_prompt_cache_key(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context=None,
+    )
+    assert not _codex_local_pair_omits_prompt_cache_key(
+        client_module_id="openai-default",
+        local_coding_server_context={"identity_mode": "static"},
+    )
+
+
+def test_codex_0149_top_level_tools_activate_only_after_exact_local_resolution() -> None:
+    body = {
+        "model": "classroom-codex",
+        "input": "hello",
+        "stream": True,
+        "tools": [
+            _function("wait"),
+            {
+                "type": "custom",
+                "name": "exec",
+                "description": "bounded-exec",
+                "format": {"type": "grammar", "syntax": "lark"},
+            },
+        ],
+    }
+
+    # These are the unchanged pre-policy additional_tools facts; top-level
+    # declarations are not treated as that namespace.
+    assert responses_codex_client_tools_requested(body) is False
+    assert responses_codex_streaming_tool_events_requested(body) is False
+
+    local_declarations, local_streaming = _derive_pair_local_codex_top_level_profile(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context={"identity_mode": "static"},
+        effective_body=body,
+    )
+    assert local_declarations == frozenset(
+        {
+            ("functions", "wait", "function"),
+            ("functions", "exec", "custom"),
+        }
+    )
+    assert local_streaming is True
+
+    non_local_declarations, non_local_streaming = _derive_pair_local_codex_top_level_profile(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context=None,
+        effective_body=body,
+    )
+    assert non_local_declarations == frozenset()
+    assert non_local_streaming is False
+
+
+def test_codex_0149_top_level_taxonomy_validates_continuation_and_replay() -> None:
+    call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "status": "completed",
+        "name": "wait",
+        "arguments": '{"value":"ok"}',
+        "call_id": "call_1",
+    }
+    output = {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "bounded result",
+    }
+    body = {
+        "model": "classroom-codex",
+        "input": [call, output],
+        "tools": [_function("wait")],
+        "stream": True,
+        "tool_choice": "auto",
+    }
+    taxonomy = codex_0149_declared_tool_taxonomy(body)
+    policy = _policy_0149(Settings())
+    result = policy.apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        adapter_managed_declaration_candidates=frozenset({"tool_search"}),
+        codex_top_level_tool_taxonomy=taxonomy,
+    )
+    candidates = codex_replay_request_candidates(
+        result.effective_body,
+        top_level_tool_taxonomy=taxonomy,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].item_kind == "function_call"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            body,
+            allow_codex_request_envelope=True,
+            allow_codex_client_tools=True,
+            allow_codex_streaming_tool_events=True,
+            adapter_managed_declaration_candidates=frozenset({"tool_search"}),
+            codex_top_level_tool_taxonomy=frozenset({("functions", "other", "function")}),
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                **body,
+                "input": [output, call],
+            },
+            allow_codex_request_envelope=True,
+            allow_codex_client_tools=True,
+            allow_codex_streaming_tool_events=True,
+            adapter_managed_declaration_candidates=frozenset({"tool_search"}),
+            codex_top_level_tool_taxonomy=taxonomy,
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+def test_codex_0149_continuation_detector_rejects_custom_or_multiple_pairs() -> None:
+    call = {"type": "function_call"}
+    output = {"type": "function_call_output"}
+    body = {"input": [call, output], "stream": True}
+    assert responses_codex_tool_roundtrip_requested(body)
+    assert not responses_codex_tool_roundtrip_requested(
+        {"input": [call, output, call, output], "stream": True}
+    )
+    assert not responses_codex_tool_roundtrip_requested(
+        {
+            "input": [
+                {"type": "custom_tool_call"},
+                {"type": "custom_tool_call_output"},
+            ],
+            "stream": True,
+        }
+    )
+    assert not responses_codex_tool_roundtrip_requested(
+        {"input": [call, {"type": "message"}, output], "stream": True}
+    )
+    assert not responses_codex_tool_roundtrip_requested(
+        {"input": [call, output], "stream": False}
+    )
+    assert not responses_codex_tool_roundtrip_requested({"input": [call, output]})
+
+
+def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_authority() -> None:
+    call = {
+        "type": "function_call",
+        "id": "fc_1",
+        "status": "completed",
+        "name": "wait",
+        "arguments": '{"value":"ok"}',
+        "call_id": "call_1",
+    }
+    output = {
+        "type": "function_call_output",
+        "call_id": "call_1",
+        "output": "bounded result",
+    }
+    body = {
+        "model": "classroom-codex",
+        "input": [call, output],
+        "tools": [_function("wait")],
+        "stream": True,
+        "tool_choice": "auto",
+    }
+    taxonomy = codex_0149_declared_tool_taxonomy(body)
+    policy = _policy_0149(Settings())
+    common = {
+        "allow_codex_request_envelope": True,
+        "allow_codex_client_tools": True,
+        "allow_codex_streaming_tool_events": True,
+        "adapter_managed_declaration_candidates": frozenset({"tool_search"}),
+    }
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(body, **common)
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            body,
+            **common,
+            codex_top_level_tool_taxonomy=frozenset(
+                {("functions", "not_declared", "function")}
+            ),
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                **body,
+                "input": [
+                    {"type": "additional_tools", "role": "developer", "tools": []},
+                    call,
+                    output,
+                ],
+            },
+            **common,
+            codex_top_level_tool_taxonomy=taxonomy,
+        )
+    assert exc_info.value.error_code == "responses_codex_client_tools_invalid"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            body,
+            **{**common, "allow_codex_streaming_tool_events": False},
+            codex_top_level_tool_taxonomy=taxonomy,
+        )
+    assert exc_info.value.error_code == "responses_input_tool_item_not_supported"
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            {
+                **body,
+                "input": [call, {**output, "call_id": "call_other"}],
+            },
+            **common,
+            codex_top_level_tool_taxonomy=taxonomy,
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+    with pytest.raises(ModuleSelectionError):
+        codex_0149_declared_tool_taxonomy(
+            {**body, "tools": [_function("wait"), _function("wait")]}
+        )
+
+    with pytest.raises(ValueError, match="codex_top_level_tool_taxonomy_invalid"):
+        codex_replay_request_candidates(
+            body,
+            top_level_tool_taxonomy=frozenset({("functions", "bad/name", "function")}),
+        )
+
+    with pytest.raises(RequestPolicyError) as exc_info:
+        policy.apply(
+            body,
+            **common,
+            codex_top_level_tool_taxonomy=frozenset(
+                {("functions", "wait", "function"), ("collaboration", "wait", "function")}
+            ),
+        )
+    assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
+
+
+
+def test_exact_pair_tool_branch_is_rejected_until_live_shape_evidence_exists() -> None:
+    profile = ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        declared_client_tools=frozenset({("functions", "exec", "custom")}),
+    )
+    validator = ResponsesStreamEventValidator(profile)
+    tool_added = {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "sequence_number": 1,
+        "item": {
+            "type": "custom_tool_call",
+            "id": "tool-item-1",
+            "status": "in_progress",
+            "namespace": "functions",
+            "name": "exec",
+            "call_id": "tool-call-1",
+            "input": "",
+        },
+    }
+    tool_delta = {
+        "type": "response.custom_tool_call_input.delta",
+        "item_id": "tool-item-1",
+        "call_id": "tool-call-1",
+        "output_index": 0,
+        "sequence_number": 2,
+        "delta": "bounded",
+    }
+    assert validator.validate(tool_added) is False
+    assert validator.validate(tool_delta) is False
+    ordinary_validator = ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    )
+    assert all(ordinary_validator.validate(event) for event in _strict_message_prefix_events())
+
+
+def _strict_function_events() -> list[dict[str, object]]:
+    arguments = '{"value":"ok"}'
+    return [
+        _strict_response_event("response.created", 0),
+        _strict_response_event("response.in_progress", 1),
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "sequence_number": 2,
+            "item": {
+                "type": "function_call",
+                "id": "function_1",
+                "status": "in_progress",
+                "namespace": None,
+                "name": "wait",
+                "arguments": "",
+                "call_id": "call_1",
+                "caller": None,
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 3,
+            "delta": '{"value":',
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 4,
+            "delta": '"ok"}',
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 5,
+            "name": "wait",
+            "arguments": arguments,
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 6,
+            "item": {
+                "type": "function_call",
+                "id": "function_1",
+                "status": "completed",
+                "namespace": None,
+                "name": "wait",
+                "arguments": arguments,
+                "call_id": "call_1",
+                "caller": None,
+            },
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 7,
+            "response": {
+                "id": "response_1",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "id": "parser_function_1",
+                        "status": "completed",
+                        "namespace": None,
+                        "name": "wait",
+                        "arguments": arguments,
+                        "call_id": "parser_call_1",
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": {
+                        "cached_tokens": 0,
+                        "input_tokens_per_turn": [1],
+                        "cached_tokens_per_turn": [0],
+                    },
+                    "output_tokens": 1,
+                    "output_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "tool_output_tokens": 0,
+                        "output_tokens_per_turn": [1],
+                        "tool_output_tokens_per_turn": [0],
+                    },
+                    "total_tokens": 2,
+                },
+            },
+        },
+    ]
+
+
+def _strict_function_profile() -> ResponsesStreamValidationProfile:
+    return ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        codex_0149_function_tool_events=True,
+        declared_client_tools=frozenset({("functions", "wait", "function")}),
+    )
+
+
+def test_codex_0149_function_lifecycle_is_ordered_and_declared() -> None:
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+
+    assert all(validator.validate(event) for event in _strict_function_events())
+    assert validator.take_replay_reference_candidates()[0].item_kind == "function_call"
+
+
+def test_codex_0149_function_profile_accepts_second_turn_message_lifecycle() -> None:
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+
+    assert all(validator.validate(event) for event in _strict_message_prefix_events())
+    assert validator.validate(_strict_response_event("response.completed", 9))
+
+
+def test_codex_0149_function_terminal_matches_semantics_not_stream_ids() -> None:
+    events = _strict_function_events()
+    events[-1]["response"]["output"][0]["name"] = "other"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:-1])
+    assert not validator.validate(events[-1])
+
+    events = _strict_function_events()
+    events[-1]["response"]["output"][0]["arguments"] = "{}"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:-1])
+    assert not validator.validate(events[-1])
+
+    events = _strict_function_events()
+    events[-1]["response"]["output"][0]["type"] = "message"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:-1])
+    assert not validator.validate(events[-1])
+
+
+def test_codex_0149_function_branch_rejects_a_second_function_item_immediately() -> None:
+    events = _strict_function_events()
+    second = copy.deepcopy(events[2:7])
+    for event in second:
+        event["sequence_number"] += 6
+        if isinstance(event.get("item_id"), str):
+            event["item_id"] = "function_2"
+        item = event.get("item")
+        if isinstance(item, dict):
+            item["id"] = "function_2"
+            item["call_id"] = "call_2"
+            if event.get("type") == "response.output_item.done":
+                item["sequence_number"] = event["sequence_number"]
+        if event.get("type") == "response.function_call_arguments.done":
+            event["name"] = "wait"
+    events[-1]["sequence_number"] = 13
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(second[0])
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].update(caller={"type": "direct"}),
+        lambda event: event["item"].update(namespace="functions"),
+        lambda event: event["item"].update(output_index=1),
+        lambda event: event["item"].update(sequence_number=3),
+    ],
+)
+def test_codex_0149_function_item_shapes_are_event_specific(mutation) -> None:
+    events = _strict_function_events()
+    mutation(events[2])
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert validator.validate(events[0])
+    assert validator.validate(events[1])
+    assert not validator.validate(events[2])
+
+    events = _strict_function_events()
+    mutation(events[6])
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+
+def test_codex_0149_function_lifecycle_rejects_reordering_and_inner_index_smuggling() -> None:
+    events = _strict_function_events()
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:5])
+    assert not validator.validate(events[6])
+
+    events = _strict_function_events()
+    events[6]["item"]["output_index"] = 0
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].update(output_index=0),
+        lambda event: event["item"].update(sequence_number=6),
+        lambda event: event.pop("output_index"),
+        lambda event: event.update(output_index=1),
+        lambda event: event.pop("sequence_number"),
+        lambda event: event.update(sequence_number=2),
+    ],
+)
+def test_codex_0149_done_requires_exact_event_coordinates_and_no_inner_coordinates(
+    mutation,
+) -> None:
+    events = _strict_function_events()
+    mutation(events[6])
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+    events = _strict_function_events()
+    events[6].pop("output_index")
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+
+def test_codex_0149_function_branch_fails_closed_for_lifecycle_boundaries() -> None:
+    events = _strict_function_events()
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert not validator.validate(events[2])
+    assert validator.validate(events[0])
+    assert validator.validate(events[1])
+    assert not validator.validate(events[4])
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events)
+    assert not validator.validate(events[2])
+
+    events = _strict_function_events()
+    events[3]["delta"] = ""
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+    events = _strict_function_events()
+    events[5].pop("name")
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:5])
+    assert not validator.validate(events[5])
+
+    events = _strict_function_events()
+    events[6]["item"]["call_id"] = "other_call"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+    events = _strict_function_events()
+    events[6]["item"]["name"] = "other"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+    events = _strict_function_events()
+    events[6]["item"]["arguments"] = "{}"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    terminal = _strict_function_events()[-1]
+    assert validator.validate(terminal) is False
+
+    smuggled = _strict_function_events()[2]
+    for item_type in ("custom_tool_call", "mcp_call", "web_search_call"):
+        smuggled = copy.deepcopy(smuggled)
+        smuggled["item"]["type"] = item_type
+        validator = ResponsesStreamEventValidator(_strict_function_profile())
+        assert validator.validate(_strict_function_events()[0])
+        assert validator.validate(_strict_function_events()[1])
+        assert not validator.validate(smuggled)
+    assert not ResponsesStreamEventValidator(_strict_function_profile()).validate(
+        {"type": "response.unknown"}
+    )
+
+
+def test_codex_0149_function_branch_rejects_exact_duplicate_and_order_errors() -> None:
+    events = _strict_function_events()
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:4])
+    assert not validator.validate(copy.deepcopy(events[3]))
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(copy.deepcopy(events[5]))
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(copy.deepcopy(events[6]))
+
+    mismatch = copy.deepcopy(events[3])
+    mismatch["output_index"] = 1
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(mismatch)
+
+    non_monotonic = copy.deepcopy(events[3])
+    non_monotonic["sequence_number"] = 2
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(non_monotonic)
+
+    after_done = copy.deepcopy(events[3])
+    after_done["sequence_number"] = 7
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(after_done)
+
+
+@pytest.mark.parametrize(
+    "mutation, prefix_length",
+    [
+        (lambda event: event["item"].update(name="undeclared"), 2),
+        (lambda event: event["item"].update(extra="unexpected"), 2),
+        (lambda event: event.update(extra="unexpected"), 3),
+    ],
+)
+def test_codex_0149_function_branch_rejects_undeclared_and_extra_fields(
+    mutation, prefix_length: int
+) -> None:
+    events = _strict_function_events()
+    target_index = 2 if prefix_length == 2 else 3
+    mutation(events[target_index])
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:prefix_length])
+    assert not validator.validate(events[target_index])
+
+
+def test_codex_0149_function_branch_rejects_inactive_exact_profile() -> None:
+    profile = ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        declared_client_tools=frozenset({("functions", "wait", "function")}),
+    )
+    validator = ResponsesStreamEventValidator(profile)
+    assert validator.validate(_strict_function_events()[0])
+    assert validator.validate(_strict_function_events()[1])
+    assert not validator.validate(_strict_function_events()[2])
+
+
+def test_codex_0149_function_branch_rejects_per_delta_overflow() -> None:
+    events = _strict_function_events()
+    events[3]["delta"] = "x" * (streaming_module._MAX_STREAM_DELTA_BYTES + 1)
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+
+def test_codex_0149_function_branch_rejects_cumulative_argument_overflow() -> None:
+    events = _strict_function_events()
+    delta_events = []
+    for sequence_number in range(3, 20):
+        delta = copy.deepcopy(events[3])
+        delta["sequence_number"] = sequence_number
+        delta["delta"] = "x" * streaming_module._MAX_STREAM_DELTA_BYTES
+        delta_events.append(delta)
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert all(validator.validate(event) for event in delta_events[:-1])
+    assert not validator.validate(delta_events[-1])
+
+
+def _message_added_event() -> dict[str, object]:
+    return {
+        "type": "response.output_item.added",
+        "output_index": 1,
+        "sequence_number": 2,
+        "item": {
+            "type": "message",
+            "id": "message_1",
+            "status": "in_progress",
+            "role": "assistant",
+            "content": [],
+            "phase": None,
+        },
+    }
+
+
+def _message_content_part(event_type: str, sequence_number: int, text: str = "") -> dict[str, object]:
+    return {
+        "type": event_type,
+        "item_id": "message_1",
+        "output_index": 1,
+        "content_index": 0,
+        "sequence_number": sequence_number,
+        "part": {
+            "type": "output_text",
+            "text": text,
+            "annotations": [],
+            "logprobs": [] if event_type == "response.content_part.added" else None,
+        },
+    }
+
+
+def _message_text_event(event_type: str, sequence_number: int, value: str) -> dict[str, object]:
+    event: dict[str, object] = {
+        "type": event_type,
+        "item_id": "message_1",
+        "output_index": 1,
+        "content_index": 0,
+        "sequence_number": sequence_number,
+        "logprobs": [],
+    }
+    event["delta" if event_type == "response.output_text.delta" else "text"] = value
+    return event
+
+
+def _message_done_event(sequence_number: int, text: str = "answer") -> dict[str, object]:
+    return {
+        "type": "response.output_item.done",
+        "output_index": 1,
+        "sequence_number": sequence_number,
+        "item": {
+            "type": "message",
+            "id": "message_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": text,
+                    "annotations": [],
+                    "logprobs": None,
+                }
+            ],
+            "phase": None,
+            "summary": [],
+        },
+    }
+
+
+def _strict_response_event(event_type: str, sequence_number: int) -> dict[str, object]:
+    response = {"id": "response_1", "status": "in_progress"}
+    if event_type == "response.completed":
+        response.update(
+            {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "id": "parser_reasoning_1",
+                        "status": None,
+                        "summary": [],
+                        "content": [{"type": "reasoning_text", "text": "bounded"}],
+                        "encrypted_content": None,
+                    },
+                    {
+                        "type": "message",
+                        "id": "parser_message_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "answer",
+                                "annotations": [],
+                                "logprobs": None,
+                            }
+                        ],
+                        "phase": None,
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": {
+                        "cached_tokens": 0,
+                        "input_tokens_per_turn": [1],
+                        "cached_tokens_per_turn": [0],
+                    },
+                    "output_tokens": 1,
+                    "output_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "tool_output_tokens": 0,
+                        "output_tokens_per_turn": [1],
+                        "tool_output_tokens_per_turn": [0],
+                    },
+                    "total_tokens": 2,
+                },
+            }
+        )
+    return {"type": event_type, "sequence_number": sequence_number, "response": response}
+
+
+def _strict_message_prefix_events() -> list[dict[str, object]]:
+    return [
+        _strict_response_event("response.created", 0),
+        _strict_response_event("response.in_progress", 1),
+        _message_added_event(),
+        _message_content_part("response.content_part.added", 3),
+        _message_text_event("response.output_text.delta", 4, "ans"),
+        _message_text_event("response.output_text.delta", 5, "wer"),
+        _message_text_event("response.output_text.done", 6, "answer"),
+        _message_content_part("response.content_part.done", 7, "answer"),
+        _message_done_event(8),
+    ]
+
+
+def test_codex_0149_message_text_lifecycle_is_exactly_scoped() -> None:
+    validator = _strict_reasoning_validator()
+    events = _strict_message_prefix_events() + [_strict_response_event("response.completed", 9)]
+    assert all(validator.validate(event) for event in events)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].pop("phase"),
+        lambda event: event["item"].update(phase="final_answer"),
+        lambda event: event["item"].update(content=[{"type": "output_text", "text": "x"}]),
+        lambda event: event["item"].update(type="function_call"),
+    ],
+)
+def test_codex_0149_message_added_rejects_non_exact_shapes(mutation) -> None:
+    event = _message_added_event()
+    mutation(event)
+    assert not _strict_reasoning_validator().validate(event)
+
+
+def test_codex_0149_message_lifecycle_rejects_reordering_and_wrong_terminal_shapes() -> None:
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_strict_response_event("response.created", 0))
+    assert validator.validate(_strict_response_event("response.in_progress", 1))
+    assert validator.validate(_message_added_event())
+    assert not validator.validate(_message_content_part("response.content_part.done", 3))
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_message_added_event())
+    assert validator.validate(_message_content_part("response.content_part.added", 3))
+    assert validator.validate(_message_text_event("response.output_text.delta", 4, "answer"))
+    assert not validator.validate(_message_text_event("response.output_text.done", 5, "wrong"))
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_message_added_event())
+    assert validator.validate(_message_content_part("response.content_part.added", 3))
+    assert validator.validate(_message_text_event("response.output_text.delta", 4, "answer"))
+    assert validator.validate(_message_text_event("response.output_text.done", 5, "answer"))
+    assert not validator.validate(_message_content_part("response.content_part.done", 6))
+
+
+def test_codex_0149_message_lifecycle_enforces_event_specific_logprobs() -> None:
+    validator = _strict_reasoning_validator()
+    added = _message_content_part("response.content_part.added", 3)
+    added["part"]["logprobs"] = None
+    assert validator.validate(_message_added_event())
+    assert not validator.validate(added)
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_message_added_event())
+    assert validator.validate(_message_content_part("response.content_part.added", 3))
+    assert validator.validate(_message_text_event("response.output_text.delta", 4, "answer"))
+    assert validator.validate(_message_text_event("response.output_text.done", 5, "answer"))
+    done_part = _message_content_part("response.content_part.done", 6, "answer")
+    done_part["part"]["logprobs"] = []
+    assert not validator.validate(done_part)
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_message_added_event())
+    assert validator.validate(_message_content_part("response.content_part.added", 3))
+    assert validator.validate(_message_text_event("response.output_text.delta", 4, "answer"))
+    assert validator.validate(_message_text_event("response.output_text.done", 5, "answer"))
+    assert validator.validate(_message_content_part("response.content_part.done", 6, "answer"))
+    terminal = _message_done_event(7)
+    terminal["item"]["content"][0]["logprobs"] = []
+    assert not validator.validate(terminal)
+
+
+def test_codex_0149_completed_requires_usage_and_no_active_output() -> None:
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_strict_response_event("response.created", 0))
+    assert not validator.validate(_strict_response_event("response.completed", 1))
+
+    validator = _strict_reasoning_validator()
+    assert validator.validate(_strict_response_event("response.created", 0))
+    assert validator.validate(_message_added_event())
+    missing_usage = _strict_response_event("response.completed", 3)
+    missing_usage["response"].pop("usage")
+    assert not validator.validate(missing_usage)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda response: response.update(output="not-a-list"),
+        lambda response: response.update(output=[]),
+        lambda response: response["output"].__setitem__(0, {"type": "function_call"}),
+        lambda response: response["output"].__setitem__(0, {**response["output"][0], "status": "completed"}),
+        lambda response: response["usage"]["input_tokens_details"].update(cached_tokens=-1),
+        lambda response: response["usage"]["output_tokens_details"].update(reasoning_tokens=-1),
+        lambda response: response["usage"]["output_tokens_details"].update(tool_output_tokens="0"),
+        lambda response: response["usage"]["input_tokens_details"].update(
+            input_tokens_per_turn=[0] * 65
+        ),
+        lambda response: response["usage"]["output_tokens_details"].update(
+            tool_output_tokens_per_turn=[0, 1]
+        ),
+        lambda response: response["usage"].update(total_tokens=3),
+    ],
+)
+def test_codex_0149_completed_output_and_usage_reject_malformed_facts(mutation) -> None:
+    validator = _strict_reasoning_validator()
+    assert all(validator.validate(event) for event in _strict_message_prefix_events())
+    completed = _strict_response_event("response.completed", 9)
+    mutation(completed["response"])
+    assert not validator.validate(completed)
+
+
+def test_codex_0149_reasoning_item_lifecycle_is_exactly_scoped() -> None:
+    added = _reasoning_added_event()
+    assert not ResponsesStreamEventValidator(ResponsesStreamValidationProfile()).validate(added)
+    validator = _strict_reasoning_validator()
+    assert validator.validate(added)
+    assert validator.validate(_reasoning_part_event("response.reasoning_part.added", 2))
+    assert validator.validate(
+        _reasoning_text_event("response.reasoning_text.delta", 3, delta="bound")
+    )
+    assert validator.validate(
+        _reasoning_text_event("response.reasoning_text.delta", 4, delta="ed")
+    )
+    assert validator.validate(
+        _reasoning_text_event("response.reasoning_text.done", 5, text="bounded")
+    )
+    assert validator.validate(
+        _reasoning_part_event("response.reasoning_part.done", 6, text="bounded")
+    )
+    assert validator.validate(_reasoning_done_event(7))
+
+
+def test_codex_0149_reasoning_lifecycle_tracks_nonzero_output_index() -> None:
+    validator = _strict_reasoning_validator()
+    events = [
+        _reasoning_added_event(),
+        _reasoning_part_event("response.reasoning_part.added", 2),
+        _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+        _reasoning_text_event("response.reasoning_text.done", 4, text="bounded"),
+        _reasoning_part_event("response.reasoning_part.done", 5, text="bounded"),
+        _reasoning_done_event(6),
+    ]
+    for event in events:
+        event["output_index"] = 4
+    assert all(validator.validate(event) for event in events)
+
+    mismatch = _strict_reasoning_validator()
+    assert mismatch.validate(_reasoning_added_event())
+    bad_delta = _reasoning_text_event("response.reasoning_text.delta", 2, delta="wrong-index")
+    bad_delta["output_index"] = 1
+    assert not mismatch.validate(bad_delta)
+
+
+def test_non_strict_reasoning_text_done_keeps_no_prior_delta_behavior() -> None:
+    validator = ResponsesStreamEventValidator(_profile())
+    assert validator.validate(_reasoning_added_event())
+    event = _reasoning_text_event("response.reasoning_text.done", 2, text="")
+    event.pop("sequence_number")
+    assert validator.validate(event)
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [_reasoning_part_event("response.reasoning_part.added", 1)],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_part_event("response.reasoning_part.added", 3),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_text_event("response.reasoning_text.delta", 2, delta="orphan"),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.done", 3, text=""),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_text_event("response.reasoning_text.done", 4, text="wrong"),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 4, text="bounded"),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_text_event("response.reasoning_text.done", 4, text="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 5, text="wrong"),
+        ],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_text_event("response.reasoning_text.done", 4, text="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 5, text="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 6, text="bounded"),
+        ],
+        [_reasoning_added_event(), _reasoning_done_event(2)],
+        [
+            _reasoning_added_event(),
+            _reasoning_part_event("response.reasoning_part.added", 2),
+            _reasoning_text_event("response.reasoning_text.delta", 3, delta="bounded"),
+            _reasoning_text_event("response.reasoning_text.done", 4, text="bounded"),
+            _reasoning_part_event("response.reasoning_part.done", 5, text="bounded"),
+            _reasoning_done_event(6, text="different"),
+        ],
+    ],
+)
+def test_codex_0149_reasoning_lifecycle_rejects_orphans_duplicates_and_reordering(
+    events: list[dict[str, object]],
+) -> None:
+    validator = _strict_reasoning_validator()
+    results = [validator.validate(event) for event in events]
+    assert results[-1] is False
+
+
+def test_codex_0149_reasoning_lifecycle_rejects_message_and_tool_smuggling() -> None:
+    validator = _strict_reasoning_validator()
+    assert not validator.validate(
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "sequence_number": 1,
+            "item": {"type": "message", "id": "message_1", "content": []},
+        }
+    )
+    assert not validator.validate(
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 2,
+            "delta": "{}",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].update(type="function_call"),
+        lambda event: event["item"].update(extra="authority"),
+        lambda event: event.update(output_index="0"),
+    ],
+)
+def test_codex_0149_reasoning_item_rejects_non_exact_shapes(mutation) -> None:
+    event = _reasoning_added_event()
+    mutation(event)
+    assert not ResponsesStreamEventValidator(
+        ResponsesStreamValidationProfile(codex_reasoning_events=True)
+    ).validate(event)
 
 
 def _done_reasoning(
