@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_CLIENT_MODULE_ID
 from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers.streaming import (
@@ -27,6 +28,12 @@ from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     codex_client_tool_declarations,
     responses_codex_streaming_tool_events_allowed,
+)
+from slaif_gateway.services.responses_gateway import (
+    _build_safe_responses_upstream_body,
+    _codex_local_pair_omits_prompt_cache_key,
+    _codex_reasoning_events_enabled,
+    _derive_pair_local_codex_top_level_profile,
 )
 from slaif_gateway.services.responses_route_capabilities import (
     default_responses_capabilities,
@@ -1589,3 +1596,420 @@ def test_tool_output_interruption_paths_record_estimated_usage(
     assert calls[0]["estimate_reason"] == estimate_reason
     assert calls[0]["estimated_output_tokens"] > 0
     assert PRIVATE_CANARY not in repr(calls[0]["response_metadata"])
+
+
+# Objective 158 permanent pair-local stream contract.  These fixtures contain
+# only synthetic bounded values and exercise the validator without provider I/O.
+def _158_profile(*, functions: bool = True) -> ResponsesStreamValidationProfile:
+    return ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        codex_0149_function_tool_events=functions,
+        declared_client_tools=(
+            frozenset({("functions", "wait", "function")}) if functions else frozenset()
+        ),
+    )
+
+
+def _158_response(event_type: str, sequence_number: int, *, output=None) -> dict[str, object]:
+    response: dict[str, object] = {
+        "id": "response_158",
+        "status": "in_progress",
+    }
+    if event_type == "response.completed":
+        response.update(
+            {
+                "status": "completed",
+                "output": output or [
+                    {
+                        "type": "message",
+                        "id": "final_message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "answer",
+                                "annotations": [],
+                                "logprobs": None,
+                            }
+                        ],
+                        "phase": None,
+                    }
+                ],
+                "usage": {
+                    "input_tokens": 1,
+                    "input_tokens_details": {
+                        "cached_tokens": 0,
+                        "input_tokens_per_turn": [1],
+                        "cached_tokens_per_turn": [0],
+                    },
+                    "output_tokens": 1,
+                    "output_tokens_details": {
+                        "reasoning_tokens": 0,
+                        "tool_output_tokens": 0,
+                        "output_tokens_per_turn": [1],
+                        "tool_output_tokens_per_turn": [0],
+                    },
+                    "total_tokens": 2,
+                },
+            }
+        )
+    return {"type": event_type, "sequence_number": sequence_number, "response": response}
+
+
+def _158_function_events() -> list[dict[str, object]]:
+    arguments = '{"value":"ok"}'
+    return [
+        _158_response("response.created", 0),
+        _158_response("response.in_progress", 1),
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "sequence_number": 2,
+            "item": {
+                "type": "function_call",
+                "id": "function_158",
+                "status": "in_progress",
+                "namespace": None,
+                "name": "wait",
+                "arguments": "",
+                "call_id": "call_158",
+                "caller": None,
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_158",
+            "output_index": 0,
+            "sequence_number": 3,
+            "delta": '{"value":',
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_158",
+            "output_index": 0,
+            "sequence_number": 4,
+            "delta": '"ok"}',
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "function_158",
+            "output_index": 0,
+            "sequence_number": 5,
+            "name": "wait",
+            "arguments": arguments,
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 6,
+            "item": {
+                "type": "function_call",
+                "id": "function_158",
+                "status": "completed",
+                "namespace": None,
+                "name": "wait",
+                "arguments": arguments,
+                "call_id": "call_158",
+                "caller": None,
+            },
+        },
+        _158_response(
+            "response.completed",
+            7,
+            output=[
+                {
+                    "type": "function_call",
+                    "id": "parser_function_158",
+                    "status": "completed",
+                    "namespace": None,
+                    "name": "wait",
+                    "arguments": arguments,
+                    "call_id": "parser_call_158",
+                }
+            ],
+        ),
+    ]
+
+
+def _158_message_events() -> list[dict[str, object]]:
+    return [
+        _158_response("response.created", 0),
+        _158_response("response.in_progress", 1),
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "sequence_number": 2,
+            "item": {
+                "type": "message",
+                "id": "message_158",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+                "phase": None,
+            },
+        },
+        {
+            "type": "response.content_part.added",
+            "item_id": "message_158",
+            "output_index": 1,
+            "content_index": 0,
+            "sequence_number": 3,
+            "part": {"type": "output_text", "text": "", "annotations": [], "logprobs": []},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "message_158",
+            "output_index": 1,
+            "content_index": 0,
+            "sequence_number": 4,
+            "delta": "answer",
+            "logprobs": [],
+        },
+        {
+            "type": "response.output_text.done",
+            "item_id": "message_158",
+            "output_index": 1,
+            "content_index": 0,
+            "sequence_number": 5,
+            "text": "answer",
+            "logprobs": [],
+        },
+        {
+            "type": "response.content_part.done",
+            "item_id": "message_158",
+            "output_index": 1,
+            "content_index": 0,
+            "sequence_number": 6,
+            "part": {"type": "output_text", "text": "answer", "annotations": [], "logprobs": None},
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "sequence_number": 7,
+            "item": {
+                "type": "message",
+                "id": "message_158",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "answer",
+                        "annotations": [],
+                        "logprobs": None,
+                    }
+                ],
+                "phase": None,
+                "summary": [],
+            },
+        },
+        _158_response("response.completed", 8),
+    ]
+
+
+def test_158_pair_profile_and_prompt_cache_are_contained() -> None:
+    assert _codex_reasoning_events_enabled(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        server_context={"identity_mode": "static"},
+    )
+    assert not _codex_reasoning_events_enabled(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID, server_context=None
+    )
+    assert not _codex_reasoning_events_enabled(
+        client_module_id="openai-default", server_context={"identity_mode": "static"}
+    )
+    assert _codex_local_pair_omits_prompt_cache_key(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context={"identity_mode": "static"},
+    )
+    assert not _codex_local_pair_omits_prompt_cache_key(
+        client_module_id="openai-default",
+        local_coding_server_context={"identity_mode": "static"},
+    )
+    policy_result = SimpleNamespace(
+        effective_body={
+            "model": "classroom-codex",
+            "input": "bounded",
+            "instructions": "bounded",
+            "prompt_cache_key": "stable",
+            "stream": True,
+        }
+    )
+    original = copy.deepcopy(policy_result.effective_body)
+    generic = _build_safe_responses_upstream_body(
+        policy_result=policy_result, upstream_model="classroom-codex"
+    )
+    local = _build_safe_responses_upstream_body(
+        policy_result=policy_result,
+        upstream_model="classroom-codex",
+        omit_prompt_cache_key=True,
+    )
+    assert policy_result.effective_body == original
+    assert local == {key: value for key, value in generic.items() if key != "prompt_cache_key"}
+
+
+def test_158_top_level_tools_activate_only_after_local_resolution() -> None:
+    body = {
+        "model": "classroom-codex",
+        "input": "hello",
+        "tools": [
+            {"type": "function", "name": "wait", "description": "bounded", "parameters": {}},
+            {"type": "custom", "name": "exec", "description": "bounded", "format": {}},
+        ],
+        "stream": True,
+    }
+    assert _derive_pair_local_codex_top_level_profile(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context={"identity_mode": "static"},
+        effective_body=body,
+    ) == (frozenset({("functions", "wait", "function"), ("functions", "exec", "custom")}), True)
+    assert _derive_pair_local_codex_top_level_profile(
+        client_module_id=CODEX_0149_CLIENT_MODULE_ID,
+        local_coding_server_context=None,
+        effective_body=body,
+    ) == (frozenset(), False)
+
+
+def test_158_function_lifecycle_and_parser_independent_terminal_ids() -> None:
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert all(validator.validate(event) for event in _158_function_events())
+    candidates = validator.take_replay_reference_candidates()
+    assert len(candidates) == 1
+    assert candidates[0].item_kind == "function_call"
+    assert "function_158" not in json.dumps(validator.safe_evidence())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["item"].update(output_index=0),
+        lambda event: event["item"].update(sequence_number=2),
+        lambda event: event["item"].update(caller={"type": "direct"}),
+        lambda event: event.pop("output_index"),
+        lambda event: event.pop("sequence_number"),
+    ],
+)
+def test_158_function_event_shapes_reject_coordinate_and_caller_smuggling(mutation) -> None:
+    events = _158_function_events()
+    mutation(events[6])
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert all(validator.validate(event) for event in events[:6])
+    assert not validator.validate(events[6])
+
+
+@pytest.mark.parametrize("index", [1])
+def test_158_function_delta_rejects_wrong_output_index(index: int) -> None:
+    events = _158_function_events()
+    events[3]["output_index"] = index
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+
+def test_158_function_lifecycle_rejects_orphans_duplicates_reorder_and_post_terminal() -> None:
+    events = _158_function_events()
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert not validator.validate(events[2])
+    assert validator.validate(events[0]) and validator.validate(events[1])
+    assert not validator.validate(events[5])
+
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert all(validator.validate(event) for event in events)
+    assert not validator.validate(copy.deepcopy(events[3]))
+    assert not validator.validate(copy.deepcopy(events[6]))
+
+    reordered = _158_function_events()
+    reordered[4]["sequence_number"] = 3
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert all(validator.validate(event) for event in reordered[:4])
+    assert not validator.validate(reordered[4])
+
+
+def test_158_message_lifecycle_is_strict_and_function_profile_preserves_it() -> None:
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert all(validator.validate(event) for event in _158_message_events())
+
+
+def test_158_reasoning_lifecycle_supports_nonzero_index_and_non_strict_legacy_done() -> None:
+    events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 4,
+            "sequence_number": 1,
+            "item": {
+                "type": "reasoning", "id": "reasoning_158", "summary": [],
+                "content": None, "encrypted_content": None, "status": "in_progress",
+            },
+        },
+        {
+            "type": "response.reasoning_part.added", "item_id": "reasoning_158",
+            "output_index": 4, "content_index": 0, "sequence_number": 2,
+            "part": {"type": "reasoning_text", "text": ""},
+        },
+        {
+            "type": "response.reasoning_text.delta", "item_id": "reasoning_158",
+            "output_index": 4, "content_index": 0, "sequence_number": 3, "delta": "safe",
+        },
+        {
+            "type": "response.reasoning_text.done", "item_id": "reasoning_158",
+            "output_index": 4, "content_index": 0, "sequence_number": 4, "text": "safe",
+        },
+        {
+            "type": "response.reasoning_part.done", "item_id": "reasoning_158",
+            "output_index": 4, "content_index": 0, "sequence_number": 5,
+            "part": {"type": "reasoning_text", "text": "safe"},
+        },
+        {
+            "type": "response.output_item.done", "output_index": 4, "sequence_number": 6,
+            "item": {
+                "type": "reasoning", "id": "reasoning_158", "summary": [],
+                "content": [{"type": "reasoning_text", "text": "safe"}],
+                "encrypted_content": None, "status": "completed",
+            },
+        },
+    ]
+    validator = ResponsesStreamEventValidator(_158_profile(functions=False))
+    assert all(validator.validate(event) for event in events)
+    legacy = ResponsesStreamEventValidator(_profile())
+    no_prior = copy.deepcopy(events[3])
+    no_prior.pop("sequence_number")
+    assert legacy.validate(events[0])
+    assert legacy.validate(no_prior) is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda event: event["response"].update(output=[]),
+        lambda event: event["response"]["usage"].update(total_tokens=3),
+        lambda event: event["response"]["usage"]["input_tokens_details"].update(cached_tokens=-1),
+        lambda event: event["response"]["usage"]["output_tokens_details"].update(
+            output_tokens_per_turn=[0] * 65
+        ),
+    ],
+)
+def test_158_completed_usage_output_bounds_are_fail_closed(mutation) -> None:
+    events = _158_message_events()
+    completed = events[-1]
+    mutation(completed)
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert all(validator.validate(event) for event in events[:-1])
+    assert not validator.validate(completed)
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "response.web_search_call.in_progress", "item_id": "ws"},
+        {"type": "response.mcp_call.in_progress", "item_id": "mcp"},
+        {"type": "response.output_item.added", "output_index": 0, "sequence_number": 2,
+         "item": {"type": "custom_tool_call", "id": "custom", "status": "in_progress"}},
+    ],
+)
+def test_158_hosted_mcp_unknown_and_custom_smuggling_are_denied(event) -> None:
+    validator = ResponsesStreamEventValidator(_158_profile())
+    assert validator.validate(_158_response("response.created", 0))
+    assert validator.validate(_158_response("response.in_progress", 1))
+    assert not validator.validate(event)

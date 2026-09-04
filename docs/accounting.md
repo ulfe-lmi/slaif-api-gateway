@@ -78,6 +78,13 @@ Core invariants:
   live-burn estimation count their bounded canonical bytes, but safe evidence
   retains only category/count/byte totals. It never retains call IDs, item IDs,
   arguments, results, reasoning, or message text.
+- The exact Codex 0.149 Local stream profile applies ordinary
+  `strict_bounded` accounting to the reviewed reasoning/function/message
+  lifecycle. A valid terminal response must contain bounded detailed usage and
+  no active item or part. Unknown, malformed, incomplete, or disconnected
+  streams follow the existing rollback/interrupted-estimate law and never
+  become a normal successful ledger row. Validator state is transient and
+  contains no persisted content, identifiers, or raw provider events.
 - Fully gated Codex function/custom output items may carry the pinned optional
   bounded `id`. When present, its complete canonical bytes are included in
   model-input admission and cost estimation, including the existing item-ID
