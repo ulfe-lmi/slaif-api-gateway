@@ -69,6 +69,11 @@ visible-reasoning dialect: an absent or null reasoning item ID is preserved as
 such, never fabricated, and visible summary/content text is bounded and
 transient. `encrypted_content: null` is not encrypted replay; a non-null
 encrypted value still requires the existing independently gated ID-bound path.
+For function/custom tool continuations in that same pair, an absent item ID
+does not weaken ownership: the mandatory call ID must resolve to exactly one
+active same-key HMAC reference with matching tool and route/provider/model
+facts. Wrong, expired, duplicate, cross-key, or cross-route references fail
+closed; a present wrong item ID never downgrades to call-ID-only lookup.
 Provider catalog proposal tooling follows the same rule: it reads official
 provider docs/APIs and writes proposal artifacts to the operator's output
 directory only. It does not write raw provider pages/responses to PostgreSQL,

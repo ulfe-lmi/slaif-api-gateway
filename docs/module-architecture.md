@@ -79,8 +79,11 @@ The exact Codex 0.149 Local pair additionally owns the bounded visible-
 reasoning request dialect and the strict reasoning/function/message stream
 profile. Visible reasoning may omit or explicitly null its item ID without
 fabrication; encrypted reasoning remains independently ID-bound and gated.
-ID-less tool replay and second-turn request behavior are not part of this
-client-module contract.
+ID-less function/custom tool-call items are part of the exact 0.149 Local pair
+only: the mandatory call ID is authenticated through the existing same-key,
+same-route/provider/model HMAC replay reference, without fabricating an item
+ID. The second-turn adjacent call/output contract remains pair-local and
+default-denied for every other client or server.
 
 Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. Identity hints from Codex metadata are transient

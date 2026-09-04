@@ -150,6 +150,17 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
         "reasoning_dialect_version": "4",
     }
     assert CODEX_0149_CLIENT_MODULE.policy_spec is CODEX_0149_POLICY_SPEC
+    assert CODEX_0149_CLIENT_MODULE.policy_spec.function_call_item_id_optional is True
+    assert CODEX_0149_CLIENT_MODULE.policy_spec.custom_tool_call_item_id_optional is True
+    assert CODEX_0149_CLIENT_MODULE.policy_spec.allow_idless_tool_call_replay is True
+
+
+def test_default_and_0147_specs_keep_tool_call_ids_strict() -> None:
+    from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
+
+    assert CODEX_0147_POLICY_SPEC.function_call_item_id_optional is False
+    assert CODEX_0147_POLICY_SPEC.custom_tool_call_item_id_optional is False
+    assert CODEX_0147_POLICY_SPEC.allow_idless_tool_call_replay is False
 
 
 def test_0149_extracts_only_equal_canonical_session_aliases() -> None:

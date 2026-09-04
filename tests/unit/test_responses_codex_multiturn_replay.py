@@ -192,6 +192,93 @@ def test_0149_visible_reasoning_requires_request_envelope_gate() -> None:
     assert exc_info.value.error_code == "responses_codex_envelope_not_allowed"
 
 
+def test_0149_idless_function_call_preserves_absence_and_uses_call_anchor() -> None:
+    taxonomy = frozenset({("functions", "exec", "function")})
+    body = _body(
+        [
+            {
+                "type": "function_call",
+                "name": "exec",
+                "namespace": "functions",
+                "arguments": "{}",
+                "call_id": "call_1",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "bounded result",
+            },
+        ]
+    )
+    body["tools"] = [
+        {
+            "type": "function",
+            "name": "exec",
+            "description": "bounded executor",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        }
+    ]
+    result = _policy_0149(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        codex_top_level_tool_taxonomy=taxonomy,
+    )
+    canonical_call = result.effective_body["input"][0]
+    assert isinstance(canonical_call, dict)
+    assert "id" not in canonical_call
+    candidates = codex_replay_request_candidates(
+        result.effective_body,
+        top_level_tool_taxonomy=taxonomy,
+        allow_idless_tool_call_replay=True,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].item_id is None
+    assert candidates[0].call_id == "call_1"
+
+
+def test_0149_idless_custom_tool_call_preserves_explicit_null_id() -> None:
+    taxonomy = frozenset({("functions", "exec", "custom")})
+    body = _body(
+        [
+            {
+                "type": "custom_tool_call",
+                "name": "exec",
+                "namespace": "functions",
+                "input": "bounded input",
+                "call_id": "call_1",
+                "id": None,
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_1",
+                "output": "bounded result",
+            },
+        ]
+    )
+    body["tools"] = [{"type": "custom", "name": "exec", "format": {"type": "text"}}]
+    result = _policy_0149(Settings()).apply(
+        body,
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+        allow_codex_streaming_tool_events=True,
+        codex_top_level_tool_taxonomy=taxonomy,
+    )
+    assert result.effective_body["input"][0]["id"] is None
+    candidates = codex_replay_request_candidates(
+        result.effective_body,
+        top_level_tool_taxonomy=taxonomy,
+        allow_idless_tool_call_replay=True,
+    )
+    assert len(candidates) == 1
+    assert candidates[0].item_id is None
+
+
 def test_default_responses_policy_rejects_visible_reasoning_without_public_id() -> None:
     body = {
         "model": "ordinary-model",

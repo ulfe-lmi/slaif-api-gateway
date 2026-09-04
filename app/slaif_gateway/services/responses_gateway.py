@@ -55,7 +55,11 @@ from slaif_gateway.modules.clients.registry import (
     normalize_default_client_request,
     resolve_responses_client_module,
 )
-from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_CLIENT_MODULE_ID
+from slaif_gateway.modules.clients.codex_0149 import (
+    CODEX_0149_CLIENT_MODULE_ID,
+    codex_0149_declared_tool_taxonomy,
+    codex_0149_streaming_tool_events_requested,
+)
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
 from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_SERVER_MODULE_ID,
@@ -149,6 +153,7 @@ from slaif_gateway.services.responses_request_policy import (
     conversation_requested,
     previous_response_id_requested,
     responses_codex_client_tools_allowed,
+    responses_codex_0149_tool_roundtrip_requested,
     responses_codex_client_tools_requested,
     responses_codex_compaction_allowed,
     responses_codex_compaction_replay_requested,
@@ -187,6 +192,8 @@ from slaif_gateway.services.responses_streaming_live_burn import (
     responses_streaming_live_burn_policy_from_metadata,
     safe_responses_streaming_interrupted_estimate_metadata,
 )
+
+
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
 from slaif_gateway.services.upstream_payloads import (
@@ -206,6 +213,7 @@ from slaif_gateway.services.upstream_request_contracts import (
     normalize_responses_input_tokens_upstream_request,
     normalize_responses_upstream_request,
 )
+
 
 RESPONSES_ENDPOINT = "/v1/responses"
 RESPONSES_PROVIDER_ENDPOINT = "responses"
@@ -368,9 +376,10 @@ def _build_local_coding_server_context(
 def _codex_reasoning_events_enabled(
     *, client_module_id: str, server_context: Mapping[str, object] | None
 ) -> bool:
-    """Contain the strict stream profile to the reviewed Codex/Local pair."""
-
-    return client_module_id == CODEX_0149_CLIENT_MODULE_ID and server_context is not None
+    return (
+        client_module_id == "codex-0.149-responses-v1"
+        and server_context is not None
+    )
 
 
 def _derive_pair_local_codex_top_level_profile(
@@ -378,22 +387,21 @@ def _derive_pair_local_codex_top_level_profile(
     client_module_id: str,
     local_coding_server_context: Mapping[str, object] | None,
     effective_body: Mapping[str, object],
+    declared_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
 ) -> tuple[frozenset[tuple[str, str, str]], bool]:
-    """Derive bounded top-level local-tool facts only after Local resolution."""
+    """Derive 0.149 top-level tool facts only after Local route resolution."""
 
-    if client_module_id != CODEX_0149_CLIENT_MODULE_ID or local_coding_server_context is None:
+    if (
+        client_module_id != CODEX_0149_CLIENT_MODULE_ID
+        or local_coding_server_context is None
+    ):
         return frozenset(), False
-    tools = effective_body.get("tools")
-    if not isinstance(tools, list):
-        return frozenset(), False
-    declarations = frozenset(
-        ("functions", tool["name"], tool["type"])
-        for tool in tools
-        if isinstance(tool, Mapping)
-        and tool.get("type") in {"function", "custom"}
-        and isinstance(tool.get("name"), str)
+    declarations = (
+        declared_tool_taxonomy
+        if declared_tool_taxonomy is not None
+        else codex_0149_declared_tool_taxonomy(effective_body)
     )
-    return declarations, effective_body.get("stream") is True and bool(declarations)
+    return declarations, codex_0149_streaming_tool_events_requested(effective_body)
 
 
 def _codex_local_pair_omits_prompt_cache_key(
@@ -401,7 +409,10 @@ def _codex_local_pair_omits_prompt_cache_key(
     client_module_id: str,
     local_coding_server_context: Mapping[str, object] | None,
 ) -> bool:
-    return client_module_id == CODEX_0149_CLIENT_MODULE_ID and local_coding_server_context is not None
+    return (
+        client_module_id == CODEX_0149_CLIENT_MODULE_ID
+        and local_coding_server_context is not None
+    )
 
 
 def _build_safe_responses_compact_upstream_body(
@@ -932,6 +943,14 @@ async def handle_response_create(
         raise _openai_error_from_client_module_error(exc) from exc
     body = normalized_client_request.body
     _ensure_client_module_pair_exists(client_module.module_id)
+    codex_0149_full_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None
+    if client_module.module_id == CODEX_0149_CLIENT_MODULE_ID:
+        try:
+            taxonomy = codex_0149_declared_tool_taxonomy(body)
+            if taxonomy:
+                codex_0149_full_tool_taxonomy = taxonomy
+        except ModuleSelectionError as exc:
+            raise _openai_error_from_client_module_error(exc) from exc
     adapter_managed_candidates = frozenset(
         normalized_client_request.adapter_managed_declaration_candidates
     )
@@ -967,6 +986,17 @@ async def handle_response_create(
     codex_streaming_tool_events_requested = responses_codex_streaming_tool_events_requested(body)
     allow_codex_streaming_tool_events = responses_codex_streaming_tool_events_allowed(
         authenticated_key.responses_policy
+    )
+    codex_0149_continuation_taxonomy = (
+        codex_0149_full_tool_taxonomy
+        if (
+            client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+            and allow_codex_request_envelope
+            and allow_codex_client_tools
+            and allow_codex_streaming_tool_events
+            and responses_codex_0149_tool_roundtrip_requested(body)
+        )
+        else None
     )
     codex_encrypted_reasoning_replay_requested = (
         responses_codex_encrypted_reasoning_replay_requested(body)
@@ -1008,16 +1038,32 @@ async def handle_response_create(
             adapter_managed_declaration_shapes=(
                 normalized_client_request.adapter_managed_declaration_shapes
             ),
+            codex_top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
 
-    replay_candidates = codex_replay_request_candidates(policy_result.effective_body)
-    replay_authorization = await _verify_owned_codex_replay_references(
-        candidates=replay_candidates,
-        authenticated_key=authenticated_key,
-        settings=settings,
-        request=request,
+    allow_idless_tool_call_replay = bool(
+        client_module.module_id == CODEX_0149_CLIENT_MODULE_ID
+        and client_module.policy_spec is not None
+        and client_module.policy_spec.allow_idless_tool_call_replay
+    )
+    replay_candidates = codex_replay_request_candidates(
+        policy_result.effective_body,
+        allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+        top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
+    )
+    defer_idless_replay = any(candidate.item_id is None for candidate in replay_candidates)
+    replay_authorization = (
+        CodexReplayAuthorization(references=())
+        if defer_idless_replay
+        else await _verify_owned_codex_replay_references(
+            candidates=replay_candidates,
+            authenticated_key=authenticated_key,
+            settings=settings,
+            request=request,
+            allow_idless_tool_call_replay=allow_idless_tool_call_replay,
+        )
     )
     request_id = _request_id_from_request(request)
     route = await _resolve_responses_route(
@@ -1056,11 +1102,27 @@ async def handle_response_create(
         route=route,
         settings=settings,
     )
-    pair_local_codex_tools, pair_local_codex_streaming_tools = (
+    if defer_idless_replay:
+        if local_coding_server_context is None:
+            raise OpenAICompatibleError(
+                "The selected client and server modules are not compatible.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="incompatible_client_server_pair",
+            )
+        replay_authorization = await _verify_owned_codex_replay_references(
+            candidates=replay_candidates,
+            authenticated_key=authenticated_key,
+            settings=settings,
+            request=request,
+            allow_idless_tool_call_replay=True,
+        )
+    pair_local_codex_top_level_tools, pair_local_codex_streaming_tools = (
         _derive_pair_local_codex_top_level_profile(
             client_module_id=client_module.module_id,
             local_coding_server_context=local_coding_server_context,
             effective_body=policy_result.effective_body,
+            declared_tool_taxonomy=codex_0149_full_tool_taxonomy,
         )
     )
     if pair_local_codex_streaming_tools:
@@ -1090,8 +1152,12 @@ async def handle_response_create(
                     responses_custom_tools_requested(policy_result.effective_body)
                     and not codex_client_tools_requested
                 ),
-                image_input_requested=responses_image_input_requested(policy_result.effective_body),
-                file_input_requested=responses_file_input_requested(policy_result.effective_body),
+                image_input_requested=responses_image_input_requested(
+                    policy_result.effective_body
+                ),
+                file_input_requested=responses_file_input_requested(
+                    policy_result.effective_body
+                ),
                 input_token_count_requested=False,
                 stored_responses_requested=policy_result.effective_body.get("store") is True,
                 previous_response_id_requested=previous_response_id_requested(
@@ -1275,7 +1341,7 @@ async def handle_response_create(
                             codex_encrypted_reasoning_event_requested
                         ),
                             declared_client_tools=(
-                                pair_local_codex_tools
+                                pair_local_codex_top_level_tools
                                 if pair_local_codex_streaming_tools
                                 else codex_client_tool_declarations(policy_result.effective_body)
                             ),
@@ -2014,6 +2080,7 @@ async def _verify_owned_codex_replay_references(
     authenticated_key: AuthenticatedGatewayKey,
     settings: Settings,
     request: Request | None,
+    allow_idless_tool_call_replay: bool = False,
 ) -> CodexReplayAuthorization:
     if not candidates:
         return CodexReplayAuthorization(references=())
@@ -2031,6 +2098,7 @@ async def _verify_owned_codex_replay_references(
             return await service.verify_owned_replay(
                 candidates=candidates,
                 gateway_key_id=authenticated_key.gateway_key_id,
+                allow_idless_tool_call_replay=allow_idless_tool_call_replay,
             )
         except CodexReplayReferenceError as exc:
             raise _openai_error_from_codex_replay_error(exc) from exc
