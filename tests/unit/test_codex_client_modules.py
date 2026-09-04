@@ -323,11 +323,13 @@ def test_registry_uses_only_server_side_metadata_and_legacy_0147_path() -> None:
         )
 
 
-def test_0149_has_no_active_server_pair_before_objective_157() -> None:
+def test_0149_has_only_the_local_coding_server_pair() -> None:
     ensure_client_server_pair(CODEX_0147_CLIENT_MODULE_ID, "openai")
-    with pytest.raises(ProviderConfigurationError, match="no compatible"):
-        ensure_client_module_has_server_pair(CODEX_0149_CLIENT_MODULE_ID)
+    ensure_client_module_has_server_pair(CODEX_0149_CLIENT_MODULE_ID)
+    ensure_client_server_pair(CODEX_0149_CLIENT_MODULE_ID, "local-coding-v1")
     for server_module_id in SERVER_MODULE_REGISTRY:
+        if server_module_id == "local-coding-v1":
+            continue
         with pytest.raises(ProviderConfigurationError, match="incompatible"):
             ensure_client_server_pair(CODEX_0149_CLIENT_MODULE_ID, server_module_id)
     with pytest.raises(ProviderConfigurationError, match="incompatible"):
@@ -391,7 +393,7 @@ def test_responses_handler_denies_0149_before_policy_or_provider_work(monkeypatc
         responses_policy={
             "client_module": {
                 "id": CODEX_0149_CLIENT_MODULE_ID,
-                "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                "version": "1",
                 "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
             }
         }
@@ -410,7 +412,7 @@ def test_responses_handler_denies_0149_before_policy_or_provider_work(monkeypatc
                 settings=SimpleNamespace(),
             )
         )
-    assert exc_info.value.code == "incompatible_client_server_pair"
+    assert exc_info.value.code == "client_module_fixture_mismatch"
 
 
 def test_0149_required_search_choice_denies_before_policy_or_provider_work(monkeypatch) -> None:

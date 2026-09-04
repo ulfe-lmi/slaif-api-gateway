@@ -15,11 +15,12 @@ This document describes implemented forwarding behavior only.
 
 Responses client modules are selected from reviewed server-side key/profile
 metadata before provider construction. `codex-0.147-responses-v1` has one
-explicit OpenAI server pair. `codex-0.149-responses-v1` has no compatible
-server pair and therefore cannot reach this forwarding contract. Its
-The observed adapter-managed `web_search` candidate is never converted into
-hosted-tool admission, external-tool pricing, or provider payload authority by
-the Gateway; unobserved `tool_search` remains rejected.
+explicit OpenAI server pair. `codex-0.149-responses-v1` has exactly one
+explicit `local-coding-v1` pair. That pair reaches this forwarding contract
+only after the independent endpoint, key, model, route, capability, pricing,
+quota, accounting, and identity gates pass. The observed adapter-managed
+`tool_search` and `web_search` candidates are never converted into hosted-tool
+admission, external-tool pricing, or provider payload authority by the Gateway.
 
 Operator-defined generic backend discovery is a separate explicit operator
 workflow. It issues one bounded `GET <base_url>/models` using the configured
@@ -27,6 +28,25 @@ server-side bearer secret, with redirects and retries disabled, and retains
 only safe unique model IDs. It does not forward discovery content, persist the
 raw response, infer capabilities, or grant hosted-tool authority. Confirmed
 setup metadata is re-probed and written atomically through PostgreSQL.
+
+## Local Coding server module
+
+`local-coding-v1` is a literal static server module for the exact
+`openai_compatible` Local Coding route contract. Its adapter supports only
+Responses create and Responses SSE streaming, serializes the validated
+canonical mapping once as deterministic UTF-8 JSON, and sends those exact
+bytes with `content=...`. It constructs a separate service Bearer from the
+provider row and never forwards the public Gateway Bearer, cookies, caller
+headers, or arbitrary `X-SLAIF-*` headers.
+
+Signed identity mode derives principal, session, and repository namespaces from
+authenticated owner/key truth, the corroborated Codex session hint, and the
+server-side repository scope with domain-separated HMACs. It signs method,
+path, raw query, exact body, identity fields, timestamp, and nonce. The
+producer validates the Local peer grammar before signing; replay protection is
+process-local TTL/LRU and requires the reviewed single-worker deployment mode.
+This is mocked/cross-contract conformance only, not a protected or deployment
+qualification.
 
 ## Provider Adapters
 
