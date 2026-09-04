@@ -4,6 +4,7 @@ import asyncio
 import http.client
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -52,6 +53,55 @@ def test_obligation_manifest_is_complete_and_bounded() -> None:
 def test_obligation_evaluator_reports_exact_empty_missing_list() -> None:
     assert verifier.evaluate_obligations() == []
     assert f"missing={verifier.evaluate_obligations()}" == "missing=[]"
+
+
+def test_doctrine_link_mutations_report_the_exact_missing_location() -> None:
+    documents = {
+        "AGENTS.md": "AGENTIC_CLIENT_INTEGRATION.md",
+        "docs/module-architecture.md": "../AGENTIC_CLIENT_INTEGRATION.md",
+        "docs/responses-compatibility.md": "../AGENTIC_CLIENT_INTEGRATION.md",
+        "docs/compatibility-matrix.md": "../AGENTIC_CLIENT_INTEGRATION.md",
+    }
+    assert verifier.missing_doctrine_links(documents) == []
+    for path, expected in (
+        ("AGENTS.md", "doctrine_link:AGENTS.md"),
+        ("docs/module-architecture.md", "doctrine_link:docs/module-architecture.md"),
+        ("docs/responses-compatibility.md", "doctrine_link:docs/responses-compatibility.md"),
+        ("docs/compatibility-matrix.md", "doctrine_link:docs/compatibility-matrix.md"),
+    ):
+        mutated = dict(documents)
+        mutated[path] = ""
+        assert verifier.missing_doctrine_links(mutated) == [expected]
+
+
+def test_gateway_failure_projection_is_finite_and_value_free() -> None:
+    observation = SimpleNamespace(
+        request_count=1,
+        response_statuses=[400],
+        error_codes=["responses_tool_invalid_shape"],
+        error_shapes=["error_invalid_request_tools_description"],
+        request_shapes=["stream_true_tools_function[name,type]_input_message"],
+    )
+    code = verifier._safe_gateway_failure_code(observation, "AttributeError")
+    assert code == (
+        "gateway_requests_one_status_4xx_error_responses_tool_invalid_shape_"
+        "shape_error_invalid_request_tools_description_exception_AttributeError_"
+        "profile_stream_true_function_input_message"
+    )
+    assert len(code) <= 512
+    assert all(char.isalnum() or char in "_+.-" for char in code)
+    unknown = SimpleNamespace(
+        request_count=9,
+        response_statuses=[0],
+        error_codes=["private-value"],
+        error_shapes=["bad value"],
+        request_shapes=["private value"],
+    )
+    unknown_code = verifier._safe_gateway_failure_code(unknown, "UnexpectedError")
+    assert unknown_code == (
+        "gateway_requests_other_status_other_error_other_shape_other_exception_other_"
+        "profile_stream_other"
+    )
 
 
 def test_gateway_observer_owns_request_projection() -> None:

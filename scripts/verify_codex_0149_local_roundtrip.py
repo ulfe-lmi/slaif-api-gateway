@@ -17,6 +17,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -83,6 +84,61 @@ _UNCHANGED_BLOBS = {
     "tests/unit/test_oap_governance.py": "8ff65fc27e89c6d432a8128619b4e53a3bcedf21",
     "AGENTIC_CLIENT_INTEGRATION.md": "7c48c679d14aa127f0c31fc3260e4a3fb01ee25f",
 }
+_DOCTRINE_LINKS = (
+    "AGENTIC_CLIENT_INTEGRATION.md",
+    "docs/module-architecture.md",
+    "docs/responses-compatibility.md",
+    "docs/compatibility-matrix.md",
+)
+_SAFE_FAILURE_COMPONENT = re.compile(r"^[a-z0-9_+.-]{1,160}$")
+
+
+def missing_doctrine_links(documents: dict[str, str]) -> list[str]:
+    """Return fixed missing-link classes for the four authority locations."""
+    missing: list[str] = []
+    if "AGENTIC_CLIENT_INTEGRATION.md" not in documents.get("AGENTS.md", ""):
+        missing.append("doctrine_link:AGENTS.md")
+    for path_text in _DOCTRINE_LINKS[1:]:
+        if "../AGENTIC_CLIENT_INTEGRATION.md" not in documents.get(path_text, ""):
+            missing.append(f"doctrine_link:{path_text}")
+    return missing
+
+
+def _safe_gateway_failure_code(observation: object, exception_class: str = "none") -> str:
+    """Project Gateway observations into one bounded, value-free class."""
+    request_count = getattr(observation, "request_count", 0)
+    request_class = "one" if request_count == 1 else "two" if request_count == 2 else "other"
+    statuses = getattr(observation, "response_statuses", [])
+    status = statuses[-1] if statuses else 0
+    status_class = "2xx" if 200 <= status < 300 else "4xx" if 400 <= status < 500 else "5xx" if 500 <= status < 600 else "other"
+    codes = getattr(observation, "error_codes", [])
+    code = codes[-1] if codes and codes[-1] in _GATEWAY_ERROR_CODES else "other"
+    shapes = getattr(observation, "error_shapes", [])
+    shape = shapes[-1] if shapes and _SAFE_FAILURE_COMPONENT.fullmatch(shapes[-1]) else "other"
+    profiles = getattr(observation, "request_shapes", [])
+    raw_profile = profiles[-1] if profiles else ""
+    if "stream_true" not in raw_profile:
+        profile = "stream_other"
+    else:
+        tool_class = (
+            "function_custom_web_search"
+            if all(token in raw_profile for token in ("function[", "custom[", "web_search["))
+            else "function_custom"
+            if "function[" in raw_profile and "custom[" in raw_profile
+            else "function"
+            if "function[" in raw_profile
+            else "other"
+        )
+        input_class = (
+            "message"
+            if "_input_message" in raw_profile
+            else "function_continuation"
+            if "function_call,function_call_output" in raw_profile
+            else "other"
+        )
+        profile = f"stream_true_{tool_class}_input_{input_class}"
+    safe_exception = exception_class if exception_class in {"none", "AttributeError", "ValueError", "TypeError", "KeyError", "IndexError", "other"} else "other"
+    return f"gateway_requests_{request_class}_status_{status_class}_error_{code}_shape_{shape}_exception_{safe_exception}_profile_{profile}"
 
 
 def _git_blob_hash(path: Path) -> str:
@@ -139,15 +195,12 @@ def evaluate_obligations() -> list[str]:
         path = REPO_ROOT / path_text
         if not path.is_file() or _git_blob_hash(path) != expected:
             missing.append(f"unchanged:{path_text}")
-    doctrine = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
-    for link in (
-        "AGENTIC_CLIENT_INTEGRATION.md",
-        "docs/responses-compatibility.md",
-        "docs/provider-forwarding-contract.md",
-        "docs/security-model.md",
-    ):
-        if link not in doctrine:
-            missing.append(f"doctrine_link:{link}")
+    documents = {
+        path_text: (REPO_ROOT / path_text).read_text(encoding="utf-8")
+        for path_text in ("AGENTS.md", *_DOCTRINE_LINKS[1:])
+        if (REPO_ROOT / path_text).is_file()
+    }
+    missing.extend(missing_doctrine_links(documents))
     return missing
 
 
@@ -928,7 +981,17 @@ def run_roundtrip() -> str:
                     category = _safe_codex_failure_category(stderr, stdout)
                     del stdout, stderr
                     if gateway_observation.request_count and not state.request_count:
-                        raise VerificationError("gateway_pre_local_rejected")
+                        exception_class = (
+                            gateway_errors.exception_classes[-1]
+                            if gateway_errors.exception_classes
+                            else "none"
+                        )
+                        raise VerificationError(
+                            _safe_gateway_failure_code(
+                                gateway_observation,
+                                exception_class,
+                            )
+                        )
                     raise VerificationError(
                         f"codex_no_gateway_request_{category}"
                         if state.request_count == 0
