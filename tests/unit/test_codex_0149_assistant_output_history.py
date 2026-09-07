@@ -47,7 +47,9 @@ def test_history_projection_is_structural_and_discards_text() -> None:
 
 def test_history_projection_rejects_empty_invalid_and_oversized_text_classes() -> None:
     empty = verifier._safe_history_projection(_history_body(""))
-    oversized = verifier._safe_history_projection(_history_body("x" * (verifier.MAX_HISTORY_TEXT_BYTES + 1)))
+    oversized = verifier._safe_history_projection(
+        _history_body("x" * (verifier.MAX_HISTORY_TEXT_BYTES + 1))
+    )
     invalid = verifier._safe_history_projection(_history_body("\udcff"))
 
     assert empty["assistant_output_text_nonempty_unicode"] is False
@@ -83,7 +85,12 @@ def test_zero_retry_and_resume_image_command_shape_is_explicit(tmp_path) -> None
     )
     shape = verifier._command_shape(command)
 
-    assert shape == {"zero_request_retries": True, "zero_stream_retries": True, "resume": True, "image": True}
+    assert shape == {
+        "zero_request_retries": True,
+        "zero_stream_retries": True,
+        "resume": True,
+        "image": True,
+    }
     assert "123e4567-e89b-12d3-a456-426614174000" in command
     assert str(tmp_path / "synthetic.png") in command
 
@@ -146,5 +153,8 @@ def test_error_projection_unknown_and_malformed_inputs_are_fixed() -> None:
         "error_code": "other",
         "param_class": "other",
     }
-    assert verifier._fixed_param_class("input[1].content[0].type") == "input_index_1_content_index_0_type"
+    assert (
+        verifier._fixed_param_class("input[1].content[0].type")
+        == "input_index_1_content_index_0_type"
+    )
     assert verifier._fixed_param_class("input[5].content[0].type.extra") == "other"

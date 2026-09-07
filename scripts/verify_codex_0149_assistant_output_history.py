@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import hashlib
 import hmac
 import http.client
 import http.server
@@ -150,12 +149,22 @@ def _safe_progress_class(value: int) -> str:
 def _safe_status_class(value: int | None) -> str:
     if value is None:
         return "none"
-    return "2xx" if 200 <= value < 300 else "4xx" if 400 <= value < 500 else "5xx" if 500 <= value < 600 else "other"
+    return (
+        "2xx"
+        if 200 <= value < 300
+        else "4xx"
+        if 400 <= value < 500
+        else "5xx"
+        if 500 <= value < 600
+        else "other"
+    )
 
 
 def _safe_failure_progress(observation: GatewayObservation, local: _LocalServer) -> str:
     status = observation.response_statuses[-1] if observation.response_statuses else None
-    error_code = _safe_diagnostic_error_code(observation.error_codes[-1] if observation.error_codes else None)
+    error_code = _safe_diagnostic_error_code(
+        observation.error_codes[-1] if observation.error_codes else None
+    )
     param_class = observation.param_classes[-1] if observation.param_classes else "other"
     return (
         f"gateway_{_safe_progress_class(observation.request_count)}"
@@ -211,9 +220,9 @@ def _safe_history_projection(body: object) -> dict[str, object]:
         for part in content:
             if not isinstance(part, Mapping) or part.get("type") != "output_text":
                 continue
-            projection["assistant_output_text_count"] = int(
-                projection["assistant_output_text_count"]
-            ) + 1
+            projection["assistant_output_text_count"] = (
+                int(projection["assistant_output_text_count"]) + 1
+            )
             projection["assistant_output_text_type_exact"] = part.get("type") == "output_text"
             text = part.get("text")
             if not isinstance(text, str):
@@ -241,7 +250,11 @@ def _safe_error_projection(body: bytes) -> dict[str, str | bool]:
         return {"json_object": False, "error_code": "other", "param_class": "other"}
     error = decoded.get("error") if isinstance(decoded, Mapping) else None
     if not isinstance(error, Mapping):
-        return {"json_object": isinstance(decoded, Mapping), "error_code": "other", "param_class": "other"}
+        return {
+            "json_object": isinstance(decoded, Mapping),
+            "error_code": "other",
+            "param_class": "other",
+        }
     return {
         "json_object": True,
         "error_code": _fixed_error_code(error.get("code")),
@@ -281,7 +294,10 @@ class GatewayObservation:
             message = await receive()
             if is_responses and message.get("type") == "http.request":
                 chunk = message.get("body", b"")
-                if isinstance(chunk, bytes) and len(request_body) + len(chunk) <= MAX_CAPTURE_BODY_BYTES:
+                if (
+                    isinstance(chunk, bytes)
+                    and len(request_body) + len(chunk) <= MAX_CAPTURE_BODY_BYTES
+                ):
                     request_body.extend(chunk)
                 else:
                     request_overflow = True
@@ -292,8 +308,13 @@ class GatewayObservation:
                         except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
                             decoded = None
                         candidate_projection = _safe_history_projection(decoded)
-                        self.image_count_classes.append(str(candidate_projection["image_part_count_class"]))
-                        if ordinal > 1 and candidate_projection["assistant_history_present"] is True:
+                        self.image_count_classes.append(
+                            str(candidate_projection["image_part_count_class"])
+                        )
+                        if (
+                            ordinal > 1
+                            and candidate_projection["assistant_history_present"] is True
+                        ):
                             self.second_projection = candidate_projection
                     request_body.clear()
             return message
@@ -308,7 +329,10 @@ class GatewayObservation:
                 status = int(message.get("status", 0))
             elif is_responses and status is not None and status >= 400:
                 chunk = message.get("body", b"")
-                if isinstance(chunk, bytes) and len(response_body) + len(chunk) <= MAX_CAPTURE_ERROR_BYTES:
+                if (
+                    isinstance(chunk, bytes)
+                    and len(response_body) + len(chunk) <= MAX_CAPTURE_ERROR_BYTES
+                ):
                     response_body.extend(chunk)
                 else:
                     response_overflow = True
@@ -370,7 +394,11 @@ def _tool_arguments(payload: Mapping[str, object], name: str) -> str:
     if not isinstance(tools, list):
         raise VerificationError("known_local_tool_missing")
     for tool in tools:
-        if not isinstance(tool, Mapping) or tool.get("type") != "function" or tool.get("name") != name:
+        if (
+            not isinstance(tool, Mapping)
+            or tool.get("type") != "function"
+            or tool.get("name") != name
+        ):
             continue
         parameters = tool.get("parameters")
         if not isinstance(parameters, Mapping):
@@ -403,13 +431,82 @@ def _function_stream(arguments: str, tool_name: str) -> tuple[dict[str, object],
     item_id = "function_history_first"
     call_id = "call_history_first"
     return (
-        {"type": "response.created", "sequence_number": 0, "response": {"id": response_id, "status": "in_progress", "model": CODEX_MODEL}},
-        {"type": "response.in_progress", "sequence_number": 1, "response": {"id": response_id, "status": "in_progress", "model": CODEX_MODEL}},
-        {"type": "response.output_item.added", "output_index": 0, "sequence_number": 2, "item": {"type": "function_call", "id": item_id, "status": "in_progress", "namespace": None, "name": tool_name, "arguments": "", "call_id": call_id, "caller": None}},
-        {"type": "response.function_call_arguments.delta", "item_id": item_id, "output_index": 0, "sequence_number": 3, "delta": arguments},
-        {"type": "response.function_call_arguments.done", "item_id": item_id, "output_index": 0, "sequence_number": 4, "name": tool_name, "arguments": arguments},
-        {"type": "response.output_item.done", "output_index": 0, "sequence_number": 5, "item": {"type": "function_call", "id": item_id, "status": "completed", "namespace": None, "name": tool_name, "arguments": arguments, "call_id": call_id, "caller": None}},
-        {"type": "response.completed", "sequence_number": 6, "response": {"id": response_id, "status": "completed", "model": CODEX_MODEL, "output": [{"type": "function_call", "id": "parser_function", "status": "completed", "namespace": None, "name": tool_name, "arguments": arguments, "call_id": "parser_call"}], "usage": _usage()}},
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {"id": response_id, "status": "in_progress", "model": CODEX_MODEL},
+        },
+        {
+            "type": "response.in_progress",
+            "sequence_number": 1,
+            "response": {"id": response_id, "status": "in_progress", "model": CODEX_MODEL},
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "sequence_number": 2,
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "status": "in_progress",
+                "namespace": None,
+                "name": tool_name,
+                "arguments": "",
+                "call_id": call_id,
+                "caller": None,
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": item_id,
+            "output_index": 0,
+            "sequence_number": 3,
+            "delta": arguments,
+        },
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": item_id,
+            "output_index": 0,
+            "sequence_number": 4,
+            "name": tool_name,
+            "arguments": arguments,
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 5,
+            "item": {
+                "type": "function_call",
+                "id": item_id,
+                "status": "completed",
+                "namespace": None,
+                "name": tool_name,
+                "arguments": arguments,
+                "call_id": call_id,
+                "caller": None,
+            },
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 6,
+            "response": {
+                "id": response_id,
+                "status": "completed",
+                "model": CODEX_MODEL,
+                "output": [
+                    {
+                        "type": "function_call",
+                        "id": "parser_function",
+                        "status": "completed",
+                        "namespace": None,
+                        "name": tool_name,
+                        "arguments": arguments,
+                        "call_id": "parser_call",
+                    }
+                ],
+                "usage": _usage(),
+            },
+        },
     )
 
 
@@ -417,15 +514,116 @@ def _message_stream() -> tuple[dict[str, object], ...]:
     response_id = "response_history_first"
     item_id = "message_history_first"
     return (
-        {"type": "response.created", "sequence_number": 0, "response": {"id": response_id, "status": "in_progress", "model": CODEX_MODEL}},
-        {"type": "response.in_progress", "sequence_number": 1, "response": {"id": response_id, "status": "in_progress", "model": CODEX_MODEL}},
-        {"type": "response.output_item.added", "output_index": 0, "sequence_number": 2, "item": {"type": "message", "id": item_id, "status": "in_progress", "role": "assistant", "content": [], "phase": None}},
-        {"type": "response.content_part.added", "item_id": item_id, "output_index": 0, "content_index": 0, "sequence_number": 3, "part": {"type": "output_text", "text": "", "annotations": [], "logprobs": []}},
-        {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "sequence_number": 4, "delta": "synthetic", "logprobs": []},
-        {"type": "response.output_text.done", "item_id": item_id, "output_index": 0, "content_index": 0, "sequence_number": 5, "text": "synthetic", "logprobs": []},
-        {"type": "response.content_part.done", "item_id": item_id, "output_index": 0, "content_index": 0, "sequence_number": 6, "part": {"type": "output_text", "text": "synthetic", "annotations": [], "logprobs": None}},
-        {"type": "response.output_item.done", "output_index": 0, "sequence_number": 7, "item": {"type": "message", "id": item_id, "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "synthetic", "annotations": [], "logprobs": None}], "phase": None, "summary": []}},
-        {"type": "response.completed", "sequence_number": 8, "response": {"id": response_id, "status": "completed", "model": CODEX_MODEL, "output": [{"type": "message", "id": "parser_message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": "synthetic", "annotations": [], "logprobs": None}], "phase": None}], "usage": _usage()}},
+        {
+            "type": "response.created",
+            "sequence_number": 0,
+            "response": {"id": response_id, "status": "in_progress", "model": CODEX_MODEL},
+        },
+        {
+            "type": "response.in_progress",
+            "sequence_number": 1,
+            "response": {"id": response_id, "status": "in_progress", "model": CODEX_MODEL},
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "sequence_number": 2,
+            "item": {
+                "type": "message",
+                "id": item_id,
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+                "phase": None,
+            },
+        },
+        {
+            "type": "response.content_part.added",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 3,
+            "part": {"type": "output_text", "text": "", "annotations": [], "logprobs": []},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 4,
+            "delta": "synthetic",
+            "logprobs": [],
+        },
+        {
+            "type": "response.output_text.done",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 5,
+            "text": "synthetic",
+            "logprobs": [],
+        },
+        {
+            "type": "response.content_part.done",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "sequence_number": 6,
+            "part": {
+                "type": "output_text",
+                "text": "synthetic",
+                "annotations": [],
+                "logprobs": None,
+            },
+        },
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 7,
+            "item": {
+                "type": "message",
+                "id": item_id,
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "synthetic",
+                        "annotations": [],
+                        "logprobs": None,
+                    }
+                ],
+                "phase": None,
+                "summary": [],
+            },
+        },
+        {
+            "type": "response.completed",
+            "sequence_number": 8,
+            "response": {
+                "id": response_id,
+                "status": "completed",
+                "model": CODEX_MODEL,
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "parser_message",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "synthetic",
+                                "annotations": [],
+                                "logprobs": None,
+                            }
+                        ],
+                        "phase": None,
+                    }
+                ],
+                "usage": _usage(),
+            },
+        },
     )
 
 
@@ -437,7 +635,9 @@ class HistoryLocalState:
         self.message_count = 0
         self._lock = threading.Lock()
 
-    def observe(self, body: bytes, headers: http.client.HTTPMessage, path: str) -> tuple[dict[str, object], ...]:
+    def observe(
+        self, body: bytes, headers: http.client.HTTPMessage, path: str
+    ) -> tuple[dict[str, object], ...]:
         if path != "/v1/responses":
             raise VerificationError("local_path_invalid")
         if headers.get("authorization") != "Bearer " + LOCAL_SERVICE_TOKEN:
@@ -495,11 +695,21 @@ class HistoryLocalState:
             items = payload.get("input")
             if not isinstance(items, list):
                 raise VerificationError("local_tool_result_input_missing")
-            calls = [item for item in items if isinstance(item, Mapping) and item.get("type") == "function_call"]
-            outputs = [item for item in items if isinstance(item, Mapping) and item.get("type") == "function_call_output"]
+            calls = [
+                item
+                for item in items
+                if isinstance(item, Mapping) and item.get("type") == "function_call"
+            ]
+            outputs = [
+                item
+                for item in items
+                if isinstance(item, Mapping) and item.get("type") == "function_call_output"
+            ]
             if len(calls) != 1 or len(outputs) != 1:
                 raise VerificationError("local_tool_result_pair_invalid")
-            if items.index(calls[0]) + 1 != items.index(outputs[0]) or calls[0].get("call_id") != outputs[0].get("call_id"):
+            if items.index(calls[0]) + 1 != items.index(outputs[0]) or calls[0].get(
+                "call_id"
+            ) != outputs[0].get("call_id"):
                 raise VerificationError("local_tool_result_adjacency_invalid")
             self.message_count += 1
             return _message_stream()
@@ -547,9 +757,13 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _run(command: list[str], *, cwd: Path, env: dict[str, str], timeout: float) -> subprocess.CompletedProcess[bytes]:
+def _run(
+    command: list[str], *, cwd: Path, env: dict[str, str], timeout: float
+) -> subprocess.CompletedProcess[bytes]:
     try:
-        return subprocess.run(command, cwd=cwd, env=env, capture_output=True, check=False, timeout=timeout)
+        return subprocess.run(
+            command, cwd=cwd, env=env, capture_output=True, check=False, timeout=timeout
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise VerificationError("process_launch_failed") from exc
 
@@ -559,12 +773,15 @@ def _install_codex(root: Path) -> Path:
     install.mkdir(mode=0o700)
     if _run(["npm", "init", "-y"], cwd=install, env=os.environ.copy(), timeout=30).returncode != 0:
         raise VerificationError("codex_install_failed")
-    if _run(
-        ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", CODEX_PACKAGE],
-        cwd=install,
-        env=os.environ.copy(),
-        timeout=180,
-    ).returncode != 0:
+    if (
+        _run(
+            ["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", CODEX_PACKAGE],
+            cwd=install,
+            env=os.environ.copy(),
+            timeout=180,
+        ).returncode
+        != 0
+    ):
         raise VerificationError("codex_install_failed")
     binary = install / "node_modules/.bin/codex"
     version = _run([str(binary), "--version"], cwd=install, env=os.environ.copy(), timeout=10)
@@ -573,7 +790,16 @@ def _install_codex(root: Path) -> Path:
     return binary
 
 
-def _resume_command(binary: Path, *, workdir: Path, port: int, model_catalog: Path, output: Path, thread_id: str, image: Path) -> list[str]:
+def _resume_command(
+    binary: Path,
+    *,
+    workdir: Path,
+    port: int,
+    model_catalog: Path,
+    output: Path,
+    thread_id: str,
+    image: Path,
+) -> list[str]:
     from scripts.capture_codex_protocol import _exec_resume_command_0149
 
     command = _exec_resume_command_0149(
@@ -645,10 +871,14 @@ async def _accounting_count(database_url: str, key_id: object) -> int:
     try:
         async with factory() as session:
             reservations = await session.scalar(
-                select(func.count()).select_from(QuotaReservation).where(QuotaReservation.gateway_key_id == key_id)
+                select(func.count())
+                .select_from(QuotaReservation)
+                .where(QuotaReservation.gateway_key_id == key_id)
             )
             ledgers = await session.scalar(
-                select(func.count()).select_from(UsageLedger).where(UsageLedger.gateway_key_id == key_id)
+                select(func.count())
+                .select_from(UsageLedger)
+                .where(UsageLedger.gateway_key_id == key_id)
             )
             return int(reservations or 0) + int(ledgers or 0)
     finally:
@@ -661,7 +891,10 @@ def run_prefixed_reproduction() -> str:
     from tests.e2e.test_openai_python_client_chat import _run_uvicorn_server
     from slaif_gateway.config import get_settings
     from slaif_gateway.main import create_app
-    from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_CLIENT_MODULE_VERSION, CODEX_0149_FIXTURE_SHA256
+    from slaif_gateway.modules.clients.codex_0149 import (
+        CODEX_0149_CLIENT_MODULE_VERSION,
+        CODEX_0149_FIXTURE_SHA256,
+    )
 
     database_url, own_db, db_name = _database()
     local = _LocalServer(HistoryLocalState())
@@ -675,7 +908,11 @@ def run_prefixed_reproduction() -> str:
             home.mkdir(mode=0o700)
             work.mkdir(mode=0o700)
             image = root / "synthetic.png"
-            image.write_bytes(bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606000000004000100f6173855d00000000049454e44ae426082"))
+            image.write_bytes(
+                bytes.fromhex(
+                    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606000000004000100f6173855d00000000049454e44ae426082"
+                )
+            )
             state = local.state
             values = {
                 "DATABASE_URL": database_url,
@@ -695,7 +932,12 @@ def run_prefixed_reproduction() -> str:
             }
             with _environment(values):
                 get_settings.cache_clear()
-                migration = _run([sys.executable, "-m", "alembic", "upgrade", "head"], cwd=REPO_ROOT, env=values, timeout=120)
+                migration = _run(
+                    [sys.executable, "-m", "alembic", "upgrade", "head"],
+                    cwd=REPO_ROOT,
+                    env=values,
+                    timeout=120,
+                )
                 if migration.returncode != 0:
                     raise VerificationError("migration_failed")
                 from slaif_gateway.config import get_settings as configured_settings
@@ -723,8 +965,16 @@ def run_prefixed_reproduction() -> str:
                         responses_policy={
                             "version": 1,
                             "local_coding_repository_scope": "assistant-history-repository",
-                            "allowed_capabilities": ["codex_request_envelope", "codex_client_tools", "codex_streaming_tool_events"],
-                            "client_module": {"id": "codex-0.149-responses-v1", "version": CODEX_0149_CLIENT_MODULE_VERSION, "fixture_sha256": CODEX_0149_FIXTURE_SHA256},
+                            "allowed_capabilities": [
+                                "codex_request_envelope",
+                                "codex_client_tools",
+                                "codex_streaming_tool_events",
+                            ],
+                            "client_module": {
+                                "id": "codex-0.149-responses-v1",
+                                "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                                "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+                            },
                         },
                         codex_request_envelope=True,
                         codex_client_tools=True,
@@ -736,13 +986,23 @@ def run_prefixed_reproduction() -> str:
                 environment = capture._isolated_environment(home)
                 environment.update(values)
                 environment[capture.CAPTURE_API_KEY_ENV] = created.plaintext_key
-                capture._write_0149_model_catalog(binary, catalog, environment=environment, model=CODEX_MODEL)
+                capture._write_0149_model_catalog(
+                    binary, catalog, environment=environment, model=CODEX_MODEL
+                )
                 catalog_value = json.loads(catalog.read_text(encoding="utf-8"))
-                catalog_models = catalog_value.get("models") if isinstance(catalog_value, Mapping) else None
-                if not isinstance(catalog_models, list) or len(catalog_models) != 1 or not isinstance(catalog_models[0], dict):
+                catalog_models = (
+                    catalog_value.get("models") if isinstance(catalog_value, Mapping) else None
+                )
+                if (
+                    not isinstance(catalog_models, list)
+                    or len(catalog_models) != 1
+                    or not isinstance(catalog_models[0], dict)
+                ):
                     raise VerificationError("model_catalog_shape_invalid")
                 catalog_models[0]["supports_image_detail_original"] = True
-                catalog.write_text(json.dumps(catalog_value, separators=(",", ":")), encoding="utf-8")
+                catalog.write_text(
+                    json.dumps(catalog_value, separators=(",", ":")), encoding="utf-8"
+                )
                 gateway_port = _free_port()
                 observation = GatewayObservation(create_app(configured_settings()))
                 first = capture._exec_command_0149(
@@ -757,7 +1017,10 @@ def run_prefixed_reproduction() -> str:
                 )
                 first_output_index = first.index("-o")
                 first[first_output_index:first_output_index] = ["--image", str(image)]
-                if not _command_shape(first)["zero_request_retries"] or not _command_shape(first)["zero_stream_retries"]:
+                if (
+                    not _command_shape(first)["zero_request_retries"]
+                    or not _command_shape(first)["zero_stream_retries"]
+                ):
                     raise VerificationError("zero_retry_command_invalid")
                 first_result = None
                 previous_logging_disable = logging.root.manager.disable
@@ -766,7 +1029,9 @@ def run_prefixed_reproduction() -> str:
                     with _run_uvicorn_server(observation, gateway_port):
                         first_result = _run(first, cwd=work, env=environment, timeout=180)
                         if first_result.returncode != 0:
-                            category = _codex_failure_category(first_result.stderr, first_result.stdout)
+                            category = _codex_failure_category(
+                                first_result.stderr, first_result.stdout
+                            )
                             raise VerificationError(
                                 f"codex_first_turn_{category}_{_safe_failure_progress(observation, local)}"
                             )
@@ -793,7 +1058,11 @@ def run_prefixed_reproduction() -> str:
                         del second_result, thread_id
                 finally:
                     logging.disable(previous_logging_disable)
-                if observation.request_count != 3 or observation.response_statuses != [200, 200, 400]:
+                if observation.request_count != 3 or observation.response_statuses != [
+                    200,
+                    200,
+                    400,
+                ]:
                     raise VerificationError(
                         f"gateway_request_progression_{_safe_progress_class(observation.request_count)}"
                         f"_statuses_{_safe_status_sequence(observation)}"
@@ -802,9 +1071,7 @@ def run_prefixed_reproduction() -> str:
                 if observation.error_codes[-1] != _ALLOWED_ERROR_CODE:
                     raise VerificationError("history_error_code_invalid")
                 if observation.param_classes[-1] != "input_5_content_0_type":
-                    raise VerificationError(
-                        f"history_error_param_{observation.param_classes[-1]}"
-                    )
+                    raise VerificationError(f"history_error_param_{observation.param_classes[-1]}")
                 projection = observation.second_projection or {}
                 required = (
                     projection.get("assistant_history_present") is True,
@@ -865,7 +1132,11 @@ def main() -> int:
         return 1
     except Exception as exc:
         name = type(exc).__name__
-        safe_name = name if name in {"AttributeError", "KeyError", "TypeError", "ValueError", "IndexError"} else "other"
+        safe_name = (
+            name
+            if name in {"AttributeError", "KeyError", "TypeError", "ValueError", "IndexError"}
+            else "other"
+        )
         print(f"VERIFY_CODEX_0149_ASSISTANT_HISTORY_BASE_FAILED code=unexpected_{safe_name}")
         return 1
 
