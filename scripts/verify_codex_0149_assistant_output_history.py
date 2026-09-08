@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import contextlib
+import hashlib
 import hmac
 import http.client
 import http.server
@@ -19,10 +21,12 @@ import logging
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
+import zlib
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
@@ -41,6 +45,13 @@ ONE_TIME_SECRET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
 MAX_CAPTURE_BODY_BYTES = 1_048_576
 MAX_CAPTURE_ERROR_BYTES = 16_384
 MAX_HISTORY_TEXT_BYTES = 65_536
+MAX_IMAGE_PARTS = 8
+FULL_IMAGE_SHA256 = "98219eff9b1ebec112240aef4928d7cf7e50ecb333176d4c8db946769dd564cb"
+CROP_IMAGE_SHA256 = "5a989a94885576fef961a926fcfb1430e9030e9d3aabdef408502b2b1f713c10"
+FULL_IMAGE_BYTE_LENGTH = 80
+CROP_IMAGE_BYTE_LENGTH = 76
+FULL_IMAGE_DIMENSIONS = (4, 2)
+CROP_IMAGE_DIMENSIONS = (2, 2)
 
 _ALLOWED_ERROR_CODE = "responses_input_content_part_not_supported"
 _SAFE_ERROR_CODES = frozenset({_ALLOWED_ERROR_CODE})
@@ -112,6 +123,190 @@ def _size_class(value: object) -> str:
     return "empty" if size == 0 else "bounded" if size <= MAX_HISTORY_TEXT_BYTES else "oversized"
 
 
+def _byte_size_class(value: int) -> str:
+    return "zero" if value == 0 else "bounded" if value <= MAX_CAPTURE_BODY_BYTES else "oversized"
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    if len(kind) != 4:
+        raise VerificationError("image_fixture_chunk_invalid")
+    checksum = zlib.crc32(kind + payload) & 0xFFFFFFFF
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
+
+
+def _rgb_png(width: int, height: int, rows: tuple[bytes, ...]) -> bytes:
+    if width <= 0 or height <= 0 or len(rows) != height:
+        raise VerificationError("image_fixture_dimensions_invalid")
+    if any(len(row) != width * 3 for row in rows):
+        raise VerificationError("image_fixture_pixels_invalid")
+    signature = b"\x89PNG\r\n\x1a\n"
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    scanlines = b"".join(b"\x00" + row for row in rows)
+    return (
+        signature
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(scanlines, 9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def _validate_rgb_png(data: bytes, *, dimensions: tuple[int, int]) -> bool:
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return False
+    offset = 8
+    chunks: list[tuple[bytes, bytes]] = []
+    while offset < len(data):
+        if offset + 12 > len(data):
+            return False
+        length = struct.unpack(">I", data[offset : offset + 4])[0]
+        end = offset + 12 + length
+        if end > len(data):
+            return False
+        kind = data[offset + 4 : offset + 8]
+        payload = data[offset + 8 : offset + 8 + length]
+        stored_crc = struct.unpack(">I", data[offset + 8 + length : end])[0]
+        if stored_crc != zlib.crc32(kind + payload) & 0xFFFFFFFF:
+            return False
+        chunks.append((kind, payload))
+        offset = end
+        if kind == b"IEND":
+            break
+    if offset != len(data) or not chunks or chunks[0][0] != b"IHDR":
+        return False
+    if len(chunks[0][1]) != 13:
+        return False
+    width, height, bit_depth, color_type, compression, filtering, interlace = struct.unpack(
+        ">IIBBBBB", chunks[0][1]
+    )
+    if (width, height) != dimensions or (bit_depth, color_type) != (8, 2):
+        return False
+    if compression != 0 or filtering != 0 or interlace != 0:
+        return False
+    return chunks[-1][0] == b"IEND" and any(kind == b"IDAT" for kind, _ in chunks)
+
+
+def _write_image_fixtures(root: Path) -> dict[str, object]:
+    full_rows = (
+        bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0]),
+        bytes([0, 255, 255, 255, 0, 255, 255, 255, 255, 64, 64, 64]),
+    )
+    crop_rows = (full_rows[0][6:12], full_rows[1][6:12])
+    full_bytes = _rgb_png(4, 2, full_rows)
+    crop_bytes = _rgb_png(2, 2, crop_rows)
+    full_path = root / "full-scene.png"
+    crop_path = root / "crop-right.png"
+    full_path.write_bytes(full_bytes)
+    crop_path.write_bytes(crop_bytes)
+    os.chmod(full_path, 0o600)
+    os.chmod(crop_path, 0o600)
+    full_digest = hashlib.sha256(full_bytes).hexdigest()
+    crop_digest = hashlib.sha256(crop_bytes).hexdigest()
+    facts = {
+        "full_path": full_path,
+        "crop_path": crop_path,
+        "full_sha256": full_digest,
+        "crop_sha256": crop_digest,
+        "full_sha256_expected": full_digest == FULL_IMAGE_SHA256,
+        "crop_sha256_expected": crop_digest == CROP_IMAGE_SHA256,
+        "distinct_sha256": full_digest != crop_digest,
+        "full_length": len(full_bytes),
+        "crop_length": len(crop_bytes),
+        "full_length_expected": len(full_bytes) == FULL_IMAGE_BYTE_LENGTH,
+        "crop_length_expected": len(crop_bytes) == CROP_IMAGE_BYTE_LENGTH,
+        "full_valid_rgb": _validate_rgb_png(full_bytes, dimensions=FULL_IMAGE_DIMENSIONS),
+        "crop_valid_rgb": _validate_rgb_png(crop_bytes, dimensions=CROP_IMAGE_DIMENSIONS),
+    }
+    del full_bytes, crop_bytes, full_rows, crop_rows, full_digest, crop_digest
+    return facts
+
+
+def _image_expectations(facts: Mapping[str, object]) -> dict[str, object]:
+    required = (
+        facts.get("full_sha256_expected") is True,
+        facts.get("crop_sha256_expected") is True,
+        facts.get("distinct_sha256") is True,
+        facts.get("full_length_expected") is True,
+        facts.get("crop_length_expected") is True,
+        facts.get("full_valid_rgb") is True,
+        facts.get("crop_valid_rgb") is True,
+    )
+    if not all(required):
+        raise VerificationError("image_fixture_validation_failed")
+    return {
+        "full_sha256": facts["full_sha256"],
+        "crop_sha256": facts["crop_sha256"],
+        "full_length": facts["full_length"],
+        "crop_length": facts["crop_length"],
+    }
+
+
+def _validate_image_pair(full_path: Path, crop_path: Path) -> dict[str, object]:
+    try:
+        full_bytes = full_path.read_bytes()
+        crop_bytes = crop_path.read_bytes()
+    except (OSError, ValueError):
+        raise VerificationError("image_fixture_missing") from None
+    if full_bytes == crop_bytes:
+        del full_bytes, crop_bytes
+        raise VerificationError("image_fixture_pair_not_distinct")
+    if not _validate_rgb_png(full_bytes, dimensions=FULL_IMAGE_DIMENSIONS):
+        del full_bytes, crop_bytes
+        raise VerificationError("image_fixture_full_invalid")
+    if not _validate_rgb_png(crop_bytes, dimensions=CROP_IMAGE_DIMENSIONS):
+        del full_bytes, crop_bytes
+        raise VerificationError("image_fixture_crop_invalid")
+    full_digest = hashlib.sha256(full_bytes).hexdigest()
+    crop_digest = hashlib.sha256(crop_bytes).hexdigest()
+    if full_digest != FULL_IMAGE_SHA256 or len(full_bytes) != FULL_IMAGE_BYTE_LENGTH:
+        del full_bytes, crop_bytes, full_digest, crop_digest
+        raise VerificationError("image_fixture_full_unexpected")
+    if crop_digest != CROP_IMAGE_SHA256 or len(crop_bytes) != CROP_IMAGE_BYTE_LENGTH:
+        del full_bytes, crop_bytes, full_digest, crop_digest
+        raise VerificationError("image_fixture_crop_unexpected")
+    result = {
+        "full_sha256": full_digest,
+        "crop_sha256": crop_digest,
+        "full_length": len(full_bytes),
+        "crop_length": len(crop_bytes),
+        "full_sha256_expected": True,
+        "crop_sha256_expected": True,
+        "distinct_sha256": True,
+        "full_length_expected": True,
+        "crop_length_expected": True,
+        "full_valid_rgb": True,
+        "crop_valid_rgb": True,
+        "full_path": full_path,
+        "crop_path": crop_path,
+    }
+    del full_bytes, crop_bytes, full_digest, crop_digest
+    return result
+
+
+def _classify_image_part(
+    part: Mapping[str, object], expectations: Mapping[str, object] | None
+) -> str:
+    if expectations is None or part.get("type") != "input_image":
+        return "other"
+    image_url = part.get("image_url")
+    if not isinstance(image_url, str) or not image_url.startswith("data:image/png;base64,"):
+        return "other"
+    encoded = image_url.partition(",")[2]
+    try:
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError, zlib.error):
+        return "other"
+    digest = hashlib.sha256(image_bytes).hexdigest()
+    length = len(image_bytes)
+    if digest == expectations.get("full_sha256") and length == expectations.get("full_length"):
+        result = "full"
+    elif digest == expectations.get("crop_sha256") and length == expectations.get("crop_length"):
+        result = "crop"
+    else:
+        result = "other"
+    del encoded, image_bytes, digest
+    return result
+
+
 def _fixed_error_code(value: object) -> str:
     return value if isinstance(value, str) and value in _SAFE_ERROR_CODES else "other"
 
@@ -180,7 +375,11 @@ def _safe_status_sequence(observation: GatewayObservation) -> str:
     return "_".join(_safe_status_class(status) for status in statuses) or "none"
 
 
-def _safe_history_projection(body: object) -> dict[str, object]:
+def _safe_history_projection(
+    body: object,
+    *,
+    image_expectations: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     """Project one request into fixed facts without retaining text or IDs."""
 
     projection: dict[str, object] = {
@@ -193,6 +392,7 @@ def _safe_history_projection(body: object) -> dict[str, object]:
         "assistant_output_text_nonempty_unicode": False,
         "assistant_output_text_size_class": "not_string",
         "image_part_count_class": "zero",
+        "image_wire_class": "none",
         "raw_value_retained": False,
     }
     if not isinstance(body, Mapping):
@@ -200,18 +400,19 @@ def _safe_history_projection(body: object) -> dict[str, object]:
     input_items = body.get("input")
     if not isinstance(input_items, list):
         return projection
-    image_count = 0
+    image_classes: list[str] = []
     for item in input_items:
         if not isinstance(item, Mapping):
             continue
         if item.get("type") == "input_image":
-            image_count += 1
+            image_classes.append(_classify_image_part(item, image_expectations))
         content = item.get("content")
         if not isinstance(content, list):
             continue
         for part in content:
             if isinstance(part, Mapping) and part.get("type") == "input_image":
-                image_count += 1
+                if len(image_classes) < MAX_IMAGE_PARTS:
+                    image_classes.append(_classify_image_part(part, image_expectations))
         if item.get("role") != "assistant":
             continue
         projection["assistant_history_count"] = int(projection["assistant_history_count"]) + 1
@@ -236,7 +437,10 @@ def _safe_history_projection(body: object) -> dict[str, object]:
                 encoded_size > 0 and encoded_size <= MAX_HISTORY_TEXT_BYTES
             )
     projection["image_part_count_class"] = (
-        "zero" if image_count == 0 else "one" if image_count == 1 else "many"
+        "zero" if not image_classes else "one" if len(image_classes) == 1 else "many"
+    )
+    projection["image_wire_class"] = (
+        "none" if not image_classes else image_classes[0] if len(image_classes) == 1 else "many"
     )
     return projection
 
@@ -265,13 +469,16 @@ def _safe_error_projection(body: bytes) -> dict[str, str | bool]:
 class GatewayObservation:
     """ASGI observer retaining only bounded request/response predicates."""
 
-    def __init__(self, app) -> None:
+    def __init__(self, app, *, image_expectations: Mapping[str, object] | None = None) -> None:
         self.app = app
+        self.image_expectations = image_expectations
         self.request_count = 0
         self.response_statuses: list[int] = []
         self.error_codes: list[str] = []
         self.param_classes: list[str] = []
         self.image_count_classes: list[str] = []
+        self.request_projections: list[dict[str, object]] = []
+        self.request_overflow_classes: list[str] = []
         self.second_projection: dict[str, object] | None = None
         self._lock = threading.Lock()
 
@@ -302,12 +509,18 @@ class GatewayObservation:
                 else:
                     request_overflow = True
                 if not message.get("more_body", False):
-                    if not request_overflow:
+                    if request_overflow:
+                        self.request_overflow_classes.append("request_body_overflow")
+                    else:
                         try:
                             decoded = json.loads(bytes(request_body))
                         except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
                             decoded = None
-                        candidate_projection = _safe_history_projection(decoded)
+                        candidate_projection = _safe_history_projection(
+                            decoded, image_expectations=self.image_expectations
+                        )
+                        if len(self.request_projections) < 4:
+                            self.request_projections.append(candidate_projection)
                         self.image_count_classes.append(
                             str(candidate_projection["image_part_count_class"])
                         )
@@ -790,47 +1003,135 @@ def _install_codex(root: Path) -> Path:
     return binary
 
 
-def _resume_command(
+def _codex_profile_args(*, port: int, model_catalog: Path) -> list[str]:
+    base_url = f'"http://127.0.0.1:{port}/v1"'
+    return [
+        "-m",
+        CODEX_MODEL,
+        "-c",
+        'model_provider="slaif-capture"',
+        "-c",
+        (
+            "model_providers.slaif-capture={"
+            f'name="Synthetic capture",base_url={base_url},'
+            'env_key="SLAIF_CAPTURE_API_KEY",wire_api="responses"}'
+        ),
+        "-c",
+        f"model_catalog_json={json.dumps(str(model_catalog))}",
+        "-c",
+        "check_for_update_on_startup=false",
+        "-c",
+        "model_providers.slaif-capture.request_max_retries=0",
+        "-c",
+        "model_providers.slaif-capture.stream_max_retries=0",
+    ]
+
+
+def _initial_command(
     binary: Path,
     *,
     workdir: Path,
     port: int,
     model_catalog: Path,
     output: Path,
-    thread_id: str,
-    image: Path,
+    full_image: Path,
 ) -> list[str]:
-    from scripts.capture_codex_protocol import _exec_resume_command_0149
-
-    command = _exec_resume_command_0149(
-        binary,
-        workdir=workdir,
-        port=port,
-        model=CODEX_MODEL,
-        model_catalog=model_catalog,
-        output_path=output,
-        thread_id=thread_id,
-    )
-    output_index = command.index("-o")
-    command[output_index:output_index] = [
-        "-c",
-        "model_providers.slaif-capture.request_max_retries=0",
-        "-c",
-        "model_providers.slaif-capture.stream_max_retries=0",
+    return [
+        str(binary),
+        "--dangerously-bypass-approvals-and-sandbox",
+        "exec",
+        "--json",
+        "--strict-config",
+        "--ignore-user-config",
+        *_codex_profile_args(port=port, model_catalog=model_catalog),
+        "--cd",
+        str(workdir),
+        "--image",
+        str(full_image),
+        "--output-last-message",
+        str(output),
+        "Describe the attached synthetic full scene briefly without tools.",
     ]
-    resume_index = command.index("resume")
-    command[resume_index + 1 : resume_index + 1] = ["--image", str(image)]
-    command[-1] = "Inspect the attached synthetic crop and return one short answer."
-    return command
 
 
-def _command_shape(command: list[str]) -> dict[str, object]:
+def _resume_last_command(
+    binary: Path,
+    *,
+    workdir: Path,
+    port: int,
+    model_catalog: Path,
+    output: Path,
+    crop_image: Path,
+) -> list[str]:
+    return [
+        str(binary),
+        "--dangerously-bypass-approvals-and-sandbox",
+        "exec",
+        "resume",
+        "--last",
+        "--json",
+        "--strict-config",
+        "--ignore-user-config",
+        *_codex_profile_args(port=port, model_catalog=model_catalog),
+        "--image",
+        str(crop_image),
+        "--output-last-message",
+        str(output),
+        "Inspect the attached synthetic crop and return one short answer.",
+    ]
+
+
+def _command_shape(
+    command: list[str], *, expected_image: Path | None = None, resume: bool | None = None
+) -> dict[str, object]:
+    image_positions = [index for index, value in enumerate(command) if value == "--image"]
+    image_binding = (
+        len(image_positions) == 1
+        and expected_image is not None
+        and image_positions[0] + 1 < len(command)
+        and command[image_positions[0] + 1] == str(expected_image)
+    )
+    resume_last = "resume" in command and "--last" in command
+    if "--cd" in command:
+        suffix = command[command.index("--cd") :]
+    elif "--image" in command:
+        suffix = command[command.index("--image") :]
+    else:
+        suffix = []
     return {
         "zero_request_retries": "model_providers.slaif-capture.request_max_retries=0" in command,
         "zero_stream_retries": "model_providers.slaif-capture.stream_max_retries=0" in command,
-        "resume": "resume" in command,
-        "image": "--image" in command,
+        "resume_last": resume_last,
+        "image_option_count_one": len(image_positions) == 1,
+        "image_binding": image_binding,
+        "output_last_message": "--output-last-message" in command,
+        "cd_flag": "--cd" in command,
+        "suffix_has_image_before_output": (
+            "--image" in suffix
+            and "--output-last-message" in suffix
+            and suffix.index("--image") < suffix.index("--output-last-message")
+        ),
+        "resume_expected": resume is None or resume_last is resume,
     }
+
+
+def _validate_command_binding(command: list[str], *, expected_image: Path, resume: bool) -> None:
+    shape = _command_shape(command, expected_image=expected_image, resume=resume)
+    if shape["image_option_count_one"] is not True:
+        raise VerificationError(
+            "image_command_missing" if "--image" not in command else "image_command_multiple"
+        )
+    if shape["image_binding"] is not True:
+        raise VerificationError("image_command_binding_invalid")
+    if (
+        shape["output_last_message"] is not True
+        or shape["suffix_has_image_before_output"] is not True
+    ):
+        raise VerificationError("image_command_suffix_invalid")
+    if shape["resume_expected"] is not True:
+        raise VerificationError("image_command_resume_invalid")
+    if shape["zero_request_retries"] is not True or shape["zero_stream_retries"] is not True:
+        raise VerificationError("image_command_retry_invalid")
 
 
 def _database() -> tuple[str, bool, str | None]:
@@ -849,6 +1150,11 @@ def _database() -> tuple[str, bool, str | None]:
     if result.returncode != 0:
         raise VerificationError("postgres_setup_failed")
     return f"postgresql+asyncpg://slaif:slaif@localhost:5432/{name}", True, name
+
+
+def _private_session_count(home: Path) -> int:
+    matches = [path for path in home.rglob("*.jsonl") if path.is_file()]
+    return len(matches) if len(matches) <= 4 else 5
 
 
 @contextlib.contextmanager
@@ -907,12 +1213,11 @@ def run_prefixed_reproduction() -> str:
             work = root / "workspace"
             home.mkdir(mode=0o700)
             work.mkdir(mode=0o700)
-            image = root / "synthetic.png"
-            image.write_bytes(
-                bytes.fromhex(
-                    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606000000004000100f6173855d00000000049454e44ae426082"
-                )
+            written_facts = _write_image_fixtures(root)
+            fixture_facts = _validate_image_pair(
+                written_facts["full_path"], written_facts["crop_path"]
             )
+            image_expectations = _image_expectations(fixture_facts)
             state = local.state
             values = {
                 "DATABASE_URL": database_url,
@@ -1004,24 +1309,20 @@ def run_prefixed_reproduction() -> str:
                     json.dumps(catalog_value, separators=(",", ":")), encoding="utf-8"
                 )
                 gateway_port = _free_port()
-                observation = GatewayObservation(create_app(configured_settings()))
-                first = capture._exec_command_0149(
+                observation = GatewayObservation(
+                    create_app(configured_settings()), image_expectations=image_expectations
+                )
+                first = _initial_command(
                     binary,
                     workdir=work,
                     port=gateway_port,
-                    model=CODEX_MODEL,
                     model_catalog=catalog,
-                    output_path=root / "first-output.json",
-                    ephemeral=False,
-                    instruction="Describe the attached synthetic image briefly without tools.",
+                    output=root / "first-output.json",
+                    full_image=fixture_facts["full_path"],
                 )
-                first_output_index = first.index("-o")
-                first[first_output_index:first_output_index] = ["--image", str(image)]
-                if (
-                    not _command_shape(first)["zero_request_retries"]
-                    or not _command_shape(first)["zero_stream_retries"]
-                ):
-                    raise VerificationError("zero_retry_command_invalid")
+                _validate_command_binding(
+                    first, expected_image=fixture_facts["full_path"], resume=False
+                )
                 first_result = None
                 previous_logging_disable = logging.root.manager.disable
                 logging.disable(logging.CRITICAL)
@@ -1035,27 +1336,24 @@ def run_prefixed_reproduction() -> str:
                             raise VerificationError(
                                 f"codex_first_turn_{category}_{_safe_failure_progress(observation, local)}"
                             )
-                        try:
-                            thread_id = capture._session_capture_thread_id(first_result.stdout)
-                        except Exception as exc:
-                            raise VerificationError("codex_thread_id_invalid") from exc
                         del first_result
-                        second = _resume_command(
+                        if _private_session_count(home) != 1:
+                            raise VerificationError("private_session_count_invalid")
+                        second = _resume_last_command(
                             binary,
                             workdir=work,
                             port=gateway_port,
                             model_catalog=catalog,
                             output=root / "second-output.json",
-                            thread_id=thread_id,
-                            image=image,
+                            crop_image=fixture_facts["crop_path"],
                         )
-                        second_shape = _command_shape(second)
-                        if not all(second_shape.values()):
-                            raise VerificationError("resume_command_invalid")
+                        _validate_command_binding(
+                            second, expected_image=fixture_facts["crop_path"], resume=True
+                        )
                         second_result = _run(second, cwd=work, env=environment, timeout=180)
                         if second_result.returncode == 0:
                             raise VerificationError("history_rejection_not_reproduced")
-                        del second_result, thread_id
+                        del second_result
                 finally:
                     logging.disable(previous_logging_disable)
                 if observation.request_count != 3 or observation.response_statuses != [
@@ -1073,6 +1371,17 @@ def run_prefixed_reproduction() -> str:
                 if observation.param_classes[-1] != "input_5_content_0_type":
                     raise VerificationError(f"history_error_param_{observation.param_classes[-1]}")
                 projection = observation.second_projection or {}
+                if not observation.request_projections:
+                    raise VerificationError("gateway_image_projection_missing")
+                if observation.request_projections[0].get("image_wire_class") != "full":
+                    raise VerificationError("gateway_full_image_missing")
+                if observation.request_projections[-1].get("image_wire_class") != "crop":
+                    raise VerificationError("gateway_crop_image_missing")
+                if any(
+                    item.get("image_wire_class") not in {"full", "none"}
+                    for item in observation.request_projections[1:-1]
+                ):
+                    raise VerificationError("gateway_intermediate_image_class_invalid")
                 required = (
                     projection.get("assistant_history_present") is True,
                     projection.get("assistant_role_exact") is True,
@@ -1080,6 +1389,7 @@ def run_prefixed_reproduction() -> str:
                     projection.get("assistant_output_text_type_exact") is True,
                     projection.get("assistant_output_text_nonempty_unicode") is True,
                     projection.get("image_part_count_class") == "one",
+                    projection.get("image_wire_class") == "crop",
                     projection.get("raw_value_retained") is False,
                 )
                 if not all(required):
@@ -1095,6 +1405,7 @@ def run_prefixed_reproduction() -> str:
                         "output_text_type",
                         "output_text_unicode",
                         "image_count",
+                        "crop_image",
                         "raw_absent",
                     )
                     failed = "_".join(name for name, passed in zip(names, required) if not passed)
@@ -1103,7 +1414,7 @@ def run_prefixed_reproduction() -> str:
                     raise VerificationError("fake_local_advanced_on_rejection")
                 if state.function_count != 1 or state.message_count != 1:
                     raise VerificationError("fake_local_lifecycle_invalid")
-                return "VERIFY_CODEX_0149_ASSISTANT_HISTORY_BASE_OK request_count=3 local_count=2 clean_rejection=true"
+                return "VERIFY_CODEX_0149_ASSISTANT_HISTORY_REPRODUCTION_OK request_count=3 local_count=2 clean_rejection=true"
     finally:
         local.shutdown()
         local.server_close()
