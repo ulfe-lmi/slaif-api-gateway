@@ -297,3 +297,113 @@ def test_error_projection_unknown_and_malformed_inputs_are_fixed() -> None:
         == "input_index_1_content_index_0_type"
     )
     assert verifier._fixed_param_class("input[5].content[0].type.extra") == "other"
+
+
+def _catalog_document() -> dict[str, object]:
+    return {
+        "schema": "synthetic-catalog-v1",
+        "models": [
+            {"slug": "other-model", "unrelated": {"stable": True}},
+            {
+                "slug": verifier.CODEX_MODEL,
+                "display_name": "synthetic",
+                "unrelated": {"stable": True},
+            },
+        ],
+    }
+
+
+def test_vision_catalog_positive_facts_are_exact_and_preserve_unrelated_fields(tmp_path) -> None:
+    baseline = _catalog_document()
+    prepared = verifier._prepare_vision_catalog_document(baseline, model=verifier.CODEX_MODEL)
+    facts = verifier._validate_vision_catalog_document(
+        prepared, model=verifier.CODEX_MODEL, baseline=baseline
+    )
+    assert facts["modalities_exact"] is True
+    assert facts["image_detail_false"] is True
+    assert facts["context_exact"] is True
+    assert facts["max_context_exact"] is True
+    assert facts["parallel_tools_false"] is True
+    selected = next(item for item in prepared["models"] if item["slug"] == verifier.CODEX_MODEL)
+    assert selected["input_modalities"] == ["text", "image"]
+    assert selected["supports_image_detail_original"] is False
+    assert selected["context_window"] == 100_000
+    assert selected["max_context_window"] == 100_000
+    assert selected["supports_parallel_tool_calls"] is False
+    assert selected["unrelated"] == {"stable": True}
+    assert verifier.LOCAL_005Q_SOURCE_COMMIT == "64e50172ee02563e2b021554f6b0d345cc7dfdec"
+    assert verifier.LOCAL_005Q_VISION_SOURCE_PATH == "tests/helpers/vision_e2e_support.py"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("input_modalities", ["image", "text"], "vision_catalog_modalities_invalid"),
+        ("input_modalities", ["text", "image", "audio"], "vision_catalog_modalities_invalid"),
+        ("supports_image_detail_original", True, "vision_catalog_image_detail_invalid"),
+        ("supports_image_detail_original", None, "vision_catalog_image_detail_invalid"),
+        ("context_window", 99_999, "vision_catalog_context_invalid"),
+        ("context_window", True, "vision_catalog_context_invalid"),
+        ("max_context_window", 100_001, "vision_catalog_context_invalid"),
+        ("max_context_window", None, "vision_catalog_context_invalid"),
+        ("supports_parallel_tool_calls", True, "vision_catalog_parallel_tools_invalid"),
+        ("supports_parallel_tool_calls", None, "vision_catalog_parallel_tools_invalid"),
+    ],
+)
+def test_vision_catalog_rejects_malformed_or_unapproved_facts(field, value, error) -> None:
+    baseline = _catalog_document()
+    prepared = verifier._prepare_vision_catalog_document(baseline, model=verifier.CODEX_MODEL)
+    selected = next(item for item in prepared["models"] if item["slug"] == verifier.CODEX_MODEL)
+    selected[field] = value
+    with pytest.raises(verifier.VerificationError, match=error):
+        verifier._validate_vision_catalog_document(prepared, model=verifier.CODEX_MODEL)
+
+
+def test_vision_catalog_rejects_missing_duplicate_and_unknown_mutation_without_raw_value() -> None:
+    missing = {"models": [{"slug": "different"}]}
+    with pytest.raises(verifier.VerificationError, match="vision_catalog_model_missing"):
+        verifier._prepare_vision_catalog_document(missing, model=verifier.CODEX_MODEL)
+
+    duplicate = {"models": [{"slug": verifier.CODEX_MODEL}, {"slug": verifier.CODEX_MODEL}]}
+    with pytest.raises(verifier.VerificationError, match="vision_catalog_model_duplicate"):
+        verifier._prepare_vision_catalog_document(duplicate, model=verifier.CODEX_MODEL)
+
+    baseline = _catalog_document()
+    prepared = verifier._prepare_vision_catalog_document(baseline, model=verifier.CODEX_MODEL)
+    raw_canary = "UNRETAINED_CATALOG_CANARY_161C"
+    selected = next(item for item in prepared["models"] if item["slug"] == verifier.CODEX_MODEL)
+    selected["unreviewed_mutation"] = raw_canary
+    with pytest.raises(verifier.VerificationError) as exc_info:
+        verifier._validate_vision_catalog_document(
+            prepared, model=verifier.CODEX_MODEL, baseline=baseline
+        )
+    assert exc_info.value.args[0] == "vision_catalog_unrelated_mutation"
+    assert raw_canary not in str(exc_info.value)
+
+
+def test_vision_catalog_write_is_canonical_bounded_and_mode_0600(tmp_path) -> None:
+    baseline = _catalog_document()
+    path = tmp_path / "catalog.json"
+    facts = verifier._write_and_validate_vision_catalog(path, baseline, model=verifier.CODEX_MODEL)
+    assert facts["model_present"] is True
+    assert path.stat().st_mode & 0o777 == 0o600
+    raw = path.read_bytes()
+    assert (
+        raw
+        == (
+            json.dumps(json.loads(raw), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        ).encode()
+    )
+
+    oversized = _catalog_document()
+    oversized["models"][1]["description"] = "x" * (verifier.MAX_CAPTURE_BODY_BYTES + 1)
+    with pytest.raises(verifier.VerificationError, match="vision_catalog_oversized"):
+        verifier._write_and_validate_vision_catalog(
+            tmp_path / "oversized.json", oversized, model=verifier.CODEX_MODEL
+        )
+
+    with pytest.raises(verifier.VerificationError, match="vision_catalog_noncanonical"):
+        verifier._prepare_vision_catalog_document(
+            {"models": [{"slug": verifier.CODEX_MODEL, "bad": object()}]},
+            model=verifier.CODEX_MODEL,
+        )

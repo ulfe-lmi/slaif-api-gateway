@@ -36,6 +36,16 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_PACKAGE = "@openai/codex@0.149.0"
 CODEX_MODEL = "codex-0149-assistant-history-model"
+CODEX_0149_BINARY_SHA256 = "bbc3341e44c9ead340ed9570c17be936e37870f570751a941699ffd04d672827"
+LOCAL_005Q_SOURCE_COMMIT = "64e50172ee02563e2b021554f6b0d345cc7dfdec"
+LOCAL_005Q_VISION_SOURCE_PATH = "tests/helpers/vision_e2e_support.py"
+LOCAL_005Q_VISION_FACTS = {
+    "input_modalities": ["text", "image"],
+    "supports_image_detail_original": False,
+    "context_window": 100_000,
+    "max_context_window": 100_000,
+    "supports_parallel_tool_calls": False,
+}
 LOCAL_SERVICE_TOKEN = "synthetic-local-history-service-token-161-a"
 LOCAL_SIGNING_SECRET = "synthetic-local-history-signing-secret-161-a"
 LOCAL_DERIVATION_SECRET = "synthetic-local-history-derivation-secret-161-a"
@@ -218,6 +228,135 @@ def _write_image_fixtures(root: Path) -> dict[str, object]:
     }
     del full_bytes, crop_bytes, full_rows, crop_rows, full_digest, crop_digest
     return facts
+
+
+def _catalog_value_class(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, Mapping):
+        return "object"
+    return "other"
+
+
+def _prepare_vision_catalog_document(document: object, *, model: str) -> dict[str, object]:
+    if not isinstance(document, Mapping):
+        raise VerificationError("vision_catalog_not_object")
+    models = document.get("models")
+    if not isinstance(models, list):
+        raise VerificationError("vision_catalog_models_invalid")
+    matches = [item for item in models if isinstance(item, Mapping) and item.get("slug") == model]
+    if not matches:
+        raise VerificationError("vision_catalog_model_missing")
+    if len(matches) != 1:
+        raise VerificationError("vision_catalog_model_duplicate")
+    selected = matches[0]
+    if not isinstance(selected, dict):
+        raise VerificationError("vision_catalog_model_invalid")
+    try:
+        prepared = json.loads(json.dumps(document))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        raise VerificationError("vision_catalog_noncanonical") from None
+    prepared_models = prepared.get("models")
+    if not isinstance(prepared_models, list):
+        raise VerificationError("vision_catalog_models_invalid")
+    prepared_selected = next(
+        (item for item in prepared_models if isinstance(item, dict) and item.get("slug") == model),
+        None,
+    )
+    if not isinstance(prepared_selected, dict):
+        raise VerificationError("vision_catalog_model_missing")
+    prepared_selected.update(LOCAL_005Q_VISION_FACTS)
+    return prepared
+
+
+def _validate_vision_catalog_document(
+    document: object,
+    *,
+    model: str,
+    baseline: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    if not isinstance(document, Mapping):
+        raise VerificationError("vision_catalog_not_object")
+    models = document.get("models")
+    if not isinstance(models, list):
+        raise VerificationError("vision_catalog_models_invalid")
+    matches = [item for item in models if isinstance(item, Mapping) and item.get("slug") == model]
+    if not matches:
+        raise VerificationError("vision_catalog_model_missing")
+    if len(matches) != 1:
+        raise VerificationError("vision_catalog_model_duplicate")
+    selected = matches[0]
+    if not isinstance(selected, Mapping):
+        raise VerificationError("vision_catalog_model_invalid")
+    if selected.get("input_modalities") != ["text", "image"]:
+        raise VerificationError("vision_catalog_modalities_invalid")
+    if selected.get("supports_image_detail_original") is not False:
+        raise VerificationError("vision_catalog_image_detail_invalid")
+    for field in ("context_window", "max_context_window"):
+        value = selected.get(field)
+        if isinstance(value, bool) or value != 100_000:
+            raise VerificationError("vision_catalog_context_invalid")
+    if selected.get("supports_parallel_tool_calls") is not False:
+        raise VerificationError("vision_catalog_parallel_tools_invalid")
+    if baseline is not None:
+        baseline_models = baseline.get("models")
+        if not isinstance(baseline_models, list):
+            raise VerificationError("vision_catalog_baseline_invalid")
+        baseline_matches = [
+            item
+            for item in baseline_models
+            if isinstance(item, Mapping) and item.get("slug") == model
+        ]
+        if len(baseline_matches) != 1 or not isinstance(baseline_matches[0], Mapping):
+            raise VerificationError("vision_catalog_baseline_model_invalid")
+        baseline_selected = dict(baseline_matches[0])
+        selected_unrelated = dict(selected)
+        baseline_selected.update(LOCAL_005Q_VISION_FACTS)
+        for field in LOCAL_005Q_VISION_FACTS:
+            selected_unrelated.pop(field, None)
+            baseline_selected.pop(field, None)
+        if selected_unrelated != baseline_selected:
+            raise VerificationError("vision_catalog_unrelated_mutation")
+    return {
+        "model_present": True,
+        "model_count": len(matches),
+        "modalities_exact": selected.get("input_modalities") == ["text", "image"],
+        "image_detail_false": selected.get("supports_image_detail_original") is False,
+        "context_exact": selected.get("context_window") == 100_000,
+        "max_context_exact": selected.get("max_context_window") == 100_000,
+        "parallel_tools_false": selected.get("supports_parallel_tool_calls") is False,
+        "selected_field_classes": {
+            field: _catalog_value_class(selected.get(field))
+            for field in (
+                "input_modalities",
+                "supports_image_detail_original",
+                "context_window",
+                "max_context_window",
+                "supports_parallel_tool_calls",
+            )
+        },
+    }
+
+
+def _write_and_validate_vision_catalog(
+    path: Path, document: Mapping[str, object], *, model: str
+) -> dict[str, object]:
+    prepared = _prepare_vision_catalog_document(document, model=model)
+    canonical = json.dumps(prepared, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    if len(canonical.encode("utf-8")) > MAX_CAPTURE_BODY_BYTES:
+        raise VerificationError("vision_catalog_oversized")
+    path.write_text(canonical, encoding="utf-8")
+    os.chmod(path, 0o600)
+    reread = json.loads(path.read_text(encoding="utf-8"))
+    return _validate_vision_catalog_document(reread, model=model, baseline=document)
 
 
 def _image_expectations(facts: Mapping[str, object]) -> dict[str, object]:
@@ -1000,6 +1139,9 @@ def _install_codex(root: Path) -> Path:
     version = _run([str(binary), "--version"], cwd=install, env=os.environ.copy(), timeout=10)
     if version.returncode != 0 or version.stdout != b"codex-cli 0.149.0\n":
         raise VerificationError("codex_version_mismatch")
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    if digest != CODEX_0149_BINARY_SHA256:
+        raise VerificationError("codex_binary_sha_mismatch")
     return binary
 
 
@@ -1295,19 +1437,9 @@ def run_prefixed_reproduction() -> str:
                     binary, catalog, environment=environment, model=CODEX_MODEL
                 )
                 catalog_value = json.loads(catalog.read_text(encoding="utf-8"))
-                catalog_models = (
-                    catalog_value.get("models") if isinstance(catalog_value, Mapping) else None
-                )
-                if (
-                    not isinstance(catalog_models, list)
-                    or len(catalog_models) != 1
-                    or not isinstance(catalog_models[0], dict)
-                ):
-                    raise VerificationError("model_catalog_shape_invalid")
-                catalog_models[0]["supports_image_detail_original"] = True
-                catalog.write_text(
-                    json.dumps(catalog_value, separators=(",", ":")), encoding="utf-8"
-                )
+                if not isinstance(catalog_value, Mapping):
+                    raise VerificationError("vision_catalog_not_object")
+                _write_and_validate_vision_catalog(catalog, catalog_value, model=CODEX_MODEL)
                 gateway_port = _free_port()
                 observation = GatewayObservation(
                     create_app(configured_settings()), image_expectations=image_expectations
