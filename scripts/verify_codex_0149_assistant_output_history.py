@@ -19,8 +19,10 @@ import http.server
 import json
 import logging
 import os
+import platform
 import re
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -28,6 +30,7 @@ import tempfile
 import threading
 import zlib
 from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -36,7 +39,27 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_PACKAGE = "@openai/codex@0.149.0"
 CODEX_MODEL = "codex-0149-assistant-history-model"
+CODEX_ROOT_PACKAGE_NAME = "@openai/codex"
+CODEX_ROOT_PACKAGE_VERSION = "0.149.0"
+CODEX_PLATFORM_PACKAGE_NAME = "@openai/codex-linux-x64"
+CODEX_PLATFORM_DISTRIBUTION_NAME = "@openai/codex"
+CODEX_PLATFORM_PACKAGE_VERSION = "0.149.0-linux-x64"
+CODEX_PLATFORM_OPTIONAL_ALIAS = "npm:@openai/codex@0.149.0-linux-x64"
+CODEX_ROOT_PACKAGE_INTEGRITY = "sha512-i4dryj2Y1j+00Mb5n+0n71EYnTK9/KDc2cdFo/dXD0d1oTog2bhUssKDEIOnKmnEf51P0Z/HJTWvTKw/UHyOvQ=="
+CODEX_PLATFORM_PACKAGE_INTEGRITY = "sha512-uZXaN9JPxu0/jjnqqJeTd4kRYPnjVZK3MiVndfG1mHhEaoDKL7ScWHfPqvAEOjwsSDEmQSlMfUkmvYp/CHciYw=="
+CODEX_LAUNCHER_RELATIVE_PATH = "../@openai/codex/bin/codex.js"
+CODEX_LAUNCHER_SHA256 = "134063e133f0b4244fa3b251acf973d4fe4b4aeeacbdc135211bf480f59f1477"
+CODEX_NATIVE_RELATIVE_PATH = (
+    "node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+)
+CODEX_SOURCE_TAG = "rust-v0.149.0"
+CODEX_SOURCE_COMMIT = "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0"
+CODEX_NATIVE_TARGET = "x86_64-unknown-linux-musl"
 CODEX_0149_BINARY_SHA256 = "bbc3341e44c9ead340ed9570c17be936e37870f570751a941699ffd04d672827"
+CODEX_VERSION_OUTPUT = b"codex-cli 0.149.0\n"
+MAX_CODEX_METADATA_BYTES = 1_048_576
+MAX_CODEX_LAUNCHER_BYTES = 4 * 1024 * 1024
+MAX_CODEX_NATIVE_BYTES = 128 * 1024 * 1024
 LOCAL_005Q_SOURCE_COMMIT = "64e50172ee02563e2b021554f6b0d345cc7dfdec"
 LOCAL_005Q_VISION_SOURCE_PATH = "tests/helpers/vision_e2e_support.py"
 LOCAL_005Q_VISION_FACTS = {
@@ -1120,7 +1143,189 @@ def _run(
         raise VerificationError("process_launch_failed") from exc
 
 
-def _install_codex(root: Path) -> Path:
+@dataclass(frozen=True)
+class CodexProvenance:
+    launcher: Path
+    native: Path
+
+
+def _provenance_path(root: Path, relative: str, *, error: str) -> Path:
+    try:
+        root_absolute = root.absolute()
+        candidate = root.joinpath(*Path(relative).parts)
+        candidate.absolute().relative_to(root_absolute)
+        root_resolved = root.resolve(strict=True)
+        candidate.resolve(strict=False).relative_to(root_resolved)
+    except (OSError, RuntimeError, ValueError):
+        raise VerificationError(error) from None
+    return candidate
+
+
+def _require_regular_file(path: Path, *, error: str, maximum: int, executable: bool) -> int:
+    try:
+        if path.is_symlink():
+            raise VerificationError(error)
+        info = path.stat()
+    except VerificationError:
+        raise
+    except (OSError, ValueError):
+        raise VerificationError(error) from None
+    if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+        raise VerificationError(error)
+    if executable and info.st_mode & 0o111 == 0:
+        raise VerificationError(error)
+    return info.st_size
+
+
+def _read_json_file(path: Path, *, error: str) -> Mapping[str, object]:
+    _require_regular_file(path, error=error, maximum=MAX_CODEX_METADATA_BYTES, executable=False)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        raise VerificationError(error) from None
+    if not isinstance(value, Mapping):
+        raise VerificationError(error)
+    return value
+
+
+def _sha256_file(path: Path, *, error: str, maximum: int) -> str:
+    _require_regular_file(path, error=error, maximum=maximum, executable=True)
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                digest.update(chunk)
+    except (OSError, ValueError):
+        raise VerificationError(error) from None
+    return digest.hexdigest()
+
+
+def _probe_codex_version(executable: Path, *, install: Path, runner: object) -> None:
+    try:
+        result = runner(  # type: ignore[operator]
+            [str(executable), "--version"],
+            cwd=install,
+            env=os.environ.copy(),
+            timeout=10,
+        )
+    except VerificationError:
+        raise
+    except Exception:
+        raise VerificationError("codex_version_probe_failed") from None
+    if (
+        getattr(result, "returncode", None) != 0
+        or getattr(result, "stdout", None) != CODEX_VERSION_OUTPUT
+        or getattr(result, "stderr", None) != b""
+    ):
+        raise VerificationError("codex_version_mismatch")
+
+
+def _validate_package_lock(install: Path) -> None:
+    lock = _read_json_file(
+        _provenance_path(install, "package-lock.json", error="codex_lock_invalid"),
+        error="codex_lock_invalid",
+    )
+    if lock.get("lockfileVersion") not in {2, 3}:
+        raise VerificationError("codex_lock_invalid")
+    packages = lock.get("packages")
+    if not isinstance(packages, Mapping):
+        raise VerificationError("codex_lock_invalid")
+    expected = {
+        "node_modules/@openai/codex": CODEX_ROOT_PACKAGE_INTEGRITY,
+        "node_modules/@openai/codex-linux-x64": CODEX_PLATFORM_PACKAGE_INTEGRITY,
+    }
+    for package_path, integrity in expected.items():
+        entry = packages.get(package_path)
+        if not isinstance(entry, Mapping) or entry.get("integrity") != integrity:
+            raise VerificationError("codex_lock_integrity_invalid")
+
+
+def _attest_codex_installation(
+    install: Path,
+    *,
+    runner: object = _run,
+    platform_name: str | None = None,
+    architecture: str | None = None,
+    launcher_digest: str = CODEX_LAUNCHER_SHA256,
+    native_digest: str = CODEX_0149_BINARY_SHA256,
+) -> CodexProvenance:
+    current_platform = (platform_name or platform.system()).lower()
+    current_architecture = (architecture or platform.machine()).lower()
+    if current_platform != "linux" or current_architecture not in {"x86_64", "x64"}:
+        raise VerificationError("codex_runtime_unsupported")
+
+    root_manifest_path = _provenance_path(
+        install,
+        "node_modules/@openai/codex/package.json",
+        error="codex_root_manifest_invalid",
+    )
+    platform_manifest_path = _provenance_path(
+        install,
+        "node_modules/@openai/codex-linux-x64/package.json",
+        error="codex_platform_manifest_invalid",
+    )
+    root_manifest = _read_json_file(root_manifest_path, error="codex_root_manifest_invalid")
+    root_bin = root_manifest.get("bin")
+    root_optional = root_manifest.get("optionalDependencies")
+    if (
+        root_manifest.get("name") != CODEX_ROOT_PACKAGE_NAME
+        or root_manifest.get("version") != CODEX_ROOT_PACKAGE_VERSION
+        or not isinstance(root_bin, Mapping)
+        or root_bin.get("codex") != "bin/codex.js"
+        or not isinstance(root_optional, Mapping)
+        or root_optional.get(CODEX_PLATFORM_PACKAGE_NAME) != CODEX_PLATFORM_OPTIONAL_ALIAS
+    ):
+        raise VerificationError("codex_root_manifest_invalid")
+    platform_manifest = _read_json_file(
+        platform_manifest_path, error="codex_platform_manifest_invalid"
+    )
+    if (
+        platform_manifest.get("name") != CODEX_PLATFORM_DISTRIBUTION_NAME
+        or platform_manifest.get("version") != CODEX_PLATFORM_PACKAGE_VERSION
+        or platform_manifest.get("os") != ["linux"]
+        or platform_manifest.get("cpu") != ["x64"]
+    ):
+        raise VerificationError("codex_platform_manifest_invalid")
+    _validate_package_lock(install)
+
+    launcher_link = _provenance_path(
+        install, "node_modules/.bin/codex", error="codex_launcher_link_invalid"
+    )
+    try:
+        if (
+            not launcher_link.is_symlink()
+            or os.readlink(launcher_link) != CODEX_LAUNCHER_RELATIVE_PATH
+        ):
+            raise VerificationError("codex_launcher_link_invalid")
+        launcher = _provenance_path(
+            install,
+            "node_modules/@openai/codex/bin/codex.js",
+            error="codex_launcher_invalid",
+        )
+        if launcher_link.resolve(strict=False) != launcher.resolve(strict=False):
+            raise VerificationError("codex_launcher_link_invalid")
+    except VerificationError:
+        raise
+    except (OSError, RuntimeError, ValueError):
+        raise VerificationError("codex_launcher_link_invalid") from None
+    if (
+        _sha256_file(launcher, error="codex_launcher_invalid", maximum=MAX_CODEX_LAUNCHER_BYTES)
+        != launcher_digest
+    ):
+        raise VerificationError("codex_launcher_digest_invalid")
+
+    native = _provenance_path(install, CODEX_NATIVE_RELATIVE_PATH, error="codex_native_invalid")
+    if (
+        _sha256_file(native, error="codex_native_invalid", maximum=MAX_CODEX_NATIVE_BYTES)
+        != native_digest
+    ):
+        raise VerificationError("codex_native_digest_invalid")
+    _probe_codex_version(launcher, install=install, runner=runner)
+    _probe_codex_version(native, install=install, runner=runner)
+    return CodexProvenance(launcher=launcher_link, native=native)
+
+
+def _install_codex(root: Path) -> CodexProvenance:
     install = root / "codex-install"
     install.mkdir(mode=0o700)
     if _run(["npm", "init", "-y"], cwd=install, env=os.environ.copy(), timeout=30).returncode != 0:
@@ -1135,14 +1340,7 @@ def _install_codex(root: Path) -> Path:
         != 0
     ):
         raise VerificationError("codex_install_failed")
-    binary = install / "node_modules/.bin/codex"
-    version = _run([str(binary), "--version"], cwd=install, env=os.environ.copy(), timeout=10)
-    if version.returncode != 0 or version.stdout != b"codex-cli 0.149.0\n":
-        raise VerificationError("codex_version_mismatch")
-    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-    if digest != CODEX_0149_BINARY_SHA256:
-        raise VerificationError("codex_binary_sha_mismatch")
-    return binary
+    return _attest_codex_installation(install)
 
 
 def _codex_profile_args(*, port: int, model_catalog: Path) -> list[str]:
@@ -1428,7 +1626,8 @@ def run_prefixed_reproduction() -> str:
                         codex_streaming_tool_events=True,
                     )
                 )
-                binary = _install_codex(root)
+                provenance = _install_codex(root)
+                binary = provenance.launcher
                 catalog = root / "model-catalog.json"
                 environment = capture._isolated_environment(home)
                 environment.update(values)

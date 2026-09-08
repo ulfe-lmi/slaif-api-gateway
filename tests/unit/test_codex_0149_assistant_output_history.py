@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import inspect
 import json
+import os
+import subprocess
 
 import pytest
 
@@ -27,6 +31,345 @@ def _history_body(text: str = "history-only-text") -> dict[str, object]:
             },
         ],
     }
+
+
+def _synthetic_codex_installation(tmp_path):
+    install = tmp_path / "codex-install"
+    root_package = install / "node_modules/@openai/codex"
+    platform_package = install / "node_modules/@openai/codex-linux-x64"
+    launcher = root_package / "bin/codex.js"
+    native = platform_package / "vendor/x86_64-unknown-linux-musl/bin/codex"
+    (install / "node_modules/.bin").mkdir(parents=True)
+    launcher.parent.mkdir(parents=True)
+    native.parent.mkdir(parents=True)
+    launcher_bytes = b"synthetic-launcher"
+    native_bytes = b"synthetic-native"
+    launcher.write_bytes(launcher_bytes)
+    native.write_bytes(native_bytes)
+    os.chmod(launcher, 0o755)
+    os.chmod(native, 0o755)
+    (install / "node_modules/.bin/codex").symlink_to(verifier.CODEX_LAUNCHER_RELATIVE_PATH)
+    (root_package / "package.json").write_text(
+        json.dumps(
+            {
+                "name": verifier.CODEX_ROOT_PACKAGE_NAME,
+                "version": verifier.CODEX_ROOT_PACKAGE_VERSION,
+                "bin": {"codex": "bin/codex.js"},
+                "optionalDependencies": {
+                    verifier.CODEX_PLATFORM_PACKAGE_NAME: verifier.CODEX_PLATFORM_OPTIONAL_ALIAS
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (platform_package / "package.json").write_text(
+        json.dumps(
+            {
+                "name": verifier.CODEX_PLATFORM_DISTRIBUTION_NAME,
+                "version": verifier.CODEX_PLATFORM_PACKAGE_VERSION,
+                "os": ["linux"],
+                "cpu": ["x64"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (install / "package-lock.json").write_text(
+        json.dumps(
+            {
+                "name": "synthetic-codex-install",
+                "lockfileVersion": 3,
+                "requires": True,
+                "packages": {
+                    "node_modules/@openai/codex": {
+                        "version": verifier.CODEX_ROOT_PACKAGE_VERSION,
+                        "integrity": verifier.CODEX_ROOT_PACKAGE_INTEGRITY,
+                    },
+                    "node_modules/@openai/codex-linux-x64": {
+                        "version": verifier.CODEX_PLATFORM_PACKAGE_VERSION,
+                        "integrity": verifier.CODEX_PLATFORM_PACKAGE_INTEGRITY,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return (
+        install,
+        launcher,
+        native,
+        hashlib.sha256(launcher_bytes).hexdigest(),
+        hashlib.sha256(native_bytes).hexdigest(),
+    )
+
+
+def _synthetic_version_runner(command, *, cwd, env, timeout):
+    return subprocess.CompletedProcess(command, 0, verifier.CODEX_VERSION_OUTPUT, b"")
+
+
+def test_codex_provenance_attests_exact_launcher_and_native_topology(tmp_path) -> None:
+    install, launcher, native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    provenance = verifier._attest_codex_installation(
+        install,
+        runner=_synthetic_version_runner,
+        platform_name="linux",
+        architecture="x86_64",
+        launcher_digest=launcher_digest,
+        native_digest=native_digest,
+    )
+    assert provenance.launcher == install / "node_modules/.bin/codex"
+    assert provenance.native == native
+    assert provenance.launcher.resolve() == launcher
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("name", "wrong"),
+        ("version", "0.149.1"),
+        ("bin", {"codex": "wrong.js"}),
+        ("optionalDependencies", {}),
+    ],
+)
+def test_codex_provenance_rejects_root_manifest_drift(tmp_path, field, value) -> None:
+    install, _launcher, _native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    path = install / "node_modules/@openai/codex/package.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest[field] = value
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(verifier.VerificationError, match="codex_root_manifest_invalid"):
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("version", "0.149.0"), ("os", ["darwin"]), ("cpu", ["arm64"])],
+)
+def test_codex_provenance_rejects_platform_manifest_drift(tmp_path, field, value) -> None:
+    install, _launcher, _native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    path = install / "node_modules/@openai/codex-linux-x64/package.json"
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest[field] = value
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(verifier.VerificationError, match="codex_platform_manifest_invalid"):
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+
+
+@pytest.mark.parametrize("kind", ["missing", "malformed", "root", "platform", "ambiguous"])
+def test_codex_provenance_rejects_lock_integrity_drift(tmp_path, kind) -> None:
+    install, _launcher, _native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    path = install / "package-lock.json"
+    if kind == "missing":
+        path.unlink()
+    elif kind == "malformed":
+        path.write_text("[]", encoding="utf-8")
+    else:
+        lock = json.loads(path.read_text(encoding="utf-8"))
+        packages = lock["packages"]
+        package_path = (
+            "node_modules/@openai/codex"
+            if kind in {"root", "ambiguous"}
+            else "node_modules/@openai/codex-linux-x64"
+        )
+        packages[package_path]["integrity"] = (
+            [verifier.CODEX_ROOT_PACKAGE_INTEGRITY] if kind == "ambiguous" else "wrong-integrity"
+        )
+        path.write_text(json.dumps(lock), encoding="utf-8")
+    error = (
+        "codex_lock_invalid" if kind in {"missing", "malformed"} else "codex_lock_integrity_invalid"
+    )
+    with pytest.raises(verifier.VerificationError, match=error):
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+
+
+@pytest.mark.parametrize("architecture", ["arm64", "amd64", "i686"])
+def test_codex_provenance_rejects_unsupported_runtime(tmp_path, architecture) -> None:
+    install, _launcher, _native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    with pytest.raises(verifier.VerificationError, match="codex_runtime_unsupported"):
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture=architecture,
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+    with pytest.raises(verifier.VerificationError, match="codex_runtime_unsupported"):
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="darwin",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+
+
+@pytest.mark.parametrize("kind", ["missing", "regular", "absolute", "wrong", "escape"])
+def test_codex_provenance_rejects_launcher_link_drift(tmp_path, kind) -> None:
+    install, launcher, _native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    link = install / "node_modules/.bin/codex"
+    link.unlink()
+    if kind == "regular":
+        link.write_bytes(b"not-a-link")
+    elif kind == "absolute":
+        link.symlink_to(launcher)
+    elif kind == "wrong":
+        link.symlink_to("../@openai/codex/bin/other.js")
+    elif kind == "escape":
+        outside = tmp_path / "outside"
+        outside.write_bytes(b"outside")
+        link.symlink_to(outside)
+    with pytest.raises(verifier.VerificationError, match="codex_launcher_link_invalid"):
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+
+
+@pytest.mark.parametrize("kind", ["missing", "symlink", "oversized", "digest"])
+def test_codex_provenance_rejects_launcher_file_drift(tmp_path, kind) -> None:
+    install, launcher, native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    if kind == "missing":
+        launcher.unlink()
+    elif kind == "symlink":
+        launcher.unlink()
+        launcher.symlink_to(native)
+    elif kind == "oversized":
+        launcher.write_bytes(b"x" * (verifier.MAX_CODEX_LAUNCHER_BYTES + 1))
+        os.chmod(launcher, 0o755)
+    else:
+        launcher_digest = "0" * 64
+    with pytest.raises(verifier.VerificationError, match="codex_launcher_"):
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+
+
+@pytest.mark.parametrize(
+    "kind", ["missing", "directory", "symlink", "non_executable", "oversized", "digest"]
+)
+def test_codex_provenance_rejects_native_file_drift(tmp_path, kind) -> None:
+    install, _launcher, native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    if kind == "missing":
+        native.unlink()
+    elif kind == "directory":
+        native.unlink()
+        native.mkdir()
+    elif kind == "symlink":
+        native.unlink()
+        outside = tmp_path / "native-outside"
+        outside.write_bytes(b"outside")
+        native.symlink_to(outside)
+    elif kind == "non_executable":
+        os.chmod(native, 0o600)
+    elif kind == "oversized":
+        native.write_bytes(b"x" * (verifier.MAX_CODEX_NATIVE_BYTES + 1))
+        os.chmod(native, 0o755)
+    else:
+        native_digest = "0" * 64
+    with pytest.raises(verifier.VerificationError, match="codex_native_"):
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        subprocess.CompletedProcess([], 1, b"", b""),
+        subprocess.CompletedProcess([], 0, b"wrong\n", b""),
+        subprocess.CompletedProcess([], 0, verifier.CODEX_VERSION_OUTPUT, b"diagnostic"),
+    ],
+)
+def test_codex_provenance_rejects_version_probe_drift(tmp_path, result) -> None:
+    install, _launcher, _native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+
+    def runner(command, *, cwd, env, timeout):
+        return result
+
+    with pytest.raises(verifier.VerificationError, match="codex_version_mismatch"):
+        verifier._attest_codex_installation(
+            install,
+            runner=runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+
+
+def test_codex_provenance_has_no_broad_search_or_raw_error_values(tmp_path) -> None:
+    install, _launcher, native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    native.unlink()
+    with pytest.raises(verifier.VerificationError) as exc_info:
+        verifier._attest_codex_installation(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+        )
+    assert str(native) not in str(exc_info.value)
+    source = inspect.getsource(verifier._attest_codex_installation)
+    assert "rglob" not in source
+    assert "which(" not in source
+    assert "glob(" not in source
 
 
 def test_history_projection_is_structural_and_discards_text() -> None:
