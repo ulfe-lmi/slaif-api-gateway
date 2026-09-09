@@ -1604,9 +1604,13 @@ class _LocalServer(http.server.ThreadingHTTPServer):
 
 
 class _DirectUpstreamState:
-    def __init__(self, image_expectations: Mapping[str, object]) -> None:
+    def __init__(
+        self,
+        image_expectations: Mapping[str, object],
+        response_text: str = "history-only-text",
+    ) -> None:
         self.image_expectations = image_expectations
-        self.assistant_text = "history-only-text"
+        self.returned_text = response_text
         self.request_count = 0
         self.authorization_count = 0
         self.first_image_class = "none"
@@ -1657,7 +1661,7 @@ class _DirectUpstreamState:
                     not isinstance(assistant_part, Mapping)
                     or set(assistant_part) != {"type", "text"}
                     or assistant_part.get("type") != "output_text"
-                    or assistant_part.get("text") != self.assistant_text
+                    or assistant_part.get("text") != self.returned_text
                 ):
                     raise VerificationError("direct_upstream_output_text_invalid")
                 try:
@@ -1668,7 +1672,7 @@ class _DirectUpstreamState:
                     raise VerificationError("direct_upstream_output_text_empty")
                 self.second_image_class = image_class
                 self.history_semantics_valid = True
-                self.semantic_text_equal = assistant_part["text"] == self.assistant_text
+                self.semantic_text_equal = assistant_part["text"] == self.returned_text
             self.request_count = ordinal
             self.authorization_count += 1
 
@@ -1681,14 +1685,18 @@ class _DirectUpstreamHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         try:
+            self.connection.settimeout(5)
             if self.path.split("?", 1)[0] not in {"/v1/responses", "/responses"}:
                 raise VerificationError("direct_upstream_path_invalid")
             length = int(self.headers.get("content-length", "0"))
             if length <= 0 or length > MAX_CAPTURE_BODY_BYTES:
                 raise VerificationError("direct_upstream_body_bound_invalid")
-            self.server.state.observe(self.rfile.read(length), self.headers)
+            request_body = self.rfile.read(length)
+            if len(request_body) != length:
+                raise VerificationError("direct_upstream_short_body")
+            self.server.state.observe(request_body, self.headers)
             body = b"".join(
-                _sse(event) for event in _message_stream(self.server.state.assistant_text)
+                _sse(event) for event in _message_stream(self.server.state.returned_text)
             )
             self.send_response(200)
             self.send_header("content-type", "text/event-stream")
@@ -1696,6 +1704,12 @@ class _DirectUpstreamHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("content-length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        except socket.timeout:
+            self.server.state.failed = True
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":{"code":"direct_upstream_timeout"}}')
         except (VerificationError, ValueError, TypeError, json.JSONDecodeError):
             self.server.state.failed = True
             self.send_response(400)
@@ -2357,7 +2371,7 @@ def _attest_direct_local_source(local_checkout: Path, environment: Mapping[str, 
     return probe.returncode == 0 and loaded == str(expected) and not probe.stderr
 
 
-def _validate_direct_terminal_sse(body: bytes) -> bool:
+def _validate_direct_terminal_sse(body: bytes) -> str:
     if not body or len(body) > MAX_CAPTURE_BODY_BYTES:
         raise VerificationError("direct_terminal_body_bound_invalid")
     events: list[Mapping[str, object]] = []
@@ -2387,7 +2401,59 @@ def _validate_direct_terminal_sse(body: bytes) -> bool:
     ]
     if [event.get("type") for event in events] != expected_types:
         raise VerificationError("direct_terminal_event_sequence_invalid")
+    added_item = events[2].get("item")
+    if not isinstance(added_item, Mapping) or added_item.get("role") != "assistant":
+        raise VerificationError("direct_terminal_role_invalid")
+    added_part = events[3].get("part")
+    if not isinstance(added_part, Mapping) or added_part.get("type") != "output_text":
+        raise VerificationError("direct_terminal_type_invalid")
+    text_values: list[str] = []
+
+    def text_value(value: object) -> str:
+        if not isinstance(value, str) or not value:
+            raise VerificationError("direct_terminal_text_invalid")
+        try:
+            if len(value.encode("utf-8")) > MAX_HISTORY_TEXT_BYTES:
+                raise VerificationError("direct_terminal_text_too_large")
+        except UnicodeEncodeError:
+            raise VerificationError("direct_terminal_text_invalid") from None
+        text_values.append(value)
+        return value
+
+    text_value(events[4].get("delta"))
+    text_value(events[5].get("text"))
+    content_done = events[6].get("part")
+    if not isinstance(content_done, Mapping) or content_done.get("type") != "output_text":
+        raise VerificationError("direct_terminal_type_invalid")
+    text_value(content_done.get("text"))
+    item_done = events[7].get("item")
+    if not isinstance(item_done, Mapping) or item_done.get("role") != "assistant":
+        raise VerificationError("direct_terminal_role_invalid")
+    item_content = item_done.get("content")
+    if not isinstance(item_content, list) or len(item_content) != 1:
+        raise VerificationError("direct_terminal_content_invalid")
+    item_part = item_content[0]
+    if not isinstance(item_part, Mapping) or item_part.get("type") != "output_text":
+        raise VerificationError("direct_terminal_type_invalid")
+    text_value(item_part.get("text"))
     completed = events[-1].get("response")
+    if not isinstance(completed, Mapping) or completed.get("status") != "completed":
+        raise VerificationError("direct_terminal_response_invalid")
+    output = completed.get("output")
+    if not isinstance(output, list) or len(output) != 1:
+        raise VerificationError("direct_terminal_output_invalid")
+    completed_item = output[0]
+    if not isinstance(completed_item, Mapping) or completed_item.get("role") != "assistant":
+        raise VerificationError("direct_terminal_role_invalid")
+    completed_content = completed_item.get("content")
+    if not isinstance(completed_content, list) or len(completed_content) != 1:
+        raise VerificationError("direct_terminal_content_invalid")
+    completed_part = completed_content[0]
+    if not isinstance(completed_part, Mapping) or completed_part.get("type") != "output_text":
+        raise VerificationError("direct_terminal_type_invalid")
+    text_value(completed_part.get("text"))
+    if len(set(text_values)) != 1:
+        raise VerificationError("direct_terminal_text_inconsistent")
     usage = completed.get("usage") if isinstance(completed, Mapping) else None
     if not isinstance(usage, Mapping):
         raise VerificationError("direct_terminal_usage_missing")
@@ -2395,7 +2461,7 @@ def _validate_direct_terminal_sse(body: bytes) -> bool:
         value = usage.get(field)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise VerificationError("direct_terminal_usage_invalid")
-    return True
+    return text_values[0]
 
 
 def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
@@ -2419,6 +2485,7 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
 
     database_url, own_db, db_name = _database()
     upstream = _DirectUpstreamServer({})
+    upstream.state.returned_text = "returned-history-text"
     upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
     upstream_thread.start()
     local_process: subprocess.Popen[bytes] | None = None
@@ -2643,23 +2710,26 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
                         }
                     ],
                 }
-                second_body = json.loads(json.dumps(first_body))
-                second_body["input"] = [
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": "history-only-text"}],
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_image",
-                                "image_url": image_data_url(fixture_facts["crop_path"]),
-                            },
-                            {"type": "input_text", "text": "crop"},
-                        ],
-                    },
-                ]
+
+                def second_body_for(returned_text: str) -> dict[str, object]:
+                    second = json.loads(json.dumps(first_body))
+                    second["input"] = [
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": returned_text}],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_image",
+                                    "image_url": image_data_url(fixture_facts["crop_path"]),
+                                },
+                                {"type": "input_text", "text": "crop"},
+                            ],
+                        },
+                    ]
+                    return second
 
                 def gateway_post(body: Mapping[str, object]) -> tuple[int, bytes]:
                     try:
@@ -2702,6 +2772,10 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
                 try:
                     with _run_uvicorn_server(app, gateway_port):
                         first_status, first_response = gateway_post(first_body)
+                        if first_status != 200:
+                            raise VerificationError("direct_first_status_invalid")
+                        returned_text = _validate_direct_terminal_sse(first_response)
+                        second_body = second_body_for(returned_text)
                         second_status, second_response = gateway_post(second_body)
                         before_invalid = asyncio.run(
                             _accounting_snapshot(database_url, created.gateway_key_id)
@@ -2721,9 +2795,8 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
                 finally:
                     logging.disable(previous_logging_disable)
 
-                _validate_direct_terminal_sse(first_response)
                 _validate_direct_terminal_sse(second_response)
-                if first_status != 200 or second_status != 200:
+                if second_status != 200:
                     raise VerificationError("direct_valid_status_invalid")
                 if not _accounting_snapshot_is_two_terminal_successes(before_invalid):
                     raise VerificationError("direct_accounting_finalization_invalid")
@@ -2735,9 +2808,6 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
                     or invalid_projection["param_class"] != "input_index_0_content_index_0_type"
                 ):
                     raise VerificationError("direct_invalid_history_not_rejected")
-                after_invalid_role = asyncio.run(
-                    _accounting_snapshot(database_url, created.gateway_key_id)
-                )
                 if not _accounting_snapshot_equal(before_invalid, after_invalid_role):
                     raise VerificationError("direct_invalid_role_accounting_side_effect")
                 invalid_extra_projection = _safe_error_projection(invalid_extra_response)
@@ -3292,9 +3362,9 @@ def _run_prefixed_reproduction_body(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--direct-bounded-fake", action="store_true")
     parser.add_argument("--local-checkout", type=Path)
     controls = parser.add_mutually_exclusive_group()
+    controls.add_argument("--direct-bounded-fake", action="store_true")
     controls.add_argument("--diagnostic-no-image-first-turn", action="store_true")
     controls.add_argument("--diagnostic-accounting-before-rejection", action="store_true")
     arguments = parser.parse_args()

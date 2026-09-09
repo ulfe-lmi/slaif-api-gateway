@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -215,6 +216,24 @@ def test_diagnostic_main_does_not_emit_arbitrary_exception_details() -> None:
     assert "type(exc).__name__" not in source
     assert "repr(exc)" not in source
     assert "traceback" not in source
+
+
+def test_main_rejects_direct_and_legacy_diagnostic_mode_conflict(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_codex_0149_assistant_output_history.py",
+            "--direct-bounded-fake",
+            "--diagnostic-no-image-first-turn",
+            "--local-checkout",
+            "/private/local",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        verifier.main()
+    assert exc_info.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err
 
 
 def _turn_failed_jsonl(message: object = "invalid image") -> bytes:
@@ -750,7 +769,7 @@ def test_direct_upstream_observer_rejects_extra_request() -> None:
 
 def test_direct_terminal_sse_requires_order_and_usage() -> None:
     body = b"".join(verifier._sse(event) for event in verifier._message_stream("history-only-text"))
-    assert verifier._validate_direct_terminal_sse(body) is True
+    assert verifier._validate_direct_terminal_sse(body) == "history-only-text"
     with pytest.raises(verifier.VerificationError, match="direct_terminal_event_sequence_invalid"):
         verifier._validate_direct_terminal_sse(
             body.replace(b"response.completed", b"response.unknown")
@@ -760,6 +779,20 @@ def test_direct_terminal_sse_requires_order_and_usage() -> None:
     without_usage = b"".join(verifier._sse(event) for event in events)
     with pytest.raises(verifier.VerificationError, match="direct_terminal_usage_missing"):
         verifier._validate_direct_terminal_sse(without_usage)
+
+
+@pytest.mark.parametrize("mutation", ["changed", "missing", "wrong_role"])
+def test_direct_terminal_rejects_returned_text_mutations(mutation: str) -> None:
+    events = list(verifier._message_stream("returned-text"))
+    if mutation == "changed":
+        events[5]["text"] = "different-text"
+    elif mutation == "missing":
+        events[7]["item"]["content"] = []
+    else:
+        events[7]["item"]["role"] = "user"
+    body = b"".join(verifier._sse(event) for event in events)
+    with pytest.raises(verifier.VerificationError):
+        verifier._validate_direct_terminal_sse(body)
 
 
 def test_direct_local_source_attestation_rejects_loaded_source_mismatch(
