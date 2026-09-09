@@ -56,10 +56,11 @@ CODEX_SOURCE_TAG = "rust-v0.149.0"
 CODEX_SOURCE_COMMIT = "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0"
 CODEX_NATIVE_TARGET = "x86_64-unknown-linux-musl"
 CODEX_0149_BINARY_SHA256 = "bbc3341e44c9ead340ed9570c17be936e37870f570751a941699ffd04d672827"
+CODEX_NATIVE_SIZE_BYTES = 258_322_048
 CODEX_VERSION_OUTPUT = b"codex-cli 0.149.0\n"
 MAX_CODEX_METADATA_BYTES = 1_048_576
 MAX_CODEX_LAUNCHER_BYTES = 4 * 1024 * 1024
-MAX_CODEX_NATIVE_BYTES = 128 * 1024 * 1024
+MAX_CODEX_NATIVE_BYTES = CODEX_NATIVE_SIZE_BYTES
 LOCAL_005Q_SOURCE_COMMIT = "64e50172ee02563e2b021554f6b0d345cc7dfdec"
 LOCAL_005Q_VISION_SOURCE_PATH = "tests/helpers/vision_e2e_support.py"
 LOCAL_005Q_VISION_FACTS = {
@@ -1161,7 +1162,15 @@ def _provenance_path(root: Path, relative: str, *, error: str) -> Path:
     return candidate
 
 
-def _require_regular_file(path: Path, *, error: str, maximum: int, executable: bool) -> int:
+def _require_regular_file(
+    path: Path,
+    *,
+    error: str,
+    maximum: int,
+    executable: bool,
+    expected_size: int | None = None,
+    size_error: str | None = None,
+) -> int:
     try:
         if path.is_symlink():
             raise VerificationError(error)
@@ -1170,7 +1179,11 @@ def _require_regular_file(path: Path, *, error: str, maximum: int, executable: b
         raise
     except (OSError, ValueError):
         raise VerificationError(error) from None
-    if not stat.S_ISREG(info.st_mode) or info.st_size > maximum:
+    if not stat.S_ISREG(info.st_mode):
+        raise VerificationError(error)
+    if expected_size is not None and info.st_size != expected_size:
+        raise VerificationError(size_error or error)
+    if info.st_size > maximum:
         raise VerificationError(error)
     if executable and info.st_mode & 0o111 == 0:
         raise VerificationError(error)
@@ -1188,8 +1201,22 @@ def _read_json_file(path: Path, *, error: str) -> Mapping[str, object]:
     return value
 
 
-def _sha256_file(path: Path, *, error: str, maximum: int) -> str:
-    _require_regular_file(path, error=error, maximum=maximum, executable=True)
+def _sha256_file(
+    path: Path,
+    *,
+    error: str,
+    maximum: int,
+    expected_size: int | None = None,
+    size_error: str | None = None,
+) -> str:
+    _require_regular_file(
+        path,
+        error=error,
+        maximum=maximum,
+        executable=True,
+        expected_size=expected_size,
+        size_error=size_error,
+    )
     digest = hashlib.sha256()
     try:
         with path.open("rb") as stream:
@@ -1248,7 +1275,13 @@ def _attest_codex_installation(
     architecture: str | None = None,
     launcher_digest: str = CODEX_LAUNCHER_SHA256,
     native_digest: str = CODEX_0149_BINARY_SHA256,
+    native_size: int | None = None,
 ) -> CodexProvenance:
+    expected_native_size = CODEX_NATIVE_SIZE_BYTES if native_size is None else native_size
+    if isinstance(expected_native_size, bool) or not isinstance(expected_native_size, int):
+        raise VerificationError("codex_native_size_invalid")
+    if expected_native_size <= 0 or expected_native_size > CODEX_NATIVE_SIZE_BYTES:
+        raise VerificationError("codex_native_size_invalid")
     current_platform = (platform_name or platform.system()).lower()
     current_architecture = (architecture or platform.machine()).lower()
     if current_platform != "linux" or current_architecture not in {"x86_64", "x64"}:
@@ -1316,7 +1349,13 @@ def _attest_codex_installation(
 
     native = _provenance_path(install, CODEX_NATIVE_RELATIVE_PATH, error="codex_native_invalid")
     if (
-        _sha256_file(native, error="codex_native_invalid", maximum=MAX_CODEX_NATIVE_BYTES)
+        _sha256_file(
+            native,
+            error="codex_native_invalid",
+            maximum=MAX_CODEX_NATIVE_BYTES,
+            expected_size=expected_native_size,
+            size_error="codex_native_size_invalid",
+        )
         != native_digest
     ):
         raise VerificationError("codex_native_digest_invalid")

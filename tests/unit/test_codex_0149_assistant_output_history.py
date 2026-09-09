@@ -106,11 +106,16 @@ def _synthetic_version_runner(command, *, cwd, env, timeout):
     return subprocess.CompletedProcess(command, 0, verifier.CODEX_VERSION_OUTPUT, b"")
 
 
+def _attest_synthetic_codex(install, **kwargs):
+    kwargs.setdefault("native_size", len(b"synthetic-native"))
+    return verifier._attest_codex_installation(install, **kwargs)
+
+
 def test_codex_provenance_attests_exact_launcher_and_native_topology(tmp_path) -> None:
     install, launcher, native, launcher_digest, native_digest = _synthetic_codex_installation(
         tmp_path
     )
-    provenance = verifier._attest_codex_installation(
+    provenance = _attest_synthetic_codex(
         install,
         runner=_synthetic_version_runner,
         platform_name="linux",
@@ -141,7 +146,7 @@ def test_codex_provenance_rejects_root_manifest_drift(tmp_path, field, value) ->
     manifest[field] = value
     path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(verifier.VerificationError, match="codex_root_manifest_invalid"):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="linux",
@@ -164,7 +169,7 @@ def test_codex_provenance_rejects_platform_manifest_drift(tmp_path, field, value
     manifest[field] = value
     path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(verifier.VerificationError, match="codex_platform_manifest_invalid"):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="linux",
@@ -200,7 +205,7 @@ def test_codex_provenance_rejects_lock_integrity_drift(tmp_path, kind) -> None:
         "codex_lock_invalid" if kind in {"missing", "malformed"} else "codex_lock_integrity_invalid"
     )
     with pytest.raises(verifier.VerificationError, match=error):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="linux",
@@ -216,7 +221,7 @@ def test_codex_provenance_rejects_unsupported_runtime(tmp_path, architecture) ->
         tmp_path
     )
     with pytest.raises(verifier.VerificationError, match="codex_runtime_unsupported"):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="linux",
@@ -225,7 +230,7 @@ def test_codex_provenance_rejects_unsupported_runtime(tmp_path, architecture) ->
             native_digest=native_digest,
         )
     with pytest.raises(verifier.VerificationError, match="codex_runtime_unsupported"):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="darwin",
@@ -253,7 +258,7 @@ def test_codex_provenance_rejects_launcher_link_drift(tmp_path, kind) -> None:
         outside.write_bytes(b"outside")
         link.symlink_to(outside)
     with pytest.raises(verifier.VerificationError, match="codex_launcher_link_invalid"):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="linux",
@@ -279,7 +284,7 @@ def test_codex_provenance_rejects_launcher_file_drift(tmp_path, kind) -> None:
     else:
         launcher_digest = "0" * 64
     with pytest.raises(verifier.VerificationError, match="codex_launcher_"):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="linux",
@@ -296,6 +301,7 @@ def test_codex_provenance_rejects_native_file_drift(tmp_path, kind) -> None:
     install, _launcher, native, launcher_digest, native_digest = _synthetic_codex_installation(
         tmp_path
     )
+    expected_native_size = len(b"synthetic-native")
     if kind == "missing":
         native.unlink()
     elif kind == "directory":
@@ -309,18 +315,52 @@ def test_codex_provenance_rejects_native_file_drift(tmp_path, kind) -> None:
     elif kind == "non_executable":
         os.chmod(native, 0o600)
     elif kind == "oversized":
-        native.write_bytes(b"x" * (verifier.MAX_CODEX_NATIVE_BYTES + 1))
-        os.chmod(native, 0o755)
+        expected_native_size += 1
     else:
         native_digest = "0" * 64
     with pytest.raises(verifier.VerificationError, match="codex_native_"):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="linux",
             architecture="x86_64",
             launcher_digest=launcher_digest,
             native_digest=native_digest,
+            native_size=expected_native_size,
+        )
+
+
+@pytest.mark.parametrize("delta", [-1, 1])
+def test_codex_provenance_rejects_one_byte_native_size_drift(tmp_path, delta) -> None:
+    install, _launcher, _native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    with pytest.raises(verifier.VerificationError, match="codex_native_size_invalid"):
+        _attest_synthetic_codex(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+            native_size=len(b"synthetic-native") + delta,
+        )
+
+
+@pytest.mark.parametrize("native_size", [True, False, "16", 16.0, 0])
+def test_codex_provenance_rejects_invalid_native_size_injection(tmp_path, native_size) -> None:
+    install, _launcher, _native, launcher_digest, native_digest = _synthetic_codex_installation(
+        tmp_path
+    )
+    with pytest.raises(verifier.VerificationError, match="codex_native_size_invalid"):
+        _attest_synthetic_codex(
+            install,
+            runner=_synthetic_version_runner,
+            platform_name="linux",
+            architecture="x86_64",
+            launcher_digest=launcher_digest,
+            native_digest=native_digest,
+            native_size=native_size,
         )
 
 
@@ -341,7 +381,7 @@ def test_codex_provenance_rejects_version_probe_drift(tmp_path, result) -> None:
         return result
 
     with pytest.raises(verifier.VerificationError, match="codex_version_mismatch"):
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=runner,
             platform_name="linux",
@@ -357,7 +397,7 @@ def test_codex_provenance_has_no_broad_search_or_raw_error_values(tmp_path) -> N
     )
     native.unlink()
     with pytest.raises(verifier.VerificationError) as exc_info:
-        verifier._attest_codex_installation(
+        _attest_synthetic_codex(
             install,
             runner=_synthetic_version_runner,
             platform_name="linux",
