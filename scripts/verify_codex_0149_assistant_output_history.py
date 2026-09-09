@@ -257,6 +257,11 @@ class DiagnosticState:
     primary_failure: bool = False
     cleanup_attempted: bool = False
     cleanup_succeeded: bool = False
+    accounting_control_snapshot: dict[str, str | bool] | None = None
+    accounting_control_gateway_count: str = "zero"
+    accounting_control_statuses: str = "none"
+    accounting_control_images: str = "none"
+    accounting_control_local_count: str = "zero"
 
     def advance(self, stage: str) -> None:
         if stage not in _DIAGNOSTIC_STAGE_SET:
@@ -336,6 +341,31 @@ def _diagnostic_unexpected_line(diagnostic: DiagnosticState, exc: Exception) -> 
         "VERIFY_CODEX_0149_ASSISTANT_HISTORY_BASE_FAILED "
         f"code=unexpected_{diagnostic.primary_stage}_{diagnostic.primary_category} "
         f"progress={diagnostic.serialize()}"
+    )
+
+
+def _accounting_control_line(diagnostic: DiagnosticState) -> str:
+    snapshot = diagnostic.accounting_control_snapshot or {}
+    fields = (
+        "reservations_total",
+        "reservations_finalized",
+        "reservations_pending",
+        "reservations_released",
+        "ledgers_total",
+        "ledgers_finalized",
+        "ledgers_pending",
+        "ledgers_failed",
+        "ledgers_successful",
+        "replay_references",
+    )
+    rendered = " ".join(f"{field}={snapshot.get(field, 'other')}" for field in fields)
+    return (
+        "VERIFY_CODEX_0149_ACCOUNTING_BEFORE_REJECTION_OK "
+        f"{rendered} gateway={diagnostic.accounting_control_gateway_count} "
+        f"statuses={diagnostic.accounting_control_statuses} "
+        f"images={diagnostic.accounting_control_images} "
+        f"local={diagnostic.accounting_control_local_count} "
+        f"cleanup_succeeded={str(diagnostic.cleanup_succeeded).lower()}"
     )
 
 
@@ -2145,11 +2175,21 @@ def _accounting_snapshot_is_two_terminal_successes(snapshot: Mapping[str, object
 
 
 def run_prefixed_reproduction(
-    diagnostic: DiagnosticState | None = None, *, no_image_first_turn: bool = False
+    diagnostic: DiagnosticState | None = None,
+    *,
+    no_image_first_turn: bool = False,
+    accounting_before_rejection: bool = False,
 ) -> str:
+    if no_image_first_turn and accounting_before_rejection:
+        raise VerificationError("diagnostic_control_args_conflict")
     state = diagnostic or DiagnosticState()
     try:
-        return _run_prefixed_reproduction_body(state, no_image_first_turn=no_image_first_turn)
+        result = _run_prefixed_reproduction_body(
+            state,
+            no_image_first_turn=no_image_first_turn,
+            accounting_before_rejection=accounting_before_rejection,
+        )
+        return _accounting_control_line(state) if state.accounting_control_snapshot else result
     except VerificationError:
         if not state.primary_failure:
             state.mark_known_failure()
@@ -2161,7 +2201,10 @@ def run_prefixed_reproduction(
 
 
 def _run_prefixed_reproduction_body(
-    diagnostic: DiagnosticState, *, no_image_first_turn: bool = False
+    diagnostic: DiagnosticState,
+    *,
+    no_image_first_turn: bool = False,
+    accounting_before_rejection: bool = False,
 ) -> str:
     diagnostic.advance("imports")
     from scripts import capture_codex_protocol as capture
@@ -2346,6 +2389,59 @@ def _run_prefixed_reproduction_body(
                                 f"codex_first_turn_{category}_{_safe_failure_progress(observation, local)}"
                             )
                         del first_result
+                        if accounting_before_rejection:
+                            diagnostic.advance("postconditions")
+                            diagnostic.refresh(observation=observation, local=local)
+                            if observation.request_count != 2 or observation.response_statuses != [
+                                200,
+                                200,
+                            ]:
+                                raise VerificationError(
+                                    f"accounting_control_gateway_progression_{_safe_progress_class(observation.request_count)}"
+                                    f"_statuses_{_safe_status_sequence(observation)}"
+                                )
+                            if (
+                                not observation.request_projections
+                                or observation.request_projections[0].get("image_wire_class")
+                                != "full"
+                            ):
+                                raise VerificationError("accounting_control_full_image_invalid")
+                            if any(
+                                item.get("image_wire_class") != "none"
+                                for item in observation.request_projections[1:]
+                            ):
+                                raise VerificationError("accounting_control_image_class_invalid")
+                            if (
+                                state.request_count != 2
+                                or state.signed_request_count != 2
+                                or state.function_count != 1
+                                or state.message_count != 1
+                            ):
+                                raise VerificationError(
+                                    "accounting_control_local_lifecycle_invalid"
+                                )
+                            diagnostic.advance("accounting_validate")
+                            diagnostic.accounting_control_snapshot = asyncio.run(
+                                _accounting_snapshot(database_url, created.gateway_key_id)
+                            )
+                            diagnostic.accounting_control_gateway_count = _safe_progress_class(
+                                observation.request_count
+                            )
+                            diagnostic.accounting_control_statuses = _safe_status_sequence(
+                                observation
+                            )
+                            diagnostic.accounting_control_images = (
+                                "_".join(
+                                    item.get("image_wire_class", "other")
+                                    for item in observation.request_projections[:4]
+                                )
+                                or "none"
+                            )
+                            diagnostic.accounting_control_local_count = _safe_progress_class(
+                                state.request_count
+                            )
+                            diagnostic.advance("complete")
+                            return "ACCOUNTING_CONTROL_RESULT_PENDING"
                         if no_image_first_turn:
                             diagnostic.advance("postconditions")
                             diagnostic.refresh(observation=observation, local=local)
@@ -2534,13 +2630,17 @@ def _run_prefixed_reproduction_body(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--diagnostic-no-image-first-turn", action="store_true")
+    controls = parser.add_mutually_exclusive_group()
+    controls.add_argument("--diagnostic-no-image-first-turn", action="store_true")
+    controls.add_argument("--diagnostic-accounting-before-rejection", action="store_true")
     arguments = parser.parse_args()
     diagnostic = DiagnosticState()
     try:
         print(
             run_prefixed_reproduction(
-                diagnostic, no_image_first_turn=arguments.diagnostic_no_image_first_turn
+                diagnostic,
+                no_image_first_turn=arguments.diagnostic_no_image_first_turn,
+                accounting_before_rejection=arguments.accounting_before_rejection,
             )
         )
         return 0

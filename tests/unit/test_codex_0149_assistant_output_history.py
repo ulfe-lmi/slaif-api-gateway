@@ -1089,3 +1089,32 @@ def test_accounting_snapshot_terminal_shape_and_equality_are_closed() -> None:
     changed["ledgers_total"] = "other"
     assert verifier._accounting_snapshot_equal(snapshot, changed) is False
     assert "PRIVATE_DB_ID" not in repr(snapshot)
+
+
+def test_accounting_control_line_is_closed_and_cleanup_bounded() -> None:
+    diagnostic = verifier.DiagnosticState(
+        accounting_control_snapshot={
+            "reservations_total": "two",
+            "reservations_finalized": "two",
+            "reservations_pending": "zero",
+            "reservations_released": "zero",
+            "ledgers_total": "two",
+            "ledgers_finalized": "two",
+            "ledgers_pending": "zero",
+            "ledgers_failed": "zero",
+            "ledgers_successful": "two",
+            "replay_references": "zero",
+            "query_success": True,
+        },
+        accounting_control_gateway_count="two",
+        accounting_control_statuses="2xx_2xx",
+        accounting_control_images="full_none",
+        accounting_control_local_count="two",
+        cleanup_succeeded=True,
+    )
+    line = verifier._accounting_control_line(diagnostic)
+    assert line.startswith("VERIFY_CODEX_0149_ACCOUNTING_BEFORE_REJECTION_OK ")
+    assert "reservations_total=two" in line
+    assert "images=full_none" in line
+    assert "cleanup_succeeded=true" in line
+    assert "PRIVATE" not in line
