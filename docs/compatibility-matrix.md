@@ -22,6 +22,12 @@ the independent ID-bound capability gate. Other clients, servers, and hosted
 routes retain their existing strict behavior. This is source-derived/mock
 regression evidence, not protected or second-turn acceptance.
 
+The same exact pair accepts bounded assistant history only as an exact
+`output_text` part with non-empty valid Unicode text. Existing message and
+request-wide text caps apply, and UTF-8 bytes are included in ordinary input
+metering and estimation. Other roles, clients, content shapes, and extra
+fields remain denied.
+
 | Feature / endpoint / field | Current support | Provider coverage | Notes | Test coverage |
 | --- | --- | --- | --- | --- |
 | `GET /v1/models` | Implemented | Local route/provider metadata | Returns enabled, visible routes allowed for the authenticated key; `allow_all_models=false` with empty `allowed_models` returns an empty OpenAI-shaped list. Each public model object remains exactly `id`, `object`, `created`, and `owned_by`; route-local Codex qualification metadata is never exposed | Unit, API route, qualification-metadata regression, integration, and mocked official-client E2E model catalog tests |

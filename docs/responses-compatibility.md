@@ -273,6 +273,13 @@ Supported item shapes are simple message objects such as
 `{"type":"message","role":"user","content":[{"type":"input_text","text":"..."}]}`.
 Supported roles are `user`, `assistant`, `system`, and `developer`; content may
 be a non-empty text string or a bounded list of `input_text` content parts.
+On the exact `codex-0.149-responses-v1 -> local-coding-v1` pair, an `assistant`
+message may additionally contain the bounded history part
+`{"type":"output_text","text":"..."}`. The part shape is exact, text must
+be non-empty valid Unicode, existing per-item and request-wide text caps apply,
+and its UTF-8 bytes are included in ordinary input metering and token
+estimation. Other client policies and message roles continue to reject
+`output_text` before forwarding.
 User-message content arrays may also include bounded `input_image` parts shaped
 as `{"type":"input_image","image_url":"...","detail"?:...}` when the resolved
 route sets `capabilities.responses.image_input=true`. Supported image sources

@@ -86,7 +86,9 @@ def test_0149_fixture_is_canonical_structural_only() -> None:
         for variant in fixture["capture"]["variants"]
         for shape in variant.get("request", {}).get("tool_declarations", {}).get("shapes", [])
     }
-    observed_candidates = {tool_type for tool_type in observed_types if tool_type in {"web_search", "tool_search"}}
+    observed_candidates = {
+        tool_type for tool_type in observed_types if tool_type in {"web_search", "tool_search"}
+    }
     assert observed_candidates == set(CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES)
     assert set(fixture["findings"]["adapter_managed_candidate_types"]) == observed_candidates
     observed_shapes = {
@@ -153,6 +155,9 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
     assert CODEX_0149_CLIENT_MODULE.policy_spec.function_call_item_id_optional is True
     assert CODEX_0149_CLIENT_MODULE.policy_spec.custom_tool_call_item_id_optional is True
     assert CODEX_0149_CLIENT_MODULE.policy_spec.allow_idless_tool_call_replay is True
+    assert CODEX_0149_CLIENT_MODULE.policy_spec.assistant_history_content_types == frozenset(
+        {"output_text"}
+    )
 
 
 def test_default_and_0147_specs_keep_tool_call_ids_strict() -> None:
@@ -161,6 +166,7 @@ def test_default_and_0147_specs_keep_tool_call_ids_strict() -> None:
     assert CODEX_0147_POLICY_SPEC.function_call_item_id_optional is False
     assert CODEX_0147_POLICY_SPEC.custom_tool_call_item_id_optional is False
     assert CODEX_0147_POLICY_SPEC.allow_idless_tool_call_replay is False
+    assert CODEX_0147_POLICY_SPEC.assistant_history_content_types == frozenset()
 
 
 def test_0149_extracts_only_equal_canonical_session_aliases() -> None:
@@ -200,7 +206,9 @@ def test_0149_extracts_only_equal_canonical_session_aliases() -> None:
         },
     ],
 )
-def test_0149_rejects_missing_malformed_or_ambiguous_session_aliases(metadata: dict[str, str]) -> None:
+def test_0149_rejects_missing_malformed_or_ambiguous_session_aliases(
+    metadata: dict[str, str],
+) -> None:
     with pytest.raises(ModuleSelectionError) as exc_info:
         CODEX_0149_CLIENT_MODULE.normalize_responses(_body(client_metadata=metadata))
     assert exc_info.value.error_code == "codex_0149_identity_shape"
@@ -212,12 +220,8 @@ def test_0149_rejects_missing_malformed_or_ambiguous_session_aliases(metadata: d
 )
 def test_0149_rejects_hosted_authority_shapes(tool_type: str) -> None:
     with pytest.raises(ModuleSelectionError, match="authority|unknown") as exc_info:
-        CODEX_0149_CLIENT_MODULE.normalize_responses(
-            _body(tools=[{"type": tool_type}])
-        )
-    assert exc_info.value.error_code == (
-        "codex_0149_authority_shape"
-    )
+        CODEX_0149_CLIENT_MODULE.normalize_responses(_body(tools=[{"type": tool_type}]))
+    assert exc_info.value.error_code == ("codex_0149_authority_shape")
 
 
 @pytest.mark.parametrize(
@@ -231,9 +235,7 @@ def test_0149_rejects_hosted_authority_shapes(tool_type: str) -> None:
 )
 def test_0149_rejects_explicit_search_choices(tool_choice: object, code: str) -> None:
     with pytest.raises(ModuleSelectionError) as exc_info:
-        CODEX_0149_CLIENT_MODULE.normalize_responses(
-            _body(tool_choice=tool_choice)
-        )
+        CODEX_0149_CLIENT_MODULE.normalize_responses(_body(tool_choice=tool_choice))
     assert exc_info.value.error_code == code
 
 
@@ -261,9 +263,7 @@ def test_0149_required_search_choice_rejects_before_gateway_policy() -> None:
 
 
 def test_0149_required_choice_survives_with_a_local_tool() -> None:
-    request = CODEX_0149_CLIENT_MODULE.normalize_responses(
-        _body(tool_choice="required")
-    )
+    request = CODEX_0149_CLIENT_MODULE.normalize_responses(_body(tool_choice="required"))
     assert request.adapter_managed_declaration_candidates == ("tool_search", "web_search")
 
 
@@ -316,15 +316,18 @@ def test_registry_uses_only_server_side_metadata_and_legacy_0147_path() -> None:
         "allowed_local_tool_types": ["function", "custom"],
     }
     assert resolve_responses_client_module(legacy) is CODEX_0147_CLIENT_MODULE
-    assert resolve_responses_client_module(
-        {
-            "client_module": {
-                "id": CODEX_0149_CLIENT_MODULE_ID,
-                "version": CODEX_0149_CLIENT_MODULE_VERSION,
-                "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+    assert (
+        resolve_responses_client_module(
+            {
+                "client_module": {
+                    "id": CODEX_0149_CLIENT_MODULE_ID,
+                    "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                    "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+                }
             }
-        }
-    ) is CODEX_0149_CLIENT_MODULE
+        )
+        is CODEX_0149_CLIENT_MODULE
+    )
 
     with pytest.raises(ModuleSelectionError, match="does not match"):
         resolve_responses_client_module(
@@ -377,12 +380,12 @@ def test_codex_client_modules_have_no_gateway_authority_imports() -> None:
 
 
 def test_generic_responses_primitives_are_neutral_and_policy_receives_a_spec() -> None:
-    policy_source = Path(
-        "app/slaif_gateway/services/responses_request_policy.py"
-    ).read_text(encoding="utf-8")
-    codex_support_source = Path(
-        "app/slaif_gateway/modules/clients/codex_support.py"
-    ).read_text(encoding="utf-8")
+    policy_source = Path("app/slaif_gateway/services/responses_request_policy.py").read_text(
+        encoding="utf-8"
+    )
+    codex_support_source = Path("app/slaif_gateway/modules/clients/codex_support.py").read_text(
+        encoding="utf-8"
+    )
     responses_support_source = Path(
         "app/slaif_gateway/modules/clients/responses_support.py"
     ).read_text(encoding="utf-8")

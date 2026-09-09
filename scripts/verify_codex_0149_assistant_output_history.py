@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import zlib
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field as dataclass_field
@@ -1600,6 +1601,101 @@ class _LocalServer(http.server.ThreadingHTTPServer):
         self.state = state
 
 
+class _DirectUpstreamState:
+    def __init__(self) -> None:
+        self.request_count = 0
+        self.authorization_valid = False
+        self.history_semantics_valid = False
+        self.image_shape_valid = False
+        self.failed = False
+        self._lock = threading.Lock()
+
+    def observe(self, body: bytes, headers: http.client.HTTPMessage) -> None:
+        if headers.get("authorization") != "Bearer synthetic-direct-upstream-token-161-p":
+            raise VerificationError("direct_upstream_authorization_invalid")
+        payload = json.loads(body)
+        if not isinstance(payload, Mapping):
+            raise VerificationError("direct_upstream_body_invalid")
+        items = payload.get("input")
+        if not isinstance(items, list):
+            raise VerificationError("direct_upstream_input_invalid")
+        assistant_items = [
+            item for item in items if isinstance(item, Mapping) and item.get("role") == "assistant"
+        ]
+        if len(assistant_items) != 1:
+            raise VerificationError("direct_upstream_assistant_history_invalid")
+        assistant_content = assistant_items[0].get("content")
+        if not isinstance(assistant_content, list) or len(assistant_content) != 1:
+            raise VerificationError("direct_upstream_assistant_content_invalid")
+        assistant_part = assistant_content[0]
+        if (
+            not isinstance(assistant_part, Mapping)
+            or set(assistant_part) != {"type", "text"}
+            or assistant_part.get("type") != "output_text"
+            or assistant_part.get("text") != "history-only-text"
+        ):
+            raise VerificationError("direct_upstream_output_text_invalid")
+        try:
+            text_bytes = assistant_part["text"].encode("utf-8")
+        except (AttributeError, UnicodeEncodeError):
+            raise VerificationError("direct_upstream_output_text_unicode_invalid") from None
+        if not text_bytes:
+            raise VerificationError("direct_upstream_output_text_empty")
+        image_parts = [
+            part
+            for item in items
+            if isinstance(item, Mapping)
+            for part in (item.get("content") if isinstance(item.get("content"), list) else [])
+            if isinstance(part, Mapping) and part.get("type") == "input_image"
+        ]
+        if len(image_parts) != 1:
+            raise VerificationError("direct_upstream_image_shape_invalid")
+        with self._lock:
+            if self.request_count != 0:
+                raise VerificationError("direct_upstream_retry_invalid")
+            self.request_count = 1
+            self.authorization_valid = True
+            self.history_semantics_valid = True
+            self.image_shape_valid = True
+
+
+class _DirectUpstreamHandler(http.server.BaseHTTPRequestHandler):
+    server: "_DirectUpstreamServer"
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def do_POST(self) -> None:
+        try:
+            if self.path.split("?", 1)[0] not in {"/v1/responses", "/responses"}:
+                raise VerificationError("direct_upstream_path_invalid")
+            length = int(self.headers.get("content-length", "0"))
+            if length <= 0 or length > MAX_CAPTURE_BODY_BYTES:
+                raise VerificationError("direct_upstream_body_bound_invalid")
+            self.server.state.observe(self.rfile.read(length), self.headers)
+            body = b"".join(_sse(event) for event in _message_stream())
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.send_header("cache-control", "no-cache")
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (VerificationError, ValueError, TypeError, json.JSONDecodeError):
+            self.server.state.failed = True
+            self.send_response(400)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error":{"code":"direct_upstream_failed"}}')
+
+
+class _DirectUpstreamServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), _DirectUpstreamHandler)
+        self.state = _DirectUpstreamState()
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -2200,6 +2296,353 @@ def _accounting_snapshot_is_two_terminal_successes(snapshot: Mapping[str, object
     }
 
 
+def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
+    """Run the post-fix assistant-history path through the frozen Local code."""
+
+    frozen_local_commit = "5aec2beccc07432d45e936b82952abf52dfb10d8"
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    try:
+        local_head = subprocess.run(
+            ["git", "-C", str(local_checkout), "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+        local_status = subprocess.run(
+            ["git", "-C", str(local_checkout), "status", "--porcelain=v1"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise VerificationError("direct_local_checkout_unavailable") from None
+    if (
+        local_head.returncode != 0
+        or local_head.stdout.decode("ascii", errors="ignore").strip() != frozen_local_commit
+        or local_status.returncode != 0
+        or local_status.stdout.strip()
+    ):
+        raise VerificationError("direct_local_checkout_not_frozen_clean")
+
+    from tests.e2e.test_openai_python_client_responses import _create_responses_test_data
+    from tests.e2e.test_openai_python_client_chat import _run_uvicorn_server
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+    from slaif_gateway.modules.clients.codex_0149 import (
+        CODEX_0149_CLIENT_MODULE_VERSION,
+        CODEX_0149_FIXTURE_SHA256,
+    )
+
+    database_url, own_db, db_name = _database()
+    upstream = _DirectUpstreamServer()
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    upstream_thread.start()
+    local_process: subprocess.Popen[bytes] | None = None
+    try:
+        with tempfile.TemporaryDirectory(prefix="slaif-161-p-direct-") as temporary:
+            root = Path(temporary)
+            local_port = _free_port()
+            gateway_port = _free_port()
+            local_config = root / "adapter.toml"
+            local_config.write_text(
+                "\n".join(
+                    [
+                        "[server]",
+                        'listen_host = "127.0.0.1"',
+                        f"listen_port = {local_port}",
+                        "request_body_max_bytes = 1048576",
+                        "response_body_max_bytes = 1048576",
+                        "json_max_nesting_depth = 128",
+                        "",
+                        "[gateway_ingress]",
+                        'mode = "service_bearer_signed_identity_v1"',
+                        'service_token_env = "LOCAL_SERVICE_TOKEN"',
+                        'signing_secret_env = "LOCAL_SIGNING_SECRET"',
+                        'identity_version = "v1"',
+                        'policy_version = "signed-identity-v1"',
+                        "clock_skew_seconds = 60",
+                        "replay_ttl_seconds = 60",
+                        "max_replay_entries = 4096",
+                        "nonce_min_length = 16",
+                        "nonce_max_length = 128",
+                        "",
+                        "[upstream]",
+                        f'base_url = "http://127.0.0.1:{upstream.server_address[1]}/v1"',
+                        'api_key_env = "FAKE_UPSTREAM_KEY"',
+                        f'model = "{CODEX_MODEL}"',
+                        "connect_timeout_seconds = 5",
+                        "request_timeout_seconds = 30",
+                        "write_timeout_seconds = 5",
+                        "pool_timeout_seconds = 5",
+                        "",
+                        "[compiler]",
+                        "enabled = true",
+                        'api_key_env = "FAKE_UPSTREAM_KEY"',
+                        "",
+                        "[cache]",
+                        'backend = "filesystem"',
+                        f'root = "{root / "cache"}"',
+                        "max_total_bytes = 1048576",
+                        "max_entry_bytes = 65536",
+                        "max_pinned_bytes = 65536",
+                        "max_entries = 64",
+                        "ttl_seconds = 60",
+                        "max_scan_entries = 64",
+                        "",
+                        "[constitution]",
+                        "enabled = true",
+                        'identity_source = "signed_request"',
+                        "",
+                        "[observation]",
+                        'schema_version = "observation-v1"',
+                        'policy_version = "references-v1"',
+                        "max_roots = 8",
+                        "max_source_bytes = 262144",
+                        "max_candidates = 128",
+                        "max_evidence_per_candidate = 16",
+                        "max_total_evidence = 1024",
+                        "max_path_bytes = 512",
+                        "",
+                        "[[routes]]",
+                        'name = "assistant-history"',
+                        f'model = "{CODEX_MODEL}"',
+                        "max_images_per_request = 1",
+                        'image_overflow_policy = "retain_newest"',
+                        "enable_responses = true",
+                        "enable_chat_completions = false",
+                        'responses_tool_policy = "passthrough"',
+                        "observation_enabled = true",
+                        "constitution_enabled = true",
+                        "",
+                        "[observability]",
+                        'log_level = "ERROR"',
+                        "log_raw_payloads = false",
+                        "metrics_enabled = false",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            local_environment = os.environ.copy()
+            local_environment.update(
+                {
+                    "FAKE_UPSTREAM_KEY": "synthetic-direct-upstream-token-161-p",
+                    "LOCAL_SERVICE_TOKEN": LOCAL_SERVICE_TOKEN,
+                    "LOCAL_SIGNING_SECRET": LOCAL_SIGNING_SECRET,
+                }
+            )
+            local_process = subprocess.Popen(
+                [sys.executable, "-m", "slaif_local_coding", "--config", str(local_config)],
+                cwd=local_checkout,
+                env=local_environment,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                try:
+                    connection = http.client.HTTPConnection("127.0.0.1", local_port, timeout=1)
+                    connection.request("GET", "/healthz")
+                    response = connection.getresponse()
+                    response.read(4096)
+                    connection.close()
+                    if response.status == 200:
+                        break
+                except (OSError, http.client.HTTPException):
+                    pass
+                if local_process.poll() is not None:
+                    raise VerificationError("direct_local_process_exited")
+                time.sleep(0.1)
+            else:
+                raise VerificationError("direct_local_process_not_ready")
+
+            values = {
+                "DATABASE_URL": database_url,
+                "APP_ENV": "test",
+                "GATEWAY_KEY_PREFIX": "sk-slaif-",
+                "GATEWAY_KEY_ACCEPTED_PREFIXES": "sk-slaif-",
+                "ACTIVE_HMAC_KEY_VERSION": "1",
+                "TOKEN_HMAC_SECRET_V1": GATEWAY_HMAC_SECRET,
+                "ADMIN_SESSION_SECRET": ADMIN_SECRET,
+                "ONE_TIME_SECRET_ENCRYPTION_KEY": ONE_TIME_SECRET_KEY,
+                "LOCAL_CODING_SERVICE_TOKEN": LOCAL_SERVICE_TOKEN,
+                "LOCAL_CODING_SIGNING_SECRET_V1": LOCAL_SIGNING_SECRET,
+                "LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1": LOCAL_DERIVATION_SECRET,
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "PYTHONPATH": str(REPO_ROOT / "app"),
+            }
+            with _environment(values):
+                get_settings.cache_clear()
+                migration = _run(
+                    [sys.executable, "-m", "alembic", "upgrade", "head"],
+                    cwd=REPO_ROOT,
+                    env=values,
+                    timeout=120,
+                )
+                if migration.returncode != 0:
+                    raise VerificationError("direct_gateway_migration_failed")
+                created = asyncio.run(
+                    _create_responses_test_data(
+                        database_url,
+                        provider="local-coding",
+                        model=CODEX_MODEL,
+                        upstream_model=CODEX_MODEL,
+                        base_url=f"http://127.0.0.1:{local_port}/v1",
+                        api_key_env_var="LOCAL_CODING_SERVICE_TOKEN",
+                        streaming=True,
+                        image_input=True,
+                        local_coding_contract={
+                            "contract_version": "local-coding-v1",
+                            "route_name": "assistant-history",
+                            "tool_policy_version": "responses-tool-policy-v1",
+                            "identity_mode": "signed_identity_v1",
+                            "replay_mode": "process_local_ttl_lru",
+                            "deployment_mode": "single_worker",
+                        },
+                        responses_policy={
+                            "version": 1,
+                            "local_coding_repository_scope": "assistant-history-repository",
+                            "allowed_capabilities": [
+                                "codex_request_envelope",
+                                "codex_client_tools",
+                                "codex_streaming_tool_events",
+                            ],
+                            "client_module": {
+                                "id": "codex-0.149-responses-v1",
+                                "version": CODEX_0149_CLIENT_MODULE_VERSION,
+                                "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
+                            },
+                        },
+                        codex_request_envelope=True,
+                        codex_client_tools=True,
+                        codex_streaming_tool_events=True,
+                    )
+                )
+                app = create_app(get_settings())
+                valid_body: dict[str, object] = {
+                    "model": CODEX_MODEL,
+                    "stream": True,
+                    "max_output_tokens": 16,
+                    "client_metadata": {
+                        "session_id": "123e4567-e89b-12d3-a456-426614174000",
+                        "thread_id": "123e4567-e89b-12d3-a456-426614174000",
+                    },
+                    "input": [
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "history-only-text"}],
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_image",
+                                    "image_url": "data:image/png;base64,AAAA",
+                                },
+                                {"type": "input_text", "text": "crop"},
+                            ],
+                        },
+                    ],
+                }
+
+                def gateway_post(body: Mapping[str, object]) -> tuple[int, bytes]:
+                    connection = http.client.HTTPConnection("127.0.0.1", gateway_port, timeout=30)
+                    encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
+                    connection.request(
+                        "POST",
+                        "/v1/responses",
+                        body=encoded,
+                        headers={
+                            "authorization": f"Bearer {created.plaintext_key}",
+                            "content-type": "application/json",
+                            "accept": "text/event-stream",
+                        },
+                    )
+                    response = connection.getresponse()
+                    response_body = response.read(MAX_CAPTURE_BODY_BYTES)
+                    status = response.status
+                    connection.close()
+                    return status, response_body
+
+                previous_logging_disable = logging.root.manager.disable
+                logging.disable(logging.CRITICAL)
+                try:
+                    with _run_uvicorn_server(app, gateway_port):
+                        valid_status, valid_response = gateway_post(valid_body)
+                        invalid_body = json.loads(json.dumps(valid_body))
+                        invalid_body["input"][0]["role"] = "user"
+                        invalid_status, invalid_response = gateway_post(invalid_body)
+                finally:
+                    logging.disable(previous_logging_disable)
+
+                if valid_status != 200 or b"response.completed" not in valid_response:
+                    raise VerificationError("direct_valid_stream_invalid")
+                invalid_projection = _safe_error_projection(invalid_response)
+                if (
+                    invalid_status < 400
+                    or invalid_projection["error_code"]
+                    != "responses_input_content_part_not_supported"
+                    or invalid_projection["param_class"] != "input_index_0_content_index_0_type"
+                ):
+                    raise VerificationError("direct_invalid_history_not_rejected")
+                summary = asyncio.run(_accounting_summary(database_url, created.gateway_key_id))
+                if summary != {
+                    "reservations": "one",
+                    "pending_reservations": "zero",
+                    "ledgers": "one",
+                    "pending_ledgers": "zero",
+                    "linked_ledgers": "one",
+                }:
+                    raise VerificationError("direct_accounting_invalid")
+                if (
+                    upstream.state.failed
+                    or upstream.state.request_count != 1
+                    or not upstream.state.authorization_valid
+                    or not upstream.state.history_semantics_valid
+                    or not upstream.state.image_shape_valid
+                    or local_process.poll() is not None
+                ):
+                    raise VerificationError("direct_cross_contract_state_invalid")
+                return (
+                    "VERIFY_CODEX_0149_ASSISTANT_HISTORY_DIRECT_FAKE_OK "
+                    "local_commit=frozen_report_head gateway=2xx invalid=4xx "
+                    "upstream_count=one signed_identity=true history=true image=true "
+                    "accounting=one_finalized pending=zero"
+                )
+    finally:
+        get_settings.cache_clear()
+        if local_process is not None:
+            try:
+                local_process.terminate()
+                local_process.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    local_process.kill()
+                except OSError:
+                    pass
+        upstream.shutdown()
+        upstream.server_close()
+        upstream_thread.join(timeout=5)
+        if own_db and db_name:
+            try:
+                cleanup = subprocess.run(
+                    ["sudo", "-n", "-u", "postgres", "dropdb", "--if-exists", db_name],
+                    cwd=REPO_ROOT,
+                    capture_output=True,
+                    check=False,
+                    timeout=30,
+                )
+                if cleanup.returncode != 0:
+                    raise VerificationError("direct_database_cleanup_failed")
+            except (OSError, subprocess.TimeoutExpired):
+                raise VerificationError("direct_database_cleanup_failed") from None
+
+
 def run_prefixed_reproduction(
     diagnostic: DiagnosticState | None = None,
     *,
@@ -2683,10 +3126,21 @@ def _run_prefixed_reproduction_body(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--direct-bounded-fake", action="store_true")
+    parser.add_argument("--local-checkout", type=Path)
     controls = parser.add_mutually_exclusive_group()
     controls.add_argument("--diagnostic-no-image-first-turn", action="store_true")
     controls.add_argument("--diagnostic-accounting-before-rejection", action="store_true")
     arguments = parser.parse_args()
+    if arguments.direct_bounded_fake:
+        if arguments.local_checkout is None:
+            parser.error("--direct-bounded-fake requires --local-checkout")
+        try:
+            print(run_direct_bounded_fake_acceptance(arguments.local_checkout))
+            return 0
+        except VerificationError as exc:
+            print(f"VERIFY_CODEX_0149_ASSISTANT_HISTORY_DIRECT_FAKE_FAILED code={exc.args[0]}")
+            return 1
     diagnostic = DiagnosticState()
     try:
         print(

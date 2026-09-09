@@ -136,6 +136,124 @@ def test_valid_string_input_injects_store_false_and_preserves_supported_fields()
     assert result.estimated_input_tokens > 0
 
 
+def test_codex_assistant_output_text_history_is_canonical_and_metered() -> None:
+    text = "ž" * 8
+    policy = _0149_policy(Settings())
+    result = policy.apply(
+        _body(
+            input=[
+                {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text}],
+                }
+            ]
+        )
+    )
+    assert result.effective_body["input"][0]["content"] == [{"type": "output_text", "text": text}]
+    assert result.estimated_input_tokens > 0
+    ascii_result = policy.apply(
+        _body(
+            input=[
+                {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "x" * len(text)}],
+                }
+            ]
+        )
+    )
+    assert result.estimated_message_input_tokens > ascii_result.estimated_message_input_tokens
+
+
+@pytest.mark.parametrize("role", ["user", "system", "developer"])
+def test_codex_assistant_output_text_history_rejects_non_assistant_roles(role: str) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _0149_policy(Settings()).apply(
+            _body(input=[{"role": role, "content": [{"type": "output_text", "text": "safe"}]}])
+        )
+    assert exc_info.value.error_code == "responses_input_content_part_not_supported"
+    assert exc_info.value.param == "input[0].content[0].type"
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        {"type": "output_text"},
+        {"type": "output_text", "text": ""},
+        {"type": "output_text", "text": 3},
+        {"type": "output_text", "text": "safe", "annotations": []},
+    ],
+)
+def test_codex_assistant_output_text_history_rejects_unbounded_shapes(part) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _0149_policy(Settings()).apply(_body(input=[{"role": "assistant", "content": [part]}]))
+    assert exc_info.value.error_code in {
+        "responses_input_content_part_not_supported",
+        "responses_input_invalid",
+    }
+    assert "safe" not in exc_info.value.safe_message
+
+
+def test_codex_assistant_output_text_history_uses_existing_text_limits() -> None:
+    with pytest.raises(RequestPolicyError) as item_exc:
+        _0149_policy(Settings(RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES=3)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "safe"}],
+                    }
+                ]
+            )
+        )
+    assert item_exc.value.error_code == "responses_input_item_too_large"
+
+    with pytest.raises(RequestPolicyError) as total_exc:
+        _0149_policy(Settings(RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=3)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ab"}],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "cd"}],
+                    },
+                ]
+            )
+        )
+    assert total_exc.value.error_code == "responses_input_item_too_large"
+
+
+def test_codex_assistant_output_text_history_rejects_invalid_unicode() -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _0149_policy(Settings()).apply(
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "\ud800"}],
+                    }
+                ]
+            )
+        )
+    assert exc_info.value.error_code == "responses_input_invalid"
+    assert "\\ud800" not in exc_info.value.safe_message
+
+
+def test_default_and_codex_0147_policies_keep_assistant_output_text_denied() -> None:
+    body = _body(
+        input=[{"role": "assistant", "content": [{"type": "output_text", "text": "safe"}]}]
+    )
+    for policy in (
+        _policy(Settings()),
+        ResponsesRequestPolicy(Settings(), client_spec=CODEX_0147_POLICY_SPEC),
+    ):
+        with pytest.raises(RequestPolicyError) as exc_info:
+            policy.apply(body)
+        assert exc_info.value.error_code == "responses_input_content_part_not_supported"
+
+
 def test_stream_true_is_policy_valid_before_route_capability_check() -> None:
     result = _policy(Settings()).apply(_body(stream=True))
 
@@ -185,9 +303,7 @@ def test_previous_response_id_rejects_invalid_shape(value: object) -> None:
 
 def test_previous_response_id_rejects_oversized_value() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(
-            Settings(RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES=8)
-        ).apply(
+        _policy(Settings(RESPONSES_MAX_PREVIOUS_RESPONSE_ID_BYTES=8)).apply(
             _body(previous_response_id="resp_previous_123"),
             allow_store=True,
         )
@@ -365,9 +481,7 @@ def test_input_token_count_rejects_invalid_parallel_tool_calls_and_truncation() 
 
 
 def test_compact_accepts_string_input_with_bounded_output_reservation() -> None:
-    result = _policy(
-        Settings(RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS=111)
-    ).apply_compact(
+    result = _policy(Settings(RESPONSES_COMPACT_DEFAULT_MAX_OUTPUT_TOKENS=111)).apply_compact(
         {
             "model": "gpt-5.2",
             "input": "Compact this transcript.",
@@ -503,9 +617,7 @@ def test_unsupported_fields_reject_before_forwarding(field: str, value: object, 
 
 
 def test_list_input_with_user_text_message_passes() -> None:
-    result = _policy(Settings()).apply(
-        _body(input=[{"role": "user", "content": "hello"}])
-    )
+    result = _policy(Settings()).apply(_body(input=[{"role": "user", "content": "hello"}]))
 
     assert result.effective_body["input"] == [{"role": "user", "content": "hello"}]
     assert result.estimated_input_tokens > 0
@@ -741,21 +853,107 @@ def test_custom_tool_call_output_input_item_passes_as_string_only_tool_result() 
     [
         ([], "input", "responses_input_invalid"),
         ([{"role": "user", "content": ""}], "input[0].content", "responses_input_invalid"),
-        ([{"role": "admin", "content": "secret"}], "input[0].role", "responses_input_item_role_not_supported"),
-        ([{"role": "user", "content": "secret", "name": "x"}], "input[0].name", "responses_input_item_invalid"),
-        ([{"type": "function_call", "role": "user", "content": "secret"}], "input[0].type", "responses_input_tool_item_not_supported"),
-        ([{"type": "reasoning", "role": "user", "content": "secret"}], "input[0].type", "responses_input_item_type_not_supported"),
-        ([{"type": "function_call_output", "call_id": "call_123", "output": [{"type": "input_image", "image_url": "secret"}]}], "input[0].output", "responses_function_call_output_invalid"),
-        ([{"type": "function_call_output", "output": "secret"}], "input[0].call_id", "responses_function_call_output_invalid"),
-        ([{"type": "function_call_output", "call_id": "call_123", "output": "secret", "extra": "x"}], "input[0].extra", "responses_function_call_output_invalid"),
-        ([{"type": "custom_tool_call", "call_id": "call_123", "input": "secret"}], "input[0].type", "responses_input_tool_item_not_supported"),
-        ([{"type": "custom_tool_call_output", "call_id": "call_123", "output": [{"type": "input_text", "text": "secret"}]}], "input[0].output", "responses_custom_tool_call_output_invalid"),
-        ([{"type": "custom_tool_call_output", "output": "secret"}], "input[0].call_id", "responses_custom_tool_call_output_invalid"),
-        ([{"type": "custom_tool_call_output", "call_id": "call_123", "output": "secret", "id": "item_123"}], "input[0].id", "responses_custom_tool_call_output_invalid"),
-        ([{"role": "user", "content": [{"type": "input_file", "file_id": "secret"}]}], "input[0].content[0].file_id", "responses_input_file_id_not_supported"),
-        ([{"role": "user", "content": [{"type": "input_audio", "data": "secret"}]}], "input[0].content[0].type", "responses_input_multimodal_not_supported"),
-        ([{"role": "user", "content": [{"type": "input_text", "text": "secret", "extra": "x"}]}], "input[0].content[0].extra", "responses_input_content_part_not_supported"),
-        ([{"role": "user", "content": [{"type": "output_text", "text": "secret"}]}], "input[0].content[0].type", "responses_input_content_part_not_supported"),
+        (
+            [{"role": "admin", "content": "secret"}],
+            "input[0].role",
+            "responses_input_item_role_not_supported",
+        ),
+        (
+            [{"role": "user", "content": "secret", "name": "x"}],
+            "input[0].name",
+            "responses_input_item_invalid",
+        ),
+        (
+            [{"type": "function_call", "role": "user", "content": "secret"}],
+            "input[0].type",
+            "responses_input_tool_item_not_supported",
+        ),
+        (
+            [{"type": "reasoning", "role": "user", "content": "secret"}],
+            "input[0].type",
+            "responses_input_item_type_not_supported",
+        ),
+        (
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": [{"type": "input_image", "image_url": "secret"}],
+                }
+            ],
+            "input[0].output",
+            "responses_function_call_output_invalid",
+        ),
+        (
+            [{"type": "function_call_output", "output": "secret"}],
+            "input[0].call_id",
+            "responses_function_call_output_invalid",
+        ),
+        (
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": "secret",
+                    "extra": "x",
+                }
+            ],
+            "input[0].extra",
+            "responses_function_call_output_invalid",
+        ),
+        (
+            [{"type": "custom_tool_call", "call_id": "call_123", "input": "secret"}],
+            "input[0].type",
+            "responses_input_tool_item_not_supported",
+        ),
+        (
+            [
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_123",
+                    "output": [{"type": "input_text", "text": "secret"}],
+                }
+            ],
+            "input[0].output",
+            "responses_custom_tool_call_output_invalid",
+        ),
+        (
+            [{"type": "custom_tool_call_output", "output": "secret"}],
+            "input[0].call_id",
+            "responses_custom_tool_call_output_invalid",
+        ),
+        (
+            [
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_123",
+                    "output": "secret",
+                    "id": "item_123",
+                }
+            ],
+            "input[0].id",
+            "responses_custom_tool_call_output_invalid",
+        ),
+        (
+            [{"role": "user", "content": [{"type": "input_file", "file_id": "secret"}]}],
+            "input[0].content[0].file_id",
+            "responses_input_file_id_not_supported",
+        ),
+        (
+            [{"role": "user", "content": [{"type": "input_audio", "data": "secret"}]}],
+            "input[0].content[0].type",
+            "responses_input_multimodal_not_supported",
+        ),
+        (
+            [{"role": "user", "content": [{"type": "input_text", "text": "secret", "extra": "x"}]}],
+            "input[0].content[0].extra",
+            "responses_input_content_part_not_supported",
+        ),
+        (
+            [{"role": "user", "content": [{"type": "output_text", "text": "secret"}]}],
+            "input[0].content[0].type",
+            "responses_input_content_part_not_supported",
+        ),
     ],
 )
 def test_list_input_rejects_unsupported_shapes_without_raw_text(
@@ -784,13 +982,9 @@ def test_list_input_caps_reject_without_raw_text() -> None:
             _body(input=[{"role": "user", "content": "one"}, {"role": "user", "content": "two"}])
         )
     with pytest.raises(RequestPolicyError) as item_exc:
-        _policy(settings).apply(
-            _body(input=[{"role": "user", "content": "secret text"}])
-        )
+        _policy(settings).apply(_body(input=[{"role": "user", "content": "secret text"}]))
     with pytest.raises(RequestPolicyError) as total_exc:
-        _policy(
-            Settings(RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=4)
-        ).apply(
+        _policy(Settings(RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=4)).apply(
             _body(
                 input=[
                     {"role": "user", "content": "abc"},
@@ -824,7 +1018,11 @@ def test_list_input_caps_reject_without_raw_text() -> None:
     ("part", "param", "code"),
     [
         (
-            {"type": "input_image", "image_url": "https://example.test/image.png", "detail": "medium"},
+            {
+                "type": "input_image",
+                "image_url": "https://example.test/image.png",
+                "detail": "medium",
+            },
             "input[0].content[0].detail",
             "responses_input_image_detail_invalid",
         ),
@@ -881,9 +1079,7 @@ def test_image_input_rejects_unsupported_shapes_without_raw_values(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(Settings()).apply(
-            _body(input=[{"role": "user", "content": [part]}])
-        )
+        _policy(Settings()).apply(_body(input=[{"role": "user", "content": [part]}]))
 
     assert exc_info.value.param == param
     assert exc_info.value.error_code == code
@@ -896,7 +1092,14 @@ def test_image_input_rejects_non_user_role_without_raw_url() -> None:
 
     with pytest.raises(RequestPolicyError) as exc_info:
         _policy(Settings()).apply(
-            _body(input=[{"role": "assistant", "content": [{"type": "input_image", "image_url": raw_url}]}])
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "input_image", "image_url": raw_url}],
+                    }
+                ]
+            )
         )
 
     assert exc_info.value.error_code == "responses_input_image_part_invalid"
@@ -910,11 +1113,20 @@ def test_image_input_caps_reject_without_raw_values() -> None:
 
     with pytest.raises(RequestPolicyError) as url_exc:
         _policy(Settings(RESPONSES_MAX_IMAGE_URL_BYTES=16)).apply(
-            _body(input=[{"role": "user", "content": [{"type": "input_image", "image_url": raw_url}]}])
+            _body(
+                input=[{"role": "user", "content": [{"type": "input_image", "image_url": raw_url}]}]
+            )
         )
     with pytest.raises(RequestPolicyError) as data_exc:
         _policy(Settings(RESPONSES_MAX_IMAGE_DATA_URL_BYTES=16)).apply(
-            _body(input=[{"role": "user", "content": [{"type": "input_image", "image_url": raw_data_url}]}])
+            _body(
+                input=[
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_image", "image_url": raw_data_url}],
+                    }
+                ]
+            )
         )
     with pytest.raises(RequestPolicyError) as total_exc:
         _policy(Settings(RESPONSES_MAX_TOTAL_IMAGE_DATA_URL_BYTES=32)).apply(
@@ -1087,9 +1299,7 @@ def test_file_input_rejects_unsupported_shapes_without_raw_values(
     code: str,
 ) -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(Settings()).apply(
-            _body(input=[{"role": "user", "content": [part]}])
-        )
+        _policy(Settings()).apply(_body(input=[{"role": "user", "content": [part]}]))
 
     assert exc_info.value.error_code == code
     assert exc_info.value.param == param
@@ -1102,7 +1312,11 @@ def test_file_input_rejects_non_user_role_without_raw_url() -> None:
 
     with pytest.raises(RequestPolicyError) as exc_info:
         _policy(Settings()).apply(
-            _body(input=[{"role": "assistant", "content": [{"type": "input_file", "file_url": raw_url}]}])
+            _body(
+                input=[
+                    {"role": "assistant", "content": [{"type": "input_file", "file_url": raw_url}]}
+                ]
+            )
         )
 
     assert exc_info.value.error_code == "responses_input_file_part_invalid"
@@ -1116,7 +1330,9 @@ def test_file_input_caps_reject_without_raw_values() -> None:
 
     with pytest.raises(RequestPolicyError) as url_exc:
         _policy(Settings(RESPONSES_MAX_FILE_URL_BYTES=16)).apply(
-            _body(input=[{"role": "user", "content": [{"type": "input_file", "file_url": raw_url}]}])
+            _body(
+                input=[{"role": "user", "content": [{"type": "input_file", "file_url": raw_url}]}]
+            )
         )
     with pytest.raises(RequestPolicyError) as data_exc:
         _policy(Settings(RESPONSES_MAX_FILE_DATA_URL_BYTES=16)).apply(
@@ -1304,9 +1520,7 @@ def test_metadata_must_be_bounded_object_without_leaking_values() -> None:
 
 
 def test_json_object_text_format_passes() -> None:
-    result = _policy(Settings()).apply(
-        _body(text={"format": {"type": "json_object"}})
-    )
+    result = _policy(Settings()).apply(_body(text={"format": {"type": "json_object"}}))
 
     assert result.effective_body["text"] == {"format": {"type": "json_object"}}
     assert result.estimated_input_tokens > 0
@@ -1449,9 +1663,7 @@ def test_text_format_size_caps_reject_without_raw_schema() -> None:
 
 def test_streaming_structured_text_format_rejected_before_forwarding() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(Settings()).apply(
-            _body(stream=True, text={"format": {"type": "json_object"}})
-        )
+        _policy(Settings()).apply(_body(stream=True, text={"format": {"type": "json_object"}}))
 
     assert exc_info.value.error_code == "responses_structured_streaming_not_supported"
     assert exc_info.value.param == "text.format"
@@ -1516,11 +1728,38 @@ def test_function_tool_choice_string_options_pass(tool_choice: str) -> None:
     [
         ([], "tools", "responses_tool_invalid_shape"),
         ([{"type": "web_search"}], "tools[0].type", "responses_hosted_tool_not_supported"),
-        ([{"type": "mcp", "server_url": "https://example.invalid"}], "tools[0].type", "responses_mcp_not_supported"),
-        ([{"type": "function", "name": "bad name", "parameters": {}}], "tools[0].name", "responses_tool_invalid_shape"),
-        ([{"type": "function", "name": "lookup", "parameters": []}], "tools[0].parameters", "responses_tool_invalid_shape"),
-        ([{"type": "function", "name": "lookup", "parameters": {}, "server_url": "https://example.invalid"}], "tools[0]", "responses_mcp_not_supported"),
-        ([{"type": "function", "name": "lookup", "parameters": {}, "strict": "true"}], "tools[0].strict", "responses_tool_invalid_shape"),
+        (
+            [{"type": "mcp", "server_url": "https://example.invalid"}],
+            "tools[0].type",
+            "responses_mcp_not_supported",
+        ),
+        (
+            [{"type": "function", "name": "bad name", "parameters": {}}],
+            "tools[0].name",
+            "responses_tool_invalid_shape",
+        ),
+        (
+            [{"type": "function", "name": "lookup", "parameters": []}],
+            "tools[0].parameters",
+            "responses_tool_invalid_shape",
+        ),
+        (
+            [
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {},
+                    "server_url": "https://example.invalid",
+                }
+            ],
+            "tools[0]",
+            "responses_mcp_not_supported",
+        ),
+        (
+            [{"type": "function", "name": "lookup", "parameters": {}, "strict": "true"}],
+            "tools[0].strict",
+            "responses_tool_invalid_shape",
+        ),
     ],
 )
 def test_function_tool_validation_rejects_invalid_shapes_without_schema_leakage(
@@ -1619,16 +1858,73 @@ def test_custom_tools_pass_with_omitted_text_and_grammar_formats() -> None:
     ("tool", "param", "code"),
     [
         ({"type": "custom", "name": "bad name"}, "tools[0].name", "responses_tool_invalid_shape"),
-        ({"type": "custom", "name": "run", "defer_loading": True}, "tools[0].defer_loading", "responses_tool_invalid_shape"),
-        ({"type": "custom", "name": "run", "server_url": "https://example.invalid"}, "tools[0]", "responses_mcp_not_supported"),
-        ({"type": "custom", "name": "run", "description": 1}, "tools[0].description", "responses_tool_invalid_shape"),
-        ({"type": "custom", "name": "run", "format": "text"}, "tools[0].format", "responses_tool_invalid_shape"),
-        ({"type": "custom", "name": "run", "format": {"type": "json"}}, "tools[0].format.type", "responses_custom_tool_format_not_supported"),
-        ({"type": "custom", "name": "run", "format": {"type": "text", "extra": "x"}}, "tools[0].format.extra", "responses_tool_invalid_shape"),
-        ({"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "json", "definition": "secret"}}, "tools[0].format.syntax", "responses_custom_tool_format_not_supported"),
-        ({"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "regex"}}, "tools[0].format.definition", "responses_tool_invalid_shape"),
-        ({"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "regex", "definition": ""}}, "tools[0].format.definition", "responses_tool_invalid_shape"),
-        ({"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "regex", "definition": "secret", "extra": "x"}}, "tools[0].format.extra", "responses_tool_invalid_shape"),
+        (
+            {"type": "custom", "name": "run", "defer_loading": True},
+            "tools[0].defer_loading",
+            "responses_tool_invalid_shape",
+        ),
+        (
+            {"type": "custom", "name": "run", "server_url": "https://example.invalid"},
+            "tools[0]",
+            "responses_mcp_not_supported",
+        ),
+        (
+            {"type": "custom", "name": "run", "description": 1},
+            "tools[0].description",
+            "responses_tool_invalid_shape",
+        ),
+        (
+            {"type": "custom", "name": "run", "format": "text"},
+            "tools[0].format",
+            "responses_tool_invalid_shape",
+        ),
+        (
+            {"type": "custom", "name": "run", "format": {"type": "json"}},
+            "tools[0].format.type",
+            "responses_custom_tool_format_not_supported",
+        ),
+        (
+            {"type": "custom", "name": "run", "format": {"type": "text", "extra": "x"}},
+            "tools[0].format.extra",
+            "responses_tool_invalid_shape",
+        ),
+        (
+            {
+                "type": "custom",
+                "name": "run",
+                "format": {"type": "grammar", "syntax": "json", "definition": "secret"},
+            },
+            "tools[0].format.syntax",
+            "responses_custom_tool_format_not_supported",
+        ),
+        (
+            {"type": "custom", "name": "run", "format": {"type": "grammar", "syntax": "regex"}},
+            "tools[0].format.definition",
+            "responses_tool_invalid_shape",
+        ),
+        (
+            {
+                "type": "custom",
+                "name": "run",
+                "format": {"type": "grammar", "syntax": "regex", "definition": ""},
+            },
+            "tools[0].format.definition",
+            "responses_tool_invalid_shape",
+        ),
+        (
+            {
+                "type": "custom",
+                "name": "run",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "regex",
+                    "definition": "secret",
+                    "extra": "x",
+                },
+            },
+            "tools[0].format.extra",
+            "responses_tool_invalid_shape",
+        ),
     ],
 )
 def test_custom_tool_validation_rejects_invalid_shapes_without_payload_leakage(
@@ -1655,9 +1951,7 @@ def test_custom_tool_caps_reject_without_definition_leakage() -> None:
             _body(tools=[{"type": "custom", "name": "run", "description": "secret description"}])
         )
     with pytest.raises(RequestPolicyError) as definition_exc:
-        _policy(
-            Settings(RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES=4)
-        ).apply(
+        _policy(Settings(RESPONSES_MAX_CUSTOM_TOOL_FORMAT_DEFINITION_BYTES=4)).apply(
             _body(
                 tools=[
                     {
@@ -1736,11 +2030,23 @@ def test_duplicate_tool_names_across_function_and_custom_reject() -> None:
     ("tool_choice", "param", "code"),
     [
         ("sometimes", "tool_choice", "responses_tool_choice_invalid"),
-        ({"type": "function", "name": "missing"}, "tool_choice.name", "responses_tool_choice_invalid"),
-        ({"type": "custom", "name": "missing"}, "tool_choice.name", "responses_tool_choice_invalid"),
+        (
+            {"type": "function", "name": "missing"},
+            "tool_choice.name",
+            "responses_tool_choice_invalid",
+        ),
+        (
+            {"type": "custom", "name": "missing"},
+            "tool_choice.name",
+            "responses_tool_choice_invalid",
+        ),
         ({"type": "web_search"}, "tool_choice.type", "responses_hosted_tool_not_supported"),
         ({"type": "mcp", "server_label": "x"}, "tool_choice.type", "responses_mcp_not_supported"),
-        ({"type": "function", "function": {"name": "lookup"}}, "tool_choice.function", "responses_tool_choice_invalid"),
+        (
+            {"type": "function", "function": {"name": "lookup"}},
+            "tool_choice.function",
+            "responses_tool_choice_invalid",
+        ),
     ],
 )
 def test_function_tool_choice_rejects_invalid_shapes(
@@ -1930,6 +2236,8 @@ def test_conversation_update_rejects_too_many_pairs_and_overlong_key_value() -> 
         },
     ],
 )
-def test_conversation_item_create_rejects_tool_media_and_hosted_markers(item: dict[str, object]) -> None:
+def test_conversation_item_create_rejects_tool_media_and_hosted_markers(
+    item: dict[str, object],
+) -> None:
     with pytest.raises(RequestPolicyError):
         validate_conversation_items_create_body({"items": [item]}, settings=Settings())

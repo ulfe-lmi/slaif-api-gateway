@@ -870,6 +870,14 @@ persistence, logs, audits, metrics, exports, errors, or safe evidence. Ordinary
 outputs, malformed/duplicate IDs, unknown fields, and broken or cross-type
 linkage remain denied.
 
+On the exact `codex-0.149-responses-v1 -> local-coding-v1` pair, assistant
+history may contain only the exact `output_text` content part with non-empty
+valid Unicode text. It is validated as bounded ordinary input, counted by the
+existing text metering and admission estimate, and remains transient request
+content. Other clients, roles, part shapes, and extra fields fail closed;
+assistant history text never enters persistence, logs, audits, metrics, exports,
+or safe errors.
+
 The separate client-tool declaration slice accepts at most one developer
 `additional_tools` item only when `codex_request_envelope` and
 `codex_client_tools` are each present on both the key and route. It admits
