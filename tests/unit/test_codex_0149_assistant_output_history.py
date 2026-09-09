@@ -7,6 +7,7 @@ import inspect
 import json
 import os
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -109,6 +110,110 @@ def _synthetic_version_runner(command, *, cwd, env, timeout):
 def _attest_synthetic_codex(install, **kwargs):
     kwargs.setdefault("native_size", len(b"synthetic-native"))
     return verifier._attest_codex_installation(install, **kwargs)
+
+
+def test_diagnostic_stage_vocabulary_transitions_and_serialization() -> None:
+    diagnostic = verifier.DiagnosticState()
+    for stage in verifier.DIAGNOSTIC_STAGES:
+        diagnostic.advance(stage)
+    assert diagnostic.stage == "complete"
+    serialized = diagnostic.serialize()
+    assert serialized == diagnostic.serialize()
+    assert '"stage":"complete"' in serialized
+    with pytest.raises(verifier.VerificationError, match="diagnostic_stage_invalid"):
+        diagnostic.advance("not-a-stage")
+
+
+@pytest.mark.parametrize(
+    ("exc", "category"),
+    [
+        (ModuleNotFoundError("private"), "capture"),
+        (OSError("private"), "filesystem"),
+        (subprocess.TimeoutExpired("private", 1), "subprocess_timeout"),
+        (ConnectionError("private"), "server_runtime"),
+        (AssertionError("private"), "assertion"),
+        (RuntimeError("private"), "other"),
+    ],
+)
+def test_diagnostic_exception_categories_are_closed(exc, category) -> None:
+    assert verifier._diagnostic_exception_category(exc) == category
+    with pytest.raises(TypeError, match="diagnostic_exception_not_exception"):
+        verifier._diagnostic_exception_category(KeyboardInterrupt())
+
+
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "imports",
+        "local_start",
+        "first_client",
+        "resume_client",
+        "postconditions",
+        "accounting_validate",
+    ],
+)
+def test_diagnostic_unexpected_failure_is_stage_closed_and_private(stage) -> None:
+    diagnostic = verifier.DiagnosticState()
+    diagnostic.advance(stage)
+    raw = "PRIVATE_DIAGNOSTIC_CANARY_161F"
+    line = verifier._diagnostic_unexpected_line(diagnostic, RuntimeError(raw))
+    assert f"unexpected_{stage}_other" in line
+    assert raw not in line
+    assert raw not in repr(diagnostic.snapshot())
+    assert all(
+        key in diagnostic.snapshot() for key in ("stage", "primary_stage", "cleanup_succeeded")
+    )
+
+
+def test_diagnostic_snapshot_bounds_gateway_and_local_progress() -> None:
+    diagnostic = verifier.DiagnosticState()
+    observation = SimpleNamespace(
+        request_count=99,
+        response_statuses=[200, 400, 500, 700, 201],
+        error_codes=["PRIVATE_ERROR_CODE"],
+        param_classes=["input[999].content[999].private"],
+    )
+    local = SimpleNamespace(
+        state=SimpleNamespace(
+            request_count=99,
+            signed_request_count=3,
+            function_count=1,
+            message_count=2,
+        )
+    )
+    diagnostic.refresh(observation=observation, local=local)
+    snapshot = diagnostic.snapshot()
+    assert snapshot["gateway_request_count"] == "other"
+    assert snapshot["gateway_statuses"] == ["2xx", "4xx", "5xx", "other"]
+    assert snapshot["gateway_error_code"] == "other"
+    assert snapshot["gateway_param_class"] == "other"
+    assert snapshot["local_request_count"] == "other"
+    assert snapshot["local_signed_request_count"] == "other"
+    assert snapshot["local_function_count"] == "one"
+    assert snapshot["local_message_count"] == "two"
+    assert "PRIVATE_ERROR_CODE" not in repr(snapshot)
+    assert "private" not in repr(snapshot)
+
+
+def test_diagnostic_primary_failure_survives_cleanup_failure() -> None:
+    diagnostic = verifier.DiagnosticState()
+    diagnostic.advance("resume_client")
+    diagnostic.mark_unexpected(RuntimeError("PRIVATE_PRIMARY"))
+    diagnostic.advance("cleanup")
+    diagnostic.cleanup_attempted = True
+    diagnostic.cleanup_succeeded = False
+    snapshot = diagnostic.snapshot()
+    assert snapshot["primary_stage"] == "resume_client"
+    assert snapshot["primary_category"] == "other"
+    assert snapshot["cleanup_succeeded"] is False
+    assert "PRIVATE_PRIMARY" not in repr(snapshot)
+
+
+def test_diagnostic_main_does_not_emit_arbitrary_exception_details() -> None:
+    source = inspect.getsource(verifier.main)
+    assert "type(exc).__name__" not in source
+    assert "repr(exc)" not in source
+    assert "traceback" not in source
 
 
 def test_codex_provenance_attests_exact_launcher_and_native_topology(tmp_path) -> None:

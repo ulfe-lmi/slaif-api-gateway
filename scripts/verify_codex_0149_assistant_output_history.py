@@ -30,7 +30,7 @@ import tempfile
 import threading
 import zlib
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -131,6 +131,175 @@ _SAFE_CODEX_FAILURES = frozenset(
 
 class VerificationError(RuntimeError):
     """A fixed verifier failure; its argument never contains request data."""
+
+
+DIAGNOSTIC_STAGES = (
+    "imports",
+    "database_setup",
+    "local_start",
+    "fixture_setup",
+    "migration",
+    "seed",
+    "codex_install",
+    "catalog_generate",
+    "catalog_validate",
+    "app_create",
+    "command_build",
+    "gateway_start",
+    "first_client",
+    "session_validate",
+    "resume_client",
+    "postconditions",
+    "accounting_validate",
+    "cleanup",
+    "complete",
+)
+_DIAGNOSTIC_STAGE_SET = frozenset(DIAGNOSTIC_STAGES)
+_DIAGNOSTIC_CATEGORIES = frozenset(
+    {
+        "capture",
+        "database_configuration",
+        "filesystem",
+        "subprocess_timeout",
+        "server_runtime",
+        "assertion",
+        "cleanup",
+        "other",
+    }
+)
+
+
+def _diagnostic_count_class(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return "other"
+    return _safe_progress_class(value)
+
+
+def _diagnostic_exception_category(exc: Exception) -> str:
+    if not isinstance(exc, Exception):
+        raise TypeError("diagnostic_exception_not_exception")
+    names = {base.__name__ for base in type(exc).__mro__}
+    if names & {"ModuleNotFoundError", "ImportError", "JSONDecodeError"}:
+        return "capture"
+    if names & {"OperationalError", "DBAPIError", "InterfaceError", "IntegrityError"}:
+        return "database_configuration"
+    if names & {"ConnectionError", "ConnectionRefusedError", "BrokenPipeError"}:
+        return "server_runtime"
+    if names & {
+        "FileNotFoundError",
+        "PermissionError",
+        "IsADirectoryError",
+        "NotADirectoryError",
+        "OSError",
+    }:
+        return "filesystem"
+    if names & {"TimeoutExpired", "TimeoutError", "SubprocessError"}:
+        return "subprocess_timeout"
+    if "AssertionError" in names:
+        return "assertion"
+    return "other"
+
+
+@dataclass
+class DiagnosticState:
+    """Bounded verifier progress state with no request or exception payloads."""
+
+    stage: str = "imports"
+    primary_stage: str = "none"
+    primary_category: str = "none"
+    gateway_request_count: str = "zero"
+    gateway_statuses: list[str] = dataclass_field(default_factory=list)
+    gateway_error_code: str = "none"
+    gateway_param_class: str = "none"
+    local_request_count: str = "zero"
+    local_signed_request_count: str = "zero"
+    local_function_count: str = "zero"
+    local_message_count: str = "zero"
+    observer_initialized: bool = False
+    local_initialized: bool = False
+    primary_failure: bool = False
+    cleanup_attempted: bool = False
+    cleanup_succeeded: bool = False
+
+    def advance(self, stage: str) -> None:
+        if stage not in _DIAGNOSTIC_STAGE_SET:
+            raise VerificationError("diagnostic_stage_invalid")
+        self.stage = stage
+
+    def refresh(
+        self,
+        observation: GatewayObservation | None = None,
+        local: _LocalServer | HistoryLocalState | None = None,
+    ) -> None:
+        if observation is not None:
+            self.observer_initialized = True
+            self.gateway_request_count = _diagnostic_count_class(observation.request_count)
+            self.gateway_statuses = [
+                _safe_status_class(status) for status in observation.response_statuses[:4]
+            ]
+            if observation.error_codes:
+                self.gateway_error_code = _safe_diagnostic_error_code(observation.error_codes[-1])
+            if observation.param_classes:
+                self.gateway_param_class = _fixed_param_class(observation.param_classes[-1])
+        if local is not None:
+            state = getattr(local, "state", local)
+            self.local_initialized = True
+            self.local_request_count = _diagnostic_count_class(
+                getattr(state, "request_count", None)
+            )
+            self.local_signed_request_count = _diagnostic_count_class(
+                getattr(state, "signed_request_count", None)
+            )
+            self.local_function_count = _diagnostic_count_class(
+                getattr(state, "function_count", None)
+            )
+            self.local_message_count = _diagnostic_count_class(
+                getattr(state, "message_count", None)
+            )
+
+    def mark_known_failure(self) -> None:
+        self.primary_failure = True
+        self.primary_stage = self.stage
+        self.primary_category = "other"
+
+    def mark_unexpected(self, exc: Exception) -> None:
+        self.primary_failure = True
+        self.primary_stage = self.stage
+        category = _diagnostic_exception_category(exc)
+        self.primary_category = category if category in _DIAGNOSTIC_CATEGORIES else "other"
+
+    def snapshot(self) -> dict[str, object]:
+        statuses = list(self.gateway_statuses[:4]) or ["none"]
+        return {
+            "stage": self.stage,
+            "primary_stage": self.primary_stage,
+            "primary_category": self.primary_category,
+            "gateway_request_count": self.gateway_request_count,
+            "gateway_statuses": statuses,
+            "gateway_error_code": self.gateway_error_code,
+            "gateway_param_class": self.gateway_param_class,
+            "local_request_count": self.local_request_count,
+            "local_signed_request_count": self.local_signed_request_count,
+            "local_function_count": self.local_function_count,
+            "local_message_count": self.local_message_count,
+            "observer_initialized": self.observer_initialized,
+            "local_initialized": self.local_initialized,
+            "primary_failure": self.primary_failure,
+            "cleanup_attempted": self.cleanup_attempted,
+            "cleanup_succeeded": self.cleanup_succeeded,
+        }
+
+    def serialize(self) -> str:
+        return json.dumps(self.snapshot(), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+
+
+def _diagnostic_unexpected_line(diagnostic: DiagnosticState, exc: Exception) -> str:
+    diagnostic.mark_unexpected(exc)
+    return (
+        "VERIFY_CODEX_0149_ASSISTANT_HISTORY_BASE_FAILED "
+        f"code=unexpected_{diagnostic.primary_stage}_{diagnostic.primary_category} "
+        f"progress={diagnostic.serialize()}"
+    )
 
 
 def _type_class(value: object) -> str:
@@ -1570,7 +1739,22 @@ async def _accounting_count(database_url: str, key_id: object) -> int:
         await engine.dispose()
 
 
-def run_prefixed_reproduction() -> str:
+def run_prefixed_reproduction(diagnostic: DiagnosticState | None = None) -> str:
+    state = diagnostic or DiagnosticState()
+    try:
+        return _run_prefixed_reproduction_body(state)
+    except VerificationError:
+        if not state.primary_failure:
+            state.mark_known_failure()
+        raise
+    except Exception as exc:
+        if not state.primary_failure:
+            state.mark_unexpected(exc)
+        raise
+
+
+def _run_prefixed_reproduction_body(diagnostic: DiagnosticState) -> str:
+    diagnostic.advance("imports")
     from scripts import capture_codex_protocol as capture
     from tests.e2e.test_openai_python_client_responses import _create_responses_test_data
     from tests.e2e.test_openai_python_client_chat import _run_uvicorn_server
@@ -1581,11 +1765,15 @@ def run_prefixed_reproduction() -> str:
         CODEX_0149_FIXTURE_SHA256,
     )
 
+    diagnostic.advance("database_setup")
     database_url, own_db, db_name = _database()
+    diagnostic.advance("local_start")
     local = _LocalServer(HistoryLocalState())
+    diagnostic.refresh(local=local)
     local_thread = threading.Thread(target=local.serve_forever, daemon=True)
     local_thread.start()
     try:
+        diagnostic.advance("fixture_setup")
         with tempfile.TemporaryDirectory(prefix="slaif-161-history-") as temporary:
             root = Path(temporary)
             home = root / "codex-home"
@@ -1616,6 +1804,7 @@ def run_prefixed_reproduction() -> str:
             }
             with _environment(values):
                 get_settings.cache_clear()
+                diagnostic.advance("migration")
                 migration = _run(
                     [sys.executable, "-m", "alembic", "upgrade", "head"],
                     cwd=REPO_ROOT,
@@ -1626,6 +1815,7 @@ def run_prefixed_reproduction() -> str:
                     raise VerificationError("migration_failed")
                 from slaif_gateway.config import get_settings as configured_settings
 
+                diagnostic.advance("seed")
                 created = asyncio.run(
                     _create_responses_test_data(
                         database_url,
@@ -1665,23 +1855,29 @@ def run_prefixed_reproduction() -> str:
                         codex_streaming_tool_events=True,
                     )
                 )
+                diagnostic.advance("codex_install")
                 provenance = _install_codex(root)
                 binary = provenance.launcher
                 catalog = root / "model-catalog.json"
                 environment = capture._isolated_environment(home)
                 environment.update(values)
                 environment[capture.CAPTURE_API_KEY_ENV] = created.plaintext_key
+                diagnostic.advance("catalog_generate")
                 capture._write_0149_model_catalog(
                     binary, catalog, environment=environment, model=CODEX_MODEL
                 )
                 catalog_value = json.loads(catalog.read_text(encoding="utf-8"))
                 if not isinstance(catalog_value, Mapping):
                     raise VerificationError("vision_catalog_not_object")
+                diagnostic.advance("catalog_validate")
                 _write_and_validate_vision_catalog(catalog, catalog_value, model=CODEX_MODEL)
                 gateway_port = _free_port()
+                diagnostic.advance("app_create")
                 observation = GatewayObservation(
                     create_app(configured_settings()), image_expectations=image_expectations
                 )
+                diagnostic.refresh(observation=observation, local=local)
+                diagnostic.advance("command_build")
                 first = _initial_command(
                     binary,
                     workdir=work,
@@ -1697,8 +1893,11 @@ def run_prefixed_reproduction() -> str:
                 previous_logging_disable = logging.root.manager.disable
                 logging.disable(logging.CRITICAL)
                 try:
+                    diagnostic.advance("gateway_start")
                     with _run_uvicorn_server(observation, gateway_port):
+                        diagnostic.advance("first_client")
                         first_result = _run(first, cwd=work, env=environment, timeout=180)
+                        diagnostic.refresh(observation=observation, local=local)
                         if first_result.returncode != 0:
                             category = _codex_failure_category(
                                 first_result.stderr, first_result.stdout
@@ -1707,8 +1906,11 @@ def run_prefixed_reproduction() -> str:
                                 f"codex_first_turn_{category}_{_safe_failure_progress(observation, local)}"
                             )
                         del first_result
+                        diagnostic.advance("session_validate")
+                        diagnostic.refresh(observation=observation, local=local)
                         if _private_session_count(home) != 1:
                             raise VerificationError("private_session_count_invalid")
+                        diagnostic.advance("command_build")
                         second = _resume_last_command(
                             binary,
                             workdir=work,
@@ -1720,12 +1922,16 @@ def run_prefixed_reproduction() -> str:
                         _validate_command_binding(
                             second, expected_image=fixture_facts["crop_path"], resume=True
                         )
+                        diagnostic.advance("resume_client")
                         second_result = _run(second, cwd=work, env=environment, timeout=180)
+                        diagnostic.refresh(observation=observation, local=local)
                         if second_result.returncode == 0:
                             raise VerificationError("history_rejection_not_reproduced")
                         del second_result
                 finally:
                     logging.disable(previous_logging_disable)
+                diagnostic.advance("postconditions")
+                diagnostic.refresh(observation=observation, local=local)
                 if observation.request_count != 3 or observation.response_statuses != [
                     200,
                     200,
@@ -1784,41 +1990,63 @@ def run_prefixed_reproduction() -> str:
                     raise VerificationError("fake_local_advanced_on_rejection")
                 if state.function_count != 1 or state.message_count != 1:
                     raise VerificationError("fake_local_lifecycle_invalid")
+                diagnostic.advance("accounting_validate")
+                diagnostic.refresh(observation=observation, local=local)
+                diagnostic.advance("complete")
                 return "VERIFY_CODEX_0149_ASSISTANT_HISTORY_REPRODUCTION_OK request_count=3 local_count=2 clean_rejection=true"
     finally:
-        local.shutdown()
-        local.server_close()
-        local_thread.join(timeout=5)
+        primary_exception = sys.exc_info()[1]
+        if isinstance(primary_exception, VerificationError):
+            diagnostic.mark_known_failure()
+        elif isinstance(primary_exception, Exception):
+            diagnostic.mark_unexpected(primary_exception)
+        diagnostic.advance("cleanup")
+        cleanup_failed = False
+        try:
+            local.shutdown()
+        except Exception:
+            cleanup_failed = True
+        try:
+            local.server_close()
+        except Exception:
+            cleanup_failed = True
+        try:
+            local_thread.join(timeout=5)
+        except Exception:
+            cleanup_failed = True
         if own_db and db_name:
             try:
-                subprocess.run(
+                cleanup_result = subprocess.run(
                     ["sudo", "-n", "-u", "postgres", "dropdb", "--if-exists", db_name],
                     cwd=REPO_ROOT,
                     capture_output=True,
                     check=False,
                     timeout=30,
                 )
+                cleanup_failed = cleanup_failed or cleanup_result.returncode != 0
             except (OSError, subprocess.TimeoutExpired):
-                pass
+                cleanup_failed = True
+        diagnostic.cleanup_attempted = True
+        diagnostic.cleanup_succeeded = not cleanup_failed
+        if cleanup_failed and primary_exception is None:
+            diagnostic.primary_failure = True
+            diagnostic.primary_stage = "cleanup"
+            diagnostic.primary_category = "cleanup"
+            raise VerificationError("diagnostic_cleanup_failed")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
+    diagnostic = DiagnosticState()
     try:
-        print(run_prefixed_reproduction())
+        print(run_prefixed_reproduction(diagnostic))
         return 0
     except VerificationError as exc:
         print(f"VERIFY_CODEX_0149_ASSISTANT_HISTORY_BASE_FAILED code={exc.args[0]}")
         return 1
     except Exception as exc:
-        name = type(exc).__name__
-        safe_name = (
-            name
-            if name in {"AttributeError", "KeyError", "TypeError", "ValueError", "IndexError"}
-            else "other"
-        )
-        print(f"VERIFY_CODEX_0149_ASSISTANT_HISTORY_BASE_FAILED code=unexpected_{safe_name}")
+        print(_diagnostic_unexpected_line(diagnostic, exc))
         return 1
 
 
