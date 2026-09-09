@@ -216,6 +216,110 @@ def test_diagnostic_main_does_not_emit_arbitrary_exception_details() -> None:
     assert "traceback" not in source
 
 
+def _turn_failed_jsonl(message: object = "invalid image") -> bytes:
+    return (json.dumps({"type": "turn.failed", "error": {"message": message}}) + "\n").encode()
+
+
+def test_turn_failure_projection_positive_is_closed_and_source_pinned() -> None:
+    projection = verifier._turn_failure_projection(
+        b"",
+        b'{"type":"thread.started"}\n' + _turn_failed_jsonl("invalid image"),
+    )
+    assert projection["turn_failed_shape_class"] == "exact"
+    assert projection["message_domain"] == "invalid_image"
+    assert projection["turn_failed_count_class"] == "one"
+    assert projection["event_classes"] == ["thread.started", "turn.failed"]
+    assert projection["combined_failure_class"] == "message_specific"
+    assert verifier.CODEX_TURN_FAILURE_SOURCE_TAG == "rust-v0.149.0"
+    assert verifier.CODEX_TURN_FAILURE_SOURCE_COMMIT == "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0"
+    assert verifier.CODEX_TURN_FAILURE_EVENT_SOURCE_PATH == "codex-rs/exec/src/exec_events.rs"
+    assert verifier.CODEX_TURN_FAILURE_PROCESSOR_SOURCE_PATH == (
+        "codex-rs/exec/src/event_processor_with_jsonl_output.rs"
+    )
+
+
+@pytest.mark.parametrize(
+    ("message", "domain"),
+    [
+        ("invalid image", "invalid_image"),
+        ("image processing failed", "image_processing_or_capability"),
+        ("unknown model catalog entry", "model_catalog_or_model"),
+        ("configuration rejected", "configuration"),
+        ("authentication failed", "authentication"),
+        ("sandbox workspace denied", "workspace_or_sandbox"),
+        ("request timeout", "request_or_transport"),
+        ("stream response failed", "stream_or_response"),
+        ("internal runtime failure", "internal_runtime"),
+        ("turn failed", "generic_turn_failed"),
+        ("unclassified condition", "other"),
+    ],
+)
+def test_turn_failure_message_domains_are_closed(message, domain) -> None:
+    projection = verifier._turn_failure_projection(b"", _turn_failed_jsonl(message))
+    assert projection["message_domain"] == domain
+    assert projection["message_size_class"] == "bounded"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not-json\n",
+        b"[]\n",
+        b'{"type":"turn.failed"}\n',
+        b'{"type":"turn.failed","error":{}}\n',
+        b'{"type":"turn.failed","error":{"message":3}}\n',
+        b'{"type":"turn.failed","error":{"message":"x"},"extra":true}\n',
+        _turn_failed_jsonl("one") + _turn_failed_jsonl("two"),
+    ],
+)
+def test_turn_failure_projection_rejects_malformed_shapes(payload) -> None:
+    projection = verifier._turn_failure_projection(b"", payload)
+    assert projection["turn_failed_shape_class"] in {
+        "missing",
+        "duplicate",
+        "top_level_fields_other",
+        "error_object_other",
+        "message_field_other",
+        "message_type_other",
+    }
+
+
+def test_turn_failure_projection_bounds_records_lines_messages_and_event_classes() -> None:
+    many_records = b"".join(b'{"type":"unknown"}\n' for _ in range(65))
+    long_line = b"{" + b"x" * verifier.MAX_TURN_FAILURE_LINE_BYTES + b"}\n"
+    long_token = "PRIVATE_LONG_TURN_FAILURE_CANARY_161I"
+    long_message = _turn_failed_jsonl(
+        long_token * (verifier.MAX_TURN_FAILURE_MESSAGE_BYTES // len(long_token) + 1)
+    )
+    projection = verifier._turn_failure_projection(
+        b"x" * (verifier.MAX_TURN_FAILURE_STDERR_BYTES + 1),
+        many_records + long_line + long_message,
+    )
+    assert projection["stderr_size_class"] == "oversized"
+    assert projection["record_count_class"] == "truncated"
+    assert projection["records_truncated"] is True
+    assert len(projection["event_classes"]) <= verifier.MAX_TURN_FAILURE_EVENT_CLASSES
+    assert long_token not in repr(projection)
+
+
+def test_turn_failure_projection_combines_stderr_and_message_without_raw_text() -> None:
+    agreeing = verifier._turn_failure_projection(
+        b"error loading config", _turn_failed_jsonl("configuration rejected")
+    )
+    conflicting = verifier._turn_failure_projection(
+        b"error loading config", _turn_failed_jsonl("request timeout")
+    )
+    generic = verifier._turn_failure_projection(b"", _turn_failed_jsonl("turn failed"))
+    assert agreeing["combined_failure_class"] == "agreeing"
+    assert conflicting["combined_failure_class"] == "conflicting"
+    assert generic["combined_failure_class"] == "generic"
+    raw = "PRIVATE_TURN_FAILED_MESSAGE_CANARY_161I"
+    private = verifier._turn_failure_projection(b"", _turn_failed_jsonl(raw))
+    assert raw not in repr(private)
+    assert raw not in json.dumps(private, sort_keys=True)
+    assert verifier._turn_failure_code(private).startswith("turn_failed_exact_")
+
+
 def test_codex_provenance_attests_exact_launcher_and_native_topology(tmp_path) -> None:
     install, launcher, native, launcher_digest, native_digest = _synthetic_codex_installation(
         tmp_path

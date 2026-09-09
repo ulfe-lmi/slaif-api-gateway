@@ -58,6 +58,41 @@ CODEX_NATIVE_TARGET = "x86_64-unknown-linux-musl"
 CODEX_0149_BINARY_SHA256 = "bbc3341e44c9ead340ed9570c17be936e37870f570751a941699ffd04d672827"
 CODEX_NATIVE_SIZE_BYTES = 258_322_048
 CODEX_VERSION_OUTPUT = b"codex-cli 0.149.0\n"
+CODEX_TURN_FAILURE_SOURCE_TAG = "rust-v0.149.0"
+CODEX_TURN_FAILURE_SOURCE_COMMIT = "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0"
+CODEX_TURN_FAILURE_EVENT_SOURCE_PATH = "codex-rs/exec/src/exec_events.rs"
+CODEX_TURN_FAILURE_PROCESSOR_SOURCE_PATH = "codex-rs/exec/src/event_processor_with_jsonl_output.rs"
+MAX_TURN_FAILURE_STDOUT_BYTES = 512_000
+MAX_TURN_FAILURE_STDERR_BYTES = 256_000
+MAX_TURN_FAILURE_RECORDS = 64
+MAX_TURN_FAILURE_LINE_BYTES = 65_536
+MAX_TURN_FAILURE_MESSAGE_BYTES = 65_536
+MAX_TURN_FAILURE_EVENT_CLASSES = 8
+TURN_FAILURE_EVENT_TYPES = (
+    "thread.started",
+    "turn.started",
+    "turn.failed",
+    "turn.completed",
+    "item.started",
+    "item.updated",
+    "item.completed",
+    "error",
+)
+_TURN_FAILURE_EVENT_TYPE_SET = frozenset(TURN_FAILURE_EVENT_TYPES)
+TURN_FAILURE_MESSAGE_DOMAINS = (
+    "invalid_image",
+    "image_processing_or_capability",
+    "model_catalog_or_model",
+    "configuration",
+    "authentication",
+    "workspace_or_sandbox",
+    "request_or_transport",
+    "stream_or_response",
+    "internal_runtime",
+    "generic_turn_failed",
+    "other",
+)
+_TURN_FAILURE_MESSAGE_DOMAIN_SET = frozenset(TURN_FAILURE_MESSAGE_DOMAINS)
 MAX_CODEX_METADATA_BYTES = 1_048_576
 MAX_CODEX_LAUNCHER_BYTES = 4 * 1024 * 1024
 MAX_CODEX_NATIVE_BYTES = CODEX_NATIVE_SIZE_BYTES
@@ -667,6 +702,217 @@ def _codex_failure_category(stderr: bytes, stdout: bytes) -> str:
 
     value = classify_codex_failure(stderr, stdout)
     return value if value in _SAFE_CODEX_FAILURES else "other"
+
+
+def _turn_failure_message_domain(message: object) -> tuple[str, str]:
+    if not isinstance(message, str):
+        return "other", "not_string"
+    try:
+        encoded = message.encode("utf-8")
+    except UnicodeEncodeError:
+        return "other", "invalid_unicode"
+    if len(encoded) > MAX_TURN_FAILURE_MESSAGE_BYTES:
+        del encoded
+        return "other", "oversized"
+    if not message:
+        del encoded
+        return "other", "empty"
+    lowered = message.casefold()
+    del encoded, message
+    if lowered == "turn failed":
+        del lowered
+        return "generic_turn_failed", "bounded"
+    markers = (
+        ("invalid_image", ("invalid image", "image is invalid", "malformed image")),
+        (
+            "image_processing_or_capability",
+            ("image processing", "vision", "multimodal", "image input", "unsupported image"),
+        ),
+        ("model_catalog_or_model", ("model catalog", "model not", "unknown model", "model")),
+        ("configuration", ("configuration", "config ", "config:", "settings")),
+        ("authentication", ("authentication", "unauthorized", "api key", "credential")),
+        ("workspace_or_sandbox", ("sandbox", "workspace", "trusted directory", "permission")),
+        ("request_or_transport", ("request", "http", "connection", "network", "timeout")),
+        ("stream_or_response", ("stream", "response", "sse", "jsonl")),
+        ("internal_runtime", ("internal", "panic", "runtime")),
+    )
+    for domain, domain_markers in markers:
+        if any(marker in lowered for marker in domain_markers):
+            del lowered
+            return domain, "bounded"
+    del lowered
+    return "other", "bounded"
+
+
+def _turn_failure_stderr_domain(stderr_class: str) -> str:
+    if stderr_class in {
+        "configuration_rejected",
+        "argument_or_configuration_rejected",
+        "argument_rejected",
+        "web_search_config_rejected",
+        "dummy_auth_environment_rejected",
+    }:
+        return "configuration"
+    if stderr_class in {"custom_provider_auth_rejected"}:
+        return "authentication"
+    if stderr_class in {"workdir_rejected"}:
+        return "workspace_or_sandbox"
+    if stderr_class in {
+        "loopback_request_failed",
+        "loopback_connection_failed",
+        "mock_http_status_rejected",
+    }:
+        return "request_or_transport"
+    if stderr_class in {
+        "mock_stream_closed_early",
+        "mock_stream_idle_timeout",
+        "mock_completed_event_rejected",
+        "mock_response_failed",
+        "mock_stream_rejected",
+    }:
+        return "stream_or_response"
+    return "other"
+
+
+def _turn_failure_combined_class(stderr_class: str, message_domain: str) -> str:
+    stderr_specific = stderr_class not in {"unclassified", "other"}
+    message_specific = message_domain not in {"other", "generic_turn_failed"}
+    if stderr_specific and message_specific:
+        return (
+            "agreeing"
+            if _turn_failure_stderr_domain(stderr_class) == message_domain
+            else "conflicting"
+        )
+    if stderr_specific:
+        return "stderr_specific"
+    if message_specific:
+        return "message_specific"
+    return "generic"
+
+
+def _turn_failure_projection(stderr: bytes, stdout: bytes) -> dict[str, object]:
+    stdout_size_class = "oversized" if len(stdout) > MAX_TURN_FAILURE_STDOUT_BYTES else "bounded"
+    stderr_size_class = "oversized" if len(stderr) > MAX_TURN_FAILURE_STDERR_BYTES else "bounded"
+    bounded_stdout = stdout[:MAX_TURN_FAILURE_STDOUT_BYTES]
+    lines = bounded_stdout.splitlines()
+    records_truncated = len(lines) > MAX_TURN_FAILURE_RECORDS
+    line_size_class = "none"
+    event_classes: list[str] = []
+    record_count = 0
+    malformed_count = 0
+    turn_failed_count = 0
+    top_level_fields_exact = False
+    error_object_exact = False
+    message_field_exact = False
+    message_type_exact = False
+    message_size_class = "none"
+    message_domain = "other"
+    event_classes_seen: list[str] = []
+    event: object = None
+    raw_line = b""
+    event_type: object = None
+    error: object = None
+    message: object = None
+
+    for raw_line in lines[:MAX_TURN_FAILURE_RECORDS]:
+        if not raw_line:
+            continue
+        record_count += 1
+        if len(raw_line) > MAX_TURN_FAILURE_LINE_BYTES:
+            line_size_class = "oversized"
+            malformed_count += 1
+            continue
+        try:
+            event = json.loads(raw_line)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            malformed_count += 1
+            continue
+        if not isinstance(event, Mapping):
+            malformed_count += 1
+            event_class = "other"
+        else:
+            event_type = event.get("type")
+            event_class = event_type if event_type in _TURN_FAILURE_EVENT_TYPE_SET else "other"
+            if event_class == "turn.failed":
+                turn_failed_count += 1
+                if turn_failed_count == 1:
+                    top_level_fields_exact = set(event) == {"type", "error"}
+                    error = event.get("error")
+                    error_object_exact = isinstance(error, Mapping)
+                    if error_object_exact:
+                        message_field_exact = set(error) == {"message"}
+                        message = error.get("message")
+                        message_type_exact = isinstance(message, str)
+                        message_domain, message_size_class = _turn_failure_message_domain(message)
+        if len(event_classes_seen) < MAX_TURN_FAILURE_EVENT_CLASSES:
+            event_classes_seen.append(event_class)
+    event_classes = event_classes_seen
+    stderr_class = _codex_failure_category(stderr, b"")
+    if turn_failed_count == 0:
+        shape_class = "missing"
+    elif turn_failed_count > 1:
+        shape_class = "duplicate"
+    elif not top_level_fields_exact:
+        shape_class = "top_level_fields_other"
+    elif not error_object_exact:
+        shape_class = "error_object_other"
+    elif not message_field_exact:
+        shape_class = "message_field_other"
+    elif not message_type_exact:
+        shape_class = "message_type_other"
+    else:
+        shape_class = "exact"
+    if records_truncated:
+        record_class = "truncated"
+    else:
+        record_class = _safe_progress_class(record_count)
+    failure_class = _turn_failure_combined_class(stderr_class, message_domain)
+    result = {
+        "stdout_size_class": stdout_size_class,
+        "stderr_size_class": stderr_size_class,
+        "record_count_class": record_class,
+        "records_truncated": records_truncated,
+        "line_size_class": line_size_class,
+        "malformed_record_count_class": _safe_progress_class(malformed_count),
+        "event_classes": event_classes,
+        "event_class_count_class": _safe_progress_class(len(event_classes)),
+        "turn_failed_count_class": _safe_progress_class(turn_failed_count),
+        "turn_failed_shape_class": shape_class,
+        "top_level_fields_exact": top_level_fields_exact,
+        "error_object_exact": error_object_exact,
+        "message_field_exact": message_field_exact,
+        "message_type_exact": message_type_exact,
+        "message_size_class": message_size_class,
+        "message_domain": message_domain
+        if message_domain in _TURN_FAILURE_MESSAGE_DOMAIN_SET
+        else "other",
+        "stderr_failure_class": stderr_class,
+        "combined_failure_class": failure_class,
+    }
+    del (
+        bounded_stdout,
+        lines,
+        event_classes_seen,
+        stderr_class,
+        event,
+        raw_line,
+        event_type,
+        error,
+        message,
+        stderr,
+        stdout,
+    )
+    return result
+
+
+def _turn_failure_code(projection: Mapping[str, object]) -> str:
+    return (
+        "turn_failed_"
+        f"{projection.get('turn_failed_shape_class', 'other')}_"
+        f"{projection.get('message_domain', 'other')}_"
+        f"{projection.get('combined_failure_class', 'other')}_"
+        f"events_{projection.get('turn_failed_count_class', 'other')}"
+    )
 
 
 def _safe_progress_class(value: int) -> str:
@@ -1899,9 +2145,18 @@ def _run_prefixed_reproduction_body(diagnostic: DiagnosticState) -> str:
                         first_result = _run(first, cwd=work, env=environment, timeout=180)
                         diagnostic.refresh(observation=observation, local=local)
                         if first_result.returncode != 0:
-                            category = _codex_failure_category(
+                            turn_failure = _turn_failure_projection(
                                 first_result.stderr, first_result.stdout
                             )
+                            legacy_category = _codex_failure_category(
+                                first_result.stderr, first_result.stdout
+                            )
+                            category = (
+                                _turn_failure_code(turn_failure)
+                                if legacy_category == "turn_failed"
+                                else legacy_category
+                            )
+                            del legacy_category, turn_failure, first_result
                             raise VerificationError(
                                 f"codex_first_turn_{category}_{_safe_failure_progress(observation, local)}"
                             )
