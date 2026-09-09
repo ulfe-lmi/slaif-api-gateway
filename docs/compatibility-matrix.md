@@ -22,10 +22,10 @@ the independent ID-bound capability gate. Other clients, servers, and hosted
 routes retain their existing strict behavior. This is source-derived/mock
 regression evidence, not protected or second-turn acceptance.
 
-The same exact pair accepts bounded assistant history only as an exact
-`output_text` part with non-empty valid Unicode text. Existing message and
-request-wide text caps apply, and UTF-8 bytes are included in ordinary input
-metering and estimation. Other roles, clients, content shapes, and extra
+The same exact pair accepts bounded assistant history only as exact
+`output_text` parts, each with non-empty valid Unicode text. Existing message
+and request-wide text caps apply, and UTF-8 bytes are included in ordinary
+input metering and estimation. Other roles, clients, content shapes, and extra
 fields remain denied.
 
 | Feature / endpoint / field | Current support | Provider coverage | Notes | Test coverage |

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -162,6 +163,144 @@ def test_codex_assistant_output_text_history_is_canonical_and_metered() -> None:
         )
     )
     assert result.estimated_message_input_tokens > ascii_result.estimated_message_input_tokens
+
+
+def test_codex_assistant_output_text_history_preserves_input_five_and_bounded_arrays() -> None:
+    history = [{"role": "user", "content": "prior"} for _ in range(5)]
+    history.append(
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": "first"},
+                {"type": "input_text", "text": "already-supported"},
+                {"type": "output_text", "text": "second"},
+            ],
+        }
+    )
+    result = _0149_policy(Settings()).apply(_body(input=history))
+    assert result.effective_body["input"][5]["content"] == [
+        {"type": "output_text", "text": "first"},
+        {"type": "input_text", "text": "already-supported"},
+        {"type": "output_text", "text": "second"},
+    ]
+
+
+def test_codex_assistant_output_text_history_accepts_exact_multibyte_limits() -> None:
+    exact = _0149_policy(
+        Settings(
+            RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES=4,
+            RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=4,
+        )
+    ).apply(
+        _body(
+            input=[
+                {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "žž"}],
+                }
+            ]
+        )
+    )
+    assert exact.effective_body["input"][0]["content"][0]["text"] == "žž"
+
+    with pytest.raises(RequestPolicyError) as item_exc:
+        _0149_policy(Settings(RESPONSES_MAX_INPUT_ITEM_TEXT_BYTES=4)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "žžž"}],
+                    }
+                ]
+            )
+        )
+    assert item_exc.value.error_code == "responses_input_item_too_large"
+
+    with pytest.raises(RequestPolicyError) as total_exc:
+        _0149_policy(Settings(RESPONSES_MAX_TOTAL_INPUT_TEXT_BYTES=4)).apply(
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ž"}],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ž"}],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ž"}],
+                    },
+                ]
+            )
+        )
+    assert total_exc.value.error_code == "responses_input_item_too_large"
+
+
+def test_codex_assistant_output_text_history_requires_enabled_policy_fact() -> None:
+    disabled_spec = replace(CODEX_0149_POLICY_SPEC, assistant_history_content_types=frozenset())
+    with pytest.raises(RequestPolicyError) as exc_info:
+        ResponsesRequestPolicy(Settings(), client_spec=disabled_spec).apply(
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "safe"}],
+                    }
+                ]
+            )
+        )
+    assert exc_info.value.error_code == "responses_input_content_part_not_supported"
+    assert exc_info.value.param == "input[0].content[0].type"
+
+
+@pytest.mark.parametrize(
+    ("part_type", "error_code"),
+    [
+        ("refusal", "responses_input_content_part_not_supported"),
+        ("output_image", "responses_input_content_part_not_supported"),
+        ("input_audio", "responses_input_multimodal_not_supported"),
+        ("function_call", "responses_input_content_part_not_supported"),
+    ],
+)
+def test_codex_assistant_output_text_history_rejects_unapproved_part_types(
+    part_type: str, error_code: str
+) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _0149_policy(Settings()).apply(
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": part_type, "text": "safe"}],
+                    }
+                ]
+            )
+        )
+    assert exc_info.value.error_code == error_code
+    assert exc_info.value.param == "input[0].content[0].type"
+
+
+@pytest.mark.parametrize("part_type", ["input_image", "input_file"])
+def test_codex_assistant_output_text_history_rejects_assistant_media_parts(
+    part_type: str,
+) -> None:
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _0149_policy(Settings()).apply(
+            _body(
+                input=[
+                    {
+                        "role": "assistant",
+                        "content": [{"type": part_type, "image_url": "https://example.invalid"}],
+                    }
+                ]
+            )
+        )
+    assert exc_info.value.error_code in {
+        "responses_input_image_part_invalid",
+        "responses_input_file_part_invalid",
+    }
 
 
 @pytest.mark.parametrize("role", ["user", "system", "developer"])

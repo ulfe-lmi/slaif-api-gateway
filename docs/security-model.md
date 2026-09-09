@@ -871,8 +871,8 @@ outputs, malformed/duplicate IDs, unknown fields, and broken or cross-type
 linkage remain denied.
 
 On the exact `codex-0.149-responses-v1 -> local-coding-v1` pair, assistant
-history may contain only the exact `output_text` content part with non-empty
-valid Unicode text. It is validated as bounded ordinary input, counted by the
+history may contain only exact `output_text` content parts with non-empty valid
+Unicode text. Each is validated as bounded ordinary input, counted by the
 existing text metering and admission estimate, and remains transient request
 content. Other clients, roles, part shapes, and extra fields fail closed;
 assistant history text never enters persistence, logs, audits, metrics, exports,

@@ -744,6 +744,8 @@ def _safe_diagnostic_error_code(value: object) -> str:
 def _fixed_param_class(value: object) -> str:
     if not isinstance(value, str):
         return "other"
+    if value == "input[0].content[0].annotations":
+        return "input_index_0_content_index_0_annotations"
     if value == "input[5].content[0].type":
         return "input_5_content_0_type"
     match = re.fullmatch(r"input\[([0-9]{1,4})\]\.content\[([0-9]{1,4})\]\.type", value)
@@ -1360,7 +1362,7 @@ def _function_stream(arguments: str, tool_name: str) -> tuple[dict[str, object],
     )
 
 
-def _message_stream() -> tuple[dict[str, object], ...]:
+def _message_stream(text: str = "synthetic") -> tuple[dict[str, object], ...]:
     response_id = "response_history_first"
     item_id = "message_history_first"
     return (
@@ -1401,7 +1403,7 @@ def _message_stream() -> tuple[dict[str, object], ...]:
             "output_index": 0,
             "content_index": 0,
             "sequence_number": 4,
-            "delta": "synthetic",
+            "delta": text,
             "logprobs": [],
         },
         {
@@ -1410,7 +1412,7 @@ def _message_stream() -> tuple[dict[str, object], ...]:
             "output_index": 0,
             "content_index": 0,
             "sequence_number": 5,
-            "text": "synthetic",
+            "text": text,
             "logprobs": [],
         },
         {
@@ -1421,7 +1423,7 @@ def _message_stream() -> tuple[dict[str, object], ...]:
             "sequence_number": 6,
             "part": {
                 "type": "output_text",
-                "text": "synthetic",
+                "text": text,
                 "annotations": [],
                 "logprobs": None,
             },
@@ -1438,7 +1440,7 @@ def _message_stream() -> tuple[dict[str, object], ...]:
                 "content": [
                     {
                         "type": "output_text",
-                        "text": "synthetic",
+                        "text": text,
                         "annotations": [],
                         "logprobs": None,
                     }
@@ -1463,7 +1465,7 @@ def _message_stream() -> tuple[dict[str, object], ...]:
                         "content": [
                             {
                                 "type": "output_text",
-                                "text": "synthetic",
+                                "text": text,
                                 "annotations": [],
                                 "logprobs": None,
                             }
@@ -1602,11 +1604,15 @@ class _LocalServer(http.server.ThreadingHTTPServer):
 
 
 class _DirectUpstreamState:
-    def __init__(self) -> None:
+    def __init__(self, image_expectations: Mapping[str, object]) -> None:
+        self.image_expectations = image_expectations
+        self.assistant_text = "history-only-text"
         self.request_count = 0
-        self.authorization_valid = False
+        self.authorization_count = 0
+        self.first_image_class = "none"
+        self.second_image_class = "none"
         self.history_semantics_valid = False
-        self.image_shape_valid = False
+        self.semantic_text_equal = False
         self.failed = False
         self._lock = threading.Lock()
 
@@ -1614,33 +1620,11 @@ class _DirectUpstreamState:
         if headers.get("authorization") != "Bearer synthetic-direct-upstream-token-161-p":
             raise VerificationError("direct_upstream_authorization_invalid")
         payload = json.loads(body)
-        if not isinstance(payload, Mapping):
+        if not isinstance(payload, Mapping) or payload.get("stream") is not True:
             raise VerificationError("direct_upstream_body_invalid")
         items = payload.get("input")
         if not isinstance(items, list):
             raise VerificationError("direct_upstream_input_invalid")
-        assistant_items = [
-            item for item in items if isinstance(item, Mapping) and item.get("role") == "assistant"
-        ]
-        if len(assistant_items) != 1:
-            raise VerificationError("direct_upstream_assistant_history_invalid")
-        assistant_content = assistant_items[0].get("content")
-        if not isinstance(assistant_content, list) or len(assistant_content) != 1:
-            raise VerificationError("direct_upstream_assistant_content_invalid")
-        assistant_part = assistant_content[0]
-        if (
-            not isinstance(assistant_part, Mapping)
-            or set(assistant_part) != {"type", "text"}
-            or assistant_part.get("type") != "output_text"
-            or assistant_part.get("text") != "history-only-text"
-        ):
-            raise VerificationError("direct_upstream_output_text_invalid")
-        try:
-            text_bytes = assistant_part["text"].encode("utf-8")
-        except (AttributeError, UnicodeEncodeError):
-            raise VerificationError("direct_upstream_output_text_unicode_invalid") from None
-        if not text_bytes:
-            raise VerificationError("direct_upstream_output_text_empty")
         image_parts = [
             part
             for item in items
@@ -1650,13 +1634,43 @@ class _DirectUpstreamState:
         ]
         if len(image_parts) != 1:
             raise VerificationError("direct_upstream_image_shape_invalid")
+        image_class = _classify_image_part(image_parts[0], self.image_expectations)
+        assistant_items = [
+            item for item in items if isinstance(item, Mapping) and item.get("role") == "assistant"
+        ]
         with self._lock:
-            if self.request_count != 0:
+            if self.request_count >= 2:
                 raise VerificationError("direct_upstream_retry_invalid")
-            self.request_count = 1
-            self.authorization_valid = True
-            self.history_semantics_valid = True
-            self.image_shape_valid = True
+            ordinal = self.request_count + 1
+            if ordinal == 1:
+                if assistant_items or image_class != "full":
+                    raise VerificationError("direct_upstream_first_request_invalid")
+                self.first_image_class = image_class
+            else:
+                if image_class != "crop" or len(assistant_items) != 1:
+                    raise VerificationError("direct_upstream_history_request_invalid")
+                assistant_content = assistant_items[0].get("content")
+                if not isinstance(assistant_content, list) or len(assistant_content) != 1:
+                    raise VerificationError("direct_upstream_assistant_content_invalid")
+                assistant_part = assistant_content[0]
+                if (
+                    not isinstance(assistant_part, Mapping)
+                    or set(assistant_part) != {"type", "text"}
+                    or assistant_part.get("type") != "output_text"
+                    or assistant_part.get("text") != self.assistant_text
+                ):
+                    raise VerificationError("direct_upstream_output_text_invalid")
+                try:
+                    text_bytes = assistant_part["text"].encode("utf-8")
+                except (AttributeError, UnicodeEncodeError):
+                    raise VerificationError("direct_upstream_output_text_unicode_invalid") from None
+                if not text_bytes:
+                    raise VerificationError("direct_upstream_output_text_empty")
+                self.second_image_class = image_class
+                self.history_semantics_valid = True
+                self.semantic_text_equal = assistant_part["text"] == self.assistant_text
+            self.request_count = ordinal
+            self.authorization_count += 1
 
 
 class _DirectUpstreamHandler(http.server.BaseHTTPRequestHandler):
@@ -1673,7 +1687,9 @@ class _DirectUpstreamHandler(http.server.BaseHTTPRequestHandler):
             if length <= 0 or length > MAX_CAPTURE_BODY_BYTES:
                 raise VerificationError("direct_upstream_body_bound_invalid")
             self.server.state.observe(self.rfile.read(length), self.headers)
-            body = b"".join(_sse(event) for event in _message_stream())
+            body = b"".join(
+                _sse(event) for event in _message_stream(self.server.state.assistant_text)
+            )
             self.send_response(200)
             self.send_header("content-type", "text/event-stream")
             self.send_header("cache-control", "no-cache")
@@ -1691,9 +1707,9 @@ class _DirectUpstreamHandler(http.server.BaseHTTPRequestHandler):
 class _DirectUpstreamServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self) -> None:
+    def __init__(self, image_expectations: Mapping[str, object]) -> None:
         super().__init__(("127.0.0.1", 0), _DirectUpstreamHandler)
-        self.state = _DirectUpstreamState()
+        self.state = _DirectUpstreamState(image_expectations)
 
 
 def _free_port() -> int:
@@ -2296,21 +2312,16 @@ def _accounting_snapshot_is_two_terminal_successes(snapshot: Mapping[str, object
     }
 
 
-def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
-    """Run the post-fix assistant-history path through the frozen Local code."""
-
-    frozen_local_commit = "5aec2beccc07432d45e936b82952abf52dfb10d8"
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
+def _direct_local_checkout_state(local_checkout: Path) -> tuple[str, bool]:
     try:
-        local_head = subprocess.run(
+        head = subprocess.run(
             ["git", "-C", str(local_checkout), "rev-parse", "HEAD"],
             cwd=REPO_ROOT,
             capture_output=True,
             check=False,
             timeout=10,
         )
-        local_status = subprocess.run(
+        status = subprocess.run(
             ["git", "-C", str(local_checkout), "status", "--porcelain=v1"],
             cwd=REPO_ROOT,
             capture_output=True,
@@ -2319,12 +2330,82 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
         )
     except (OSError, subprocess.TimeoutExpired):
         raise VerificationError("direct_local_checkout_unavailable") from None
-    if (
-        local_head.returncode != 0
-        or local_head.stdout.decode("ascii", errors="ignore").strip() != frozen_local_commit
-        or local_status.returncode != 0
-        or local_status.stdout.strip()
-    ):
+    return head.stdout.decode(
+        "ascii", errors="ignore"
+    ).strip(), status.returncode == 0 and not status.stdout
+
+
+def _attest_direct_local_source(local_checkout: Path, environment: Mapping[str, str]) -> bool:
+    expected = (local_checkout / "src" / "slaif_local_coding" / "__init__.py").resolve()
+    try:
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import slaif_local_coding; "
+                "print(Path(slaif_local_coding.__file__).resolve())",
+            ],
+            cwd=local_checkout,
+            env=dict(environment),
+            capture_output=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise VerificationError("direct_local_source_probe_failed") from None
+    loaded = probe.stdout.decode("utf-8", errors="ignore").strip()
+    return probe.returncode == 0 and loaded == str(expected) and not probe.stderr
+
+
+def _validate_direct_terminal_sse(body: bytes) -> bool:
+    if not body or len(body) > MAX_CAPTURE_BODY_BYTES:
+        raise VerificationError("direct_terminal_body_bound_invalid")
+    events: list[Mapping[str, object]] = []
+    for frame in body.split(b"\n\n"):
+        if not frame:
+            continue
+        lines = frame.splitlines()
+        if len(lines) != 1 or not lines[0].startswith(b"data: "):
+            raise VerificationError("direct_terminal_sse_shape_invalid")
+        try:
+            event = json.loads(lines[0][6:])
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+            raise VerificationError("direct_terminal_event_invalid") from None
+        if not isinstance(event, Mapping):
+            raise VerificationError("direct_terminal_event_invalid")
+        events.append(event)
+    expected_types = [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    if [event.get("type") for event in events] != expected_types:
+        raise VerificationError("direct_terminal_event_sequence_invalid")
+    completed = events[-1].get("response")
+    usage = completed.get("usage") if isinstance(completed, Mapping) else None
+    if not isinstance(usage, Mapping):
+        raise VerificationError("direct_terminal_usage_missing")
+    for field in ("input_tokens", "output_tokens", "total_tokens"):
+        value = usage.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise VerificationError("direct_terminal_usage_invalid")
+    return True
+
+
+def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
+    """Run the post-fix assistant-history path through the frozen Local code."""
+
+    frozen_local_commit = "5aec2beccc07432d45e936b82952abf52dfb10d8"
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    local_head, local_clean = _direct_local_checkout_state(local_checkout)
+    if local_head != frozen_local_commit or not local_clean:
         raise VerificationError("direct_local_checkout_not_frozen_clean")
 
     from tests.e2e.test_openai_python_client_responses import _create_responses_test_data
@@ -2337,13 +2418,19 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
     )
 
     database_url, own_db, db_name = _database()
-    upstream = _DirectUpstreamServer()
+    upstream = _DirectUpstreamServer({})
     upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
     upstream_thread.start()
     local_process: subprocess.Popen[bytes] | None = None
     try:
         with tempfile.TemporaryDirectory(prefix="slaif-161-p-direct-") as temporary:
             root = Path(temporary)
+            written_fixtures = _write_image_fixtures(root)
+            fixture_facts = _validate_image_pair(
+                written_fixtures["full_path"], written_fixtures["crop_path"]
+            )
+            image_expectations = _image_expectations(fixture_facts)
+            upstream.state.image_expectations = image_expectations
             local_port = _free_port()
             gateway_port = _free_port()
             local_config = root / "adapter.toml"
@@ -2432,8 +2519,10 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
                     "FAKE_UPSTREAM_KEY": "synthetic-direct-upstream-token-161-p",
                     "LOCAL_SERVICE_TOKEN": LOCAL_SERVICE_TOKEN,
                     "LOCAL_SIGNING_SECRET": LOCAL_SIGNING_SECRET,
+                    "PYTHONPATH": str(local_checkout / "src"),
                 }
             )
+            source_attested = _attest_direct_local_source(local_checkout, local_environment)
             local_process = subprocess.Popen(
                 [sys.executable, "-m", "slaif_local_coding", "--config", str(local_config)],
                 cwd=local_checkout,
@@ -2524,95 +2613,169 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
                     )
                 )
                 app = create_app(get_settings())
-                valid_body: dict[str, object] = {
+
+                def image_data_url(path: Path) -> str:
+                    try:
+                        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                    except (OSError, UnicodeError):
+                        raise VerificationError("direct_image_fixture_read_failed") from None
+                    return f"data:image/png;base64,{encoded}"
+
+                metadata = {
+                    "session_id": "123e4567-e89b-12d3-a456-426614174000",
+                    "thread_id": "123e4567-e89b-12d3-a456-426614174000",
+                }
+                first_body: dict[str, object] = {
                     "model": CODEX_MODEL,
                     "stream": True,
                     "max_output_tokens": 16,
-                    "client_metadata": {
-                        "session_id": "123e4567-e89b-12d3-a456-426614174000",
-                        "thread_id": "123e4567-e89b-12d3-a456-426614174000",
-                    },
+                    "client_metadata": metadata,
                     "input": [
-                        {
-                            "role": "assistant",
-                            "content": [{"type": "output_text", "text": "history-only-text"}],
-                        },
                         {
                             "role": "user",
                             "content": [
                                 {
                                     "type": "input_image",
-                                    "image_url": "data:image/png;base64,AAAA",
+                                    "image_url": image_data_url(fixture_facts["full_path"]),
                                 },
-                                {"type": "input_text", "text": "crop"},
+                                {"type": "input_text", "text": "full"},
                             ],
-                        },
+                        }
                     ],
                 }
+                second_body = json.loads(json.dumps(first_body))
+                second_body["input"] = [
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "history-only-text"}],
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_image",
+                                "image_url": image_data_url(fixture_facts["crop_path"]),
+                            },
+                            {"type": "input_text", "text": "crop"},
+                        ],
+                    },
+                ]
 
                 def gateway_post(body: Mapping[str, object]) -> tuple[int, bytes]:
+                    try:
+                        encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
+                    except (TypeError, ValueError, UnicodeError):
+                        raise VerificationError("direct_gateway_body_invalid") from None
+                    if len(encoded) > MAX_CAPTURE_BODY_BYTES:
+                        raise VerificationError("direct_gateway_body_too_large")
                     connection = http.client.HTTPConnection("127.0.0.1", gateway_port, timeout=30)
-                    encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
-                    connection.request(
-                        "POST",
-                        "/v1/responses",
-                        body=encoded,
-                        headers={
-                            "authorization": f"Bearer {created.plaintext_key}",
-                            "content-type": "application/json",
-                            "accept": "text/event-stream",
-                        },
-                    )
-                    response = connection.getresponse()
-                    response_body = response.read(MAX_CAPTURE_BODY_BYTES)
-                    status = response.status
-                    connection.close()
-                    return status, response_body
+                    try:
+                        connection.request(
+                            "POST",
+                            "/v1/responses",
+                            body=encoded,
+                            headers={
+                                "authorization": f"Bearer {created.plaintext_key}",
+                                "content-type": "application/json",
+                                "accept": "text/event-stream",
+                            },
+                        )
+                        response = connection.getresponse()
+                        response_body = response.read(MAX_CAPTURE_BODY_BYTES + 1)
+                        if len(response_body) > MAX_CAPTURE_BODY_BYTES:
+                            raise VerificationError("direct_gateway_response_too_large")
+                        return response.status, response_body
+                    except OSError as exc:
+                        code = (
+                            "direct_gateway_request_connection_refused"
+                            if exc.errno == 111
+                            else "direct_gateway_request_oserror"
+                        )
+                        raise VerificationError(code) from None
+                    except http.client.HTTPException:
+                        raise VerificationError("direct_gateway_request_http_exception") from None
+                    finally:
+                        connection.close()
 
                 previous_logging_disable = logging.root.manager.disable
                 logging.disable(logging.CRITICAL)
                 try:
                     with _run_uvicorn_server(app, gateway_port):
-                        valid_status, valid_response = gateway_post(valid_body)
-                        invalid_body = json.loads(json.dumps(valid_body))
-                        invalid_body["input"][0]["role"] = "user"
-                        invalid_status, invalid_response = gateway_post(invalid_body)
+                        first_status, first_response = gateway_post(first_body)
+                        second_status, second_response = gateway_post(second_body)
+                        before_invalid = asyncio.run(
+                            _accounting_snapshot(database_url, created.gateway_key_id)
+                        )
+                        invalid_role = json.loads(json.dumps(second_body))
+                        invalid_role["input"][0]["role"] = "user"
+                        invalid_role_status, invalid_role_response = gateway_post(invalid_role)
+                        after_invalid_role = asyncio.run(
+                            _accounting_snapshot(database_url, created.gateway_key_id)
+                        )
+                        invalid_extra = json.loads(json.dumps(second_body))
+                        invalid_extra["input"][0]["content"][0]["annotations"] = []
+                        invalid_extra_status, invalid_extra_response = gateway_post(invalid_extra)
+                        after_invalid_extra = asyncio.run(
+                            _accounting_snapshot(database_url, created.gateway_key_id)
+                        )
                 finally:
                     logging.disable(previous_logging_disable)
 
-                if valid_status != 200 or b"response.completed" not in valid_response:
-                    raise VerificationError("direct_valid_stream_invalid")
-                invalid_projection = _safe_error_projection(invalid_response)
+                _validate_direct_terminal_sse(first_response)
+                _validate_direct_terminal_sse(second_response)
+                if first_status != 200 or second_status != 200:
+                    raise VerificationError("direct_valid_status_invalid")
+                if not _accounting_snapshot_is_two_terminal_successes(before_invalid):
+                    raise VerificationError("direct_accounting_finalization_invalid")
+                invalid_projection = _safe_error_projection(invalid_role_response)
                 if (
-                    invalid_status < 400
+                    invalid_role_status != 400
                     or invalid_projection["error_code"]
                     != "responses_input_content_part_not_supported"
                     or invalid_projection["param_class"] != "input_index_0_content_index_0_type"
                 ):
                     raise VerificationError("direct_invalid_history_not_rejected")
-                summary = asyncio.run(_accounting_summary(database_url, created.gateway_key_id))
-                if summary != {
-                    "reservations": "one",
-                    "pending_reservations": "zero",
-                    "ledgers": "one",
-                    "pending_ledgers": "zero",
-                    "linked_ledgers": "one",
-                }:
-                    raise VerificationError("direct_accounting_invalid")
+                after_invalid_role = asyncio.run(
+                    _accounting_snapshot(database_url, created.gateway_key_id)
+                )
+                if not _accounting_snapshot_equal(before_invalid, after_invalid_role):
+                    raise VerificationError("direct_invalid_role_accounting_side_effect")
+                invalid_extra_projection = _safe_error_projection(invalid_extra_response)
+                if (
+                    invalid_extra_status != 400
+                    or invalid_extra_projection["error_code"]
+                    != "responses_input_content_part_not_supported"
+                    or invalid_extra_projection["param_class"]
+                    != "input_index_0_content_index_0_annotations"
+                ):
+                    raise VerificationError("direct_invalid_extra_not_rejected")
+                if not _accounting_snapshot_equal(before_invalid, after_invalid_extra):
+                    raise VerificationError("direct_invalid_extra_accounting_side_effect")
+
+                local_head_after, local_clean_after = _direct_local_checkout_state(local_checkout)
+                source_attested = source_attested and _attest_direct_local_source(
+                    local_checkout, local_environment
+                )
                 if (
                     upstream.state.failed
-                    or upstream.state.request_count != 1
-                    or not upstream.state.authorization_valid
+                    or upstream.state.request_count != 2
+                    or upstream.state.authorization_count != 2
+                    or upstream.state.first_image_class != "full"
+                    or upstream.state.second_image_class != "crop"
                     or not upstream.state.history_semantics_valid
-                    or not upstream.state.image_shape_valid
+                    or not upstream.state.semantic_text_equal
+                    or not source_attested
+                    or local_head_after != frozen_local_commit
+                    or not local_clean_after
                     or local_process.poll() is not None
                 ):
                     raise VerificationError("direct_cross_contract_state_invalid")
                 return (
                     "VERIFY_CODEX_0149_ASSISTANT_HISTORY_DIRECT_FAKE_OK "
-                    "local_commit=frozen_report_head gateway=2xx invalid=4xx "
-                    "upstream_count=one signed_identity=true history=true image=true "
-                    "accounting=one_finalized pending=zero"
+                    "local_commit=frozen_report_head source=true gateway=2xx_two "
+                    "invalid=two_4xx upstream_count=two signed_identity=true "
+                    "history=true semantic_equal=true image=full_crop "
+                    "accounting=two_finalized pending=zero replay=zero"
                 )
     finally:
         get_settings.cache_clear()
@@ -2623,8 +2786,11 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
             except (OSError, subprocess.TimeoutExpired):
                 try:
                     local_process.kill()
+                    local_process.wait(timeout=10)
                 except OSError:
                     pass
+                except subprocess.TimeoutExpired:
+                    raise VerificationError("direct_local_process_cleanup_failed") from None
         upstream.shutdown()
         upstream.server_close()
         upstream_thread.join(timeout=5)
@@ -3140,6 +3306,9 @@ def main() -> int:
             return 0
         except VerificationError as exc:
             print(f"VERIFY_CODEX_0149_ASSISTANT_HISTORY_DIRECT_FAKE_FAILED code={exc.args[0]}")
+            return 1
+        except Exception:
+            print("VERIFY_CODEX_0149_ASSISTANT_HISTORY_DIRECT_FAKE_FAILED code=direct_unexpected")
             return 1
     diagnostic = DiagnosticState()
     try:

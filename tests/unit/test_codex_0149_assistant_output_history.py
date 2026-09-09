@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import http.client
 import inspect
 import json
 import os
@@ -654,6 +655,129 @@ def test_history_projection_rejects_empty_invalid_and_oversized_text_classes() -
     assert oversized["assistant_output_text_size_class"] == "oversized"
     assert invalid["assistant_output_text_nonempty_unicode"] is False
     assert invalid["assistant_output_text_size_class"] == "invalid_unicode"
+
+
+def _direct_observer_body(
+    image_bytes: bytes, *, history: bool = False, extra: bool = False
+) -> bytes:
+    image_url = "data:image/png;base64," + base64.b64encode(image_bytes).decode("ascii")
+    items: list[dict[str, object]] = []
+    if history:
+        part: dict[str, object] = {"type": "output_text", "text": "history-only-text"}
+        if extra:
+            part["annotations"] = []
+        items.append({"role": "assistant", "content": [part]})
+    items.append(
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_image", "image_url": image_url},
+                {"type": "input_text", "text": "bounded"},
+            ],
+        }
+    )
+    return json.dumps({"stream": True, "input": items}).encode()
+
+
+def _direct_headers(authorization: str = "Bearer synthetic-direct-upstream-token-161-p"):
+    headers = http.client.HTTPMessage()
+    headers["authorization"] = authorization
+    return headers
+
+
+def test_direct_upstream_observer_accepts_full_then_crop_history() -> None:
+    full = b"full"
+    crop = b"crop"
+    expectations = {
+        "full_sha256": hashlib.sha256(full).hexdigest(),
+        "full_length": len(full),
+        "crop_sha256": hashlib.sha256(crop).hexdigest(),
+        "crop_length": len(crop),
+    }
+    state = verifier._DirectUpstreamState(expectations)
+    state.observe(_direct_observer_body(full), _direct_headers())
+    state.observe(_direct_observer_body(crop, history=True), _direct_headers())
+    assert state.request_count == 2
+    assert state.authorization_count == 2
+    assert state.first_image_class == "full"
+    assert state.second_image_class == "crop"
+    assert state.history_semantics_valid is True
+    assert state.semantic_text_equal is True
+
+
+@pytest.mark.parametrize("kind", ["auth", "text", "extra"])
+def test_direct_upstream_observer_rejects_history_mutations(kind: str) -> None:
+    full = b"full"
+    crop = b"crop"
+    expectations = {
+        "full_sha256": hashlib.sha256(full).hexdigest(),
+        "full_length": len(full),
+        "crop_sha256": hashlib.sha256(crop).hexdigest(),
+        "crop_length": len(crop),
+    }
+    state = verifier._DirectUpstreamState(expectations)
+    state.observe(_direct_observer_body(full), _direct_headers())
+    body = _direct_observer_body(crop, history=True)
+    headers = _direct_headers()
+    if kind == "auth":
+        headers = _direct_headers("Bearer wrong")
+        error = "direct_upstream_authorization_invalid"
+    elif kind == "text":
+        body = body.replace(b"history-only-text", b"changed-text")
+        error = "direct_upstream_output_text_invalid"
+    else:
+        body = body.replace(b'"type": "output_text"', b'"type": "output_text", "phase": "x"')
+        error = "direct_upstream_output_text_invalid"
+    with pytest.raises(verifier.VerificationError, match=error):
+        state.observe(body, headers)
+
+
+def test_direct_upstream_observer_rejects_extra_request() -> None:
+    full = b"full"
+    crop = b"crop"
+    expectations = {
+        "full_sha256": hashlib.sha256(full).hexdigest(),
+        "full_length": len(full),
+        "crop_sha256": hashlib.sha256(crop).hexdigest(),
+        "crop_length": len(crop),
+    }
+    state = verifier._DirectUpstreamState(expectations)
+    state.observe(_direct_observer_body(full), _direct_headers())
+    state.observe(_direct_observer_body(crop, history=True), _direct_headers())
+    with pytest.raises(verifier.VerificationError, match="direct_upstream_retry_invalid"):
+        state.observe(_direct_observer_body(crop, history=True), _direct_headers())
+
+
+def test_direct_terminal_sse_requires_order_and_usage() -> None:
+    body = b"".join(verifier._sse(event) for event in verifier._message_stream("history-only-text"))
+    assert verifier._validate_direct_terminal_sse(body) is True
+    with pytest.raises(verifier.VerificationError, match="direct_terminal_event_sequence_invalid"):
+        verifier._validate_direct_terminal_sse(
+            body.replace(b"response.completed", b"response.unknown")
+        )
+    events = list(verifier._message_stream("history-only-text"))
+    events[-1]["response"].pop("usage")
+    without_usage = b"".join(verifier._sse(event) for event in events)
+    with pytest.raises(verifier.VerificationError, match="direct_terminal_usage_missing"):
+        verifier._validate_direct_terminal_sse(without_usage)
+
+
+def test_direct_local_source_attestation_rejects_loaded_source_mismatch(
+    tmp_path, monkeypatch
+) -> None:
+    checkout = tmp_path / "local"
+    expected = checkout / "src/slaif_local_coding/__init__.py"
+    expected.parent.mkdir(parents=True)
+    expected.write_text("", encoding="utf-8")
+
+    def fake_run(*_args, **_kwargs):
+        return subprocess.CompletedProcess([], 0, b"/unrelated/source.py\n", b"")
+
+    monkeypatch.setattr(verifier.subprocess, "run", fake_run)
+    assert (
+        verifier._attest_direct_local_source(checkout, {"PYTHONPATH": str(expected.parent)})
+        is False
+    )
 
 
 def test_error_projection_is_closed_and_does_not_retain_raw_values() -> None:

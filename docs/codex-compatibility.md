@@ -436,12 +436,11 @@ server, approval, MCP, and hosted-type markers remain denied. This exception
 does not apply to ordinary Responses tools.
 
 On the exact `codex-0.149-responses-v1 -> local-coding-v1` pair, request
-history may also carry an assistant message with exactly one bounded
-`output_text` part. The part has only `type` and non-empty valid-Unicode
-`text`; existing text limits and UTF-8 input estimation apply. This is
-transient client history and does not grant provider, tool, replay, or output
-authority. The default policy, Codex 0.147, other roles, and extra fields
-remain fail-closed.
+history may also carry an assistant message with bounded `output_text` parts.
+Each part has only `type` and non-empty valid-Unicode `text`; existing text
+limits and UTF-8 input estimation apply. This is transient client history and
+does not grant provider, tool, replay, or output authority. The default policy,
+Codex 0.147, other roles, and extra fields remain fail-closed.
 
 With these declarations, `tool_choice` is limited to the strings `none`,
 `auto`, or `required`; the pinned profile uses `auto`. Named/object choices are
