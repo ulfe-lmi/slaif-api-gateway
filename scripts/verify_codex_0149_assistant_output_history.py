@@ -1928,6 +1928,42 @@ def _validate_command_binding(command: list[str], *, expected_image: Path, resum
         raise VerificationError("image_command_retry_invalid")
 
 
+def _no_image_first_turn_command(command: list[str], *, expected_image: Path) -> list[str]:
+    positions = [index for index, value in enumerate(command) if value == "--image"]
+    if len(positions) != 1:
+        raise VerificationError("no_image_command_image_pair_invalid")
+    index = positions[0]
+    if index + 1 >= len(command) or command[index + 1] != str(expected_image):
+        raise VerificationError("no_image_command_image_pair_invalid")
+    control = command[:index] + command[index + 2 :]
+    if "--image" in control or str(expected_image) in control or "resume" in control:
+        raise VerificationError("no_image_command_contains_image_or_resume")
+    if "--last" in control or control != command[:index] + command[index + 2 :]:
+        raise VerificationError("no_image_command_shape_invalid")
+    return control
+
+
+def _validate_no_image_command(
+    command: list[str], *, baseline: list[str], expected_image: Path, crop_image: Path
+) -> None:
+    expected = _no_image_first_turn_command(baseline, expected_image=expected_image)
+    if command != expected:
+        raise VerificationError("no_image_command_differential_invalid")
+    if any(path in command for path in (str(expected_image), str(crop_image))):
+        raise VerificationError("no_image_command_image_path_invalid")
+    if any(value in command for value in ("resume", "--last")):
+        raise VerificationError("no_image_command_resume_invalid")
+    shape = _command_shape(command, expected_image=None, resume=False)
+    if (
+        shape["image_option_count_one"] is not False
+        or shape["resume_expected"] is not True
+        or shape["zero_request_retries"] is not True
+        or shape["zero_stream_retries"] is not True
+        or shape["output_last_message"] is not True
+    ):
+        raise VerificationError("no_image_command_shape_invalid")
+
+
 def _database() -> tuple[str, bool, str | None]:
     provided = os.environ.get("TEST_DATABASE_URL")
     if provided:
@@ -1985,10 +2021,64 @@ async def _accounting_count(database_url: str, key_id: object) -> int:
         await engine.dispose()
 
 
-def run_prefixed_reproduction(diagnostic: DiagnosticState | None = None) -> str:
+async def _accounting_summary(database_url: str, key_id: object) -> dict[str, str]:
+    from slaif_gateway.db.models import QuotaReservation, UsageLedger
+
+    engine = create_async_engine(database_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            reservation_total = await session.scalar(
+                select(func.count())
+                .select_from(QuotaReservation)
+                .where(QuotaReservation.gateway_key_id == key_id)
+            )
+            pending_reservations = await session.scalar(
+                select(func.count())
+                .select_from(QuotaReservation)
+                .where(
+                    QuotaReservation.gateway_key_id == key_id,
+                    QuotaReservation.status == "pending",
+                )
+            )
+            ledger_total = await session.scalar(
+                select(func.count())
+                .select_from(UsageLedger)
+                .where(UsageLedger.gateway_key_id == key_id)
+            )
+            pending_ledgers = await session.scalar(
+                select(func.count())
+                .select_from(UsageLedger)
+                .where(
+                    UsageLedger.gateway_key_id == key_id,
+                    UsageLedger.accounting_status == "pending",
+                )
+            )
+            linked_ledgers = await session.scalar(
+                select(func.count())
+                .select_from(UsageLedger)
+                .where(
+                    UsageLedger.gateway_key_id == key_id,
+                    UsageLedger.quota_reservation_id.is_not(None),
+                )
+            )
+            return {
+                "reservations": _safe_progress_class(int(reservation_total or 0)),
+                "pending_reservations": _safe_progress_class(int(pending_reservations or 0)),
+                "ledgers": _safe_progress_class(int(ledger_total or 0)),
+                "pending_ledgers": _safe_progress_class(int(pending_ledgers or 0)),
+                "linked_ledgers": _safe_progress_class(int(linked_ledgers or 0)),
+            }
+    finally:
+        await engine.dispose()
+
+
+def run_prefixed_reproduction(
+    diagnostic: DiagnosticState | None = None, *, no_image_first_turn: bool = False
+) -> str:
     state = diagnostic or DiagnosticState()
     try:
-        return _run_prefixed_reproduction_body(state)
+        return _run_prefixed_reproduction_body(state, no_image_first_turn=no_image_first_turn)
     except VerificationError:
         if not state.primary_failure:
             state.mark_known_failure()
@@ -1999,7 +2089,9 @@ def run_prefixed_reproduction(diagnostic: DiagnosticState | None = None) -> str:
         raise
 
 
-def _run_prefixed_reproduction_body(diagnostic: DiagnosticState) -> str:
+def _run_prefixed_reproduction_body(
+    diagnostic: DiagnosticState, *, no_image_first_turn: bool = False
+) -> str:
     diagnostic.advance("imports")
     from scripts import capture_codex_protocol as capture
     from tests.e2e.test_openai_python_client_responses import _create_responses_test_data
@@ -2124,7 +2216,7 @@ def _run_prefixed_reproduction_body(diagnostic: DiagnosticState) -> str:
                 )
                 diagnostic.refresh(observation=observation, local=local)
                 diagnostic.advance("command_build")
-                first = _initial_command(
+                first_baseline = _initial_command(
                     binary,
                     workdir=work,
                     port=gateway_port,
@@ -2132,9 +2224,22 @@ def _run_prefixed_reproduction_body(diagnostic: DiagnosticState) -> str:
                     output=root / "first-output.json",
                     full_image=fixture_facts["full_path"],
                 )
-                _validate_command_binding(
-                    first, expected_image=fixture_facts["full_path"], resume=False
-                )
+                if no_image_first_turn:
+                    first = _no_image_first_turn_command(
+                        first_baseline, expected_image=fixture_facts["full_path"]
+                    )
+                    _validate_no_image_command(
+                        first,
+                        baseline=first_baseline,
+                        expected_image=fixture_facts["full_path"],
+                        crop_image=fixture_facts["crop_path"],
+                    )
+                else:
+                    first = first_baseline
+                    _validate_command_binding(
+                        first, expected_image=fixture_facts["full_path"], resume=False
+                    )
+                del first_baseline
                 first_result = None
                 previous_logging_disable = logging.root.manager.disable
                 logging.disable(logging.CRITICAL)
@@ -2161,6 +2266,48 @@ def _run_prefixed_reproduction_body(diagnostic: DiagnosticState) -> str:
                                 f"codex_first_turn_{category}_{_safe_failure_progress(observation, local)}"
                             )
                         del first_result
+                        if no_image_first_turn:
+                            diagnostic.advance("postconditions")
+                            diagnostic.refresh(observation=observation, local=local)
+                            if observation.request_count != 2 or observation.response_statuses != [
+                                200,
+                                200,
+                            ]:
+                                raise VerificationError(
+                                    f"no_image_gateway_progression_{_safe_progress_class(observation.request_count)}"
+                                    f"_statuses_{_safe_status_sequence(observation)}"
+                                )
+                            if any(
+                                item.get("image_wire_class") != "none"
+                                for item in observation.request_projections
+                            ):
+                                raise VerificationError("no_image_wire_class_invalid")
+                            if (
+                                state.request_count != 2
+                                or state.signed_request_count != 2
+                                or state.function_count != 1
+                                or state.message_count != 1
+                            ):
+                                raise VerificationError("no_image_local_lifecycle_invalid")
+                            diagnostic.advance("accounting_validate")
+                            accounting = asyncio.run(
+                                _accounting_summary(database_url, created.gateway_key_id)
+                            )
+                            if accounting != {
+                                "reservations": "two",
+                                "pending_reservations": "zero",
+                                "ledgers": "two",
+                                "pending_ledgers": "zero",
+                                "linked_ledgers": "two",
+                            }:
+                                raise VerificationError("no_image_accounting_invalid")
+                            diagnostic.advance("complete")
+                            return (
+                                "VERIFY_CODEX_0149_NO_IMAGE_FIRST_TURN_OK "
+                                "request_count=two local_count=two image_count=zero "
+                                "accounting_reservations=two accounting_ledgers=two "
+                                "accounting_pending=zero"
+                            )
                         diagnostic.advance("session_validate")
                         diagnostic.refresh(observation=observation, local=local)
                         if _private_session_count(home) != 1:
@@ -2292,10 +2439,15 @@ def _run_prefixed_reproduction_body(diagnostic: DiagnosticState) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument("--diagnostic-no-image-first-turn", action="store_true")
+    arguments = parser.parse_args()
     diagnostic = DiagnosticState()
     try:
-        print(run_prefixed_reproduction(diagnostic))
+        print(
+            run_prefixed_reproduction(
+                diagnostic, no_image_first_turn=arguments.diagnostic_no_image_first_turn
+            )
+        )
         return 0
     except VerificationError as exc:
         print(f"VERIFY_CODEX_0149_ASSISTANT_HISTORY_BASE_FAILED code={exc.args[0]}")

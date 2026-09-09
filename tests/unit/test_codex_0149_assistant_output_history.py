@@ -775,6 +775,66 @@ def test_image_command_negatives_cover_binding_placement_and_cardinality(tmp_pat
         )
 
 
+def test_no_image_control_removes_exactly_one_full_image_pair(tmp_path) -> None:
+    written = verifier._write_image_fixtures(tmp_path)
+    baseline = verifier._initial_command(
+        tmp_path / "codex",
+        workdir=tmp_path / "workspace",
+        port=43123,
+        model_catalog=tmp_path / "catalog.json",
+        output=tmp_path / "first.json",
+        full_image=written["full_path"],
+    )
+    control = verifier._no_image_first_turn_command(baseline, expected_image=written["full_path"])
+    verifier._validate_no_image_command(
+        control,
+        baseline=baseline,
+        expected_image=written["full_path"],
+        crop_image=written["crop_path"],
+    )
+    image_index = baseline.index("--image")
+    assert control == baseline[:image_index] + baseline[image_index + 2 :]
+    assert "--image" not in control
+    assert str(written["full_path"]) not in control
+    assert "resume" not in control and "--last" not in control
+
+
+@pytest.mark.parametrize("mutation", ["missing", "wrong", "duplicate", "resume"])
+def test_no_image_control_rejects_differential_mutations(tmp_path, mutation) -> None:
+    written = verifier._write_image_fixtures(tmp_path)
+    baseline = verifier._initial_command(
+        tmp_path / "codex",
+        workdir=tmp_path / "workspace",
+        port=43123,
+        model_catalog=tmp_path / "catalog.json",
+        output=tmp_path / "first.json",
+        full_image=written["full_path"],
+    )
+    if mutation == "missing":
+        mutated = [item for item in baseline if item not in {"--image", str(written["full_path"])}]
+        with pytest.raises(verifier.VerificationError, match="no_image_command_image_pair_invalid"):
+            verifier._no_image_first_turn_command(mutated, expected_image=written["full_path"])
+        return
+    else:
+        mutated = verifier._no_image_first_turn_command(
+            baseline, expected_image=written["full_path"]
+        )
+        if mutation == "wrong":
+            mutated.insert(mutated.index("--output-last-message"), str(written["full_path"]))
+        elif mutation == "duplicate":
+            index = mutated.index("--output-last-message")
+            mutated[index:index] = ["--image", str(written["full_path"])]
+        elif mutation == "resume":
+            mutated.insert(2, "resume")
+    with pytest.raises(verifier.VerificationError, match="no_image_"):
+        verifier._validate_no_image_command(
+            mutated,
+            baseline=baseline,
+            expected_image=written["full_path"],
+            crop_image=written["crop_path"],
+        )
+
+
 def test_image_wire_projection_discards_data_url_and_classifies_fixture(tmp_path) -> None:
     written = verifier._write_image_fixtures(tmp_path)
     facts = verifier._validate_image_pair(written["full_path"], written["crop_path"])
