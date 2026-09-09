@@ -172,6 +172,12 @@ class VerificationError(RuntimeError):
 
 DIAGNOSTIC_STAGES = (
     "imports",
+    "import_capture",
+    "import_responses_helper",
+    "import_chat_helper",
+    "import_gateway_config",
+    "import_gateway_app",
+    "import_codex_module",
     "database_setup",
     "local_start",
     "fixture_setup",
@@ -195,6 +201,10 @@ _DIAGNOSTIC_STAGE_SET = frozenset(DIAGNOSTIC_STAGES)
 _DIAGNOSTIC_CATEGORIES = frozenset(
     {
         "capture",
+        "import",
+        "attribute",
+        "type_or_value",
+        "runtime",
         "database_configuration",
         "filesystem",
         "subprocess_timeout",
@@ -217,7 +227,7 @@ def _diagnostic_exception_category(exc: Exception) -> str:
         raise TypeError("diagnostic_exception_not_exception")
     names = {base.__name__ for base in type(exc).__mro__}
     if names & {"ModuleNotFoundError", "ImportError", "JSONDecodeError"}:
-        return "capture"
+        return "import"
     if names & {"OperationalError", "DBAPIError", "InterfaceError", "IntegrityError"}:
         return "database_configuration"
     if names & {"ConnectionError", "ConnectionRefusedError", "BrokenPipeError"}:
@@ -234,6 +244,12 @@ def _diagnostic_exception_category(exc: Exception) -> str:
         return "subprocess_timeout"
     if "AssertionError" in names:
         return "assertion"
+    if "AttributeError" in names:
+        return "attribute"
+    if names & {"TypeError", "ValueError"}:
+        return "type_or_value"
+    if "RuntimeError" in names:
+        return "runtime"
     return "other"
 
 
@@ -262,10 +278,16 @@ class DiagnosticState:
     accounting_control_statuses: str = "none"
     accounting_control_images: str = "none"
     accounting_control_local_count: str = "zero"
+    module_context: str = "other"
+    scripts_package_present: bool = False
+    verifier_module_present: bool = False
+    duplicate_verifier_module: bool = False
 
     def advance(self, stage: str) -> None:
         if stage not in _DIAGNOSTIC_STAGE_SET:
             raise VerificationError("diagnostic_stage_invalid")
+        if DIAGNOSTIC_STAGES.index(stage) < DIAGNOSTIC_STAGES.index(self.stage):
+            raise VerificationError("diagnostic_stage_non_monotonic")
         self.stage = stage
 
     def refresh(
@@ -329,6 +351,10 @@ class DiagnosticState:
             "primary_failure": self.primary_failure,
             "cleanup_attempted": self.cleanup_attempted,
             "cleanup_succeeded": self.cleanup_succeeded,
+            "module_context": self.module_context,
+            "scripts_package_present": self.scripts_package_present,
+            "verifier_module_present": self.verifier_module_present,
+            "duplicate_verifier_module": self.duplicate_verifier_module,
         }
 
     def serialize(self) -> str:
@@ -2207,11 +2233,39 @@ def _run_prefixed_reproduction_body(
     accounting_before_rejection: bool = False,
 ) -> str:
     diagnostic.advance("imports")
+    diagnostic.module_context = (
+        "main"
+        if __name__ == "__main__"
+        else "module"
+        if __name__ == "scripts.verify_codex_0149_assistant_output_history"
+        else "other"
+    )
+    diagnostic.scripts_package_present = "scripts" in sys.modules
+    diagnostic.verifier_module_present = (
+        __name__ in sys.modules
+        or "scripts.verify_codex_0149_assistant_output_history" in sys.modules
+    )
+    verifier_module = sys.modules.get("scripts.verify_codex_0149_assistant_output_history")
+    diagnostic.duplicate_verifier_module = (
+        verifier_module is not None
+        and sum(1 for value in sys.modules.values() if value is verifier_module) > 1
+    )
+    diagnostic.advance("import_capture")
     from scripts import capture_codex_protocol as capture
+
+    diagnostic.advance("import_responses_helper")
     from tests.e2e.test_openai_python_client_responses import _create_responses_test_data
+
+    diagnostic.advance("import_chat_helper")
     from tests.e2e.test_openai_python_client_chat import _run_uvicorn_server
+
+    diagnostic.advance("import_gateway_config")
     from slaif_gateway.config import get_settings
+
+    diagnostic.advance("import_gateway_app")
     from slaif_gateway.main import create_app
+
+    diagnostic.advance("import_codex_module")
     from slaif_gateway.modules.clients.codex_0149 import (
         CODEX_0149_CLIENT_MODULE_VERSION,
         CODEX_0149_FIXTURE_SHA256,
@@ -2484,6 +2538,10 @@ def _run_prefixed_reproduction_body(
                                 "accounting_reservations=two accounting_ledgers=two "
                                 "accounting_pending=zero"
                             )
+                        diagnostic.advance("session_validate")
+                        diagnostic.refresh(observation=observation, local=local)
+                        if _private_session_count(home) != 1:
+                            raise VerificationError("private_session_count_invalid")
                         diagnostic.advance("accounting_validate")
                         before_rejection_accounting = asyncio.run(
                             _accounting_snapshot(database_url, created.gateway_key_id)
@@ -2492,11 +2550,6 @@ def _run_prefixed_reproduction_body(
                             before_rejection_accounting
                         ):
                             raise VerificationError("accounting_before_rejection_invalid")
-                        diagnostic.advance("session_validate")
-                        diagnostic.refresh(observation=observation, local=local)
-                        if _private_session_count(home) != 1:
-                            raise VerificationError("private_session_count_invalid")
-                        diagnostic.advance("command_build")
                         second = _resume_last_command(
                             binary,
                             workdir=work,

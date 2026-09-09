@@ -127,12 +127,12 @@ def test_diagnostic_stage_vocabulary_transitions_and_serialization() -> None:
 @pytest.mark.parametrize(
     ("exc", "category"),
     [
-        (ModuleNotFoundError("private"), "capture"),
+        (ModuleNotFoundError("private"), "import"),
         (OSError("private"), "filesystem"),
         (subprocess.TimeoutExpired("private", 1), "subprocess_timeout"),
         (ConnectionError("private"), "server_runtime"),
         (AssertionError("private"), "assertion"),
-        (RuntimeError("private"), "other"),
+        (RuntimeError("private"), "runtime"),
     ],
 )
 def test_diagnostic_exception_categories_are_closed(exc, category) -> None:
@@ -157,7 +157,7 @@ def test_diagnostic_unexpected_failure_is_stage_closed_and_private(stage) -> Non
     diagnostic.advance(stage)
     raw = "PRIVATE_DIAGNOSTIC_CANARY_161F"
     line = verifier._diagnostic_unexpected_line(diagnostic, RuntimeError(raw))
-    assert f"unexpected_{stage}_other" in line
+    assert f"unexpected_{stage}_runtime" in line
     assert raw not in line
     assert raw not in repr(diagnostic.snapshot())
     assert all(
@@ -204,7 +204,7 @@ def test_diagnostic_primary_failure_survives_cleanup_failure() -> None:
     diagnostic.cleanup_succeeded = False
     snapshot = diagnostic.snapshot()
     assert snapshot["primary_stage"] == "resume_client"
-    assert snapshot["primary_category"] == "other"
+    assert snapshot["primary_category"] == "runtime"
     assert snapshot["cleanup_succeeded"] is False
     assert "PRIVATE_PRIMARY" not in repr(snapshot)
 
@@ -1118,3 +1118,54 @@ def test_accounting_control_line_is_closed_and_cleanup_bounded() -> None:
     assert "images=full_none" in line
     assert "cleanup_succeeded=true" in line
     assert "PRIVATE" not in line
+
+
+def test_accounting_dispatch_forwards_once_and_preserves_default(monkeypatch) -> None:
+    calls: list[tuple[bool, bool]] = []
+
+    def fake_body(diagnostic, *, no_image_first_turn=False, accounting_before_rejection=False):
+        calls.append((no_image_first_turn, accounting_before_rejection))
+        return "CONTROL_STUB"
+
+    monkeypatch.setattr(verifier, "_run_prefixed_reproduction_body", fake_body)
+    assert (
+        verifier.run_prefixed_reproduction(
+            verifier.DiagnosticState(), accounting_before_rejection=True
+        )
+        == "CONTROL_STUB"
+    )
+    assert verifier.run_prefixed_reproduction(verifier.DiagnosticState()) == "CONTROL_STUB"
+    assert calls == [(False, True), (False, False)]
+    with pytest.raises(verifier.VerificationError, match="diagnostic_control_args_conflict"):
+        verifier.run_prefixed_reproduction(
+            verifier.DiagnosticState(),
+            no_image_first_turn=True,
+            accounting_before_rejection=True,
+        )
+
+
+def test_diagnostic_import_stages_and_module_context_are_closed() -> None:
+    diagnostic = verifier.DiagnosticState()
+    import_stages = (
+        "imports",
+        "import_capture",
+        "import_responses_helper",
+        "import_chat_helper",
+        "import_gateway_config",
+        "import_gateway_app",
+        "import_codex_module",
+        "database_setup",
+    )
+    for stage in import_stages:
+        diagnostic.advance(stage)
+    with pytest.raises(verifier.VerificationError, match="diagnostic_stage_non_monotonic"):
+        diagnostic.advance("import_capture")
+    diagnostic.module_context = "module"
+    diagnostic.scripts_package_present = True
+    diagnostic.verifier_module_present = True
+    diagnostic.duplicate_verifier_module = False
+    snapshot = diagnostic.snapshot()
+    assert snapshot["module_context"] == "module"
+    assert snapshot["scripts_package_present"] is True
+    assert snapshot["verifier_module_present"] is True
+    assert snapshot["duplicate_verifier_module"] is False
