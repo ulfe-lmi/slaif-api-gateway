@@ -39,6 +39,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CODEX_PACKAGE = "@openai/codex@0.149.0"
 CODEX_MODEL = "codex-0149-assistant-history-model"
+CODEX_CAPTURE_API_KEY_ENV = "SLAIF_CODEX_CAPTURE_API_KEY"
+STALE_CAPTURE_API_KEY_ENV = "SLAIF_CAPTURE_API_KEY"
 CODEX_ROOT_PACKAGE_NAME = "@openai/codex"
 CODEX_ROOT_PACKAGE_VERSION = "0.149.0"
 CODEX_PLATFORM_PACKAGE_NAME = "@openai/codex-linux-x64"
@@ -1808,7 +1810,8 @@ def _codex_profile_args(*, port: int, model_catalog: Path) -> list[str]:
         (
             "model_providers.slaif-capture={"
             f'name="Synthetic capture",base_url={base_url},'
-            'env_key="SLAIF_CAPTURE_API_KEY",wire_api="responses"}'
+            f'env_key="{CODEX_CAPTURE_API_KEY_ENV}",wire_api="responses"'
+            "}"
         ),
         "-c",
         f"model_catalog_json={json.dumps(str(model_catalog))}",
@@ -2073,6 +2076,74 @@ async def _accounting_summary(database_url: str, key_id: object) -> dict[str, st
         await engine.dispose()
 
 
+async def _accounting_snapshot(database_url: str, key_id: object) -> dict[str, str | bool]:
+    from slaif_gateway.db.models import CodexReplayReference, QuotaReservation, UsageLedger
+
+    engine = create_async_engine(database_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+
+            async def count(model, *conditions):
+                query = (
+                    select(func.count()).select_from(model).where(model.gateway_key_id == key_id)
+                )
+                for condition in conditions:
+                    query = query.where(condition)
+                return _safe_progress_class(int(await session.scalar(query) or 0))
+
+            return {
+                "reservations_total": await count(QuotaReservation),
+                "reservations_finalized": await count(
+                    QuotaReservation, QuotaReservation.status == "finalized"
+                ),
+                "reservations_pending": await count(
+                    QuotaReservation, QuotaReservation.status == "pending"
+                ),
+                "reservations_released": await count(
+                    QuotaReservation, QuotaReservation.status.in_(("released", "expired"))
+                ),
+                "ledgers_total": await count(UsageLedger),
+                "ledgers_finalized": await count(
+                    UsageLedger, UsageLedger.accounting_status == "finalized"
+                ),
+                "ledgers_pending": await count(
+                    UsageLedger, UsageLedger.accounting_status == "pending"
+                ),
+                "ledgers_failed": await count(
+                    UsageLedger,
+                    UsageLedger.accounting_status.in_(("failed", "interrupted")),
+                ),
+                "ledgers_successful": await count(UsageLedger, UsageLedger.success.is_(True)),
+                "replay_references": await count(CodexReplayReference),
+                "query_success": True,
+            }
+    except Exception:
+        raise VerificationError("accounting_snapshot_query_failed") from None
+    finally:
+        await engine.dispose()
+
+
+def _accounting_snapshot_equal(before: Mapping[str, object], after: Mapping[str, object]) -> bool:
+    return dict(before) == dict(after)
+
+
+def _accounting_snapshot_is_two_terminal_successes(snapshot: Mapping[str, object]) -> bool:
+    return dict(snapshot) == {
+        "reservations_total": "two",
+        "reservations_finalized": "two",
+        "reservations_pending": "zero",
+        "reservations_released": "zero",
+        "ledgers_total": "two",
+        "ledgers_finalized": "two",
+        "ledgers_pending": "zero",
+        "ledgers_failed": "zero",
+        "ledgers_successful": "two",
+        "replay_references": "zero",
+        "query_success": True,
+    }
+
+
 def run_prefixed_reproduction(
     diagnostic: DiagnosticState | None = None, *, no_image_first_turn: bool = False
 ) -> str:
@@ -2199,7 +2270,16 @@ def _run_prefixed_reproduction_body(
                 catalog = root / "model-catalog.json"
                 environment = capture._isolated_environment(home)
                 environment.update(values)
+                if capture.CAPTURE_API_KEY_ENV != CODEX_CAPTURE_API_KEY_ENV:
+                    raise VerificationError("capture_env_constant_drift")
+                if STALE_CAPTURE_API_KEY_ENV in environment:
+                    raise VerificationError("stale_capture_env_present")
                 environment[capture.CAPTURE_API_KEY_ENV] = created.plaintext_key
+                if (
+                    environment.get(CODEX_CAPTURE_API_KEY_ENV) != created.plaintext_key
+                    or STALE_CAPTURE_API_KEY_ENV in environment
+                ):
+                    raise VerificationError("capture_env_setup_invalid")
                 diagnostic.advance("catalog_generate")
                 capture._write_0149_model_catalog(
                     binary, catalog, environment=environment, model=CODEX_MODEL
@@ -2308,6 +2388,14 @@ def _run_prefixed_reproduction_body(
                                 "accounting_reservations=two accounting_ledgers=two "
                                 "accounting_pending=zero"
                             )
+                        diagnostic.advance("accounting_validate")
+                        before_rejection_accounting = asyncio.run(
+                            _accounting_snapshot(database_url, created.gateway_key_id)
+                        )
+                        if not _accounting_snapshot_is_two_terminal_successes(
+                            before_rejection_accounting
+                        ):
+                            raise VerificationError("accounting_before_rejection_invalid")
                         diagnostic.advance("session_validate")
                         diagnostic.refresh(observation=observation, local=local)
                         if _private_session_count(home) != 1:
@@ -2330,6 +2418,13 @@ def _run_prefixed_reproduction_body(
                         if second_result.returncode == 0:
                             raise VerificationError("history_rejection_not_reproduced")
                         del second_result
+                        after_rejection_accounting = asyncio.run(
+                            _accounting_snapshot(database_url, created.gateway_key_id)
+                        )
+                        if not _accounting_snapshot_equal(
+                            before_rejection_accounting, after_rejection_accounting
+                        ):
+                            raise VerificationError("accounting_rejection_side_effect")
                 finally:
                     logging.disable(previous_logging_disable)
                 diagnostic.advance("postconditions")

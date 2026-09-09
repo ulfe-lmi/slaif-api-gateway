@@ -1059,3 +1059,33 @@ def test_vision_catalog_write_is_canonical_bounded_and_mode_0600(tmp_path) -> No
             {"models": [{"slug": verifier.CODEX_MODEL, "bad": object()}]},
             model=verifier.CODEX_MODEL,
         )
+
+
+def test_canonical_capture_environment_is_pinned_and_stale_alias_is_rejected(tmp_path) -> None:
+    args = verifier._codex_profile_args(port=43123, model_catalog=tmp_path / "catalog.json")
+    provider_blocks = [item for item in args if item.startswith("model_providers.slaif-capture=")]
+    assert len(provider_blocks) == 1
+    assert f'env_key="{verifier.CODEX_CAPTURE_API_KEY_ENV}"' in provider_blocks[0]
+    assert verifier.STALE_CAPTURE_API_KEY_ENV not in provider_blocks[0]
+
+
+def test_accounting_snapshot_terminal_shape_and_equality_are_closed() -> None:
+    snapshot = {
+        "reservations_total": "two",
+        "reservations_finalized": "two",
+        "reservations_pending": "zero",
+        "reservations_released": "zero",
+        "ledgers_total": "two",
+        "ledgers_finalized": "two",
+        "ledgers_pending": "zero",
+        "ledgers_failed": "zero",
+        "ledgers_successful": "two",
+        "replay_references": "zero",
+        "query_success": True,
+    }
+    assert verifier._accounting_snapshot_is_two_terminal_successes(snapshot)
+    assert verifier._accounting_snapshot_equal(snapshot, dict(snapshot))
+    changed = dict(snapshot)
+    changed["ledgers_total"] = "other"
+    assert verifier._accounting_snapshot_equal(snapshot, changed) is False
+    assert "PRIVATE_DB_ID" not in repr(snapshot)
