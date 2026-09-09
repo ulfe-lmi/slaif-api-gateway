@@ -77,6 +77,7 @@ class ResponsesClientPolicySpec:
     max_reasoning_visible_part_bytes: int = 0
     max_reasoning_visible_bytes: int = 0
     allow_idless_encrypted_reasoning: bool = False
+    assistant_history_content_types: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)

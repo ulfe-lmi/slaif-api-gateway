@@ -298,13 +298,10 @@ class ResponsesRequestPolicy:
         if codex_replay_request_candidates(
             effective_body,
             allow_idless_tool_call_replay=(
-                self._codex_spec is not None
-                and self._codex_spec.allow_idless_tool_call_replay
+                self._codex_spec is not None and self._codex_spec.allow_idless_tool_call_replay
             ),
             top_level_tool_taxonomy=continuation_taxonomy,
-        ) and (
-            "conversation" in effective_body or "previous_response_id" in effective_body
-        ):
+        ) and ("conversation" in effective_body or "previous_response_id" in effective_body):
             _raise(
                 "input",
                 "responses_codex_replay_provider_state_not_supported",
@@ -951,7 +948,10 @@ class ResponsesRequestPolicy:
                 encrypted_value = canonical_item.get("encrypted_content")
                 if isinstance(encrypted_value, str):
                     encrypted_reasoning_bytes += len(encrypted_value.encode("utf-8"))
-                if encrypted_reasoning_bytes > self._codex_spec.max_encrypted_reasoning_request_bytes:
+                if (
+                    encrypted_reasoning_bytes
+                    > self._codex_spec.max_encrypted_reasoning_request_bytes
+                ):
                     _raise(
                         "input",
                         "responses_codex_encrypted_reasoning_replay_too_large",
@@ -1001,8 +1001,10 @@ class ResponsesRequestPolicy:
                     "responses_codex_tool_roundtrip_invalid",
                     "Codex tool-call continuation requires the exact client-tool declarations.",
                 )
-        if codex_client_tool_items or codex_reasoning_items or (
-            codex_tool_call_items and codex_top_level_tool_taxonomy is not None
+        if (
+            codex_client_tool_items
+            or codex_reasoning_items
+            or (codex_tool_call_items and codex_top_level_tool_taxonomy is not None)
         ):
             self._validate_codex_tool_roundtrip_items(
                 canonical_items,
@@ -1070,8 +1072,11 @@ class ResponsesRequestPolicy:
                 "responses_codex_envelope_not_allowed",
                 "Visible Codex reasoning requires the request-envelope capability.",
             )
-        if item_type == "reasoning" and self._codex_spec is not None and self._codex_spec.reasoning_visible_id_optional and (
-            "encrypted_content" not in item or item.get("encrypted_content") is None
+        if (
+            item_type == "reasoning"
+            and self._codex_spec is not None
+            and self._codex_spec.reasoning_visible_id_optional
+            and ("encrypted_content" not in item or item.get("encrypted_content") is None)
         ):
             return self._validate_codex_visible_reasoning_item(item, param=param)
         if item_type == "reasoning" and (
@@ -1371,9 +1376,13 @@ class ResponsesRequestPolicy:
                         "This Codex client tool has an invalid declaration type.",
                     )
                 if namespace_name == "functions" and tool_name == "request_user_input":
-                    allowed_authority_key_paths = self._codex_spec.request_user_input_allowed_authority_key_paths
+                    allowed_authority_key_paths = (
+                        self._codex_spec.request_user_input_allowed_authority_key_paths
+                    )
                 elif namespace_name == "functions" and tool_name == "exec_command":
-                    allowed_authority_key_paths = self._codex_spec.exec_command_allowed_authority_key_paths
+                    allowed_authority_key_paths = (
+                        self._codex_spec.exec_command_allowed_authority_key_paths
+                    )
                 else:
                     allowed_authority_key_paths = frozenset()
                 if _contains_recursive_codex_authority_marker(
@@ -1459,11 +1468,13 @@ class ResponsesRequestPolicy:
             "type": "additional_tools",
             "role": "developer",
             "tools": [
-                canonical_by_namespace[namespace_name]
-                for namespace_name, _tools in taxonomy
+                canonical_by_namespace[namespace_name] for namespace_name, _tools in taxonomy
             ],
         }
-        if len(canonical_json_bytes(canonical_item)) > self._codex_spec.max_client_tool_declaration_bytes:
+        if (
+            len(canonical_json_bytes(canonical_item))
+            > self._codex_spec.max_client_tool_declaration_bytes
+        ):
             _raise(
                 param,
                 "responses_codex_client_tools_too_large",
@@ -1607,7 +1618,10 @@ class ResponsesRequestPolicy:
             canonical["id"] = item_id
 
         summary = item.get("summary")
-        if not isinstance(summary, list) or len(summary) > self._codex_spec.max_reasoning_summary_parts:
+        if (
+            not isinstance(summary, list)
+            or len(summary) > self._codex_spec.max_reasoning_summary_parts
+        ):
             _raise(
                 f"{param}.summary",
                 "responses_codex_reasoning_visible_invalid",
@@ -1617,7 +1631,10 @@ class ResponsesRequestPolicy:
         visible_bytes = 0
         for summary_index, part in enumerate(summary):
             part_param = f"{param}.summary[{summary_index}]"
-            if not isinstance(part, Mapping) or set(part) != self._codex_spec.reasoning_summary_fields:
+            if (
+                not isinstance(part, Mapping)
+                or set(part) != self._codex_spec.reasoning_summary_fields
+            ):
                 _raise(
                     part_param,
                     "responses_codex_reasoning_visible_invalid",
@@ -1778,7 +1795,10 @@ class ResponsesRequestPolicy:
                 "This Codex tool-call continuation type is invalid.",
             )
         call_id = item.get("call_id")
-        if not isinstance(call_id, str) or self._codex_spec.tool_call_id_pattern.fullmatch(call_id) is None:
+        if (
+            not isinstance(call_id, str)
+            or self._codex_spec.tool_call_id_pattern.fullmatch(call_id) is None
+        ):
             _raise(
                 f"{param}.call_id",
                 "responses_codex_tool_roundtrip_invalid",
@@ -1824,13 +1844,10 @@ class ResponsesRequestPolicy:
             )
         item_id_value = item.get("id")
         if item_id_value is None:
-            idless_allowed = (
-                self._codex_spec is not None
-                and (
-                    self._codex_spec.custom_tool_call_item_id_optional
-                    if custom
-                    else self._codex_spec.function_call_item_id_optional
-                )
+            idless_allowed = self._codex_spec is not None and (
+                self._codex_spec.custom_tool_call_item_id_optional
+                if custom
+                else self._codex_spec.function_call_item_id_optional
             )
             if not idless_allowed:
                 _raise(
@@ -2291,6 +2308,7 @@ class ResponsesRequestPolicy:
                     canonical_part, part_bytes = self._validate_input_text_part(
                         part,
                         param=f"{param}[{part_index}]",
+                        role=role,
                     )
                     text_parts += 1
                     total_text_bytes += part_bytes
@@ -2319,7 +2337,13 @@ class ResponsesRequestPolicy:
             error_code="responses_input_invalid",
         )
 
-    def _validate_input_text_part(self, part: Any, *, param: str) -> tuple[dict[str, str], int]:
+    def _validate_input_text_part(
+        self,
+        part: Any,
+        *,
+        param: str,
+        role: str,
+    ) -> tuple[dict[str, str], int]:
         if not isinstance(part, Mapping):
             _raise(
                 param,
@@ -2328,6 +2352,41 @@ class ResponsesRequestPolicy:
             )
 
         part_type = part.get("type")
+        if part_type == "output_text":
+            if (
+                self._codex_spec is None
+                or "output_text" not in self._codex_spec.assistant_history_content_types
+                or role != "assistant"
+            ):
+                _raise(
+                    f"{param}.type",
+                    "responses_input_content_part_not_supported",
+                    "This Responses output content part type is not enabled by this gateway.",
+                )
+            unknown = set(part) - {"type", "text"}
+            if unknown:
+                _raise(
+                    f"{param}.{sorted(unknown)[0]}",
+                    "responses_input_content_part_not_supported",
+                    "This Responses output content part field is not enabled by this gateway.",
+                )
+            text = part.get("text")
+            if not isinstance(text, str) or not text:
+                _raise(
+                    f"{param}.text",
+                    "responses_input_invalid",
+                    "Responses output text parts require non-empty text.",
+                )
+            try:
+                text_bytes = len(text.encode("utf-8"))
+            except UnicodeEncodeError:
+                _raise(
+                    f"{param}.text",
+                    "responses_input_invalid",
+                    "Responses output text must be valid Unicode.",
+                )
+            self._validate_input_item_text_bytes(text_bytes, param=f"{param}.text")
+            return {"type": "output_text", "text": text}, text_bytes
         if part_type != "input_text":
             code = (
                 "responses_input_multimodal_not_supported"
@@ -2356,7 +2415,14 @@ class ResponsesRequestPolicy:
                 "responses_input_invalid",
                 "Responses input text parts require non-empty text.",
             )
-        text_bytes = len(text.encode("utf-8"))
+        try:
+            text_bytes = len(text.encode("utf-8"))
+        except UnicodeEncodeError:
+            _raise(
+                f"{param}.text",
+                "responses_input_invalid",
+                "Responses input text must be valid Unicode.",
+            )
         self._validate_input_item_text_bytes(text_bytes, param=f"{param}.text")
         return {"type": "input_text", "text": text}, text_bytes
 
@@ -3154,7 +3220,10 @@ class ResponsesRequestPolicy:
                         "The Codex reasoning context is not supported.",
                     )
                 canonical_reasoning["context"] = self._codex_spec.reasoning_context
-            if len(canonical_json_bytes(canonical_reasoning)) > self._codex_spec.max_reasoning_bytes:
+            if (
+                len(canonical_json_bytes(canonical_reasoning))
+                > self._codex_spec.max_reasoning_bytes
+            ):
                 _raise(
                     "reasoning",
                     "responses_codex_envelope_invalid",
@@ -3307,7 +3376,11 @@ class ResponsesRequestPolicy:
                 self._validate_adapter_managed_tool(tool, param=f"tools[{index}]")
                 canonical_tools.append(copy.deepcopy(dict(tool)))
                 continue
-            if allow_external_tool_request and isinstance(tool, Mapping) and tool.get("type") == "web_search":
+            if (
+                allow_external_tool_request
+                and isinstance(tool, Mapping)
+                and tool.get("type") == "web_search"
+            ):
                 allowed_fields = {"type", "search_context_size"}
                 if set(tool) - allowed_fields:
                     _raise(
@@ -3323,7 +3396,10 @@ class ResponsesRequestPolicy:
                         "The hosted web-search context size is invalid.",
                     )
                 canonical_tools.append(
-                    {"type": "web_search", **({"search_context_size": context} if context is not None else {})}
+                    {
+                        "type": "web_search",
+                        **({"search_context_size": context} if context is not None else {}),
+                    }
                 )
                 continue
             canonical_tool, schema_bytes, format_bytes = self._validate_local_tool(
@@ -3523,13 +3599,23 @@ class ResponsesRequestPolicy:
             )
         name = tool.get("name")
         if not isinstance(name, str) or not name or len(name.encode("utf-8")) > 256:
-            _raise(f"{param}.name", "responses_namespace_tool_invalid", "Invalid namespace tool name.")
+            _raise(
+                f"{param}.name", "responses_namespace_tool_invalid", "Invalid namespace tool name."
+            )
         nested_tools = tool.get("tools")
         if not isinstance(nested_tools, list) or len(nested_tools) > 128:
-            _raise(f"{param}.tools", "responses_namespace_tool_invalid", "Invalid namespace tools list.")
+            _raise(
+                f"{param}.tools",
+                "responses_namespace_tool_invalid",
+                "Invalid namespace tools list.",
+            )
         for index, nested in enumerate(nested_tools):
             if not isinstance(nested, Mapping) or nested.get("type") not in {"function", "custom"}:
-                _raise(f"{param}.tools[{index}]", "responses_namespace_tool_invalid", "Invalid namespace nested tool.")
+                _raise(
+                    f"{param}.tools[{index}]",
+                    "responses_namespace_tool_invalid",
+                    "Invalid namespace nested tool.",
+                )
         return {
             "type": "namespace",
             "name": name,
@@ -4724,18 +4810,13 @@ def _input_contains_function_call_output(value: Any) -> bool:
 def _input_contains_codex_tool_roundtrip(value: Any) -> bool:
     if not isinstance(value, list):
         return False
-    item_types = [
-        item.get("type")
-        for item in value
-        if isinstance(item, Mapping)
-    ]
+    item_types = [item.get("type") for item in value if isinstance(item, Mapping)]
     function_pair_count = sum(
         item_types[index : index + 2] == ["function_call", "function_call_output"]
         for index in range(len(item_types) - 1)
     )
     custom_pair_count = sum(
-        item_types[index : index + 2]
-        == ["custom_tool_call", "custom_tool_call_output"]
+        item_types[index : index + 2] == ["custom_tool_call", "custom_tool_call_output"]
         for index in range(len(item_types) - 1)
     )
     return function_pair_count == 1 and custom_pair_count == 0
@@ -4744,18 +4825,13 @@ def _input_contains_codex_tool_roundtrip(value: Any) -> bool:
 def _input_contains_codex_0149_tool_roundtrip(value: Any) -> bool:
     if not isinstance(value, list):
         return False
-    item_types = [
-        item.get("type")
-        for item in value
-        if isinstance(item, Mapping)
-    ]
+    item_types = [item.get("type") for item in value if isinstance(item, Mapping)]
     function_pair_count = sum(
         item_types[index : index + 2] == ["function_call", "function_call_output"]
         for index in range(len(item_types) - 1)
     )
     custom_pair_count = sum(
-        item_types[index : index + 2]
-        == ["custom_tool_call", "custom_tool_call_output"]
+        item_types[index : index + 2] == ["custom_tool_call", "custom_tool_call_output"]
         for index in range(len(item_types) - 1)
     )
     return (function_pair_count == 1 and custom_pair_count == 0) or (

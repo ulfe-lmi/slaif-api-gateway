@@ -19,11 +19,15 @@ CODEX_0149_CLIENT_MODULE_VERSION = "3"
 CODEX_0149_REASONING_DIALECT_VERSION = "4"
 CODEX_0149_CLI_VERSION = "0.149.0"
 CODEX_0149_FIXTURE_SHA256 = "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
-CODEX_0149_FIXTURE_RELATIVE_PATH = "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
+CODEX_0149_FIXTURE_RELATIVE_PATH = (
+    "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
+)
 CODEX_0149_PROFILE_ID = "responses-session-relationship-v3"
 CODEX_0149_SOURCE_CONTRACT_TAG = "rust-v0.149.0"
 CODEX_0149_SOURCE_CONTRACT_COMMIT = "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0"
-CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256 = "d24178dc3467dfaf276b015dcf8298fcc1ddc35bc6c6dcd615f101c3e1cd76df"
+CODEX_0149_SOURCE_CONTRACT_FIXTURE_SHA256 = (
+    "d24178dc3467dfaf276b015dcf8298fcc1ddc35bc6c6dcd615f101c3e1cd76df"
+)
 CODEX_0149_SOURCE_CONTRACT_FIXTURE_RELATIVE_PATH = (
     "tests/fixtures/codex/0.149.0/responses-reasoning-dialect-v1.json"
 )
@@ -79,9 +83,7 @@ CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES = MappingProxyType(
     }
 )
 _CANDIDATE_TYPES = CODEX_0149_ADAPTER_MANAGED_CANDIDATE_TYPES
-_ALLOWED_TOOL_TYPES = frozenset(
-    {"function", "custom", "namespace", "tool_search", "web_search"}
-)
+_ALLOWED_TOOL_TYPES = frozenset({"function", "custom", "namespace", "tool_search", "web_search"})
 _FORBIDDEN_AUTHORITY_TYPES = frozenset(
     {
         "web_search_preview",
@@ -179,7 +181,16 @@ def codex_0149_streaming_tool_events_requested(body: Mapping[str, object]) -> bo
 
 CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
     compact_fields=frozenset(
-        {"model", "input", "instructions", "tools", "parallel_tool_calls", "reasoning", "prompt_cache_key", "text"}
+        {
+            "model",
+            "input",
+            "instructions",
+            "tools",
+            "parallel_tool_calls",
+            "reasoning",
+            "prompt_cache_key",
+            "text",
+        }
     ),
     function_call_output_fields=frozenset({"type", "id", "call_id", "output"}),
     custom_tool_call_output_fields=frozenset({"type", "id", "call_id", "output"}),
@@ -218,9 +229,7 @@ CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
     request_user_input_allowed_authority_key_paths=frozenset(
         {("parameters", "properties", "questions", "items", "properties", "header")}
     ),
-    exec_command_allowed_authority_key_paths=frozenset(
-        {("parameters", "properties", "shell")}
-    ),
+    exec_command_allowed_authority_key_paths=frozenset({("parameters", "properties", "shell")}),
     max_encrypted_reasoning_item_bytes=262_144,
     max_encrypted_reasoning_request_bytes=1_048_576,
     max_reasoning_summary_bytes=65_536,
@@ -229,7 +238,16 @@ CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
     internal_chat_message_metadata_field="internal_chat_message_metadata_passthrough",
     max_internal_chat_message_metadata_bytes=32_768,
     internal_chat_message_metadata_item_types=frozenset(
-        {None, "message", "reasoning", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "compaction"}
+        {
+            None,
+            "message",
+            "reasoning",
+            "function_call",
+            "function_call_output",
+            "custom_tool_call",
+            "custom_tool_call_output",
+            "compaction",
+        }
     ),
     taxonomy_for=_codex_0149_taxonomy_for,
     taxonomy_0148=(),
@@ -240,6 +258,7 @@ CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
     reasoning_visible_id_optional=True,
     reasoning_visible_content_fields=frozenset({"type", "text"}),
     reasoning_visible_content_types=frozenset({"reasoning_text", "text"}),
+    assistant_history_content_types=frozenset({"output_text"}),
     max_reasoning_visible_parts=64,
     max_reasoning_visible_part_bytes=8_192,
     max_reasoning_visible_bytes=65_536,
@@ -289,7 +308,12 @@ def _walk_forbidden_keys(value: object, *, depth: int = 0) -> None:
                     "The Codex 0.149 declaration contains an authority field",
                     "codex_0149_authority_shape",
                 )
-            if depth > 0 and key == "type" and isinstance(child, str) and child in _FORBIDDEN_AUTHORITY_TYPES:
+            if (
+                depth > 0
+                and key == "type"
+                and isinstance(child, str)
+                and child in _FORBIDDEN_AUTHORITY_TYPES
+            ):
                 raise _error(
                     "The Codex 0.149 declaration contains a nested authority shape",
                     "codex_0149_authority_shape",
@@ -313,7 +337,15 @@ def _walk_unsafe_candidate_values(value: object, *, depth: int = 0) -> None:
         lowered = value.lower()
         if "://" in value or any(
             marker in lowered
-            for marker in ("bearer", "api_key", "apikey", "authorization", "secret", "password", "token")
+            for marker in (
+                "bearer",
+                "api_key",
+                "apikey",
+                "authorization",
+                "secret",
+                "password",
+                "token",
+            )
         ):
             raise _error(
                 "The Codex 0.149 candidate contains an authority value",
@@ -326,12 +358,7 @@ def _reject_nested_candidate_types(value: object, *, depth: int = 0) -> None:
         raise _error("The Codex 0.149 declaration is too deeply nested")
     if isinstance(value, Mapping):
         for key, child in value.items():
-            if (
-                depth > 0
-                and key == "type"
-                and isinstance(child, str)
-                and child in _CANDIDATE_TYPES
-            ):
+            if depth > 0 and key == "type" and isinstance(child, str) and child in _CANDIDATE_TYPES:
                 raise _error(
                     "The Codex 0.149 declaration contains a nested search declaration",
                     "codex_0149_authority_shape",
@@ -502,7 +529,8 @@ class Codex0149ResponsesClientModule:
             body.get("tool_choice"),
             candidates=candidates,
             local_tools=any(
-                isinstance(tool, Mapping) and tool.get("type") in {"function", "custom", "namespace"}
+                isinstance(tool, Mapping)
+                and tool.get("type") in {"function", "custom", "namespace"}
                 for tool in tools
             ),
         )

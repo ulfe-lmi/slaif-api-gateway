@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import http.client
 import json
+import shutil
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from scripts import verify_codex_0149_local_roundtrip as verifier
+
+_ORIGINAL_GIT_BLOB_HASH = verifier._git_blob_hash
+_ORIGINAL_REPO_ROOT = verifier.REPO_ROOT
 
 
 def test_codex_command_uses_task_local_zero_retry_responses_profile(tmp_path) -> None:
@@ -48,7 +54,9 @@ def test_service_credential_error_is_allowlisted_and_unknown_is_other() -> None:
         error_shapes=["error_server"],
         request_shapes=["stream_true_tools_function[name,type]_input_message"],
     )
-    assert "error_local_coding_service_credential_invalid" in verifier._safe_gateway_failure_code(known)
+    assert "error_local_coding_service_credential_invalid" in verifier._safe_gateway_failure_code(
+        known
+    )
     unknown = SimpleNamespace(
         request_count=1,
         response_statuses=[503],
@@ -80,9 +88,169 @@ def test_obligation_manifest_is_complete_and_bounded() -> None:
     assert all(isinstance(value, str) and value for value in verifier.OBLIGATION_MANIFEST.values())
 
 
-def test_obligation_evaluator_reports_exact_empty_missing_list() -> None:
+def _historical_snapshot_allowlist(source_root: Path) -> set[str]:
+    paths = {
+        "AGENTS.md",
+        *verifier._DOCTRINE_LINKS[1:],
+        *verifier._PRODUCTION_BLOBS,
+        *verifier._PERMANENT_TEST_BLOBS,
+        *verifier._PERMANENT_FIXTURE_BLOBS,
+        *verifier._UNCHANGED_BLOBS,
+        "scripts/verify_codex_0149_local_roundtrip.py",
+        "tests/unit/test_codex_0149_local_roundtrip.py",
+        "tests/unit/test_responses_codex_multiturn_replay.py",
+        "tests/unit/test_responses_codex_streaming_tools.py",
+        "tests/integration/test_codex_replay_references_postgres.py",
+    }
+    paths.update(
+        path.relative_to(source_root).as_posix()
+        for path in (source_root / "app").rglob("*.py")
+        if path.is_file() and not path.is_symlink()
+    )
+    return paths
+
+
+def _copy_allowlisted_snapshot(
+    source_root: Path, destination: Path, allowlist: set[str]
+) -> set[str]:
+    source_resolved = source_root.resolve()
+    copied: set[str] = set()
+    for relative_text in sorted(allowlist):
+        source = source_root / relative_text
+        try:
+            if source.is_symlink() or not source.is_file():
+                raise ValueError("historical_snapshot_input_not_regular")
+            source.resolve().relative_to(source_resolved)
+        except (OSError, RuntimeError, ValueError):
+            raise ValueError("historical_snapshot_input_symlink_or_missing") from None
+        target = destination / relative_text
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        copied.add(relative_text)
+    return copied
+
+
+def _historical_evaluator_snapshot(tmp_path, monkeypatch, mutate=None):
+    snapshot = tmp_path / "historical-snapshot"
+    allowlist = _historical_snapshot_allowlist(_ORIGINAL_REPO_ROOT)
+    copied = _copy_allowlisted_snapshot(_ORIGINAL_REPO_ROOT, snapshot, allowlist)
+    assert copied == allowlist
+    expected_blobs = {
+        **verifier._PRODUCTION_BLOBS,
+        **verifier._PERMANENT_TEST_BLOBS,
+        **verifier._PERMANENT_FIXTURE_BLOBS,
+        **verifier._UNCHANGED_BLOBS,
+    }
+    baseline_bytes = {
+        path: (snapshot / path).read_bytes()
+        for path in expected_blobs
+        if (snapshot / path).is_file()
+    }
+
+    def fake_ref(ref: str) -> str | None:
+        if ref == "HEAD:app":
+            return (
+                "bd536a282362cc549cc0c5518db8e743af667b63"
+                if not (snapshot / "app" / "marker.py").exists()
+                else "wrong-app-tree"
+            )
+        return None
+
+    def fake_blob_hash(path):
+        try:
+            relative = path.relative_to(snapshot).as_posix()
+        except ValueError:
+            return _ORIGINAL_GIT_BLOB_HASH(path)
+        if relative in expected_blobs and path.read_bytes() == baseline_bytes[relative]:
+            return expected_blobs[relative]
+        return _ORIGINAL_GIT_BLOB_HASH(path)
+
+    monkeypatch.setattr(verifier, "REPO_ROOT", snapshot)
+    monkeypatch.setattr(verifier, "_git_ref", fake_ref)
+    monkeypatch.setattr(verifier, "_git_blob_hash", fake_blob_hash)
+    if mutate is not None:
+        mutate(snapshot)
+    return snapshot
+
+
+def test_historical_snapshot_copy_is_finite_and_rejects_symlinks(tmp_path) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    (source / "nested").mkdir(parents=True)
+    (source / "allowed.txt").write_text("allowed", encoding="utf-8")
+    (source / "nested/allowed.txt").write_text("nested", encoding="utf-8")
+    (source / "unrelated/deep").mkdir(parents=True)
+    (source / "unrelated/deep/private.txt").write_text("private", encoding="utf-8")
+    (source / ".ignored-sentinel").write_text("sentinel", encoding="utf-8")
+    copied = _copy_allowlisted_snapshot(
+        source,
+        destination,
+        {"allowed.txt", "nested/allowed.txt"},
+    )
+    assert copied == {"allowed.txt", "nested/allowed.txt"}
+    assert sorted(path.relative_to(destination).as_posix() for path in destination.rglob("*")) == [
+        "allowed.txt",
+        "nested",
+        "nested/allowed.txt",
+    ]
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside", encoding="utf-8")
+    (source / "escape.txt").symlink_to(outside)
+    with pytest.raises(ValueError, match="historical_snapshot_input_symlink_or_missing"):
+        _copy_allowlisted_snapshot(source, tmp_path / "symlink-destination", {"escape.txt"})
+
+
+def test_real_git_blob_hash_helper_is_verified_on_known_bytes(tmp_path) -> None:
+    probe = tmp_path / "blob"
+    probe.write_bytes(b"known")
+    expected = hashlib.sha1(b"blob 5\0known").hexdigest()
+    assert verifier._git_blob_hash(probe) == expected
+
+
+def test_obligation_evaluator_uses_a_hermetic_historical_snapshot(tmp_path, monkeypatch) -> None:
+    _historical_evaluator_snapshot(tmp_path, monkeypatch)
     assert verifier.evaluate_obligations() == []
     assert f"missing={verifier.evaluate_obligations()}" == "missing=[]"
+
+
+def test_historical_snapshot_negative_mutations_keep_precise_obligations(
+    tmp_path, monkeypatch
+) -> None:
+    def wrong_app(snapshot):
+        (snapshot / "app" / "marker.py").write_text("changed", encoding="utf-8")
+
+    _historical_evaluator_snapshot(tmp_path / "wrong-app", monkeypatch, wrong_app)
+    assert verifier.evaluate_obligations() == ["app_tree"]
+
+    def changed_blob(snapshot):
+        path = snapshot / "app/slaif_gateway/modules/clients/codex_0149.py"
+        path.write_text(path.read_text(encoding="utf-8") + "\nchanged\n", encoding="utf-8")
+
+    _historical_evaluator_snapshot(tmp_path / "changed-blob", monkeypatch, changed_blob)
+    assert verifier.evaluate_obligations() == ["app/slaif_gateway/modules/clients/codex_0149.py"]
+
+    def missing_required(snapshot):
+        (snapshot / "scripts/verify_codex_0149_local_roundtrip.py").unlink()
+
+    _historical_evaluator_snapshot(tmp_path / "missing-required", monkeypatch, missing_required)
+    assert verifier.evaluate_obligations() == ["scripts/verify_codex_0149_local_roundtrip.py"]
+
+    def forbidden_historical(snapshot):
+        path = snapshot / "scripts/verify_local_coding_full_stack.py"
+        path.write_text("historical", encoding="utf-8")
+
+    _historical_evaluator_snapshot(
+        tmp_path / "forbidden-historical", monkeypatch, forbidden_historical
+    )
+    assert verifier.evaluate_obligations() == [
+        "historical_absent:scripts/verify_local_coding_full_stack.py"
+    ]
+
+    def missing_doctrine(snapshot):
+        (snapshot / "AGENTS.md").write_text("", encoding="utf-8")
+
+    _historical_evaluator_snapshot(tmp_path / "missing-doctrine", monkeypatch, missing_doctrine)
+    assert verifier.evaluate_obligations() == ["doctrine_link:AGENTS.md"]
 
 
 def test_doctrine_link_mutations_report_the_exact_missing_location() -> None:
@@ -156,11 +324,7 @@ def test_gateway_observer_owns_request_projection() -> None:
             "input": [{"type": "message"}],
         }
     ).encode()
-    messages = iter(
-        (
-            {"type": "http.request", "body": body, "more_body": False},
-        )
-    )
+    messages = iter(({"type": "http.request", "body": body, "more_body": False},))
 
     async def receive() -> dict[str, object]:
         return next(messages)
@@ -199,9 +363,10 @@ def test_known_local_tool_selection_fails_closed() -> None:
     with pytest.raises(verifier.VerificationError, match="known_local_tool_missing"):
         verifier._tool_name({"tools": [{"type": "function", "name": "unknown"}]})
 
-    assert verifier._tool_name(
-        {"tools": [{"type": "function", "name": "exec_command"}]}
-    ) == "exec_command"
+    assert (
+        verifier._tool_name({"tools": [{"type": "function", "name": "exec_command"}]})
+        == "exec_command"
+    )
 
 
 def test_fake_local_requires_signed_headers_and_idless_adjacent_output() -> None:
@@ -236,7 +401,11 @@ def test_fake_local_requires_signed_headers_and_idless_adjacent_output() -> None
 
 
 def test_main_emits_only_fixed_failure_line(monkeypatch, capsys) -> None:
-    monkeypatch.setattr(verifier, "run_roundtrip", lambda: (_ for _ in ()).throw(verifier.VerificationError("accounting_predicate_failed")))
+    monkeypatch.setattr(
+        verifier,
+        "run_roundtrip",
+        lambda: (_ for _ in ()).throw(verifier.VerificationError("accounting_predicate_failed")),
+    )
     monkeypatch.setattr(sys, "argv", ["verify_codex_0149_local_roundtrip.py"])
 
     assert verifier.main() == 1

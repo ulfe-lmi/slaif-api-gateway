@@ -90,6 +90,11 @@ Core invariants:
   only to the transient request estimate; they do not create replay ownership
   or enter ledger, audit, metric, export, or error data. Non-null encrypted
   reasoning remains on its existing separately gated ID-bound path.
+- On the exact Codex 0.149 Local pair, an assistant history
+  `output_text` part is ordinary bounded input material. Its UTF-8 text bytes
+  contribute to the existing message input estimate and text caps; the text
+  remains transient and does not create output authority, replay ownership, or
+  any persisted, logged, audited, metered-metadata, or exported content.
 - Fully gated Codex function/custom output items may carry the pinned optional
   bounded `id`. When present, its complete canonical bytes are included in
   model-input admission and cost estimation, including the existing item-ID
