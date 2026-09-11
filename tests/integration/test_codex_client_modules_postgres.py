@@ -13,21 +13,22 @@ from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.db.models import QuotaReservation, UsageLedger
 from slaif_gateway.modules.clients.codex_0149 import (
     CODEX_0149_CLIENT_MODULE_ID,
+    CODEX_0149_CLIENT_MODULE_VERSION,
     CODEX_0149_FIXTURE_SHA256,
 )
 from slaif_gateway.services.responses_gateway import handle_response_create
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stale_version", ["3", "1"])
 async def test_codex_0149_old_metadata_rejection_has_no_postgres_side_effect(
     async_test_session: AsyncSession,
+    stale_version: str,
 ) -> None:
     before_reservations = await async_test_session.scalar(
         select(func.count()).select_from(QuotaReservation)
     )
-    before_ledger = await async_test_session.scalar(
-        select(func.count()).select_from(UsageLedger)
-    )
+    before_ledger = await async_test_session.scalar(select(func.count()).select_from(UsageLedger))
     payload = SimpleNamespace(
         model_dump=lambda **_: {
             "model": f"codex-0149-{uuid.uuid4().hex}",
@@ -41,7 +42,7 @@ async def test_codex_0149_old_metadata_rejection_has_no_postgres_side_effect(
         responses_policy={
             "client_module": {
                 "id": CODEX_0149_CLIENT_MODULE_ID,
-                "version": "1",
+                "version": stale_version,
                 "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
             }
         }
@@ -58,9 +59,7 @@ async def test_codex_0149_old_metadata_rejection_has_no_postgres_side_effect(
     after_reservations = await async_test_session.scalar(
         select(func.count()).select_from(QuotaReservation)
     )
-    after_ledger = await async_test_session.scalar(
-        select(func.count()).select_from(UsageLedger)
-    )
+    after_ledger = await async_test_session.scalar(select(func.count()).select_from(UsageLedger))
     assert after_reservations == before_reservations
     assert after_ledger == before_ledger
 
@@ -98,7 +97,7 @@ async def test_codex_0149_session_alias_rejection_has_no_postgres_side_effect(
         responses_policy={
             "client_module": {
                 "id": CODEX_0149_CLIENT_MODULE_ID,
-                "version": "3",
+                "version": CODEX_0149_CLIENT_MODULE_VERSION,
                 "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
             }
         }

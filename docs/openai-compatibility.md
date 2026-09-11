@@ -180,6 +180,15 @@ streaming accounting uses provider usage from the completed response event;
 also sends `data: [DONE]`, SLAIF does not forward it as a normal success marker
 before finalization. Missing final usage is not treated as zero cost.
 
+On the exact version-4 `codex-0.149-responses-v1 -> local-coding-v1` pair,
+streaming also accepts the reviewed zero-argument function closure: an eligible
+top-level function may complete with `arguments=""` after its added item
+without a function-argument delta or `arguments.done`. This is a request-
+derived pair-local exception; ordinary Responses, other clients/pairs, and
+functions with parameters retain the strict delta/done lifecycle. Provider
+events are not synthesized or rewritten, and final accounting/replay
+ownership remains unchanged.
+
 Responses live-burn monitoring is implemented for the supported stateless
 text-output Responses streaming subset. As documented in
 [`streaming-live-burn-margin.md`](streaming-live-burn-margin.md), SLAIF counts

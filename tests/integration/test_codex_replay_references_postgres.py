@@ -94,6 +94,13 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
             tool_namespace="functions",
             tool_name="exec",
         ),
+        Candidate(
+            item_kind="function_call",
+            item_id="function_zero_argument_raw_id",
+            call_id="function_zero_argument_raw_call_id",
+            tool_namespace="functions",
+            tool_name="local_lookup",
+        ),
     )
     settings = Settings(
         APP_ENV="development",
@@ -117,7 +124,7 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
                 upstream_model=route.upstream_model,
                 now=now,
             )
-            == 2
+            == 3
         )
     rows = list(
         (
@@ -126,7 +133,7 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
             )
         ).scalars()
     )
-    assert len(rows) == 2
+    assert len(rows) == 3
     serialized_safe_rows = " ".join(
         f"{row.item_kind} {row.item_id_hmac} {row.call_id_hmac or ''}" for row in rows
     )
@@ -134,6 +141,8 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
         "rs_private_raw_id",
         "ctc_private_raw_id",
         "call_private_raw_id",
+        "function_zero_argument_raw_id",
+        "function_zero_argument_raw_call_id",
     ):
         assert forbidden not in serialized_safe_rows
 

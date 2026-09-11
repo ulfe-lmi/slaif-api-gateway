@@ -35,9 +35,13 @@ process-local TTL/LRU replay contract. Local Coding tool filtering and
 accounting remain independent Gateway-core decisions. The exact pair also
 validates the reviewed Codex 0.149 reasoning, local function-call, and
 assistant-message SSE lifecycle with strict event order, coordinates, terminal
-output, and detailed usage. This remains mocked/state-machine conformance
-only: it does not add second-turn admission, replay ownership, visible-
-reasoning replay, or protected model qualification.
+output, and detailed usage. Version `4` also accepts the source-derived
+zero-argument function closure on this exact pair: an eligible top-level
+function with an exact empty-parameter schema may go from `output_item.added`
+to the matching `output_item.done` with `arguments=""` and no argument delta or
+`arguments.done`. Events are forwarded unchanged, and the normal replay,
+accounting, and privacy paths remain in force. This remains mocked/state-machine
+conformance only: it does not add protected model qualification.
 
 The Codex 0.149 client module also recognizes the source-derived visible
 reasoning dialect on its exact Local pair. A reasoning item may have an absent

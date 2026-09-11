@@ -62,10 +62,10 @@ profile:
 | Official source distribution | npm `@openai/codex@0.149.0` |
 | Verified raw version | `codex-cli 0.149.0` |
 | Tarball SHA-512 | `8b876bca3d98d63fb4d0c6f99fed27ef51189d32bdfca0dcd9c745a3f7570f4775a13a20d9b854b2c2831083a72a69c47f9d4fd19fc72535af4cac3f507c8ebd` |
-| Client module | `codex-0.149-responses-v1` / version `1` |
+| Client module | `codex-0.149-responses-v1` / version `4` |
 | Structural fixture | `tests/fixtures/codex/0.149.0/responses-structural.json` |
 | Fixture SHA-256 | `0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d` |
-| Runtime status | default-denied; no compatible server pair; no qualification or provider/model E2E |
+| Runtime status | default-denied; exact `local-coding-v1` pair has bounded mocked stream conformance; no protected or provider/model E2E qualification |
 
 The capture used a private disposable `CODEX_HOME`, an empty workspace, a
 synthetic token, and a fake numeric-loopback Responses server. No provider key,
@@ -85,6 +85,17 @@ headers, credentials, and unknown shapes fail closed. OpenAI documents
 built-in Responses tools separately from caller-provided function/custom
 tools; that authority-class distinction is descriptive and does not authorize
 Gateway forwarding ([Responses create reference](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)).
+
+Module version `4` retains the same module ID, structural capture fixture, and
+fixture digest while owning one additional pair-local request fact: exact
+top-level function declarations with the zero-parameter object schema and
+`strict` absent/true may use the reviewed zero-argument stream closure. Version
+`3` metadata remains stale and is rejected rather than treated as version `4`.
+The closure accepts the provider's empty-string function arguments when the
+added event is followed directly by the matching completed output item without
+argument delta or `arguments.done`; it does not synthesize events or accept
+the canonical `{}` lifecycle through this branch. This is bounded mocked
+conformance only, not protected or real-provider qualification.
 
 ## Protocol qualification and profile-v2 configuration
 

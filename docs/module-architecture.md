@@ -77,7 +77,13 @@ deployment contract. The observed `tool_search` and `web_search` declarations
 remain bounded adapter-managed candidates and never grant hosted authority.
 The exact Codex 0.149 Local pair additionally owns the bounded visible-
 reasoning request dialect and the strict reasoning/function/message stream
-profile. Visible reasoning may omit or explicitly null its item ID without
+profile. Module version `4` additionally carries a default-empty, request-
+derived fact for exact top-level zero-argument function declarations. Only the
+pair-local strict stream validator consumes that fact, and it accepts the
+provider's empty-string closure without synthesizing an argument event. The
+ordinary delta/`arguments.done` lifecycle, generic/default clients, and other
+pairs remain unchanged. Visible reasoning may omit or explicitly null its item
+ID without
 fabrication; encrypted reasoning remains independently ID-bound and gated.
 ID-less function/custom tool-call items are part of the exact 0.149 Local pair
 only: the mandatory call ID is authenticated through the existing same-key,

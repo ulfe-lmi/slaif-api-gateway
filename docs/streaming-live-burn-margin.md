@@ -158,12 +158,18 @@ Chat Completions:
   choices[].delta.tool_calls[].function.arguments
 ```
 
-Future Responses surface:
+Responses surface:
 
 ```text
 Responses:
   response.output_text.delta
 ```
+
+For the exact version-4 Codex/Local function stream, a declared eligible
+zero-argument function may omit argument delta and done events. Its completed
+item still carries the exact empty-string argument value; because no argument
+bytes are generated, this closure adds no live-burn tokens and does not alter
+final provider-usage accounting.
 
 The estimate is used to decide whether to interrupt an active Chat Completions
 stream. It is not invoice-grade billing truth.

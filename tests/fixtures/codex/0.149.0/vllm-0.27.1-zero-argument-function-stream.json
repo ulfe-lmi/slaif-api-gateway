@@ -1,0 +1,38 @@
+{
+  "client_pair": "codex-0.149-responses-v1->local-coding-v1",
+  "lifecycle": {
+    "added_arguments": "empty_string",
+    "argument_delta_count": 0,
+    "arguments_done_event": false,
+    "call_id": "present",
+    "completed_arguments": "empty_string",
+    "event_types": [
+      "response.created",
+      "response.in_progress",
+      "response.output_item.added",
+      "response.output_item.done",
+      "response.completed"
+    ],
+    "function_name": "local_lookup",
+    "item_id": "present",
+    "output_index": "present",
+    "sequence_numbers": "strictly_increasing"
+  },
+  "privacy": {
+    "identifiers_structural_only": true,
+    "raw_payloads_retained": false
+  },
+  "provenance": {
+    "provider": "vLLM",
+    "serving_sha256": "628429902ff26b87f86eae1a45297f647f3712d7b421ca9a4866a3fd0f046a5b",
+    "streaming_events_sha256": "cf1d8f5e0619148374ce10be15b1a9f7640016d810f1fe766c2dd451a918aa1f",
+    "tag_commit": "6e448d0ea9bf3d88d898b65449ca6dc2aec170ac",
+    "version": "0.27.1"
+  },
+  "terminal": {
+    "function_summary_arguments": "empty_string",
+    "replay_candidate": "function_call_after_item_completion",
+    "response_status": "completed",
+    "usage": "valid_detailed_vllm_responses_usage"
+  }
+}

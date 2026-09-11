@@ -64,6 +64,7 @@ class ResponsesStreamValidationProfile:
 
     codex_streaming_tool_events: bool = False
     codex_0149_function_tool_events: bool = False
+    zero_argument_function_names: frozenset[str] = frozenset()
     codex_encrypted_reasoning_replay: bool = False
     declared_client_tools: frozenset[tuple[str, str, str]] = frozenset()
     web_search: bool = False
@@ -196,11 +197,13 @@ class ResponsesStreamEventValidator:
                 else:
                     valid = self._validate_codex_reasoning_output_item(payload, event_type)
             elif event_type in {
-                "response.reasoning_part.added", "response.reasoning_part.done",
+                "response.reasoning_part.added",
+                "response.reasoning_part.done",
             }:
                 valid = self._validate_reasoning_part_event(payload, event_type)
             elif event_type in {
-                "response.reasoning_text.delta", "response.reasoning_text.done",
+                "response.reasoning_text.delta",
+                "response.reasoning_text.done",
             }:
                 valid = self._validate_reasoning_event(payload, event_type, strict_codex=True)
             elif event_type in {"response.content_part.added", "response.content_part.done"}:
@@ -273,7 +276,12 @@ class ResponsesStreamEventValidator:
             index = payload.get("output_index")
             if not _bounded_identifier(item_id, required=True) or not _valid_index(index):
                 return False
-            if event_type.rsplit(".", 1)[-1] not in {"in_progress", "searching", "completed", "failed"}:
+            if event_type.rsplit(".", 1)[-1] not in {
+                "in_progress",
+                "searching",
+                "completed",
+                "failed",
+            }:
                 return False
             self._web_search_evidence.append(
                 {
@@ -588,9 +596,7 @@ class ResponsesStreamEventValidator:
         state.delta_text += delta
         return True
 
-    def _validate_codex_function_event(
-        self, payload: Mapping[str, Any], event_type: str
-    ) -> bool:
+    def _validate_codex_function_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
         """Validate the exact 0.149 function-call lifecycle, in sequence."""
         if self._strict_response_id is None or self._strict_response_completed:
             return False
@@ -741,9 +747,19 @@ class ResponsesStreamEventValidator:
             or state.call_id != call_id
             or state.name != name
             or item_id in self._function_output_done
-            or item_id not in self._function_arguments_done
-            or item.get("arguments") != state.delta_text
         ):
+            return False
+        arguments = item.get("arguments")
+        zero_argument_omission = (
+            name in self._profile.zero_argument_function_names
+            and item_id not in self._function_delta_seen
+            and item_id not in self._function_arguments_done
+            and arguments == ""
+        )
+        ordinary_completion = (
+            item_id in self._function_arguments_done and arguments == state.delta_text
+        )
+        if not zero_argument_omission and not ordinary_completion:
             return False
         self._function_output_done.add(item_id)
         self._function_done_states[item_id] = state
@@ -806,7 +822,12 @@ class ResponsesStreamEventValidator:
         index = int(payload[index_name])
         category = "content" if is_content else "summary"
         key = (str(item_id), category, index)
-        field = "text" if event_type in ("response.reasoning_summary_text.done", "response.reasoning_text.done") else "delta"
+        field = (
+            "text"
+            if event_type
+            in ("response.reasoning_summary_text.done", "response.reasoning_text.done")
+            else "delta"
+        )
         value = payload.get(field)
         limit = _MAX_STREAM_ITEM_TEXT_BYTES if field == "text" else _MAX_STREAM_DELTA_BYTES
         if not isinstance(value, str) or not _bounded_utf8(value, limit):
@@ -855,9 +876,7 @@ class ResponsesStreamEventValidator:
         item = payload.get("item")
         if not isinstance(item, Mapping):
             return False
-        if set(item) != {
-            "type", "id", "summary", "content", "encrypted_content", "status"
-        }:
+        if set(item) != {"type", "id", "summary", "content", "encrypted_content", "status"}:
             return False
         item_id = item.get("id")
         if not _bounded_identifier(item_id, required=True):
@@ -974,9 +993,11 @@ class ResponsesStreamEventValidator:
         item_id = payload.get("item_id")
         if not _bounded_identifier(item_id, required=True):
             return False
-        if not _required_index(payload, "output_index") or not _required_index(
-            payload, "content_index"
-        ) or not _required_index(payload, "sequence_number"):
+        if (
+            not _required_index(payload, "output_index")
+            or not _required_index(payload, "content_index")
+            or not _required_index(payload, "sequence_number")
+        ):
             return False
         assert isinstance(item_id, str)
         state = self._active_items.get(item_id)
@@ -1012,18 +1033,18 @@ class ResponsesStreamEventValidator:
     def _validate_codex_message_text_event(
         self, payload: Mapping[str, Any], event_type: str
     ) -> bool:
-        common = {
-            "type", "item_id", "output_index", "content_index", "sequence_number", "logprobs"
-        }
+        common = {"type", "item_id", "output_index", "content_index", "sequence_number", "logprobs"}
         allowed = common | ({"delta"} if event_type == "response.output_text.delta" else {"text"})
         if not _only_fields(payload, allowed):
             return False
         item_id = payload.get("item_id")
         if not _bounded_identifier(item_id, required=True):
             return False
-        if not _required_index(payload, "output_index") or not _required_index(
-            payload, "content_index"
-        ) or not _required_index(payload, "sequence_number"):
+        if (
+            not _required_index(payload, "output_index")
+            or not _required_index(payload, "content_index")
+            or not _required_index(payload, "sequence_number")
+        ):
             return False
         if payload.get("logprobs") != []:
             return False
@@ -1063,9 +1084,7 @@ class ResponsesStreamEventValidator:
         self._message_text_done.add(key)
         return True
 
-    def _validate_codex_response_event(
-        self, payload: Mapping[str, Any], event_type: str
-    ) -> bool:
+    def _validate_codex_response_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
         if not _only_fields(payload, {"type", "response", "sequence_number"}):
             return False
         if event_type in {"response.created", "response.in_progress"}:
@@ -1078,14 +1097,12 @@ class ResponsesStreamEventValidator:
             response_id = response.get("id")
             if event_type == "response.created":
                 if self._strict_response_id is not None or response.get("status") not in {
-                    "queued", "in_progress"
+                    "queued",
+                    "in_progress",
                 }:
                     return False
                 self._strict_response_id = response_id
-            elif (
-                self._strict_response_id != response_id
-                or response.get("status") != "in_progress"
-            ):
+            elif self._strict_response_id != response_id or response.get("status") != "in_progress":
                 return False
             return self._accept_strict_sequence(payload)
 
@@ -1134,9 +1151,7 @@ class ResponsesStreamEventValidator:
         self._strict_last_sequence = sequence
         return True
 
-    def _validate_reasoning_part_event(
-        self, payload: Mapping[str, Any], event_type: str
-    ) -> bool:
+    def _validate_reasoning_part_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
         if not _only_fields(
             payload,
             {"type", "item_id", "output_index", "content_index", "part", "sequence_number"},
@@ -1145,9 +1160,11 @@ class ResponsesStreamEventValidator:
         item_id = payload.get("item_id")
         if not _bounded_identifier(item_id, required=True):
             return False
-        if not _required_index(payload, "output_index") or not _required_index(
-            payload, "content_index"
-        ) or not self._accept_strict_sequence(payload):
+        if (
+            not _required_index(payload, "output_index")
+            or not _required_index(payload, "content_index")
+            or not self._accept_strict_sequence(payload)
+        ):
             return False
         state = self._active_items.get(str(item_id))
         if state is None or state.item_type != "reasoning":
@@ -1208,9 +1225,7 @@ def _required_index(value: Mapping[str, Any], name: str) -> bool:
 
 def _valid_index(value: Any) -> bool:
     return (
-        not isinstance(value, bool)
-        and isinstance(value, int)
-        and 0 <= value <= _MAX_STREAM_INDEX
+        not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= _MAX_STREAM_INDEX
     )
 
 
@@ -1281,7 +1296,9 @@ def _validate_completed_usage(
     input_details = usage.get("input_tokens_details")
     if strict_vllm_responses:
         if not isinstance(input_details, Mapping) or set(input_details) != {
-            "cached_tokens", "input_tokens_per_turn", "cached_tokens_per_turn"
+            "cached_tokens",
+            "input_tokens_per_turn",
+            "cached_tokens_per_turn",
         }:
             return False
         if not _validate_nonnegative_count(input_details.get("cached_tokens")):
@@ -1400,7 +1417,14 @@ def _validate_codex_completed_output_item(
         if not allow_function_call or function_states is None:
             return False
         function_fields = {
-            "type", "id", "status", "namespace", "name", "arguments", "call_id", "caller"
+            "type",
+            "id",
+            "status",
+            "namespace",
+            "name",
+            "arguments",
+            "call_id",
+            "caller",
         }
         if set(item) not in (function_fields, function_fields - {"caller"}):
             return False
@@ -1420,9 +1444,7 @@ def _validate_codex_completed_output_item(
             return False
         state = next(iter(function_states.values()))
         return state.name == item.get("name") and state.delta_text == item.get("arguments")
-    if item_type != "message" or set(item) != {
-        "type", "id", "status", "role", "content", "phase"
-    }:
+    if item_type != "message" or set(item) != {"type", "id", "status", "role", "content", "phase"}:
         return False
     if (
         item.get("status") != "completed"
@@ -1465,13 +1487,13 @@ def _validate_delta_event(payload: Mapping[str, Any], *, require_item: bool) -> 
         )
     if not _bounded_identifier(payload.get("item_id"), required=False):
         return False
-    return _optional_index(payload, "output_index") and _optional_index(
-        payload, "content_index"
-    )
+    return _optional_index(payload, "output_index") and _optional_index(payload, "content_index")
 
 
 def _validate_assistant_message_item(item: Mapping[str, Any]) -> bool:
-    if not _only_fields(item, {"type", "id", "status", "role", "content", "phase", "summary", "annotations"}):
+    if not _only_fields(
+        item, {"type", "id", "status", "role", "content", "phase", "summary", "annotations"}
+    ):
         return False
     if item.get("role") != "assistant" or not _optional_item_status(item):
         return False
@@ -1483,7 +1505,9 @@ def _validate_assistant_message_item(item: Mapping[str, Any]) -> bool:
         return False
     total_bytes = 0
     for part in content:
-        if not isinstance(part, Mapping) or not _only_fields(part, {"type", "text", "annotations", "logprobs"}):
+        if not isinstance(part, Mapping) or not _only_fields(
+            part, {"type", "text", "annotations", "logprobs"}
+        ):
             return False
         if part.get("type") != "output_text":
             return False
@@ -1502,9 +1526,7 @@ def _validate_reasoning_text_part(part: Mapping[str, Any], *, expected_type: str
 
 
 def _validate_codex_output_text_part(part: Any, *, logprobs: Any) -> bool:
-    if not isinstance(part, Mapping) or set(part) != {
-        "type", "text", "annotations", "logprobs"
-    }:
+    if not isinstance(part, Mapping) or set(part) != {"type", "text", "annotations", "logprobs"}:
         return False
     return (
         part.get("type") == "output_text"
@@ -1536,7 +1558,9 @@ def _validate_reasoning_item(
                 return None
             encrypted_bytes = len(encrypted_content.encode("utf-8"))
         else:
-            if not _only_fields(item, {"type", "id", "status", "summary", "content", "encrypted_content"}):
+            if not _only_fields(
+                item, {"type", "id", "status", "summary", "content", "encrypted_content"}
+            ):
                 return None
             if not _optional_item_status(item):
                 return None
@@ -1545,7 +1569,9 @@ def _validate_reasoning_item(
                 return None
             encrypted_bytes = 0
     else:
-        if not _only_fields(item, {"type", "id", "status", "summary", "content", "encrypted_content"}):
+        if not _only_fields(
+            item, {"type", "id", "status", "summary", "content", "encrypted_content"}
+        ):
             return None
         if not _optional_item_status(item):
             return None

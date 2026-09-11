@@ -82,6 +82,8 @@ def _policy(settings: Settings) -> ResponsesRequestPolicy:
 
 def _policy_0149(settings: Settings) -> ResponsesRequestPolicy:
     return ResponsesRequestPolicy(settings, client_spec=CODEX_0149_POLICY_SPEC)
+
+
 def _function(name: str) -> dict[str, object]:
     return {
         "type": "function",
@@ -188,7 +190,9 @@ def _reasoning_added_event() -> dict[str, object]:
     }
 
 
-def _reasoning_part_event(event_type: str, sequence_number: int, text: str = "") -> dict[str, object]:
+def _reasoning_part_event(
+    event_type: str, sequence_number: int, text: str = ""
+) -> dict[str, object]:
     return {
         "type": event_type,
         "item_id": "reasoning_1",
@@ -273,9 +277,7 @@ def test_codex_0149_local_pair_drops_only_prompt_cache_key_for_upstream() -> Non
     )
     assert policy_result.effective_body == original
     assert local_body == {
-        key: value
-        for key, value in generic_body.items()
-        if key != "prompt_cache_key"
+        key: value for key, value in generic_body.items() if key != "prompt_cache_key"
     }
     assert generic_body["prompt_cache_key"] == "bounded-cache-key"
     assert _codex_local_pair_omits_prompt_cache_key(
@@ -384,7 +386,6 @@ def test_codex_0149_top_level_taxonomy_validates_continuation_and_replay() -> No
         )
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
 
-
     with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(
             {
@@ -420,9 +421,7 @@ def test_codex_0149_continuation_detector_rejects_custom_or_multiple_pairs() -> 
     assert not responses_codex_tool_roundtrip_requested(
         {"input": [call, {"type": "message"}, output], "stream": True}
     )
-    assert not responses_codex_tool_roundtrip_requested(
-        {"input": [call, output], "stream": False}
-    )
+    assert not responses_codex_tool_roundtrip_requested({"input": [call, output], "stream": False})
     assert not responses_codex_tool_roundtrip_requested({"input": [call, output]})
 
 
@@ -464,9 +463,7 @@ def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_autho
         policy.apply(
             body,
             **common,
-            codex_top_level_tool_taxonomy=frozenset(
-                {("functions", "not_declared", "function")}
-            ),
+            codex_top_level_tool_taxonomy=frozenset({("functions", "not_declared", "function")}),
         )
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
 
@@ -505,9 +502,7 @@ def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_autho
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
 
     with pytest.raises(ModuleSelectionError):
-        codex_0149_declared_tool_taxonomy(
-            {**body, "tools": [_function("wait"), _function("wait")]}
-        )
+        codex_0149_declared_tool_taxonomy({**body, "tools": [_function("wait"), _function("wait")]})
 
     with pytest.raises(ValueError, match="codex_top_level_tool_taxonomy_invalid"):
         codex_replay_request_candidates(
@@ -524,7 +519,6 @@ def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_autho
             ),
         )
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
-
 
 
 def test_exact_pair_tool_branch_is_rejected_until_live_shape_evidence_exists() -> None:
@@ -665,6 +659,548 @@ def _strict_function_profile() -> ResponsesStreamValidationProfile:
         codex_streaming_tool_events=True,
         codex_0149_function_tool_events=True,
         declared_client_tools=frozenset({("functions", "wait", "function")}),
+    )
+
+
+def _zero_argument_function_events() -> list[dict[str, object]]:
+    events = _strict_function_events()
+    del events[3:6]
+    events[2]["item"]["name"] = "local_lookup"
+    events[3]["item"]["name"] = "local_lookup"
+    events[4]["response"]["output"][0]["name"] = "local_lookup"
+    events[3]["item"]["arguments"] = ""
+    events[4]["response"]["output"][0]["arguments"] = ""
+    return events
+
+
+def _zero_argument_function_profile(
+    *,
+    names: frozenset[str] = frozenset({"local_lookup"}),
+) -> ResponsesStreamValidationProfile:
+    return ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        codex_0149_function_tool_events=True,
+        zero_argument_function_names=names,
+        declared_client_tools=frozenset({("functions", "local_lookup", "function")}),
+    )
+
+
+def test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_events() -> None:
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    events = _zero_argument_function_events()
+
+    assert [event["type"] for event in events] == [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert all(validator.validate(event) for event in events)
+    candidates = validator.take_replay_reference_candidates()
+    assert len(candidates) == 1
+    assert candidates[0].item_kind == "function_call"
+    assert candidates[0].tool_name == "local_lookup"
+
+
+def test_codex_0149_zero_argument_fact_is_pair_scoped_and_default_denied() -> None:
+    events = _zero_argument_function_events()
+    absent_fact_validator = ResponsesStreamEventValidator(
+        _zero_argument_function_profile(names=frozenset())
+    )
+    assert all(absent_fact_validator.validate(event) for event in events[:3])
+    assert not absent_fact_validator.validate(events[3])
+    assert absent_fact_validator.take_replay_reference_candidates() == ()
+    assert not absent_fact_validator.validate(events[4])
+
+    present_fact_validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(present_fact_validator.validate(event) for event in events)
+    assert len(present_fact_validator.take_replay_reference_candidates()) == 1
+
+
+def test_codex_0149_zero_argument_default_and_undeclared_profiles_fail_closed() -> None:
+    events = _zero_argument_function_events()
+    for profile in (
+        _strict_function_profile(),
+        ResponsesStreamValidationProfile(
+            codex_reasoning_events=True,
+            codex_streaming_tool_events=True,
+            declared_client_tools=frozenset({("functions", "local_lookup", "function")}),
+        ),
+    ):
+        validator = ResponsesStreamEventValidator(profile)
+        assert all(validator.validate(event) for event in events[:2])
+        assert not validator.validate(events[2])
+
+    undeclared = _zero_argument_function_events()
+    undeclared[2]["item"]["name"] = "not_declared"
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in undeclared[:2])
+    assert not validator.validate(undeclared[2])
+
+
+def _done_item(event: dict[str, object]) -> dict[str, object]:
+    item = event["item"]
+    assert isinstance(item, dict)
+    return item
+
+
+def _done_response(event: dict[str, object]) -> dict[str, object]:
+    response = event["response"]
+    assert isinstance(response, dict)
+    return response
+
+
+def _done_output(event: dict[str, object]) -> dict[str, object]:
+    output = _done_response(event)["output"]
+    assert isinstance(output, list)
+    item = output[0]
+    assert isinstance(item, dict)
+    return item
+
+
+def _done_missing_item_id(event: dict[str, object]) -> None:
+    _done_item(event).pop("id")
+
+
+def _done_mismatched_item_id(event: dict[str, object]) -> None:
+    _done_item(event)["id"] = "other_function"
+
+
+def _done_missing_call_id(event: dict[str, object]) -> None:
+    _done_item(event).pop("call_id")
+
+
+def _done_mismatched_call_id(event: dict[str, object]) -> None:
+    _done_item(event)["call_id"] = "other_call"
+
+
+def _done_missing_output_index(event: dict[str, object]) -> None:
+    event.pop("output_index")
+
+
+def _done_mismatched_output_index(event: dict[str, object]) -> None:
+    event["output_index"] = 1
+
+
+def _done_missing_completed_status(event: dict[str, object]) -> None:
+    _done_item(event).pop("status")
+
+
+def _done_wrong_completed_status(event: dict[str, object]) -> None:
+    _done_item(event)["status"] = "in_progress"
+
+
+def _done_wrong_namespace(event: dict[str, object]) -> None:
+    _done_item(event)["namespace"] = "functions"
+
+
+def _done_non_null_caller(event: dict[str, object]) -> None:
+    _done_item(event)["caller"] = {"type": "direct"}
+
+
+def _done_wrong_name(event: dict[str, object]) -> None:
+    _done_item(event)["name"] = "other"
+
+
+def _done_non_empty_arguments(event: dict[str, object]) -> None:
+    _done_item(event)["arguments"] = "not-json"
+
+
+def _done_canonical_empty_object_arguments(event: dict[str, object]) -> None:
+    _done_item(event)["arguments"] = "{}"
+
+
+def _done_extra_event_field(event: dict[str, object]) -> None:
+    event["unexpected"] = "rejected"
+
+
+def _done_extra_item_field(event: dict[str, object]) -> None:
+    _done_item(event)["unexpected"] = "rejected"
+
+
+def _done_missing_sequence(event: dict[str, object]) -> None:
+    event.pop("sequence_number")
+
+
+def _done_missing_item_type(event: dict[str, object]) -> None:
+    _done_item(event).pop("type")
+
+
+def _done_duplicate_sequence(event: dict[str, object]) -> None:
+    event["sequence_number"] = 2
+
+
+def _done_non_monotonic_sequence(event: dict[str, object]) -> None:
+    event["sequence_number"] = 0
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(_done_missing_item_id, id="missing-item-id"),
+        pytest.param(_done_mismatched_item_id, id="mismatched-item-id"),
+        pytest.param(_done_missing_call_id, id="missing-call-id"),
+        pytest.param(_done_mismatched_call_id, id="mismatched-call-id"),
+        pytest.param(_done_missing_output_index, id="missing-output-index"),
+        pytest.param(_done_mismatched_output_index, id="mismatched-output-index"),
+        pytest.param(_done_missing_completed_status, id="missing-completed-status"),
+        pytest.param(_done_wrong_completed_status, id="wrong-completed-status"),
+        pytest.param(_done_wrong_namespace, id="wrong-namespace"),
+        pytest.param(_done_non_null_caller, id="non-null-caller"),
+        pytest.param(_done_wrong_name, id="wrong-name"),
+        pytest.param(_done_non_empty_arguments, id="non-empty-arguments"),
+        pytest.param(_done_canonical_empty_object_arguments, id="canonical-empty-object"),
+        pytest.param(_done_extra_event_field, id="extra-event-field"),
+        pytest.param(_done_extra_item_field, id="extra-item-field"),
+        pytest.param(_done_missing_sequence, id="missing-sequence"),
+        pytest.param(_done_missing_item_type, id="missing-item-type"),
+        pytest.param(_done_duplicate_sequence, id="duplicate-sequence"),
+        pytest.param(_done_non_monotonic_sequence, id="non-monotonic-sequence"),
+    ],
+)
+def test_codex_0149_zero_argument_omission_item_done_mutations(mutation) -> None:
+    events = _zero_argument_function_events()
+    mutation(events[3])
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+    assert validator.take_replay_reference_candidates() == ()
+    assert not validator.validate(events[4])
+
+
+def _insert_empty_delta(events: list[dict[str, object]]) -> int:
+    events.insert(
+        3,
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 3,
+            "delta": "",
+        },
+    )
+    return 3
+
+
+def _insert_arguments_done_without_delta(events: list[dict[str, object]]) -> int:
+    events.insert(
+        3,
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 3,
+            "name": "local_lookup",
+            "arguments": "",
+        },
+    )
+    return 3
+
+
+def _insert_non_empty_delta_without_done(events: list[dict[str, object]]) -> int:
+    events.insert(
+        3,
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 3,
+            "delta": "{}",
+        },
+    )
+    events[4]["sequence_number"] = 4
+    return 4
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(_insert_empty_delta, id="empty-delta"),
+        pytest.param(_insert_arguments_done_without_delta, id="arguments-done-without-delta"),
+        pytest.param(_insert_non_empty_delta_without_done, id="non-empty-delta-without-done"),
+    ],
+)
+def test_codex_0149_zero_argument_omission_pre_completion_rejections(mutation) -> None:
+    events = _zero_argument_function_events()
+    failure_index = mutation(events)
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:failure_index])
+    assert not validator.validate(events[failure_index])
+
+
+def _duplicate_item_completion(events: list[dict[str, object]]) -> dict[str, object]:
+    duplicate = copy.deepcopy(events[3])
+    duplicate["sequence_number"] = 4
+    return duplicate
+
+
+def _argument_delta_after_item_done(events: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "type": "response.function_call_arguments.delta",
+        "item_id": "function_1",
+        "output_index": 0,
+        "sequence_number": 4,
+        "delta": "{}",
+    }
+
+
+def _arguments_done_after_item_done(events: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "type": "response.function_call_arguments.done",
+        "item_id": "function_1",
+        "output_index": 0,
+        "sequence_number": 4,
+        "name": "local_lookup",
+        "arguments": "",
+    }
+
+
+def _second_function_item(events: list[dict[str, object]]) -> dict[str, object]:
+    second = copy.deepcopy(events[2])
+    second["sequence_number"] = 4
+    second["item"]["id"] = "function_2"
+    second["item"]["call_id"] = "call_2"
+    return second
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(_duplicate_item_completion, id="duplicate-item-completion"),
+        pytest.param(_argument_delta_after_item_done, id="argument-delta-after-item-done"),
+        pytest.param(_arguments_done_after_item_done, id="arguments-done-after-item-done"),
+        pytest.param(_second_function_item, id="second-function-item"),
+    ],
+)
+def test_codex_0149_zero_argument_post_completion_mutations_are_rejected(mutation) -> None:
+    events = _zero_argument_function_events()
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:4])
+    assert len(validator.take_replay_reference_candidates()) == 1
+    assert not validator.validate(mutation(events))
+
+
+def _terminal_wrong_name(event: dict[str, object]) -> None:
+    _done_output(event)["name"] = "other"
+
+
+def _terminal_non_empty_arguments(event: dict[str, object]) -> None:
+    _done_output(event)["arguments"] = "{}"
+
+
+def _terminal_wrong_type(event: dict[str, object]) -> None:
+    _done_output(event)["type"] = "message"
+
+
+def _terminal_wrong_status(event: dict[str, object]) -> None:
+    _done_output(event)["status"] = "in_progress"
+
+
+def _terminal_missing_usage(event: dict[str, object]) -> None:
+    _done_response(event).pop("usage")
+
+
+def _terminal_invalid_usage(event: dict[str, object]) -> None:
+    usage = _done_response(event)["usage"]
+    assert isinstance(usage, dict)
+    usage["input_tokens"] = -1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(_terminal_wrong_name, id="wrong-terminal-name"),
+        pytest.param(_terminal_non_empty_arguments, id="wrong-terminal-arguments"),
+        pytest.param(_terminal_wrong_type, id="wrong-terminal-type"),
+        pytest.param(_terminal_wrong_status, id="wrong-terminal-status"),
+        pytest.param(_terminal_missing_usage, id="missing-terminal-usage"),
+        pytest.param(_terminal_invalid_usage, id="invalid-terminal-usage"),
+    ],
+)
+def test_codex_0149_zero_argument_terminal_mutations_are_rejected(mutation) -> None:
+    events = _zero_argument_function_events()
+    mutation(events[4])
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:4])
+    assert len(validator.take_replay_reference_candidates()) == 1
+    assert not validator.validate(events[4])
+
+
+def test_codex_0149_zero_argument_duplicate_terminal_is_rejected() -> None:
+    events = _zero_argument_function_events()
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events)
+    assert not validator.validate(copy.deepcopy(events[4]))
+
+
+def test_codex_0149_zero_argument_terminal_before_item_completion_is_rejected() -> None:
+    events = _zero_argument_function_events()
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[4])
+    assert validator.take_replay_reference_candidates() == ()
+
+
+def test_codex_0149_zero_argument_schema_does_not_authorize_canonical_empty_object() -> None:
+    events = _zero_argument_function_events()
+    events[3]["item"]["arguments"] = "{}"
+    events[4]["response"]["output"][0]["arguments"] = "{}"
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+    ordinary = _strict_function_events()
+    del ordinary[4]
+    ordinary[3]["delta"] = "{}"
+    ordinary[4]["arguments"] = "{}"
+    ordinary[5]["item"]["arguments"] = "{}"
+    ordinary[6]["response"]["output"][0]["arguments"] = "{}"
+    for event_index in (2, 4, 5):
+        if "item" in ordinary[event_index]:
+            ordinary[event_index]["item"]["name"] = "local_lookup"
+        else:
+            ordinary[event_index]["name"] = "local_lookup"
+    ordinary[6]["response"]["output"][0]["name"] = "local_lookup"
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in ordinary)
+
+    terminal_mismatch = _zero_argument_function_events()
+    terminal_mismatch[4]["response"]["output"][0]["arguments"] = "{}"
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in terminal_mismatch[:4])
+    assert not validator.validate(terminal_mismatch[4])
+
+
+_ZERO_ARGUMENT_OBLIGATION_NODES = {
+    "source.vllm_five_event_lifecycle": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_events",
+    "source.request_fact_is_declarative": "tests/unit/test_codex_client_modules.py::test_0149_derives_only_exact_top_level_zero_argument_function_fact",
+    "positive.fact_present_item_done_and_terminal": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_fact_is_pair_scoped_and_default_denied",
+    "negative.fact_absent_item_done_boundary": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_fact_is_pair_scoped_and_default_denied",
+    "negative.default_other_profile_isolation": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_default_and_undeclared_profiles_fail_closed",
+    "negative.undeclared_tool": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_default_and_undeclared_profiles_fail_closed",
+    "schema.eligibility_matrix": "tests/unit/test_codex_client_modules.py::test_0149_derives_only_exact_top_level_zero_argument_function_fact",
+    "lifecycle.canonical_empty_object": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_schema_does_not_authorize_canonical_empty_object",
+    "lifecycle.empty_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_pre_completion_rejections[empty-delta]",
+    "lifecycle.arguments_done_without_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_pre_completion_rejections[arguments-done-without-delta]",
+    "lifecycle.nonempty_delta_without_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_pre_completion_rejections[non-empty-delta-without-done]",
+    "omission.missing_item_id": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-item-id]",
+    "omission.mismatched_item_id": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[mismatched-item-id]",
+    "omission.missing_call_id": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-call-id]",
+    "omission.mismatched_call_id": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[mismatched-call-id]",
+    "omission.missing_output_index": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-output-index]",
+    "omission.mismatched_output_index": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[mismatched-output-index]",
+    "omission.missing_status": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-completed-status]",
+    "omission.wrong_status": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[wrong-completed-status]",
+    "omission.wrong_namespace": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[wrong-namespace]",
+    "omission.non_null_caller": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[non-null-caller]",
+    "omission.wrong_name": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[wrong-name]",
+    "omission.non_empty_arguments": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[non-empty-arguments]",
+    "omission.canonical_empty_object_arguments": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[canonical-empty-object]",
+    "omission.extra_event_field": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[extra-event-field]",
+    "omission.extra_item_field": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[extra-item-field]",
+    "omission.missing_sequence": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-sequence]",
+    "omission.missing_item_type": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-item-type]",
+    "omission.duplicate_sequence": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[duplicate-sequence]",
+    "omission.non_monotonic_sequence": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[non-monotonic-sequence]",
+    "post_completion.duplicate_item": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_post_completion_mutations_are_rejected[duplicate-item-completion]",
+    "post_completion.argument_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_post_completion_mutations_are_rejected[argument-delta-after-item-done]",
+    "post_completion.arguments_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_post_completion_mutations_are_rejected[arguments-done-after-item-done]",
+    "post_completion.second_function": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_post_completion_mutations_are_rejected[second-function-item]",
+    "terminal.wrong_name": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[wrong-terminal-name]",
+    "terminal.wrong_arguments": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[wrong-terminal-arguments]",
+    "terminal.wrong_type": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[wrong-terminal-type]",
+    "terminal.wrong_status": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[wrong-terminal-status]",
+    "terminal.missing_usage": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[missing-terminal-usage]",
+    "terminal.invalid_usage": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[invalid-terminal-usage]",
+    "terminal.duplicate_completion": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_duplicate_terminal_is_rejected",
+    "terminal.before_item_completion": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_before_item_completion_is_rejected",
+    "failure.provider_failed": "tests/unit/test_responses_codex_streaming_tools.py::test_hosted_authority_unknown_and_provider_failure_events_fail_closed[event4]",
+    "failure.provider_incomplete": "tests/unit/test_responses_codex_streaming_tools.py::test_hosted_authority_unknown_and_provider_failure_events_fail_closed[event5]",
+    "failure.truncation": "tests/unit/test_responses_codex_streaming_tools.py::test_tool_output_interruption_paths_record_estimated_usage[responses_streaming_usage_missing_estimated]",
+    "failure.provider_error": "tests/unit/test_responses_codex_streaming_tools.py::test_tool_output_interruption_paths_record_estimated_usage[responses_streaming_provider_error_estimated]",
+    "failure.client_disconnect": "tests/unit/test_responses_codex_streaming_tools.py::test_tool_output_interruption_paths_record_estimated_usage[responses_streaming_client_disconnected_estimated]",
+    "replay.candidate_after_valid_item_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_events",
+    "replay.persistence_after_accounting": "tests/integration/test_codex_replay_references_postgres.py::test_codex_replay_postgres_hmac_only_same_key_and_expiry",
+    "privacy.hmac_only_durable_state": "tests/integration/test_codex_replay_references_postgres.py::test_codex_replay_postgres_hmac_only_same_key_and_expiry",
+    "accounting.zero_pending_handler": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e",
+    "authority.no_external_tool_facts": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e",
+    "e2e.vllm_five_event_handler_path": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e",
+    "metadata.stale_version_three_denied": "tests/integration/test_codex_client_modules_postgres.py::test_codex_0149_old_metadata_rejection_has_no_postgres_side_effect[3]",
+}
+
+_ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS = frozenset(
+    {
+        "source.vllm_five_event_lifecycle",
+        "source.request_fact_is_declarative",
+        "positive.fact_present_item_done_and_terminal",
+        "negative.fact_absent_item_done_boundary",
+        "negative.default_other_profile_isolation",
+        "negative.undeclared_tool",
+        "schema.eligibility_matrix",
+        "lifecycle.canonical_empty_object",
+        "lifecycle.empty_delta",
+        "lifecycle.arguments_done_without_delta",
+        "lifecycle.nonempty_delta_without_done",
+        "omission.missing_item_id",
+        "omission.mismatched_item_id",
+        "omission.missing_call_id",
+        "omission.mismatched_call_id",
+        "omission.missing_output_index",
+        "omission.mismatched_output_index",
+        "omission.missing_status",
+        "omission.wrong_status",
+        "omission.wrong_namespace",
+        "omission.non_null_caller",
+        "omission.wrong_name",
+        "omission.non_empty_arguments",
+        "omission.canonical_empty_object_arguments",
+        "omission.extra_event_field",
+        "omission.extra_item_field",
+        "omission.missing_sequence",
+        "omission.missing_item_type",
+        "omission.duplicate_sequence",
+        "omission.non_monotonic_sequence",
+        "post_completion.duplicate_item",
+        "post_completion.argument_delta",
+        "post_completion.arguments_done",
+        "post_completion.second_function",
+        "terminal.wrong_name",
+        "terminal.wrong_arguments",
+        "terminal.wrong_type",
+        "terminal.wrong_status",
+        "terminal.missing_usage",
+        "terminal.invalid_usage",
+        "terminal.duplicate_completion",
+        "terminal.before_item_completion",
+        "failure.provider_failed",
+        "failure.provider_incomplete",
+        "failure.truncation",
+        "failure.provider_error",
+        "failure.client_disconnect",
+        "replay.candidate_after_valid_item_done",
+        "replay.persistence_after_accounting",
+        "privacy.hmac_only_durable_state",
+        "accounting.zero_pending_handler",
+        "authority.no_external_tool_facts",
+        "e2e.vllm_five_event_handler_path",
+        "metadata.stale_version_three_denied",
+    }
+)
+
+
+def test_codex_0149_zero_argument_obligation_manifest_is_complete() -> None:
+    obligation_ids = tuple(_ZERO_ARGUMENT_OBLIGATION_NODES)
+    assert len(obligation_ids) == len(set(obligation_ids))
+    assert set(obligation_ids) == _ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS
+    missing = sorted(_ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS - set(obligation_ids))
+    unknown = sorted(set(obligation_ids) - _ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS)
+    assert missing == []
+    assert unknown == []
+    assert all(
+        node.startswith(("tests/unit/", "tests/integration/", "tests/e2e/"))
+        for node in _ZERO_ARGUMENT_OBLIGATION_NODES.values()
     )
 
 
@@ -949,7 +1485,9 @@ def _message_added_event() -> dict[str, object]:
     }
 
 
-def _message_content_part(event_type: str, sequence_number: int, text: str = "") -> dict[str, object]:
+def _message_content_part(
+    event_type: str, sequence_number: int, text: str = ""
+) -> dict[str, object]:
     return {
         "type": event_type,
         "item_id": "message_1",
@@ -1031,7 +1569,7 @@ def _strict_response_event(event_type: str, sequence_number: int) -> dict[str, o
                             }
                         ],
                         "phase": None,
-                    }
+                    },
                 ],
                 "usage": {
                     "input_tokens": 1,
@@ -1156,7 +1694,9 @@ def test_codex_0149_completed_requires_usage_and_no_active_output() -> None:
         lambda response: response.update(output="not-a-list"),
         lambda response: response.update(output=[]),
         lambda response: response["output"].__setitem__(0, {"type": "function_call"}),
-        lambda response: response["output"].__setitem__(0, {**response["output"][0], "status": "completed"}),
+        lambda response: response["output"].__setitem__(
+            0, {**response["output"][0], "status": "completed"}
+        ),
         lambda response: response["usage"]["input_tokens_details"].update(cached_tokens=-1),
         lambda response: response["usage"]["output_tokens_details"].update(reasoning_tokens=-1),
         lambda response: response["usage"]["output_tokens_details"].update(tool_output_tokens="0"),
@@ -1186,9 +1726,7 @@ def test_codex_0149_reasoning_item_lifecycle_is_exactly_scoped() -> None:
     assert validator.validate(
         _reasoning_text_event("response.reasoning_text.delta", 3, delta="bound")
     )
-    assert validator.validate(
-        _reasoning_text_event("response.reasoning_text.delta", 4, delta="ed")
-    )
+    assert validator.validate(_reasoning_text_event("response.reasoning_text.delta", 4, delta="ed"))
     assert validator.validate(
         _reasoning_text_event("response.reasoning_text.done", 5, text="bounded")
     )
@@ -1396,9 +1934,7 @@ def test_encrypted_reasoning_requires_gate_done_event_and_cumulative_cap() -> No
                 encrypted_content="x" * 262_144,
             )
         )
-    assert not validator.validate(
-        _done_reasoning(item_id="rs_over", encrypted_content="x")
-    )
+    assert not validator.validate(_done_reasoning(item_id="rs_over", encrypted_content="x"))
     assert len(validator.take_replay_reference_candidates()) == 4
 
 
@@ -1485,9 +2021,7 @@ def test_streaming_client_tools_require_three_independent_key_gates(
         "allow_codex_streaming_tool_events": stream_events,
     }
     if allowed:
-        assert _policy(Settings()).apply(_body(), **kwargs).effective_body[
-            "stream"
-        ] is True
+        assert _policy(Settings()).apply(_body(), **kwargs).effective_body["stream"] is True
     else:
         with pytest.raises(RequestPolicyError):
             _policy(Settings()).apply(_body(), **kwargs)
@@ -1683,9 +2217,7 @@ def test_reasoning_message_and_terminal_event_table_is_bounded() -> None:
         },
     ]
 
-    assert set(event["type"] for event in events).issubset(
-        RESPONSES_CODEX_STREAM_EVENT_TYPES
-    )
+    assert set(event["type"] for event in events).issubset(RESPONSES_CODEX_STREAM_EVENT_TYPES)
     assert all(validator.validate(event) for event in events)
 
 
@@ -1908,9 +2440,7 @@ def test_event_and_replay_size_caps_fail_closed_without_echoing_content() -> Non
         {"type": "custom_tool_call_output", "call_id": "call_1", "output": "x"},
     ]
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(
-            Settings(RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=4)
-        ).apply(
+        _policy(Settings(RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=4)).apply(
             _body(input_items=items),
             allow_codex_request_envelope=True,
             allow_codex_client_tools=True,
@@ -2091,10 +2621,10 @@ def test_unknown_codex_output_item_fields_remain_denied(unknown_field: str) -> N
         ],
         [
             _additional_tools(),
-                {
-                    "type": "function_call",
-                    "id": "fc_1",
-                    "name": "unknown",
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "name": "unknown",
                 "call_id": "call_1",
                 "arguments": "{}",
             },
@@ -2107,10 +2637,10 @@ def test_unknown_codex_output_item_fields_remain_denied(unknown_field: str) -> N
         ],
         [
             _additional_tools(),
-                {
-                    "type": "function_call",
-                    "id": "fc_1",
-                    "name": "wait",
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "name": "wait",
                 "call_id": "call_1",
                 "arguments": "{}",
             },
@@ -2123,10 +2653,10 @@ def test_unknown_codex_output_item_fields_remain_denied(unknown_field: str) -> N
         ],
         [
             _additional_tools(),
-                {
-                    "type": "custom_tool_call",
-                    "id": "ctc_1",
-                    "namespace": "collaboration",
+            {
+                "type": "custom_tool_call",
+                "id": "ctc_1",
+                "namespace": "collaboration",
                 "name": "send_message",
                 "call_id": "call_1",
                 "input": PRIVATE_CANARY,
@@ -2443,7 +2973,7 @@ def test_manual_verifier_fixture_pin_and_pytest_purity() -> None:
         "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
     )
     source = Path("scripts/verify_codex_tool_roundtrip.py").read_text()
-    assert "if __name__ == \"__main__\"" in source
+    assert 'if __name__ == "__main__"' in source
     assert "verify_roundtrip(" not in source.split('if __name__ == "__main__"')[1]
 
 
@@ -2494,7 +3024,9 @@ def test_gateway_forwards_frames_in_order_and_holds_completed_until_accounting(
             },
         },
     ]
-    raw_events = [f"data: {json.dumps(payload, separators=(',', ':'))}\n\n" for payload in event_payloads]
+    raw_events = [
+        f"data: {json.dumps(payload, separators=(',', ':'))}\n\n" for payload in event_payloads
+    ]
 
     class FakeAdapter:
         async def stream_response(self, request):
