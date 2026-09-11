@@ -706,6 +706,21 @@ def test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_eve
 
 def test_codex_0149_zero_argument_fact_is_pair_scoped_and_default_denied() -> None:
     events = _zero_argument_function_events()
+    absent_fact_validator = ResponsesStreamEventValidator(
+        _zero_argument_function_profile(names=frozenset())
+    )
+    assert all(absent_fact_validator.validate(event) for event in events[:3])
+    assert not absent_fact_validator.validate(events[3])
+    assert absent_fact_validator.take_replay_reference_candidates() == ()
+    assert not absent_fact_validator.validate(events[4])
+
+    present_fact_validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(present_fact_validator.validate(event) for event in events)
+    assert len(present_fact_validator.take_replay_reference_candidates()) == 1
+
+
+def test_codex_0149_zero_argument_default_and_undeclared_profiles_fail_closed() -> None:
+    events = _zero_argument_function_events()
     for profile in (
         _strict_function_profile(),
         ResponsesStreamValidationProfile(
@@ -717,6 +732,12 @@ def test_codex_0149_zero_argument_fact_is_pair_scoped_and_default_denied() -> No
         validator = ResponsesStreamEventValidator(profile)
         assert all(validator.validate(event) for event in events[:2])
         assert not validator.validate(events[2])
+
+    undeclared = _zero_argument_function_events()
+    undeclared[2]["item"]["name"] = "not_declared"
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in undeclared[:2])
+    assert not validator.validate(undeclared[2])
 
 
 @pytest.mark.parametrize(
@@ -800,34 +821,77 @@ def test_codex_0149_zero_argument_schema_does_not_authorize_canonical_empty_obje
     assert not validator.validate(terminal_mismatch[4])
 
 
-def test_codex_0149_zero_argument_obligation_manifest_is_complete() -> None:
-    lifecycle_validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
-    lifecycle_passed = all(
-        lifecycle_validator.validate(event) for event in _zero_argument_function_events()
-    )
-    replay_validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
-    replay_passed = all(
-        replay_validator.validate(event) for event in _zero_argument_function_events()
-    ) and bool(replay_validator.take_replay_reference_candidates())
-    mismatch = _zero_argument_function_events()
-    mismatch[3]["item"]["arguments"] = "{}"
-    mismatch_validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
-    mismatch_rejected = all(
-        mismatch_validator.validate(event) for event in mismatch[:3]
-    ) and not mismatch_validator.validate(mismatch[3])
-    obligations = {
-        "source.lifecycle_without_argument_events": lifecycle_passed,
-        "source.replay_candidate_after_completion": replay_passed,
-        "negative.fact_absent": not ResponsesStreamEventValidator(
-            _strict_function_profile()
-        ).validate(_zero_argument_function_events()[2]),
-        "negative.wrong_argument_semantics": mismatch_rejected,
-        "negative.default_profile": not ResponsesStreamEventValidator(
-            ResponsesStreamValidationProfile()
-        ).validate(_zero_argument_function_events()[2]),
+_ZERO_ARGUMENT_OBLIGATION_NODES = {
+    "source.vllm_five_event_lifecycle": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_events",
+    "source.request_fact_is_declarative": "tests/unit/test_codex_client_modules.py::test_0149_derives_only_exact_top_level_zero_argument_function_fact",
+    "positive.fact_present_item_done_and_terminal": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_fact_is_pair_scoped_and_default_denied",
+    "negative.fact_absent_item_done_boundary": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_fact_is_pair_scoped_and_default_denied",
+    "negative.default_other_profile_isolation": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_default_and_undeclared_profiles_fail_closed",
+    "negative.undeclared_tool": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_default_and_undeclared_profiles_fail_closed",
+    "schema.eligibility_matrix": "tests/unit/test_codex_client_modules.py::test_0149_derives_only_exact_top_level_zero_argument_function_fact",
+    "lifecycle.canonical_empty_object": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_schema_does_not_authorize_canonical_empty_object",
+    "lifecycle.empty_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_rejects_empty_delta_and_arguments_done",
+    "lifecycle.arguments_done_without_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_rejects_empty_delta_and_arguments_done",
+    "lifecycle.nonempty_delta_without_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_function_branch_fails_closed_for_lifecycle_boundaries",
+    "boundary.item_done_fields_and_coordinates": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_done_requires_exact_event_coordinates_and_no_inner_coordinates[<lambda>0]",
+    "boundary.duplicate_reorder_sequence_second_item": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_function_branch_rejects_exact_duplicate_and_order_errors",
+    "boundary.item_done_identity_status_namespace_caller_extra": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_function_item_shapes_are_event_specific[<lambda>0]",
+    "boundary.terminal_output_and_usage": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_completed_output_and_usage_reject_malformed_facts[<lambda>0]",
+    "boundary.terminal_duplicate_and_missing_completion": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_completed_requires_usage_and_no_active_output",
+    "boundary.provider_failure_and_incomplete": "tests/unit/test_responses_codex_streaming_tools.py::test_hosted_authority_unknown_and_provider_failure_events_fail_closed[event4]",
+    "boundary.truncation_and_abnormal_close": "tests/unit/test_responses_codex_streaming_tools.py::test_tool_output_interruption_paths_record_estimated_usage[responses_streaming_usage_missing_estimated]",
+    "replay.candidate_after_valid_item_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_events",
+    "replay.persistence_after_accounting": "tests/integration/test_codex_replay_references_postgres.py::test_codex_replay_postgres_hmac_only_same_key_and_expiry",
+    "privacy.hmac_only_durable_state": "tests/integration/test_codex_replay_references_postgres.py::test_codex_replay_postgres_hmac_only_same_key_and_expiry",
+    "accounting.zero_pending_handler": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e",
+    "authority.no_external_tool_facts": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e",
+    "e2e.vllm_five_event_handler_path": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e",
+    "metadata.stale_version_three_denied": "tests/integration/test_codex_client_modules_postgres.py::test_codex_0149_old_metadata_rejection_has_no_postgres_side_effect[3]",
+}
+
+_ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS = frozenset(
+    {
+        "source.vllm_five_event_lifecycle",
+        "source.request_fact_is_declarative",
+        "positive.fact_present_item_done_and_terminal",
+        "negative.fact_absent_item_done_boundary",
+        "negative.default_other_profile_isolation",
+        "negative.undeclared_tool",
+        "schema.eligibility_matrix",
+        "lifecycle.canonical_empty_object",
+        "lifecycle.empty_delta",
+        "lifecycle.arguments_done_without_delta",
+        "lifecycle.nonempty_delta_without_done",
+        "boundary.item_done_fields_and_coordinates",
+        "boundary.duplicate_reorder_sequence_second_item",
+        "boundary.item_done_identity_status_namespace_caller_extra",
+        "boundary.terminal_output_and_usage",
+        "boundary.terminal_duplicate_and_missing_completion",
+        "boundary.provider_failure_and_incomplete",
+        "boundary.truncation_and_abnormal_close",
+        "replay.candidate_after_valid_item_done",
+        "replay.persistence_after_accounting",
+        "privacy.hmac_only_durable_state",
+        "accounting.zero_pending_handler",
+        "authority.no_external_tool_facts",
+        "e2e.vllm_five_event_handler_path",
+        "metadata.stale_version_three_denied",
     }
-    missing = [name for name, passed in obligations.items() if not passed]
+)
+
+
+def test_codex_0149_zero_argument_obligation_manifest_is_complete() -> None:
+    obligation_ids = tuple(_ZERO_ARGUMENT_OBLIGATION_NODES)
+    assert len(obligation_ids) == len(set(obligation_ids))
+    assert set(obligation_ids) == _ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS
+    missing = sorted(_ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS - set(obligation_ids))
+    unknown = sorted(set(obligation_ids) - _ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS)
     assert missing == []
+    assert unknown == []
+    assert all(
+        node.startswith(("tests/unit/", "tests/integration/", "tests/e2e/"))
+        for node in _ZERO_ARGUMENT_OBLIGATION_NODES.values()
+    )
 
 
 def test_codex_0149_function_lifecycle_is_ordered_and_declared() -> None:

@@ -176,8 +176,13 @@ def _codex_zero_argument_function_stream(response: dict[str, object]) -> str:
                 "response": {"id": response_id, "status": "in_progress"},
             },
             {
-                "type": "response.output_item.added",
+                "type": "response.in_progress",
                 "sequence_number": 1,
+                "response": {"id": response_id, "status": "in_progress"},
+            },
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 2,
                 "output_index": 0,
                 "item": {
                     "type": "function_call",
@@ -192,7 +197,7 @@ def _codex_zero_argument_function_stream(response: dict[str, object]) -> str:
             },
             {
                 "type": "response.output_item.done",
-                "sequence_number": 2,
+                "sequence_number": 3,
                 "output_index": 0,
                 "item": {
                     "type": "function_call",
@@ -207,7 +212,7 @@ def _codex_zero_argument_function_stream(response: dict[str, object]) -> str:
             },
             {
                 "type": "response.completed",
-                "sequence_number": 3,
+                "sequence_number": 4,
                 "response": response,
             },
         )
@@ -1191,6 +1196,7 @@ def test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e(
 
     assert [event.type for event in events] == [
         "response.created",
+        "response.in_progress",
         "response.output_item.added",
         "response.output_item.done",
         "response.completed",
