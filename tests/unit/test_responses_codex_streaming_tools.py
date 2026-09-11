@@ -740,26 +740,137 @@ def test_codex_0149_zero_argument_default_and_undeclared_profiles_fail_closed() 
     assert not validator.validate(undeclared[2])
 
 
+def _done_item(event: dict[str, object]) -> dict[str, object]:
+    item = event["item"]
+    assert isinstance(item, dict)
+    return item
+
+
+def _done_response(event: dict[str, object]) -> dict[str, object]:
+    response = event["response"]
+    assert isinstance(response, dict)
+    return response
+
+
+def _done_output(event: dict[str, object]) -> dict[str, object]:
+    output = _done_response(event)["output"]
+    assert isinstance(output, list)
+    item = output[0]
+    assert isinstance(item, dict)
+    return item
+
+
+def _done_missing_item_id(event: dict[str, object]) -> None:
+    _done_item(event).pop("id")
+
+
+def _done_mismatched_item_id(event: dict[str, object]) -> None:
+    _done_item(event)["id"] = "other_function"
+
+
+def _done_missing_call_id(event: dict[str, object]) -> None:
+    _done_item(event).pop("call_id")
+
+
+def _done_mismatched_call_id(event: dict[str, object]) -> None:
+    _done_item(event)["call_id"] = "other_call"
+
+
+def _done_missing_output_index(event: dict[str, object]) -> None:
+    event.pop("output_index")
+
+
+def _done_mismatched_output_index(event: dict[str, object]) -> None:
+    event["output_index"] = 1
+
+
+def _done_missing_completed_status(event: dict[str, object]) -> None:
+    _done_item(event).pop("status")
+
+
+def _done_wrong_completed_status(event: dict[str, object]) -> None:
+    _done_item(event)["status"] = "in_progress"
+
+
+def _done_wrong_namespace(event: dict[str, object]) -> None:
+    _done_item(event)["namespace"] = "functions"
+
+
+def _done_non_null_caller(event: dict[str, object]) -> None:
+    _done_item(event)["caller"] = {"type": "direct"}
+
+
+def _done_wrong_name(event: dict[str, object]) -> None:
+    _done_item(event)["name"] = "other"
+
+
+def _done_non_empty_arguments(event: dict[str, object]) -> None:
+    _done_item(event)["arguments"] = "not-json"
+
+
+def _done_canonical_empty_object_arguments(event: dict[str, object]) -> None:
+    _done_item(event)["arguments"] = "{}"
+
+
+def _done_extra_event_field(event: dict[str, object]) -> None:
+    event["unexpected"] = "rejected"
+
+
+def _done_extra_item_field(event: dict[str, object]) -> None:
+    _done_item(event)["unexpected"] = "rejected"
+
+
+def _done_missing_sequence(event: dict[str, object]) -> None:
+    event.pop("sequence_number")
+
+
+def _done_missing_item_type(event: dict[str, object]) -> None:
+    _done_item(event).pop("type")
+
+
+def _done_duplicate_sequence(event: dict[str, object]) -> None:
+    event["sequence_number"] = 2
+
+
+def _done_non_monotonic_sequence(event: dict[str, object]) -> None:
+    event["sequence_number"] = 0
+
+
 @pytest.mark.parametrize(
-    ("name", "arguments"),
+    "mutation",
     [
-        ("other", ""),
-        ("local_lookup", "{}"),
+        pytest.param(_done_missing_item_id, id="missing-item-id"),
+        pytest.param(_done_mismatched_item_id, id="mismatched-item-id"),
+        pytest.param(_done_missing_call_id, id="missing-call-id"),
+        pytest.param(_done_mismatched_call_id, id="mismatched-call-id"),
+        pytest.param(_done_missing_output_index, id="missing-output-index"),
+        pytest.param(_done_mismatched_output_index, id="mismatched-output-index"),
+        pytest.param(_done_missing_completed_status, id="missing-completed-status"),
+        pytest.param(_done_wrong_completed_status, id="wrong-completed-status"),
+        pytest.param(_done_wrong_namespace, id="wrong-namespace"),
+        pytest.param(_done_non_null_caller, id="non-null-caller"),
+        pytest.param(_done_wrong_name, id="wrong-name"),
+        pytest.param(_done_non_empty_arguments, id="non-empty-arguments"),
+        pytest.param(_done_canonical_empty_object_arguments, id="canonical-empty-object"),
+        pytest.param(_done_extra_event_field, id="extra-event-field"),
+        pytest.param(_done_extra_item_field, id="extra-item-field"),
+        pytest.param(_done_missing_sequence, id="missing-sequence"),
+        pytest.param(_done_missing_item_type, id="missing-item-type"),
+        pytest.param(_done_duplicate_sequence, id="duplicate-sequence"),
+        pytest.param(_done_non_monotonic_sequence, id="non-monotonic-sequence"),
     ],
 )
-def test_codex_0149_zero_argument_omission_rejects_name_or_argument_mismatch(
-    name: str, arguments: str
-) -> None:
+def test_codex_0149_zero_argument_omission_item_done_mutations(mutation) -> None:
     events = _zero_argument_function_events()
-    events[3]["item"]["name"] = name
-    events[3]["item"]["arguments"] = arguments
+    mutation(events[3])
     validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
     assert all(validator.validate(event) for event in events[:3])
     assert not validator.validate(events[3])
+    assert validator.take_replay_reference_candidates() == ()
+    assert not validator.validate(events[4])
 
 
-def test_codex_0149_zero_argument_omission_rejects_empty_delta_and_arguments_done() -> None:
-    events = _zero_argument_function_events()
+def _insert_empty_delta(events: list[dict[str, object]]) -> int:
     events.insert(
         3,
         {
@@ -770,11 +881,10 @@ def test_codex_0149_zero_argument_omission_rejects_empty_delta_and_arguments_don
             "delta": "",
         },
     )
-    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
-    assert all(validator.validate(event) for event in events[:3])
-    assert not validator.validate(events[3])
+    return 3
 
-    events = _zero_argument_function_events()
+
+def _insert_arguments_done_without_delta(events: list[dict[str, object]]) -> int:
     events.insert(
         3,
         {
@@ -786,9 +896,151 @@ def test_codex_0149_zero_argument_omission_rejects_empty_delta_and_arguments_don
             "arguments": "",
         },
     )
+    return 3
+
+
+def _insert_non_empty_delta_without_done(events: list[dict[str, object]]) -> int:
+    events.insert(
+        3,
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 3,
+            "delta": "{}",
+        },
+    )
+    events[4]["sequence_number"] = 4
+    return 4
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(_insert_empty_delta, id="empty-delta"),
+        pytest.param(_insert_arguments_done_without_delta, id="arguments-done-without-delta"),
+        pytest.param(_insert_non_empty_delta_without_done, id="non-empty-delta-without-done"),
+    ],
+)
+def test_codex_0149_zero_argument_omission_pre_completion_rejections(mutation) -> None:
+    events = _zero_argument_function_events()
+    failure_index = mutation(events)
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:failure_index])
+    assert not validator.validate(events[failure_index])
+
+
+def _duplicate_item_completion(events: list[dict[str, object]]) -> dict[str, object]:
+    duplicate = copy.deepcopy(events[3])
+    duplicate["sequence_number"] = 4
+    return duplicate
+
+
+def _argument_delta_after_item_done(events: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "type": "response.function_call_arguments.delta",
+        "item_id": "function_1",
+        "output_index": 0,
+        "sequence_number": 4,
+        "delta": "{}",
+    }
+
+
+def _arguments_done_after_item_done(events: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "type": "response.function_call_arguments.done",
+        "item_id": "function_1",
+        "output_index": 0,
+        "sequence_number": 4,
+        "name": "local_lookup",
+        "arguments": "",
+    }
+
+
+def _second_function_item(events: list[dict[str, object]]) -> dict[str, object]:
+    second = copy.deepcopy(events[2])
+    second["sequence_number"] = 4
+    second["item"]["id"] = "function_2"
+    second["item"]["call_id"] = "call_2"
+    return second
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(_duplicate_item_completion, id="duplicate-item-completion"),
+        pytest.param(_argument_delta_after_item_done, id="argument-delta-after-item-done"),
+        pytest.param(_arguments_done_after_item_done, id="arguments-done-after-item-done"),
+        pytest.param(_second_function_item, id="second-function-item"),
+    ],
+)
+def test_codex_0149_zero_argument_post_completion_mutations_are_rejected(mutation) -> None:
+    events = _zero_argument_function_events()
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:4])
+    assert len(validator.take_replay_reference_candidates()) == 1
+    assert not validator.validate(mutation(events))
+
+
+def _terminal_wrong_name(event: dict[str, object]) -> None:
+    _done_output(event)["name"] = "other"
+
+
+def _terminal_non_empty_arguments(event: dict[str, object]) -> None:
+    _done_output(event)["arguments"] = "{}"
+
+
+def _terminal_wrong_type(event: dict[str, object]) -> None:
+    _done_output(event)["type"] = "message"
+
+
+def _terminal_wrong_status(event: dict[str, object]) -> None:
+    _done_output(event)["status"] = "in_progress"
+
+
+def _terminal_missing_usage(event: dict[str, object]) -> None:
+    _done_response(event).pop("usage")
+
+
+def _terminal_invalid_usage(event: dict[str, object]) -> None:
+    usage = _done_response(event)["usage"]
+    assert isinstance(usage, dict)
+    usage["input_tokens"] = -1
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(_terminal_wrong_name, id="wrong-terminal-name"),
+        pytest.param(_terminal_non_empty_arguments, id="wrong-terminal-arguments"),
+        pytest.param(_terminal_wrong_type, id="wrong-terminal-type"),
+        pytest.param(_terminal_wrong_status, id="wrong-terminal-status"),
+        pytest.param(_terminal_missing_usage, id="missing-terminal-usage"),
+        pytest.param(_terminal_invalid_usage, id="invalid-terminal-usage"),
+    ],
+)
+def test_codex_0149_zero_argument_terminal_mutations_are_rejected(mutation) -> None:
+    events = _zero_argument_function_events()
+    mutation(events[4])
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:4])
+    assert len(validator.take_replay_reference_candidates()) == 1
+    assert not validator.validate(events[4])
+
+
+def test_codex_0149_zero_argument_duplicate_terminal_is_rejected() -> None:
+    events = _zero_argument_function_events()
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events)
+    assert not validator.validate(copy.deepcopy(events[4]))
+
+
+def test_codex_0149_zero_argument_terminal_before_item_completion_is_rejected() -> None:
+    events = _zero_argument_function_events()
     validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
     assert all(validator.validate(event) for event in events[:3])
-    assert not validator.validate(events[3])
+    assert not validator.validate(events[4])
+    assert validator.take_replay_reference_candidates() == ()
 
 
 def test_codex_0149_zero_argument_schema_does_not_authorize_canonical_empty_object() -> None:
@@ -830,16 +1082,45 @@ _ZERO_ARGUMENT_OBLIGATION_NODES = {
     "negative.undeclared_tool": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_default_and_undeclared_profiles_fail_closed",
     "schema.eligibility_matrix": "tests/unit/test_codex_client_modules.py::test_0149_derives_only_exact_top_level_zero_argument_function_fact",
     "lifecycle.canonical_empty_object": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_schema_does_not_authorize_canonical_empty_object",
-    "lifecycle.empty_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_rejects_empty_delta_and_arguments_done",
-    "lifecycle.arguments_done_without_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_rejects_empty_delta_and_arguments_done",
-    "lifecycle.nonempty_delta_without_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_function_branch_fails_closed_for_lifecycle_boundaries",
-    "boundary.item_done_fields_and_coordinates": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_done_requires_exact_event_coordinates_and_no_inner_coordinates[<lambda>0]",
-    "boundary.duplicate_reorder_sequence_second_item": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_function_branch_rejects_exact_duplicate_and_order_errors",
-    "boundary.item_done_identity_status_namespace_caller_extra": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_function_item_shapes_are_event_specific[<lambda>0]",
-    "boundary.terminal_output_and_usage": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_completed_output_and_usage_reject_malformed_facts[<lambda>0]",
-    "boundary.terminal_duplicate_and_missing_completion": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_completed_requires_usage_and_no_active_output",
-    "boundary.provider_failure_and_incomplete": "tests/unit/test_responses_codex_streaming_tools.py::test_hosted_authority_unknown_and_provider_failure_events_fail_closed[event4]",
-    "boundary.truncation_and_abnormal_close": "tests/unit/test_responses_codex_streaming_tools.py::test_tool_output_interruption_paths_record_estimated_usage[responses_streaming_usage_missing_estimated]",
+    "lifecycle.empty_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_pre_completion_rejections[empty-delta]",
+    "lifecycle.arguments_done_without_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_pre_completion_rejections[arguments-done-without-delta]",
+    "lifecycle.nonempty_delta_without_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_pre_completion_rejections[non-empty-delta-without-done]",
+    "omission.missing_item_id": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-item-id]",
+    "omission.mismatched_item_id": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[mismatched-item-id]",
+    "omission.missing_call_id": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-call-id]",
+    "omission.mismatched_call_id": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[mismatched-call-id]",
+    "omission.missing_output_index": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-output-index]",
+    "omission.mismatched_output_index": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[mismatched-output-index]",
+    "omission.missing_status": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-completed-status]",
+    "omission.wrong_status": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[wrong-completed-status]",
+    "omission.wrong_namespace": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[wrong-namespace]",
+    "omission.non_null_caller": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[non-null-caller]",
+    "omission.wrong_name": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[wrong-name]",
+    "omission.non_empty_arguments": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[non-empty-arguments]",
+    "omission.canonical_empty_object_arguments": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[canonical-empty-object]",
+    "omission.extra_event_field": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[extra-event-field]",
+    "omission.extra_item_field": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[extra-item-field]",
+    "omission.missing_sequence": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-sequence]",
+    "omission.missing_item_type": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[missing-item-type]",
+    "omission.duplicate_sequence": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[duplicate-sequence]",
+    "omission.non_monotonic_sequence": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_omission_item_done_mutations[non-monotonic-sequence]",
+    "post_completion.duplicate_item": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_post_completion_mutations_are_rejected[duplicate-item-completion]",
+    "post_completion.argument_delta": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_post_completion_mutations_are_rejected[argument-delta-after-item-done]",
+    "post_completion.arguments_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_post_completion_mutations_are_rejected[arguments-done-after-item-done]",
+    "post_completion.second_function": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_post_completion_mutations_are_rejected[second-function-item]",
+    "terminal.wrong_name": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[wrong-terminal-name]",
+    "terminal.wrong_arguments": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[wrong-terminal-arguments]",
+    "terminal.wrong_type": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[wrong-terminal-type]",
+    "terminal.wrong_status": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[wrong-terminal-status]",
+    "terminal.missing_usage": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[missing-terminal-usage]",
+    "terminal.invalid_usage": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_mutations_are_rejected[invalid-terminal-usage]",
+    "terminal.duplicate_completion": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_duplicate_terminal_is_rejected",
+    "terminal.before_item_completion": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_terminal_before_item_completion_is_rejected",
+    "failure.provider_failed": "tests/unit/test_responses_codex_streaming_tools.py::test_hosted_authority_unknown_and_provider_failure_events_fail_closed[event4]",
+    "failure.provider_incomplete": "tests/unit/test_responses_codex_streaming_tools.py::test_hosted_authority_unknown_and_provider_failure_events_fail_closed[event5]",
+    "failure.truncation": "tests/unit/test_responses_codex_streaming_tools.py::test_tool_output_interruption_paths_record_estimated_usage[responses_streaming_usage_missing_estimated]",
+    "failure.provider_error": "tests/unit/test_responses_codex_streaming_tools.py::test_tool_output_interruption_paths_record_estimated_usage[responses_streaming_provider_error_estimated]",
+    "failure.client_disconnect": "tests/unit/test_responses_codex_streaming_tools.py::test_tool_output_interruption_paths_record_estimated_usage[responses_streaming_client_disconnected_estimated]",
     "replay.candidate_after_valid_item_done": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_events",
     "replay.persistence_after_accounting": "tests/integration/test_codex_replay_references_postgres.py::test_codex_replay_postgres_hmac_only_same_key_and_expiry",
     "privacy.hmac_only_durable_state": "tests/integration/test_codex_replay_references_postgres.py::test_codex_replay_postgres_hmac_only_same_key_and_expiry",
@@ -862,13 +1143,42 @@ _ZERO_ARGUMENT_REQUIRED_OBLIGATION_IDS = frozenset(
         "lifecycle.empty_delta",
         "lifecycle.arguments_done_without_delta",
         "lifecycle.nonempty_delta_without_done",
-        "boundary.item_done_fields_and_coordinates",
-        "boundary.duplicate_reorder_sequence_second_item",
-        "boundary.item_done_identity_status_namespace_caller_extra",
-        "boundary.terminal_output_and_usage",
-        "boundary.terminal_duplicate_and_missing_completion",
-        "boundary.provider_failure_and_incomplete",
-        "boundary.truncation_and_abnormal_close",
+        "omission.missing_item_id",
+        "omission.mismatched_item_id",
+        "omission.missing_call_id",
+        "omission.mismatched_call_id",
+        "omission.missing_output_index",
+        "omission.mismatched_output_index",
+        "omission.missing_status",
+        "omission.wrong_status",
+        "omission.wrong_namespace",
+        "omission.non_null_caller",
+        "omission.wrong_name",
+        "omission.non_empty_arguments",
+        "omission.canonical_empty_object_arguments",
+        "omission.extra_event_field",
+        "omission.extra_item_field",
+        "omission.missing_sequence",
+        "omission.missing_item_type",
+        "omission.duplicate_sequence",
+        "omission.non_monotonic_sequence",
+        "post_completion.duplicate_item",
+        "post_completion.argument_delta",
+        "post_completion.arguments_done",
+        "post_completion.second_function",
+        "terminal.wrong_name",
+        "terminal.wrong_arguments",
+        "terminal.wrong_type",
+        "terminal.wrong_status",
+        "terminal.missing_usage",
+        "terminal.invalid_usage",
+        "terminal.duplicate_completion",
+        "terminal.before_item_completion",
+        "failure.provider_failed",
+        "failure.provider_incomplete",
+        "failure.truncation",
+        "failure.provider_error",
+        "failure.client_disconnect",
         "replay.candidate_after_valid_item_done",
         "replay.persistence_after_accounting",
         "privacy.hmac_only_durable_state",
