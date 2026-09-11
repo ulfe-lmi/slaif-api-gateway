@@ -52,8 +52,13 @@ The exact Codex 0.149 Local pair uses a pair-local strict Responses SSE
 validator. It requires the reviewed response, reasoning, declared local
 function, and assistant-message lifecycles in order, with exact event-specific
 fields, coordinates, bounded UTF-8 content, terminal output, and detailed
-usage. Unknown or incomplete streams fail closed before successful accounting
-completion. Event values, bodies, identifiers, and reasoning/message content
+usage. Version `4` accepts one additional source-derived lifecycle only for an
+eligible top-level zero-argument function: the exact empty-string arguments may
+close directly from the added item to the matching completed item when neither
+argument event was emitted. The provider events are forwarded unchanged; no
+synthetic delta or done event is created. Unknown or incomplete streams fail
+closed before successful accounting completion. Event values, bodies,
+identifiers, and reasoning/message content
 are inspected only in bounded transient memory and are not persisted or
 logged. This is mocked/state-machine evidence, not protected qualification.
 

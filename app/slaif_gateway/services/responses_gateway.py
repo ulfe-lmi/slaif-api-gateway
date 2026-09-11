@@ -257,7 +257,10 @@ _ALLOWED_RESPONSES_STREAM_EVENT_TYPES = RESPONSES_TEXT_STREAM_EVENT_TYPES
 def _key_allows_external_web_search(authenticated_key: AuthenticatedGatewayKey) -> bool:
     """Permit candidate parsing only for a canonical fenced key policy."""
     parsed = parse_key_external_tool_policy(authenticated_key.external_tool_policy)
-    return bool(parsed.valid and parsed.policy is not None and parsed.policy.mode == EXTERNAL_TOOL_FENCED)
+    return bool(
+        parsed.valid and parsed.policy is not None and parsed.policy.mode == EXTERNAL_TOOL_FENCED
+    )
+
 
 get_db_session_after_auth_header_check = dependencies_module.get_db_session_after_auth_header_check
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check
@@ -342,7 +345,9 @@ def _build_local_coding_server_context(
         if contract is None:
             raise ValueError("Local Coding route contract is unavailable")
         policy = authenticated_key.responses_policy
-        repository_scope = policy.get("local_coding_repository_scope") if isinstance(policy, Mapping) else None
+        repository_scope = (
+            policy.get("local_coding_repository_scope") if isinstance(policy, Mapping) else None
+        )
         identity = derive_request_identity(
             owner_id=authenticated_key.owner_id,
             gateway_key_id=authenticated_key.gateway_key_id,
@@ -376,10 +381,7 @@ def _build_local_coding_server_context(
 def _codex_reasoning_events_enabled(
     *, client_module_id: str, server_context: Mapping[str, object] | None
 ) -> bool:
-    return (
-        client_module_id == "codex-0.149-responses-v1"
-        and server_context is not None
-    )
+    return client_module_id == "codex-0.149-responses-v1" and server_context is not None
 
 
 def _derive_pair_local_codex_top_level_profile(
@@ -391,10 +393,7 @@ def _derive_pair_local_codex_top_level_profile(
 ) -> tuple[frozenset[tuple[str, str, str]], bool]:
     """Derive 0.149 top-level tool facts only after Local route resolution."""
 
-    if (
-        client_module_id != CODEX_0149_CLIENT_MODULE_ID
-        or local_coding_server_context is None
-    ):
+    if client_module_id != CODEX_0149_CLIENT_MODULE_ID or local_coding_server_context is None:
         return frozenset(), False
     declarations = (
         declared_tool_taxonomy
@@ -410,8 +409,7 @@ def _codex_local_pair_omits_prompt_cache_key(
     local_coding_server_context: Mapping[str, object] | None,
 ) -> bool:
     return (
-        client_module_id == CODEX_0149_CLIENT_MODULE_ID
-        and local_coding_server_context is not None
+        client_module_id == CODEX_0149_CLIENT_MODULE_ID and local_coding_server_context is not None
     )
 
 
@@ -529,10 +527,7 @@ def _validate_compact_response(
         or "usage" not in payload
         or ("object" in payload and payload["object"] != "response.compaction")
         or ("id" in payload and not _valid_codex_compact_response_id(payload["id"]))
-        or (
-            "created_at" in payload
-            and not _valid_codex_compact_created_at(payload["created_at"])
-        )
+        or ("created_at" in payload and not _valid_codex_compact_created_at(payload["created_at"]))
         or not _valid_codex_compact_usage(raw_usage, provider_response.usage)
     ):
         raise ProviderError(
@@ -646,10 +641,9 @@ def _valid_codex_compact_usage(raw: Mapping[str, object], usage: ProviderUsage) 
         assert isinstance(cache_write_tokens, int)
         if cached_tokens + cache_write_tokens > input_tokens:
             return False
-        if (
-            usage.cached_tokens != input_details.get("cached_tokens")
-            or usage.cache_write_tokens != input_details.get("cache_write_tokens")
-        ):
+        if usage.cached_tokens != input_details.get(
+            "cached_tokens"
+        ) or usage.cache_write_tokens != input_details.get("cache_write_tokens"):
             return False
     elif usage.cached_tokens is not None or usage.cache_write_tokens is not None:
         return False
@@ -963,13 +957,20 @@ async def handle_response_create(
     ):
         if field in payload.model_fields_set and field not in body:
             body[field] = None
-    external_web_search_requested = any(
-        isinstance(tool, Mapping) and tool.get("type") == "web_search"
-        for tool in body.get("tools", [])
-    ) if isinstance(body.get("tools", []), list) and "web_search" not in adapter_managed_candidates else False
-    allow_external_tool_request = _key_allows_external_web_search(
-        authenticated_key
-    ) if external_web_search_requested else False
+    external_web_search_requested = (
+        any(
+            isinstance(tool, Mapping) and tool.get("type") == "web_search"
+            for tool in body.get("tools", [])
+        )
+        if isinstance(body.get("tools", []), list)
+        and "web_search" not in adapter_managed_candidates
+        else False
+    )
+    allow_external_tool_request = (
+        _key_allows_external_web_search(authenticated_key)
+        if external_web_search_requested
+        else False
+    )
     codex_client_tools_requested = responses_codex_client_tools_requested(body)
     codex_request_envelope_requested = (
         responses_codex_request_envelope_requested(body) or codex_client_tools_requested
@@ -980,9 +981,7 @@ async def handle_response_create(
     allow_codex_client_tools = responses_codex_client_tools_allowed(
         authenticated_key.responses_policy
     )
-    codex_client_tool_taxonomy = codex_client_tool_taxonomy_id(
-        authenticated_key.responses_policy
-    )
+    codex_client_tool_taxonomy = codex_client_tool_taxonomy_id(authenticated_key.responses_policy)
     codex_streaming_tool_events_requested = responses_codex_streaming_tool_events_requested(body)
     allow_codex_streaming_tool_events = responses_codex_streaming_tool_events_allowed(
         authenticated_key.responses_policy
@@ -1140,9 +1139,7 @@ async def handle_response_create(
                 route_supports_streaming=route.supports_streaming,
                 json_mode_requested=responses_text_format_type(policy_result.effective_body)
                 == TEXT_FORMAT_JSON_OBJECT,
-                structured_output_requested=responses_text_format_type(
-                    policy_result.effective_body
-                )
+                structured_output_requested=responses_text_format_type(policy_result.effective_body)
                 == TEXT_FORMAT_JSON_SCHEMA,
                 function_tools_requested=(
                     responses_function_tools_requested(policy_result.effective_body)
@@ -1152,12 +1149,8 @@ async def handle_response_create(
                     responses_custom_tools_requested(policy_result.effective_body)
                     and not codex_client_tools_requested
                 ),
-                image_input_requested=responses_image_input_requested(
-                    policy_result.effective_body
-                ),
-                file_input_requested=responses_file_input_requested(
-                    policy_result.effective_body
-                ),
+                image_input_requested=responses_image_input_requested(policy_result.effective_body),
+                file_input_requested=responses_file_input_requested(policy_result.effective_body),
                 input_token_count_requested=False,
                 stored_responses_requested=policy_result.effective_body.get("store") is True,
                 previous_response_id_requested=previous_response_id_requested(
@@ -1332,25 +1325,34 @@ async def handle_response_create(
                             or pair_local_codex_streaming_tools
                         ),
                         codex_0149_function_tool_events=pair_local_codex_streaming_tools,
+                        zero_argument_function_names=(
+                            normalized_client_request.zero_argument_function_names
+                            if (
+                                pair_local_codex_streaming_tools
+                                and allow_codex_request_envelope
+                                and allow_codex_client_tools
+                                and allow_codex_streaming_tool_events
+                            )
+                            else frozenset()
+                        ),
                         codex_reasoning_events=_codex_reasoning_events_enabled(
                             client_module_id=client_module.module_id,
                             server_context=local_coding_server_context,
                         ),
-
                         codex_encrypted_reasoning_replay=(
                             codex_encrypted_reasoning_event_requested
                         ),
-                            declared_client_tools=(
-                                pair_local_codex_top_level_tools
-                                if pair_local_codex_streaming_tools
-                                else codex_client_tool_declarations(policy_result.effective_body)
-                            ),
-                            web_search=external_web_search_admission is not None,
-                            web_search_max_tool_calls=(
-                                external_web_search_admission.request.effective_tool_call_cap
-                                if external_web_search_admission is not None
-                                else None
-                            ),
+                        declared_client_tools=(
+                            pair_local_codex_top_level_tools
+                            if pair_local_codex_streaming_tools
+                            else codex_client_tool_declarations(policy_result.effective_body)
+                        ),
+                        web_search=external_web_search_admission is not None,
+                        web_search_max_tool_calls=(
+                            external_web_search_admission.request.effective_tool_call_cap
+                            if external_web_search_admission is not None
+                            else None
+                        ),
                     ),
                     external_web_search_admission=external_web_search_admission,
                     external_tool_pricing=quota.external_tool_pricing,
@@ -2722,16 +2724,20 @@ def _streaming_responses_response(
                         tool_choice=policy_result.effective_body.get("tool_choice"),
                     )
                     if not streaming_evidence.authoritative:
-                        raise AccountingError("Authoritative web-search stream evidence is required")
+                        raise AccountingError(
+                            "Authoritative web-search stream evidence is required"
+                        )
                 else:
-                    provider_completed_record = await _record_provider_completed_before_finalization(
-                        reservation=reservation,
-                        authenticated_key=authenticated_key,
-                        route=route,
-                        cost_estimate=cost_estimate,
-                        provider_response=provider_response,
-                        request_id=request_id,
-                        request=request,
+                    provider_completed_record = (
+                        await _record_provider_completed_before_finalization(
+                            reservation=reservation,
+                            authenticated_key=authenticated_key,
+                            route=route,
+                            cost_estimate=cost_estimate,
+                            provider_response=provider_response,
+                            request_id=request_id,
+                            request=request,
+                        )
                     )
                 try:
                     if external_web_search_admission is not None:

@@ -74,6 +74,12 @@ does not weaken ownership: the mandatory call ID must resolve to exactly one
 active same-key HMAC reference with matching tool and route/provider/model
 facts. Wrong, expired, duplicate, cross-key, or cross-route references fail
 closed; a present wrong item ID never downgrades to call-ID-only lookup.
+Module version `4` adds only a request-derived name set for exact top-level
+zero-argument function declarations. The pair-local stream validator uses it
+to accept the provider's empty-string added-to-completed closure without
+creating argument events; it grants no tool, route, provider, replay, or
+execution authority. Functions with parameters, stale module metadata, other
+clients/pairs, and the generic Responses validator remain fail-closed.
 Provider catalog proposal tooling follows the same rule: it reads official
 provider docs/APIs and writes proposal artifacts to the operator's output
 directory only. It does not write raw provider pages/responses to PostgreSQL,

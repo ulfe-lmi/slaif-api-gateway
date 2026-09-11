@@ -15,7 +15,7 @@ from slaif_gateway.modules.contracts import (
 )
 
 CODEX_0149_CLIENT_MODULE_ID = "codex-0.149-responses-v1"
-CODEX_0149_CLIENT_MODULE_VERSION = "3"
+CODEX_0149_CLIENT_MODULE_VERSION = "4"
 CODEX_0149_REASONING_DIALECT_VERSION = "4"
 CODEX_0149_CLI_VERSION = "0.149.0"
 CODEX_0149_FIXTURE_SHA256 = "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
@@ -177,6 +177,42 @@ def codex_0149_streaming_tool_events_requested(body: Mapping[str, object]) -> bo
     """Require the exact 0.149 local declarations on a streaming request."""
 
     return body.get("stream") is True and bool(codex_0149_declared_tool_taxonomy(body))
+
+
+def codex_0149_zero_argument_function_names(
+    body: Mapping[str, object],
+) -> frozenset[str]:
+    """Return only exact top-level zero-parameter function declarations."""
+
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        return frozenset()
+    declarations = codex_0149_declared_tool_taxonomy(body)
+    eligible: set[str] = set()
+    for tool in tools:
+        if not isinstance(tool, Mapping) or tool.get("type") != "function":
+            continue
+        name = tool.get("name")
+        if not isinstance(name, str) or ("functions", name, "function") not in declarations:
+            continue
+        parameters = tool.get("parameters")
+        if not isinstance(parameters, Mapping):
+            continue
+        if set(parameters) not in (
+            {"type", "properties", "additionalProperties"},
+            {"type", "properties", "additionalProperties", "required"},
+        ):
+            continue
+        if (
+            parameters.get("type") != "object"
+            or parameters.get("properties") != {}
+            or parameters.get("additionalProperties") is not False
+            or ("required" in parameters and parameters.get("required") != [])
+            or ("strict" in tool and tool.get("strict") is not True)
+        ):
+            continue
+        eligible.add(name)
+    return frozenset(eligible)
 
 
 CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
@@ -546,6 +582,7 @@ class Codex0149ResponsesClientModule:
             adapter_managed_declaration_candidates=tuple(candidates),
             adapter_managed_declaration_shapes=CODEX_0149_ADAPTER_MANAGED_CANDIDATE_SHAPES,
             stream_profile=self.module_id,
+            zero_argument_function_names=codex_0149_zero_argument_function_names(body),
             profile_facts=_PROFILE_FACTS,
             identity_hints=_transient_identity_hints(
                 body.get("client_metadata"),

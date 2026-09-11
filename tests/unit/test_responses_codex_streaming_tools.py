@@ -82,6 +82,8 @@ def _policy(settings: Settings) -> ResponsesRequestPolicy:
 
 def _policy_0149(settings: Settings) -> ResponsesRequestPolicy:
     return ResponsesRequestPolicy(settings, client_spec=CODEX_0149_POLICY_SPEC)
+
+
 def _function(name: str) -> dict[str, object]:
     return {
         "type": "function",
@@ -188,7 +190,9 @@ def _reasoning_added_event() -> dict[str, object]:
     }
 
 
-def _reasoning_part_event(event_type: str, sequence_number: int, text: str = "") -> dict[str, object]:
+def _reasoning_part_event(
+    event_type: str, sequence_number: int, text: str = ""
+) -> dict[str, object]:
     return {
         "type": event_type,
         "item_id": "reasoning_1",
@@ -273,9 +277,7 @@ def test_codex_0149_local_pair_drops_only_prompt_cache_key_for_upstream() -> Non
     )
     assert policy_result.effective_body == original
     assert local_body == {
-        key: value
-        for key, value in generic_body.items()
-        if key != "prompt_cache_key"
+        key: value for key, value in generic_body.items() if key != "prompt_cache_key"
     }
     assert generic_body["prompt_cache_key"] == "bounded-cache-key"
     assert _codex_local_pair_omits_prompt_cache_key(
@@ -384,7 +386,6 @@ def test_codex_0149_top_level_taxonomy_validates_continuation_and_replay() -> No
         )
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
 
-
     with pytest.raises(RequestPolicyError) as exc_info:
         policy.apply(
             {
@@ -420,9 +421,7 @@ def test_codex_0149_continuation_detector_rejects_custom_or_multiple_pairs() -> 
     assert not responses_codex_tool_roundtrip_requested(
         {"input": [call, {"type": "message"}, output], "stream": True}
     )
-    assert not responses_codex_tool_roundtrip_requested(
-        {"input": [call, output], "stream": False}
-    )
+    assert not responses_codex_tool_roundtrip_requested({"input": [call, output], "stream": False})
     assert not responses_codex_tool_roundtrip_requested({"input": [call, output]})
 
 
@@ -464,9 +463,7 @@ def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_autho
         policy.apply(
             body,
             **common,
-            codex_top_level_tool_taxonomy=frozenset(
-                {("functions", "not_declared", "function")}
-            ),
+            codex_top_level_tool_taxonomy=frozenset({("functions", "not_declared", "function")}),
         )
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
 
@@ -505,9 +502,7 @@ def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_autho
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
 
     with pytest.raises(ModuleSelectionError):
-        codex_0149_declared_tool_taxonomy(
-            {**body, "tools": [_function("wait"), _function("wait")]}
-        )
+        codex_0149_declared_tool_taxonomy({**body, "tools": [_function("wait"), _function("wait")]})
 
     with pytest.raises(ValueError, match="codex_top_level_tool_taxonomy_invalid"):
         codex_replay_request_candidates(
@@ -524,7 +519,6 @@ def test_codex_0149_top_level_continuation_rejects_missing_and_conflicting_autho
             ),
         )
     assert exc_info.value.error_code == "responses_codex_tool_roundtrip_invalid"
-
 
 
 def test_exact_pair_tool_branch_is_rejected_until_live_shape_evidence_exists() -> None:
@@ -666,6 +660,174 @@ def _strict_function_profile() -> ResponsesStreamValidationProfile:
         codex_0149_function_tool_events=True,
         declared_client_tools=frozenset({("functions", "wait", "function")}),
     )
+
+
+def _zero_argument_function_events() -> list[dict[str, object]]:
+    events = _strict_function_events()
+    del events[3:6]
+    events[2]["item"]["name"] = "local_lookup"
+    events[3]["item"]["name"] = "local_lookup"
+    events[4]["response"]["output"][0]["name"] = "local_lookup"
+    events[3]["item"]["arguments"] = ""
+    events[4]["response"]["output"][0]["arguments"] = ""
+    return events
+
+
+def _zero_argument_function_profile(
+    *,
+    names: frozenset[str] = frozenset({"local_lookup"}),
+) -> ResponsesStreamValidationProfile:
+    return ResponsesStreamValidationProfile(
+        codex_reasoning_events=True,
+        codex_streaming_tool_events=True,
+        codex_0149_function_tool_events=True,
+        zero_argument_function_names=names,
+        declared_client_tools=frozenset({("functions", "local_lookup", "function")}),
+    )
+
+
+def test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_events() -> None:
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    events = _zero_argument_function_events()
+
+    assert [event["type"] for event in events] == [
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert all(validator.validate(event) for event in events)
+    candidates = validator.take_replay_reference_candidates()
+    assert len(candidates) == 1
+    assert candidates[0].item_kind == "function_call"
+    assert candidates[0].tool_name == "local_lookup"
+
+
+def test_codex_0149_zero_argument_fact_is_pair_scoped_and_default_denied() -> None:
+    events = _zero_argument_function_events()
+    for profile in (
+        _strict_function_profile(),
+        ResponsesStreamValidationProfile(
+            codex_reasoning_events=True,
+            codex_streaming_tool_events=True,
+            declared_client_tools=frozenset({("functions", "local_lookup", "function")}),
+        ),
+    ):
+        validator = ResponsesStreamEventValidator(profile)
+        assert all(validator.validate(event) for event in events[:2])
+        assert not validator.validate(events[2])
+
+
+@pytest.mark.parametrize(
+    ("name", "arguments"),
+    [
+        ("other", ""),
+        ("local_lookup", "{}"),
+    ],
+)
+def test_codex_0149_zero_argument_omission_rejects_name_or_argument_mismatch(
+    name: str, arguments: str
+) -> None:
+    events = _zero_argument_function_events()
+    events[3]["item"]["name"] = name
+    events[3]["item"]["arguments"] = arguments
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+
+def test_codex_0149_zero_argument_omission_rejects_empty_delta_and_arguments_done() -> None:
+    events = _zero_argument_function_events()
+    events.insert(
+        3,
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 3,
+            "delta": "",
+        },
+    )
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+    events = _zero_argument_function_events()
+    events.insert(
+        3,
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": "function_1",
+            "output_index": 0,
+            "sequence_number": 3,
+            "name": "local_lookup",
+            "arguments": "",
+        },
+    )
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+
+def test_codex_0149_zero_argument_schema_does_not_authorize_canonical_empty_object() -> None:
+    events = _zero_argument_function_events()
+    events[3]["item"]["arguments"] = "{}"
+    events[4]["response"]["output"][0]["arguments"] = "{}"
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in events[:3])
+    assert not validator.validate(events[3])
+
+    ordinary = _strict_function_events()
+    del ordinary[4]
+    ordinary[3]["delta"] = "{}"
+    ordinary[4]["arguments"] = "{}"
+    ordinary[5]["item"]["arguments"] = "{}"
+    ordinary[6]["response"]["output"][0]["arguments"] = "{}"
+    for event_index in (2, 4, 5):
+        if "item" in ordinary[event_index]:
+            ordinary[event_index]["item"]["name"] = "local_lookup"
+        else:
+            ordinary[event_index]["name"] = "local_lookup"
+    ordinary[6]["response"]["output"][0]["name"] = "local_lookup"
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in ordinary)
+
+    terminal_mismatch = _zero_argument_function_events()
+    terminal_mismatch[4]["response"]["output"][0]["arguments"] = "{}"
+    validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    assert all(validator.validate(event) for event in terminal_mismatch[:4])
+    assert not validator.validate(terminal_mismatch[4])
+
+
+def test_codex_0149_zero_argument_obligation_manifest_is_complete() -> None:
+    lifecycle_validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    lifecycle_passed = all(
+        lifecycle_validator.validate(event) for event in _zero_argument_function_events()
+    )
+    replay_validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    replay_passed = all(
+        replay_validator.validate(event) for event in _zero_argument_function_events()
+    ) and bool(replay_validator.take_replay_reference_candidates())
+    mismatch = _zero_argument_function_events()
+    mismatch[3]["item"]["arguments"] = "{}"
+    mismatch_validator = ResponsesStreamEventValidator(_zero_argument_function_profile())
+    mismatch_rejected = all(
+        mismatch_validator.validate(event) for event in mismatch[:3]
+    ) and not mismatch_validator.validate(mismatch[3])
+    obligations = {
+        "source.lifecycle_without_argument_events": lifecycle_passed,
+        "source.replay_candidate_after_completion": replay_passed,
+        "negative.fact_absent": not ResponsesStreamEventValidator(
+            _strict_function_profile()
+        ).validate(_zero_argument_function_events()[2]),
+        "negative.wrong_argument_semantics": mismatch_rejected,
+        "negative.default_profile": not ResponsesStreamEventValidator(
+            ResponsesStreamValidationProfile()
+        ).validate(_zero_argument_function_events()[2]),
+    }
+    missing = [name for name, passed in obligations.items() if not passed]
+    assert missing == []
 
 
 def test_codex_0149_function_lifecycle_is_ordered_and_declared() -> None:
@@ -949,7 +1111,9 @@ def _message_added_event() -> dict[str, object]:
     }
 
 
-def _message_content_part(event_type: str, sequence_number: int, text: str = "") -> dict[str, object]:
+def _message_content_part(
+    event_type: str, sequence_number: int, text: str = ""
+) -> dict[str, object]:
     return {
         "type": event_type,
         "item_id": "message_1",
@@ -1031,7 +1195,7 @@ def _strict_response_event(event_type: str, sequence_number: int) -> dict[str, o
                             }
                         ],
                         "phase": None,
-                    }
+                    },
                 ],
                 "usage": {
                     "input_tokens": 1,
@@ -1156,7 +1320,9 @@ def test_codex_0149_completed_requires_usage_and_no_active_output() -> None:
         lambda response: response.update(output="not-a-list"),
         lambda response: response.update(output=[]),
         lambda response: response["output"].__setitem__(0, {"type": "function_call"}),
-        lambda response: response["output"].__setitem__(0, {**response["output"][0], "status": "completed"}),
+        lambda response: response["output"].__setitem__(
+            0, {**response["output"][0], "status": "completed"}
+        ),
         lambda response: response["usage"]["input_tokens_details"].update(cached_tokens=-1),
         lambda response: response["usage"]["output_tokens_details"].update(reasoning_tokens=-1),
         lambda response: response["usage"]["output_tokens_details"].update(tool_output_tokens="0"),
@@ -1186,9 +1352,7 @@ def test_codex_0149_reasoning_item_lifecycle_is_exactly_scoped() -> None:
     assert validator.validate(
         _reasoning_text_event("response.reasoning_text.delta", 3, delta="bound")
     )
-    assert validator.validate(
-        _reasoning_text_event("response.reasoning_text.delta", 4, delta="ed")
-    )
+    assert validator.validate(_reasoning_text_event("response.reasoning_text.delta", 4, delta="ed"))
     assert validator.validate(
         _reasoning_text_event("response.reasoning_text.done", 5, text="bounded")
     )
@@ -1396,9 +1560,7 @@ def test_encrypted_reasoning_requires_gate_done_event_and_cumulative_cap() -> No
                 encrypted_content="x" * 262_144,
             )
         )
-    assert not validator.validate(
-        _done_reasoning(item_id="rs_over", encrypted_content="x")
-    )
+    assert not validator.validate(_done_reasoning(item_id="rs_over", encrypted_content="x"))
     assert len(validator.take_replay_reference_candidates()) == 4
 
 
@@ -1485,9 +1647,7 @@ def test_streaming_client_tools_require_three_independent_key_gates(
         "allow_codex_streaming_tool_events": stream_events,
     }
     if allowed:
-        assert _policy(Settings()).apply(_body(), **kwargs).effective_body[
-            "stream"
-        ] is True
+        assert _policy(Settings()).apply(_body(), **kwargs).effective_body["stream"] is True
     else:
         with pytest.raises(RequestPolicyError):
             _policy(Settings()).apply(_body(), **kwargs)
@@ -1683,9 +1843,7 @@ def test_reasoning_message_and_terminal_event_table_is_bounded() -> None:
         },
     ]
 
-    assert set(event["type"] for event in events).issubset(
-        RESPONSES_CODEX_STREAM_EVENT_TYPES
-    )
+    assert set(event["type"] for event in events).issubset(RESPONSES_CODEX_STREAM_EVENT_TYPES)
     assert all(validator.validate(event) for event in events)
 
 
@@ -1908,9 +2066,7 @@ def test_event_and_replay_size_caps_fail_closed_without_echoing_content() -> Non
         {"type": "custom_tool_call_output", "call_id": "call_1", "output": "x"},
     ]
     with pytest.raises(RequestPolicyError) as exc_info:
-        _policy(
-            Settings(RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=4)
-        ).apply(
+        _policy(Settings(RESPONSES_MAX_CUSTOM_TOOL_CALL_OUTPUT_BYTES=4)).apply(
             _body(input_items=items),
             allow_codex_request_envelope=True,
             allow_codex_client_tools=True,
@@ -2091,10 +2247,10 @@ def test_unknown_codex_output_item_fields_remain_denied(unknown_field: str) -> N
         ],
         [
             _additional_tools(),
-                {
-                    "type": "function_call",
-                    "id": "fc_1",
-                    "name": "unknown",
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "name": "unknown",
                 "call_id": "call_1",
                 "arguments": "{}",
             },
@@ -2107,10 +2263,10 @@ def test_unknown_codex_output_item_fields_remain_denied(unknown_field: str) -> N
         ],
         [
             _additional_tools(),
-                {
-                    "type": "function_call",
-                    "id": "fc_1",
-                    "name": "wait",
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "name": "wait",
                 "call_id": "call_1",
                 "arguments": "{}",
             },
@@ -2123,10 +2279,10 @@ def test_unknown_codex_output_item_fields_remain_denied(unknown_field: str) -> N
         ],
         [
             _additional_tools(),
-                {
-                    "type": "custom_tool_call",
-                    "id": "ctc_1",
-                    "namespace": "collaboration",
+            {
+                "type": "custom_tool_call",
+                "id": "ctc_1",
+                "namespace": "collaboration",
                 "name": "send_message",
                 "call_id": "call_1",
                 "input": PRIVATE_CANARY,
@@ -2443,7 +2599,7 @@ def test_manual_verifier_fixture_pin_and_pytest_purity() -> None:
         "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
     )
     source = Path("scripts/verify_codex_tool_roundtrip.py").read_text()
-    assert "if __name__ == \"__main__\"" in source
+    assert 'if __name__ == "__main__"' in source
     assert "verify_roundtrip(" not in source.split('if __name__ == "__main__"')[1]
 
 
@@ -2494,7 +2650,9 @@ def test_gateway_forwards_frames_in_order_and_holds_completed_until_accounting(
             },
         },
     ]
-    raw_events = [f"data: {json.dumps(payload, separators=(',', ':'))}\n\n" for payload in event_payloads]
+    raw_events = [
+        f"data: {json.dumps(payload, separators=(',', ':'))}\n\n" for payload in event_payloads
+    ]
 
     class FakeAdapter:
         async def stream_response(self, request):

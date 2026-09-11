@@ -18,6 +18,15 @@ Agentic clients are not ordinary SDK callers. They often maintain multi-turn sta
 
 The contract therefore treats each supported agentic client profile as a **versioned protocol dialect**, not as a brand name and not as a broad relaxation of the OpenAI API.
 
+Current profile note: `codex-0.149-responses-v1` is module version `4`. The
+version retains the existing module ID and fixture identity while adding one
+default-empty, request-derived fact for exact top-level zero-argument function
+declarations. Only the exact `codex-0.149-responses-v1 -> local-coding-v1`
+pair may consume that fact in its strict stream state machine. Version `3`
+metadata remains stale and fails closed. The exception preserves the provider's
+empty-string added/completed lifecycle without synthesizing argument events;
+ordinary/default clients and other pairs retain their existing lifecycle.
+
 ### 0.1 Normative language
 
 The words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, and **MAY** are normative.

@@ -92,6 +92,7 @@ class CanonicalClientRequest:
     adapter_managed_declaration_candidates: tuple[str, ...] = ()
     adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     stream_profile: str | None = None
+    zero_argument_function_names: frozenset[str] = frozenset()
     profile_facts: Mapping[str, str] = field(default_factory=dict)
     identity_hints: Mapping[str, str] = field(default_factory=dict)
 

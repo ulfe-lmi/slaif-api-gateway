@@ -85,6 +85,12 @@ Core invariants:
   streams follow the existing rollback/interrupted-estimate law and never
   become a normal successful ledger row. Validator state is transient and
   contains no persisted content, identifiers, or raw provider events.
+- In module version `4`, an exact top-level zero-argument function on the
+  Codex/Local pair may close with an empty-string argument summary directly
+  from the completed output item when the provider omitted both function
+  argument events. This changes only stream-shape admission: the same one
+  reservation/one terminal ledger lifecycle, final provider usage, replay
+  persistence-after-accounting, and zero-pending requirement still apply.
 - Source-derived visible Codex 0.149 reasoning is ordinary bounded input
   material. Its optional/null ID, summary, and visible text bytes contribute
   only to the transient request estimate; they do not create replay ownership

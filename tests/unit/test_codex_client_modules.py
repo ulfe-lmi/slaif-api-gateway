@@ -18,6 +18,7 @@ from slaif_gateway.modules.clients.codex_0149 import (
     CODEX_0149_CLIENT_MODULE_VERSION,
     CODEX_0149_FIXTURE_SHA256,
     CODEX_0149_POLICY_SPEC,
+    codex_0149_zero_argument_function_names,
 )
 from slaif_gateway.modules.clients.registry import (
     CODEX_0147_CLIENT_MODULE,
@@ -37,6 +38,9 @@ from slaif_gateway.services.responses_request_policy import _HOSTED_TOOL_TYPES
 FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-structural-v2.json")
 HISTORICAL_FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-structural.json")
 SESSION_FIXTURE = Path("tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json")
+ZERO_ARGUMENT_FIXTURE = Path(
+    "tests/fixtures/codex/0.149.0/vllm-0.27.1-zero-argument-function-stream.json"
+)
 
 
 def _body(**overrides: object) -> dict[str, object]:
@@ -127,6 +131,31 @@ def test_0149_session_fixture_is_canonical_and_version_owned() -> None:
         assert forbidden.encode() not in raw
 
 
+def test_0149_zero_argument_source_fixture_is_canonical_and_pinned() -> None:
+    raw = ZERO_ARGUMENT_FIXTURE.read_bytes()
+    fixture = json.loads(raw)
+    canonical = (json.dumps(fixture, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode()
+
+    assert raw == canonical
+    assert hashlib.sha256(raw).hexdigest() == (
+        "4845044674df7f8861626e3fb5c928ba12907e0cef9010964298358f24cec0b8"
+    )
+    assert fixture["provenance"] == {
+        "provider": "vLLM",
+        "version": "0.27.1",
+        "tag_commit": "6e448d0ea9bf3d88d898b65449ca6dc2aec170ac",
+        "streaming_events_sha256": "cf1d8f5e0619148374ce10be15b1a9f7640016d810f1fe766c2dd451a918aa1f",
+        "serving_sha256": "628429902ff26b87f86eae1a45297f647f3712d7b421ca9a4866a3fd0f046a5b",
+    }
+    assert fixture["lifecycle"]["argument_delta_count"] == 0
+    assert fixture["lifecycle"]["arguments_done_event"] is False
+    assert fixture["lifecycle"]["completed_arguments"] == "empty_string"
+    assert fixture["privacy"] == {
+        "raw_payloads_retained": False,
+        "identifiers_structural_only": True,
+    }
+
+
 def test_0147_module_keeps_exact_qualified_identity() -> None:
     request = CODEX_0147_CLIENT_MODULE.normalize_responses(_body())
 
@@ -155,6 +184,56 @@ def test_0149_classifies_search_candidates_without_hosted_authority() -> None:
     assert CODEX_0149_CLIENT_MODULE.policy_spec.function_call_item_id_optional is True
     assert CODEX_0149_CLIENT_MODULE.policy_spec.custom_tool_call_item_id_optional is True
     assert CODEX_0149_CLIENT_MODULE.policy_spec.allow_idless_tool_call_replay is True
+
+
+def test_0149_derives_only_exact_top_level_zero_argument_function_fact() -> None:
+    eligible = {
+        "type": "function",
+        "name": "local_lookup",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    }
+    request = CODEX_0149_CLIENT_MODULE.normalize_responses(_body(tools=[eligible]))
+    assert request.zero_argument_function_names == frozenset({"local_lookup"})
+    assert codex_0149_zero_argument_function_names(request.body) == frozenset({"local_lookup"})
+
+    for override in (
+        {"properties": {"value": {"type": "string"}}},
+        {"required": ["value"]},
+        {"type": "array"},
+        {"additionalProperties": True},
+        {"description": "not part of the exact zero-parameter schema"},
+    ):
+        parameters = dict(eligible["parameters"])
+        parameters.update(override)
+        assert (
+            codex_0149_zero_argument_function_names(
+                {"tools": [{**eligible, "parameters": parameters}]}
+            )
+            == frozenset()
+        )
+
+    assert codex_0149_zero_argument_function_names(
+        {"tools": [{**eligible, "parameters": {**eligible["parameters"], "required": []}}]}
+    ) == frozenset({"local_lookup"})
+    assert codex_0149_zero_argument_function_names(
+        {"tools": [{**eligible, "strict": True}]}
+    ) == frozenset({"local_lookup"})
+    assert (
+        codex_0149_zero_argument_function_names({"tools": [{**eligible, "strict": False}]})
+        == frozenset()
+    )
+    assert (
+        codex_0149_zero_argument_function_names({"tools": [{**eligible, "strict": None}]})
+        == frozenset()
+    )
+    assert (
+        codex_0149_zero_argument_function_names({"tools": [{**eligible, "type": "custom"}]})
+        == frozenset()
+    )
     assert CODEX_0149_CLIENT_MODULE.policy_spec.assistant_history_content_types == frozenset(
         {"output_text"}
     )
@@ -336,6 +415,17 @@ def test_registry_uses_only_server_side_metadata_and_legacy_0147_path() -> None:
                     "id": CODEX_0149_CLIENT_MODULE_ID,
                     "version": "1",
                     "fixture_sha256": "0" * 64,
+                }
+            }
+        )
+
+    with pytest.raises(ModuleSelectionError, match="does not match"):
+        resolve_responses_client_module(
+            {
+                "client_module": {
+                    "id": CODEX_0149_CLIENT_MODULE_ID,
+                    "version": "3",
+                    "fixture_sha256": CODEX_0149_FIXTURE_SHA256,
                 }
             }
         )
