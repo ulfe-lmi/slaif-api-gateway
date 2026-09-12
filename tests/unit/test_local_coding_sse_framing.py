@@ -550,6 +550,11 @@ def _bounded_chunks(total: int, *, fill: bytes = b"x" * 65_536):
         remaining -= size
 
 
+def _one_byte_over_chunks(total: int):
+    yield from _bounded_chunks(total)
+    yield b"x"
+
+
 def _joined_data_chunks(*, joined_data_bytes: int, extra_byte: bool):
     segments = MAX_SSE_DATA_SEGMENTS
     target = joined_data_bytes + (1 if extra_byte else 0)
@@ -558,6 +563,17 @@ def _joined_data_chunks(*, joined_data_bytes: int, extra_byte: bool):
     values.append(target - sum(values) - (segments - 1))
     for value_bytes in values:
         yield b"data: " + b"x" * value_bytes + b"\r\n"
+
+
+def _joined_data_one_byte_over_chunks():
+    segments = MAX_SSE_DATA_SEGMENTS
+    prior_target = MAX_SSE_JOINED_DATA_BYTES - 1
+    value_size = (prior_target - (segments - 2)) // (segments - 1)
+    values = [value_size] * (segments - 2)
+    values.append(prior_target - sum(values) - (segments - 2))
+    for value_bytes in values:
+        yield b"data: " + b"x" * value_bytes + b"\r\n"
+    yield b"data: x\r\n"
 
 
 def _frame_overflow_chunks():
@@ -569,7 +585,7 @@ def _frame_overflow_chunks():
 
 
 def test_production_line_ceiling_rejects_before_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    stream = GeneratedStream(_bounded_chunks(MAX_SSE_LINE_BYTES + 1))
+    stream = GeneratedStream(_one_byte_over_chunks(MAX_SSE_LINE_BYTES))
     response = _response(stream)
     framer = BoundedSSEFramer()
 
@@ -589,9 +605,7 @@ def test_production_line_ceiling_rejects_before_json(monkeypatch: pytest.MonkeyP
 def test_production_joined_data_ceiling_rejects_before_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    stream = GeneratedStream(
-        _joined_data_chunks(joined_data_bytes=MAX_SSE_JOINED_DATA_BYTES, extra_byte=True)
-    )
+    stream = GeneratedStream(_joined_data_one_byte_over_chunks())
     response = _response(stream)
     framer = BoundedSSEFramer()
 
