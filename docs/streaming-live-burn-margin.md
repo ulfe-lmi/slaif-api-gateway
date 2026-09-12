@@ -991,8 +991,8 @@ finalization failure uses recovery/reconciliation behavior
 
 The exact Local Coding Responses transport has an earlier resource boundary
 that is independent of live-burn estimation. A module-local raw-byte framer
-accepts identity encoding only and enforces 31,588,359-byte lines,
-31,868,929-byte frames, 31,588,352 joined data bytes, and 2,048 data segments
+accepts identity encoding only and enforces 25,296,903-byte lines,
+25,573,379-byte frames, 25,296,896 joined data bytes, and 2,048 data segments
 before typed validation. The values are derived from the reviewed semantic
 event budget and worst-case JSON escaping, not from an arbitrary 16 KiB
 threshold. Overflow, malformed UTF-8/JSON, unsupported encoding, cancellation,

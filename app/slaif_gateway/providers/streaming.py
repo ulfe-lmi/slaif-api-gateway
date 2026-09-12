@@ -54,44 +54,56 @@ _MAX_STREAM_CONTENT_PARTS = 64
 _MAX_STREAM_INDEX = 1_000_000
 _MAX_STREAM_TOKEN_COUNT = 2**63 - 1
 _MAX_WEB_SEARCH_EVIDENCE_EVENTS = 256
-# The exact Codex/Local typed profile allows one reasoning item, one function
-# item, and one assistant-message item.  Reasoning has one MiB each for its
-# summary and visible content; function arguments and message text are one MiB
-# each.  One additional MiB covers the bounded response envelope.
-MAX_CODEX_TYPED_RESPONSE_SEMANTIC_BYTES = 5 * _MAX_STREAM_CUMULATIVE_ITEM_BYTES
+# Public names used by the Local-owned transport derivation; the underlying
+# semantic limits remain source constants and are not route configurable.
+MAX_CODEX_TYPED_RESPONSE_DELTA_BYTES = _MAX_STREAM_DELTA_BYTES
+# The exact Codex/Local terminal permits at most three output items with one
+# MiB of aggregate content/arguments each.  One additional MiB covers the
+# bounded response envelope; individual delta/item events remain bounded by
+# the existing one-MiB semantic item limits.
+MAX_CODEX_TYPED_RESPONSE_SEMANTIC_BYTES = 4 * _MAX_STREAM_CUMULATIVE_ITEM_BYTES
 MAX_CODEX_TYPED_RESPONSE_OUTPUT_ITEMS = 3
-MAX_CODEX_TYPED_RESPONSE_OUTPUT_BYTES = 4 * _MAX_STREAM_CUMULATIVE_ITEM_BYTES
+MAX_CODEX_TYPED_RESPONSE_OUTPUT_BYTES = 3 * _MAX_STREAM_CUMULATIVE_ITEM_BYTES
 _MAX_CODEX_RESPONSE_ENVELOPE_BYTES = _MAX_STREAM_CUMULATIVE_ITEM_BYTES
-# These are the only vLLM/OpenAI response-envelope names admitted by the exact
-# Codex/Local profile.  ``output`` and ``usage`` have their own validators;
-# every other value is bounded by the serialized-envelope ceiling below.
+# These are the exact serialized vLLM 0.27.1 ResponsesResponse field names
+# admitted by the exact Codex/Local profile.  ``output`` and ``usage`` have
+# their own validators; every other value is bounded by the serialized-envelope
+# ceiling below.  The source pin and type/default classes are in the content-
+# free fixture under tests/fixtures/codex/0.149.0/.
 _CODEX_RESPONSE_ENVELOPE_FIELDS = frozenset(
     {
         "id",
-        "object",
         "created_at",
-        "status",
-        "error",
         "incomplete_details",
         "instructions",
-        "max_output_tokens",
+        "metadata",
         "model",
+        "object",
+        "output",
         "parallel_tool_calls",
-        "previous_response_id",
-        "reasoning",
-        "store",
         "temperature",
         "text",
         "tool_choice",
         "tools",
         "top_p",
-        "truncation",
-        "metadata",
-        "service_tier",
-        "prompt_cache_key",
+        "background",
+        "max_output_tokens",
         "max_tool_calls",
-        "output",
+        "previous_response_id",
+        "prompt",
+        "reasoning",
+        "service_tier",
+        "status",
+        "top_logprobs",
+        "truncation",
         "usage",
+        "user",
+        "presence_penalty",
+        "frequency_penalty",
+        "kv_transfer_params",
+        "ec_transfer_params",
+        "input_messages",
+        "output_messages",
     }
 )
 _ITEM_STATUSES = frozenset({"in_progress", "completed", "incomplete"})
@@ -166,7 +178,6 @@ class ResponsesStreamEventValidator:
         self._safe_event_counts: Counter[str] = Counter()
         self._safe_event_bytes: Counter[str] = Counter()
         self._encrypted_reasoning_bytes = 0
-        self._reasoning_summary_bytes = 0
         self._replay_reference_candidates: list[CodexReplayStreamCandidate] = []
         # The evidence window is a bounded state machine input, never an unbounded
         # copy of provider events.  Payload content is discarded at the boundary.
@@ -857,13 +868,6 @@ class ResponsesStreamEventValidator:
                 part, expected_type="summary_text"
             ):
                 return False
-            part_bytes = len(part["text"].encode("utf-8"))
-            if self._reasoning_summary_bytes + part_bytes > _MAX_STREAM_CUMULATIVE_ITEM_BYTES:
-                return False
-            self._reasoning_summary_bytes += part_bytes
-            self._reasoning_deltas[(str(item_id), "summary", int(payload["summary_index"]))] = part[
-                "text"
-            ]
             return True
 
         is_content = event_type in ("response.reasoning_text.delta", "response.reasoning_text.done")
@@ -887,11 +891,6 @@ class ResponsesStreamEventValidator:
             return False
         if field == "text":
             prior = self._reasoning_deltas.get(key)
-            if category == "summary" and prior is None:
-                text_bytes = len(value.encode("utf-8"))
-                if self._reasoning_summary_bytes + text_bytes > _MAX_STREAM_CUMULATIVE_ITEM_BYTES:
-                    return False
-                self._reasoning_summary_bytes += text_bytes
             if strict_codex:
                 strict_key = (str(item_id), int(payload["content_index"]))
                 if (
@@ -916,11 +915,6 @@ class ResponsesStreamEventValidator:
         combined = self._reasoning_deltas.get(key, "") + value
         if len(combined.encode("utf-8")) > _MAX_STREAM_CUMULATIVE_ITEM_BYTES:
             return False
-        if category == "summary":
-            delta_bytes = len(value.encode("utf-8"))
-            if self._reasoning_summary_bytes + delta_bytes > _MAX_STREAM_CUMULATIVE_ITEM_BYTES:
-                return False
-            self._reasoning_summary_bytes += delta_bytes
         self._reasoning_deltas[key] = combined
         if strict_codex:
             self._reasoning_delta_seen.add((str(item_id), int(payload["content_index"])))
@@ -1429,6 +1423,16 @@ def _validate_codex_response_envelope(response: Mapping[str, Any]) -> bool:
     """Bound optional vLLM/OpenAI response-envelope echoes before retention."""
 
     if set(response) - _CODEX_RESPONSE_ENVELOPE_FIELDS:
+        return False
+    if any(
+        response.get(field) is not None
+        for field in (
+            "input_messages",
+            "output_messages",
+            "kv_transfer_params",
+            "ec_transfer_params",
+        )
+    ):
         return False
     envelope = {key: value for key, value in response.items() if key not in {"output", "usage"}}
     try:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterable
 
 import httpx
 import pytest
@@ -15,11 +16,17 @@ from slaif_gateway.modules.servers.local_coding.sse_framing import (
     MAX_SSE_DATA_SEGMENTS,
     MAX_SSE_DATA_LINE_OVERHEAD_BYTES,
     MAX_SSE_FRAME_BYTES,
+    MAX_SSE_IGNORED_FIELD_MULTIPLIER,
+    MAX_SSE_IGNORED_FIELD_OVERHEAD_BYTES,
     MAX_SSE_JOINED_DATA_BYTES,
     MAX_SSE_LINE_BYTES,
+    MAX_SSE_LINES_PER_SEMANTIC_PART,
+    MAX_SSE_SEMANTIC_PARTS,
+    MAX_CODEX_TYPED_RESPONSE_DELTA_BYTES,
     BoundedSSEFramer,
     SSEFramingLimits,
 )
+from slaif_gateway.modules.servers.local_coding import sse_framing as framing_module
 from slaif_gateway.providers.errors import ProviderResponseParseError
 from slaif_gateway.schemas.providers import ProviderRequest
 from slaif_gateway.config import Settings
@@ -48,7 +55,10 @@ LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE = {
     "framing.multiline-data": "tests/unit/test_local_coding_sse_framing.py::test_framer_handles_crlf_split_boundary_and_multiline_data",
     "framing.comments-ignored-fields": "tests/unit/test_local_coding_sse_framing.py::test_comments_and_ignored_fields_are_bounded_and_eof_dispatches_final_event",
     "bounds.derivation": "tests/unit/test_local_coding_sse_framing.py::test_static_bound_derivation_is_explicit_and_cannot_be_raised",
-    "bounds.maximum-event": "tests/unit/test_local_coding_sse_framing.py::test_maximum_reviewed_semantic_event_serializes_within_all_wire_ceilings",
+    "bounds.maximum-event": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_maximum_typed_event_fits_bounded_framer",
+    "bounds.frame-arithmetic": "tests/unit/test_local_coding_sse_framing.py::test_maximum_escaped_semantic_budget_fits_joined_data_ceiling",
+    "bounds.segment-rationale": "tests/unit/test_local_coding_sse_framing.py::test_static_bound_derivation_is_explicit_and_cannot_be_raised",
+    "bounds.ignored-rationale": "tests/unit/test_local_coding_sse_framing.py::test_static_bound_derivation_is_explicit_and_cannot_be_raised",
     "bounds.line-one-byte-over": "tests/unit/test_local_coding_sse_framing.py::test_one_byte_over_bounds_fail_before_oversized_state_is_retained[line-one-byte-over]",
     "bounds.frame-one-byte-over": "tests/unit/test_local_coding_sse_framing.py::test_one_byte_over_bounds_fail_before_oversized_state_is_retained[frame-one-byte-over]",
     "bounds.joined-data-one-byte-over": "tests/unit/test_local_coding_sse_framing.py::test_one_byte_over_bounds_fail_before_oversized_state_is_retained[joined-data-one-byte-over]",
@@ -65,8 +75,14 @@ LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE = {
     "close.parser-error": "tests/unit/test_local_coding_sse_framing.py::test_local_adapter_uses_bounded_framer_and_closes_after_parse_error",
     "close.consumer-aclose": "tests/unit/test_local_coding_sse_framing.py::test_consumer_aclose_closes_upstream_stream_promptly",
     "close.cancellation": "tests/unit/test_local_coding_sse_framing.py::test_cancellation_closes_upstream_stream_and_is_not_swallowed",
+    "close.real-consumer-task-cancellation": "tests/unit/test_local_coding_sse_framing.py::test_real_consumer_task_cancellation_closes_blocking_upstream",
+    "failure.state-clearing": "tests/unit/test_local_coding_sse_framing.py::test_invalid_utf8_json_and_non_object_data_fail_closed_without_echo[invalid-json]",
     "incremental.many-events": "tests/unit/test_local_coding_sse_framing.py::test_done_marker_and_many_events_are_incremental_and_content_free_stats_only",
     "encoding.unsupported": "tests/unit/test_local_coding_sse_framing.py::test_unsupported_content_encoding_fails_before_raw_iteration",
+    "production.line-ceiling": "tests/unit/test_local_coding_sse_framing.py::test_production_line_ceiling_rejects_before_json",
+    "production.joined-data-ceiling": "tests/unit/test_local_coding_sse_framing.py::test_production_joined_data_ceiling_rejects_before_json",
+    "production.frame-ceiling": "tests/unit/test_local_coding_sse_framing.py::test_production_frame_ceiling_rejects_bounded_ignored_fields_before_json",
+    "production.segment-ceiling": "tests/unit/test_local_coding_sse_framing.py::test_production_segment_cardinality_rejects_before_json",
     "accounting.pre-output": "tests/e2e/test_openai_python_client_responses.py::test_local_coding_malformed_stream_before_output_releases_accounting",
     "accounting.post-output": "tests/e2e/test_openai_python_client_responses.py::test_local_coding_malformed_stream_after_output_records_interruption",
     "objective-162.zero-argument": "tests/unit/test_responses_codex_streaming_tools.py::test_codex_0149_zero_argument_source_lifecycle_accepts_without_synthetic_events",
@@ -76,13 +92,62 @@ LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE = {
     "objective-162.replay-privacy": "tests/unit/test_responses_codex_streaming_tools.py::test_event_and_replay_size_caps_fail_closed_without_echoing_content",
 }
 
+LOCAL_CODING_SSE_REQUIRED_OBLIGATION_IDS = frozenset(
+    {
+        "framing.normal",
+        "framing.byte-by-byte-utf8",
+        "framing.crlf",
+        "framing.multiline-data",
+        "framing.comments-ignored-fields",
+        "bounds.derivation",
+        "bounds.maximum-event",
+        "bounds.frame-arithmetic",
+        "bounds.segment-rationale",
+        "bounds.ignored-rationale",
+        "bounds.line-one-byte-over",
+        "bounds.frame-one-byte-over",
+        "bounds.joined-data-one-byte-over",
+        "bounds.data-segments-one-byte-over",
+        "bounds.unterminated-line",
+        "bounds.many-data-lines",
+        "eof.valid-final-event",
+        "eof.malformed-final-event",
+        "eof.comment-only",
+        "parse.invalid-json",
+        "parse.non-object-json",
+        "parse.invalid-utf8",
+        "parse.dangling-utf8",
+        "close.parser-error",
+        "close.consumer-aclose",
+        "close.cancellation",
+        "close.real-consumer-task-cancellation",
+        "failure.state-clearing",
+        "incremental.many-events",
+        "encoding.unsupported",
+        "production.line-ceiling",
+        "production.joined-data-ceiling",
+        "production.frame-ceiling",
+        "production.segment-ceiling",
+        "accounting.pre-output",
+        "accounting.post-output",
+        "objective-162.zero-argument",
+        "objective-162.function-lifecycle",
+        "objective-162.reasoning-message-terminal",
+        "objective-162.usage",
+        "objective-162.replay-privacy",
+    }
+)
 
-def test_objective_163_obligation_map_is_literal_and_nonempty() -> None:
-    assert set(LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE)
-    assert all("[" not in key for key in LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE)
+
+def test_objective_163_obligation_map_is_literal_and_complete() -> None:
+    obligation_ids = set(LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE)
+    assert obligation_ids == LOCAL_CODING_SSE_REQUIRED_OBLIGATION_IDS
+    assert len(obligation_ids) == len(LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE)
+    assert all("[" not in key for key in obligation_ids)
     assert all(
         value.startswith("tests/") for value in LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE.values()
     )
+    assert all("<" not in value for value in LOCAL_CODING_SSE_OBLIGATION_TO_TEST_NODE.values())
 
 
 class ChunkStream(httpx.AsyncByteStream):
@@ -100,6 +165,37 @@ class ChunkStream(httpx.AsyncByteStream):
         self.closed = True
 
 
+class GeneratedStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: Iterable[bytes]) -> None:
+        self.chunks = iter(chunks)
+        self.closed = False
+        self.iterated = False
+
+    async def __aiter__(self):
+        self.iterated = True
+        for chunk in self.chunks:
+            yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+class BlockingStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.released = asyncio.Event()
+        self.closed = False
+
+    async def __aiter__(self):
+        self.started.set()
+        await self.released.wait()
+        yield b""
+
+    async def aclose(self) -> None:
+        self.closed = True
+        self.released.set()
+
+
 class CancelledStream(httpx.AsyncByteStream):
     def __init__(self) -> None:
         self.closed = False
@@ -112,7 +208,9 @@ class CancelledStream(httpx.AsyncByteStream):
         self.closed = True
 
 
-def _response(stream: ChunkStream, *, headers: dict[str, str] | None = None) -> httpx.Response:
+def _response(
+    stream: httpx.AsyncByteStream, *, headers: dict[str, str] | None = None
+) -> httpx.Response:
     return httpx.Response(
         200,
         headers={"content-type": "text/event-stream", **(headers or {})},
@@ -142,11 +240,22 @@ async def _collect(framer: BoundedSSEFramer, response: httpx.Response):
     return [event async for event in framer.iter_events(response)]
 
 
+def _assert_current_state_clear(framer: BoundedSSEFramer) -> None:
+    assert framer.stats.current_line_bytes == 0
+    assert framer.stats.current_frame_bytes == 0
+    assert framer.stats.current_joined_data_bytes == 0
+    assert framer.stats.current_data_segments == 0
+
+
 def test_static_bound_derivation_is_explicit_and_cannot_be_raised() -> None:
     assert DEFAULT_SSE_FRAMING_LIMITS.max_line_bytes == MAX_SSE_LINE_BYTES
     assert DEFAULT_SSE_FRAMING_LIMITS.max_frame_bytes == MAX_SSE_FRAME_BYTES
     assert DEFAULT_SSE_FRAMING_LIMITS.max_joined_data_bytes == MAX_SSE_JOINED_DATA_BYTES
     assert DEFAULT_SSE_FRAMING_LIMITS.max_data_segments == MAX_SSE_DATA_SEGMENTS
+    assert MAX_SSE_DATA_SEGMENTS == MAX_SSE_SEMANTIC_PARTS * MAX_SSE_LINES_PER_SEMANTIC_PART
+    assert MAX_SSE_IGNORED_FIELD_OVERHEAD_BYTES == (
+        MAX_SSE_IGNORED_FIELD_MULTIPLIER * MAX_CODEX_TYPED_RESPONSE_DELTA_BYTES
+    )
     with pytest.raises(ValueError):
         SSEFramingLimits(max_line_bytes=MAX_SSE_LINE_BYTES + 1)
     with pytest.raises(ValueError):
@@ -158,75 +267,18 @@ def test_static_bound_derivation_is_explicit_and_cannot_be_raised() -> None:
 
 
 def test_maximum_escaped_semantic_budget_fits_joined_data_ceiling() -> None:
-    # Five MiB is the reviewed semantic event budget (reasoning summary and
-    # visible content are separate one-MiB fields); six is the worst-case
-    # JSON ASCII expansion and 128 KiB is the fixed structural allowance.
-    assert MAX_SSE_JOINED_DATA_BYTES == 5 * 1_048_576 * 6 + 131_072
+    # Four MiB is the reviewed co-resident terminal event budget; six is the
+    # worst-case JSON ASCII expansion and 128 KiB is fixed JSON structure.
+    assert MAX_SSE_JOINED_DATA_BYTES == 4 * 1_048_576 * 6 + 131_072
     assert MAX_SSE_LINE_BYTES == MAX_SSE_JOINED_DATA_BYTES + 7
     assert MAX_SSE_DATA_LINE_OVERHEAD_BYTES == 8
     assert MAX_SSE_FRAME_BYTES == (
         MAX_SSE_JOINED_DATA_BYTES
         + MAX_SSE_DATA_SEGMENTS * MAX_SSE_DATA_LINE_OVERHEAD_BYTES
-        + MAX_SSE_DATA_SEGMENTS
-        - 1
-        + 262_144
+        - (MAX_SSE_DATA_SEGMENTS - 1)
+        + MAX_SSE_IGNORED_FIELD_OVERHEAD_BYTES
         + 2
     )
-
-
-def test_maximum_reviewed_semantic_event_serializes_within_all_wire_ceilings() -> None:
-    mib = 1_048_576
-    control_text = "\x00" * mib
-    response = {
-        "id": "response_maximum",
-        "status": "completed",
-        "instructions": control_text,
-        "output": [
-            {
-                "type": "reasoning",
-                "id": "reasoning_maximum",
-                "summary": [{"type": "summary_text", "text": control_text}],
-                "content": [{"type": "reasoning_text", "text": control_text}],
-                "encrypted_content": None,
-                "status": None,
-            },
-            {
-                "type": "function_call",
-                "id": "function_maximum",
-                "call_id": "call_maximum",
-                "name": "bounded",
-                "arguments": control_text,
-                "status": "completed",
-            },
-            {
-                "type": "message",
-                "id": "message_maximum",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": control_text}],
-                "phase": None,
-            },
-        ],
-        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-    }
-    encoded_response = json.dumps(
-        response, ensure_ascii=True, sort_keys=True, separators=(",", ":")
-    ).encode("ascii")
-    event_data = json.dumps(
-        {"type": "response.completed", "sequence_number": 99, "response": response},
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("ascii")
-
-    assert len(encoded_response) <= MAX_SSE_JOINED_DATA_BYTES
-    assert len(event_data) <= MAX_SSE_JOINED_DATA_BYTES
-    assert len(b"data: " + event_data + b"\n") <= MAX_SSE_LINE_BYTES
-    assert len(b"data: " + event_data + b"\n\n") <= MAX_SSE_FRAME_BYTES
-
-    stream = ChunkStream([b"data: " + event_data + b"\n\n"])
-    events = asyncio.run(_collect(BoundedSSEFramer(), _response(stream)))
-    assert events[0].json_body["type"] == "response.completed"
 
 
 def test_framer_handles_normal_small_chunks_and_utf8_split_at_byte_boundaries() -> None:
@@ -329,6 +381,10 @@ def test_one_byte_over_bounds_fail_before_oversized_state_is_retained(
     assert framer.stats.max_frame_bytes_retained <= limits.max_frame_bytes
     assert framer.stats.max_joined_data_bytes_retained <= limits.max_joined_data_bytes
     assert framer.stats.max_data_segments_retained <= limits.max_data_segments
+    assert framer.stats.current_line_bytes == 0
+    assert framer.stats.current_frame_bytes == 0
+    assert framer.stats.current_joined_data_bytes == 0
+    assert framer.stats.current_data_segments == 0
 
 
 def test_unterminated_line_fails_at_first_over_bound_byte() -> None:
@@ -341,6 +397,7 @@ def test_unterminated_line_fails_at_first_over_bound_byte() -> None:
 
     assert exc_info.value.error_code == "local_coding_sse_line_too_large"
     assert framer.stats.max_line_bytes_retained <= 12
+    assert framer.stats.current_line_bytes == 0
 
 
 def test_many_small_data_segments_are_bounded_before_joining() -> None:
@@ -361,6 +418,10 @@ def test_many_small_data_segments_are_bounded_before_joining() -> None:
     assert exc_info.value.error_code == "local_coding_sse_data_too_large"
     assert framer.stats.max_data_segments_retained <= 64
     assert framer.stats.max_joined_data_bytes_retained <= 39
+    assert framer.stats.current_line_bytes == 0
+    assert framer.stats.current_frame_bytes == 0
+    assert framer.stats.current_joined_data_bytes == 0
+    assert framer.stats.current_data_segments == 0
 
 
 @pytest.mark.parametrize(
@@ -377,12 +438,17 @@ def test_invalid_utf8_json_and_non_object_data_fail_closed_without_echo(
 ) -> None:
     stream = ChunkStream([raw])
     response = _response(stream)
+    framer = BoundedSSEFramer(limits=_small_limits())
     with pytest.raises(ProviderResponseParseError) as exc_info:
-        asyncio.run(_collect(BoundedSSEFramer(limits=_small_limits()), response))
+        asyncio.run(_collect(framer, response))
 
     assert exc_info.value.error_code == error_code
     assert raw.decode("utf-8", errors="replace") not in exc_info.value.safe_message
     assert stream.closed is True
+    assert framer.stats.current_line_bytes == 0
+    assert framer.stats.current_frame_bytes == 0
+    assert framer.stats.current_joined_data_bytes == 0
+    assert framer.stats.current_data_segments == 0
 
 
 def test_done_marker_and_many_events_are_incremental_and_content_free_stats_only() -> None:
@@ -403,13 +469,18 @@ def test_done_marker_and_many_events_are_incremental_and_content_free_stats_only
 def test_unsupported_content_encoding_fails_before_raw_iteration() -> None:
     stream = ChunkStream([_event_bytes({"ok": True})])
     response = _response(stream, headers={"content-encoding": "gzip"})
+    framer = BoundedSSEFramer(limits=_small_limits())
 
     with pytest.raises(ProviderResponseParseError) as exc_info:
-        asyncio.run(_collect(BoundedSSEFramer(limits=_small_limits()), response))
+        asyncio.run(_collect(framer, response))
 
     assert exc_info.value.error_code == "local_coding_sse_content_encoding_unsupported"
     assert stream.iterated is False
     assert stream.closed is True
+    assert framer.stats.current_line_bytes == 0
+    assert framer.stats.current_frame_bytes == 0
+    assert framer.stats.current_joined_data_bytes == 0
+    assert framer.stats.current_data_segments == 0
 
 
 def test_consumer_aclose_closes_upstream_stream_promptly() -> None:
@@ -424,16 +495,151 @@ def test_consumer_aclose_closes_upstream_stream_promptly() -> None:
 
     asyncio.run(consume_one())
     assert stream.closed is True
+    assert framer.stats.current_line_bytes == 0
+    assert framer.stats.current_frame_bytes == 0
+    assert framer.stats.current_joined_data_bytes == 0
+    assert framer.stats.current_data_segments == 0
 
 
 def test_cancellation_closes_upstream_stream_and_is_not_swallowed() -> None:
     stream = CancelledStream()
     response = _response(stream)
+    framer = BoundedSSEFramer()
 
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(_collect(BoundedSSEFramer(), response))
+        asyncio.run(_collect(framer, response))
 
     assert stream.closed is True
+    assert framer.stats.current_line_bytes == 0
+    assert framer.stats.current_frame_bytes == 0
+    assert framer.stats.current_joined_data_bytes == 0
+    assert framer.stats.current_data_segments == 0
+
+
+def test_real_consumer_task_cancellation_closes_blocking_upstream() -> None:
+    stream = BlockingStream()
+    response = _response(stream)
+    framer = BoundedSSEFramer()
+
+    async def consume() -> None:
+        async for _event in framer.iter_events(response):
+            pass
+
+    async def scenario() -> None:
+        task = asyncio.create_task(consume())
+        await asyncio.wait_for(stream.started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=1)
+        assert task.done()
+        assert not asyncio.all_tasks() - {asyncio.current_task()}
+
+    asyncio.run(scenario())
+    assert stream.closed is True
+    assert framer.stats.current_line_bytes == 0
+    assert framer.stats.current_frame_bytes == 0
+    assert framer.stats.current_joined_data_bytes == 0
+    assert framer.stats.current_data_segments == 0
+
+
+def _bounded_chunks(total: int, *, fill: bytes = b"x" * 65_536):
+    remaining = total
+    while remaining:
+        size = min(remaining, len(fill))
+        yield fill[:size]
+        remaining -= size
+
+
+def _joined_data_chunks(*, joined_data_bytes: int, extra_byte: bool):
+    segments = MAX_SSE_DATA_SEGMENTS
+    target = joined_data_bytes + (1 if extra_byte else 0)
+    value_size = (target - (segments - 1)) // segments
+    values = [value_size] * (segments - 1)
+    values.append(target - sum(values) - (segments - 1))
+    for value_bytes in values:
+        yield b"data: " + b"x" * value_bytes + b"\r\n"
+
+
+def _frame_overflow_chunks():
+    yield from _joined_data_chunks(joined_data_bytes=MAX_SSE_JOINED_DATA_BYTES, extra_byte=False)
+    comment_body_bytes = MAX_SSE_IGNORED_FIELD_OVERHEAD_BYTES - 1
+    yield b":"
+    yield from _bounded_chunks(comment_body_bytes - 1)
+    yield b"\r\n\r\n"
+
+
+def test_production_line_ceiling_rejects_before_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = GeneratedStream(_bounded_chunks(MAX_SSE_LINE_BYTES + 1))
+    response = _response(stream)
+    framer = BoundedSSEFramer()
+
+    def unexpected_json(_data):
+        raise AssertionError("json.loads must not run on line overflow")
+
+    monkeypatch.setattr(framing_module.json, "loads", unexpected_json)
+    with pytest.raises(ProviderResponseParseError) as exc_info:
+        asyncio.run(_collect(framer, response))
+
+    assert exc_info.value.error_code == "local_coding_sse_line_too_large"
+    assert stream.closed is True
+    assert framer.stats.max_line_bytes_retained <= MAX_SSE_LINE_BYTES
+    _assert_current_state_clear(framer)
+
+
+def test_production_joined_data_ceiling_rejects_before_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = GeneratedStream(
+        _joined_data_chunks(joined_data_bytes=MAX_SSE_JOINED_DATA_BYTES, extra_byte=True)
+    )
+    response = _response(stream)
+    framer = BoundedSSEFramer()
+
+    def unexpected_json(_data):
+        raise AssertionError("json.loads must not run on joined-data overflow")
+
+    monkeypatch.setattr(framing_module.json, "loads", unexpected_json)
+    with pytest.raises(ProviderResponseParseError) as exc_info:
+        asyncio.run(_collect(framer, response))
+
+    assert exc_info.value.error_code == "local_coding_sse_data_too_large"
+    assert stream.closed is True
+    assert framer.stats.max_joined_data_bytes_retained <= MAX_SSE_JOINED_DATA_BYTES
+    _assert_current_state_clear(framer)
+
+
+def test_production_frame_ceiling_rejects_bounded_ignored_fields_before_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream = GeneratedStream(_frame_overflow_chunks())
+    response = _response(stream)
+    framer = BoundedSSEFramer()
+
+    def unexpected_json(_data):
+        raise AssertionError("json.loads must not run on frame overflow")
+
+    monkeypatch.setattr(framing_module.json, "loads", unexpected_json)
+    with pytest.raises(ProviderResponseParseError) as exc_info:
+        asyncio.run(_collect(framer, response))
+
+    assert exc_info.value.error_code == "local_coding_sse_frame_too_large"
+    assert stream.closed is True
+    assert framer.stats.max_frame_bytes_retained <= MAX_SSE_FRAME_BYTES
+    _assert_current_state_clear(framer)
+
+
+def test_production_segment_cardinality_rejects_before_json() -> None:
+    stream = GeneratedStream(b"data: {}\r\n" for _ in range(MAX_SSE_DATA_SEGMENTS + 1))
+    response = _response(stream)
+    framer = BoundedSSEFramer()
+
+    with pytest.raises(ProviderResponseParseError) as exc_info:
+        asyncio.run(_collect(framer, response))
+
+    assert exc_info.value.error_code == "local_coding_sse_data_segments_too_many"
+    assert stream.closed is True
+    assert framer.stats.max_data_segments_retained <= MAX_SSE_DATA_SEGMENTS
+    _assert_current_state_clear(framer)
 
 
 @pytest.mark.asyncio

@@ -11,33 +11,43 @@ import httpx
 
 from slaif_gateway.providers.errors import ProviderResponseParseError
 from slaif_gateway.providers.streaming import (
+    MAX_CODEX_TYPED_RESPONSE_DELTA_BYTES,
     MAX_CODEX_TYPED_RESPONSE_SEMANTIC_BYTES,
     ParsedSSEEvent,
     format_sse_data,
 )
 
-# The strict Codex/Local validator bounds one reasoning summary, one visible
-# reasoning content field, one local function's arguments, and one assistant
-# message's text to one MiB each.  A one-MiB response envelope is reserved for
-# bounded request echoes such as instructions/tools.  JSON escaping can expand
-# a one-byte control character to six ASCII bytes (``\\u00XX``); the remaining
-# 128 KiB covers field names, IDs, indexes, usage arrays, punctuation, and
-# other fixed JSON structure.  This is a derivation, not a provider/client or
-# environment-configurable limit.
+# The strict Codex/Local terminal has at most three output items, each with at
+# most one MiB of aggregate content/arguments; a one-MiB response envelope is
+# retained separately. Individual progress/item/delta events are no larger
+# than one MiB. JSON escaping can expand a one-byte control character to six
+# ASCII bytes (``\\u00XX``); the remaining 128 KiB covers field names, IDs,
+# indexes, usage arrays, punctuation, and other fixed JSON structure. This is
+# a derivation, not a provider/client or environment-configurable limit.
 JSON_ASCII_ESCAPE_EXPANSION = 6
 JSON_STRUCTURAL_OVERHEAD_BYTES = 131_072
 MAX_SSE_JOINED_DATA_BYTES = (
     MAX_CODEX_TYPED_RESPONSE_SEMANTIC_BYTES * JSON_ASCII_ESCAPE_EXPANSION
     + JSON_STRUCTURAL_OVERHEAD_BYTES
 )
-MAX_SSE_DATA_SEGMENTS = 2_048
+# vLLM emits one JSON data record per event; the compatibility tolerance is a
+# finite 64 semantic-part allowance times 32 framing lines per part. Neither
+# route nor provider data can raise this source constant.
+MAX_SSE_SEMANTIC_PARTS = 64
+MAX_SSE_LINES_PER_SEMANTIC_PART = 32
+MAX_SSE_DATA_SEGMENTS = MAX_SSE_SEMANTIC_PARTS * MAX_SSE_LINES_PER_SEMANTIC_PART
 MAX_SSE_LINE_BYTES = MAX_SSE_JOINED_DATA_BYTES + len(b"data: ") + 1  # optional CR
-MAX_SSE_IGNORED_FIELD_OVERHEAD_BYTES = 262_144
+# Four existing 65,536-byte semantic delta bounds provide a finite allowance
+# for ignored comments/fields; their content is discarded, not forwarded.
+MAX_SSE_IGNORED_FIELD_MULTIPLIER = 4
+MAX_SSE_IGNORED_FIELD_OVERHEAD_BYTES = (
+    MAX_SSE_IGNORED_FIELD_MULTIPLIER * MAX_CODEX_TYPED_RESPONSE_DELTA_BYTES
+)
 MAX_SSE_DATA_LINE_OVERHEAD_BYTES = len(b"data: \r\n")
 MAX_SSE_FRAME_BYTES = (
     MAX_SSE_JOINED_DATA_BYTES
     + MAX_SSE_DATA_SEGMENTS * MAX_SSE_DATA_LINE_OVERHEAD_BYTES
-    + max(0, MAX_SSE_DATA_SEGMENTS - 1)  # joined-data newlines
+    - max(0, MAX_SSE_DATA_SEGMENTS - 1)  # already included joined-data newlines
     + MAX_SSE_IGNORED_FIELD_OVERHEAD_BYTES
     + len(b"\r\n")  # final blank-line delimiter
 )
@@ -78,6 +88,10 @@ class SSEFramingStats:
     max_frame_bytes_retained: int
     max_joined_data_bytes_retained: int
     max_data_segments_retained: int
+    current_line_bytes: int
+    current_frame_bytes: int
+    current_joined_data_bytes: int
+    current_data_segments: int
 
 
 def _parse_error(code: str, message: str) -> ProviderResponseParseError:
@@ -111,6 +125,10 @@ class BoundedSSEFramer:
             max_frame_bytes_retained=self._max_frame_bytes,
             max_joined_data_bytes_retained=self._max_joined_data_bytes,
             max_data_segments_retained=self._max_data_segments,
+            current_line_bytes=len(self._line),
+            current_frame_bytes=self._frame_bytes,
+            current_joined_data_bytes=self._joined_data_bytes,
+            current_data_segments=len(self._data_segments),
         )
 
     async def iter_events(self, response: httpx.Response) -> AsyncIterator[ParsedSSEEvent]:
@@ -129,6 +147,7 @@ class BoundedSSEFramer:
             for event in self._finish_at_eof():
                 yield event
         except BaseException:
+            self._clear_current_state()
             with suppress(BaseException):
                 await response.aclose()
             raise
@@ -269,6 +288,12 @@ class BoundedSSEFramer:
         return event
 
     def _reset_event(self) -> None:
+        self._data_segments.clear()
+        self._frame_bytes = 0
+        self._joined_data_bytes = 0
+
+    def _clear_current_state(self) -> None:
+        self._line.clear()
         self._data_segments.clear()
         self._frame_bytes = 0
         self._joined_data_bytes = 0

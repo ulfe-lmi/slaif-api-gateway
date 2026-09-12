@@ -646,8 +646,8 @@ For the exact `codex-0.149-responses-v1` to `local-coding-v1` pair, raw
 identity-encoded SSE bytes pass through a bounded incremental framer before
 typed event validation. It supports LF/CRLF, split UTF-8 and delimiters,
 multi-line `data:` joining, comments/ignored fields, final-event EOF dispatch,
-and `[DONE]`. Static reviewed ceilings are 31,588,359-byte lines,
-31,868,929-byte frames, 31,588,352-byte joined data, and 2,048 data segments;
+and `[DONE]`. Static reviewed ceilings are 25,296,903-byte lines,
+25,573,379-byte frames, 25,296,896-byte joined data, and 2,048 data segments;
 overflow and malformed data become safe low-cardinality provider parse errors.
 No raw stream content is stored, logged, or placed in client errors, and the
 upstream response is closed promptly on failure or cancellation.

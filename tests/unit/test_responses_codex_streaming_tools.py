@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
 import pytest
 
 from slaif_gateway.config import Settings
@@ -21,6 +23,12 @@ from slaif_gateway.modules.clients.codex_0147 import CODEX_0147_POLICY_SPEC
 from slaif_gateway.modules.contracts import ModuleSelectionError
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.providers import streaming as streaming_module
+from slaif_gateway.modules.servers.local_coding.sse_framing import (
+    BoundedSSEFramer,
+    MAX_SSE_FRAME_BYTES,
+    MAX_SSE_JOINED_DATA_BYTES,
+    MAX_SSE_LINE_BYTES,
+)
 from slaif_gateway.providers.streaming import (
     RESPONSES_CODEX_STREAM_EVENT_TYPES,
     ResponsesStreamEventValidator,
@@ -61,6 +69,10 @@ from scripts import verify_codex_tool_roundtrip as verifier
 
 
 PRIVATE_CANARY = "private-tool-stream-canary"
+VLLM_RESPONSE_ENVELOPE_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures/codex/0.149.0/vllm-0.27.1-responses-response-envelope.json"
+)
 DECLARATIONS = frozenset(
     {
         ("functions", "exec", "custom"),
@@ -660,6 +672,429 @@ def _strict_function_profile() -> ResponsesStreamValidationProfile:
         codex_0149_function_tool_events=True,
         declared_client_tools=frozenset({("functions", "wait", "function")}),
     )
+
+
+def _source_response_envelope(
+    *,
+    status: str,
+    output: list[dict[str, object]],
+    usage: dict[str, object] | None,
+    instructions: str | None = None,
+) -> dict[str, object]:
+    return {
+        "id": "response_1",
+        "created_at": 123,
+        "incomplete_details": None,
+        "instructions": instructions,
+        "metadata": None,
+        "model": "qwen3.8-27b",
+        "object": "response",
+        "output": output,
+        "parallel_tool_calls": True,
+        "temperature": 1.0,
+        "tool_choice": "none",
+        "tools": [],
+        "top_p": 1.0,
+        "background": False,
+        "max_output_tokens": 20,
+        "max_tool_calls": None,
+        "previous_response_id": None,
+        "prompt": None,
+        "reasoning": None,
+        "service_tier": "auto",
+        "status": status,
+        "text": None,
+        "top_logprobs": None,
+        "truncation": "disabled",
+        "usage": usage,
+        "user": None,
+        "presence_penalty": None,
+        "frequency_penalty": None,
+        "kv_transfer_params": None,
+        "ec_transfer_params": None,
+        "input_messages": None,
+        "output_messages": None,
+    }
+
+
+def _vllm_usage() -> dict[str, object]:
+    return {
+        "input_tokens": 1,
+        "input_tokens_details": {
+            "cached_tokens": 0,
+            "input_tokens_per_turn": [1],
+            "cached_tokens_per_turn": [0],
+        },
+        "output_tokens": 1,
+        "output_tokens_details": {
+            "reasoning_tokens": 0,
+            "tool_output_tokens": 0,
+            "output_tokens_per_turn": [1],
+            "tool_output_tokens_per_turn": [0],
+        },
+        "total_tokens": 2,
+    }
+
+
+def test_vllm_response_envelope_fixture_is_pinned_and_exact() -> None:
+    raw = VLLM_RESPONSE_ENVELOPE_FIXTURE.read_bytes()
+    fixture = json.loads(raw)
+
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "fb297b6425343c94145a1ffbb63bfbd1a41dfbbcead1e5549f206b169657aeec"
+    )
+    assert fixture["provenance"] == {
+        "provider": "vLLM",
+        "version": "0.27.1",
+        "tag_commit": "6e448d0ea9bf3d88d898b65449ca6dc2aec170ac",
+        "source_file": "vllm/entrypoints/openai/responses/protocol.py",
+        "source_file_sha256": "6aeabf69dbc924b238172b505730a8a8321b50a819891d2a72a690963c970fba",
+    }
+    assert fixture["field_order"] == list(fixture["field_classes"])
+    assert set(fixture["field_order"]) == streaming_module._CODEX_RESPONSE_ENVELOPE_FIELDS
+    assert len(fixture["field_order"]) == 32
+
+
+def test_vllm_full_default_null_envelope_passes_strict_validator() -> None:
+    events = _strict_function_events()
+    events[0]["response"] = _source_response_envelope(status="in_progress", output=[], usage=None)
+    events[1]["response"] = _source_response_envelope(status="in_progress", output=[], usage=None)
+    events[-1]["response"] = _source_response_envelope(
+        status="completed",
+        output=events[-1]["response"]["output"],
+        usage=events[-1]["response"]["usage"],
+    )
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events)
+
+
+def _maximum_strict_events() -> tuple[list[dict[str, object]], bytes]:
+    delta = "\x00" * streaming_module._MAX_STREAM_DELTA_BYTES
+    maximum_text = delta * 16
+    events: list[dict[str, object]] = []
+    sequence = 0
+
+    def add(event: dict[str, object]) -> None:
+        nonlocal sequence
+        if "sequence_number" in event:
+            event["sequence_number"] = sequence
+            sequence += 1
+        events.append(event)
+
+    add({"type": "response.created", "response": {}, "sequence_number": 0})
+    add({"type": "response.in_progress", "response": {}, "sequence_number": 0})
+    events[0]["response"] = _source_response_envelope(status="in_progress", output=[], usage=None)
+    events[1]["response"] = _source_response_envelope(status="in_progress", output=[], usage=None)
+
+    reasoning_id = "reasoning_max"
+    add(
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "sequence_number": 0,
+            "item": {
+                "type": "reasoning",
+                "id": reasoning_id,
+                "summary": [],
+                "content": None,
+                "encrypted_content": None,
+                "status": "in_progress",
+            },
+        }
+    )
+    add(
+        {
+            "type": "response.reasoning_part.added",
+            "item_id": reasoning_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "reasoning_text", "text": ""},
+            "sequence_number": 0,
+        }
+    )
+    for _ in range(16):
+        add(
+            {
+                "type": "response.reasoning_text.delta",
+                "item_id": reasoning_id,
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta,
+                "sequence_number": 0,
+            }
+        )
+    add(
+        {
+            "type": "response.reasoning_text.done",
+            "item_id": reasoning_id,
+            "output_index": 0,
+            "content_index": 0,
+            "text": maximum_text,
+            "sequence_number": 0,
+        }
+    )
+    add(
+        {
+            "type": "response.reasoning_part.done",
+            "item_id": reasoning_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {"type": "reasoning_text", "text": maximum_text},
+            "sequence_number": 0,
+        }
+    )
+    add(
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 0,
+            "item": {
+                "type": "reasoning",
+                "id": reasoning_id,
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": maximum_text}],
+                "encrypted_content": None,
+                "status": "completed",
+            },
+        }
+    )
+
+    function_id = "function_max"
+    function_call_id = "call_max"
+    add(
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "sequence_number": 0,
+            "item": {
+                "type": "function_call",
+                "id": function_id,
+                "status": "in_progress",
+                "namespace": None,
+                "name": "wait",
+                "arguments": "",
+                "call_id": function_call_id,
+                "caller": None,
+            },
+        }
+    )
+    for _ in range(16):
+        add(
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": function_id,
+                "output_index": 1,
+                "delta": delta,
+                "sequence_number": 0,
+            }
+        )
+    add(
+        {
+            "type": "response.function_call_arguments.done",
+            "item_id": function_id,
+            "output_index": 1,
+            "sequence_number": 0,
+            "name": "wait",
+            "arguments": maximum_text,
+        }
+    )
+    add(
+        {
+            "type": "response.output_item.done",
+            "output_index": 1,
+            "sequence_number": 0,
+            "item": {
+                "type": "function_call",
+                "id": function_id,
+                "status": "completed",
+                "namespace": None,
+                "name": "wait",
+                "arguments": maximum_text,
+                "call_id": function_call_id,
+                "caller": None,
+            },
+        }
+    )
+
+    message_id = "message_max"
+    add(
+        {
+            "type": "response.output_item.added",
+            "output_index": 2,
+            "sequence_number": 0,
+            "item": {
+                "type": "message",
+                "id": message_id,
+                "status": "in_progress",
+                "role": "assistant",
+                "content": [],
+                "phase": None,
+            },
+        }
+    )
+    add(
+        {
+            "type": "response.content_part.added",
+            "item_id": message_id,
+            "output_index": 2,
+            "content_index": 0,
+            "part": {"type": "output_text", "text": "", "annotations": [], "logprobs": []},
+            "sequence_number": 0,
+        }
+    )
+    for _ in range(16):
+        add(
+            {
+                "type": "response.output_text.delta",
+                "item_id": message_id,
+                "output_index": 2,
+                "content_index": 0,
+                "delta": delta,
+                "logprobs": [],
+                "sequence_number": 0,
+            }
+        )
+    add(
+        {
+            "type": "response.output_text.done",
+            "item_id": message_id,
+            "output_index": 2,
+            "content_index": 0,
+            "text": maximum_text,
+            "logprobs": [],
+            "sequence_number": 0,
+        }
+    )
+    add(
+        {
+            "type": "response.content_part.done",
+            "item_id": message_id,
+            "output_index": 2,
+            "content_index": 0,
+            "part": {
+                "type": "output_text",
+                "text": maximum_text,
+                "annotations": [],
+                "logprobs": None,
+            },
+            "sequence_number": 0,
+        }
+    )
+    add(
+        {
+            "type": "response.output_item.done",
+            "output_index": 2,
+            "sequence_number": 0,
+            "item": {
+                "type": "message",
+                "id": message_id,
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": maximum_text,
+                        "annotations": [],
+                        "logprobs": None,
+                    }
+                ],
+                "phase": None,
+                "summary": [],
+            },
+        }
+    )
+
+    output = [
+        {
+            "type": "reasoning",
+            "id": "terminal_reasoning_max",
+            "status": None,
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": maximum_text}],
+            "encrypted_content": None,
+        },
+        {
+            "type": "function_call",
+            "id": "terminal_function_max",
+            "status": "completed",
+            "namespace": None,
+            "name": "wait",
+            "arguments": maximum_text,
+            "call_id": "terminal_call_max",
+            "caller": None,
+        },
+        {
+            "type": "message",
+            "id": "terminal_message_max",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {"type": "output_text", "text": maximum_text, "annotations": [], "logprobs": None}
+            ],
+            "phase": None,
+        },
+    ]
+    terminal = _source_response_envelope(
+        status="completed",
+        output=output,
+        usage=_vllm_usage(),
+        instructions="",
+    )
+    envelope_without_output = {
+        key: value for key, value in terminal.items() if key not in {"output", "usage"}
+    }
+    envelope_base_bytes = len(
+        json.dumps(
+            envelope_without_output, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+        )
+    )
+    envelope_text = "\x00" * (
+        (streaming_module._MAX_CODEX_RESPONSE_ENVELOPE_BYTES - envelope_base_bytes) // 6
+    )
+    terminal["instructions"] = envelope_text
+    completed = {
+        "type": "response.completed",
+        "sequence_number": sequence,
+        "response": terminal,
+    }
+    events.append(completed)
+
+    event_data = json.dumps(
+        completed, ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    ).encode("ascii")
+    return events, event_data
+
+
+def test_codex_0149_maximum_typed_event_fits_bounded_framer() -> None:
+    events, event_data = _maximum_strict_events()
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+
+    assert all(validator.validate(event) for event in events)
+    assert len(event_data) <= MAX_SSE_JOINED_DATA_BYTES
+    assert len(b"data: " + event_data + b"\r\n") <= MAX_SSE_LINE_BYTES
+    assert len(b"data: " + event_data + b"\r\n\r\n") <= MAX_SSE_FRAME_BYTES
+
+    class OneChunkStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"data: " + event_data + b"\r\n\r\n"
+
+        async def aclose(self) -> None:
+            pass
+
+    response = httpx.Response(
+        200,
+        headers={"content-type": "text/event-stream"},
+        stream=OneChunkStream(),
+        request=httpx.Request("POST", "http://local-coding.test/v1/responses"),
+    )
+
+    async def collect() -> list[object]:
+        return [event async for event in BoundedSSEFramer().iter_events(response)]
+
+    parsed = asyncio.run(collect())
+    assert len(parsed) == 1
 
 
 def _zero_argument_function_events() -> list[dict[str, object]]:
@@ -1725,6 +2160,13 @@ def test_codex_0149_typed_response_envelope_and_output_cardinality_are_bounded()
     validator = ResponsesStreamEventValidator(_strict_function_profile())
     assert all(validator.validate(event) for event in events[:7])
     assert not validator.validate(events[-1])
+
+    for field in ("input_messages", "output_messages", "kv_transfer_params", "ec_transfer_params"):
+        events = _strict_function_events()
+        events[-1]["response"][field] = {}
+        validator = ResponsesStreamEventValidator(_strict_function_profile())
+        assert all(validator.validate(event) for event in events[:7])
+        assert not validator.validate(events[-1])
 
     events = _strict_function_events()
     events[-1]["response"]["unreviewed_envelope_field"] = "not admitted"

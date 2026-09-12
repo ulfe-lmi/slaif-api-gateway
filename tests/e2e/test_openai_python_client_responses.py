@@ -636,7 +636,6 @@ def test_openai_python_client_codex_0149_signed_thread_namespace_e2e(
             }
         ],
         "usage": _codex_vllm_usage(3, 2),
-        "store": False,
     }
     sse = _codex_standard_stream(completed)
     tools = [
@@ -997,7 +996,6 @@ def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
             }
         ],
         "usage": _codex_vllm_usage(4, 3),
-        "store": False,
     }
     sse = _codex_standard_stream(completed)
 
@@ -1252,7 +1250,6 @@ def test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e(
             }
         ],
         "usage": _codex_vllm_usage(4, 3),
-        "store": False,
     }
     sse = _codex_zero_argument_function_stream(completed)
 
