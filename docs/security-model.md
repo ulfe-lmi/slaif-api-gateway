@@ -108,6 +108,17 @@ is process-local TTL/LRU under the reviewed single-worker contract; restart
 and multi-worker guarantees are not claimed. The evidence here is mocked and
 cross-contract only, not protected or production qualification.
 
+The Local Coding Responses adapter consumes raw identity-encoded SSE bytes with
+a static bounded framer before typed validation. Line, frame, joined-data, and
+data-segment ceilings are derived from the reviewed Codex/Local semantic
+profile, including worst-case JSON escaping and fixed SSE overhead; a route,
+provider, response header, or environment variable cannot raise them. Strict
+UTF-8 and complete-object JSON parsing fail closed with safe low-cardinality
+codes. The framer exposes only numeric peak-state facts to tests, closes the
+upstream stream on overflow/malformed input/cancellation, and never places raw
+lines, JSON, reasoning, arguments, identifiers, or credentials in logs,
+metrics, audit rows, ledger metadata, OAP evidence, or client errors.
+
 In production, enabled built-in OpenAI/OpenRouter providers require configured,
 non-placeholder upstream provider secrets. The server treats `OPENAI_API_KEY` as
 a client-facing gateway-key variable, not as the upstream OpenAI provider secret;

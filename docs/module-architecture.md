@@ -75,6 +75,15 @@ Bearer and, in signed mode, derived opaque HMAC identity fields. Its
 process-local TTL/LRU replay boundary requires the reviewed single-worker
 deployment contract. The observed `tool_search` and `web_search` declarations
 remain bounded adapter-managed candidates and never grant hosted authority.
+
+The Local Coding SSE transport uses a module-local incremental byte framer
+before shared typed validation. It bounds one line, one wire frame, joined
+`data:` bytes, and data-segment cardinality using the reviewed static
+derivation in the provider-forwarding contract. It consumes raw identity
+encoding, rejects unsupported content encoding before iteration, strictly
+decodes complete lines/data, and exposes only content-free peak-state
+diagnostics. This boundary is Local Coding-specific; OpenAI/OpenRouter Chat
+and generic Responses adapters retain their separate streaming paths.
 The exact Codex 0.149 Local pair additionally owns the bounded visible-
 reasoning request dialect and the strict reasoning/function/message stream
 profile. Module version `4` additionally carries a default-empty, request-

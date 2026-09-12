@@ -654,6 +654,17 @@ request is finalized as estimated interrupted usage when token-bearing output
 was already observed, and the client receives a safe typed `error` event
 instead of a normal terminal success marker.
 
+The production `local-coding-v1` path adds a module-local raw-byte boundary
+before typed validation. It permits only identity content encoding and uses
+static ceilings of 31,588,359 bytes per line, 31,868,929 bytes per frame,
+31,588,352 joined `data:` bytes, and 2,048 data segments. These values are
+derived from the exact Codex/Local semantic budget and worst-case JSON escaping
+allowance in the [provider-forwarding contract](provider-forwarding-contract.md)
+and cannot be raised by route or provider metadata. Invalid UTF-8,
+invalid/non-object JSON, unknown response-envelope fields, malformed EOF, and
+overflow become safe provider parse errors; the upstream response is closed on
+failure, cancellation, or consumer close.
+
 For a successful gated Codex replay stream, finalized accounting is followed by
 a same-key/source-ledger verification and HMAC-only reference commit while
 `response.completed` remains held. Reference persistence failure emits a safe

@@ -1717,6 +1717,67 @@ def test_codex_0149_completed_output_and_usage_reject_malformed_facts(mutation) 
     assert not validator.validate(completed)
 
 
+def test_codex_0149_typed_response_envelope_and_output_cardinality_are_bounded() -> None:
+    events = _strict_function_events()
+    events[-1]["response"]["instructions"] = "x" * (
+        streaming_module._MAX_STREAM_CUMULATIVE_ITEM_BYTES + 1
+    )
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(events[-1])
+
+    events = _strict_function_events()
+    events[-1]["response"]["unreviewed_envelope_field"] = "not admitted"
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(events[-1])
+
+    events = _strict_function_events()
+    message = {
+        "type": "message",
+        "id": "parser_message_1",
+        "status": "completed",
+        "role": "assistant",
+        "content": [
+            {
+                "type": "output_text",
+                "text": "x" * streaming_module._MAX_STREAM_ITEM_TEXT_BYTES,
+                "annotations": [],
+                "logprobs": None,
+            }
+            for _ in range(5)
+        ],
+        "phase": None,
+    }
+    events[-1]["response"]["output"] = [message]
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(events[-1])
+
+    events = _strict_function_events()
+    events[-1]["response"]["output"] = [
+        {
+            "type": "message",
+            "id": "parser_message_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "x" * streaming_module._MAX_STREAM_ITEM_TEXT_BYTES,
+                    "annotations": [],
+                    "logprobs": None,
+                }
+            ],
+            "phase": None,
+        }
+        for _ in range(4)
+    ]
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    assert all(validator.validate(event) for event in events[:7])
+    assert not validator.validate(events[-1])
+
+
 def test_codex_0149_reasoning_item_lifecycle_is_exactly_scoped() -> None:
     added = _reasoning_added_event()
     assert not ResponsesStreamEventValidator(ResponsesStreamValidationProfile()).validate(added)

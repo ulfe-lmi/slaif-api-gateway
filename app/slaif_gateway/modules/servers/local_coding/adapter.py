@@ -35,7 +35,7 @@ from slaif_gateway.providers.errors import (
     UnsupportedProviderEndpointError,
 )
 from slaif_gateway.providers.headers import safe_response_headers
-from slaif_gateway.providers.streaming import parse_sse_lines
+from slaif_gateway.modules.servers.local_coding.sse_framing import BoundedSSEFramer
 from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
 
 _UPSTREAM_REQUEST_ID_HEADERS = ("x-request-id", "openai-request-id")
@@ -155,8 +155,10 @@ class LocalCodingAdapter(ProviderAdapter):
             self._settings.OPENROUTER_API_KEY,
             self._settings.OPENAI_ADMIN_DISCOVERY_API_KEY,
         ):
-            if isinstance(value, str) and value and hmac.compare_digest(
-                service_secret, value.encode("utf-8")
+            if (
+                isinstance(value, str)
+                and value
+                and hmac.compare_digest(service_secret, value.encode("utf-8"))
             ):
                 raise ProviderConfigurationError(
                     "Local Coding secret roles are not separate",
@@ -297,15 +299,18 @@ class LocalCodingAdapter(ProviderAdapter):
                     async for event in self._stream_response_events(response):
                         yield self._provider_response_stream_chunk(request, event)
                 return
-            async with httpx.AsyncClient(
-                timeout=self._timeout_seconds,
-                follow_redirects=False,
-            ) as client, client.stream(
-                "POST",
-                url,
-                content=body,
-                headers=headers,
-            ) as response:
+            async with (
+                httpx.AsyncClient(
+                    timeout=self._timeout_seconds,
+                    follow_redirects=False,
+                ) as client,
+                client.stream(
+                    "POST",
+                    url,
+                    content=body,
+                    headers=headers,
+                ) as response,
+            ):
                 async for event in self._stream_response_events(response):
                     yield self._provider_response_stream_chunk(request, event)
         except httpx.TimeoutException as exc:
@@ -325,19 +330,10 @@ class LocalCodingAdapter(ProviderAdapter):
                 diagnostic=diagnostic,
             )
 
-        pending_lines: list[str] = []
-        async for line in response.aiter_lines():
-            pending_lines.append(line)
-            if line == "":
-                for event in parse_sse_lines(pending_lines):
-                    self._raise_for_stream_error_event(response, event.json_body)
-                    yield response, event
-                pending_lines = []
-
-        if pending_lines:
-            for event in parse_sse_lines(pending_lines):
-                self._raise_for_stream_error_event(response, event.json_body)
-                yield response, event
+        framer = BoundedSSEFramer()
+        async for event in framer.iter_events(response):
+            self._raise_for_stream_error_event(response, event.json_body)
+            yield response, event
 
     def _provider_response(
         self,

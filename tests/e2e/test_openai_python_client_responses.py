@@ -1066,6 +1066,118 @@ def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
     _assert_strict_bounded_no_external_facts(state)
 
 
+def _run_local_coding_malformed_stream_e2e(monkeypatch: pytest.MonkeyPatch, *, after_output: bool):
+    database_url = _test_database_url()
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    local_model = f"local-coding-malformed-{'after' if after_output else 'before'}-test"
+    local_port = _free_port()
+    monkeypatch.setenv("LOCAL_CODING_SERVICE_TOKEN", "synthetic-local-coding-service-bearer")
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            provider="local-coding",
+            model=local_model,
+            upstream_model="qwen3.8-27b",
+            base_url=f"http://127.0.0.1:{local_port}/v1",
+            api_key_env_var="LOCAL_CODING_SERVICE_TOKEN",
+            streaming=True,
+            local_coding_contract={
+                "contract_version": "local-coding-v1",
+                "route_name": "vision",
+                "tool_policy_version": "responses-tool-policy-v1",
+                "identity_mode": "static",
+                "replay_mode": "process_local_ttl_lru",
+                "deployment_mode": "single_worker",
+            },
+            responses_policy={
+                "version": 1,
+                "allowed_capabilities": ["text", "stateless"],
+                "client_module": {"id": "openai-default", "version": "1", "fixture_sha256": None},
+            },
+        )
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    gateway_port = _free_port()
+    app = create_app(get_settings())
+    canary = "LOCAL_SSE_SECRET_CANARY"
+    malformed = f'data: {{"private":"{canary}"\n\n'
+    upstream_body = malformed
+    if after_output:
+        upstream_body = (
+            _sse({"type": "response.created", "response": {"id": "resp_malformed"}})
+            + _sse({"type": "response.output_text.delta", "delta": "visible"})
+            + malformed
+        )
+
+    with _run_uvicorn_server(app, gateway_port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+            local_route = router.post(f"http://127.0.0.1:{local_port}/v1/responses").mock(
+                return_value=httpx.Response(
+                    200,
+                    content=upstream_body.encode(),
+                    headers={"content-type": "text/event-stream"},
+                )
+            )
+            router.route(host="127.0.0.1").pass_through()
+            with httpx.Client() as client:
+                response = client.post(
+                    f"http://127.0.0.1:{gateway_port}/v1/responses",
+                    json={"model": local_model, "input": "synthetic", "stream": True},
+                    headers={"Authorization": f"Bearer {created.plaintext_key}"},
+                )
+
+    state = asyncio.run(
+        _load_accounting_state(database_url, created.gateway_key_id, provider="local-coding")
+    )
+    return response, local_route, state, canary
+
+
+@pytest.mark.e2e
+def test_local_coding_malformed_stream_before_output_releases_accounting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, local_route, state, canary = _run_local_coding_malformed_stream_e2e(
+        monkeypatch, after_output=False
+    )
+
+    assert response.status_code == 200
+    assert "local_coding_sse_invalid_json" in response.text
+    assert "data: [DONE]" not in response.text
+    assert canary not in response.text
+    assert len(local_route.calls) == 1
+    assert state.reservation.status == "released"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.accounting_status == "failed"
+    assert state.usage_ledger.error_type == "local_coding_sse_invalid_json"
+    assert canary not in json.dumps(state.usage_ledger.response_metadata, sort_keys=True)
+
+
+@pytest.mark.e2e
+def test_local_coding_malformed_stream_after_output_records_interruption(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response, local_route, state, canary = _run_local_coding_malformed_stream_e2e(
+        monkeypatch, after_output=True
+    )
+
+    assert response.status_code == 200
+    assert "response.output_text.delta" in response.text
+    assert "local_coding_sse_invalid_json" in response.text
+    assert "response.completed" not in response.text
+    assert "data: [DONE]" not in response.text
+    assert canary not in response.text
+    assert len(local_route.calls) == 1
+    assert state.reservation.status == "finalized"
+    assert state.gateway_key.tokens_reserved_total == 0
+    assert state.usage_ledger.accounting_status == "estimated"
+    assert state.usage_ledger.error_type == "local_coding_sse_invalid_json"
+    assert canary not in json.dumps(state.usage_ledger.response_metadata, sort_keys=True)
+
+
 @pytest.mark.e2e
 def test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e(
     monkeypatch: pytest.MonkeyPatch,

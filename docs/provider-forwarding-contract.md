@@ -62,6 +62,40 @@ identifiers, and reasoning/message content
 are inspected only in bounded transient memory and are not persisted or
 logged. This is mocked/state-machine evidence, not protected qualification.
 
+### Local Coding SSE framing boundary
+
+The Local Coding adapter consumes raw identity-encoded response bytes with a
+bounded incremental SSE framer before the typed Responses validator. It scans
+LF delimiters across arbitrary network chunks, strips one CR for CRLF, joins
+multiple `data:` fields with exactly one newline, ignores other SSE fields, and
+dispatches one complete event at a time. A complete final data event is
+dispatched at EOF; comment/ignored-only EOF is empty. Unsupported
+`Content-Encoding` values fail closed before byte iteration.
+
+The reviewed static derivation is:
+
+| Bound | Derivation | Value |
+| --- | --- | ---: |
+| semantic event budget | reasoning summary 1 MiB + visible reasoning 1 MiB + function arguments 1 MiB + assistant message text 1 MiB + response envelope 1 MiB | 5,242,880 bytes |
+| joined data / `json.loads` input | semantic budget × worst-case JSON ASCII escaping (6) + fixed JSON structure (128 KiB) | 31,588,352 bytes |
+| one line | joined-data ceiling + `data: ` prefix + optional CR | 31,588,359 bytes |
+| data segments | finite data-line cardinality | 2,048 |
+| ignored-field allowance | comments and non-data fields counted in the frame | 262,144 bytes |
+| complete wire frame | joined-data ceiling + data prefixes/CRLFs + inserted joined newlines + ignored-field allowance + blank CRLF delimiter | 31,868,929 bytes |
+
+The hard ceilings cannot be raised by a route, provider, response header, or
+environment variable; tests may only use smaller limits. The exact response-
+envelope names are `id`, `object`, `created_at`, `status`, `error`,
+`incomplete_details`, `instructions`, `max_output_tokens`, `model`,
+`parallel_tool_calls`, `previous_response_id`, `reasoning`, `store`,
+`temperature`, `text`, `tool_choice`, `tools`, `top_p`, `truncation`,
+`metadata`, `service_tier`, `prompt_cache_key`, and `max_tool_calls`, with
+`output` and `usage` validated separately. Unknown envelope names,
+oversized lines/frames/data, excessive data segments, invalid UTF-8,
+invalid/non-object JSON, and malformed EOF fail with low-cardinality safe
+provider parse codes. No raw line, frame, JSON, or stream content is retained
+in diagnostics, accounting metadata, logs, or client errors.
+
 ## Provider Adapters
 
 | Provider | Adapter | Upstream API shape | Implemented endpoint |
