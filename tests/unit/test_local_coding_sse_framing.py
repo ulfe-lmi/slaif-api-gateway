@@ -39,7 +39,7 @@ STATIC_ROUTE_CAPABILITIES = {
         "route_name": "vision",
         "tool_policy_version": "responses-tool-policy-v1",
         "identity_mode": "static",
-        "replay_mode": "process_local_ttl_lru",
+        "replay_mode": "process_local_inclusive_horizon_fail_closed",
         "deployment_mode": "single_worker",
     }
 }

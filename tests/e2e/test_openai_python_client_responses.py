@@ -528,8 +528,10 @@ def test_openai_python_client_codex_0149_signed_thread_namespace_e2e(
                 "route_name": "vision",
                 "tool_policy_version": "responses-tool-policy-v1",
                 "identity_mode": "signed_identity_v1",
-                "replay_mode": "process_local_ttl_lru",
+                "replay_mode": "process_local_inclusive_horizon_fail_closed",
                 "deployment_mode": "single_worker",
+                "clock_skew_seconds": 60,
+                "replay_ttl_seconds": 60,
             },
             responses_policy={
                 "version": 1,
@@ -811,7 +813,7 @@ def test_openai_python_client_local_coding_server_module_e2e(
                 "route_name": "vision",
                 "tool_policy_version": "responses-tool-policy-v1",
                 "identity_mode": "static",
-                "replay_mode": "process_local_ttl_lru",
+                "replay_mode": "process_local_inclusive_horizon_fail_closed",
                 "deployment_mode": "single_worker",
             },
             responses_policy={
@@ -945,7 +947,7 @@ def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
                 "route_name": "vision",
                 "tool_policy_version": "responses-tool-policy-v1",
                 "identity_mode": "static",
-                "replay_mode": "process_local_ttl_lru",
+                "replay_mode": "process_local_inclusive_horizon_fail_closed",
                 "deployment_mode": "single_worker",
             },
             responses_policy={
@@ -1085,7 +1087,7 @@ def _run_local_coding_malformed_stream_e2e(monkeypatch: pytest.MonkeyPatch, *, a
                 "route_name": "vision",
                 "tool_policy_version": "responses-tool-policy-v1",
                 "identity_mode": "static",
-                "replay_mode": "process_local_ttl_lru",
+                "replay_mode": "process_local_inclusive_horizon_fail_closed",
                 "deployment_mode": "single_worker",
             },
             responses_policy={
@@ -1201,7 +1203,7 @@ def test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e(
                 "route_name": "vision",
                 "tool_policy_version": "responses-tool-policy-v1",
                 "identity_mode": "static",
-                "replay_mode": "process_local_ttl_lru",
+                "replay_mode": "process_local_inclusive_horizon_fail_closed",
                 "deployment_mode": "single_worker",
             },
             responses_policy={

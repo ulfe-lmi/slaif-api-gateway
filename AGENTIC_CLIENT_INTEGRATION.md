@@ -1228,10 +1228,28 @@ Construction should fail safely if configured roles collide. Errors must never i
 
 ## 26. Replay mode and deployment claims
 
-If the downstream verifier uses process-local nonce TTL/LRU replay state:
+The accepted replay mode is exactly
+`process_local_inclusive_horizon_fail_closed`. The downstream verifier holds
+process-local, digest-only nonce state and:
+
+- retains each accepted SHA-256 nonce digest through the inclusive effective
+  horizon `max(admission_time + replay_ttl_seconds, signed_timestamp +
+  clock_skew_seconds)`;
+- reclaims entries only when the current time is strictly later;
+- never evicts a live digest when the bounded store is full, and fails closed
+  instead;
+- fails closed on non-finite or backward wall-clock observations;
+- keeps known replay distinct from the fail-closed capacity/clock outcomes.
+
+The Gateway declares and validates the replay metadata but does not configure
+or verify the peer's replay state: signed routes require explicit bounded
+`clock_skew_seconds` and `replay_ttl_seconds` values (reviewed peer default
+60/60), and static routes carry inert timing defaults. Server module version
+`2` records the replay-behavior change without changing the `local-coding-v1`
+contract ID or the identity-v1 wire. These limits apply:
 
 - the qualified deployment is single worker/process;
-- restart-persistent replay protection is not claimed;
+- restart-persistent replay protection is not claimed; state resets on restart;
 - multi-worker exclusion is not claimed;
 - secret rotation requires coordinated drain/disable/update/restart/re-enable;
 - overlapping key acceptance requires a new versioned contract.

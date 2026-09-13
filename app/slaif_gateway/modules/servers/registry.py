@@ -16,6 +16,7 @@ from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapte
 from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_ROUTE_CAPABILITY_KEY,
     LOCAL_CODING_SERVER_MODULE_ID,
+    LOCAL_CODING_SERVER_MODULE_VERSION,
     parse_local_coding_route_contract,
 )
 from slaif_gateway.providers.errors import ProviderConfigurationError
@@ -92,7 +93,7 @@ SERVER_MODULE_REGISTRY: Mapping[str, tuple[ServerModuleDescriptor, Callable[...,
         LOCAL_CODING_SERVER_MODULE_ID: (
             ServerModuleDescriptor(
                 module_id=LOCAL_CODING_SERVER_MODULE_ID,
-                module_version="1",
+                module_version=LOCAL_CODING_SERVER_MODULE_VERSION,
                 provider_slugs=frozenset(),
                 provider_kinds=frozenset({"openai_compatible"}),
             ),

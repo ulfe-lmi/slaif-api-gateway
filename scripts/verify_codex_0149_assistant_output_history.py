@@ -2657,8 +2657,10 @@ def run_direct_bounded_fake_acceptance(local_checkout: Path) -> str:
                             "route_name": "assistant-history",
                             "tool_policy_version": "responses-tool-policy-v1",
                             "identity_mode": "signed_identity_v1",
-                            "replay_mode": "process_local_ttl_lru",
+                            "replay_mode": "process_local_inclusive_horizon_fail_closed",
                             "deployment_mode": "single_worker",
+                            "clock_skew_seconds": 60,
+                            "replay_ttl_seconds": 60,
                         },
                         responses_policy={
                             "version": 1,
@@ -3018,8 +3020,10 @@ def _run_prefixed_reproduction_body(
                             "route_name": "vision",
                             "tool_policy_version": "responses-tool-policy-v1",
                             "identity_mode": "signed_identity_v1",
-                            "replay_mode": "process_local_ttl_lru",
+                            "replay_mode": "process_local_inclusive_horizon_fail_closed",
                             "deployment_mode": "single_worker",
+                            "clock_skew_seconds": 60,
+                            "replay_ttl_seconds": 60,
                         },
                         responses_policy={
                             "version": 1,

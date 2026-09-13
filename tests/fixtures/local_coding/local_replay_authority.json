@@ -1,0 +1,55 @@
+{
+  "source": {
+    "repository": "ulfe-lmi/slaif-local-coding",
+    "merged_main": "efc4dbcd377dd796a670726b16ebc06bd54b6356",
+    "merged_main_tree": "68144646615cf8aec954f737261060f1b1601033",
+    "implementation_commit": "4e1f07adc5d71c3f17e71b73cb57aec76aa28d9a",
+    "report_commit": "67d895b9666a7b59753c4a373a6d15bc5884e099",
+    "report_path": "oap/reports/006-a-signed-request-replay-hardening.md",
+    "gateway_identity_py_sha256": "8ea6e63920d3a3e4db6d80c1bed7300cacf21e74a7e3d359583dad5694cdd4b5",
+    "config_py_sha256": "871c4336068c2e27dad1cae0a5a0f036c4e43e00300b28b2e44d8f4418ee4a6e",
+    "report_sha256": "3df009a5d95fdfda3413e69f2c2293bfca991ce6d7fa2d9bde5824a808ae161b",
+    "handoff_comment": "https://github.com/ulfe-lmi/slaif-api-gateway/pull/299#issuecomment-5649192000"
+  },
+  "capability": {
+    "replay_mode": "process_local_inclusive_horizon_fail_closed",
+    "rejected_replay_mode": "process_local_ttl_lru"
+  },
+  "semantics": {
+    "retention": "each admitted SHA-256 nonce digest is retained through the inclusive effective horizon max(admission_time + replay_ttl_seconds, signed_timestamp + clock_skew_seconds)",
+    "reclamation": "only when the current time is strictly later than the retained expiry",
+    "live_digest_eviction": "never",
+    "capacity_full": "fail closed with 503 signed_identity_replay_capacity_unavailable",
+    "unsafe_wall_clock": "fail closed with 503 signed_identity_clock_unavailable on non-finite or backward observation",
+    "known_replay": "distinct closed outcome with 409 signed_identity_replayed"
+  },
+  "peer_defaults": {
+    "clock_skew_seconds": 60,
+    "replay_ttl_seconds": 60,
+    "max_replay_entries": 4096,
+    "nonce_min_length": 16,
+    "nonce_max_length": 128
+  },
+  "peer_bounds": {
+    "clock_skew_seconds": [1, 300],
+    "replay_ttl_seconds": [1, 86400]
+  },
+  "wire": {
+    "identity_bytes": "unchanged slaif-local-coding-identity-v1 newline-joined canonical fields",
+    "identity_mode": "signed_identity_v1",
+    "identity_version": "v1",
+    "signature_format": "v1=<64 lowercase hex hmac-sha256>",
+    "nonce_state": "SHA-256 hex digest only; raw nonce never retained"
+  },
+  "limitations": [
+    "digest-only state",
+    "bounded process-local store",
+    "single worker/process",
+    "non-durable",
+    "state resets on restart"
+  ],
+  "ownership": {
+    "gateway": "declares and validates route capability, deployment mode, and signed skew/TTL metadata only; does not configure, verify, or replicate peer replay state",
+    "local": "owns nonce admission, inclusive-horizon retention, replay/capacity/clock outcomes, and process-local storage"
+  }
+}

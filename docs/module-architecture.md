@@ -72,8 +72,12 @@ model, route, provider, capability, pricing, quota, accounting, identity, and
 tool decisions remain Gateway-core facts. The Local Coding server module is a
 Responses-create/Responses-SSE transport only; it uses a separate service
 Bearer and, in signed mode, derived opaque HMAC identity fields. Its
-process-local TTL/LRU replay boundary requires the reviewed single-worker
-deployment contract. The observed `tool_search` and `web_search` declarations
+process-local inclusive-horizon fail-closed replay boundary
+(`process_local_inclusive_horizon_fail_closed`) requires the reviewed
+single-worker deployment contract; signed routes carry explicit bounded
+skew/TTL metadata that the Gateway validates while the Local peer configures
+it out-of-band, and server module version `2` records that replay-behavior
+change without changing the `local-coding-v1` contract ID. The observed `tool_search` and `web_search` declarations
 remain bounded adapter-managed candidates and never grant hosted authority.
 
 The Local Coding SSE transport uses a module-local incremental byte framer

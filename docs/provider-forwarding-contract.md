@@ -44,7 +44,15 @@ authenticated owner/key truth, the corroborated Codex session hint, and the
 server-side repository scope with domain-separated HMACs. It signs method,
 path, raw query, exact body, identity fields, timestamp, and nonce. The
 producer validates the Local peer grammar before signing; replay protection is
-process-local TTL/LRU and requires the reviewed single-worker deployment mode.
+the process-local inclusive-horizon fail-closed contract
+(`process_local_inclusive_horizon_fail_closed`): the peer retains each accepted
+SHA-256 nonce digest through `max(admission_time + replay_ttl_seconds,
+signed_timestamp + clock_skew_seconds)`, reclaims only strictly later, never
+evicts a live digest, fails closed on capacity exhaustion or unsafe wall-clock
+observation, keeps known replay distinct, and requires the reviewed
+single-worker deployment mode. The Gateway declares and validates the replay
+metadata (explicit signed skew/TTL) but does not verify the peer's out-of-band
+configuration.
 This is mocked/cross-contract conformance only, not a protected or deployment
 qualification.
 

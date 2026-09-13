@@ -7,7 +7,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 LOCAL_CODING_SERVER_MODULE_ID = "local-coding-v1"
-LOCAL_CODING_SERVER_MODULE_VERSION = "1"
+LOCAL_CODING_SERVER_MODULE_VERSION = "2"
+LOCAL_CODING_REPLAY_MODE = "process_local_inclusive_horizon_fail_closed"
 LOCAL_CODING_ROUTE_CAPABILITY_KEY = "local_coding"
 LOCAL_CODING_TOOL_POLICY_VERSION = "responses-tool-policy-v1"
 _SAFE_ROUTE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
@@ -49,7 +50,7 @@ class LocalCodingRouteContract:
     deployment_mode: str
     max_body_bytes: int = 67_108_864
     clock_skew_seconds: int = 60
-    replay_ttl_seconds: int = 120
+    replay_ttl_seconds: int = 60
     nonce_min_length: int = 16
     nonce_max_length: int = 128
 
@@ -79,10 +80,14 @@ def parse_local_coding_route_contract(
         raise ValueError("Local Coding identity mode is unsupported")
     if identity_mode == "signed_identity_v1" and _LOCAL_V1_SIGNED_ROUTE_NAME.fullmatch(route_name) is None:
         raise ValueError("Local Coding signed route name is invalid")
-    if raw.get("replay_mode") != "process_local_ttl_lru":
+    if raw.get("replay_mode") != LOCAL_CODING_REPLAY_MODE:
         raise ValueError("Local Coding replay mode is unsupported")
     if raw.get("deployment_mode") != "single_worker":
         raise ValueError("Local Coding deployment mode is unsupported")
+    if identity_mode == "signed_identity_v1":
+        for field in ("clock_skew_seconds", "replay_ttl_seconds"):
+            if field not in raw:
+                raise ValueError(f"Local Coding {field} is required for signed identity")
 
     values: dict[str, int] = {}
     bounds = {
@@ -106,7 +111,7 @@ def parse_local_coding_route_contract(
         route_name=route_name,
         tool_policy_version=LOCAL_CODING_TOOL_POLICY_VERSION,
         identity_mode=identity_mode,
-        replay_mode="process_local_ttl_lru",
+        replay_mode=LOCAL_CODING_REPLAY_MODE,
         deployment_mode="single_worker",
         **values,
     )

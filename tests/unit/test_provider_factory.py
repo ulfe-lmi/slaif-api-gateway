@@ -7,6 +7,7 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.facial_scoring import FacialScoringAdapter
 from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
+from slaif_gateway.modules.servers.registry import resolve_server_module
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderConfigurationError
 from slaif_gateway.providers.factory import get_provider_adapter
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
@@ -20,8 +21,10 @@ LOCAL_CODING_ROUTE_CAPABILITIES = {
         "route_name": "factory-test",
         "tool_policy_version": "responses-tool-policy-v1",
         "identity_mode": "signed_identity_v1",
-        "replay_mode": "process_local_ttl_lru",
+        "replay_mode": "process_local_inclusive_horizon_fail_closed",
         "deployment_mode": "single_worker",
+        "clock_skew_seconds": 60,
+        "replay_ttl_seconds": 60,
     }
 }
 
@@ -201,6 +204,8 @@ def test_factory_builds_local_coding_responses_only_adapter_from_route_metadata(
     assert not isinstance(adapter, OpenAIProviderAdapter)
     assert adapter._api_key == service_secret
     assert adapter._base_url == "http://local-coding.lan/v1"
+    resolved = resolve_server_module("local-model", "openai_compatible", LOCAL_CODING_ROUTE_CAPABILITIES)
+    assert resolved.module_version == "2"
 
 
 def test_factory_rejects_generic_bad_url_and_client_env_name(monkeypatch) -> None:
@@ -236,3 +241,33 @@ def test_generic_adapter_never_falls_back_to_openai_secret() -> None:
 
     assert exc_info.value.provider == "lan-qwen-text"
     assert "built-in-secret" not in str(exc_info.value)
+
+
+def test_factory_rejects_retired_local_coding_replay_mode_before_construction(monkeypatch) -> None:
+    service_secret = "factory-local-coding-service-bearer-secret-0123456789"
+    monkeypatch.setenv("FACTORY_LOCAL_CODING_KEY", service_secret)
+    route = SimpleNamespace(
+        provider="local-model",
+        provider_kind="openai_compatible",
+        provider_base_url="http://local-coding.lan/v1",
+        provider_api_key_env_var="FACTORY_LOCAL_CODING_KEY",
+        provider_timeout_seconds=12,
+        provider_max_retries=0,
+        capabilities={
+            "local_coding": {
+                **LOCAL_CODING_ROUTE_CAPABILITIES["local_coding"],
+                "replay_mode": "process_local_ttl_lru",
+            }
+        },
+    )
+
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        get_provider_adapter(
+            route,
+            Settings(
+                LOCAL_CODING_SIGNING_SECRET_V1="factory-local-coding-signing-secret-0123456789",
+                LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1="factory-local-coding-derivation-secret-0123456789",
+            ),
+        )
+
+    assert exc_info.value.error_code == "local_coding_route_contract_invalid"
