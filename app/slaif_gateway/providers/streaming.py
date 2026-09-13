@@ -1163,6 +1163,10 @@ class ResponsesStreamEventValidator:
             assert isinstance(response, Mapping)
             if not _validate_codex_response_envelope(response):
                 return False
+            if ("output" in response and response["output"] != []) or (
+                "usage" in response and response["usage"] is not None
+            ):
+                return False
             response_id = response.get("id")
             if event_type == "response.created":
                 if self._strict_response_id is not None or response.get("status") not in {

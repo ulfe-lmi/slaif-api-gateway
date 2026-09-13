@@ -99,6 +99,14 @@ provider parse codes. No raw line, frame, JSON, or stream content is retained
 in diagnostics, accounting metadata, logs, or client errors. The exact source
 field/default/type classes and vLLM tag/file digest are pinned in
 `tests/fixtures/codex/0.149.0/vllm-0.27.1-responses-response-envelope.json`.
+For the exact vLLM progress emitter, `response.created` and
+`response.in_progress` use the shared source-shaped representation with
+`output=[]`, `status="in_progress"`, and `usage=null` when those fields are
+serialized. The Gateway accepts absent fields for compatibility, but any
+present progress `output` must be exactly `[]` and present progress `usage`
+must be exactly `null`; completed output/usage continue through their separate
+strict validators. The source emission fact is pinned in
+`tests/fixtures/codex/0.149.0/vllm-0.27.1-responses-progress-emission.json`.
 
 ## Provider Adapters
 

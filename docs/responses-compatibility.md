@@ -668,6 +668,13 @@ invalid/non-object JSON, unknown response-envelope fields, malformed EOF, and
 overflow become safe provider parse errors; the upstream response is closed on
 failure, cancellation, or consumer close.
 
+Within that field set, strict `response.created` and `response.in_progress`
+events admit only the source-emitted progress state: present `output` is the
+empty list and present `usage` is null (either field may remain absent in
+minimal compatibility fixtures). The completed event is different: its
+`output` and `usage` values remain required and are checked by the existing
+strict lifecycle, cardinality, semantic-size, and detailed-usage validators.
+
 For a successful gated Codex replay stream, finalized accounting is followed by
 a same-key/source-ledger verification and HMAC-only reference commit while
 `response.completed` remains held. Reference persistence failure emits a safe

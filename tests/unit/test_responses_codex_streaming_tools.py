@@ -73,6 +73,10 @@ VLLM_RESPONSE_ENVELOPE_FIXTURE = (
     Path(__file__).resolve().parents[1]
     / "fixtures/codex/0.149.0/vllm-0.27.1-responses-response-envelope.json"
 )
+VLLM_PROGRESS_EMISSION_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures/codex/0.149.0/vllm-0.27.1-responses-progress-emission.json"
+)
 DECLARATIONS = frozenset(
     {
         ("functions", "exec", "custom"),
@@ -754,6 +758,110 @@ def test_vllm_response_envelope_fixture_is_pinned_and_exact() -> None:
     assert fixture["field_order"] == list(fixture["field_classes"])
     assert set(fixture["field_order"]) == streaming_module._CODEX_RESPONSE_ENVELOPE_FIELDS
     assert len(fixture["field_order"]) == 32
+
+
+def test_vllm_progress_emission_fixture_is_pinned_and_exact() -> None:
+    raw = VLLM_PROGRESS_EMISSION_FIXTURE.read_bytes()
+    fixture = json.loads(raw)
+
+    assert (
+        hashlib.sha256(raw).hexdigest()
+        == "f4f83c604dc600d65aefe27b4b6035c334ae17375745d5cbd4fa26854c33f99f"
+    )
+    assert fixture["provenance"] == {
+        "provider": "vLLM",
+        "version": "0.27.1",
+        "tag_commit": "6e448d0ea9bf3d88d898b65449ca6dc2aec170ac",
+        "source_file": "vllm/entrypoints/openai/responses/serving.py",
+        "source_file_sha256": "628429902ff26b87f86eae1a45297f647f3712d7b421ca9a4866a3fd0f046a5b",
+    }
+    assert fixture["initial_response_emission"] == {
+        "shared_initial_response": True,
+        "response_created": {"output": "empty_list", "status": "in_progress", "usage": "null"},
+        "response_in_progress": {
+            "output": "empty_list",
+            "status": "in_progress",
+            "usage": "null",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        pytest.param("response.created", id="created"),
+        pytest.param("response.in_progress", id="in-progress"),
+    ],
+)
+def test_vllm_source_shaped_progress_event_accepts_full_default_null_envelope(
+    event_type: str,
+) -> None:
+    event = {
+        "type": event_type,
+        "sequence_number": 0,
+        "response": _source_response_envelope(status="in_progress", output=[], usage=None),
+    }
+
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+
+    if event_type == "response.in_progress":
+        created = {**event, "type": "response.created"}
+        assert validator.validate(created)
+        event["sequence_number"] = 1
+    assert validator.validate(event)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        pytest.param(
+            lambda response: response.update(output=[{"private": PRIVATE_CANARY}]),
+            id="output-nonempty-list",
+        ),
+        pytest.param(lambda response: response.update(output={}), id="output-mapping"),
+        pytest.param(lambda response: response.update(output=PRIVATE_CANARY), id="output-string"),
+        pytest.param(lambda response: response.update(output=None), id="output-null"),
+        pytest.param(
+            lambda response: response.update(usage={"input_tokens": 1}),
+            id="usage-non-null-mapping",
+        ),
+        pytest.param(
+            lambda response: response.update(usage="malformed"), id="usage-malformed-string"
+        ),
+        pytest.param(
+            lambda response: response.update(output=PRIVATE_CANARY + "x" * 30_000_000),
+            id="output-generated-large",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        pytest.param("response.created", id="created"),
+        pytest.param("response.in_progress", id="in-progress"),
+    ],
+)
+def test_vllm_progress_output_and_usage_shapes_fail_closed_without_echo(
+    mutation, event_type: str
+) -> None:
+    event = {
+        "type": event_type,
+        "sequence_number": 0,
+        "response": _source_response_envelope(status="in_progress", output=[], usage=None),
+    }
+    validator = ResponsesStreamEventValidator(_strict_function_profile())
+    if event_type == "response.in_progress":
+        created = {
+            **event,
+            "type": "response.created",
+            "response": _source_response_envelope(status="in_progress", output=[], usage=None),
+        }
+        assert validator.validate(created)
+        event["sequence_number"] = 1
+    mutation(event["response"])
+
+    assert not validator.validate(event)
+    assert PRIVATE_CANARY not in repr(validator.safe_evidence())
 
 
 def test_vllm_full_default_null_envelope_passes_strict_validator() -> None:
