@@ -54,6 +54,58 @@ _MAX_STREAM_CONTENT_PARTS = 64
 _MAX_STREAM_INDEX = 1_000_000
 _MAX_STREAM_TOKEN_COUNT = 2**63 - 1
 _MAX_WEB_SEARCH_EVIDENCE_EVENTS = 256
+# Public names used by the Local-owned transport derivation; the underlying
+# semantic limits remain source constants and are not route configurable.
+MAX_CODEX_TYPED_RESPONSE_DELTA_BYTES = _MAX_STREAM_DELTA_BYTES
+# The exact Codex/Local terminal permits at most three output items with one
+# MiB of aggregate content/arguments each.  One additional MiB covers the
+# bounded response envelope; individual delta/item events remain bounded by
+# the existing one-MiB semantic item limits.
+MAX_CODEX_TYPED_RESPONSE_SEMANTIC_BYTES = 4 * _MAX_STREAM_CUMULATIVE_ITEM_BYTES
+MAX_CODEX_TYPED_RESPONSE_OUTPUT_ITEMS = 3
+MAX_CODEX_TYPED_RESPONSE_OUTPUT_BYTES = 3 * _MAX_STREAM_CUMULATIVE_ITEM_BYTES
+_MAX_CODEX_RESPONSE_ENVELOPE_BYTES = _MAX_STREAM_CUMULATIVE_ITEM_BYTES
+# These are the exact serialized vLLM 0.27.1 ResponsesResponse field names
+# admitted by the exact Codex/Local profile.  ``output`` and ``usage`` have
+# their own validators; every other value is bounded by the serialized-envelope
+# ceiling below.  The source pin and type/default classes are in the content-
+# free fixture under tests/fixtures/codex/0.149.0/.
+_CODEX_RESPONSE_ENVELOPE_FIELDS = frozenset(
+    {
+        "id",
+        "created_at",
+        "incomplete_details",
+        "instructions",
+        "metadata",
+        "model",
+        "object",
+        "output",
+        "parallel_tool_calls",
+        "temperature",
+        "text",
+        "tool_choice",
+        "tools",
+        "top_p",
+        "background",
+        "max_output_tokens",
+        "max_tool_calls",
+        "previous_response_id",
+        "prompt",
+        "reasoning",
+        "service_tier",
+        "status",
+        "top_logprobs",
+        "truncation",
+        "usage",
+        "user",
+        "presence_penalty",
+        "frequency_penalty",
+        "kv_transfer_params",
+        "ec_transfer_params",
+        "input_messages",
+        "output_messages",
+    }
+)
 _ITEM_STATUSES = frozenset({"in_progress", "completed", "incomplete"})
 _MESSAGE_PHASES = frozenset({"commentary", "final_answer"})
 
@@ -119,6 +171,7 @@ class ResponsesStreamEventValidator:
         self._function_output_done: set[str] = set()
         self._function_delta_seen: set[str] = set()
         self._function_done_states: dict[str, _StreamItemState] = {}
+        self._codex_output_items_started = 0
         self._strict_response_id: str | None = None
         self._strict_response_completed = False
         self._strict_last_sequence: int | None = None
@@ -727,6 +780,7 @@ class ResponsesStreamEventValidator:
                 or item_id in self._seen_item_ids
                 or call_id in self._seen_call_ids
                 or bool(self._function_output_indices)
+                or self._codex_output_items_started >= MAX_CODEX_TYPED_RESPONSE_OUTPUT_ITEMS
                 or self._resolve_declared_tool(None, name, "function") is None
             ):
                 return False
@@ -736,6 +790,7 @@ class ResponsesStreamEventValidator:
             self._active_items[item_id] = _StreamItemState(
                 "function_call", "functions", name, call_id
             )
+            self._codex_output_items_started += 1
             return True
 
         state = self._active_items.get(item_id)
@@ -809,9 +864,11 @@ class ResponsesStreamEventValidator:
             if not _required_index(payload, "summary_index"):
                 return False
             part = payload.get("part")
-            return isinstance(part, Mapping) and _validate_reasoning_text_part(
+            if not isinstance(part, Mapping) or not _validate_reasoning_text_part(
                 part, expected_type="summary_text"
-            )
+            ):
+                return False
+            return True
 
         is_content = event_type in ("response.reasoning_text.delta", "response.reasoning_text.done")
         if strict_codex and (not is_content or int(payload["content_index"]) != 0):
@@ -893,11 +950,16 @@ class ResponsesStreamEventValidator:
         if event_type == "response.output_item.added":
             if item.get("status") != "in_progress" or item.get("content") is not None:
                 return False
-            if item_id in self._seen_item_ids or item_id in self._reasoning_output_indices:
+            if (
+                item_id in self._seen_item_ids
+                or item_id in self._reasoning_output_indices
+                or self._codex_output_items_started >= MAX_CODEX_TYPED_RESPONSE_OUTPUT_ITEMS
+            ):
                 return False
             self._seen_item_ids.add(item_id)
             self._reasoning_output_indices[item_id] = output_index
             self._active_items[item_id] = _StreamItemState("reasoning", None, None, None)
+            self._codex_output_items_started += 1
             return True
 
         if item.get("status") != "completed" or item_id in self._reasoning_output_done:
@@ -948,11 +1010,16 @@ class ResponsesStreamEventValidator:
         if event_type == "response.output_item.added":
             if item.get("status") != "in_progress" or item.get("content") != []:
                 return False
-            if item_id in self._seen_item_ids or item_id in self._message_output_indices:
+            if (
+                item_id in self._seen_item_ids
+                or item_id in self._message_output_indices
+                or self._codex_output_items_started >= MAX_CODEX_TYPED_RESPONSE_OUTPUT_ITEMS
+            ):
                 return False
             self._seen_item_ids.add(item_id)
             self._message_output_indices[item_id] = output_index
             self._active_items[item_id] = _StreamItemState("message", None, None, None)
+            self._codex_output_items_started += 1
             return True
 
         if (
@@ -1094,6 +1161,12 @@ class ResponsesStreamEventValidator:
                 return False
             response = payload["response"]
             assert isinstance(response, Mapping)
+            if not _validate_codex_response_envelope(response):
+                return False
+            if ("output" in response and response["output"] != []) or (
+                "usage" in response and response["usage"] is not None
+            ):
+                return False
             response_id = response.get("id")
             if event_type == "response.created":
                 if self._strict_response_id is not None or response.get("status") not in {
@@ -1124,6 +1197,8 @@ class ResponsesStreamEventValidator:
                 or self._function_output_done
             )
         ):
+            return False
+        if not _validate_codex_response_envelope(response):
             return False
         usage = response.get("usage")
         if (
@@ -1348,6 +1423,35 @@ def _validate_completed_usage(
     return True
 
 
+def _validate_codex_response_envelope(response: Mapping[str, Any]) -> bool:
+    """Bound optional vLLM/OpenAI response-envelope echoes before retention."""
+
+    if set(response) - _CODEX_RESPONSE_ENVELOPE_FIELDS:
+        return False
+    if any(
+        response.get(field) is not None
+        for field in (
+            "input_messages",
+            "output_messages",
+            "kv_transfer_params",
+            "ec_transfer_params",
+        )
+    ):
+        return False
+    envelope = {key: value for key, value in response.items() if key not in {"output", "usage"}}
+    try:
+        encoded = json.dumps(
+            envelope,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("ascii")
+    except (TypeError, ValueError, UnicodeError):
+        return False
+    return len(encoded) <= _MAX_CODEX_RESPONSE_ENVELOPE_BYTES
+
+
 def _validate_nonnegative_count(value: Any) -> bool:
     return (
         isinstance(value, int)
@@ -1370,16 +1474,52 @@ def _validate_codex_completed_output(
     allow_function_calls: bool = False,
     function_states: Mapping[str, _StreamItemState] | None = None,
 ) -> bool:
-    if not isinstance(output, list) or not output or len(output) > _MAX_STREAM_CONTENT_PARTS:
+    if (
+        not isinstance(output, list)
+        or not output
+        or len(output) > MAX_CODEX_TYPED_RESPONSE_OUTPUT_ITEMS
+    ):
         return False
-    return all(
-        _validate_codex_completed_output_item(
+    total_bytes = 0
+    for item in output:
+        if not _validate_codex_completed_output_item(
             item,
             allow_function_call=allow_function_calls,
             function_states=function_states,
-        )
-        for item in output
-    )
+        ):
+            return False
+        total_bytes += _codex_completed_output_item_bytes(item)
+        if total_bytes > MAX_CODEX_TYPED_RESPONSE_OUTPUT_BYTES:
+            return False
+    return True
+
+
+def _codex_completed_output_item_bytes(item: Any) -> int:
+    if not isinstance(item, Mapping):
+        return 0
+    item_type = item.get("type")
+    if item_type == "function_call":
+        arguments = item.get("arguments")
+        return len(arguments.encode("utf-8")) if isinstance(arguments, str) else 0
+    if item_type in {"reasoning", "message"}:
+        total = 0
+        if item_type == "reasoning":
+            parts = item.get("summary")
+            if isinstance(parts, list):
+                total += sum(
+                    len(part["text"].encode("utf-8"))
+                    for part in parts
+                    if isinstance(part, Mapping) and isinstance(part.get("text"), str)
+                )
+        parts = item.get("content")
+        if isinstance(parts, list):
+            total += sum(
+                len(part["text"].encode("utf-8"))
+                for part in parts
+                if isinstance(part, Mapping) and isinstance(part.get("text"), str)
+            )
+        return total
+    return 0
 
 
 def _validate_codex_completed_output_item(

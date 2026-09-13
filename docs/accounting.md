@@ -85,6 +85,13 @@ Core invariants:
   streams follow the existing rollback/interrupted-estimate law and never
   become a normal successful ledger row. Validator state is transient and
   contains no persisted content, identifiers, or raw provider events.
+- Before that typed Local stream profile runs, the `local-coding-v1` adapter
+  applies static raw-byte SSE ceilings: 25,296,903 bytes per line,
+  25,573,379 bytes per frame, 25,296,896 joined data bytes, and 2,048 data
+  segments. A pre-output framing error uses the existing provider-failure/
+  release path; a post-output framing error uses estimated interrupted
+  accounting. Both paths finish with zero pending/reserved state, and
+  malformed/oversized bytes are excluded from safe accounting metadata.
 - In module version `4`, an exact top-level zero-argument function on the
   Codex/Local pair may close with an empty-string argument summary directly
   from the completed output item when the provider omitted both function

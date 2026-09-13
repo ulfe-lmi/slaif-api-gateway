@@ -1,0 +1,23 @@
+{
+  "schema_version": "vllm-0.27.1-responses-progress-emission-v1",
+  "provenance": {
+    "provider": "vLLM",
+    "version": "0.27.1",
+    "tag_commit": "6e448d0ea9bf3d88d898b65449ca6dc2aec170ac",
+    "source_file": "vllm/entrypoints/openai/responses/serving.py",
+    "source_file_sha256": "628429902ff26b87f86eae1a45297f647f3712d7b421ca9a4866a3fd0f046a5b"
+  },
+  "initial_response_emission": {
+    "shared_initial_response": true,
+    "response_created": {
+      "output": "empty_list",
+      "status": "in_progress",
+      "usage": "null"
+    },
+    "response_in_progress": {
+      "output": "empty_list",
+      "status": "in_progress",
+      "usage": "null"
+    }
+  }
+}

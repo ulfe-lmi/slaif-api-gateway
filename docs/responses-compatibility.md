@@ -654,6 +654,27 @@ request is finalized as estimated interrupted usage when token-bearing output
 was already observed, and the client receives a safe typed `error` event
 instead of a normal terminal success marker.
 
+The production `local-coding-v1` path adds a module-local raw-byte boundary
+before typed validation. It permits only identity content encoding and uses
+static ceilings of 25,296,903 bytes per line, 25,573,379 bytes per frame,
+25,296,896 joined `data:` bytes, and 2,048 data segments. These values are
+derived from the exact Codex/Local semantic budget and worst-case JSON escaping
+allowance in the [provider-forwarding contract](provider-forwarding-contract.md)
+and cannot be raised by route or provider metadata. The response envelope is
+the exact pinned vLLM 0.27.1 `ResponsesResponse` field set; `input_messages`,
+`output_messages`, `kv_transfer_params`, and `ec_transfer_params` must remain
+absent/null on the Gateway path. Invalid UTF-8,
+invalid/non-object JSON, unknown response-envelope fields, malformed EOF, and
+overflow become safe provider parse errors; the upstream response is closed on
+failure, cancellation, or consumer close.
+
+Within that field set, strict `response.created` and `response.in_progress`
+events admit only the source-emitted progress state: present `output` is the
+empty list and present `usage` is null (either field may remain absent in
+minimal compatibility fixtures). The completed event is different: its
+`output` and `usage` values remain required and are checked by the existing
+strict lifecycle, cardinality, semantic-size, and detailed-usage validators.
+
 For a successful gated Codex replay stream, finalized accounting is followed by
 a same-key/source-ledger verification and HMAC-only reference commit while
 `response.completed` remains held. Reference persistence failure emits a safe

@@ -62,6 +62,52 @@ identifiers, and reasoning/message content
 are inspected only in bounded transient memory and are not persisted or
 logged. This is mocked/state-machine evidence, not protected qualification.
 
+### Local Coding SSE framing boundary
+
+The Local Coding adapter consumes raw identity-encoded response bytes with a
+bounded incremental SSE framer before the typed Responses validator. It scans
+LF delimiters across arbitrary network chunks, strips one CR for CRLF, joins
+multiple `data:` fields with exactly one newline, ignores other SSE fields, and
+dispatches one complete event at a time. A complete final data event is
+dispatched at EOF; comment/ignored-only EOF is empty. Unsupported
+`Content-Encoding` values fail closed before byte iteration.
+
+The reviewed static derivation is:
+
+| Bound | Derivation | Value |
+| --- | --- | ---: |
+| semantic event budget | terminal output: 3 items × 1 MiB aggregate content/arguments; plus 1 MiB serialized non-output/usage envelope | 4,194,304 bytes |
+| joined data / `json.loads` input | semantic budget × worst-case JSON ASCII escaping (6) + fixed JSON structure (128 KiB) | 25,296,896 bytes |
+| one line | joined-data ceiling + `data: ` prefix + optional CR | 25,296,903 bytes |
+| data segments | 64 semantic parts × 32 framing lines per part | 2,048 |
+| ignored-field allowance | 4 × existing 65,536-byte semantic delta bound | 262,144 bytes |
+| complete wire frame | joined data + `N × len("data: \r\n") - (N - 1)` + ignored allowance + blank CRLF delimiter, `N=2,048` | 25,573,379 bytes |
+
+The hard ceilings cannot be raised by a route, provider, response header, or
+environment variable; tests may only use smaller limits. The exact vLLM 0.27.1
+response-envelope names are `id`, `created_at`, `incomplete_details`,
+`instructions`, `metadata`, `model`, `object`, `output`,
+`parallel_tool_calls`, `temperature`, `tool_choice`, `tools`, `top_p`,
+`background`, `max_output_tokens`, `max_tool_calls`, `previous_response_id`,
+`prompt`, `reasoning`, `service_tier`, `status`, `text`, `top_logprobs`,
+`truncation`, `usage`, `user`, `presence_penalty`, `frequency_penalty`,
+`kv_transfer_params`, `ec_transfer_params`, `input_messages`, and
+`output_messages`. `output` and `usage` are validated separately. Unknown envelope names,
+oversized lines/frames/data, excessive data segments, invalid UTF-8,
+invalid/non-object JSON, and malformed EOF fail with low-cardinality safe
+provider parse codes. No raw line, frame, JSON, or stream content is retained
+in diagnostics, accounting metadata, logs, or client errors. The exact source
+field/default/type classes and vLLM tag/file digest are pinned in
+`tests/fixtures/codex/0.149.0/vllm-0.27.1-responses-response-envelope.json`.
+For the exact vLLM progress emitter, `response.created` and
+`response.in_progress` use the shared source-shaped representation with
+`output=[]`, `status="in_progress"`, and `usage=null` when those fields are
+serialized. The Gateway accepts absent fields for compatibility, but any
+present progress `output` must be exactly `[]` and present progress `usage`
+must be exactly `null`; completed output/usage continue through their separate
+strict validators. The source emission fact is pinned in
+`tests/fixtures/codex/0.149.0/vllm-0.27.1-responses-progress-emission.json`.
+
 ## Provider Adapters
 
 | Provider | Adapter | Upstream API shape | Implemented endpoint |

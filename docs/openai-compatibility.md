@@ -642,6 +642,16 @@ Implemented streaming behavior:
 - If the provider completed with usage but finalization fails after content was already delivered, the gateway leaves a durable provider-completed recovery row marked for reconciliation and does not treat the request as a zero-cost provider failure.
 - Streaming Redis concurrency slots are heartbeated while the stream remains open and released in the generator cleanup path.
 
+For the exact `codex-0.149-responses-v1` to `local-coding-v1` pair, raw
+identity-encoded SSE bytes pass through a bounded incremental framer before
+typed event validation. It supports LF/CRLF, split UTF-8 and delimiters,
+multi-line `data:` joining, comments/ignored fields, final-event EOF dispatch,
+and `[DONE]`. Static reviewed ceilings are 25,296,903-byte lines,
+25,573,379-byte frames, 25,296,896-byte joined data, and 2,048 data segments;
+overflow and malformed data become safe low-cardinality provider parse errors.
+No raw stream content is stored, logged, or placed in client errors, and the
+upstream response is closed promptly on failure or cancellation.
+
 Unsupported streaming request features are the same as non-streaming Chat
 Completions: hosted/provider-side tools, web search, custom tools,
 audio output, non-default `service_tier`, background

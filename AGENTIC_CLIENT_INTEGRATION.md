@@ -192,6 +192,15 @@ SSE support requires exact event names, payload shapes, ordering, cardinality, c
 
 An allowlist alone is insufficient.
 
+For the exact `codex-0.149-responses-v1` → `local-coding-v1` pair, the server
+module performs bounded raw-byte SSE framing before this state machine. It
+accepts LF/CRLF and arbitrary chunk/UTF-8 splits, joins only bounded `data:`
+segments, dispatches a complete final event at EOF, and rejects unsupported
+content encoding, malformed UTF-8/JSON, unknown response-envelope names, and
+line/frame/data/cardinality overflow. The reviewed ceiling is static and
+content-free diagnostics expose only numeric peak state; the generic
+OpenAI/OpenRouter streaming paths are not changed by this pair-local boundary.
+
 ### Rule 13 — Producer and consumer grammars must be tested together
 
 It is not enough for the Gateway to produce a value that passes its own test. Generated headers, identities, route names, request bytes, and signatures MUST be exercised against the actual pinned consumer implementation or an exact source-derived conformance harness.
