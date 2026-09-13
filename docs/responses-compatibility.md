@@ -31,7 +31,8 @@ The `local-coding-v1` pair is a non-authorizing, Responses-only server
 transport. It substitutes a distinct provider-row service Bearer, signs the
 exact canonical UTF-8 request bytes with bounded derived HMAC identities when
 the route selects signed mode, and accepts only the reviewed single-worker,
-process-local TTL/LRU replay contract. Local Coding tool filtering and
+process-local inclusive-horizon fail-closed replay contract
+(`process_local_inclusive_horizon_fail_closed`). Local Coding tool filtering and
 accounting remain independent Gateway-core decisions. The exact pair also
 validates the reviewed Codex 0.149 reasoning, local function-call, and
 assistant-message SSE lifecycle with strict event order, coordinates, terminal

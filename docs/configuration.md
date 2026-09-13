@@ -57,8 +57,19 @@ use distinct `LOCAL_CODING_SIGNING_SECRET_V1` and
 `LOCAL_CODING_IDENTITY_DERIVATION_SECRET_V1` values, each validated as bounded
 visible-ASCII secret material and kept distinct from provider, Gateway-key,
 admin-session, and one-time-secret roles. The signed contract is
-`single_worker` with process-local `process_local_ttl_lru` replay state; it does
-not claim restart-persistent or multi-worker replay protection.
+`single_worker` with the exact `process_local_inclusive_horizon_fail_closed`
+replay mode. The Gateway declares this metadata; the Local peer owns admission
+and storage. The peer retains each accepted SHA-256 nonce digest through the
+inclusive effective horizon `max(admission_time + replay_ttl_seconds,
+signed_timestamp + clock_skew_seconds)`, reclaims only strictly later, never
+evicts a live digest, fails closed on bounded-store exhaustion or unsafe
+wall-clock observation, and keeps known replay distinct. Signed routes require
+explicit `clock_skew_seconds` and `replay_ttl_seconds` values (reviewed peer
+default 60/60); the Gateway validates those declared assertions but cannot
+verify the peer's out-of-band configuration, and it does not claim
+restart-persistent or multi-worker replay protection. Server module version
+`2` records the replay-behavior change without changing the `local-coding-v1`
+contract ID or the identity-v1 wire.
 The corresponding version labels are `LOCAL_CODING_SIGNING_KEY_VERSION` and
 `LOCAL_CODING_IDENTITY_KEY_VERSION`; both remain explicitly versioned as `1`
 for this contract.

@@ -81,9 +81,11 @@ This does not rotate user gateway keys.
 For `local-coding-v1`, rotate the service Bearer separately from the signing
 and identity-derivation secrets. Validate the complete route contract and
 secret-role separation before restarting the API. The signed mode uses
-process-local TTL/LRU replay protection under the single-worker contract;
-rotation does not establish restart-persistent or multi-worker replay
-guarantees.
+process-local inclusive-horizon fail-closed replay protection
+(`process_local_inclusive_horizon_fail_closed`) under the single-worker
+contract; the explicit signed skew/TTL metadata is a Gateway-declared
+assertion of the peer's out-of-band configuration. Rotation does not establish
+restart-persistent or multi-worker replay guarantees.
 
 ## Rollback
 

@@ -17,7 +17,9 @@ from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
 from slaif_gateway.modules.servers.local_coding.contract import (
+    LOCAL_CODING_REPLAY_MODE,
     LOCAL_CODING_SERVER_MODULE_ID,
+    LOCAL_CODING_SERVER_MODULE_VERSION,
     parse_local_coding_route_contract,
 )
 from slaif_gateway.modules.servers.local_coding.identity import (
@@ -27,7 +29,7 @@ from slaif_gateway.modules.servers.local_coding.identity import (
     expected_signature,
 )
 import slaif_gateway.modules.servers.local_coding.identity as identity_module
-from slaif_gateway.modules.servers.registry import resolve_server_module
+from slaif_gateway.modules.servers.registry import SERVER_MODULE_REGISTRY, resolve_server_module
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.providers import ProviderRequest
@@ -35,6 +37,7 @@ from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.responses_gateway import _build_local_coding_server_context
 
 FIXTURE = Path("tests/fixtures/local_coding/signed_identity_v1_vectors.json")
+REPLAY_AUTHORITY_FIXTURE = Path("tests/fixtures/local_coding/local_replay_authority.json")
 SIGNING_SECRET = "local-coding-signing-secret-012345678901"
 DERIVATION_SECRET = "local-coding-derivation-secret-0123456789"
 SERVICE_SECRET = "local-coding-service-bearer-secret-0123456789"
@@ -44,8 +47,10 @@ ROUTE_CAPABILITIES = {
         "route_name": "vision",
         "tool_policy_version": "responses-tool-policy-v1",
         "identity_mode": "signed_identity_v1",
-        "replay_mode": "process_local_ttl_lru",
+        "replay_mode": "process_local_inclusive_horizon_fail_closed",
         "deployment_mode": "single_worker",
+        "clock_skew_seconds": 60,
+        "replay_ttl_seconds": 60,
     }
 }
 STATIC_ROUTE_CAPABILITIES = {
@@ -62,6 +67,10 @@ def test_local_coding_route_contract_is_exact_and_default_denied() -> None:
     assert contract.contract_version == LOCAL_CODING_SERVER_MODULE_ID
     assert contract.route_name == "vision"
     assert contract.nonce_min_length == 16
+    assert contract.replay_mode == LOCAL_CODING_REPLAY_MODE
+    assert contract.deployment_mode == "single_worker"
+    assert contract.clock_skew_seconds == 60
+    assert contract.replay_ttl_seconds == 60
     assert contract.replay_ttl_seconds >= contract.clock_skew_seconds
 
     with pytest.raises(ValueError):
@@ -85,6 +94,9 @@ def test_local_coding_route_contract_is_exact_and_default_denied() -> None:
 
 
 def test_signed_identity_fixture_matches_exact_canonical_bytes_and_hmac() -> None:
+    assert hashlib.sha256(FIXTURE.read_bytes()).hexdigest() == (
+        "4fdbc6dd46fcd11819a60a7dd4e8892a82ff64cd8da1e108a9fdb2482c13e1f0"
+    )
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture["source"] == {
         "repository": "ulfe-lmi/slaif-local-coding",
@@ -662,3 +674,315 @@ def test_core_local_coding_identity_context_returns_none_for_non_local_route_and
         settings=Settings(),
     )
     assert static_context == {"identity_mode": "static", "route": "vision"}
+
+# Objective-164 obligation manifest.  Every obligation maps to one exact,
+# explicitly named test node covering the affected/required boundary.  The two
+# complete verifier unit files are executed separately in full, not enumerated
+# here.  The collector must prove missing=[] and zero skips.
+LOCAL_CODING_REPLAY_OBLIGATION_TO_TEST_NODE = {
+    "parser.accepts-new-mode": "tests/unit/test_local_coding_server_module.py::test_local_coding_route_contract_is_exact_and_default_denied",
+    "parser.rejects-retired-mode": "tests/unit/test_local_coding_server_module.py::test_local_coding_parser_rejects_retired_and_unknown_replay_modes[retired-ttl-lru]",
+    "parser.rejects-truncated-synonym": "tests/unit/test_local_coding_server_module.py::test_local_coding_parser_rejects_retired_and_unknown_replay_modes[truncated-synonym]",
+    "parser.rejects-unknown-mode": "tests/unit/test_local_coding_server_module.py::test_local_coding_parser_rejects_retired_and_unknown_replay_modes[unknown-synonym]",
+    "signed.accepts-explicit-60-60": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_accepts_explicit_replay_timing[explicit-60-60]",
+    "signed.accepts-explicit-60-120": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_accepts_explicit_replay_timing[explicit-60-120]",
+    "signed.rejects-missing-both": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[missing-both]",
+    "signed.rejects-missing-skew": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[missing-skew]",
+    "signed.rejects-missing-ttl": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[missing-ttl]",
+    "signed.rejects-bool-skew": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[bool-skew]",
+    "signed.rejects-bool-ttl": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[bool-ttl]",
+    "signed.rejects-coercible-skew": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[coercible-skew]",
+    "signed.rejects-coercible-ttl": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[coercible-ttl]",
+    "signed.rejects-float-ttl": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[float-ttl]",
+    "signed.rejects-skew-zero": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[skew-zero]",
+    "signed.rejects-skew-301": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[skew-301]",
+    "signed.rejects-ttl-zero": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[ttl-zero]",
+    "signed.rejects-ttl-86401": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[ttl-86401]",
+    "signed.rejects-ttl-below-skew": "tests/unit/test_local_coding_server_module.py::test_local_coding_signed_identity_requires_explicit_replay_timing[ttl-below-skew]",
+    "static.inert-defaults-no-signed-leak": "tests/unit/test_local_coding_server_module.py::test_local_coding_static_mode_keeps_inert_timing_defaults",
+    "module-version-2.descriptor-and-resolution": "tests/unit/test_local_coding_server_module.py::test_local_coding_server_module_version_two_selects_only_exact_contract",
+    "registry.rejects-retired-mode": "tests/unit/test_local_coding_server_module.py::test_local_coding_registry_resolution_fails_closed_for_stale_contract[retired-replay-mode]",
+    "registry.rejects-unknown-mode": "tests/unit/test_local_coding_server_module.py::test_local_coding_registry_resolution_fails_closed_for_stale_contract[unknown-replay-mode]",
+    "registry.rejects-wrong-provider-kind": "tests/unit/test_local_coding_server_module.py::test_local_coding_registry_resolution_fails_closed_for_stale_contract[wrong-provider-kind]",
+    "factory.version-2-new-contract": "tests/unit/test_provider_factory.py::test_factory_builds_local_coding_responses_only_adapter_from_route_metadata",
+    "factory.rejects-retired-mode": "tests/unit/test_provider_factory.py::test_factory_rejects_retired_local_coding_replay_mode_before_construction",
+    "source.replay-authority-fixture-pinned": "tests/unit/test_local_coding_server_module.py::test_local_coding_replay_authority_fixture_pins_exact_source_facts",
+    "signing.canonical-fixture-unchanged": "tests/unit/test_local_coding_server_module.py::test_signed_identity_fixture_matches_exact_canonical_bytes_and_hmac",
+    "postgres.roundtrip-no-reservation-no-ledger": "tests/integration/test_local_coding_server_module_postgres.py::test_local_coding_identity_failure_creates_no_reservation_or_ledger",
+    "postgres.route-row-roundtrip-version-2": "tests/integration/test_local_coding_server_module_postgres.py::test_local_coding_route_row_roundtrips_new_mode_and_resolves_version_two",
+    "postgres.e2e-route-creation-roundtrip": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_signed_thread_namespace_e2e",
+    "e2e.signed-thread-namespace": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_signed_thread_namespace_e2e",
+    "e2e.static-server-module": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_local_coding_server_module_e2e",
+    "e2e.codex-streaming": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_local_coding_streaming_e2e",
+    "e2e.zero-argument-function": "tests/e2e/test_openai_python_client_responses.py::test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e",
+    "e2e.malformed-stream-before-output": "tests/e2e/test_openai_python_client_responses.py::test_local_coding_malformed_stream_before_output_releases_accounting",
+    "e2e.malformed-stream-after-output": "tests/e2e/test_openai_python_client_responses.py::test_local_coding_malformed_stream_after_output_records_interruption",
+    "framing.adapter-bounded-framer-unchanged": "tests/unit/test_local_coding_sse_framing.py::test_local_adapter_uses_bounded_framer_and_closes_after_parse_error",
+    "framing.adapter-done-marker-unchanged": "tests/unit/test_local_coding_sse_framing.py::test_local_adapter_yields_bounded_events_and_preserves_done_marker",
+    "deployment.single-worker-only": "tests/unit/test_local_coding_server_module.py::test_local_coding_deployment_mode_is_single_worker_only[multi-worker]",
+    "deployment.rejects-cluster": "tests/unit/test_local_coding_server_module.py::test_local_coding_deployment_mode_is_single_worker_only[cluster]",
+    "deployment.rejects-missing": "tests/unit/test_local_coding_server_module.py::test_local_coding_deployment_mode_is_single_worker_only[missing]",
+    "verifier.metadata-sync-roundtrip-manifest": "tests/unit/test_codex_0149_local_roundtrip.py::test_obligation_manifest_is_complete_and_bounded",
+    "verifier.metadata-sync-assistant-history-source": "tests/unit/test_codex_0149_assistant_output_history.py::test_turn_failure_projection_positive_is_closed_and_source_pinned",
+    "obligation.map-literal-complete": "tests/unit/test_local_coding_server_module.py::test_objective_164_obligation_map_is_literal_and_complete",
+}
+
+LOCAL_CODING_REPLAY_REQUIRED_OBLIGATION_IDS = frozenset(
+    {
+        "parser.accepts-new-mode",
+        "parser.rejects-retired-mode",
+        "parser.rejects-truncated-synonym",
+        "parser.rejects-unknown-mode",
+        "signed.accepts-explicit-60-60",
+        "signed.accepts-explicit-60-120",
+        "signed.rejects-missing-both",
+        "signed.rejects-missing-skew",
+        "signed.rejects-missing-ttl",
+        "signed.rejects-bool-skew",
+        "signed.rejects-bool-ttl",
+        "signed.rejects-coercible-skew",
+        "signed.rejects-coercible-ttl",
+        "signed.rejects-float-ttl",
+        "signed.rejects-skew-zero",
+        "signed.rejects-skew-301",
+        "signed.rejects-ttl-zero",
+        "signed.rejects-ttl-86401",
+        "signed.rejects-ttl-below-skew",
+        "static.inert-defaults-no-signed-leak",
+        "module-version-2.descriptor-and-resolution",
+        "registry.rejects-retired-mode",
+        "registry.rejects-unknown-mode",
+        "registry.rejects-wrong-provider-kind",
+        "factory.version-2-new-contract",
+        "factory.rejects-retired-mode",
+        "source.replay-authority-fixture-pinned",
+        "signing.canonical-fixture-unchanged",
+        "postgres.roundtrip-no-reservation-no-ledger",
+        "postgres.route-row-roundtrip-version-2",
+        "postgres.e2e-route-creation-roundtrip",
+        "e2e.signed-thread-namespace",
+        "e2e.static-server-module",
+        "e2e.codex-streaming",
+        "e2e.zero-argument-function",
+        "e2e.malformed-stream-before-output",
+        "e2e.malformed-stream-after-output",
+        "framing.adapter-bounded-framer-unchanged",
+        "framing.adapter-done-marker-unchanged",
+        "deployment.single-worker-only",
+        "deployment.rejects-cluster",
+        "deployment.rejects-missing",
+        "verifier.metadata-sync-roundtrip-manifest",
+        "verifier.metadata-sync-assistant-history-source",
+        "obligation.map-literal-complete",
+    }
+)
+
+
+@pytest.mark.parametrize(
+    "replay_mode",
+    [
+        "process_local_ttl_lru",
+        "process_local_inclusive_horizon",
+        "process_local_lru",
+    ],
+    ids=["retired-ttl-lru", "truncated-synonym", "unknown-synonym"],
+)
+def test_local_coding_parser_rejects_retired_and_unknown_replay_modes(replay_mode: str) -> None:
+    with pytest.raises(ValueError, match="replay mode is unsupported"):
+        parse_local_coding_route_contract(
+            {"local_coding": {**ROUTE_CAPABILITIES["local_coding"], "replay_mode": replay_mode}}
+        )
+
+
+_MISSING = object()
+SIGNED_TIMING_NEGATIVE_CASES = {
+    "missing-skew": {"clock_skew_seconds": _MISSING},
+    "missing-ttl": {"replay_ttl_seconds": _MISSING},
+    "missing-both": {"clock_skew_seconds": _MISSING, "replay_ttl_seconds": _MISSING},
+    "bool-skew": {"clock_skew_seconds": True},
+    "bool-ttl": {"replay_ttl_seconds": True},
+    "coercible-skew": {"clock_skew_seconds": "60"},
+    "coercible-ttl": {"replay_ttl_seconds": "60"},
+    "float-ttl": {"replay_ttl_seconds": 60.0},
+    "skew-zero": {"clock_skew_seconds": 0},
+    "skew-301": {"clock_skew_seconds": 301},
+    "ttl-zero": {"replay_ttl_seconds": 0},
+    "ttl-86401": {"replay_ttl_seconds": 86_401},
+    "ttl-below-skew": {"clock_skew_seconds": 60, "replay_ttl_seconds": 59},
+}
+
+
+@pytest.mark.parametrize("case", sorted(SIGNED_TIMING_NEGATIVE_CASES))
+def test_local_coding_signed_identity_requires_explicit_replay_timing(case: str) -> None:
+    contract_dict = dict(ROUTE_CAPABILITIES["local_coding"])
+    for field, value in SIGNED_TIMING_NEGATIVE_CASES[case].items():
+        if value is _MISSING:
+            contract_dict.pop(field, None)
+        else:
+            contract_dict[field] = value
+    with pytest.raises(ValueError):
+        parse_local_coding_route_contract({"local_coding": contract_dict})
+
+
+@pytest.mark.parametrize(
+    ("skew", "ttl"),
+    [(60, 60), (60, 120)],
+    ids=["explicit-60-60", "explicit-60-120"],
+)
+def test_local_coding_signed_identity_accepts_explicit_replay_timing(skew: int, ttl: int) -> None:
+    parsed = parse_local_coding_route_contract(
+        {
+            "local_coding": {
+                **ROUTE_CAPABILITIES["local_coding"],
+                "clock_skew_seconds": skew,
+                "replay_ttl_seconds": ttl,
+            }
+        }
+    )
+    assert parsed is not None
+    assert parsed.clock_skew_seconds == skew
+    assert parsed.replay_ttl_seconds == ttl
+    assert parsed.replay_mode == LOCAL_CODING_REPLAY_MODE
+
+
+def test_local_coding_static_mode_keeps_inert_timing_defaults() -> None:
+    static_values = {
+        "contract_version": "local-coding-v1",
+        "route_name": "vision",
+        "tool_policy_version": "responses-tool-policy-v1",
+        "identity_mode": "static",
+        "replay_mode": "process_local_inclusive_horizon_fail_closed",
+        "deployment_mode": "single_worker",
+    }
+    parsed = parse_local_coding_route_contract({"local_coding": dict(static_values)})
+    assert parsed is not None
+    assert parsed.identity_mode == "static"
+    assert parsed.replay_mode == LOCAL_CODING_REPLAY_MODE
+    assert parsed.clock_skew_seconds == 60
+    assert parsed.replay_ttl_seconds == 60
+    explicit = parse_local_coding_route_contract(
+        {"local_coding": {**static_values, "clock_skew_seconds": 60, "replay_ttl_seconds": 120}}
+    )
+    assert explicit is not None
+    assert explicit.clock_skew_seconds == 60
+    assert explicit.replay_ttl_seconds == 120
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["retired-replay-mode", "unknown-replay-mode", "wrong-provider-kind"],
+)
+def test_local_coding_registry_resolution_fails_closed_for_stale_contract(case: str) -> None:
+    if case == "wrong-provider-kind":
+        with pytest.raises(ProviderConfigurationError) as exc_info:
+            resolve_server_module("local-model", "openai", ROUTE_CAPABILITIES)
+        assert exc_info.value.error_code == "local_coding_provider_kind_invalid"
+        return
+    replay_mode = "process_local_ttl_lru" if case == "retired-replay-mode" else "process_local_lru"
+    with pytest.raises(ProviderConfigurationError) as exc_info:
+        resolve_server_module(
+            "local-model",
+            "openai_compatible",
+            {"local_coding": {**ROUTE_CAPABILITIES["local_coding"], "replay_mode": replay_mode}},
+        )
+    assert exc_info.value.error_code == "local_coding_route_contract_invalid"
+
+
+def test_local_coding_server_module_version_two_selects_only_exact_contract() -> None:
+    descriptor = SERVER_MODULE_REGISTRY[LOCAL_CODING_SERVER_MODULE_ID][0]
+    assert descriptor.module_id == LOCAL_CODING_SERVER_MODULE_ID
+    assert descriptor.module_version == LOCAL_CODING_SERVER_MODULE_VERSION
+    assert LOCAL_CODING_SERVER_MODULE_VERSION == "2"
+    resolved = resolve_server_module("local-model", "openai_compatible", ROUTE_CAPABILITIES)
+    assert resolved.module_id == LOCAL_CODING_SERVER_MODULE_ID
+    assert resolved.module_version == LOCAL_CODING_SERVER_MODULE_VERSION
+
+
+@pytest.mark.parametrize(
+    "deployment_mode",
+    ["multi_worker", "cluster", None],
+    ids=["multi-worker", "cluster", "missing"],
+)
+def test_local_coding_deployment_mode_is_single_worker_only(deployment_mode: str | None) -> None:
+    contract_dict = dict(ROUTE_CAPABILITIES["local_coding"])
+    if deployment_mode is None:
+        contract_dict.pop("deployment_mode")
+    else:
+        contract_dict["deployment_mode"] = deployment_mode
+    with pytest.raises(ValueError, match="deployment mode|incomplete or contains unknown fields"):
+        parse_local_coding_route_contract({"local_coding": contract_dict})
+
+
+def test_local_coding_replay_authority_fixture_pins_exact_source_facts() -> None:
+    assert hashlib.sha256(REPLAY_AUTHORITY_FIXTURE.read_bytes()).hexdigest() == (
+        "da6a9423d4d028e218270329d083550a7c7c552d8877312e5d291b574fc4893d"
+    )
+    fixture = json.loads(REPLAY_AUTHORITY_FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["source"] == {
+        "repository": "ulfe-lmi/slaif-local-coding",
+        "merged_main": "efc4dbcd377dd796a670726b16ebc06bd54b6356",
+        "merged_main_tree": "68144646615cf8aec954f737261060f1b1601033",
+        "implementation_commit": "4e1f07adc5d71c3f17e71b73cb57aec76aa28d9a",
+        "report_commit": "67d895b9666a7b59753c4a373a6d15bc5884e099",
+        "report_path": "oap/reports/006-a-signed-request-replay-hardening.md",
+        "gateway_identity_py_sha256": "8ea6e63920d3a3e4db6d80c1bed7300cacf21e74a7e3d359583dad5694cdd4b5",
+        "config_py_sha256": "871c4336068c2e27dad1cae0a5a0f036c4e43e00300b28b2e44d8f4418ee4a6e",
+        "report_sha256": "3df009a5d95fdfda3413e69f2c2293bfca991ce6d7fa2d9bde5824a808ae161b",
+        "handoff_comment": "https://github.com/ulfe-lmi/slaif-api-gateway/pull/299#issuecomment-5649192000",
+    }
+    assert fixture["capability"]["replay_mode"] == LOCAL_CODING_REPLAY_MODE
+    assert fixture["capability"]["rejected_replay_mode"] == "process_local_ttl_lru"
+    assert fixture["semantics"]["retention"] == (
+        "each admitted SHA-256 nonce digest is retained through the inclusive effective "
+        "horizon max(admission_time + replay_ttl_seconds, signed_timestamp + clock_skew_seconds)"
+    )
+    assert fixture["semantics"]["reclamation"] == (
+        "only when the current time is strictly later than the retained expiry"
+    )
+    assert fixture["semantics"]["live_digest_eviction"] == "never"
+    assert fixture["semantics"]["capacity_full"] == (
+        "fail closed with 503 signed_identity_replay_capacity_unavailable"
+    )
+    assert fixture["semantics"]["unsafe_wall_clock"] == (
+        "fail closed with 503 signed_identity_clock_unavailable on non-finite or backward observation"
+    )
+    assert fixture["semantics"]["known_replay"] == (
+        "distinct closed outcome with 409 signed_identity_replayed"
+    )
+    assert fixture["peer_defaults"] == {
+        "clock_skew_seconds": 60,
+        "replay_ttl_seconds": 60,
+        "max_replay_entries": 4096,
+        "nonce_min_length": 16,
+        "nonce_max_length": 128,
+    }
+    assert fixture["peer_bounds"] == {
+        "clock_skew_seconds": [1, 300],
+        "replay_ttl_seconds": [1, 86_400],
+    }
+    assert fixture["wire"]["identity_mode"] == "signed_identity_v1"
+    assert fixture["wire"]["identity_version"] == "v1"
+    assert fixture["wire"]["signature_format"] == "v1=<64 lowercase hex hmac-sha256>"
+    assert fixture["limitations"] == [
+        "digest-only state",
+        "bounded process-local store",
+        "single worker/process",
+        "non-durable",
+        "state resets on restart",
+    ]
+    assert (
+        "does not configure, verify, or replicate peer replay state"
+        in fixture["ownership"]["gateway"]
+    )
+    assert "owns nonce admission" in fixture["ownership"]["local"]
+
+
+def test_objective_164_obligation_map_is_literal_and_complete() -> None:
+    obligation_ids = set(LOCAL_CODING_REPLAY_OBLIGATION_TO_TEST_NODE)
+    assert obligation_ids == LOCAL_CODING_REPLAY_REQUIRED_OBLIGATION_IDS
+    assert len(obligation_ids) == len(LOCAL_CODING_REPLAY_OBLIGATION_TO_TEST_NODE)
+    assert all("[" not in key for key in obligation_ids)
+    assert all(
+        value.startswith("tests/") for value in LOCAL_CODING_REPLAY_OBLIGATION_TO_TEST_NODE.values()
+    )
+    assert all("<" not in value for value in LOCAL_CODING_REPLAY_OBLIGATION_TO_TEST_NODE.values())

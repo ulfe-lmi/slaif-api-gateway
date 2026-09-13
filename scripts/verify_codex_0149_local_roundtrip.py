@@ -568,7 +568,7 @@ class _FakeLocalState:
         }
         from slaif_gateway.modules.servers.local_coding.identity import LocalCodingRequestIdentity, canonical_identity_bytes, expected_signature
         from slaif_gateway.modules.servers.local_coding.contract import parse_local_coding_route_contract
-        route = parse_local_coding_route_contract({"local_coding": {"contract_version": "local-coding-v1", "route_name": "vision", "tool_policy_version": "responses-tool-policy-v1", "identity_mode": "signed_identity_v1", "replay_mode": "process_local_ttl_lru", "deployment_mode": "single_worker"}})
+        route = parse_local_coding_route_contract({"local_coding": {"contract_version": "local-coding-v1", "route_name": "vision", "tool_policy_version": "responses-tool-policy-v1", "identity_mode": "signed_identity_v1", "replay_mode": "process_local_inclusive_horizon_fail_closed", "deployment_mode": "single_worker", "clock_skew_seconds": 60, "replay_ttl_seconds": 60}})
         if route is None:
             raise VerificationError("local_route_contract_invalid")
         local_identity = LocalCodingRequestIdentity(**identity, identity_mode="signed_identity_v1")
@@ -938,7 +938,7 @@ def run_roundtrip() -> str:
                         base_url=f"http://127.0.0.1:{fake_port}/v1",
                         api_key_env_var="LOCAL_CODING_SERVICE_TOKEN",
                         streaming=True,
-                        local_coding_contract={"contract_version": "local-coding-v1", "route_name": "vision", "tool_policy_version": "responses-tool-policy-v1", "identity_mode": "signed_identity_v1", "replay_mode": "process_local_ttl_lru", "deployment_mode": "single_worker"},
+                        local_coding_contract={"contract_version": "local-coding-v1", "route_name": "vision", "tool_policy_version": "responses-tool-policy-v1", "identity_mode": "signed_identity_v1", "replay_mode": "process_local_inclusive_horizon_fail_closed", "deployment_mode": "single_worker", "clock_skew_seconds": 60, "replay_ttl_seconds": 60},
                         responses_policy={"version": 1, "local_coding_repository_scope": "roundtrip-repository", "allowed_capabilities": ["codex_request_envelope", "codex_client_tools", "codex_streaming_tool_events"], "client_module": {"id": "codex-0.149-responses-v1", "version": CODEX_0149_CLIENT_MODULE_VERSION, "fixture_sha256": CODEX_0149_FIXTURE_SHA256}},
                         codex_request_envelope=True,
                         codex_client_tools=True,
