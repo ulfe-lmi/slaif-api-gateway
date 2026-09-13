@@ -1237,14 +1237,20 @@ process-local, digest-only nonce state and:
   clock_skew_seconds)`;
 - reclaims entries only when the current time is strictly later;
 - never evicts a live digest when the bounded store is full, and fails closed
-  instead;
-- fails closed on non-finite or backward wall-clock observations;
-- keeps known replay distinct from the fail-closed capacity/clock outcomes.
+  instead with `503 signed_identity_replay_capacity_unavailable`;
+- fails closed on non-finite or backward wall-clock observations with
+  `503 signed_identity_clock_unavailable`;
+- keeps known replay distinct from the fail-closed capacity/clock outcomes as
+  `409 signed_identity_replayed`.
 
-The Gateway declares and validates the replay metadata but does not configure
-or verify the peer's replay state: signed routes require explicit bounded
-`clock_skew_seconds` and `replay_ttl_seconds` values (reviewed peer default
-60/60), and static routes carry inert timing defaults. Server module version
+The current replay-contract source authority is Local merged main
+`efc4dbcd377dd796a670726b16ebc06bd54b6356` (merged Local PR #8); the older
+Local protected-qualification pin `4d3ab2fd97d249710f952dd3d2c28936138cc8fa`
+recorded earlier in this document remains historical evidence and is not
+rewritten as a rerun. The Gateway declares and validates the replay metadata
+but does not configure or verify the peer's replay state: signed routes
+require explicit bounded `clock_skew_seconds` and `replay_ttl_seconds` values
+(reviewed peer default 60/60), and static routes carry inert timing defaults. Server module version
 `2` records the replay-behavior change without changing the `local-coding-v1`
 contract ID or the identity-v1 wire. These limits apply:
 

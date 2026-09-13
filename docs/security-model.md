@@ -109,9 +109,11 @@ is process-local inclusive-horizon fail-closed
 contract: digest-only state retained through the inclusive effective horizon
 `max(admission_time + replay_ttl_seconds, signed_timestamp +
 clock_skew_seconds)`, strict-later reclamation, no live eviction, fail-closed
-capacity and clock behavior, and distinct known-replay handling. The Gateway
-validates the declared signed skew/TTL metadata, but the Local peer configures
-it out-of-band; restart and multi-worker guarantees are not claimed. The evidence here is mocked and
+capacity behavior (`503 signed_identity_replay_capacity_unavailable`), and
+unsafe-clock behavior (`503 signed_identity_clock_unavailable`), with known
+replay kept distinct as `409 signed_identity_replayed`. The Gateway validates
+the declared signed skew/TTL metadata, but the Local peer configures it
+out-of-band; restart and multi-worker guarantees are not claimed. The evidence here is mocked and
 cross-contract only, not protected or production qualification.
 
 The Local Coding Responses adapter consumes raw identity-encoded SSE bytes with
