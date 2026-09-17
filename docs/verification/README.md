@@ -40,3 +40,13 @@ fitness, security, compliance, provider behavior, or scale.
   metrics-exposure finding. Dated evidence for the named candidate commit
   only; mocked-upstream qualification, not a real-provider run, release
   decision, security certification, or production approval.
+- [`2026-09-17 current-main integrated requalification`](2026-09-17-current-main-integrated-requalification.md)
+  - fresh RC-posture integrated requalification of `main`
+  `1043c3f42fb46f06a8d7952273739cefb9de6cc7` (PR #305 merge; repeat of the
+  abandoned Objective 169): two consecutive no-keep production-appliance
+  harness runs `RESULT=OK` 16/16, full local unit/integration/E2E matrix
+  (modulo the two labeled environment-only non-passes), and 9/9 required
+  CI checks SUCCESS on the PR head. Verdict
+  `RESULT=QUALIFIED-RC-POSTURE`. Dated evidence for the named candidate
+  commit only; mocked-upstream qualification, not a real-provider run,
+  release decision, security certification, or production approval.
