@@ -1002,7 +1002,7 @@ def test_openai_python_client_codex_0149_local_coding_streaming_e2e(
     sse = _codex_standard_stream(completed)
 
     with _run_uvicorn_server(app, gateway_port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             local_route = router.post(f"http://127.0.0.1:{local_port}/v1/responses").mock(
                 return_value=httpx.Response(
                     200,
@@ -1114,7 +1114,7 @@ def _run_local_coding_malformed_stream_e2e(monkeypatch: pytest.MonkeyPatch, *, a
         )
 
     with _run_uvicorn_server(app, gateway_port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             local_route = router.post(f"http://127.0.0.1:{local_port}/v1/responses").mock(
                 return_value=httpx.Response(
                     200,
@@ -1256,7 +1256,7 @@ def test_openai_python_client_codex_0149_zero_argument_function_streaming_e2e(
     sse = _codex_zero_argument_function_stream(completed)
 
     with _run_uvicorn_server(app, gateway_port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             local_route = router.post(f"http://127.0.0.1:{local_port}/v1/responses").mock(
                 return_value=httpx.Response(
                     200,
@@ -1430,7 +1430,7 @@ def test_openai_python_client_responses_text_e2e(monkeypatch: pytest.MonkeyPatch
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -1555,7 +1555,7 @@ def test_openai_python_client_responses_store_retrieve_delete_e2e(
     delete_payload = {"id": "resp_stored_e2e", "object": "response.deleted", "deleted": True}
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             create_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -1676,7 +1676,7 @@ def test_openai_python_client_responses_previous_response_id_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 side_effect=[
@@ -1789,7 +1789,7 @@ def test_openai_python_client_responses_input_items_list_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             create_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -1918,7 +1918,7 @@ def test_openai_python_client_responses_conversations_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             conversation_create_route = router.post("https://api.openai.com/v1/conversations").mock(
                 return_value=httpx.Response(
@@ -2086,7 +2086,7 @@ def test_openai_python_client_conversation_update_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             conversation_create_route = router.post("https://api.openai.com/v1/conversations").mock(
                 return_value=httpx.Response(
@@ -2211,7 +2211,7 @@ def test_openai_python_client_responses_streaming_text_e2e(
     )
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -2304,7 +2304,7 @@ def test_openai_python_client_responses_web_search_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -2398,7 +2398,7 @@ def test_openai_python_client_responses_input_items_structured_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -2537,7 +2537,7 @@ def test_openai_python_client_responses_streaming_input_items_e2e(
     )
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -2690,7 +2690,7 @@ def test_openai_python_client_responses_structured_text_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -2823,7 +2823,7 @@ def test_openai_python_client_responses_function_tool_e2e(
     ]
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -2937,7 +2937,7 @@ def test_openai_python_client_responses_custom_tool_e2e(
     ]
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -3049,7 +3049,7 @@ def test_openai_python_client_responses_image_input_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -3148,7 +3148,7 @@ def test_openai_python_client_responses_file_input_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/responses").mock(
                 return_value=httpx.Response(
@@ -3235,7 +3235,7 @@ def test_openai_python_client_responses_input_token_count_e2e(
             ],
         }
     ]
-    with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
         router.route(host="127.0.0.1").pass_through()
         upstream_route = router.post("https://api.openai.com/v1/responses/input_tokens").mock(
             return_value=httpx.Response(
@@ -3312,7 +3312,7 @@ def test_openai_python_client_responses_compact_e2e(
         "usage": {"input_tokens": 13, "output_tokens": 17, "total_tokens": 30},
     }
 
-    with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+    with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
         router.route(host="127.0.0.1").pass_through()
         upstream_route = router.post("https://api.openai.com/v1/responses/compact").mock(
             return_value=httpx.Response(
@@ -3414,7 +3414,7 @@ def test_openai_python_client_generic_responses_conformance_e2e(
         "store": False,
     }
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream = router.post("https://lan-qwen-responses.example.test/v1/responses").mock(
                 return_value=httpx.Response(

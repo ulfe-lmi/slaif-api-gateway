@@ -27,6 +27,12 @@ export OPENAI_API_KEY="sk-slaif-..."
 export OPENAI_BASE_URL="https://api.ulfe.slaif.si/v1"
 ```
 
+The official OpenAI Python client E2E matrix (54 tests in `tests/e2e/`) is
+qualified under the dev/test pin `openai==3.9.0` per the dated record
+[`verification/2026-09-17-openai-sdk3-qualification.md`](verification/2026-09-17-openai-sdk3-qualification.md).
+That qualification is mocked-upstream evidence on disposable PostgreSQL, not
+a real-provider run.
+
 The key in `OPENAI_API_KEY` is a gateway-issued key. It is not an upstream OpenAI or OpenRouter provider key. The server-side upstream OpenAI secret must use `OPENAI_UPSTREAM_API_KEY`; production validation rejects likely upstream provider keys placed in server `OPENAI_API_KEY`. The gateway authenticates the gateway key, applies policy and quota, resolves a provider route, and substitutes the real provider key server-side before forwarding.
 
 The pinned Codex 0.147.0 / `gpt-5.6-sol` profile has a local-only gateway E2E
