@@ -1,7 +1,7 @@
 # RC-Beta Release Notes And Checklist
 
 > **Status:** Release checklist and historical RC-beta evidence
-> **Current readiness:** See [beta-readiness.md](beta-readiness.md)
+> **Readiness record:** See [beta-readiness.md](beta-readiness.md) (dated; evidence as-of the named commit)
 
 This document is the operator-facing RC-beta checklist. It complements
 [`beta-readiness.md`](beta-readiness.md), which records the detailed readiness
@@ -18,7 +18,11 @@ RC-beta means the implemented and documented scope is ready for beta labeling
 after CI and local verification pass. It is not a production certification,
 compliance attestation, or penetration-test report.
 
-## Current verification evidence
+## Dated verification evidence (latest on record)
+
+This section names the latest recorded production-path qualification and
+does not assert that current `main` has been re-qualified after that
+date.
 
 The latest merged production-path evidence is the
 [2026-08-24 production-appliance qualification](verification/2026-08-24-production-appliance-qualification.md).

@@ -17,3 +17,8 @@ fitness, security, compliance, provider behavior, or scale.
 - [`2026-08-24 documentation architecture and truth audit`](2026-08-24-documentation-audit.md)
   — repository-wide cross-document and documentation-versus-code baseline for
   the documentation-modernization PR.
+- [`2026-08-24 RC-beta readiness record`](../beta-readiness.md)
+  — dated readiness record for `main`
+  `8f2813bf745b90221da33a7cfaf40726c5b1b480` (reviewed 2026-08-24).
+  Historical/dated evidence for the named commit only; not a current-state
+  claim.
