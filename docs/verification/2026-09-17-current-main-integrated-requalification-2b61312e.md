@@ -290,19 +290,21 @@ objective report):
 
 Objective 170 qualified candidate `1043c3f42fb46f06a8d7952273739cefb9de6cc7`
 (PR #305 merge) with the qualified-RC-posture verdict recorded in its
-dated record on `main`. This candidate
-`2b61312e0eb569aa7c6f953f52e35b44e84b91c1` descends from it through
-exactly two merged objectives: 171 (PR #308: `ruff==0.16.7` + explicit
-`[tool.ruff.lint]` policy pin; zero code change) and 172 (PR #309:
-`openai==3.14.1` qualified dev pin + one compatibility-doc sentence +
-dated record; zero code change). P0 proves the runtime tree of this
+dated record on `main`. Between that candidate and this candidate
+`2b61312e0eb569aa7c6f953f52e35b44e84b91c1`, `main` advanced through the
+merged publication of Objective 170 itself (PR #307: dated record,
+README index row, OAP order/report files, and the `oap/active` pointer;
+no runtime change) and through Objectives 171 (PR #308: `ruff==0.16.7`
++ explicit `[tool.ruff.lint]` policy pin; zero code change) and 172
+(PR #309: `openai==3.14.1` qualified dev pin + one compatibility-doc
+sentence + dated record; zero code change). Every intermediate merge
+was CI-verified at merge time. P0 proves the runtime tree of this
 candidate is byte-identical to the 170-qualified candidate over
 `app/`, `tests/`, `scripts/`, `.github/`, `migrations/`, `nginx/`,
 `Dockerfile`, `docker-compose.yml`, `docker-compose.production.yml`, and
-`Makefile` (the full 12-path candidate-to-candidate delta is
-dev-pin/documentation/OAP-record paths only). Both intermediate merges
-were CI-verified at merge (10/10 and 9/9 emitted checks `success`
-respectively, re-verified live at order reconciliation). This objective
+`Makefile` (the full 12-path candidate-to-candidate delta, which
+includes 170's own publication, is dev-pin/documentation/OAP-record
+paths only). This objective
 therefore re-proves the strict 170 acceptance set on the exact commit a
 release decision would actually point at. The transient 503 class
 observed in the abandoned 169 attempt (and not in 170) did not recur in
