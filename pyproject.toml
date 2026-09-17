@@ -44,7 +44,7 @@ dev = [
   "playwright",
   "testcontainers[postgres]",
   "hypothesis",
-  "ruff==0.15.16",
+  "ruff==0.16.7",
 ]
 
 [project.scripts]
@@ -73,3 +73,12 @@ markers = [
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# Explicit policy pin: the exact default rule set that ruff 0.15.16
+# applied (59 rules; prefixes E4, E7, E9, F). Ruff 0.16 expanded its
+# default selection; without this pin the effective lint policy would
+# silently change with the dependency version (1293 findings on the
+# current tree). Adopting any additional rule or rule family is a
+# separate, deliberate policy objective (see Objective 171 order).
+select = ["E4", "E7", "E9", "F"]
