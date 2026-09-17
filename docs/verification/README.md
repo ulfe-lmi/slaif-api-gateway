@@ -40,3 +40,17 @@ fitness, security, compliance, provider behavior, or scale.
   metrics-exposure finding. Dated evidence for the named candidate commit
   only; mocked-upstream qualification, not a real-provider run, release
   decision, security certification, or production approval.
+- [`2026-09-17 current-main integrated requalification`](2026-09-17-current-main-integrated-requalification.md)
+  - fresh RC-posture requalification of `main`
+  `1043c3f42fb46f06a8d7952273739cefb9de6cc7` (PR #305 merge / Objective
+  168): clean-room P1 freeze, two consecutive production-appliance
+  harness runs — Run A `RESULT=OK` (16/16) and Run B `RESULT=FAIL`
+  (phase 9 `redis-concurrency`, non-deterministic transient 503 on the
+  following request, classified P2.3) — full local unit/integration/E2E
+  matrix, and CI 9/9 SUCCESS on the candidate with the PR head's
+  `Unit, lint, and migration head` FAILED on the candidate's brittle
+  OAP governance test (P4.1). Verdict `RESULT=NOT-QUALIFIED` (AP-1
+  requires two consecutive `RESULT=OK`; AP-3 requires nine PR-head
+  checks `success`). Dated evidence for the named candidate commit
+  only; mocked-upstream qualification, not a real-provider run, release
+  decision, security certification, or production approval.
