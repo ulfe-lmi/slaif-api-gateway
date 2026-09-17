@@ -60,3 +60,16 @@ fitness, security, compliance, provider behavior, or scale.
   PR head. Dated evidence for the named base commit and candidate SDK
   version only; mocked-upstream qualification, not a real-provider run,
   release decision, security certification, or production approval.
+- [`2026-09-17 current-main integrated requalification (candidate 2b61312e)`](2026-09-17-current-main-integrated-requalification-2b61312e.md)
+  - fresh RC-posture integrated requalification of `main`
+  `2b61312e0eb569aa7c6f953f52e35b44e84b91c1` (PR #309 merge; repeats the
+  strict 170 acceptance set plus the new P0 runtime-tree identity proof):
+  the exact 12-path candidate-to-candidate delta is dev-pin/documentation/
+  OAP-record paths only and the runtime-surface diff is empty; two
+  consecutive no-keep production-appliance harness runs `RESULT=OK` 16/16,
+  full local unit/integration/E2E matrix (modulo the two labeled
+  environment-only non-passes), and 9/9 required CI checks SUCCESS on the
+  PR head. Verdict `RESULT=QUALIFIED-RC-POSTURE`. Dated evidence for the
+  named candidate commit only; mocked-upstream qualification, not a
+  real-provider run, release decision, security certification, or
+  production approval.
