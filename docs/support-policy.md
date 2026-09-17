@@ -1,7 +1,7 @@
 # Support policy
 
 > **Status:** Current project support boundary
-> **Release state:** Pre-release; see [current readiness](beta-readiness.md)
+> **Release state:** Pre-release; see the dated readiness record ([beta-readiness.md](beta-readiness.md))
 
 The documented deployment model is self-hosted Docker Compose on Linux from a
 published tag or an exact reviewed commit. Operators own the host, TLS,

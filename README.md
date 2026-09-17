@@ -154,7 +154,7 @@ Start at the [documentation home](docs/README.md).
 
 | If you are… | Read… |
 |---|---|
-| Evaluating product scope | [Product scope](docs/product-scope.md), [current readiness](docs/beta-readiness.md), and [compatibility matrix](docs/compatibility-matrix.md) |
+| Evaluating product scope | [Product scope](docs/product-scope.md), [readiness record (dated; evidence as-of the named commit)](docs/beta-readiness.md), and [compatibility matrix](docs/compatibility-matrix.md) |
 | Deploying or operating | [Quickstart](docs/quickstart.md), [configuration](docs/configuration.md), [production deployment](docs/deployment-production.md), and [runbooks](docs/runbooks/README.md) |
 | Integrating a client | [OpenAI compatibility](docs/openai-compatibility.md), [Responses compatibility](docs/responses-compatibility.md), and [forwarding contract](docs/provider-forwarding-contract.md) |
 | Reviewing controls | [Security model](docs/security-model.md), [accounting](docs/accounting.md), and [database schema](docs/database-schema.md) |

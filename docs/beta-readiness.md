@@ -1,9 +1,22 @@
 # RC-Beta Readiness Report
 
-> **Authority:** Current verification/readiness summary for merged code
-> **Not:** Release, production, security, compliance, or SLA approval
+> **Dated record:** This is a dated verification/readiness record for
+> merged code. Its evidence boundary is `main` commit
+> `8f2813bf745b90221da33a7cfaf40726c5b1b480`, reviewed 2026-08-24. It is
+> not a current-state claim about later `main` commits, and it is not a
+> release, production, security, compliance, or SLA approval.
+<!-- readiness-record-as-of: 8f2813bf745b90221da33a7cfaf40726c5b1b480 -->
 
 Current review date: 2026-08-24
+
+## Current status
+
+Current merged-code feature status is governed by
+[`docs/rc2-feature-scope.md`](rc2-feature-scope.md). Dated verification
+records live in [`docs/verification/`](verification/README.md). The
+current verification state of `main` is the GitHub CI state of the
+current `main` commit. This record remains an accurate description only
+of its named commit.
 
 ## Current merged-main summary
 

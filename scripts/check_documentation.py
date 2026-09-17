@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate repository Markdown structure, links, anchors, reachability, and branding."""
+"""Validate repository Markdown structure, links, anchors, reachability, branding, and readiness-record as-of markers."""
 
 from __future__ import annotations
 
@@ -10,8 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_DOCS = (ROOT / "README.md", ROOT / "SECURITY.md", ROOT / "CHANGELOG.md")
-MARKDOWN_FILES = (*ROOT_DOCS, *sorted((ROOT / "docs").rglob("*.md")))
+ROOT_DOC_NAMES = ("README.md", "SECURITY.md", "CHANGELOG.md")
 ARCHIVE_BODY_PATTERNS = (
     "docs/releases/v",
     "docs/security/reviews/2026-",
@@ -19,10 +18,25 @@ ARCHIVE_BODY_PATTERNS = (
 )
 LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+AS_OF_MARKER_RE = re.compile(r"<!--\s*readiness-record-as-of\s*:\s*([0-9a-f]{40})\s*-->")
+AS_OF_MARKER_CANDIDATE_RE = re.compile(r"<!--\s*readiness-record-as-of\s*:\s*(.*?)\s*-->")
+AS_OF_SHA_RE = re.compile(r"[0-9a-f]{40}")
+AS_OF_CLAIM_RE = re.compile(r"current verification/readiness", re.IGNORECASE)
+BETA_READINESS_REL = "docs/beta-readiness.md"
 
 
-def _relative(path: Path) -> str:
-    return path.relative_to(ROOT).as_posix()
+def markdown_files(root: Path) -> list[Path]:
+    root_docs = [root / name for name in ROOT_DOC_NAMES if (root / name).is_file()]
+    docs_dir = root / "docs"
+    doc_files = sorted(docs_dir.rglob("*.md")) if docs_dir.is_dir() else []
+    return [*root_docs, *doc_files]
+
+
+MARKDOWN_FILES = markdown_files(ROOT)
+
+
+def _relative(path: Path, root: Path) -> str:
+    return path.relative_to(root).as_posix()
 
 
 def _markdown_lines(path: Path):
@@ -70,31 +84,79 @@ def _link_target(raw: str) -> str:
     return value.split(maxsplit=1)[0]
 
 
-def _resolve_link(source: Path, target: str) -> tuple[Path | None, str]:
+def _resolve_link(source: Path, target: str, root: Path) -> tuple[Path | None, str]:
     if not target or target.startswith(("http://", "https://", "mailto:", "data:")):
         return None, ""
     path_text, _, anchor = target.partition("#")
     if not path_text:
         return source, unquote(anchor)
     decoded = unquote(path_text)
-    path = (ROOT / decoded.lstrip("/")) if decoded.startswith("/") else (source.parent / decoded)
+    path = (root / decoded.lstrip("/")) if decoded.startswith("/") else (source.parent / decoded)
     resolved = path.resolve()
     if resolved.is_dir():
         resolved = resolved / "README.md"
     return resolved, unquote(anchor)
 
 
-def _is_historical_body(path: Path) -> bool:
-    relative = _relative(path)
+def _is_historical_body(path: Path, root: Path) -> bool:
+    relative = _relative(path, root)
     return any(relative.startswith(prefix) for prefix in ARCHIVE_BODY_PATTERNS)
 
 
-def check() -> list[str]:
-    errors: list[str] = []
-    graph: dict[Path, set[Path]] = {path.resolve(): set() for path in MARKDOWN_FILES}
-    anchor_cache = {path.resolve(): _anchors(path) for path in MARKDOWN_FILES}
+def _asof_errors(path: Path, root: Path) -> list[str]:
+    lines = list(_markdown_lines(path))
+    body = "\n".join(line for _, line in lines)
+    relative = _relative(path, root)
+    is_beta_record = relative == BETA_READINESS_REL
+    has_claim = (
+        not _is_historical_body(path, root)
+        and AS_OF_CLAIM_RE.search(body) is not None
+    )
+    if not is_beta_record and not has_claim:
+        return []
+    rule = "asof-R2" if is_beta_record else "asof-R1"
 
-    for path in MARKDOWN_FILES:
+    candidates: list[tuple[int, str]] = []
+    for number, line in lines:
+        for match in AS_OF_MARKER_CANDIDATE_RE.finditer(line):
+            candidates.append((number, match.group(1).strip()))
+
+    errors: list[str] = []
+    valid_shas: list[str] = []
+    for number, payload in candidates:
+        if AS_OF_SHA_RE.fullmatch(payload) is None:
+            errors.append(
+                f"{relative}:{number}: [{rule}] malformed readiness-record-as-of "
+                f"marker payload"
+            )
+        else:
+            valid_shas.append(payload)
+    if not valid_shas:
+        errors.append(f"{relative}: [{rule}] missing readiness-record-as-of marker")
+    elif len(valid_shas) > 1:
+        errors.append(
+            f"{relative}: [{rule}] multiple readiness-record-as-of markers "
+            f"({len(valid_shas)})"
+        )
+    else:
+        sha = valid_shas[0]
+        prose = AS_OF_MARKER_CANDIDATE_RE.sub("", body)
+        if sha not in prose:
+            errors.append(
+                f"{relative}: [{rule}] readiness-record-as-of SHA {sha} not found "
+                f"in document prose"
+            )
+    return errors
+
+
+def check(root: Path | None = None) -> list[str]:
+    root = (root if root is not None else ROOT).resolve()
+    files = markdown_files(root)
+    errors: list[str] = []
+    graph: dict[Path, set[Path]] = {path.resolve(): set() for path in files}
+    anchor_cache = {path.resolve(): _anchors(path) for path in files}
+
+    for path in files:
         resolved_source = path.resolve()
         headings: list[tuple[int, int]] = []
         for number, line in _markdown_lines(path):
@@ -103,32 +165,35 @@ def check() -> list[str]:
                 headings.append((number, len(heading.group(1))))
             for match in LINK_RE.finditer(line):
                 target = _link_target(match.group(1))
-                resolved, anchor = _resolve_link(path, target)
+                resolved, anchor = _resolve_link(path, target, root)
                 if resolved is None:
                     continue
                 if not resolved.exists():
-                    errors.append(f"{_relative(path)}:{number}: missing link target {target}")
+                    errors.append(f"{_relative(path, root)}:{number}: missing link target {target}")
                     continue
                 if resolved.suffix.lower() == ".md" and resolved in graph:
                     graph[resolved_source].add(resolved)
                     if anchor and anchor not in anchor_cache[resolved]:
                         errors.append(
-                            f"{_relative(path)}:{number}: missing anchor #{anchor} in {_relative(resolved)}"
+                            f"{_relative(path, root)}:{number}: missing anchor #{anchor} in "
+                            f"{_relative(resolved, root)}"
                         )
 
-        if not _is_historical_body(path):
+        if not _is_historical_body(path, root):
             h1 = [number for number, level in headings if level == 1]
             if len(h1) != 1:
-                errors.append(f"{_relative(path)}: expected one H1, found {len(h1)}")
+                errors.append(f"{_relative(path, root)}: expected one H1, found {len(h1)}")
             previous = 0
             for number, level in headings:
                 if previous and level > previous + 1:
                     errors.append(
-                        f"{_relative(path)}:{number}: heading jumps from H{previous} to H{level}"
+                        f"{_relative(path, root)}:{number}: heading jumps from H{previous} to H{level}"
                     )
                 previous = level
 
-    roots = [ROOT / "README.md", ROOT / "docs" / "README.md"]
+        errors.extend(_asof_errors(path, root))
+
+    roots = [root / "README.md", root / "docs" / "README.md"]
     visited: set[Path] = set()
     queue = deque(path.resolve() for path in roots)
     while queue:
@@ -137,9 +202,9 @@ def check() -> list[str]:
             continue
         visited.add(path)
         queue.extend(graph.get(path, ()))
-    for path in MARKDOWN_FILES:
+    for path in files:
         if path.resolve() not in visited:
-            errors.append(f"{_relative(path)}: orphaned from README/docs navigation")
+            errors.append(f"{_relative(path, root)}: orphaned from README/docs navigation")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     if not readme.startswith('<div align="center">'):

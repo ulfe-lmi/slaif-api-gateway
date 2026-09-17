@@ -12,7 +12,7 @@ and do not override current contracts or merged code.
 
 | Goal | Start here |
 |---|---|
-| Understand the product and its limits | [Product scope](product-scope.md) → [current readiness](beta-readiness.md) |
+| Understand the product and its limits | [Product scope](product-scope.md) → [dated readiness record](beta-readiness.md) |
 | Run the Gateway locally | [Quickstart](quickstart.md) → [configuration](configuration.md) → [development deployment](deployment.md) |
 | Prepare a production-style appliance | [Production Compose](deployment-production.md) → [security model](security-model.md) → [operator runbooks](runbooks/README.md) |
 | Integrate an OpenAI client | [Compatibility matrix](compatibility-matrix.md) → [OpenAI compatibility](openai-compatibility.md) |
@@ -40,12 +40,12 @@ domain. Merged code remains implementation truth.
 | Threat, privacy, key, session, and logging boundaries | [Security model](security-model.md) |
 | Environment settings and defaults | [Configuration](configuration.md) |
 | Tables, columns, relationships, and constraints | [Database schema](database-schema.md) |
-| Current verification and release-readiness evidence | [Beta readiness](beta-readiness.md) |
+| Dated verification and release-readiness records | [Beta readiness](beta-readiness.md) |
 
 ## Start and evaluate
 
 - [Product scope](product-scope.md)
-- [Current beta readiness](beta-readiness.md)
+- [Beta readiness record (dated 2026-08-24)](beta-readiness.md)
 - [Compatibility matrix](compatibility-matrix.md)
 - [RC-beta checklist and history](rc-beta.md)
 - [RC2 target classifications](rc2-feature-scope.md)
