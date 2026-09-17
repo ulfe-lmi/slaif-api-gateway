@@ -30,3 +30,13 @@ fitness, security, compliance, provider behavior, or scale.
   `main` `1fccaa746df6cd44f1ddf8c2ec5cf6ea9f18b1cb` and the Objective 166 PR
   head. Mocked-upstream qualification only; not a real-provider run, release
   decision, security certification, or production approval.
+- [`2026-09-17 current-main integrated qualification`](2026-09-17-current-main-integrated-qualification.md)
+  - fresh RC-posture qualification of `main`
+  `9bb81cb960b6d3ba5373425cbe50cdcc670b93dc` (PR #303 merge): clean-room
+  P1 freeze, production-appliance harness run 1 `RESULT=FAIL` (privacy
+  metrics scrape) with run 2 reproduction `RESULT=OK`, full local unit/
+  integration/E2E matrix, and 9/9 CI checks SUCCESS. Verdict
+  `RESULT=NOT-QUALIFIED` on the non-deterministic per-worker
+  metrics-exposure finding. Dated evidence for the named candidate commit
+  only; mocked-upstream qualification, not a real-provider run, release
+  decision, security certification, or production approval.
