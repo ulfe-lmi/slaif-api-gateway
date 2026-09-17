@@ -50,3 +50,13 @@ fitness, security, compliance, provider behavior, or scale.
   `RESULT=QUALIFIED-RC-POSTURE`. Dated evidence for the named candidate
   commit only; mocked-upstream qualification, not a real-provider run,
   release decision, security certification, or production approval.
+- [`2026-09-17 OpenAI Python SDK 3.14.1 official-client compatibility requalification`](2026-09-17-openai-sdk-3141-requalification.md)
+  - deliberate requalification of the declared official-client
+  compatibility contract under the current stable SDK
+  `openai==3.14.1` from the qualified baseline `openai==3.9.0`
+  (`OUTCOME=A`): Phase B soundness 54/0/0, Phase C 54/0/0 on a
+  single-variable dependency delta, ripple check green modulo the two
+  labeled environment-only non-passes, and 9/9 CI checks SUCCESS on the
+  PR head. Dated evidence for the named base commit and candidate SDK
+  version only; mocked-upstream qualification, not a real-provider run,
+  release decision, security certification, or production approval.

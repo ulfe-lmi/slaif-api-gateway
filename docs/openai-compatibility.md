@@ -28,8 +28,8 @@ export OPENAI_BASE_URL="https://api.ulfe.slaif.si/v1"
 ```
 
 The official OpenAI Python client E2E matrix (54 tests in `tests/e2e/`) is
-qualified under the dev/test pin `openai==3.9.0` per the dated record
-[`verification/2026-09-17-openai-sdk3-qualification.md`](verification/2026-09-17-openai-sdk3-qualification.md).
+qualified under the dev/test pin `openai==3.14.1` per the dated record
+[`verification/2026-09-17-openai-sdk-3141-requalification.md`](verification/2026-09-17-openai-sdk-3141-requalification.md).
 That qualification is mocked-upstream evidence on disposable PostgreSQL, not
 a real-provider run.
 
