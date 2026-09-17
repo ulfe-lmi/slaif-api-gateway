@@ -1,5 +1,6 @@
 """ASGI app entrypoint for the SLAIF API Gateway."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from slaif_gateway import metrics as metrics_module
 from slaif_gateway.api.admin import router as admin_router
 from slaif_gateway.api.errors import (
     OpenAICompatibleError,
@@ -29,7 +31,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     configure_logging(app_settings)
     emit_startup_configuration_warnings(app_settings)
-    app = FastAPI(title="SLAIF API Gateway", lifespan=build_lifespan(app_settings))
+    @asynccontextmanager
+    async def app_lifespan(app: FastAPI):
+        try:
+            async with build_lifespan(app_settings)(app):
+                yield
+        finally:
+            # UvicornWorker graceful shutdown exits via the re-raised
+            # captured SIGTERM, so atexit/worker-exit never run there.
+            metrics_module.cleanup_multiproc_metrics()
+
+    app = FastAPI(title="SLAIF API Gateway", lifespan=app_lifespan)
     app.state.settings = app_settings
     app.state.db_engine = None
     app.state.db_sessionmaker = None

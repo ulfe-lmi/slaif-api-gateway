@@ -48,6 +48,10 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+    environment:
+      PROMETHEUS_MULTIPROC_DIR: /var/slaif/metrics
+    tmpfs:
+      - /var/slaif/metrics:mode=1777
     command:
       - gunicorn
       - slaif_gateway.main:app

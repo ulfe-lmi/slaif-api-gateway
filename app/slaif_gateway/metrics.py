@@ -1,108 +1,202 @@
-"""Prometheus metrics for the implemented gateway path."""
+"""Prometheus metrics for the implemented gateway path.
+
+Multi-worker (gunicorn) deployments set ``PROMETHEUS_MULTIPROC_DIR`` to a
+directory shared by all API worker processes (a tmpfs mount in the
+shipped Compose topologies). In that mode prometheus_client's mmap-based
+multiprocess mode is used: metric objects are created without registering
+them on a registry, and a single ``MultiProcessCollector`` exposes the
+aggregated samples of every live worker under the original metric names
+(a registered metric object and the shared-directory collector cannot
+coexist in one registry). Without the environment variable the previous
+single-process behavior is unchanged (unit tests, CLI, Celery processes).
+"""
 
 from __future__ import annotations
 
+import atexit
+import glob
+import os
 import time
 from collections.abc import Callable
 from decimal import Decimal
 from typing import Any
 
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Counter, Histogram, generate_latest
 
-HTTP_REQUESTS = Counter(
+# ---------------------------------------------------------------------------
+# Multiprocess (multi-worker) wiring.
+#
+# The shipped dev and production topologies run the API under gunicorn with
+# two Uvicorn workers in one container. prometheus_client (0.26.x,
+# mmap-based multiprocess mode) aggregates the per-worker metric files in
+# PROMETHEUS_MULTIPROC_DIR through a MultiProcessCollector; per-process
+# identity lives in the mmap file names (``counter_<pid>.db``), not in the
+# sample names, so the exposition keeps the original metric names.
+# ---------------------------------------------------------------------------
+_MULTIPROC_DIR = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+
+if _MULTIPROC_DIR and not os.path.isdir(_MULTIPROC_DIR):
+    raise RuntimeError(
+        "PROMETHEUS_MULTIPROC_DIR is set but is not a directory; mount the "
+        "shared API metrics volume before starting the gateway"
+    )
+
+
+def _counter(name: str, documentation: str, labelnames: tuple[str, ...]) -> Counter:
+    return Counter(name, documentation, labelnames, registry=None if _MULTIPROC_DIR else REGISTRY)
+
+
+def _histogram(name: str, documentation: str, labelnames: tuple[str, ...]) -> Histogram:
+    return Histogram(name, documentation, labelnames, registry=None if _MULTIPROC_DIR else REGISTRY)
+
+
+HTTP_REQUESTS = _counter(
     "gateway_http_requests_total",
     "HTTP requests handled by the gateway.",
     ("method", "endpoint", "status"),
 )
-HTTP_REQUEST_DURATION = Histogram(
+HTTP_REQUEST_DURATION = _histogram(
     "gateway_http_request_duration_seconds",
     "HTTP request duration in seconds.",
     ("method", "endpoint"),
 )
-AUTH_FAILURES = Counter(
+AUTH_FAILURES = _counter(
     "gateway_auth_failures_total",
     "Authentication failures by error code.",
     ("error_code",),
 )
-QUOTA_REJECTIONS = Counter(
+QUOTA_REJECTIONS = _counter(
     "gateway_quota_rejections_total",
     "Quota rejections.",
     ("error_code",),
 )
-PROVIDER_REQUESTS = Counter(
+PROVIDER_REQUESTS = _counter(
     "gateway_provider_requests_total",
     "Upstream provider requests.",
     ("provider", "endpoint", "status"),
 )
-PROVIDER_REQUEST_DURATION = Histogram(
+PROVIDER_REQUEST_DURATION = _histogram(
     "gateway_provider_request_duration_seconds",
     "Upstream provider request duration in seconds.",
     ("provider", "endpoint"),
 )
-PROVIDER_HTTP_ERRORS = Counter(
+PROVIDER_HTTP_ERRORS = _counter(
     "gateway_provider_http_errors_total",
     "Upstream provider HTTP errors.",
     ("provider", "endpoint", "status_class"),
 )
-PROVIDER_DIAGNOSTICS_GENERATED = Counter(
+PROVIDER_DIAGNOSTICS_GENERATED = _counter(
     "gateway_provider_diagnostics_generated_total",
     "Sanitized provider diagnostics generated.",
     ("provider", "endpoint"),
 )
-TOKENS_TOTAL = Counter(
+TOKENS_TOTAL = _counter(
     "gateway_tokens_total",
     "Provider-reported token totals.",
     ("provider", "model", "token_type"),
 )
-COST_EUR_TOTAL = Counter(
+COST_EUR_TOTAL = _counter(
     "gateway_cost_eur_total",
     "Gateway-accounted cost in EUR.",
     ("provider", "model"),
 )
-ACCOUNTING_FAILURES = Counter(
+ACCOUNTING_FAILURES = _counter(
     "gateway_accounting_failures_total",
     "Accounting failures by error code.",
     ("error_code",),
 )
-RATE_LIMIT_REJECTIONS = Counter(
+RATE_LIMIT_REJECTIONS = _counter(
     "gateway_rate_limit_rejections_total",
     "Redis-backed operational rate-limit rejections.",
     ("error_code",),
 )
-RATE_LIMIT_RELEASE_FAILURES = Counter(
+RATE_LIMIT_RELEASE_FAILURES = _counter(
     "gateway_rate_limit_release_failures_total",
     "Redis-backed concurrency release failures.",
     ("error_code",),
 )
-RATE_LIMIT_HEARTBEAT_FAILURES = Counter(
+RATE_LIMIT_HEARTBEAT_FAILURES = _counter(
     "gateway_rate_limit_heartbeat_failures_total",
     "Redis-backed concurrency heartbeat failures.",
     ("error_code",),
 )
-RECONCILIATION_BACKLOG = Counter(
+RECONCILIATION_BACKLOG = _counter(
     "gateway_reconciliation_backlog_total",
     "Reconciliation backlog items observed by type.",
     ("type",),
 )
-RECONCILIATION_RUNS = Counter(
+RECONCILIATION_RUNS = _counter(
     "gateway_reconciliation_runs_total",
     "Reconciliation task runs by type, status, and dry-run mode.",
     ("type", "status", "dry_run"),
 )
-RECONCILIATION_ITEMS = Counter(
+RECONCILIATION_ITEMS = _counter(
     "gateway_reconciliation_items_total",
     "Reconciliation items handled by type, status, and dry-run mode.",
     ("type", "status", "dry_run"),
 )
-RECONCILIATION_ALERTS = Counter(
+RECONCILIATION_ALERTS = _counter(
     "gateway_reconciliation_alerts_total",
     "Reconciliation alert delivery attempts by status.",
     ("status",),
 )
-RECONCILIATION_ALERT_FAILURES = Counter(
+RECONCILIATION_ALERT_FAILURES = _counter(
     "gateway_reconciliation_alert_failures_total",
     "Failed reconciliation alert deliveries.",
+    (),
 )
+
+
+if _MULTIPROC_DIR:
+    from prometheus_client.multiprocess import MultiProcessCollector
+
+    MultiProcessCollector(REGISTRY)
+
+
+def _remove_multiproc_files_for_pid(pid: int) -> None:
+    """Remove one process's multiprocess metric files from the shared dir."""
+    path = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+    if not path:
+        return
+    for filename in glob.glob(os.path.join(path, f"*_{pid}.db")):
+        try:
+            os.remove(filename)
+        except OSError:
+            pass
+
+
+def cleanup_multiproc_metrics() -> None:
+    """Remove this process's multiprocess metric files from the shared dir.
+
+    The pid is resolved at call time, not registration time: gunicorn
+    imports the application in the master process and forks the workers, so
+    a pid captured at registration time would be the master's pid in every
+    inherited handler. This is a no-op when ``PROMETHEUS_MULTIPROC_DIR`` is
+    unset.
+    """
+    _remove_multiproc_files_for_pid(os.getpid())
+
+
+def on_worker_exit(server: Any = None, worker: Any = None) -> None:
+    """gunicorn ``worker_exit`` hook entry point (config-file deployments).
+
+    Gunicorn 26.x exposes no CLI flag for the ``worker_exit`` hook, and in
+    the shipped UvicornWorker topology the hook does not run on graceful
+    SIGTERM: after the graceful shutdown uvicorn re-raises the captured
+    SIGTERM under the restored default handler, so the worker terminates by
+    signal before gunicorn's worker-exit finally block (and any ``atexit``
+    handler) can execute. The application lifespan shutdown (wired in
+    ``slaif_gateway.main``) is the reliable cleanup point there; this hook
+    covers config-file deployments whose workers exit through a normal
+    interpreter shutdown (e.g. gunicorn sync workers). A SIGKILL terminates
+    a process before any mechanism can run; stale files then persist but
+    can only inflate, never zero or reduce, the aggregate.
+    """
+    cleanup_multiproc_metrics()
+
+
+if _MULTIPROC_DIR:
+    atexit.register(cleanup_multiproc_metrics)
 
 
 def prometheus_response_body() -> bytes:
