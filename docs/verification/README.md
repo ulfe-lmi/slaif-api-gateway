@@ -22,3 +22,11 @@ fitness, security, compliance, provider behavior, or scale.
   `8f2813bf745b90221da33a7cfaf40726c5b1b480` (reviewed 2026-08-24).
   Historical/dated evidence for the named commit only; not a current-state
   claim.
+- [`2026-09-17 OpenAI SDK 3.9.0 official-client compatibility qualification`](2026-09-17-openai-sdk3-qualification.md)
+  - 54-test official OpenAI-client E2E matrix qualified under
+  `openai==3.9.0` (`OUTCOME=A`): wire-identity capture evidence, one
+  root-cause family (SDK 3.x `httpx2` transport escapes respx observation),
+  harness adaptation only, no gateway change. Evidence boundary: base
+  `main` `1fccaa746df6cd44f1ddf8c2ec5cf6ea9f18b1cb` and the Objective 166 PR
+  head. Mocked-upstream qualification only; not a real-provider run, release
+  decision, security certification, or production approval.

@@ -181,7 +181,7 @@ def test_openai_python_client_realtime_client_secret_e2e(monkeypatch: pytest.Mon
     app = create_app(get_settings())
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/realtime/client_secrets").mock(
                 return_value=httpx.Response(

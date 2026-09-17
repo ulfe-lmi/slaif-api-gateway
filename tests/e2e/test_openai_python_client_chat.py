@@ -438,7 +438,7 @@ def test_openai_python_client_chat_completions_env_e2e(monkeypatch: pytest.Monke
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
                 return_value=httpx.Response(
@@ -584,7 +584,7 @@ def test_openai_python_client_chat_completions_custom_tool_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
                 return_value=httpx.Response(
@@ -691,7 +691,7 @@ def test_openai_python_client_chat_completions_image_input_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
                 return_value=httpx.Response(
@@ -795,7 +795,7 @@ def test_openai_python_client_chat_completions_inline_file_input_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
                 return_value=httpx.Response(
@@ -906,7 +906,7 @@ def test_openai_python_client_chat_completions_audio_input_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
                 return_value=httpx.Response(
@@ -1018,7 +1018,7 @@ def test_openai_python_client_chat_completions_audio_output_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
                 return_value=httpx.Response(
@@ -1112,7 +1112,7 @@ def test_openai_python_client_chat_completions_multiple_choices_e2e(
     }
 
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream_route = router.post("https://api.openai.com/v1/chat/completions").mock(
                 return_value=httpx.Response(
@@ -1459,7 +1459,7 @@ def test_openai_python_client_generic_chat_images_and_function_tool_e2e(
         "usage": {"prompt_tokens": 25, "completion_tokens": 7, "total_tokens": 32},
     }
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream = router.post("https://lan-qwen.example.test/v1/chat/completions").mock(
                 return_value=httpx.Response(200, json=payload, headers={"x-request-id": "generic-chat"})
@@ -1537,7 +1537,7 @@ def test_openai_python_client_generic_chat_streaming_final_usage_e2e(
         "data: [DONE]\n\n"
     )
     with _run_uvicorn_server(app, port):
-        with respx.mock(assert_all_mocked=True, assert_all_called=True) as router:
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
             router.route(host="127.0.0.1").pass_through()
             upstream = router.post("https://lan-qwen-stream.example.test/v1/chat/completions").mock(
                 return_value=httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
