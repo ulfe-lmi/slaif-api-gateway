@@ -3,9 +3,9 @@
 > **Status:** Current production-style appliance procedure
 > **Not:** Certification or approval for an internet-facing deployment
 
-Prerequisites: Linux host, Docker with Compose v2, TLS certificate and private
-key, and operator-created secret files under `secrets/` with directory mode
-`0700`. The [installation overview](../INSTALL.md) summarizes this production
+Prerequisites: Linux host, Docker with Compose v2, host Python 3.12 or newer
+(for the secret-generation one-liners below), TLS certificate and private key,
+and operator-created secret files under `secrets/` with directory mode `0700`. The [installation overview](../INSTALL.md) summarizes this production
 topology and the local evaluation path; this page is the detailed appliance
 procedure.
 

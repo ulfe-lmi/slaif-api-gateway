@@ -12,26 +12,52 @@ patches.
 - Python **3.12 or newer**, Git, and Docker with Compose v2 (for Compose
   validation and container-based checks).
 
+Set up a virtualenv. On standard externally managed Linux Pythons (for
+example Ubuntu 24.04), installing directly into the system interpreter is
+refused, so use the venv for every command below:
+
 ```bash
 git clone https://github.com/ulfe-lmi/slaif-api-gateway.git
 cd slaif-api-gateway
+python3 -m venv .venv
+. .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
 ## Focused checks
 
-Run the focused set before opening a pull request. The full CI matrix
-(plus PostgreSQL integration, mocked E2E, browser smoke, Docker Compose
-smoke, CodeQL, and documentation hygiene) runs on every PR:
+Run the focused set for your change before opening a pull request. The full
+CI matrix (plus PostgreSQL integration, mocked E2E, browser smoke, Docker
+Compose smoke, CodeQL, and documentation hygiene) runs on every PR, so a
+documentation patch does not need the full local unit suite.
+
+Documentation-only patches:
+
+```bash
+python scripts/check_documentation.py
+git diff --check
+```
+
+Code or configuration patches add the focused local set:
 
 ```bash
 python -m pytest tests/unit
 python -m ruff check app tests
 alembic heads
-docker compose config --quiet
-python scripts/check_documentation.py
 git diff --check
 ```
+
+Compose validation needs the local template, because the development
+Compose file references `.env` (`env_file`) and fails without it. Copy the
+template first (never commit the copy), then validate:
+
+```bash
+cp .env.example .env
+docker compose config --quiet
+```
+
+No provider credentials, running services, or database are needed for any
+of the checks above.
 
 Documentation changes must keep the repository link graph consistent: every
 Markdown file must remain reachable from the root `README.md` or

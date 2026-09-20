@@ -2,47 +2,47 @@
 
 > **Status:** Canonical short quickstart
 > **Goal:** Boot SLAIF API Gateway with no provider credentials, log in as
-> admin, then make your first ordinary OpenAI-client request — in one sitting.
+> admin, then send one bounded model call using an explicitly configured
+> server-side provider credential — in one sitting.
 
 SLAIF API Gateway sits between your users and upstream LLM providers. Users
 keep using standard OpenAI-compatible clients with `OPENAI_API_KEY` and
-`OPENAI_BASE_URL`; the gateway checks local keys, quotas, routing, pricing, and
-audit rules before forwarding allowed requests with server-side provider
+`OPENAI_BASE_URL`; the gateway checks local keys, quotas, routing, pricing,
+and audit rules before forwarding allowed requests with server-side provider
 credentials.
 
 This quickstart has two milestones:
 
 - **Milestone 1 — provider-free boot.** Clone, configure, build, start,
-  migrate, create an admin, and log into the dashboard. No provider key is
-  needed.
-- **Milestone 2 — first OpenAI-client request.** Create local provider
-  metadata, issue a narrow gateway key, and list the models your key can see
-  with the official OpenAI client. Still no live provider inference.
+  migrate, create an admin, and log into the dashboard. No provider key and
+  no host Python are needed.
+- **Milestone 2 — first model call.** Add one server-side provider
+  credential, create local provider/route/pricing metadata, issue a narrow
+  gateway key, verify **local** model discovery, and send one bounded
+  `chat.completions` call. Only that final inference call is **external**:
+  it contacts the upstream provider and consumes key quota/cost.
 
-For the full detailed tutorial (including real-provider calls, email in
-Mailpit, testing, and troubleshooting), see the
-[first-time operator guide](docs/first-time-operator-guide.md). For
-installation, upgrades, and production topology, see
-[INSTALL.md](INSTALL.md).
+For the detailed tutorial (placeholder-pricing branch, FX metadata, secret
+rotation, non-interactive admin, real-provider smoke test, troubleshooting)
+see the [first-time operator guide](docs/first-time-operator-guide.md); for
+installation, upgrades, and production topology see [INSTALL.md](INSTALL.md).
 
 ## What you need
 
-- A **Linux** host. This quickstart is written and tested for Linux; we do not
-  claim macOS or Windows support.
-- **Git**, to clone the repository.
-- **Docker** with **Compose v2**, to run PostgreSQL, Redis, Mailpit, and the
-  Gateway containers.
-- **Bash** and **curl** for the commands below.
-- No real provider key for either milestone. No host Python installation just
-  to boot.
+Milestone 1 (provider-free boot): a **Linux** host (written and tested for
+Linux; no macOS/Windows claim), **Git**, **Docker** with **Compose v2**,
+**Bash**, and **curl**.
 
-Mailpit is a local fake email sink: it catches test email in a local web inbox
-at `http://localhost:8025` instead of sending real email.
+Milestone 2 (first model call) additionally needs: host **Python 3.12 or
+newer**, used only for a disposable client virtualenv that talks to the
+Gateway, and one real server-side provider credential for the selected
+upstream — `OPENAI_UPSTREAM_API_KEY` here — set in `.env` at Milestone 2,
+step 1. Only the external inference call uses it.
 
-The development Compose file publishes host ports for Postgres, Redis, the
-API, and Mailpit. It is a trusted local evaluation environment, not a hardened
-public deployment; use the production topology in [INSTALL.md](INSTALL.md)
-for real deployments.
+Mailpit (local fake email sink) catches test email at
+`http://localhost:8025` instead of sending real email. The development
+Compose file publishes host ports on host interfaces; it is a trusted local
+evaluation environment, not a hardened public deployment.
 
 ## Milestone 1: Provider-free boot
 
@@ -55,15 +55,13 @@ cd slaif-api-gateway
 
 ### 2. Create and protect the local environment file
 
-`.env.example` is a curated local template, not a catalog of every setting.
-Copy it and restrict permissions on shared systems:
+`.env.example` is a curated local template, not a catalog of every setting;
+never commit the result:
 
 ```bash
 cp .env.example .env
 chmod 600 .env
 ```
-
-Never commit `.env`.
 
 ### 3. Build the local images
 
@@ -73,14 +71,10 @@ docker compose build
 
 ### 4. Generate the three runtime secrets
 
-The three runtime secrets protect HMAC key signing, admin sessions, and
-encrypted one-time key deliveries. Generate them with the Gateway CLI inside
-the `api` container. The container writes your host `.env` file through a
-real bind mount, so no host Python installation is needed.
-
-Define this helper once in your shell session. It runs a `slaif-gateway`
-command inside the `api` image with the current directory mounted as the
-working directory:
+The secrets protect HMAC key signing, admin sessions, and encrypted
+one-time key deliveries. Generate them with the Gateway CLI inside the
+`api` image; it writes your host `.env` through a bind mount, so Milestone
+1 needs no host Python. Define this helper once in your shell session:
 
 ```bash
 run-cli() {
@@ -101,59 +95,42 @@ run-cli slaif-gateway secrets generate one-time --env-file .env --write
 run-cli slaif-gateway secrets validate-env --env-file .env
 ```
 
-`--write` writes generated values into your clear-text local `.env` for
-bootstrap convenience. It does not print generated values, refuses
-`.env.example`, and will not replace an existing non-placeholder value unless
-you pass `--force`. It is a bootstrap convenience, not a complete production
-secret-management system. Rotation cautions: changing
-`TOKEN_HMAC_SECRET_V1` invalidates gateway keys signed with that version,
-changing `ADMIN_SESSION_SECRET` logs active admins out, and changing
-`ONE_TIME_SECRET_ENCRYPTION_KEY` can make existing encrypted one-time key
-deliveries undecryptable.
+`--write` is a clear-text local bootstrap convenience, not a production
+secret-management system; rotation cautions and non-interactive
+alternatives live in the operator guide.
 
-### 5. Start the infrastructure
+### 5. Start the infrastructure and run migrations explicitly
 
 ```bash
 docker compose up -d postgres redis mailpit
-```
 
-PostgreSQL stores durable gateway data, Redis stores temporary rate-limit and
-broker state, and Mailpit catches local test email.
-
-### 6. Run database migrations explicitly
-
-API, worker, and scheduler containers never run migrations automatically:
-
-```bash
 docker compose run --rm api slaif-gateway db upgrade
 ```
 
-You should see Alembic apply migrations through the latest head.
+API, worker, and scheduler containers never run migrations automatically;
+you should see Alembic apply migrations through the latest head.
 
-### 7. Start the Gateway
+### 6. Start the Gateway
 
 ```bash
 docker compose up -d api worker scheduler
 ```
 
-### 8. Check health and readiness
+### 7. Check health and readiness
 
 ```bash
 curl --fail http://localhost:8000/healthz
 curl --fail http://localhost:8000/readyz
 ```
 
-`/healthz` answers `{"status":"ok"}`. `/readyz` reports database and schema
+`/healthz` answers `{"status":"ok"}`; `/readyz` reports database and schema
 status. If the first readiness probe races startup, wait a few seconds and
-retry; Compose only starts the API after PostgreSQL and Redis report healthy,
-so a retry should succeed. If readiness keeps failing with a schema or
-migration message, re-run the migration command from step 6 and retry.
+retry; a persistent schema or migration message means re-run step 5.
 
-### 9. Create the first administrator
+### 8. Create the first administrator
 
-Create the admin with the interactive hidden prompt. Run the command in a
-terminal and type a strong password twice at the hidden prompts (the password
-never appears in shell history or output):
+Create the admin with the interactive hidden prompt; type a strong password
+twice (the password never appears in shell history or output):
 
 ```bash
 docker compose run --rm api slaif-gateway admin create \
@@ -161,11 +138,7 @@ docker compose run --rm api slaif-gateway admin create \
   --display-name "Gateway administrator"
 ```
 
-For non-interactive automation, `--password-stdin` reads the password from
-standard input **to end of input**; it is not an interactive prompt. See the
-[first-time operator guide](docs/first-time-operator-guide.md) for details.
-
-### 10. Log in to the dashboard
+### 9. Log in to the dashboard
 
 Open `http://localhost:8000/admin/login` and sign in with the email and
 password you just created. Login errors are intentionally generic.
@@ -173,42 +146,46 @@ password you just created. Login errors are intentionally generic.
 Milestone 1 is complete: a running, provider-free Gateway with a working
 admin login.
 
-## Milestone 2: First OpenAI-client request
+## Milestone 2: First model call
 
-This milestone creates local metadata and one narrow key, then performs one
-real request through the Gateway with the official OpenAI client. The request
-(`GET /v1/models` through the client) exercises authentication, key policy,
-and the local model catalog. It does **not** call a provider: local metadata
-operations and `/v1/models` never contact OpenAI or OpenRouter.
+Two different kinds of calls happen here, and the distinction matters:
 
-### 1. Add reviewed local pricing and route metadata
+- `GET /v1/models` is **LOCAL** discovery, served from local route
+  metadata; it never contacts the provider.
+- `POST /v1/chat/completions` is **EXTERNAL** inference, forwarded to the
+  upstream provider with your server-side credential; it consumes the
+  key's quota and cost limits.
 
-Set the server-side upstream provider key in `.env` now so the provider
-configuration is complete (you will not need it for this milestone's request,
-but real provider calls require it):
+### 1. Configure the server-side provider credential
+
+Put the real upstream key in `.env` — the only step that needs a real key —
+then apply it:
 
 ```env
-OPENAI_UPSTREAM_API_KEY=your-real-upstream-provider-key
+OPENAI_UPSTREAM_API_KEY=<your real upstream provider key>
 ```
 
-Keep the value out of client examples: `OPENAI_API_KEY` is always the
-**gateway-issued** client key, `OPENAI_UPSTREAM_API_KEY` is the server-side
-provider key. After changing `.env`, apply it with
-`./scripts/docker-refresh.sh --env-only` (or
-`docker compose up -d --force-recreate api worker scheduler`).
+```bash
+./scripts/docker-refresh.sh --env-only
+```
 
-Bootstrap the local OpenAI Chat Completions catalog. Copy the example pricing
-file (EUR prices) and replace the zero placeholder prices with
-operator-reviewed pricing assumptions before applying:
+Keep the two key worlds distinct: `OPENAI_API_KEY` is always the
+**gateway-issued** client key; `OPENAI_UPSTREAM_API_KEY` is server-side and
+never appears in client examples.
+
+### 2. Bootstrap local catalog metadata with reviewed pricing
+
+Copy the example pricing file (EUR, placeholder values) and replace the
+placeholder prices with operator-reviewed pricing assumptions:
 
 ```bash
 cp docs/examples/openai-completions-pricing.example.csv local-openai-pricing.csv
-# edit local-openai-pricing.csv: set real EUR per-million-token prices
+# edit local-openai-pricing.csv: set EUR per-million-token prices
 ```
 
-Then apply the catalog with the reviewed pricing file. The command reads the
-CSV from your working directory, which is why it runs through the mounted
-`run-cli` helper from step 4:
+Then apply the catalog with the reviewed pricing file (the command reads the
+CSV from your working directory, so it runs through the mounted `run-cli`
+helper from Milestone 1, step 4):
 
 ```bash
 run-cli slaif-gateway bootstrap openai-completions-catalog \
@@ -216,16 +193,14 @@ run-cli slaif-gateway bootstrap openai-completions-catalog \
   --apply
 ```
 
-For a fast local wiring smoke test you may instead use placeholder pricing,
-but placeholder pricing is demo wiring only — never reviewed pricing, spend
-protection, or invoice truth:
-
-```bash
-run-cli slaif-gateway bootstrap openai-completions-catalog \
-  --pricing-mode placeholder \
-  --confirm-placeholder-pricing \
-  --apply
-```
+Evaluation setup friction: the default catalog has ten models
+(`gpt-5.2` through `gpt-4o-mini`, listed by `routes list`), and the
+bootstrap requires a pricing row for **every** selected model even if your
+key will use only one. There is no single-model bootstrap switch today; a
+bounded single-model evaluation bootstrap is a reasonable future
+improvement. The [operator guide](docs/first-time-operator-guide.md#pricing)
+documents the placeholder-pricing alternative and how to replace pricing
+rows afterwards.
 
 Before sending any request, verify the local metadata:
 
@@ -235,23 +210,15 @@ run-cli slaif-gateway routes list
 run-cli slaif-gateway pricing list
 ```
 
-Reapplying an identical bootstrap is idempotent (rows report `exists`).
-Reapplying a pricing file whose prices differ from existing enabled rows
-reports `conflict` and blocks; update the existing pricing rows first (see the
-[first-time operator guide](docs/first-time-operator-guide.md#pricing)) and
-rerun. If any imported pricing used a non-EUR currency, add an FX row, for
-example:
+Reapplying an identical bootstrap is idempotent (rows report `exists`); a
+pricing file whose prices differ from existing enabled rows reports
+`conflict` and blocks until you replace the existing rows.
 
-```bash
-run-cli slaif-gateway fx add --base-currency USD --quote-currency EUR --rate 0.920000000
-```
+### 3. Create an owner and a narrow key
 
-The example file is EUR, so no FX row is needed for it.
-
-### 2. Create an owner and a narrow key
-
-Owners record who is accountable for a key. Institutions and cohorts are
-optional groupings, not required setup. Create a minimal owner:
+Owners record who is accountable for a key; institutions and cohorts are
+optional groupings. Create a minimal owner, then a key with a narrow
+model/endpoint policy and a finite evaluation quota (replace `<owner-id>`):
 
 ```bash
 run-cli slaif-gateway owners create \
@@ -259,9 +226,6 @@ run-cli slaif-gateway owners create \
   --surname Lovelace \
   --email ada@example.org
 ```
-
-Create a key with a narrow model/endpoint policy and a finite evaluation
-quota. Replace `<owner-id>` with the owner ID printed by the previous command:
 
 ```bash
 run-cli slaif-gateway keys create \
@@ -274,72 +238,75 @@ run-cli slaif-gateway keys create \
   --allowed-model gpt-4o-mini
 ```
 
-The plaintext gateway key is shown **once**. Save it. The gateway stores only
-an HMAC digest and cannot show the key again.
+The plaintext gateway key is shown **once**; the gateway stores only an
+HMAC digest and cannot show it again.
 
-### 3. Perform one request with the OpenAI client
+### 4. Verify local model discovery
 
-Use the standard OpenAI-compatible environment variables. You need a client
-Python environment with the `openai` package; the cleanest option is a
-disposable virtualenv on the host (or an equivalent disposable client
-container). Set up the client environment:
+Set up a disposable host virtualenv with the repository's qualified SDK
+version, point the standard client variables at the Gateway, and list the
+models your key allows:
 
 ```bash
 python3 -m venv .venv-client
 . .venv-client/bin/activate
-python -m pip install -q openai
-```
+python -m pip install -q openai==3.14.1
 
-Point the client at the Gateway and issue one request:
-
-```bash
-export OPENAI_API_KEY="sk-slaif-..."   # the gateway-issued key from step 2
+export OPENAI_API_KEY="sk-slaif-..."   # the gateway-issued key from step 3
 export OPENAI_BASE_URL="http://localhost:8000/v1"
 
 python - <<'PY'
 from openai import OpenAI
 
 client = OpenAI()
-models = client.models.list()
-print([model.id for model in models.data])
+print([model.id for model in client.models.list().data])
 PY
 ```
 
-Expected outcome: the list includes `gpt-4o-mini` (the model your key
-allows). If the list is empty, follow the
-["No models are visible" checklist](docs/first-time-operator-guide.md#troubleshooting)
-in the operator guide.
+Expected outcome: the list contains `gpt-4o-mini`. This request is
+**LOCAL** and never contacts the provider. If the list is empty, use the
+["No models are visible" checklist](docs/first-time-operator-guide.md#troubleshooting).
 
-To go further — real `chat.completions` calls, streaming, mailpit email,
-pricing deep-dive, and full troubleshooting — continue with the
-[first-time operator guide](docs/first-time-operator-guide.md).
+### 5. Send one bounded model call (external)
+
+With the same client environment, send one small Chat Completions request:
+
+```bash
+python - <<'PY'
+from openai import OpenAI
+
+client = OpenAI()
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    max_completion_tokens=100,
+    messages=[{"role": "user", "content": "Say hello from SLAIF."}],
+)
+print(resp.choices[0].message.content)
+PY
+```
+
+This is the **EXTERNAL** step: the gateway forwards it to the upstream
+provider with your server-side credential, and the completed usage is
+finalized against the key's quota and cost limits. For streaming, the
+checked-in real-provider smoke script, and full troubleshooting, continue
+with the [first-time operator guide](docs/first-time-operator-guide.md).
 
 ## Stop and clean up
 
-Stop the containers and keep your data (the named `postgres-data` and
-`redis-data` volumes are preserved):
-
-```bash
-docker compose down
-```
-
-**Destructive:** delete the local data volumes as well. This deletes all local
-gateway data (keys, quotas, usage, audit):
-
-```bash
-docker compose down -v
-```
-
-Use the last command only when you intentionally want to wipe the local
-Gateway.
+`docker compose down` stops the containers and preserves the named
+`postgres-data` and `redis-data` volumes. **Destructive:**
+`docker compose down -v` also deletes those volumes and with them all local
+gateway data (keys, quotas, usage, audit); use it only to intentionally
+wipe the local Gateway. [INSTALL.md](INSTALL.md) documents the full
+stop/cleanup semantics.
 
 ## Where to go next
 
 - [INSTALL.md](INSTALL.md) — installation overview, persistence, production
   topology, upgrades, and stop/cleanup semantics.
 - [First-time operator guide](docs/first-time-operator-guide.md) — the full
-  detailed tutorial: real-provider calls, Mailpit email, local testing,
-  refresh workflows, and troubleshooting.
+  detailed tutorial: placeholder-pricing branch, FX metadata, secret
+  rotation, non-interactive admin, real-provider smoke, troubleshooting.
 - [Documentation home](docs/README.md) — configuration, compatibility
   contracts, security, and operations.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — development environment and checks.

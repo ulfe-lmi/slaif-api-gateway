@@ -121,3 +121,24 @@ def test_real_provider_doc_does_not_overclaim_current_sql_evidence() -> None:
     normalized_matrix = " ".join(matrix.split())
     assert "Complete current real-provider accounting qualification is not established" in normalized_matrix
     assert "passed with finalized PostgreSQL usage-ledger entries" not in matrix
+
+
+def test_quickstart_milestone_two_documents_credentialed_model_call() -> None:
+    quickstart = (ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
+    # The model call is executable code in the root quickstart, not a deep link.
+    assert "chat.completions.create(" in quickstart
+    # The client example pins the repository's qualified SDK version.
+    assert "openai==3.14.1" in quickstart
+    # Local discovery and external inference are explicitly labeled.
+    assert "**LOCAL**" in quickstart
+    assert "**EXTERNAL**" in quickstart
+    # The provider credential is configured at the milestone-2 boundary.
+    assert "OPENAI_UPSTREAM_API_KEY" in quickstart
+    # Milestone 2 no longer claims provider-free inference.
+    assert "no live provider inference" not in quickstart.lower()
+
+
+def test_operator_guide_places_grouping_flags_on_their_commands() -> None:
+    guide = (ROOT / "docs/first-time-operator-guide.md").read_text(encoding="utf-8")
+    assert "owners create --institution-id" in guide
+    assert "keys create --cohort-id" in guide

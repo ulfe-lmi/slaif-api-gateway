@@ -17,28 +17,38 @@
 
 </div>
 
-SLAIF API Gateway puts your organization in control of AI access. It issues
-its own API keys, enforces per-key policy and hard quota/accounting, and
-forwards permitted requests to upstream providers such as OpenAI and
-OpenRouter — while provider credentials stay server-side. Your users and
-applications keep using the standard OpenAI Python client with no code
-changes beyond two environment variables. The current deployment model
+SLAIF API Gateway is built for European SMEs, institutions, and bounded
+research or workshop teams that want one organization in control of its AI
+access. It issues its own API keys, enforces per-key policy and hard
+quota/accounting, and forwards permitted requests to upstream providers such
+as OpenAI and OpenRouter — while provider credentials stay server-side. Your
+users and applications keep using the standard OpenAI Python client with no
+code changes beyond two environment variables. The current deployment model
 assumes one organization per self-hosted deployment.
 
 ## Get started
 
 - **[QUICKSTART.md](QUICKSTART.md)** — boot the Gateway with no provider
-  credentials, log in as admin, and make your first OpenAI-client request in
-  one sitting.
+  credentials, log in as admin, then send your first bounded model call
+  using an explicitly configured server-side provider credential, in one
+  sitting.
 - **[INSTALL.md](INSTALL.md)** — installation overview: prerequisites,
   persistence, the production-style topology, upgrades, and stop/cleanup
   semantics.
 
+After you have a running Gateway and a gateway-issued key from the
+quickstart, point any standard OpenAI client at it (shell):
+
 ```bash
 export OPENAI_API_KEY="sk-slaif-..."          # a gateway-issued key
 export OPENAI_BASE_URL="https://api.example.org/v1"
+```
 
+and use the official Python client (Python):
+
+```python
 from openai import OpenAI
+
 client = OpenAI()
 ```
 

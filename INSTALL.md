@@ -19,9 +19,14 @@ Verified against the repository's Compose packaging:
   through Nginx plus a host-loopback API diagnostic port (`127.0.0.1:8000` by
   default).
 
-No host Python installation is required to run the Gateway; everything runs
-in containers. Host Python is only needed for local development and testing
-(see [CONTRIBUTING.md](CONTRIBUTING.md)).
+The provider-free local boot needs no host Python: the Gateway, database,
+cache, and secret generation all run in containers. Host **Python 3.12 or
+newer** is needed for two documented paths: the quickstart's Milestone 2
+client examples (a disposable virtualenv with the OpenAI client) and the
+production secret-generation one-liners in
+[deployment-production.md](docs/deployment-production.md). It is also
+required for local development and testing (see
+[CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## Local installation (development and evaluation)
 
@@ -41,8 +46,11 @@ The points below are the invariants to keep in mind:
   `slaif-gateway secrets generate ... --write` through the Docker-only
   bind-mounted workflow in the quickstart. `--write` is a clear-text local
   bootstrap convenience, not a production secret-management system.
-- **Migrations are explicit.** `slaif-gateway db upgrade` is the only
-  migration path; API, worker, and scheduler never migrate on startup.
+- **Migrations are explicit, with two documented paths.** On the local
+  Compose stack you run `docker compose run --rm api slaif-gateway db
+  upgrade`. In the production appliance the one-shot `migrations` service
+  runs `alembic upgrade head`. On both paths API, worker, and scheduler
+  never migrate on startup.
 - **Start/health.** `docker compose up -d postgres redis mailpit`, migrate,
   then `docker compose up -d api worker scheduler`; verify
   `http://localhost:8000/healthz` and `/readyz`.
@@ -60,11 +68,58 @@ one-time-secret key versions separately (see
 
 ### Local refresh
 
-After `.env` changes or code updates, the bundled helper
-`./scripts/docker-refresh.sh` (`--env-only`, `--pull`, or full) rebuilds and
-recreates the runtime services non-destructively: it never deletes volumes,
-overwrites `.env`, or resets git state. It is a local convenience, not a
-production upgrade tool.
+The bundled helper `./scripts/docker-refresh.sh` refreshes the runtime
+services non-destructively: it never deletes volumes, overwrites `.env`, or
+resets git state. It is a local convenience, not a production upgrade tool.
+Pick the variant for what changed:
+
+After `.env` changes (skip git, build, and migrations; recreate
+api/worker/scheduler, then health-check):
+
+```bash
+./scripts/docker-refresh.sh --env-only
+```
+
+After upstream code updates on `main`. This requires a **clean tracked
+worktree and the current branch to be `main`** (the script refuses
+otherwise); it fetches and fast-forwards `main`, then builds, runs
+migrations, recreates the services, and health-checks:
+
+```bash
+./scripts/docker-refresh.sh --pull
+```
+
+After local code changes (build, migrate, recreate, health-check; no git):
+
+```bash
+./scripts/docker-refresh.sh
+```
+
+`--skip-build` and `--skip-migrations` skip the named steps;
+`--no-health-check` skips the final checks.
+
+**Health probe after recreation:** the script's final `/healthz` and
+`/readyz` curls are single attempts and can race service startup right
+after `--force-recreate`. If one of them fails immediately after a refresh,
+retry with a bounded wait instead of assuming failure — but do not hide a
+persistent error:
+
+```bash
+for i in 1 2 3 4 5 6; do
+  if curl -fsS http://localhost:8000/healthz >/dev/null \
+     && curl -fsS http://localhost:8000/readyz >/dev/null; then
+    echo "healthy after attempt $i"
+    break
+  fi
+  echo "attempt $i not ready yet"
+  sleep 5
+done
+curl -fsS http://localhost:8000/readyz
+```
+
+If readiness still fails, read the `/readyz` body and the API logs: a schema
+or migration message means re-run
+`docker compose run --rm api slaif-gateway db upgrade`.
 
 ## Production-style installation
 
@@ -99,13 +154,33 @@ Production rules that differ from the local workflow:
 - **Nonempty provider secrets.** Enabled providers require non-placeholder
   provider key files in production; the local provider-free promise does not
   apply to production.
-- **Explicit migrations.** Because migrations run as a one-shot service,
-  applying migrations after an image refresh means recreating that service
-  (for example with `docker compose -f docker-compose.production.yml up -d
-  --force-recreate migrations`, waiting for successful completion, then
-  recreating the API). Follow the
-  [upgrade runbook](docs/upgrade-runbook.md) for the full controlled-upgrade
-  procedure, including backup/restore rehearsal.
+- **Controlled production upgrade outline.** Run this on a disposable or
+  explicitly reviewed target with the pinned candidate code. First do the
+  pre-upgrade steps in the [upgrade runbook](docs/upgrade-runbook.md)
+  (backup PostgreSQL and secret versions, restore the backup into a
+  disposable target and run `scripts/verify_restore.py`, confirm the
+  candidate migration head, rehearse). Then, on the disposable/reviewed
+  target:
+
+  ```bash
+  docker compose -f docker-compose.production.yml build
+  docker compose -f docker-compose.production.yml up -d --force-recreate migrations
+  docker compose -f docker-compose.production.yml ps migrations   # wait for "Completed (0)"
+  docker compose -f docker-compose.production.yml up -d --force-recreate api
+  curl -fsS http://127.0.0.1:8000/healthz
+  curl -fsS http://127.0.0.1:8000/readyz
+  ```
+
+  `--force-recreate <service>` recreates only the named service; verified on
+  Compose 2.40.3, its dependencies (PostgreSQL, Redis) keep running with
+  their existing containers and are not recreated. If the `async` profile is
+  in use, recreate worker/scheduler with
+  `--profile async` added to the compose commands. If `migrations` exits
+  non-zero, stop; do not recreate the API on a failed migration.
+  The [RC-beta upgrade checklist](docs/runbooks/rc-beta-upgrade.md) shows the
+  same sequence in the local Compose command form; for the production
+  project the `-f docker-compose.production.yml` invocations above are the
+  complete service sequence.
 
 Run the fail-closed preflight before deploying:
 
@@ -118,11 +193,25 @@ and Compose configuration.
 
 ## Interface exposure
 
-- Local: the API is reachable at `http://localhost:8000` (`/v1`,
-  `/admin`, `/healthz`); `/readyz` and `/metrics` are internal/allowlisted.
-- Production: only Nginx ports `80`/`443` are publicly bound; `/metrics` is
-  not published by the production Nginx configuration, and `/readyz` is
-  allowlisted to private networks by default.
+Distinguish three layers: network publication, application-level route
+behavior, and the production reverse proxy.
+
+- **Local (development Compose).** The API port is published on host
+  interfaces (the default `${API_HOST_PORT:-8000}:8000` binding listens on
+  all interfaces, not only localhost), and there is no Nginx in front. At
+  the application level, `/readyz` has no auth or IP dependency. `/metrics`
+  is gated by application settings: the stock `.env.example` sets
+  `METRICS_REQUIRE_AUTH=true` with an empty `METRICS_ALLOWED_IPS`, so
+  `/metrics` answers 403 to every client until you configure an allowlist
+  (or disable metrics). The fail-closed metrics default is a metrics
+  authentication setting, not a network allowlist: on a shared host
+  network, `/v1`, `/admin`, and `/readyz` are reachable from other hosts on
+  that network. Treat the development Compose as a trusted local evaluation
+  environment.
+- **Production.** Only Nginx ports `80`/`443` are publicly bound, plus the
+  API's loopback diagnostic binding `127.0.0.1:${SLAIF_API_DIAGNOSTIC_PORT:-8000}`.
+  The default production Nginx configuration denies `/metrics` (403) and
+  allowlists `/readyz` to loopback and private networks.
 
 ## Stop and clean up
 

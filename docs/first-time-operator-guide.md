@@ -27,8 +27,9 @@ key.
 - **Docker** with **Compose v2**, to run PostgreSQL, Redis, Mailpit, the API,
   and background workers locally.
 - **Bash** and **curl** for the commands below.
-- Host **Python 3.12** or newer only if you want to run tests outside Docker
-  (see [Contributing](../CONTRIBUTING.md)).
+- Host **Python 3.12** or newer, only for the real-provider client smoke
+  (disposable venv) and for tests outside Docker (see
+  [Contributing](../CONTRIBUTING.md)).
 - No real provider key for the local dashboard smoke.
 - A real upstream provider key only for real provider calls.
 
@@ -73,6 +74,15 @@ OPENAI_UPSTREAM_API_KEY=replace-with-real-upstream-provider-key
 
 This is different from the user's client key. Users set `OPENAI_API_KEY` to a
 gateway-issued key.
+
+## Build The Local Image
+
+Build the local image (the secret-generation helper below runs inside the
+`api` image, so build it first):
+
+```bash
+docker compose build
+```
 
 ## Generate Local Runtime Secrets
 
@@ -122,13 +132,8 @@ Keep these rotation cautions in mind:
 - Changing `ONE_TIME_SECRET_ENCRYPTION_KEY` can make existing encrypted
   one-time key deliveries undecryptable.
 
-## Build And Start Local Services
 
-Build the local image:
-
-```bash
-docker compose build
-```
+## Start Local Services
 
 Start PostgreSQL, Redis, and Mailpit:
 
@@ -196,7 +201,10 @@ Manual equivalent:
 docker compose up -d --force-recreate api worker scheduler
 ```
 
-After pulling fresh code:
+After pulling fresh code. This requires a **clean tracked worktree on
+`main`** (the script refuses otherwise); it fetches and fast-forwards
+`main`, then builds, runs migrations, recreates the services, and
+health-checks:
 
 ```bash
 ./scripts/docker-refresh.sh --pull
@@ -213,6 +221,11 @@ docker compose ps
 curl -fsS http://localhost:8000/healthz
 curl -fsS http://localhost:8000/readyz
 ```
+
+The final health curls are single attempts and can race service startup
+right after `--force-recreate`; if one fails immediately after a refresh,
+retry with a bounded wait (see the refresh section in
+[INSTALL.md](../INSTALL.md)) rather than assuming failure.
 
 After local code changes, run the script without flags:
 
@@ -280,6 +293,11 @@ provider calls with a cost limit, replace it with reviewed pricing.
 
 1. Copy the example file.
 2. Replace placeholder prices with operator-reviewed pricing assumptions.
+   The default catalog has ten models (`gpt-5.2` through `gpt-4o-mini`),
+   and the bootstrap requires a pricing row for **every** selected model —
+   even if your key will use only one. There is no single-model bootstrap
+   switch today; a bounded single-model evaluation bootstrap is a
+   reasonable future improvement, not a supported option.
 3. Run the bootstrap command in the default `require-file` mode.
 
 ```bash
@@ -307,10 +325,36 @@ provider,model,endpoint,currency,input_price_per_1m,output_price_per_1m
 - Reapplying an identical bootstrap is idempotent: matching rows report
   `exists` and the run completes.
 - Reapplying a pricing file whose prices differ from existing enabled rows
-  reports `conflict` and blocks. Update the existing pricing rows first
-  (dashboard pricing pages or the `pricing` CLI group), then rerun.
+  reports `conflict` and blocks. Replace the existing rows first (next
+  section), then rerun.
 - Row statuses are `created`, `exists`, `conflict`, `missing`, and
   `not_implemented`; any `conflict` or `missing` row fails the run.
+
+### Replacing existing pricing rows
+
+When a bootstrap used placeholder or now-outdated prices, replace the rows
+with reviewed prices through the admin dashboard. The `pricing` CLI group
+has `add`, `list`, `show`, `disable-model`, and `import`, but no
+row-update command, and the CLI `import` creates rows only (a duplicate
+against an existing rule fails), so row replacement goes through the
+dashboard.
+
+Batch path (recommended for a reviewed CSV):
+
+1. Open the pricing import page:
+   `http://localhost:8000/admin/pricing/import`.
+2. Paste or upload the revised CSV (same columns as
+   `docs/examples/openai-completions-pricing.example.csv`).
+3. Preview: each row is classified against the existing enabled rows; rows
+   matching an existing rule are classified `update`.
+4. Enter an audit reason and confirm; execute applies the updates.
+
+Per-row path: from the pricing list, open a row and its **Edit** page
+(`/admin/pricing/<pricing-rule-id>/edit`), set the reviewed per-million-token
+prices, and submit with the required reason.
+
+After replacing, verify with `run-cli slaif-gateway pricing list` that the
+effective prices are the reviewed values you intended.
 
 ### FX metadata
 
@@ -342,10 +386,11 @@ The provider config stores only the env var name `OPENAI_UPSTREAM_API_KEY`.
 ## Create An Owner And A Gateway Key
 
 Owners record who is accountable for a key. Institutions and cohorts are
-optional groupings, not required setup. If your organization wants them,
-create them first (`institutions create`, `cohorts create`) and pass
-`--institution-id` / `--cohort-id` when creating the owner; the beginner path
-uses a bare owner:
+optional groupings, not required setup. Institutions attach to owners
+(`owners create --institution-id`); cohorts attach to keys
+(`keys create --cohort-id`). If your organization wants them, create them
+first (`institutions create`, `cohorts create`); the beginner path uses a
+bare owner:
 
 ```bash
 run-cli slaif-gateway owners create \
@@ -369,7 +414,8 @@ run-cli slaif-gateway keys create \
 ```
 
 The plaintext gateway key is shown **once**. Save it. The gateway does not
-store plaintext keys and cannot show old keys again.
+store plaintext keys and cannot show old keys again. To group a key by
+cohort, pass `--cohort-id <cohort-id>` to `keys create`.
 
 You may allow every catalog model by editing the key policy through the
 dashboard or service workflows, or list only the selected catalog model IDs
@@ -408,12 +454,13 @@ This step requires a real `OPENAI_UPSTREAM_API_KEY` in `.env` (applied with
 safely; the local dashboard, database, migrations, key creation, and `/v1/models`
 checks still work without a real provider key.
 
-Install the OpenAI client in a disposable host environment:
+Install the OpenAI client in a disposable host environment, pinned to the
+repository's qualified SDK version:
 
 ```bash
 python3 -m venv .venv-client
 . .venv-client/bin/activate
-python -m pip install openai
+python -m pip install -q openai==3.14.1
 ```
 
 Run the checked-in example:

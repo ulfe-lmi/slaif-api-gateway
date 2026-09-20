@@ -11,14 +11,14 @@ and do not override current contracts or merged code.
 ## Getting started
 
 - [QUICKSTART](../QUICKSTART.md) — the canonical short quickstart:
-  provider-free boot to admin login, then the first OpenAI-client request.
+  provider-free boot to admin login, then the first bounded model call with
+  an explicitly configured server-side provider credential.
 - [INSTALL](../INSTALL.md) — installation overview: prerequisites,
   persistence, production topology, upgrades, stop/cleanup.
 - [First-time operator guide](first-time-operator-guide.md) — the detailed
   tutorial: real-provider wiring, Mailpit email, testing, refresh workflows,
   troubleshooting.
-- [Legacy quickstart path (compatibility stub)](quickstart.md) — historical
-  link target only; the canonical quickstart now lives at the repository root.
+- [Configuration reference](configuration.md) — every supported setting.
 - [Product scope](product-scope.md) — what SLAIF is, the deployment boundary,
   and the current/approved-target/non-goal labels.
 - [Compatibility matrix](compatibility-matrix.md) — exact endpoint-family
@@ -113,6 +113,9 @@ feature is wired into every Gateway entrypoint):
   verification evidence references.
 - [Beta readiness record (dated 2026-08-24)](beta-readiness.md) — historical
   readiness evidence as-of its named commit.
+- [Legacy quickstart path (compatibility stub)](quickstart.md) — historical
+  link target only; the canonical quickstart now lives at the repository
+  root.
 - [Release-decision draft](release-decision-brief.md) — superseded draft for
   an untagged candidate.
 - [Untagged RC2 release-notes draft](release-notes.md) — draft only.

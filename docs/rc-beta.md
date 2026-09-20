@@ -1,11 +1,14 @@
 # RC-Beta Release Notes And Checklist
 
 > **Status:** Release checklist and historical RC-beta evidence
-> **Readiness record:** See [beta-readiness.md](beta-readiness.md) (dated; evidence as-of the named commit)
+> **Readiness and verification evidence:** See the [verification index](verification/README.md)
+> for current dated records; the [2026-08-24 beta-readiness record](beta-readiness.md)
+> is historical, immutable evidence as-of its named commit
 
-This document is the operator-facing RC-beta checklist. It complements
-[`beta-readiness.md`](beta-readiness.md), which records the detailed readiness
-verification pass.
+This document is the operator-facing RC-beta checklist. For current readiness
+and verification evidence, read the [verification index](verification/README.md);
+the [2026-08-24 beta-readiness record](beta-readiness.md) is the historical
+detailed readiness verification pass, immutable as-of its named commit.
 
 The canonical current-vs-target product and deployment boundary is
 [`product-scope.md`](product-scope.md). It positions the self-hosted gateway as
