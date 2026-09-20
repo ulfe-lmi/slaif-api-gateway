@@ -332,26 +332,29 @@ provider,model,endpoint,currency,input_price_per_1m,output_price_per_1m
 
 ### Replacing existing pricing rows
 
-When a bootstrap used placeholder or now-outdated prices, replace the rows
-with reviewed prices through the admin dashboard. The `pricing` CLI group
-has `add`, `list`, `show`, `disable-model`, and `import`, but no
-row-update command, and the CLI `import` creates rows only (a duplicate
-against an existing rule fails), so row replacement goes through the
-dashboard.
+When a bootstrap used placeholder or now-outdated prices, replace them with
+reviewed prices through the admin dashboard **Edit** page — the supported
+in-place update path. Two things to know before you start:
 
-Batch path (recommended for a reviewed CSV):
+- The `pricing` CLI group has `add`, `list`, `show`, `disable-model`, and
+  `import`, but **no row-update command**.
+- The dashboard pricing **import** is create-only: a row matching an existing
+  enabled rule is classified `duplicate` (identical validity window) or
+  `overlap` (overlapping window) and is never written (the `update`
+  classification only appears for new validity windows that do not overlap an
+  existing row). Do not use import to overwrite prices.
 
-1. Open the pricing import page:
-   `http://localhost:8000/admin/pricing/import`.
-2. Paste or upload the revised CSV (same columns as
-   `docs/examples/openai-completions-pricing.example.csv`).
-3. Preview: each row is classified against the existing enabled rows; rows
-   matching an existing rule are classified `update`.
-4. Enter an audit reason and confirm; execute applies the updates.
+Procedure:
 
-Per-row path: from the pricing list, open a row and its **Edit** page
-(`/admin/pricing/<pricing-rule-id>/edit`), set the reviewed per-million-token
-prices, and submit with the required reason.
+1. Note the row IDs: `run-cli slaif-gateway pricing list` (or
+   `slaif-gateway pricing list --json`).
+2. For each row, open its **Edit** page:
+   `http://localhost:8000/admin/pricing/<pricing-rule-id>/edit`.
+3. Set the reviewed per-million-token prices (input, output, and cached/
+   reasoning/request fields where applicable), keep the validity window, and
+   submit with the required audit reason. The update is audited as
+   `pricing_rule_updated`.
+4. Repeat for every row whose prices changed.
 
 After replacing, verify with `run-cli slaif-gateway pricing list` that the
 effective prices are the reviewed values you intended.
