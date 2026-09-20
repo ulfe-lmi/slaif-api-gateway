@@ -177,9 +177,13 @@ checkout at the reviewed candidate revision, and let it retain that
 deployment's existing Compose project name, file-backed secrets, named
 volumes, configured ports, and TLS. PostgreSQL and Redis must already be
 running and healthy. This is a maintenance procedure, not a zero-downtime
-procedure: ingress and the runtime users are quiesced before the schema
-migration and stay stopped until every check in the sequence passes, so
-the maintenance window lasts until the final public check succeeds. The
+procedure: it stops ingress and the runtime users before the migration.
+A failed migration leaves them stopped. After a successful migration,
+services restart in stages; a later readiness or public HTTPS failure
+stops further commands but does not automatically stop services already
+restarted or roll back the deployment. Inspect the failed step and follow
+the recovery runbook before treating the upgrade as complete. The
+maintenance window ends only when the final public check passes. The
 three prompts are concrete operator inputs, not shell placeholders; the
 sequence does not source the secret `.env` into the shell and does not
 print credentials.
@@ -226,13 +230,17 @@ Sequence mechanics, verified against the checked-in definitions:
   checkout default to the same project name, so the explicit, verified
   name is what separates them.
 - `stop nginx api` (and `stop worker scheduler` only when the deployment
-  uses the `async` profile) quiesces ingress and the runtime users before
-  any schema change. With `set -euo pipefail`, a failure at any later step
-  leaves them stopped; do not silently start old software against a
-  partly migrated database. If the sequence stops, follow the recovery
-  decision in the [upgrade runbook](docs/upgrade-runbook.md) - restore
-  the pre-upgrade database and matching application together, or fix
-  forward with a reviewed corrective migration - instead of improvising.
+  uses the `async` profile) stops ingress and the runtime users before
+  any schema change. A failed migration leaves them stopped: with
+  `set -euo pipefail`, the subshell halts at the migration gate, so do
+  not silently start old software against a partly migrated database.
+  After a successful migration, services restart in stages; a later
+  readiness or public HTTPS failure stops further commands but does not
+  stop services already restarted. If the sequence stops, inspect the
+  failed step and follow the recovery decision in the
+  [upgrade runbook](docs/upgrade-runbook.md) - restore the pre-upgrade
+  database and matching application together, or fix forward with a
+  reviewed corrective migration - instead of improvising.
 - The one-shot `run --rm --no-deps migrations` runs in the foreground, so
   its exit status is the real gate: a non-zero exit stops the subshell
   before the API is replaced. `--no-deps` keeps the one-shot from starting
@@ -259,9 +267,11 @@ Sequence mechanics, verified against the checked-in definitions:
   `stop nginx api` until the public check passes. There is no
   zero-downtime claim and no automatic rollback in this sequence.
 
-Verified on Compose 2.40.3 and curl 8.5.0; `up --wait` /
-`--wait-timeout` require Docker Compose v2.1.1 or newer, and
-`--retry-all-errors` requires curl 7.71.0 or newer.
+This sequence was verified on Docker Compose 2.40.3 and curl 8.5.0. It
+requires [Compose 2.17.0](https://github.com/docker/compose/releases/tag/v2.17.0)
+or newer for `up --wait-timeout`, and curl 7.71.0 or newer for
+`--retry-all-errors`. Those flag requirements are not a claim that the
+complete deployment was tested on every older version.
 
 The [RC-beta upgrade checklist](docs/runbooks/rc-beta-upgrade.md) shows the
 corresponding sequence in the local Compose command form (CLI-driven
