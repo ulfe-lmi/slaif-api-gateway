@@ -5,6 +5,25 @@ commits and execution environments. A record describes what one bounded run
 actually proved; it is not permanent certification of later commits, production
 fitness, security, compliance, provider behavior, or scale.
 
+## Current evidence (newest first)
+
+For current readers, these are the newest qualification and identity records
+on record. They are dated, commit-specific evidence, not certifications.
+
+- [`2026-09-20 release-candidate identity record (candidate db0bd3ae)`](2026-09-20-release-identity-db0bd3ae.md)
+  — `RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY` for exact `main`
+  `db0bd3aeaaadee71ba40a16ee0dddf7a35e0a4b7` (PR #313 merge): identity
+  derivation from the Objective-173 qualification through an empty
+  runtime/deployment/dependency-surface diff; not a second full clean-room
+  run, and not a release decision.
+- [`2026-09-17 current-main integrated requalification (candidate 2b61312e)`](2026-09-17-current-main-integrated-requalification-2b61312e.md)
+  — `RESULT=QUALIFIED-RC-POSTURE` for `main`
+  `2b61312e0eb569aa7c6f953f52e35b44e84b91c1` (PR #309 merge): mocked-upstream
+  production-appliance double with two labeled environment-only non-passes;
+  not a real-provider run, release decision, or production certification.
+
+## Records
+
 - [`2026-08-17 current-main baseline`](2026-08-17-current-main-baseline.md) —
   one 24-worker full current-machine matrix, classified `RESULT=FAIL` because
   one of 2,534 tests failed. The separate post-PR-220 128-worker HPC

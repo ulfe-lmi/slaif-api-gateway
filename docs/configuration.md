@@ -3,10 +3,12 @@
 > **Authority:** Current Settings and operator configuration reference
 > **Template:** `.env.example` is a curated local baseline, not an exhaustive catalog
 
-For first-time local setup, see [`quickstart.md`](quickstart.md). For RC-beta
-release scope and the verification checklist, see [`rc-beta.md`](rc-beta.md)
-and [`beta-readiness.md`](beta-readiness.md). For the canonical RC2 target and
-the still-missing endpoint families, see
+For first-time local setup, see the [QUICKSTART](../QUICKSTART.md) and the
+detailed [first-time operator guide](first-time-operator-guide.md). For
+RC-beta release scope and the release checklist, see
+[`rc-beta.md`](rc-beta.md) and the dated [verification index](verification/README.md).
+For the canonical RC2 target and the current implemented / explicitly
+deferred / unsupported-by-policy classification, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md).
 
 This gateway is configured with environment variables. Secrets should come from

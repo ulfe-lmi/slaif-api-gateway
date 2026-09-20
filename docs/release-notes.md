@@ -6,10 +6,14 @@
 These notes describe a proposed candidate assembled during post-MVP extension
 work. They do not establish that `0.1.0rc2` was tagged, released, or approved.
 
-This release candidate adds organizational governance, identity, budgets,
-policy bundles, DLP, provider governance, observability, recoverability,
-deployment hardening, and supply-chain gates to the existing OpenAI-compatible
-gateway.
+This release candidate is drafted around the wired OpenAI-compatible gateway
+scope — the supported endpoint families documented in the compatibility
+matrix — plus a set of bounded post-MVP service foundations: organizational
+governance, identity, budgets, policy bundles, DLP, provider governance,
+observability, recoverability, deployment hardening, and supply-chain gates.
+Foundation modules are documented bounded code with their stated readiness
+state; they are not claims that every listed capability is deployed or wired
+into every gateway entrypoint.
 
 Operators should read:
 

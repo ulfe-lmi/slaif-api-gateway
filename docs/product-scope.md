@@ -14,6 +14,10 @@ use gateway-issued keys through ordinary OpenAI-compatible clients, while the
 operator governs providers, models, endpoints, per-key policy, quotas and
 budgets, routing, pricing/accounting, and safe audit metadata.
 
+New here? Start with the [QUICKSTART](../QUICKSTART.md) (provider-free boot to
+the first OpenAI-client request) and the [installation overview](../INSTALL.md),
+then return to this contract for the product boundary.
+
 ## How to read this contract
 
 | Label | Meaning |

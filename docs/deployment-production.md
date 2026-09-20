@@ -3,9 +3,11 @@
 > **Status:** Current production-style appliance procedure
 > **Not:** Certification or approval for an internet-facing deployment
 
-Prerequisites: Linux host, Docker with Compose v2, TLS certificate and private
-key, and operator-created secret files under `secrets/` with directory mode
-`0700`.
+Prerequisites: Linux host, Docker with Compose v2, host Python 3.12 or newer
+(for the secret-generation one-liners below), TLS certificate and private key,
+and operator-created secret files under `secrets/` with directory mode `0700`. The [installation overview](../INSTALL.md) summarizes this production
+topology and the local evaluation path; this page is the detailed appliance
+procedure.
 
 ## Create secrets
 
@@ -90,6 +92,19 @@ The production image starts as root only long enough for the allowlisted
 file-backed secret loader to read Docker/Compose secrets. It then executes the
 requested command as the `slaif` application user. Direct production secret
 environment variables are rejected; use the documented `*_FILE` inputs.
+
+## Upgrading
+
+For a controlled upgrade of a deployed production project, use the
+[controlled production upgrade outline](../INSTALL.md#production-upgrade-controlled-outline)
+in the installation overview — the single canonical copy of the fail-closed
+sequence (ingress and runtime quiesced before a foreground one-shot
+migration whose exit status gates the rest, `--no-deps` service
+replacement with an API health wait, public proxy refresh, and a
+retried public HTTPS readiness check).
+Production prerequisites still apply: the pre-upgrade backup and rehearsal
+steps in the [upgrade runbook](upgrade-runbook.md), the fail-closed
+`scripts/preflight.sh` preflight, file-backed secrets, and TLS.
 
 For a disposable qualification using a socket-level provider double, run:
 

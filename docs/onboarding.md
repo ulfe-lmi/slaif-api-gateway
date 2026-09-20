@@ -10,7 +10,7 @@ command renders that state machine as a guided wizard.
 
 Use the current manual operator sequence instead:
 
-1. Follow the [quickstart](quickstart.md) and create a local administrator.
+1. Follow the [QUICKSTART](../QUICKSTART.md) and create a local administrator.
 2. Configure server-side provider secrets and safe provider metadata.
 3. Create or import reviewed routes, pricing, and required FX rows.
 4. Create owners/institutions/cohorts needed by the current key workflow.

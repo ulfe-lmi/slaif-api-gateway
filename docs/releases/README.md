@@ -21,3 +21,14 @@ Release notes for tagged SLAIF API Gateway release candidates and releases.
 - [`2026-08-24 production-appliance qualification`](../verification/2026-08-24-production-appliance-qualification.md)
   — later disposable production-path evidence. It does not create a release,
   update the historical `v0.1.0-rc.1` tag, or certify production use.
+- [`2026-09-17 current-main integrated requalification (candidate 2b61312e)`](../verification/2026-09-17-current-main-integrated-requalification-2b61312e.md)
+  — mocked-upstream integrated RC-posture requalification of `main`
+  `2b61312e0eb569aa7c6f953f52e35b44e84b91c1` (PR #309 merge), verdict
+  `RESULT=QUALIFIED-RC-POSTURE`. It does not create a release, tag, or
+  production certification.
+- [`2026-09-20 release-candidate identity record (candidate db0bd3ae)`](../verification/2026-09-20-release-identity-db0bd3ae.md)
+  — identity derivation binding the Objective-173 qualification to exact
+  `main` `db0bd3aeaaadee71ba40a16ee0dddf7a35e0a4b7` (PR #313 merge), verdict
+  `RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY`. Identity derivation only; not a
+  second full clean-room qualification, release decision, or production
+  certification.

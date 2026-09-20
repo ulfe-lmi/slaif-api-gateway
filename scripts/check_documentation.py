@@ -10,7 +10,14 @@ from pathlib import Path
 from urllib.parse import unquote
 
 ROOT = Path(__file__).resolve().parents[1]
-ROOT_DOC_NAMES = ("README.md", "SECURITY.md", "CHANGELOG.md")
+ROOT_DOC_NAMES = (
+    "README.md",
+    "QUICKSTART.md",
+    "INSTALL.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+)
 ARCHIVE_BODY_PATTERNS = (
     "docs/releases/v",
     "docs/security/reviews/2026-",
@@ -218,6 +225,23 @@ def check(root: Path | None = None) -> list[str]:
     ):
         if fragment not in readme:
             errors.append(f"README.md: missing required brand/navigation fragment {fragment}")
+
+    # Front-door navigation for the public entry points. These rules are
+    # conditional on the entry points existing in the checked tree so that
+    # synthetic checker trees keep working while the real repository must
+    # expose the canonical quickstart/install hierarchy.
+    local_readme = root / "README.md"
+    if local_readme.is_file():
+        local_readme_text = local_readme.read_text(encoding="utf-8")
+        for name in ("QUICKSTART.md", "INSTALL.md"):
+            if (root / name).is_file() and name not in local_readme_text:
+                errors.append(f"README.md: missing front-door link to {name}")
+    quickstart_stub = root / "docs" / "quickstart.md"
+    if quickstart_stub.is_file() and (root / "QUICKSTART.md").is_file():
+        stub_text = quickstart_stub.read_text(encoding="utf-8")
+        for target in ("../QUICKSTART.md", "../INSTALL.md", "first-time-operator-guide.md"):
+            if target not in stub_text:
+                errors.append(f"docs/quickstart.md: stub missing pointer to {target}")
 
     return errors
 
