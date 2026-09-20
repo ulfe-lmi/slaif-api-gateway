@@ -28,17 +28,22 @@ does not assert that current `main` has been re-qualified after that
 date.
 
 The latest recorded RC-posture evidence is the
-[2026-09-20 release-candidate identity record](verification/2026-09-20-release-identity-db0bd3ae.md)
+[2026-09-20 post-documentation release-identity record](verification/2026-09-20-post-documentation-release-identity-71092fef.md)
 for exact `main` candidate
-`db0bd3aeaaadee71ba40a16ee0dddf7a35e0a4b7`
-(`RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY`): an identity derivation that binds
-the [2026-09-17 integrated requalification](verification/2026-09-17-current-main-integrated-requalification-2b61312e.md)
+`71092fefee74649bad71dbb5b7a7106115e9f545`
+(PR #315 merge; `RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY`): an identity
+derivation that binds the [2026-09-17 integrated
+requalification](verification/2026-09-17-current-main-integrated-requalification-2b61312e.md)
 for candidate `2b61312e0eb569aa7c6f953f52e35b44e84b91c1`
-(`RESULT=QUALIFIED-RC-POSTURE`) to the later candidate through an empty
-runtime/deployment/dependency-surface diff. The 2026-09-17 record is a
-mocked-upstream double qualification with two labeled environment-only
-non-passes; it is not a real-provider run, benchmark, release decision, or
-production certification, and no documentation objective reruns that matrix.
+(`RESULT=QUALIFIED-RC-POSTURE`) to this documentation-complete candidate
+through empty runtime/deployment/dependency-surface diffs from both prior
+anchors. The [previous identity
+record](verification/2026-09-20-release-identity-db0bd3ae.md) (candidate
+`db0bd3aeaaadee71ba40a16ee0dddf7a35e0a4b7`) remains immutable historical
+evidence. The 2026-09-17 record is a mocked-upstream double qualification
+with two labeled environment-only non-passes; it is not a real-provider run,
+benchmark, release decision, or production certification, and no
+documentation objective reruns that matrix.
 
 The 2026-08-24 production-appliance qualification
 ([record](verification/2026-08-24-production-appliance-qualification.md))
