@@ -10,6 +10,14 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-09-20 post-documentation release-identity record (candidate 71092fef)`](2026-09-20-post-documentation-release-identity-71092fef.md)
+  — `RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY` for exact `main`
+  `71092fefee74649bad71dbb5b7a7106115e9f545` (PR #315 merge): identity
+  derivation that binds the Objective-173 integrated qualification to the
+  documentation-complete candidate through empty
+  runtime/deployment/dependency-surface diffs from both prior anchors
+  (the Objective-177 `db0bd3ae` identity record and the 173 integrated
+  record); not a second full clean-room run, and not a release decision.
 - [`2026-09-20 release-candidate identity record (candidate db0bd3ae)`](2026-09-20-release-identity-db0bd3ae.md)
   — `RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY` for exact `main`
   `db0bd3aeaaadee71ba40a16ee0dddf7a35e0a4b7` (PR #313 merge): identity
