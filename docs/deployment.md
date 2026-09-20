@@ -7,11 +7,12 @@ This document describes the repository Docker Compose packaging and the
 deployment boundaries operators must keep explicit. It is not a production
 certification or a complete site reliability runbook.
 
-For a beginner-friendly local walkthrough, start with
-[`quickstart.md`](quickstart.md). For RC-beta scope and release checklist, see
-[`rc-beta.md`](rc-beta.md) and [`beta-readiness.md`](beta-readiness.md). For
-operator incident and maintenance procedures, see
-[`runbooks/README.md`](runbooks/README.md).
+For the canonical local walkthrough, start with the
+[QUICKSTART](../QUICKSTART.md); the detailed variant is the
+[first-time operator guide](first-time-operator-guide.md). For RC-beta scope
+and the release checklist, see [`rc-beta.md`](rc-beta.md) and the dated
+[verification index](verification/README.md). For operator incident and
+maintenance procedures, see [`runbooks/README.md`](runbooks/README.md).
 
 ## Overview
 
@@ -33,107 +34,49 @@ Migrations are explicit operator actions.
 
 ## Local Docker Compose
 
-Clone the repository and create a local environment file:
+The canonical first-time local sequence — clone, `.env`, secret
+generation, build, infrastructure, explicit migrations, API start,
+health/readiness, first admin, dashboard login, local metadata, and the first
+client request — lives in the [QUICKSTART](../QUICKSTART.md); the detailed
+variant with real-provider wiring is the
+[first-time operator guide](first-time-operator-guide.md). This section keeps
+the deployment-level facts operators need beyond a first boot.
 
-```bash
-git clone https://github.com/ulfe-lmi/slaif-api-gateway.git
-cd slaif-api-gateway
-cp .env.example .env
-```
+- `.env.example` already points `DATABASE_URL`, `REDIS_URL`,
+  `CELERY_BROKER_URL`, and `SMTP_HOST` at the Compose service names. `.env`
+  is clear-text local runtime configuration; do not commit it, and on shared
+  systems restrict it with `chmod 600`.
+- Secret generation must use the bind-mounted `run-cli` workflow from the
+  quickstart; do not assume a plain `docker compose run api ... --env-file
+  .env --write` updates the host `.env` file unless the project directory is
+  explicitly mounted.
+- Migrations are explicit: `docker compose run --rm api slaif-gateway db
+  upgrade`; API, worker, and scheduler never migrate on startup.
+- Before sending real traffic, bootstrap local catalog metadata (provider,
+  routes, reviewed pricing) and issue keys with explicit `/v1` endpoint and
+  model policy. The bootstrap command creates local OpenAI Chat Completions
+  metadata only. It does not call OpenAI, fetch pricing, create gateway keys,
+  or store provider key values. Legacy `/v1/completions` is not implemented.
+- Users call the local gateway with the standard `OPENAI_API_KEY` /
+  `OPENAI_BASE_URL` variables; `OPENAI_API_KEY` is always the
+  gateway-issued key, never the upstream provider key.
 
-Replace development placeholders in `.env` before using the stack for anything
-outside local testing. For local Compose, `.env.example` already points
-`DATABASE_URL`, `REDIS_URL`, `CELERY_BROKER_URL`, and `SMTP_HOST` at the Compose
-service names. `.env` is clear-text local runtime configuration; do not commit
-it, and on shared systems restrict it with:
-
-```bash
-chmod 600 .env
-```
-
-Generate local runtime secrets with `slaif-gateway secrets generate ... --write`
-before starting services. Use either the host-local CLI workflow or the
-Docker-only bind-mounted workflow in [`quickstart.md`](quickstart.md); do not
-assume a plain `docker compose run api ... --env-file .env --write` updates the
-host `.env` file unless the project directory is explicitly mounted. The
-`--write` option intentionally writes generated runtime secrets to that
-clear-text file for local/self-hosted bootstrap. It is a convenience, not a
-complete production secret-management system.
-
-Build the image and start infrastructure:
-
-```bash
-docker compose build
-docker compose up -d postgres redis mailpit
-```
-
-Run migrations explicitly:
-
-```bash
-docker compose run --rm api slaif-gateway db upgrade
-```
-
-Then start the full local stack:
-
-```bash
-docker compose up
-```
-
-Create the first admin account:
-
-```bash
-printf '%s\n' 'replace-this-password' \
-  | docker compose run --rm api slaif-gateway admin create \
-      --email admin@example.org \
-      --display-name "Admin User" \
-      --password-stdin
-```
-
-Create local catalog metadata before sending traffic through `/v1`. For real
-traffic, copy the example pricing CSV and replace its placeholder prices with
-operator-reviewed local pricing assumptions before applying it:
-
-```bash
-cp docs/examples/openai-completions-pricing.example.csv local-openai-pricing.csv
-
-docker compose run --rm api slaif-gateway bootstrap openai-completions-catalog \
-  --pricing-file local-openai-pricing.csv \
-  --apply
-
-docker compose run --rm api slaif-gateway fx add \
-  --base-currency USD \
-  --quote-currency EUR \
-  --rate 0.920000000
-```
-
-The bootstrap command creates local OpenAI Chat Completions metadata only. It
-does not call OpenAI, fetch pricing, create gateway keys, or store provider key
-values. Legacy `/v1/completions` is not implemented.
-
-Create prerequisite owner records and issue a gateway key with endpoints
-`/v1/models` and `/v1/chat/completions` plus the desired catalog model IDs.
-Users then call the local gateway with normal OpenAI-compatible variables:
-
-```bash
-export OPENAI_API_KEY="sk-slaif-..."
-export OPENAI_BASE_URL="http://localhost:8000/v1"
-```
-
-Mailpit is available at `http://localhost:8025` by default. Its SMTP endpoint is
-`mailpit:1025` from containers and `localhost:1025` from the host. Compose host
-ports are configurable with `API_HOST_PORT`, `POSTGRES_HOST_PORT`,
+Mailpit is available at `http://localhost:8025` by default. Its SMTP endpoint
+is `mailpit:1025` from containers and `localhost:1025` from the host. Compose
+host ports are configurable with `API_HOST_PORT`, `POSTGRES_HOST_PORT`,
 `REDIS_HOST_PORT`, `MAILPIT_SMTP_HOST_PORT`, `MAILPIT_WEB_HOST_PORT`, and
 `NGINX_HOST_PORT`; the default Postgres and Redis host ports are `15432` and
 `16379` to avoid common collisions with host-local services.
 
-Stop the local stack:
+Stop the local stack non-destructively:
 
 ```bash
 docker compose down
 ```
 
 Use `docker compose down -v` only when you intentionally want to delete local
-PostgreSQL and Redis volumes.
+PostgreSQL and Redis volumes; [INSTALL](../INSTALL.md) documents the stop and
+destructive-cleanup semantics.
 
 For non-destructive local refreshes, use:
 
@@ -145,7 +88,8 @@ For non-destructive local refreshes, use:
 
 The script builds API/worker/scheduler images, runs migrations unless skipped,
 recreates runtime services, shows Compose status, and checks `/healthz` and
-`/readyz`. It never removes Docker volumes or overwrites `.env`.
+`/readyz`. It never removes Docker volumes or overwrites `.env`. It is a
+local convenience, not a production upgrade tool.
 
 ## Optional Browser Smoke Tests
 

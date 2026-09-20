@@ -145,6 +145,29 @@ def test_file_without_claim_phrase_and_without_marker_passes(tmp_path: Path) -> 
 # --- Real-repository state at the PR head -----------------------------------
 
 
+def test_front_door_rules_require_canonical_entry_point_links(tmp_path: Path) -> None:
+    _write(tmp_path / "README.md", "# Root\n\nSee [QUICKSTART](QUICKSTART.md) only.\n")
+    _write(tmp_path / "QUICKSTART.md", "# Quickstart\n\nboot\n")
+    _write(tmp_path / "INSTALL.md", "# Install\n\ninstall\n")
+    errors = _CHECKER.check(tmp_path)
+    assert any("README.md: missing front-door link to INSTALL.md" in e for e in errors), errors
+
+    _write(tmp_path / "docs" / "quickstart.md", "# Stub\n\nnothing here\n")
+    errors = _CHECKER.check(tmp_path)
+    assert any("docs/quickstart.md: stub missing pointer to ../QUICKSTART.md" in e for e in errors), errors
+    assert any("docs/quickstart.md: stub missing pointer to ../INSTALL.md" in e for e in errors), errors
+    assert any(
+        "docs/quickstart.md: stub missing pointer to first-time-operator-guide.md" in e
+        for e in errors
+    ), errors
+
+
+def test_front_door_rules_silent_when_entry_points_absent(tmp_path: Path) -> None:
+    _write(tmp_path / "README.md", "# Root\n\nSee [docs/record.md](docs/record.md).\n")
+    _write(tmp_path / "docs" / "record.md", "# Record\n\ndated record\n")
+    assert _CHECKER.check(tmp_path) == []
+
+
 def test_real_repository_passes_all_structure_and_asof_rules() -> None:
     assert _CHECKER.check() == []
 

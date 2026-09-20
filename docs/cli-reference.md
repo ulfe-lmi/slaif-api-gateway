@@ -107,7 +107,8 @@ Configuration validation reports bounded names/status, never secret values.
 ## Related documentation
 
 - [Configuration](configuration.md)
-- [Quickstart](quickstart.md)
+- [QUICKSTART](../QUICKSTART.md)
+- [First-time operator guide](first-time-operator-guide.md)
 - [Provider catalog proposals](provider-catalog-proposals.md)
 - [Pricing catalog](pricing-catalog.md)
 - [Key templates](key-templates.md)

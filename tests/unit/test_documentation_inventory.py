@@ -88,6 +88,30 @@ def test_foundation_docs_do_not_claim_runtime_wiring() -> None:
         assert phrase in (ROOT / relative).read_text(encoding="utf-8")
 
 
+def test_root_public_entry_points_exist_and_are_front_door() -> None:
+    for name in ("QUICKSTART.md", "INSTALL.md", "CONTRIBUTING.md"):
+        assert (ROOT / name).is_file(), name
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "QUICKSTART.md" in readme
+    assert "INSTALL.md" in readme
+    docs_home = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
+    assert "../QUICKSTART.md" in docs_home
+    assert "../INSTALL.md" in docs_home
+
+
+def test_quickstart_stub_points_to_canonical_entry_points() -> None:
+    stub = (ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")
+    assert "../QUICKSTART.md" in stub
+    assert "../INSTALL.md" in stub
+    assert "first-time-operator-guide.md" in stub
+
+
+def test_operator_guide_keeps_required_pricing_and_troubleshooting_sections() -> None:
+    guide = (ROOT / "docs" / "first-time-operator-guide.md").read_text(encoding="utf-8")
+    assert "## Pricing" in guide
+    assert "## Troubleshooting" in guide
+
+
 def test_real_provider_doc_does_not_overclaim_current_sql_evidence() -> None:
     content = (ROOT / "docs/real-provider-qualification.md").read_text(encoding="utf-8")
     assert "performs no SQL query" in content

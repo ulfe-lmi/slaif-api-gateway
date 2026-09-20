@@ -4,9 +4,10 @@
 > **Not:** A current GO decision, published release, or production approval
 
 This document preserves a proposal tied to PR #277. The only published GitHub
-release is `v0.1.0-rc.1`. Current release decisions must be made from the latest
-[readiness report](beta-readiness.md), [verification archive](verification/README.md),
-and exact candidate checks.
+release is `v0.1.0-rc.1`. Current release decisions must be made from the
+current [verification index](verification/README.md) (the September 2026
+qualification and identity records), the
+[RC2 feature scope](rc2-feature-scope.md), and exact candidate checks.
 
 Candidate commit: see implementation head recorded on PR #277.
 Proposed version: `0.1.0rc2`.

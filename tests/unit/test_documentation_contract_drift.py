@@ -154,20 +154,32 @@ def test_current_facing_docs_remove_only_the_stale_embeddings_sentence() -> None
 
 
 def test_objective_001_preserves_failure_and_later_github_outcome() -> None:
-    evidence_paths = (
+    # The full historical fact ledger lives in the immutable sources: the
+    # durable constitution and the dated 2026-08-17 verification record.
+    immutable_sources = (
         "AGENTS.md",
-        "docs/rc-beta.md",
-        "docs/releases/README.md",
         "docs/verification/2026-08-17-current-main-baseline.md",
     )
 
-    for relative_path in evidence_paths:
+    for relative_path in immutable_sources:
         evidence = _read(relative_path)
         assert "RESULT=FAIL" in evidence
         assert "PR #226" in evidence
         assert REPORT_HEAD in evidence
         assert "all ten" in evidence.casefold()
         assert MERGE_COMMIT in evidence
+
+    # Current-facing indexes keep the failed outcome validated and must link
+    # to the working archive record instead of duplicating the history ledger.
+    current_indexes = {
+        "docs/rc-beta.md": "verification/2026-08-17-current-main-baseline.md",
+        "docs/releases/README.md": "../verification/2026-08-17-current-main-baseline.md",
+    }
+
+    for relative_path, archive_link in current_indexes.items():
+        index = _read(relative_path)
+        assert "RESULT=FAIL" in index, relative_path
+        assert archive_link in index, relative_path
 
 
 def test_live_burn_staged_acceptance_sections_are_explicitly_historical() -> None:

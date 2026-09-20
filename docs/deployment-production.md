@@ -5,7 +5,9 @@
 
 Prerequisites: Linux host, Docker with Compose v2, TLS certificate and private
 key, and operator-created secret files under `secrets/` with directory mode
-`0700`.
+`0700`. The [installation overview](../INSTALL.md) summarizes this production
+topology and the local evaluation path; this page is the detailed appliance
+procedure.
 
 ## Create secrets
 

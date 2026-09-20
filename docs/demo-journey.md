@@ -23,5 +23,5 @@ no real OpenAI or OpenRouter call. See the
 [production qualification record](verification/2026-08-24-production-appliance-qualification.md)
 for the exact evidence and limitations.
 
-For human first-time setup, use the [quickstart](quickstart.md). For production
+For human first-time setup, use the [QUICKSTART](../QUICKSTART.md). For production
 deployment preparation, use [Production Compose deployment](deployment-production.md).

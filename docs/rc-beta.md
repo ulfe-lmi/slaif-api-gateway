@@ -24,16 +24,30 @@ This section names the latest recorded production-path qualification and
 does not assert that current `main` has been re-qualified after that
 date.
 
-The latest merged production-path evidence is the
-[2026-08-24 production-appliance qualification](verification/2026-08-24-production-appliance-qualification.md).
-It exercises the real production Compose/NGINX/PostgreSQL/Redis entrypoints with
-a provider double and passes its bounded accounting, failure, operator, privacy,
-backup/restore, and cleanup matrix. It is not a real-provider run, benchmark,
-release decision, or production certification.
+The latest recorded RC-posture evidence is the
+[2026-09-20 release-candidate identity record](verification/2026-09-20-release-identity-db0bd3ae.md)
+for exact `main` candidate
+`db0bd3aeaaadee71ba40a16ee0dddf7a35e0a4b7`
+(`RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY`): an identity derivation that binds
+the [2026-09-17 integrated requalification](verification/2026-09-17-current-main-integrated-requalification-2b61312e.md)
+for candidate `2b61312e0eb569aa7c6f953f52e35b44e84b91c1`
+(`RESULT=QUALIFIED-RC-POSTURE`) to the later candidate through an empty
+runtime/deployment/dependency-surface diff. The 2026-09-17 record is a
+mocked-upstream double qualification with two labeled environment-only
+non-passes; it is not a real-provider run, benchmark, release decision, or
+production certification, and no documentation objective reruns that matrix.
 
-The earlier 2026-08-17 record below remains immutable failed historical
-evidence for its exact commit and environment; later focused and appliance
-evidence does not rewrite its `RESULT=FAIL`.
+The 2026-08-24 production-appliance qualification
+([record](verification/2026-08-24-production-appliance-qualification.md))
+exercises the real production Compose/NGINX/PostgreSQL/Redis entrypoints with
+a provider double and passes its bounded accounting, failure, operator,
+privacy, backup/restore, and cleanup matrix for its named candidate. It is
+immutable historical evidence, not a real-provider run, benchmark, release
+decision, or production certification.
+
+The 2026-08-17 record below remains immutable failed historical
+evidence for its exact commit and environment; later focused, appliance, and
+September 2026 evidence does not rewrite its `RESULT=FAIL`.
 
 The 2026-08-17 current-machine verification record is
 [`verification/2026-08-17-current-main-baseline.md`](verification/2026-08-17-current-main-baseline.md).
