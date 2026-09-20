@@ -169,6 +169,10 @@ OPENAI_UPSTREAM_API_KEY=<your real upstream provider key>
 ./scripts/docker-refresh.sh --env-only
 ```
 
+If a health probe fails immediately after this refresh, the single retry
+window in [INSTALL's health-probe recovery](INSTALL.md#health-probe-after-recreation)
+distinguishes a startup race from a persistent failure.
+
 Keep the two key worlds distinct: `OPENAI_API_KEY` is always the
 **gateway-issued** client key; `OPENAI_UPSTREAM_API_KEY` is server-side and
 never appears in client examples.
@@ -196,11 +200,10 @@ run-cli slaif-gateway bootstrap openai-completions-catalog \
 Evaluation setup friction: the default catalog has ten models
 (`gpt-5.2` through `gpt-4o-mini`, listed by `routes list`), and the
 bootstrap requires a pricing row for **every** selected model even if your
-key will use only one. There is no single-model bootstrap switch today; a
-bounded single-model evaluation bootstrap is a reasonable future
-improvement. The [operator guide](docs/first-time-operator-guide.md#pricing)
-documents the placeholder-pricing alternative and how to replace pricing
-rows afterwards.
+key will use only one; there is no single-model bootstrap switch today.
+The [operator guide](docs/first-time-operator-guide.md#pricing) documents
+the placeholder-pricing alternative and how to replace pricing rows
+afterwards.
 
 Before sending any request, verify the local metadata:
 

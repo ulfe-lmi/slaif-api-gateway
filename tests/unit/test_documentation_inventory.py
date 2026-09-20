@@ -142,3 +142,36 @@ def test_operator_guide_places_grouping_flags_on_their_commands() -> None:
     guide = (ROOT / "docs/first-time-operator-guide.md").read_text(encoding="utf-8")
     assert "owners create --institution-id" in guide
     assert "keys create --cohort-id" in guide
+
+
+def test_install_production_upgrade_is_fail_closed_and_proxy_refreshed() -> None:
+    install = (ROOT / "INSTALL.md").read_text(encoding="utf-8")
+    start = install.index("### Production upgrade (controlled outline)")
+    outline = install[start : install.index("## Interface exposure")]
+    # The sequence is a fail-closed subshell, and the one-shot migration
+    # exit-status gate precedes the API replacement.
+    assert "set -euo pipefail" in outline
+    gate = outline.index("run --rm --no-deps migrations")
+    api = outline.index("up -d --force-recreate api")
+    assert gate < api
+    # The public proxy is refreshed after the API replacement (static
+    # proxy_pass does not pick up the recreated container's address).
+    assert outline.index("up -d --force-recreate nginx") > api
+    # Stopped one-shots are only observable with ps --all.
+    assert "ps --all" in outline
+    # Optional async services have a concrete named command.
+    assert (
+        "--profile async up -d --force-recreate worker scheduler" in outline
+    )
+    # No metrics status is invented for the production proxy.
+    assert "denies `/metrics`" not in install
+    assert "does not expose or proxy `/metrics`" in install
+
+
+def test_quickstart_links_refresh_race_to_install_recovery() -> None:
+    quickstart = (ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
+    assert "INSTALL.md#health-probe-after-recreation" in quickstart
+    # The ten-row prerequisite stays; the speculative product recommendation
+    # does not appear in the beginner prose.
+    assert "requires a pricing row for **every** selected model" in quickstart
+    assert "reasonable future improvement" not in quickstart

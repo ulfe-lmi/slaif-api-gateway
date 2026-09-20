@@ -93,6 +93,17 @@ file-backed secret loader to read Docker/Compose secrets. It then executes the
 requested command as the `slaif` application user. Direct production secret
 environment variables are rejected; use the documented `*_FILE` inputs.
 
+## Upgrading
+
+For a controlled upgrade of a deployed production project, use the
+[controlled production upgrade outline](../INSTALL.md#production-upgrade-controlled-outline)
+in the installation overview — the single canonical copy of the fail-closed
+sequence (foreground one-shot migration with an exit-status gate, API and
+optional `async` service replacement, public proxy refresh, readiness).
+Production prerequisites still apply: the pre-upgrade backup and rehearsal
+steps in the [upgrade runbook](upgrade-runbook.md), the fail-closed
+`scripts/preflight.sh` preflight, file-backed secrets, and TLS.
+
 For a disposable qualification using a socket-level provider double, run:
 
 ```bash

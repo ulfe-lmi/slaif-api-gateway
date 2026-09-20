@@ -98,9 +98,10 @@ After local code changes (build, migrate, recreate, health-check; no git):
 `--skip-build` and `--skip-migrations` skip the named steps;
 `--no-health-check` skips the final checks.
 
-**Health probe after recreation:** the script's final `/healthz` and
-`/readyz` curls are single attempts and can race service startup right
-after `--force-recreate`. If one of them fails immediately after a refresh,
+#### Health probe after recreation
+
+The script's final `/healthz` and `/readyz` curls are single attempts and
+can race service startup right after `--force-recreate`. If one of them fails immediately after a refresh,
 retry with a bounded wait instead of assuming failure — but do not hide a
 persistent error:
 
@@ -154,33 +155,93 @@ Production rules that differ from the local workflow:
 - **Nonempty provider secrets.** Enabled providers require non-placeholder
   provider key files in production; the local provider-free promise does not
   apply to production.
-- **Controlled production upgrade outline.** Run this on a disposable or
-  explicitly reviewed target with the pinned candidate code. First do the
-  pre-upgrade steps in the [upgrade runbook](docs/upgrade-runbook.md)
-  (backup PostgreSQL and secret versions, restore the backup into a
-  disposable target and run `scripts/verify_restore.py`, confirm the
-  candidate migration head, rehearse). Then, on the disposable/reviewed
-  target:
+### Production upgrade (controlled outline)
 
-  ```bash
+Run this on a disposable or explicitly reviewed target with the pinned
+candidate code. First do the pre-upgrade steps in the
+[upgrade runbook](docs/upgrade-runbook.md) (backup PostgreSQL and secret
+versions, restore the backup into a disposable target and run
+`scripts/verify_restore.py`, confirm the candidate migration head,
+rehearse). The outline below is a human-executed deployment action: it
+presumes explicit deployment authority, file-backed secrets, and TLS are
+already in place for the target.
+
+On the disposable/reviewed target, run the sequence as one fail-closed
+subshell: any failed step exits non-zero and stops the sequence in place, so
+traffic is never moved on after a failed migration:
+
+```bash
+(
+  set -euo pipefail
+  cd <checkout containing the pinned candidate code>
+
+  # 1) Build the candidate image for this project.
   docker compose -f docker-compose.production.yml build
-  docker compose -f docker-compose.production.yml up -d --force-recreate migrations
-  docker compose -f docker-compose.production.yml ps migrations   # wait for "Completed (0)"
+
+  # 2) One-shot migration, in the foreground. Its exit status is the gate:
+  #    a non-zero exit stops the subshell here and the API is not touched.
+  docker compose -f docker-compose.production.yml run --rm --no-deps migrations
+
+  # 3) Replace the API. Include the optional async services only when the
+  #    deployment runs with the `async` profile (remove this line otherwise;
+  #    running it on a non-async deployment would start them).
   docker compose -f docker-compose.production.yml up -d --force-recreate api
+  docker compose -f docker-compose.production.yml --profile async up -d --force-recreate worker scheduler
+
+  # 4) Refresh the public proxy. `nginx/production.conf` uses a static
+  #    `proxy_pass http://api:8000` and no resolver: Nginx keeps the address
+  #    resolved at config load, so after the API is replaced the proxy must
+  #    be recreated as well or it can keep forwarding to the old container.
+  docker compose -f docker-compose.production.yml up -d --force-recreate nginx
+
+  # 5) Readiness on the API's loopback diagnostic port. Loopback success
+  #    alone does not prove the user-facing HTTPS path; step 4 is what
+  #    refreshes the proxy, and the public port check is the confirmation.
   curl -fsS http://127.0.0.1:8000/healthz
   curl -fsS http://127.0.0.1:8000/readyz
-  ```
+)
+```
 
-  `--force-recreate <service>` recreates only the named service; verified on
-  Compose 2.40.3, its dependencies (PostgreSQL, Redis) keep running with
-  their existing containers and are not recreated. If the `async` profile is
-  in use, recreate worker/scheduler with
-  `--profile async` added to the compose commands. If `migrations` exits
-  non-zero, stop; do not recreate the API on a failed migration.
-  The [RC-beta upgrade checklist](docs/runbooks/rc-beta-upgrade.md) shows the
-  same sequence in the local Compose command form; for the production
-  project the `-f docker-compose.production.yml` invocations above are the
-  complete service sequence.
+Sequence mechanics, verified against the checked-in definitions:
+
+- The one-shot `run --rm` runs in the foreground, so its exit status is a
+  real gate. Do not gate on `docker compose ps migrations` instead: plain
+  `ps` omits stopped containers, so a finished one-shot disappears from its
+  output and a comment is not a check. If you run the one-shot with
+  `up -d` instead, observe it with
+  `docker compose -f docker-compose.production.yml ps --all migrations`
+  (`Exited (0)`/`Exited (1)`) and stop the sequence on any non-zero exit.
+- `run --rm --no-deps` does not start or wait on PostgreSQL/Redis: in an
+  upgrade they already serve the running project. `--rm` removes the
+  one-shot container on exit, so no container is left behind.
+- The production definition makes `api` depend on `migrations` with
+  `condition: service_completed_successfully`. If the project's last
+  migrations service container exited non-zero, a later `up -d api` re-runs
+  the migration service to satisfy that condition and the API does not start
+  if it fails again. The explicit gate above is the human decision point;
+  the dependency condition is the fail-closed backstop.
+- `--force-recreate <service>` recreates only the named service; verified on
+  Compose 2.40.3, its dependencies (PostgreSQL, Redis) keep running in their
+  existing containers and are not recreated, and the named data volume
+  `postgres_data` is preserved. Never recreate PostgreSQL or Redis to force
+  a migration or a restart.
+- The production and local definitions do not form separate project
+  namespaces by filename alone: in the same checkout, both default to the
+  same Compose project name (the directory basename) and therefore to the
+  same container and network namespaces. Operate them in separate
+  checkouts, or select distinct projects explicitly (for example `-p
+  slaif-prod` and `-p slaif-local`).
+- Downtime is two brief, bounded windows on this single-appliance layout:
+  the API recreation in step 3 and the Nginx recreation in step 4. Keep
+  clients retrying across the window; a persistent readiness failure after
+  the window means re-read the `/readyz` body and logs and stop the
+  sequence, not a longer wait.
+
+The [RC-beta upgrade checklist](docs/runbooks/rc-beta-upgrade.md) shows the
+corresponding sequence in the local Compose command form (CLI-driven
+migrations and local service set); for the production project the
+`-f docker-compose.production.yml` invocations above are the complete
+service sequence.
 
 Run the fail-closed preflight before deploying:
 
@@ -210,8 +271,11 @@ behavior, and the production reverse proxy.
   environment.
 - **Production.** Only Nginx ports `80`/`443` are publicly bound, plus the
   API's loopback diagnostic binding `127.0.0.1:${SLAIF_API_DIAGNOSTIC_PORT:-8000}`.
-  The default production Nginx configuration denies `/metrics` (403) and
-  allowlists `/readyz` to loopback and private networks.
+  The checked-in production Nginx configuration (`nginx/production.conf`)
+  does not expose or proxy `/metrics` (there is no metrics location in it;
+  the qualification-only Compose override permits metrics solely from the
+  API container's `127.0.0.1` loopback). It allowlists `/readyz` to
+  loopback and private networks.
 
 ## Stop and clean up
 
