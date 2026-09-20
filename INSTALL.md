@@ -162,88 +162,7 @@ candidate code. First do the pre-upgrade steps in the
 [upgrade runbook](docs/upgrade-runbook.md) (backup PostgreSQL and secret
 versions, restore the backup into a disposable target and run
 `scripts/verify_restore.py`, confirm the candidate migration head,
-rehearse). The outline below is a human-executed deployment action: it
-presumes explicit deployment authority, file-backed secrets, and TLS are
-already in place for the target.
-
-On the disposable/reviewed target, run the sequence as one fail-closed
-subshell: any failed step exits non-zero and stops the sequence in place, so
-traffic is never moved on after a failed migration:
-
-```bash
-(
-  set -euo pipefail
-  cd <checkout containing the pinned candidate code>
-
-  # 1) Build the candidate image for this project.
-  docker compose -f docker-compose.production.yml build
-
-  # 2) One-shot migration, in the foreground. Its exit status is the gate:
-  #    a non-zero exit stops the subshell here and the API is not touched.
-  docker compose -f docker-compose.production.yml run --rm --no-deps migrations
-
-  # 3) Replace the API. Include the optional async services only when the
-  #    deployment runs with the `async` profile (remove this line otherwise;
-  #    running it on a non-async deployment would start them).
-  docker compose -f docker-compose.production.yml up -d --force-recreate api
-  docker compose -f docker-compose.production.yml --profile async up -d --force-recreate worker scheduler
-
-  # 4) Refresh the public proxy. `nginx/production.conf` uses a static
-  #    `proxy_pass http://api:8000` and no resolver: Nginx keeps the address
-  #    resolved at config load, so after the API is replaced the proxy must
-  #    be recreated as well or it can keep forwarding to the old container.
-  docker compose -f docker-compose.production.yml up -d --force-recreate nginx
-
-  # 5) Readiness on the API's loopback diagnostic port. Loopback success
-  #    alone does not prove the user-facing HTTPS path; step 4 is what
-  #    refreshes the proxy, and the public port check is the confirmation.
-  curl -fsS http://127.0.0.1:8000/healthz
-  curl -fsS http://127.0.0.1:8000/readyz
-)
-```
-
-Sequence mechanics, verified against the checked-in definitions:
-
-- The one-shot `run --rm` runs in the foreground, so its exit status is a
-  real gate. Do not gate on `docker compose ps migrations` instead: plain
-  `ps` omits stopped containers, so a finished one-shot disappears from its
-  output and a comment is not a check. If you run the one-shot with
-  `up -d` instead, observe it with
-  `docker compose -f docker-compose.production.yml ps --all migrations`
-  (`Exited (0)`/`Exited (1)`) and stop the sequence on any non-zero exit.
-- `run --rm --no-deps` does not start or wait on PostgreSQL/Redis: in an
-  upgrade they already serve the running project. `--rm` removes the
-  one-shot container on exit, so no container is left behind.
-- The production definition makes `api` depend on `migrations` with
-  `condition: service_completed_successfully`. If the project's last
-  migrations service container exited non-zero, a later `up -d api` re-runs
-  the migration service to satisfy that condition and the API does not start
-  if it fails again. The explicit gate above is the human decision point;
-  the dependency condition is the fail-closed backstop.
-- `--force-recreate <service>` recreates only the named service; verified on
-  Compose 2.40.3, its dependencies (PostgreSQL, Redis) keep running in their
-  existing containers and are not recreated, and the named data volume
-  `postgres_data` is preserved. Never recreate PostgreSQL or Redis to force
-  a migration or a restart.
-- The production and local definitions do not form separate project
-  namespaces by filename alone: in the same checkout, both default to the
-  same Compose project name (the directory basename) and therefore to the
-  same container and network namespaces. Operate them in separate
-  checkouts, or select distinct projects explicitly (for example `-p
-  slaif-prod` and `-p slaif-local`).
-- Downtime is two brief, bounded windows on this single-appliance layout:
-  the API recreation in step 3 and the Nginx recreation in step 4. Keep
-  clients retrying across the window; a persistent readiness failure after
-  the window means re-read the `/readyz` body and logs and stop the
-  sequence, not a longer wait.
-
-The [RC-beta upgrade checklist](docs/runbooks/rc-beta-upgrade.md) shows the
-corresponding sequence in the local Compose command form (CLI-driven
-migrations and local service set); for the production project the
-`-f docker-compose.production.yml` invocations above are the complete
-service sequence.
-
-Run the fail-closed preflight before deploying:
+rehearse), then run the fail-closed preflight:
 
 ```bash
 bash scripts/preflight.sh
@@ -251,6 +170,105 @@ bash scripts/preflight.sh
 
 It verifies secret files, directory mode, TLS files, Docker availability,
 and Compose configuration.
+
+The outline below is a human-executed deployment action against the
+EXISTING production project. Execute it from the existing production
+checkout at the reviewed candidate revision, and let it retain that
+deployment's existing Compose project name, file-backed secrets, named
+volumes, configured ports, and TLS. PostgreSQL and Redis must already be
+running and healthy. This is a maintenance procedure, not a zero-downtime
+procedure: ingress and the runtime users are quiesced before the schema
+migration and stay stopped until every check in the sequence passes, so
+the maintenance window lasts until the final public check succeeds. The
+three prompts are concrete operator inputs, not shell placeholders; the
+sequence does not source the secret `.env` into the shell and does not
+print credentials.
+
+Execute the sequence as one fail-closed subshell: any failed step exits
+non-zero and stops the sequence in place, so the old software is never
+restarted against a partly migrated database and traffic is never moved
+on after a failed migration:
+
+```bash
+(
+  set -euo pipefail
+  read -r -p 'Existing production Compose project name: ' upgrade_project
+  read -r -p 'Public HTTPS origin (for example https://gateway.example.org): ' upgrade_origin
+  read -r -p 'Does this deployment already use the async profile? [yes/no]: ' upgrade_async
+  test -n "$upgrade_project"
+  case "$upgrade_origin" in https://*) ;; *) echo 'HTTPS origin required' >&2; exit 1 ;; esac
+  case "$upgrade_async" in yes|no) ;; *) echo 'Answer yes or no' >&2; exit 1 ;; esac
+  upgrade_compose=(docker compose -p "$upgrade_project" -f docker-compose.production.yml)
+  if [ "$upgrade_async" = yes ]; then upgrade_compose+=(--profile async); fi
+
+  "${upgrade_compose[@]}" build
+  "${upgrade_compose[@]}" stop nginx api
+  if [ "$upgrade_async" = yes ]; then "${upgrade_compose[@]}" stop worker scheduler; fi
+  "${upgrade_compose[@]}" run --rm --no-deps migrations
+  "${upgrade_compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 api
+  "${upgrade_compose[@]}" exec -T api python -c 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/readyz", timeout=5).read()'
+  if [ "$upgrade_async" = yes ]; then
+    "${upgrade_compose[@]}" up -d --no-deps --force-recreate worker scheduler
+  fi
+  "${upgrade_compose[@]}" up -d --no-deps --force-recreate nginx
+  curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
+    --retry-max-time 60 --connect-timeout 5 --max-time 10 "${upgrade_origin%/}/healthz"
+)
+```
+
+Sequence mechanics, verified against the checked-in definitions:
+
+- Enter the project name that the existing deployment actually uses
+  (visible in `docker compose ls` or in the `com.docker.compose.project`
+  label of any of its running containers). That same name on every line is
+  what binds the sequence to that one namespace; never operate on a
+  guessed project. The production file and the local file in the same
+  checkout default to the same project name, so the explicit, verified
+  name is what separates them.
+- `stop nginx api` (and `stop worker scheduler` only when the deployment
+  uses the `async` profile) quiesces ingress and the runtime users before
+  any schema change. With `set -euo pipefail`, a failure at any later step
+  leaves them stopped; do not silently start old software against a
+  partly migrated database. If the sequence stops, follow the recovery
+  decision in the [upgrade runbook](docs/upgrade-runbook.md) - restore
+  the pre-upgrade database and matching application together, or fix
+  forward with a reviewed corrective migration - instead of improvising.
+- The one-shot `run --rm --no-deps migrations` runs in the foreground, so
+  its exit status is the real gate: a non-zero exit stops the subshell
+  before the API is replaced. `--no-deps` keeps the one-shot from starting
+  or waiting on PostgreSQL/Redis, which already serve the running project,
+  and `--rm` removes the one-shot container on exit.
+- Every replacement `up` uses `--no-deps`, so Compose does not re-run the
+  one-shot migration to satisfy `api`'s
+  `condition: service_completed_successfully` dependency and does not
+  recreate PostgreSQL/Redis; those containers and the named volume
+  `postgres_data` keep running and keep their data throughout the
+  upgrade. `--wait --wait-timeout 120 api` blocks until the new API
+  container reports healthy (its healthcheck probes `/healthz`), and the
+  `exec` probe then reads `/readyz` inside that same container as an
+  explicit second check.
+- `nginx/production.conf` uses a static `proxy_pass http://api:8000` with
+  no resolver: Nginx keeps the address resolved at config load, so the
+  proxy is recreated only after the API is healthy, as the final service
+  touched before the public check.
+- The final `curl` verifies the user-facing HTTPS path on the public
+  origin (bounded retries, no `--insecure`). Loopback success alone does
+  not prove it, and this `curl` is the last statement of the subshell, so
+  the sequence's exit status is the upgrade verdict.
+- Downtime is the maintenance window described above: from
+  `stop nginx api` until the public check passes. There is no
+  zero-downtime claim and no automatic rollback in this sequence.
+
+Verified on Compose 2.40.3 and curl 8.5.0; `up --wait` /
+`--wait-timeout` require Docker Compose v2.1.1 or newer, and
+`--retry-all-errors` requires curl 7.71.0 or newer.
+
+The [RC-beta upgrade checklist](docs/runbooks/rc-beta-upgrade.md) shows the
+corresponding sequence in the local Compose command form (CLI-driven
+migrations and local service set); for the production project the
+`-f docker-compose.production.yml` invocations above are the complete
+service sequence.
+
 
 ## Interface exposure
 

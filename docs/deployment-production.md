@@ -98,8 +98,10 @@ environment variables are rejected; use the documented `*_FILE` inputs.
 For a controlled upgrade of a deployed production project, use the
 [controlled production upgrade outline](../INSTALL.md#production-upgrade-controlled-outline)
 in the installation overview — the single canonical copy of the fail-closed
-sequence (foreground one-shot migration with an exit-status gate, API and
-optional `async` service replacement, public proxy refresh, readiness).
+sequence (ingress and runtime quiesced before a foreground one-shot
+migration whose exit status gates the rest, `--no-deps` service
+replacement with an API health wait, public proxy refresh, and a
+retried public HTTPS readiness check).
 Production prerequisites still apply: the pre-upgrade backup and rehearsal
 steps in the [upgrade runbook](upgrade-runbook.md), the fail-closed
 `scripts/preflight.sh` preflight, file-backed secrets, and TLS.
