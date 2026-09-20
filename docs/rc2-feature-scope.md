@@ -27,9 +27,22 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 | --- | ---: |
 | `RC2_REQUIRED_IMPLEMENTED` | 27 |
 | `RC2_REQUIRED_MISSING` | 0 |
-| `RC2_EXPLICITLY_DEFERRED` | 17 |
-| `RC2_UNSUPPORTED_BY_POLICY` | 1 |
-| `NEEDS_MAINTAINER_DECISION` | 6 |
+| `RC2_EXPLICITLY_DEFERRED` | 21 |
+| `RC2_UNSUPPORTED_BY_POLICY` | 3 |
+| `NEEDS_MAINTAINER_DECISION` | 0 |
+
+## Maintainer scope decisions
+
+- 2026-09-20 — The maintainer decided that the six previously undecided
+  endpoint families (files, uploads, legacy Completions, Responses
+  audio, Responses multimodal output, and other unlisted public
+  OpenAI-compatible endpoint families) are outside the declared scope of
+  this release candidate and must not be implied as supported. They are
+  reclassified as `RC2_EXPLICITLY_DEFERRED` (not-implemented families)
+  and `RC2_UNSUPPORTED_BY_POLICY` (already fail-closed families); no
+  capability is added or removed; runtime fail-closed/error-shape
+  behavior is unchanged. This closes all open maintainer scope decisions
+  for this release without changing the RC2 scope lock.
 
 ## RC2 Scope Matrix
 
@@ -80,12 +93,12 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 | `POST /v1/realtime/transcription_sessions` | Not implemented | Unsupported-route/error-shape coverage only | No transcription-session accounting path yet | No provider forwarding path yet | No transcript/audio storage | `RC2_EXPLICITLY_DEFERRED` | Deferred; current Realtime slice supports `session.type="realtime"` only | — |
 | Realtime translation sessions | Not implemented | Request-policy/docs coverage only | No translation-session accounting path yet | No provider forwarding path yet | No transcript/audio storage | `RC2_EXPLICITLY_DEFERRED` | Deferred to keep the first Realtime slice narrow and bounded | — |
 | Realtime SIP | Not implemented | Unsupported-route/docs coverage only | No SIP session accounting path yet | No SIP transport or forwarding path yet | No call audio/metadata storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly deferred by maintainer scope for this PR | — |
-| `/v1/files` list/create/retrieve/delete/content | Not implemented | Unsupported-route/error-shape coverage only | No ownership/pricing/accounting contract | No provider forwarding path yet | No file payload storage | `NEEDS_MAINTAINER_DECISION` | Maintainer asked for explicit decision unless separately documented | — |
-| `/v1/uploads` and upload parts | Not implemented | Unsupported-route/error-shape coverage only | No ownership/pricing/accounting contract | No provider forwarding path yet | No upload payload storage | `NEEDS_MAINTAINER_DECISION` | Maintainer asked for explicit decision unless separately documented | — |
-| Legacy `POST /v1/completions` | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No prompt/completion storage | `NEEDS_MAINTAINER_DECISION` | Maintainer asked for explicit decision unless separately documented | — |
-| Responses audio | Unsupported/fail-closed | Unit/policy coverage | No audio pricing/accounting path exposed | Rejected before provider forwarding | No audio payload storage | `NEEDS_MAINTAINER_DECISION` | Maintainer asked for explicit decision unless Realtime/audio work narrows the bridge | — |
-| Responses multimodal output | Unsupported/fail-closed | Unit/policy coverage | No multimodal output pricing/accounting path exposed | Rejected before provider forwarding | No media payload storage | `NEEDS_MAINTAINER_DECISION` | Maintainer asked for explicit decision if distinct from current input-to-text support | — |
-| Other public OpenAI-compatible endpoint families not listed above | Not implemented unless separately documented | Unsupported-route/error-shape coverage only where applicable | No pricing/accounting path yet | No provider forwarding path yet | No payload storage | `NEEDS_MAINTAINER_DECISION` | Maintainer requested explicit decision for anything overclaimed outside the listed RC2 target | — |
+| `/v1/files` list/create/retrieve/delete/content | Not implemented | Unsupported-route/error-shape coverage only | No ownership/pricing/accounting contract | No provider forwarding path yet | No file payload storage | `RC2_EXPLICITLY_DEFERRED` | Maintainer decision 2026-09-20: outside this RC scope; not implemented; must not be implied as supported (error-shape only). | — |
+| `/v1/uploads` and upload parts | Not implemented | Unsupported-route/error-shape coverage only | No ownership/pricing/accounting contract | No provider forwarding path yet | No upload payload storage | `RC2_EXPLICITLY_DEFERRED` | Maintainer decision 2026-09-20: outside this RC scope; not implemented; must not be implied as supported (error-shape only). | — |
+| Legacy `POST /v1/completions` | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No prompt/completion storage | `RC2_EXPLICITLY_DEFERRED` | Maintainer decision 2026-09-20: outside this RC scope; not implemented; must not be implied as supported (error-shape only). | — |
+| Responses audio | Unsupported/fail-closed | Unit/policy coverage | No audio pricing/accounting path exposed | Rejected before provider forwarding | No audio payload storage | `RC2_UNSUPPORTED_BY_POLICY` | Maintainer decision 2026-09-20: remains fail-closed for this RC; no implementation planned. | — |
+| Responses multimodal output | Unsupported/fail-closed | Unit/policy coverage | No multimodal output pricing/accounting path exposed | Rejected before provider forwarding | No media payload storage | `RC2_UNSUPPORTED_BY_POLICY` | Maintainer decision 2026-09-20: remains fail-closed for this RC; no implementation planned. | — |
+| Other public OpenAI-compatible endpoint families not listed above | Not implemented unless separately documented | Unsupported-route/error-shape coverage only where applicable | No pricing/accounting path yet | No provider forwarding path yet | No payload storage | `RC2_EXPLICITLY_DEFERRED` | Maintainer decision 2026-09-20: outside this RC scope; not implemented; must not be implied as supported (error-shape only). | — |
 
 ## Required RC2 Implementation Sequence
 
