@@ -73,3 +73,17 @@ fitness, security, compliance, provider behavior, or scale.
   named candidate commit only; mocked-upstream qualification, not a
   real-provider run, release decision, security certification, or
   production approval.
+- [`2026-09-20 release-candidate identity record (candidate db0bd3ae)`](2026-09-20-release-identity-db0bd3ae.md)
+  - verification-only identity derivation binding the Objective-173
+  full integrated qualification
+  (`2b61312e0eb569aa7c6f953f52e35b44e84b91c1`,
+  `RESULT=QUALIFIED-RC-POSTURE`) to exact `main`
+  `db0bd3aeaaadee71ba40a16ee0dddf7a35e0a4b7` (PR #313 merge): empty
+  runtime/deployment/dependency-surface diff, every intervening path
+  classified CI-only / release-metadata-SBOM / documentation-OAP,
+  fresh 9/9 stable checks plus CodeQL suite rollup `success`, RC2 scope
+  closure 27/0/21/3/0, and SBOM correspondence
+  `SBOM_CHECK=OK components=60`. Verdict
+  `RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY`. Dated evidence for the
+  named candidate commit only; identity derivation, not a second full
+  clean-room qualification, and not a release decision.
