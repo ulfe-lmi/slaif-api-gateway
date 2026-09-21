@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import uuid
+from urllib.parse import urlparse
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -387,7 +388,8 @@ def test_export_baseline_complete_redacted_and_deterministic(migrated_postgres_u
     assert doc_a.counts.providers == len(doc_a.providers)
     assert doc_a.sql_checked is True
     assert doc_a.target.database.endswith("test")
-    assert doc_a.target.server_port == 5433
+    expected_port = urlparse(migrated_postgres_url).port or 5432
+    assert doc_a.target.server_port == expected_port
     assert doc_a.target.postgres_version.startswith("16")
     exported_models = {row.requested_model for row in doc_a.routes}
     assert set(MODELS) <= exported_models
