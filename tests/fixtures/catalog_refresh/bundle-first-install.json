@@ -1,0 +1,149 @@
+{
+ "baseline": {
+  "content_sha256": null,
+  "exported_at": null,
+  "mode": "first_install",
+  "postgres_version": null,
+  "row_counts": {},
+  "sql_checked": false,
+  "target_database": null
+ },
+ "fx": [],
+ "generated_at": "2026-09-21T12:00:00Z",
+ "models": [
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "context_length": 128000,
+   "deprecated": false,
+   "display_name": "Synthetic Chat-V1 (fixture)",
+   "max_output_tokens": 8192,
+   "model": "synthetic/chat-v1",
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/chat-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "supports_streaming": true,
+   "warnings": []
+  }
+ ],
+ "notes": "Synthetic first-install fixture: all-EUR pricing, create-only bootstrap.",
+ "policy": {
+  "fx_change_review": "0.03",
+  "fx_stale_blocked_days": 7,
+  "fx_stale_review_days": 3,
+  "price_change_review": "0.25",
+  "source_stale_blocked_hours": 72,
+  "source_stale_review_hours": 24,
+  "version": 1
+ },
+ "pricing": [
+  {
+   "currency": "EUR",
+   "dimensions": [
+    {
+     "currency": "EUR",
+     "name": "input",
+     "unit": "per_1m_tokens",
+     "value": "0.25"
+    },
+    {
+     "currency": "EUR",
+     "name": "output",
+     "unit": "per_1m_tokens",
+     "value": "1"
+    }
+   ],
+   "endpoint": "/v1/chat/completions",
+   "model": "synthetic/chat-v1",
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/chat-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "warnings": []
+  }
+ ],
+ "profile": {
+  "capability_allowlist": [],
+  "endpoint": "/v1/chat/completions",
+  "local_models_visible": true,
+  "name": "standard-v1",
+  "supports_streaming": true
+ },
+ "research": {
+  "codex_version": "N/A",
+  "extractor_version": "fixture/1.0",
+  "prompt_version": "N/A",
+  "status": "NOT_RUN",
+  "tool_version": "fixture/1.0"
+ },
+ "revision": {
+  "policy_version": 1,
+  "renderer_version": "180.0",
+  "schema_version": "1",
+  "slaif_revision": "fixture-revision-180"
+ },
+ "routes": [
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "match_type": "exact",
+   "priority": 100,
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/chat-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "requested_model": "synthetic/chat-v1",
+   "supports_streaming": true,
+   "upstream_model": "synthetic/chat-v1",
+   "visible_in_models": true,
+   "warnings": []
+  }
+ ],
+ "run_id": "fixture-first-install-001",
+ "schema_version": "1",
+ "selection": {
+  "model_include": [],
+  "providers": [
+   "openrouter"
+  ]
+ },
+ "sources": [
+  {
+   "content_sha256": "f7a75a3d74ffcd5f4bef364478f59b81fba119c4f8fb53c49acdd261ee23bc8e",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "synthetic/chat-v1",
+   "provider": "openrouter",
+   "published_at": null,
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "openrouter_models_api",
+   "truncated": false,
+   "url": "https://openrouter.ai/api/v1/models",
+   "warnings": []
+  }
+ ]
+}

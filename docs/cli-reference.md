@@ -104,6 +104,39 @@ slaif-gateway secrets validate-env
 Codex commands apply only to explicitly registered qualification profiles.
 Configuration validation reports bounded names/status, never secret values.
 
+## Catalog refresh (offline review)
+
+Bounded offline catalog refresh: one typed proposal bundle, one safe
+baseline, one sealed one-page report. Offline review, verify, and read-only
+export only — there is no refresh command and no apply command; supersession
+apply is NOT_SUPPORTED until the audited-apply objective lands. Full
+semantics, policy thresholds, sealing, and exit codes live in
+[Catalog refresh (offline review)](catalog-refresh.md).
+
+```bash
+# Review a proposal bundle against an exported baseline (sealed run output)
+slaif-gateway catalog-refresh review /path/to/catalog-refresh.json \
+  --baseline-file /path/to/baseline.json
+
+# Review against a live read-only database snapshot
+slaif-gateway catalog-refresh review /path/to/catalog-refresh.json \
+  --db-url postgresql+asyncpg://user@host:5432/dbname
+
+# First install: explicitly empty baseline
+slaif-gateway catalog-refresh review /path/to/catalog-refresh.json --first-install
+
+# Verify a sealed run directory against the runner-owned key
+slaif-gateway catalog-refresh verify --run-dir /path/to/run --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
+
+# Export a read-only consistent baseline document
+slaif-gateway catalog-refresh export-baseline --out /path/to/baseline.json --db-url postgresql+asyncpg://user@host:5432/dbname
+```
+
+Review exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED, 65 data
+error, 2 usage error. Verify: 0 valid, 30 invalid, 65 data error.
+Export-baseline: 0 written, 65 data error (never overwrites output, never
+bootstraps empty).
+
 ## Related documentation
 
 - [Configuration](configuration.md)
@@ -126,6 +159,9 @@ slaif-gateway admin reset-password
 slaif-gateway admin list
 slaif-gateway bootstrap openai-completions-catalog
 slaif-gateway calibration summarize
+slaif-gateway catalog-refresh review
+slaif-gateway catalog-refresh verify
+slaif-gateway catalog-refresh export-baseline
 slaif-gateway codex inspect
 slaif-gateway codex profile
 slaif-gateway cohorts create

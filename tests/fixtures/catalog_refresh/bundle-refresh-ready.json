@@ -1,0 +1,338 @@
+{
+ "baseline": {
+  "content_sha256": "9abb0311363e706e84ae27b8567ddc697041b7c7ec38d183f667ea42db7b22bc",
+  "exported_at": "2026-09-21T10:00:00Z",
+  "mode": "exported_file",
+  "postgres_version": null,
+  "row_counts": {
+   "fx_rates": 1,
+   "pricing_rules": 5,
+   "providers": 1,
+   "routes": 5
+  },
+  "sql_checked": true,
+  "target_database": "slaif-synthetic-baseline"
+ },
+ "fx": [],
+ "generated_at": "2026-09-21T12:00:00Z",
+ "models": [
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "context_length": 128000,
+   "deprecated": false,
+   "display_name": "Synthetic Stable-V1 (fixture)",
+   "max_output_tokens": 8192,
+   "model": "synthetic/stable-v1",
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/stable-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "supports_streaming": true,
+   "warnings": []
+  },
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "context_length": 128000,
+   "deprecated": false,
+   "display_name": "Synthetic Updated-V1 (fixture)",
+   "max_output_tokens": 8192,
+   "model": "synthetic/updated-v1",
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/updated-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "supports_streaming": true,
+   "warnings": []
+  },
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "context_length": 128000,
+   "deprecated": false,
+   "display_name": "Synthetic New-V1 (fixture)",
+   "max_output_tokens": 8192,
+   "model": "synthetic/new-v1",
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/new-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "supports_streaming": true,
+   "warnings": []
+  }
+ ],
+ "notes": "Synthetic refresh fixture: 1 unchanged, 1 changed (input +20%), 1 new. All-EUR, FX N/A.",
+ "policy": {
+  "fx_change_review": "0.03",
+  "fx_stale_blocked_days": 7,
+  "fx_stale_review_days": 3,
+  "price_change_review": "0.25",
+  "source_stale_blocked_hours": 72,
+  "source_stale_review_hours": 24,
+  "version": 1
+ },
+ "pricing": [
+  {
+   "currency": "EUR",
+   "dimensions": [
+    {
+     "currency": "EUR",
+     "name": "input",
+     "unit": "per_1m_tokens",
+     "value": "0.5"
+    },
+    {
+     "currency": "EUR",
+     "name": "output",
+     "unit": "per_1m_tokens",
+     "value": "2"
+    }
+   ],
+   "endpoint": "/v1/chat/completions",
+   "model": "synthetic/stable-v1",
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/stable-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "warnings": []
+  },
+  {
+   "currency": "EUR",
+   "dimensions": [
+    {
+     "currency": "EUR",
+     "name": "input",
+     "unit": "per_1m_tokens",
+     "value": "1.2"
+    },
+    {
+     "currency": "EUR",
+     "name": "output",
+     "unit": "per_1m_tokens",
+     "value": "4"
+    }
+   ],
+   "endpoint": "/v1/chat/completions",
+   "model": "synthetic/updated-v1",
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/updated-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "warnings": []
+  },
+  {
+   "currency": "EUR",
+   "dimensions": [
+    {
+     "currency": "EUR",
+     "name": "input",
+     "unit": "per_1m_tokens",
+     "value": "0.1"
+    },
+    {
+     "currency": "EUR",
+     "name": "output",
+     "unit": "per_1m_tokens",
+     "value": "0.4"
+    }
+   ],
+   "endpoint": "/v1/chat/completions",
+   "model": "synthetic/new-v1",
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/new-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "warnings": []
+  }
+ ],
+ "profile": {
+  "capability_allowlist": [],
+  "endpoint": "/v1/chat/completions",
+  "local_models_visible": true,
+  "name": "standard-v1",
+  "supports_streaming": true
+ },
+ "research": {
+  "codex_version": "N/A",
+  "extractor_version": "fixture/1.0",
+  "prompt_version": "N/A",
+  "status": "NOT_RUN",
+  "tool_version": "fixture/1.0"
+ },
+ "revision": {
+  "policy_version": 1,
+  "renderer_version": "180.0",
+  "schema_version": "1",
+  "slaif_revision": "fixture-revision-180"
+ },
+ "routes": [
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "match_type": "exact",
+   "priority": 100,
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/stable-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "requested_model": "synthetic/stable-v1",
+   "supports_streaming": true,
+   "upstream_model": "synthetic/stable-v1",
+   "visible_in_models": true,
+   "warnings": []
+  },
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "match_type": "exact",
+   "priority": 200,
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/updated-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "requested_model": "synthetic/updated-v1",
+   "supports_streaming": true,
+   "upstream_model": "synthetic/updated-v1",
+   "visible_in_models": true,
+   "warnings": []
+  },
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "match_type": "exact",
+   "priority": 100,
+   "provenance": {
+    "authoritative": true,
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/new-v1|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "requested_model": "synthetic/new-v1",
+   "supports_streaming": true,
+   "upstream_model": "synthetic/new-v1",
+   "visible_in_models": true,
+   "warnings": []
+  }
+ ],
+ "run_id": "fixture-refresh-ready-001",
+ "schema_version": "1",
+ "selection": {
+  "model_include": [
+   "synthetic/stable-v1",
+   "synthetic/updated-v1",
+   "synthetic/new-v1"
+  ],
+  "providers": [
+   "openrouter"
+  ]
+ },
+ "sources": [
+  {
+   "content_sha256": "d5849794cd0d2fe92d635ee60225b3a2db91e9cfd3f4c1d77e06c43fbaa33095",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "synthetic/stable-v1",
+   "provider": "openrouter",
+   "published_at": null,
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "openrouter_models_api",
+   "truncated": false,
+   "url": "https://openrouter.ai/api/v1/models",
+   "warnings": []
+  },
+  {
+   "content_sha256": "320dd4f523dae4682a092b79af80b377a47b0a91cc9d16652f8a2d54b61f43f9",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "synthetic/updated-v1",
+   "provider": "openrouter",
+   "published_at": null,
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "openrouter_models_api",
+   "truncated": false,
+   "url": "https://openrouter.ai/api/v1/models",
+   "warnings": []
+  },
+  {
+   "content_sha256": "04c06ebb10e5d3b8148fb629da9131ca0f62a1bccea12862efda619da1dbb1eb",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "synthetic/new-v1",
+   "provider": "openrouter",
+   "published_at": null,
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "openrouter_models_api",
+   "truncated": false,
+   "url": "https://openrouter.ai/api/v1/models",
+   "warnings": []
+  }
+ ]
+}

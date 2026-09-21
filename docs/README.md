@@ -38,6 +38,9 @@ and do not override current contracts or merged code.
   metadata and cost behavior.
 - [Provider catalog proposals](provider-catalog-proposals.md) — proposal-only
   catalog tooling.
+- [Catalog refresh (offline review)](catalog-refresh.md) — the working
+  offline slice of the catalog refresh workflow: typed proposal bundles,
+  safe baselines, and one sealed one-page report (no apply yet).
 - [Gateway key templates](key-templates.md) — template metadata and
   single-key creation.
 - [CLI reference](cli-reference.md) — the operator command index.
