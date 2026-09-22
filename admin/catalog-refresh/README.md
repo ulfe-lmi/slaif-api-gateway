@@ -42,11 +42,20 @@ reference-rate XML; provider `ecb`, currency-pair model such as `EUR-USD`,
 official ECB host). Each source's `evidence_b64` must match its declared
 `content_sha256` and parse successfully to support required facts: a
 matching digest of arbitrary or empty bytes is not content trust and blocks
-the run, and repeated references to identical bytes count as one
-independent source. FX facts verify only against an official
-`ecb/ecb_reference_xml` quote (rate or exact reciprocal within 1e-8,
-publication date equal to the quote date). Details and the exact offline
-scope: [catalog refresh documentation](../../docs/catalog-refresh.md#source-evidence-binding-offline-replay).
+the run regardless of any extraction label, each decoded snapshot is
+parsed strictly (duplicate keys, non-finite constants, malformed rows, and
+unbounded price cells are code-only errors), and repeated references to
+the same official URL count as one independent source. Every proposed
+field is validated against the sources its own fact declares for the
+route's actual upstream model, and conflicting supplied observations block.
+FX facts bind to an official `ecb/ecb_reference_xml` quote before any
+currency normalization (rate or exact reciprocal within 1e-8, quote source
+declared in the fact's provenance, publication date equal to the quote
+date); an unbound rate is never guessed or used. Selection is reconciled
+per model: unexplained eligible-model omissions under an all-eligible
+selection block, while explicit subset exclusions are named in the report.
+Details and the exact offline scope:
+[catalog refresh documentation](../../docs/catalog-refresh.md#source-evidence-binding-offline-replay).
 
 The seal key is runner-owned, mode `0600`, created only if missing, and must
 live outside the run tree. It is a local integrity key: protect it, rotate

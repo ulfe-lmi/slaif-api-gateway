@@ -36,9 +36,9 @@ import binascii
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 from urllib.parse import urlparse
 
@@ -139,6 +139,7 @@ _OFFICIAL_HOST_RULES: dict[tuple[str, str], frozenset[str]] = {
     ("openrouter", "openrouter_model_detail"): frozenset({"openrouter.ai"}),
     ("openai", "openai_models_api"): frozenset({"api.openai.com"}),
     ("openai", "openai_pricing_docs"): frozenset({"openai.com"}),
+    ("openai", "openai_models_docs"): frozenset({"openai.com"}),
     ("openai", "docs_page"): frozenset({"openai.com"}),
     ("openrouter", "docs_page"): frozenset({"openrouter.ai"}),
     # ECB is the FX reference publisher (its own identity, never a model
@@ -671,17 +672,19 @@ def validate_bundle(
     # trust: empty, unrelated, or contradictory bytes fail the gate. ------
     assessment_by_key: dict[str, dict[str, Any]] = {}
     parse_results: dict[str, se.SnapshotParse] = {}
+    deduped_models: dict[str, list[se.ParsedModel]] = {}
     fx_quotes: list[tuple[str, se.ParsedFxQuote]] = []
     all_observations: list[se.Observation] = []
     source_digests: dict[str, str] = {}
+    source_urls: dict[str, str] = {}
+    source_times: dict[str, str] = {}
     official_source_keys: set[str] = set()
-    semantic_source_keys: set[str] = set()
     for source, assessment in zip(bundle.sources, source_assessments):
         key = f"{source.provider}|{source.model}|{source.source_kind}"
         assessment_by_key[key] = assessment
         assessment["parser"] = se.PARSER_IDS.get((source.provider, source.source_kind), "")
-        if source.source_kind == "operator_input" or source.extraction == "semantic":
-            semantic_source_keys.add(key)
+        source_urls[key] = source.url
+        source_times[key] = source.retrieved_at.isoformat()
         if source.truncated or source.evidence_b64 is None:
             assessment["parse_state"] = "truncated" if source.truncated else "no_evidence"
             assessment["parsed_models"] = 0
@@ -697,16 +700,42 @@ def validate_bundle(
         parse_results[key] = parsed
         if parsed.ok:
             source_digests[key] = source.content_sha256
-            all_observations.extend(se.derive_observations(key, parsed))
+            # 180-d: conflicting rows within ONE snapshot block (a single
+            # digest disagreeing with itself is a contradiction, not a
+            # skip); identical duplicate rows deduplicate under an explicit
+            # safe policy with an honest finding and reconciled counts.
+            kept, duplicates = se.dedupe_parsed_models(parsed)
+            deduped_models[key] = kept
+            for duplicate_id, (kind, count) in sorted(duplicates.items()):
+                if kind == "identical":
+                    add(
+                        SEVERITY_REVIEW,
+                        "source_duplicate_rows_deduplicated",
+                        f"source {key} repeats {count} identical rows for model {duplicate_id}; deduplicated with an explicit count, not silently",
+                        source.provider,
+                        duplicate_id,
+                    )
+                else:
+                    add(
+                        SEVERITY_BLOCKER,
+                        "source_observations_contradict",
+                        f"source {key} contains {count} conflicting rows for model {duplicate_id} within one snapshot; conflicting values block",
+                        source.provider,
+                        duplicate_id,
+                    )
+            if kept:
+                deduped = replace(parsed, models=tuple(kept))
+                all_observations.extend(se.derive_observations(key, deduped))
             for quote in parsed.fx_quotes:
                 fx_quotes.append((key, quote))
             if assessment["classification"] == SOURCE_OFFICIAL:
                 official_source_keys.add(key)
-        elif source.extraction == "deterministic" and se.has_deterministic_parser(
-            source.provider, source.source_kind
-        ):
-            # Registered deterministic parser, digest-verified bytes, and the
-            # parse still failed: the bytes are not the claimed content.
+        elif se.has_deterministic_parser(source.provider, source.source_kind):
+            # 180-d: a required source with a registered parser whose
+            # digest-verified bytes fail deterministic parsing is blocked
+            # regardless of the extraction label: a semantic label is not
+            # evidence, and a matching hash of unparseable bytes is not
+            # content trust.
             detail = f"required source failed deterministic parsing ({parsed.error})" if source.required else (
                 "optional source failed deterministic parsing (" + str(parsed.error) + ")"
             )
@@ -719,42 +748,160 @@ def validate_bundle(
         assessment["parse_state"] = "ok" if parsed.ok else (parsed.error or "no_registered_parser")
         assessment["parsed_models"] = len(parsed.models)
         assessment["parsed_fx_quotes"] = len(parsed.fx_quotes)
-        if parsed.ok:
-            id_counts: dict[str, int] = {}
-            for parsed_model in parsed.models:
-                id_counts[parsed_model.model] = id_counts.get(parsed_model.model, 0) + 1
-            for duplicate_id in sorted(model_id for model_id, count in id_counts.items() if count > 1):
-                add(
-                    SEVERITY_REVIEW,
-                    "source_duplicate_model_id",
-                    f"source {key} parses {id_counts[duplicate_id]} rows for model {duplicate_id}; duplicate IDs are not independent evidence",
-                    source.provider,
-                    duplicate_id,
-                )
 
-    # Verified native -> EUR rates from the bundle's own FX facts (the same
-    # strict active selection the FX gate uses; a rate that cannot be
-    # resolved deterministically is never invented).
-    fx_to_eur_candidates: dict[str, set[Decimal]] = {}
+    # --- 180-d: FX facts must bind to parsed authoritative quotes BEFORE any
+    # currency normalization. A candidate rate merely labelled verified
+    # before its check is not verified: fx_to_eur is built exclusively from
+    # quotes that passed full binding (rate within tolerance in the direct or
+    # exact-reciprocal direction, finite positive fact rate, publication date
+    # equal to the quote date, quote source declared in the fact's
+    # provenance). No semantic/manual escape hatch for guessed FX. ---------
+    fx_backed: list[dict[str, Any]] = []
+    bound_fx: list[Any] = []
+    fx_to_eur: dict[str, Decimal] = {}
+    fx_rate_provenance: dict[str, dict[str, Any]] = {}
     for facts in bundle.fx:
-        active, ambiguous = _select_active_fx(
-            [f for f in bundle.fx if f.base_currency == facts.base_currency and f.quote_currency == facts.quote_currency],
-            now,
-        )
-        if ambiguous or active is None:
+        pair = (facts.base_currency, facts.quote_currency)
+        pair_names = {f"{pair[0]}-{pair[1]}", f"{pair[1]}-{pair[0]}"}
+        field_quotes = [
+            (source_key, quote)
+            for source_key, quote in fx_quotes
+            if f"{quote.base_currency}-{quote.quote_currency}" in pair_names
+        ]
+        official_quotes = [item for item in field_quotes if item[0] in official_source_keys]
+        if not official_quotes:
+            if field_quotes:
+                add(
+                    SEVERITY_BLOCKER,
+                    "source_evidence_unapproved",
+                    f"FX fact {pair[0]} to {pair[1]} is backed only by unapproved source quotes",
+                    None,
+                    None,
+                )
+            else:
+                add(
+                    SEVERITY_BLOCKER,
+                    "fx_evidence_unbound",
+                    f"FX fact {pair[0]} to {pair[1]} has no verified reference quote; semantic/manual rates are not evidence",
+                    None,
+                    None,
+                )
             continue
-        rate = Decimal(active.rate)
-        if active.quote_currency == "EUR":
-            fx_to_eur_candidates.setdefault(active.base_currency, set()).add(rate)
-        elif active.base_currency == "EUR" and rate > 0:
-            derived = _reciprocal(rate)
-            if derived > 0:
-                fx_to_eur_candidates.setdefault(active.quote_currency, set()).add(derived)
-    fx_to_eur: dict[str, Decimal] = {
-        currency: next(iter(rates))
-        for currency, rates in fx_to_eur_candidates.items()
-        if len(rates) == 1
-    }
+        try:
+            fact_rate = Decimal(facts.rate)
+        except InvalidOperation:
+            fact_rate = None
+        if fact_rate is None or not fact_rate.is_finite() or fact_rate <= 0:
+            add(
+                SEVERITY_BLOCKER,
+                "fx_rate_not_finite_positive",
+                f"FX fact {pair[0]} to {pair[1]} rate is not a finite positive decimal",
+                None,
+                None,
+            )
+            continue
+        rates = {str(quote.rate) for _key, quote in official_quotes}
+        if len(rates) > 1:
+            add(
+                SEVERITY_BLOCKER,
+                "source_observations_contradict",
+                f"distinct FX snapshots disagree on {pair[0]}-{pair[1]}: {', '.join(sorted(rates)[:4])}",
+                None,
+                None,
+            )
+            continue
+        matched: tuple[str, se.ParsedFxQuote, bool] | None = None
+        for source_key, quote in official_quotes:
+            same_direction = (quote.base_currency, quote.quote_currency) == pair
+            if same_direction:
+                agrees = abs(quote.rate - fact_rate) <= se.FX_BINDING_TOLERANCE
+            else:
+                agrees = abs(quote.rate - _reciprocal(fact_rate)) <= se.FX_BINDING_TOLERANCE
+            if agrees:
+                matched = (source_key, quote, same_direction)
+                break
+        if matched is None:
+            add(
+                SEVERITY_BLOCKER,
+                "source_evidence_value_mismatch",
+                f"FX rate {facts.rate} does not match any verified {pair[0]}/{pair[1]} reference quote or its reciprocal",
+                None,
+                None,
+            )
+            continue
+        source_key, quote, same_direction = matched
+        if source_key not in facts.provenance.sources:
+            add(
+                SEVERITY_BLOCKER,
+                "source_evidence_reference_mismatch",
+                f"FX fact {pair[0]} to {pair[1]} is not declared to be supported by the verified quote source {source_key}",
+                None,
+                None,
+            )
+            continue
+        if facts.published_at is None:
+            add(
+                SEVERITY_BLOCKER,
+                "fx_evidence_date_mismatch",
+                f"FX fact {pair[0]} to {pair[1]} carries no publication date; the verified quote is dated {quote.published_date.isoformat()}",
+                None,
+                None,
+            )
+            continue
+        if facts.published_at.date() != quote.published_date:
+            add(
+                SEVERITY_BLOCKER,
+                "fx_evidence_date_mismatch",
+                f"FX fact publication date {facts.published_at.date().isoformat()} does not match the verified quote date {quote.published_date.isoformat()}",
+                None,
+                None,
+            )
+            continue
+        bound_fx.append(facts)
+        fx_backed.append(
+            {
+                "pair": f"{pair[0]} to {pair[1]}",
+                "rate": facts.rate,
+                "backed_by": source_key,
+                "observed_quote": str(quote.rate),
+                "derived_reciprocal": not same_direction,
+                "quote_date": quote.published_date.isoformat(),
+                "quote_locator": quote.locator,
+                "quote_url": source_urls.get(source_key, ""),
+                "quote_digest": source_digests.get(source_key, ""),
+                "quote_retrieved_at": source_times.get(source_key, ""),
+                "quote_parser": quote.parser,
+                "fact_published_at": facts.published_at.isoformat(),
+            }
+        )
+        # Register the verified native -> EUR rate from the QUOTE (not the
+        # fact's string), using the exact reciprocal rule the FX gate uses.
+        if quote.quote_currency == "EUR":
+            currency_to_register = quote.base_currency
+            rate_to_register = quote.rate
+        elif quote.base_currency == "EUR":
+            currency_to_register = quote.quote_currency
+            rate_to_register = _reciprocal(quote.rate)
+        else:
+            continue
+        existing = fx_to_eur.get(currency_to_register)
+        if existing is not None and existing != rate_to_register:
+            add(
+                SEVERITY_BLOCKER,
+                "source_observations_contradict",
+                f"verified FX quotes give conflicting {currency_to_register} to EUR rates: {existing} vs {rate_to_register}",
+                None,
+                None,
+            )
+            continue
+        fx_to_eur[currency_to_register] = rate_to_register
+        fx_rate_provenance[currency_to_register] = {
+            "pair": f"{quote.base_currency}-{quote.quote_currency}",
+            "rate": str(quote.rate),
+            "derived_reciprocal": quote.base_currency == "EUR",
+            "quote_date": quote.published_date.isoformat(),
+            "source": source_key,
+        }
 
     # --- per-selected-model dispositions ----------------------------------
     dispositions: list[Disposition] = []
@@ -905,18 +1052,30 @@ def validate_bundle(
             continue
         upstream_by_key[pricing_key] = upstream
 
-        # --- 180-c: bind proposed facts to parsed snapshot observations ---
-        # Only OFFICIAL-source observations (approved publisher/kind/parser/
+        # --- 180-d: bind proposed facts to parsed snapshot observations ---
+        # Provider facts bind to provider + the route's ACTUAL upstream
+        # model (a public alias is local routing policy, not a model whose
+        # price can be borrowed). Each field is validated against the
+        # sources its own fact declares; conflicts are detected across all
+        # official observations for the context, so selective citation
+        # cannot hide a conflicting supplied observation. Only
+        # OFFICIAL-classified observations (approved publisher/kind/parser/
         # host, digest-verified bytes, successful deterministic parse) can
-        # verify a fact. Operator/semantic provenance keeps a fact in REVIEW
-        # only; unapproved observations establish nothing.
-        fact_sources = {
-            source_ref
-            for facts_ in (facts, primary_route, pricing_facts)
-            if facts_ is not None
-            for source_ref in facts_.provenance.sources
+        # verify a fact; operator/semantic provenance never does.
+        declared: dict[str, frozenset[str]] = {
+            f"pricing:{dimension.name}": frozenset(pricing_facts.provenance.sources)
+            for dimension in pricing_facts.dimensions
         }
-        semantic_provenance = any(key in semantic_source_keys for key in fact_sources)
+        if facts is not None:
+            fact_sources = frozenset(facts.provenance.sources)
+            if facts.context_length is not None:
+                declared["model:context_length"] = fact_sources
+            if facts.max_output_tokens is not None:
+                declared["model:max_output_tokens"] = fact_sources
+            if facts.deprecated:
+                declared["model:deprecated"] = fact_sources
+            if facts.capabilities.get("text"):
+                declared["model:capability:text"] = fact_sources
         proposed: dict[str, Any] = {}
         for dimension in pricing_facts.dimensions:
             proposed[f"pricing:{dimension.name}"] = {
@@ -935,14 +1094,16 @@ def validate_bundle(
                 proposed["model:capability:text"] = True
         evidence_findings, backed_facts, _unresolved_fields, missing_fx = se.reconcile_model_facts(
             provider=provider,
-            model=model,
-            upstream_model=upstream,
+            binding_model=upstream,
             proposed=proposed,
             observations=tuple(all_observations),
             official_source_keys=frozenset(official_source_keys),
-            semantic_provenance=semantic_provenance,
+            declared_sources=declared,
             fx_to_eur=fx_to_eur,
+            urls=source_urls,
             digests=source_digests,
+            source_times=source_times,
+            fx_info=fx_rate_provenance,
         )
         for finding in evidence_findings:
             add(finding.severity, finding.code, finding.detail, finding.provider, finding.model)
@@ -952,11 +1113,13 @@ def validate_bundle(
                 {
                     "provider": provider,
                     "model": model,
+                    "upstream_model": upstream,
                     "field": backed_fact.field,
                     "proposed": backed_fact.proposed,
+                    "proposed_normalized": backed_fact.proposed_normalized,
                     "backed_by": list(backed_fact.backed_by),
                     "independent_sources": backed_fact.independent_sources,
-                    "semantic_only": backed_fact.semantic_only,
+                    "observations": list(backed_fact.observations),
                 }
             )
         if missing_fx:
@@ -967,16 +1130,16 @@ def validate_bundle(
                 provider,
                 model,
             )
-        model_names = {model, upstream}
+        declared_all = {key for keys in declared.values() for key in keys}
         complete_keys = [
             key
-            for key in fact_sources
+            for key in declared_all
             if parse_results.get(key) is not None and parse_results[key].ok
         ]
         model_missing = bool(
             complete_keys
             and not any(
-                parsed_model.model in model_names
+                parsed_model.model == upstream
                 for key in complete_keys
                 for parsed_model in parse_results[key].models
             )
@@ -1228,117 +1391,15 @@ def validate_bundle(
     fx_required_currencies = {
         item.currency for item in bundle.pricing if (item.provider, item.model) in selected
     } - {"EUR"}
+    # FX facts that failed evidence binding above are not executable: the
+    # FX gate sees only bound facts, so an unbound required pair surfaces as
+    # a missing-pair blocker instead of an executable row with a guessed
+    # rate.
+    bundle_for_fx = bundle if len(bound_fx) == len(bundle.fx) else bundle.model_copy(update={"fx": tuple(bound_fx)})
     fx_rows, fx_gate, fx_comparisons = _run_fx_gate(
-        baseline, bundle, now, fx_required_currencies, policy, add
+        baseline, bundle_for_fx, now, fx_required_currencies, policy, add
     )
     fx_json = generate_fx_json(fx_rows)
-
-    # --- 180-c: bind FX facts to parsed ECB reference quotes ---------------
-    # An FX fact is verified only when a verified quote from the ECB
-    # publisher (own identity, ecb_reference_xml kind) carries the same pair
-    # (or its native inverse, reciprocated with the exact Decimal rule the
-    # FX gate uses) and the fact's publication date equals the quote date.
-    fx_backed: list[dict[str, Any]] = []
-    for facts in bundle.fx:
-        pair = (facts.base_currency, facts.quote_currency)
-        pair_names = {f"{pair[0]}-{pair[1]}", f"{pair[1]}-{pair[0]}"}
-        field_quotes = [
-            (source_key, quote)
-            for source_key, quote in fx_quotes
-            if f"{quote.base_currency}-{quote.quote_currency}" in pair_names
-        ]
-        official_quotes = [
-            item for item in field_quotes if item[0] in official_source_keys
-        ]
-        fact_semantic = any(key in semantic_source_keys for key in facts.provenance.sources)
-        if not official_quotes:
-            if field_quotes:
-                add(
-                    SEVERITY_BLOCKER,
-                    "source_evidence_unapproved",
-                    f"FX fact {pair[0]} to {pair[1]} is backed only by unapproved source quotes",
-                    None,
-                    None,
-                )
-            elif fact_semantic:
-                add(
-                    SEVERITY_REVIEW,
-                    "fx_evidence_semantic_only",
-                    f"FX fact {pair[0]} to {pair[1]} is operator/semantic input without a verified reference quote",
-                    None,
-                    None,
-                )
-            else:
-                add(
-                    SEVERITY_BLOCKER,
-                    "fx_evidence_unbound",
-                    f"FX fact {pair[0]} to {pair[1]} has no verified reference quote",
-                    None,
-                    None,
-                )
-            continue
-        rates = {str(quote.rate) for _key, quote in official_quotes}
-        if len(rates) > 1:
-            add(
-                SEVERITY_BLOCKER,
-                "source_observations_contradict",
-                f"distinct FX snapshots disagree on {pair[0]}-{pair[1]}: {', '.join(sorted(rates)[:4])}",
-                None,
-                None,
-            )
-            continue
-        fact_rate = Decimal(facts.rate)
-        matched: tuple[str, se.ParsedFxQuote, bool] | None = None
-        for source_key, quote in official_quotes:
-            same_direction = (
-                quote.base_currency,
-                quote.quote_currency,
-            ) == pair
-            if same_direction:
-                agrees = abs(quote.rate - fact_rate) <= se.FX_BINDING_TOLERANCE
-            else:
-                agrees = abs(quote.rate - _reciprocal(fact_rate)) <= se.FX_BINDING_TOLERANCE
-            if agrees:
-                matched = (source_key, quote, same_direction)
-                break
-        if matched is None:
-            add(
-                SEVERITY_BLOCKER,
-                "source_evidence_value_mismatch",
-                f"FX rate {facts.rate} does not match any verified {pair[0]}/{pair[1]} reference quote or its reciprocal",
-                None,
-                None,
-            )
-            continue
-        source_key, quote, same_direction = matched
-        if facts.published_at is None:
-            add(
-                SEVERITY_BLOCKER,
-                "fx_evidence_date_mismatch",
-                f"FX fact {pair[0]} to {pair[1]} carries no publication date; the verified quote is dated {quote.published_date.isoformat()}",
-                None,
-                None,
-            )
-            continue
-        if facts.published_at.date() != quote.published_date:
-            add(
-                SEVERITY_BLOCKER,
-                "fx_evidence_date_mismatch",
-                f"FX fact publication date {facts.published_at.date().isoformat()} does not match the verified quote date {quote.published_date.isoformat()}",
-                None,
-                None,
-            )
-            continue
-        fx_backed.append(
-            {
-                "pair": f"{pair[0]} to {pair[1]}",
-                "rate": facts.rate,
-                "backed_by": source_key,
-                "observed_quote": str(quote.rate),
-                "derived_reciprocal": not same_direction,
-                "quote_date": quote.published_date.isoformat(),
-            }
-        )
 
     route_gate = _run_route_gate(bundle, baseline, route_tsv, excluded_route_mutations, baseline is not None)
     pricing_gate = _run_pricing_gate(baseline, pricing_tsv, excluded_pricing_mutations, baseline is not None)
@@ -1368,31 +1429,74 @@ def validate_bundle(
         unsupported_detail = "no unsupported rows"
         unsupported_evidence = EVIDENCE_VERIFIED
 
-    # inventory: derived independently from the parsed snapshots, then
-    # reconciled against the selection (considered is len(selected); the
-    # inventory is a separate projection, never a re-derivation of it).
-    evidence_models_by_provider: dict[str, set[str]] = {}
+    # --- 180-d: selection reconciliation ----------------------------------
+    # Inventory derived independently from the official parsed snapshots,
+    # then every parsed raw identifier is reconciled into an explicit
+    # disposition: selected/proposed, retained from baseline (historical
+    # local state), explicitly excluded by a subset, unsupported (text
+    # capability not observed), or an unexplained omission under an
+    # all-eligible selection - which blocks. No silent row disappearance.
+    baseline_model_keys: set[tuple[str, str]] = {
+        identity[:2] for identity in baseline_routes_by_identity
+    } | {(p, m) for (p, m, _e) in baseline_pricing_by_key}
+    evidence_ids_by_provider: dict[str, dict[str, se.ParsedModel]] = {}
     for key, parsed in parse_results.items():
-        if not parsed.ok:
+        if not parsed.ok or key not in official_source_keys:
             continue
-        for parsed_model in parsed.models:
-            evidence_models_by_provider.setdefault(parsed_model.provider, set()).add(parsed_model.model)
+        for parsed_model in deduped_models.get(key, []):
+            if parsed_model.provider in selection_providers:
+                evidence_ids_by_provider.setdefault(parsed_model.provider, {})[parsed_model.model] = parsed_model
     selected_by_provider: dict[str, set[str]] = {}
     for provider, model in selected:
         selected_by_provider.setdefault(provider, set()).add(model)
-    upstream_by_provider: dict[str, set[str]] = {}
-    for route in bundle.routes:
-        if (route.provider, route.requested_model) in selected:
-            upstream_by_provider.setdefault(route.provider, set()).add(route.upstream_model)
-    inventory: dict[str, dict[str, int]] = {}
-    for provider in sorted(set(evidence_models_by_provider) | set(selected_by_provider)):
-        evidence = evidence_models_by_provider.get(provider, set())
-        accounted = selected_by_provider.get(provider, set()) | upstream_by_provider.get(provider, set())
-        inventory[provider] = {
-            "evidence_models": len(evidence),
-            "selected_models": len(selected_by_provider.get(provider, set())),
-            "unproposed_candidates": len(evidence - accounted),
+    explicit_subset = bool(bundle.selection.model_include)
+    inventory: dict[str, dict[str, Any]] = {}
+    unexplained_omissions: list[str] = []
+    for provider in sorted(selection_providers & (set(evidence_ids_by_provider) | set(selected_by_provider))):
+        ids = evidence_ids_by_provider.get(provider, {})
+        sel = selected_by_provider.get(provider, set())
+        prov_counts = {
+            "evidence_models": len(ids),
+            "selected_models": sum(1 for mid in ids if mid in sel),
+            "retained_local_models": 0,
+            "explicitly_excluded_models": 0,
+            "unsupported_excluded_models": 0,
+            "unexplained_omissions": 0,
         }
+        retained_ids: list[str] = []
+        excluded_ids: list[str] = []
+        for mid in sorted(ids):
+            if mid in sel:
+                continue
+            if (provider, mid) in baseline_model_keys:
+                prov_counts["retained_local_models"] += 1
+                retained_ids.append(mid)
+            elif explicit_subset:
+                prov_counts["explicitly_excluded_models"] += 1
+                excluded_ids.append(mid)
+            elif ids[mid].text_modality is not True:
+                prov_counts["unsupported_excluded_models"] += 1
+                excluded_ids.append(mid)
+            else:
+                prov_counts["unexplained_omissions"] += 1
+                unexplained_omissions.append(f"{provider}/{mid}")
+        inventory[provider] = {
+            **prov_counts,
+            "selection_mode": "explicit_subset" if explicit_subset else "all_eligible",
+            "retained_local_ids": retained_ids[:16],
+            "excluded_ids": excluded_ids[:16],
+        }
+    if unexplained_omissions:
+        add(
+            SEVERITY_BLOCKER,
+            "selection_unexplained_omission",
+            f"{len(unexplained_omissions)} eligible model(s) present in official snapshots are neither proposed, "
+            "explicitly excluded by a subset, nor retained from baseline: "
+            + ", ".join(sorted(unexplained_omissions)[:8])
+            + ("" if len(unexplained_omissions) <= 8 else f" (+{len(unexplained_omissions) - 8} more)"),
+            None,
+            None,
+        )
     source_evidence_report: dict[str, Any] = {
         "scope": "offline_replay",
         "note": (

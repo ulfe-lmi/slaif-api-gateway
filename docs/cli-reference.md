@@ -149,9 +149,19 @@ provider `ecb`, model part a currency pair such as `EUR-USD`, official ECB
 host, DOCTYPE and external entities rejected). `evidence_b64` must match
 the declared `content_sha256` and parse successfully to support required
 facts; a matching digest of arbitrary or empty bytes is not content trust
-and fails the gate. An FX fact is verified only against an official
-`ecb/ecb_reference_xml` quote (rate or exact reciprocal within 1e-8, and
-publication date equal to the quote date). Full contract:
+and fails the gate, regardless of any extraction label. Each decoded
+snapshot is parsed strictly (duplicate JSON keys, non-finite constants,
+malformed rows, and unbounded price cells are code-only errors), and every
+proposed field is validated against the sources its own fact declares for
+the route's actual upstream model — an unobserved upstream, a wrong
+per-field source, or a conflicting supplied observation blocks. An FX fact
+binds to an official `ecb/ecb_reference_xml` quote before any currency
+normalization (finite positive rate or exact reciprocal within 1e-8, quote
+source declared in the fact's provenance, publication date equal to the
+quote date); an unbound FX rate is never guessed or used. Selection is
+reconciled per model: an unexplained eligible-model omission under an
+all-eligible selection blocks; explicit subset exclusions are named in the
+report. Full contract:
 [Catalog refresh (offline review)](catalog-refresh.md#source-evidence-binding-offline-replay).
 
 ## Related documentation

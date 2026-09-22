@@ -501,6 +501,21 @@ def test_future_source_timestamp_blocks() -> None:
 
 # --- FX direction and publication age ---------------------------------------
 
+
+
+def _bound_ecb_source(pair_model: str = "EUR-USD", *, rate: str = "1.08",
+                      date_s: str = "2026-09-21") -> dict:
+    """An official ECB reference-rate source whose single quote matches the
+    180-d binding rules (rate, date, own publisher identity)."""
+    return _evidence_tests.ecb_source_dict(
+        pair_model=pair_model,
+        date_s=date_s,
+        rate=rate,
+        retrieved_at=(GENERATED_AT - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+        published_at=f"{date_s}T00:00:00Z",
+    )
+
+
 def _fx_report(rate: str, published_hours_ago: float | None, *, pair: str = "USD-EUR"):
     """USD-priced bundle with one FX fact bound to a supplied ECB reference
     quote; the mini baseline controls the pair. ``published_hours_ago`` must
@@ -593,37 +608,51 @@ def test_fx_eur_to_native_is_reciprocated_deterministically() -> None:
 
 
 def test_fx_direct_and_reciprocal_must_agree() -> None:
+    """Both a direct USD->EUR fact and its EUR->USD reciprocal bind to the
+    one verified quote, and the FX gate confirms they agree. Under the
+    180-d binding, a genuine direct/reciprocal disagreement can no longer
+    reach the gate unbound - it blocks at evidence binding first (see the
+    value-mismatch test below)."""
     payload = _bundle_payload()
-    payload["run_id"] = "test-fx-contradiction-001"
+    payload["run_id"] = "test-fx-agreement-001"
     _usd_pricing(payload)
-    payload["fx"] = [
-        _fx_facts_dict("0.9", pair="USD-EUR", provider="openrouter", kind="docs_page"),
-        _fx_facts_dict(  # reciprocal 0.925925926 != 0.9
-            "1.08", pair="EUR-USD", provider="openrouter", kind="docs_page"
-        ),
-    ]
+    direct = _fx_facts_dict("0.925925926", pair="USD-EUR")
+    reciprocal = _fx_facts_dict("1.08", pair="EUR-USD")
+    # Both facts declare the one official quote source that verifies them.
+    for fact in (direct, reciprocal):
+        fact["provenance"]["sources"] = ["ecb|EUR-USD|ecb_reference_xml"]
+    payload["fx"] = [direct, reciprocal]
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
-    payload["sources"].append(_fx_source_dict("USD-EUR"))
-    payload["sources"].append(_fx_source_dict("EUR-USD"))
+    payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
-    assert "fx_contradictory_rates" in _codes(report)
-    assert report.state == OVERALL_BLOCKED
+    assert "fx_contradictory_rates" not in _codes(report)
+    assert "source_observations_contradict" not in _codes(report)
+    comparison = next(c for c in report.fx_comparisons if c["pair"] == "USD\u2192EUR")
+    assert comparison["state"] == "NEW"
+    # Both facts are bound to the verified quote, with derivation recorded.
+    assert len(report.source_evidence["fx_backed"]) == 2
 
 
 def test_fx_ambiguous_active_rows_block() -> None:
+    """Overlapping active FX rows with different rates can no longer both
+    bind to one verified quote: the rate the quote does not verify fails
+    evidence binding, so the run blocks before the gate could silently
+    pick one of the overlapping rows."""
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-ambiguous-001"
     _usd_pricing(payload)
-    first = _fx_facts_dict("0.9", pair="USD-EUR", provider="openrouter", kind="docs_page")
-    second = _fx_facts_dict("0.91", pair="USD-EUR", provider="openrouter", kind="docs_page")
+    first = _fx_facts_dict("0.925925926", pair="USD-EUR")     # agrees with the 1.08 quote
+    second = _fx_facts_dict("0.9", pair="USD-EUR")            # disagrees
     second["valid_from"] = "2026-09-21T06:00:00+00:00"  # overlapping window, new identity
+    for fact in (first, second):
+        fact["provenance"]["sources"] = ["ecb|EUR-USD|ecb_reference_xml"]
     payload["fx"] = [first, second]
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
-    payload["sources"].append(_fx_source_dict("USD-EUR"))
+    payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
-    assert any(code.startswith("fx_ambiguous_") for code in _codes(report))
+    assert "source_evidence_value_mismatch" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
 
@@ -635,63 +664,42 @@ def test_fx_publication_age_boundaries_are_calendar_days() -> None:
     assert _fx_report("1", 7 * 24 + 1)[0].state == OVERALL_BLOCKED
 
 
-def test_fx_missing_publication_date_is_review() -> None:
-    """An undated FX fact with operator/semantic provenance (no verified
-    reference quote) stays a REVIEW finding; an ECB-backed fact without a
-    date blocks instead (fx_evidence_date_mismatch, covered in the 180-c
-    independent-input module)."""
+def test_fx_missing_publication_date_blocks() -> None:
+    """An ECB-verified quote with an undated fact cannot bind: the missing
+    publication date is a BLOCKER (fx_evidence_date_mismatch), never a
+    review-only finding. Missing dates/quotes cannot be warning-only."""
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-nodate-001"
     _usd_pricing(payload)
-    # Truthful USD->EUR rate (reciprocal of the snapshot's 1.08 quote) so
-    # the only failure under test is the missing publication date.
-    fact = _fx_facts_dict(
-        "0.925925926",
-        pair="USD-EUR",
-        published_hours_ago=None,
-        provider="openrouter",
-        kind="docs_page",
-    )
-    fact["provenance"]["extraction"] = "semantic"
-    junk = b"fx notes without a date"
+    # Truthful USD->EUR rate (reciprocal of the quote's 1.08) so the only
+    # failure under test is the missing publication date.
+    fact = _fx_facts_dict("0.925925926", pair="USD-EUR", published_hours_ago=None)
+    fact["provenance"]["sources"] = ["ecb|EUR-USD|ecb_reference_xml"]
     payload["fx"] = [fact]
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
-    payload["sources"].append(
-        {
-            "provider": "openrouter",
-            "model": "USD-EUR",
-            "source_kind": "docs_page",
-            "url": "https://openrouter.ai/docs/fx",
-            "retrieved_at": (GENERATED_AT - timedelta(hours=1)).isoformat(),
-            "published_at": None,
-            "content_sha256": hashlib.sha256(junk).hexdigest(),
-            "evidence_b64": base64.b64encode(junk).decode("ascii"),
-            "extractor": "fixture-deterministic/1.0",
-            "extraction": "semantic",
-            "required": True,
-            "truncated": False,
-            "warnings": [],
-        }
-    )
+    payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     baseline = _mini_usd_baseline(
         fx=[{"base": "USD", "quote": "EUR", "rate": "0.925925926", "valid_from": "2026-09-20T00:00:00+00:00"}]
     )
     report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
-    assert "fx_no_publication_date" in _codes(report)
-    assert "fx_evidence_semantic_only" in _codes(report)
-    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert "fx_evidence_date_mismatch" in _codes(report)
+    assert report.state == OVERALL_BLOCKED
+    assert report.source_evidence["fx_backed"] == []
 
 
 def test_fx_future_publication_blocks() -> None:
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-future-001"
     _usd_pricing(payload)
-    facts = _fx_facts_dict("1", pair="USD-EUR", provider="openrouter", kind="docs_page")
+    facts = _fx_facts_dict("0.925925926", pair="USD-EUR")
+    # Publication date in the future but equal to the quote's date, so the
+    # fact binds and the FX gate's publication-age check fires.
     facts["published_at"] = (GENERATED_AT + timedelta(hours=1)).isoformat()
+    facts["provenance"]["sources"] = ["ecb|EUR-USD|ecb_reference_xml"]
     payload["fx"] = [facts]
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
-    payload["sources"].append(_fx_source_dict("USD-EUR"))
+    payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
     assert "fx_future_publication" in _codes(report)
@@ -702,14 +710,17 @@ def test_fx_provenance_may_not_borrow_a_model_source() -> None:
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-provenance-001"
     _usd_pricing(payload)
-    facts = _fx_facts_dict(
-        "0.925925926", pair="USD-EUR", provider="openrouter", kind="docs_page"
-    )
-    # Borrowing a model's OpenRouter API reference is schema-shaped but
-    # semantically invalid for an FX fact.
-    facts["provenance"]["sources"] = ["openrouter|synthetic/stable-v1|openrouter_models_api"]
+    facts = _fx_facts_dict("0.925925926", pair="USD-EUR")
+    # Declares the verified quote source AND borrows a model's OpenRouter
+    # API reference: schema-shaped but semantically invalid for an FX
+    # fact, so the fact binds and the gate's provenance rule still fires.
+    facts["provenance"]["sources"] = [
+        "ecb|EUR-USD|ecb_reference_xml",
+        "openrouter|synthetic/stable-v1|openrouter_models_api",
+    ]
     payload["fx"] = [facts]
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
+    payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
     assert "fx_provenance_invalid_reference" in _codes(report)
@@ -909,14 +920,17 @@ def test_same_model_id_is_independent_across_providers() -> None:
          "source_provenance_blocked", "route_upstream_contradiction"}
         & codes
     )
-    # The operator-attested mirror is review-only, never verified.
-    assert report.state == OVERALL_READY_WITH_WARNINGS
-    assert "source_evidence_semantic_only" in codes
-    # openai mirror is a genuine NEW create; the openrouter row is unchanged.
-    assert report.counts["new"] == 1
+    # 180-d: the operator-attested mirror is never provider evidence: its
+    # required facts cannot be verified, so the mirrored model blocks
+    # (the old review-only NEW row was the bypass). The shared ID still
+    # pairs within its own provider: the openrouter row is unchanged.
+    assert report.state == OVERALL_BLOCKED
+    assert "source_evidence_unsupported" in codes
+    assert report.counts["new"] == 0
     assert report.counts["unchanged"] == 1
+    assert report.counts["blocked"] == 1
     dispositions = {(d.provider, d.model): d.disposition for d in report.dispositions}
-    assert dispositions[("openai", "synthetic/stable-v1")] == "NEW"
+    assert dispositions[("openai", "synthetic/stable-v1")] == "BLOCKED"
     assert dispositions[("openrouter", "synthetic/stable-v1")] == "UNCHANGED"
 
 

@@ -247,16 +247,20 @@ def _source_evidence_line(report: dict[str, Any]) -> str:
     """Compact truthful source-evidence summary for the decision box."""
     evidence = report.get("source_evidence", {}) or {}
     backed = evidence.get("backed_facts", []) or []
-    verified = [item for item in backed if not item.get("semantic_only")]
-    semantic = [item for item in backed if item.get("semantic_only")]
     inventory = evidence.get("inventory", {}) or {}
     evidence_models = sum(values.get("evidence_models", 0) for values in inventory.values())
-    unproposed = sum(values.get("unproposed_candidates", 0) for values in inventory.values())
-    parts = [
-        f"{len(verified)} fact(s) bound to parsed snapshot observations (deterministic parsers)"
-        + (f", {len(semantic)} review-only (operator/semantic provenance)" if semantic else "")
-    ]
-    parts.append(f"{evidence_models} model(s) present in complete parsed snapshots, {unproposed} unproposed candidate(s)")
+    selected = sum(values.get("selected_models", 0) for values in inventory.values())
+    retained = sum(values.get("retained_local_models", 0) for values in inventory.values())
+    excluded = sum(
+        values.get("explicitly_excluded_models", 0) + values.get("unsupported_excluded_models", 0)
+        for values in inventory.values()
+    )
+    unexplained = sum(values.get("unexplained_omissions", 0) for values in inventory.values())
+    parts = [f"{len(backed)} fact(s) bound to parsed snapshot observations (deterministic parsers)"]
+    parts.append(
+        f"{evidence_models} model(s) in official snapshots: {selected} selected, {retained} retained local, "
+        f"{excluded} excluded (subset/unsupported), {unexplained} unexplained omission(s)"
+    )
     parts.append(evidence.get("note", "offline replay of supplied snapshots"))
     return esc(" · ".join(parts))
 
@@ -710,47 +714,84 @@ def _render_source_evidence_details(report: dict[str, Any]) -> list[str]:
     backed = evidence.get("backed_facts", []) or []
     parts.append(f"<h3>Proposed facts bound to parsed observations ({len(backed)})</h3>")
     if backed:
-        parts.append("<table><thead><tr><th>Provider/Model</th><th>Field</th><th>Proposed</th><th>Backing sources (distinct digests counted once)</th><th>Independent sources</th><th>State</th></tr></thead><tbody>")
+        parts.append("<table><thead><tr><th>Provider/Model</th><th>Field</th><th>Proposed</th><th>Normalized (EUR)</th><th>Declared backing sources</th><th>Independent sources (distinct URLs)</th><th>State</th></tr></thead><tbody>")
         for item in backed:
-            state = (
-                "<span class='ev-review'>REVIEW (operator/semantic provenance — review-only, never verified)</span>"
-                if item.get("semantic_only")
-                else "<span class='ev-verified'>BOUND (deterministic parser)</span>"
-            )
             parts.append(
-                f"<tr><td>{esc(item.get('provider'))}/{esc(item.get('model'))}</td>"
-                f"<td>{esc(item.get('field'))}</td><td>{esc(item.get('proposed'))}</td>"
-                f"<td>{esc(', '.join(item.get('backed_by', []))) or '—'}</td>"
-                f"<td class='num'>{esc(item.get('independent_sources', 0))}</td><td>{state}</td></tr>"
+                f"<tr><td>{esc(item.get('provider'))}/{esc(item.get('model'))} (upstream {esc(item.get('upstream_model', item.get('model')))})</td>"
+                f"<td>{esc(item.get('field'))}</td>"
+                f"<td>{esc(item.get('proposed'))}</td>"
+                f"<td>{esc(item.get('proposed_normalized')) if item.get('proposed_normalized') is not None else esc(chr(8212))}</td>"
+                f"<td>{esc(', '.join(item.get('backed_by', []))) or esc(chr(8212))}</td>"
+                f"<td class='num'>{esc(item.get('independent_sources', 0))}</td>"
+                "<td><span class='ev-verified'>BOUND (deterministic parser)</span></td></tr>"
             )
         parts.append("</tbody></table>")
-        parts.append("<p class='muted'>Repeated references to one snapshot (duplicate URLs, aliases to identical bytes) count as one independent source, not corroboration. Facts that could not be bound appear in the findings table with their blocker/REVIEW code; a fact with no supporting observation is never silently treated as verified.</p>")
+        for item in backed:
+            observations = item.get("observations", []) or []
+            if not observations:
+                continue
+            parts.append(
+                f"<details><summary>Observations binding {esc(item.get('field'))} for "
+                f"{esc(item.get('provider'))}/{esc(item.get('model'))} ({len(observations)} shown)</summary>"
+            )
+            parts.append("<table><thead><tr><th>Source</th><th>Locator</th><th>Observed value</th><th>Unit</th><th>Currency</th><th>Normalized (EUR)</th><th>Conversion</th><th>URL</th><th>Content digest</th><th>Parser</th><th>Retrieved</th></tr></thead><tbody>")
+            for obs in observations:
+                parts.append(
+                    f"<tr><td>{esc(obs.get('source', ''))}</td>"
+                    f"<td>{esc(obs.get('locator', ''))}</td>"
+                    f"<td class='num'>{esc(obs.get('observed_value', ''))}</td>"
+                    f"<td>{esc(obs.get('unit', ''))}</td>"
+                    f"<td>{esc(obs.get('currency') or esc(chr(8212)))}</td>"
+                    f"<td class='num'>{esc(obs.get('normalized_eur')) if obs.get('normalized_eur') is not None else esc(chr(8212))}</td>"
+                    f"<td>{esc(obs.get('conversion') or esc(chr(8212)))}</td>"
+                    f"<td>{_link(obs.get('url', ''))}</td>"
+                    f"<td class='muted'>{esc(str(obs.get('digest', ''))[:16])}</td>"
+                    f"<td>{esc(obs.get('parser', ''))}</td>"
+                    f"<td>{esc(obs.get('retrieved_at', ''))}</td></tr>"
+                )
+            parts.append("</tbody></table>")
+            parts.append("</details>")
+        parts.append("<p class='muted'>Each row is an actual derived observation from the parsed snapshot bytes: the observed value with its unit, currency and exact row/field locator, the source URL, content digest, parser identity and retrieval time, and the exact normalization to the comparison currency. Repeated retrievals or aliases of the same official URL count as one independent source, not corroboration. Facts that could not be bound appear in the findings table with their blocker/REVIEW code; a fact with no verified supporting observation is never silently treated as verified, and a semantic label is never evidence.</p>")
     else:
         parts.append("<p class='muted'>No proposed facts carried bindable non-null values in this run.</p>")
     fx_backed = evidence.get("fx_backed", []) or []
     if fx_backed:
         parts.append("<h3>FX facts bound to verified reference quotes</h3>")
-        parts.append("<table><thead><tr><th>Pair</th><th>Proposed rate</th><th>Observed quote</th><th>Derivation</th><th>Quote date</th><th>Backing source</th></tr></thead><tbody>")
+        parts.append("<table><thead><tr><th>Pair</th><th>Proposed rate</th><th>Observed quote</th><th>Quote locator</th><th>Derivation</th><th>Quote date</th><th>Fact published</th><th>Backing source</th><th>Quote URL</th><th>Quote digest</th><th>Parser</th></tr></thead><tbody>")
         for item in fx_backed:
             parts.append(
                 f"<tr><td>{esc(item.get('pair'))}</td><td class='num'>{esc(item.get('rate'))}</td>"
                 f"<td class='num'>{esc(item.get('observed_quote'))}</td>"
+                f"<td>{esc(item.get('quote_locator', ''))}</td>"
                 f"<td>{'reciprocal of native quote' if item.get('derived_reciprocal') else 'native quote'}</td>"
-                f"<td>{esc(item.get('quote_date'))}</td><td>{esc(item.get('backed_by'))}</td></tr>"
+                f"<td>{esc(item.get('quote_date'))}</td><td>{esc(item.get('fact_published_at', ''))}</td>"
+                f"<td>{esc(item.get('backed_by'))}</td>"
+                f"<td>{_link(item.get('quote_url', ''))}</td>"
+                f"<td class='muted'>{esc(str(item.get('quote_digest', ''))[:16])}</td>"
+                f"<td>{esc(item.get('quote_parser', ''))}</td></tr>"
             )
         parts.append("</tbody></table>")
     inventory = evidence.get("inventory", {}) or {}
     if inventory:
-        parts.append("<h3>Inventory (independently derived from parsed snapshots, reconciled to selection)</h3>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Models in complete snapshots</th><th>Selected</th><th>Unproposed candidates (counted, not silently dropped)</th></tr></thead><tbody>")
+        parts.append("<h3>Inventory (independently derived from official snapshots, every identifier reconciled)</h3>")
+        parts.append("<table><thead><tr><th>Provider</th><th>Selection mode</th><th>Models in official snapshots</th><th>Selected/proposed</th><th>Retained local (baseline)</th><th>Explicitly excluded (subset)</th><th>Unsupported excluded</th><th>Unexplained omissions</th><th>Excluded/retained IDs (bounded list)</th></tr></thead><tbody>")
         for provider, values in inventory.items():
+            ids_note = ", ".join(
+                [f"excluded: {esc(', '.join(values.get('excluded_ids', [])))}"] if values.get("excluded_ids") else []
+                + [f"retained: {esc(', '.join(values.get('retained_local_ids', [])))}"] if values.get("retained_local_ids") else []
+            ) or esc(chr(8212))
             parts.append(
-                f"<tr><td>{esc(provider)}</td>"
+                f"<tr><td>{esc(provider)}</td><td>{esc(values.get('selection_mode', ''))}</td>"
                 f"<td class='num'>{esc(values.get('evidence_models', 0))}</td>"
                 f"<td class='num'>{esc(values.get('selected_models', 0))}</td>"
-                f"<td class='num'>{esc(values.get('unproposed_candidates', 0))}</td></tr>"
+                f"<td class='num'>{esc(values.get('retained_local_models', 0))}</td>"
+                f"<td class='num'>{esc(values.get('explicitly_excluded_models', 0))}</td>"
+                f"<td class='num'>{esc(values.get('unsupported_excluded_models', 0))}</td>"
+                f"<td class='num'>{esc(values.get('unexplained_omissions', 0))}</td>"
+                f"<td class='muted'>{ids_note}</td></tr>"
             )
         parts.append("</tbody></table>")
+        parts.append("<p class='muted'>Every model identifier parsed from an official snapshot is reconciled into exactly one disposition. An unexplained omission under an all-eligible selection blocks the run; explicitly excluded (subset) and unsupported (text capability not observed) models are listed by name and count, not warned per row. Retained local models keep historical local state with no automatic deletion.</p>")
     parts.append("</details>")
     return parts
 

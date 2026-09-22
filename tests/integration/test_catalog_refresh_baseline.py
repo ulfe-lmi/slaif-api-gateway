@@ -366,7 +366,7 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
         "revision": {
             "schema_version": "1",
             "slaif_revision": "obj180-integration-revision",
-            "renderer_version": "180.1",
+            "renderer_version": "180.2",
             "policy_version": 1,
         },
         "research": {

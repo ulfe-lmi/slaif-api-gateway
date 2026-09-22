@@ -30,7 +30,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = "1"
-RENDERER_VERSION = "180.1"
+RENDERER_VERSION = "180.2"
 POLICY_VERSION = 1
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -49,6 +49,7 @@ SOURCE_KINDS: frozenset[str] = frozenset(
         "openrouter_model_detail",
         "openai_models_api",
         "openai_pricing_docs",
+        "openai_models_docs",
         "docs_page",
         "operator_input",
         "ecb_reference_xml",

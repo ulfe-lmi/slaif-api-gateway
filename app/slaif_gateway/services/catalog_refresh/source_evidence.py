@@ -46,8 +46,6 @@ from slaif_gateway.services.provider_catalog_proposal import (
     _convert_openrouter_price,
     _doc_price_cell,
     _extract_tabular_blocks,
-    _openrouter_models_from_payload,
-    _parse_openai_models_api,
     _parse_openai_models_docs,
     _parse_openai_pricing_docs,
     _safe_openai_model_id,
@@ -159,13 +157,20 @@ class ReconciliationFinding:
 
 @dataclass(frozen=True)
 class BackedFact:
-    """One proposed fact with its deterministic (or review-only) backing."""
+    """One proposed fact bound to deterministic parsed observations.
+
+    ``observations`` carries the actual derived observation records that
+    bound the fact (observed value, unit, currency, exact locator,
+    normalization) so the one report can show the evidence inline. There
+    is no semantic backing: a label or copied value never verifies a fact.
+    """
 
     field: str
     proposed: str
-    backed_by: tuple[str, ...]      # source keys with a matching observation
-    independent_sources: int        # distinct snapshot digests among the matchers
-    semantic_only: bool             # True: review-only backing, never verified
+    proposed_normalized: str | None  # canonical normalized proposal (EUR for pricing)
+    backed_by: tuple[str, ...]       # declared source keys with a matching observation
+    independent_sources: int         # distinct official URLs among the matchers
+    observations: tuple[dict[str, Any], ...] = ()
 
 
 # --- deterministic parsers ---------------------------------------------------
@@ -179,32 +184,71 @@ def _decode_bounded(evidence: bytes, *, kind: str, max_bytes: int) -> str:
         raise SnapshotFormatError(f"{kind}:not_utf8") from None
 
 
+def _reject_duplicate_key(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: set[str] = set()
+    for key, _value in pairs:
+        if key in seen:
+            raise SnapshotFormatError("duplicate_key")
+        seen.add(key)
+    return dict(pairs)
+
+
+def _reject_non_finite_constant(token: str) -> Any:
+    raise SnapshotFormatError("non_finite_constant")
+
+
 def _json_loads_bounded(evidence: bytes, *, kind: str) -> Any:
+    """Decode and parse bounded snapshot JSON strictly.
+
+    Duplicate object keys and non-finite constants are rejected at every
+    nesting level, not merely in the outer bundle: a second conflicting
+    ``prompt`` cell inside the decoded snapshot is malformed official
+    content, never a last-wins surprise. Errors are code-only; no input
+    fragments are echoed.
+    """
     text = _decode_bounded(evidence, kind=kind, max_bytes=MAX_SNAPSHOT_BYTES)
     try:
-        return json.loads(text)
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_key,
+            parse_constant=_reject_non_finite_constant,
+        )
+    except SnapshotFormatError as exc:
+        raise SnapshotFormatError(f"{kind}:{exc.code}") from None
     except json.JSONDecodeError:
         raise SnapshotFormatError(f"{kind}:malformed_json") from None
 
 
-def _openrouter_rows(payload: Any, *, kind: str) -> list[Mapping[str, object]]:
-    """Row selection for an OpenRouter-style payload; a payload without
-    ``data[]`` (e.g. ``{}``) is a format error, never a bare traceback."""
-    if not isinstance(payload, Mapping):
-        raise SnapshotFormatError(f"{kind}:not_an_object")
-    try:
-        return _openrouter_models_from_payload(payload)
-    except ValueError:
-        raise SnapshotFormatError(f"{kind}:missing_data_array") from None
+# Bounded raw decimal cell: official per-token price cells are short
+# decimal strings. Digits and exponents are bounded before the reused
+# conversion helper so hostile exponents cannot trigger huge allocations
+# or uncaught Decimal errors during normalization.
+_BOUNDED_PRICE_CELL = re.compile(r"^[+-]?(?:\d{1,18}(?:\.\d{1,15})?|\.\d{1,15})(?:[eE][+-]?\d{1,3})?$")
 
 
-def _openai_model_ids(payload: Any, *, kind: str) -> set[str]:
+def _openrouter_validated_rows(payload: Any, *, kind: str) -> list[Mapping[str, object]]:
+    """Raw structural validation of an OpenRouter-style payload.
+
+    The raw structure is validated with original row indices preserved
+    before any reused helper is invoked: the proposal helper filters
+    non-mapping rows before enumeration, which would shift locators and
+    let malformed rows disappear silently. Any malformed row or invalid
+    model id is a format error (code-only, never echoed).
+    """
     if not isinstance(payload, Mapping):
         raise SnapshotFormatError(f"{kind}:not_an_object")
-    try:
-        return _parse_openai_models_api(payload)
-    except ValueError:
-        raise SnapshotFormatError(f"{kind}:missing_data_array") from None
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise SnapshotFormatError(f"{kind}:missing_data_array")
+    if len(data) > MAX_JSON_ITEMS:
+        raise SnapshotFormatError(f"{kind}:too_many_rows")
+    for _index, row in enumerate(data):
+        if not isinstance(row, Mapping):
+            raise SnapshotFormatError(f"{kind}:malformed_row")
+        raw_id = row.get("id")
+        if not isinstance(raw_id, str) or not raw_id or raw_id != raw_id.strip() or len(raw_id) > 200:
+            raise SnapshotFormatError(f"{kind}:invalid_model_id")
+    return list(data)
 
 
 def _safe_int(value: Any) -> int | None:
@@ -235,23 +279,20 @@ def _string_list(value: Any) -> tuple[str, ...] | None:
 def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]:
     """Parse a cached OpenRouter /models payload (official API shape).
 
-    Reuses ``_openrouter_models_from_payload`` for row selection and
-    ``_convert_openrouter_price`` for exact per-token -> per-million USD
-    conversion. Pricing cells are per-token USD strings in the official
-    shape; they are normalized to per-million USD with exact Decimal
-    arithmetic (the SLAIF import-contract unit). Rows lacking a safe model
-    id are skipped; a payload without ``data[]`` is malformed.
+    The raw structure is validated with original row indices preserved
+    (a malformed row or invalid id is a format error, never a silent
+    skip), then ``_convert_openrouter_price`` is reused for exact
+    per-token -> per-million USD conversion of bounded decimal cells.
+    Pricing cells are per-token USD strings in the official shape; they
+    are normalized to per-million USD with exact Decimal arithmetic (the
+    SLAIF import-contract unit). A payload without ``data[]`` is
+    malformed.
     """
     payload = _json_loads_bounded(evidence, kind="openrouter_models_api")
-    rows = _openrouter_rows(payload, kind="openrouter_models_api")
-    if len(rows) > MAX_JSON_ITEMS:
-        raise SnapshotFormatError("openrouter_models_api:too_many_rows")
+    rows = _openrouter_validated_rows(payload, kind="openrouter_models_api")
     models: list[ParsedModel] = []
     for index, row in enumerate(rows):
-        raw_id = row.get("id")
-        if not isinstance(raw_id, str) or not raw_id or len(raw_id) > 200:
-            continue
-        model_id = raw_id
+        model_id = str(row.get("id"))
         prefix = f"data[{index}]"
         locators: dict[str, str] = {}
 
@@ -298,9 +339,12 @@ def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
         }
         for dim, key in dim_keys.items():
             if key in pricing:
+                raw_cell = pricing.get(key)
+                if not isinstance(raw_cell, str) or not _BOUNDED_PRICE_CELL.fullmatch(raw_cell.strip()):
+                    raise SnapshotFormatError("openrouter_models_api:invalid_price")
                 try:
-                    per_1m = _convert_openrouter_price(pricing.get(key), allow_zero=True)
-                except ValueError:
+                    per_1m = _convert_openrouter_price(raw_cell.strip(), allow_zero=True)
+                except (ValueError, InvalidOperation, OverflowError):
                     raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
                 if per_1m is not None:
                     prices[dim] = Decimal(per_1m)
@@ -328,22 +372,40 @@ def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
 def parse_openai_models_api_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]:
     """Parse a cached OpenAI /v1/models payload: identity only.
 
-    The Models API identity alone cannot prove a price, unit, or context
-    limit; those fields stay None and only the model's presence is observable.
+    Rows are validated on the raw structure and duplicate ids are
+    preserved: the set-based helper would erase duplicates before they
+    could be checked, and a malformed row must never disappear through
+    filtering. The Models API identity alone cannot prove a price, unit,
+    or context limit; those fields stay None and only the model's
+    presence is observable.
     """
     payload = _json_loads_bounded(evidence, kind="openai_models_api")
-    ids = _openai_model_ids(payload, kind="openai_models_api")
-    if len(ids) > MAX_MODELS_PER_SNAPSHOT:
-        raise SnapshotFormatError("openai_models_api:too_many_models")
-    return tuple(
-        ParsedModel(
-            provider="openai",
-            model=model_id,
-            parser="openai_models_api/v1",
-            identity_only=True,
+    if not isinstance(payload, Mapping):
+        raise SnapshotFormatError("openai_models_api:not_an_object")
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise SnapshotFormatError("openai_models_api:missing_data_array")
+    if len(data) > MAX_JSON_ITEMS:
+        raise SnapshotFormatError("openai_models_api:too_many_rows")
+    models: list[ParsedModel] = []
+    for index, row in enumerate(data):
+        if not isinstance(row, Mapping):
+            raise SnapshotFormatError("openai_models_api:malformed_row")
+        model_id = _safe_openai_model_id(row.get("id"))
+        if model_id is None:
+            raise SnapshotFormatError("openai_models_api:invalid_model_id")
+        models.append(
+            ParsedModel(
+                provider="openai",
+                model=model_id,
+                parser="openai_models_api/v1",
+                identity_only=True,
+                locators={"model:identity": f"data[{index}].id"},
+            )
         )
-        for model_id in sorted(ids)
-    )
+    if len(models) > MAX_MODELS_PER_SNAPSHOT:
+        raise SnapshotFormatError("openai_models_api:too_many_models")
+    return tuple(models)
 
 
 def parse_openai_pricing_docs_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]:
@@ -591,6 +653,44 @@ def parse_snapshot(
 
 # --- observation derivation ----------------------------------------------------
 
+def _parsed_model_signature(model: ParsedModel) -> tuple:
+    return (
+        tuple(sorted((dim, str(value)) for dim, value in model.prices.items())),
+        model.context_length,
+        model.max_output_tokens,
+        model.text_modality,
+        model.deprecated,
+    )
+
+
+def dedupe_parsed_models(parsed: SnapshotParse) -> tuple[list[ParsedModel], dict[str, tuple[str, int]]]:
+    """Deduplicate rows of one parsed snapshot with explicit dispositions.
+
+    Identical duplicate rows (same observed values) are deduplicated and
+    reported as ``("identical", count)``; rows for the same model id with
+    conflicting values are dropped from observations and reported as
+    ``("conflict", count)`` - a single snapshot contradicting itself must
+    block, not skip. Returns ``(kept_models, {model_id: (kind, count)})``.
+    """
+    by_id: dict[str, list[ParsedModel]] = {}
+    for model in parsed.models:
+        by_id.setdefault(model.model, []).append(model)
+    kept: list[ParsedModel] = []
+    duplicates: dict[str, tuple[str, int]] = {}
+    for model_id in sorted(by_id):
+        rows = by_id[model_id]
+        if len(rows) == 1:
+            kept.append(rows[0])
+            continue
+        if len({_parsed_model_signature(m) for m in rows}) == 1:
+            kept.append(rows[0])
+            duplicates[model_id] = ("identical", len(rows))
+        else:
+            duplicates[model_id] = ("conflict", len(rows))
+    kept.sort(key=lambda m: m.model)
+    return kept, duplicates
+
+
 def derive_observations(source_key: str, parsed: SnapshotParse) -> tuple[Observation, ...]:
     """Derive typed observations from one successfully parsed snapshot.
 
@@ -729,86 +829,149 @@ def observations_for(
     )
 
 
-def independent_digests(observations: tuple[Observation, ...], digests: Mapping[str, str]) -> int:
-    """Count of distinct snapshot content digests behind these observations.
+def independent_source_urls(observations: tuple[Observation, ...], urls: Mapping[str, str]) -> int:
+    """Count of distinct official source URLs behind these observations.
 
-    Duplicate URLs, aliases to identical bytes, or repeated references to one
-    snapshot are one digest, not independent corroboration.
+    Repeated retrievals or aliases of the same official URL are one source,
+    not independent corroboration - even when the content hashes of the
+    repeated retrievals differ. Only distinct URLs count.
     """
     seen: set[str] = set()
     for observation in observations:
-        digest = digests.get(observation.source_key)
-        if digest is not None:
-            seen.add(digest)
+        seen.add(urls.get(observation.source_key, observation.source_key))
     return len(seen)
 
 
 def contradicting_values(
-    observations: tuple[Observation, ...], digests: Mapping[str, str]
+    observations: tuple[Observation, ...],
+    urls: Mapping[str, str],
+    digests: Mapping[str, str],
+    fx_to_eur: Mapping[str, Decimal],
 ) -> tuple[str, ...] | None:
-    """Canonical values across DISTINCT snapshots for one field.
+    """Canonical values across distinct (URL, digest) snapshots for one field.
 
-    Returns the distinct values when different snapshots disagree, else None
-    (agreement or a single snapshot). Comparison is canonical, not raw string
-    spelling: money compares as Decimal (1 == 1.0); a single snapshot with
-    multiple source records (repeated references) never contradicts itself.
+    Returns the distinct raw values when different supplied snapshots
+    disagree, else None (agreement or a single snapshot). Comparison is
+    canonical, not raw string spelling: money compares after exact EUR
+    normalization (1 == 1.0); a value whose unit/currency is missing or
+    whose FX rate is unbound cannot be assigned a currency by assertion -
+    it is its own distinct marker, so unverifiable currencies never
+    silently agree. Observations grouped by the same (URL, digest) pair
+    (repeated references to identical bytes) never contradict themselves.
     """
     if not observations:
         return None
-    numeric_field = observations[0].field.startswith("pricing:")
-    by_digest_value: dict[str, set[Decimal | str]] = {}
+    pricing = observations[0].field.startswith("pricing:")
+    by_group: dict[tuple[str, str], set[Decimal | str]] = {}
+    raw_by_norm: dict[Decimal | str, str] = {}
     for observation in observations:
+        url = urls.get(observation.source_key, observation.source_key)
         digest = digests.get(observation.source_key, observation.source_key)
-        if numeric_field:
+        if pricing:
             try:
-                value: Decimal | str = Decimal(observation.value)
-            except InvalidOperation:
-                value = observation.value
+                normalized: Decimal | str = to_eur(Decimal(observation.value), observation.currency, fx_to_eur)
+            except (InvalidOperation, KeyError):
+                normalized = f"unresolvable:{observation.currency or 'unknown'}"
         else:
-            value = observation.value
-        by_digest_value.setdefault(digest, set()).add(value)
-    if len(by_digest_value) <= 1:
+            normalized = observation.value
+        by_group.setdefault((url, digest), set()).add(normalized)
+        raw_by_norm.setdefault(normalized, observation.value)
+    if len(by_group) <= 1:
         return None
     union: set[Decimal | str] = set()
-    for values in by_digest_value.values():
+    for values in by_group.values():
         union.update(values)
     if len(union) <= 1:
         return None
-    return tuple(sorted(str(value) for value in union))
+    return tuple(sorted(raw_by_norm.get(value, str(value)) for value in union))
 
 
 # --- reconciliation -------------------------------------------------------------
 
+def _observation_record(
+    observation: Observation,
+    urls: Mapping[str, str],
+    digests: Mapping[str, str],
+    source_times: Mapping[str, str],
+    fx_info: Mapping[str, Mapping[str, Any]],
+    fx_to_eur: Mapping[str, Decimal],
+) -> dict[str, Any]:
+    """Serializable record of one actual derived observation (D5)."""
+    normalized: str | None = None
+    conversion: str | None = None
+    if observation.field.startswith("pricing:") and observation.unit == "per_1m_tokens":
+        try:
+            normalized = str(to_eur(Decimal(observation.value), observation.currency, fx_to_eur))
+            if observation.currency is None:
+                conversion = "none"
+            elif observation.currency == _EUR:
+                conversion = "identity (EUR)"
+            else:
+                info = fx_info.get(observation.currency, {})
+                direction = "reciprocal of verified quote" if info.get("derived_reciprocal") else "verified quote"
+                conversion = (
+                    f"{observation.currency} to EUR at {fx_to_eur.get(observation.currency)} "
+                    f"({info.get('pair', 'verified FX binding')}, {direction}, quote date {info.get('quote_date', 'n/a')})"
+                )
+        except (InvalidOperation, KeyError):
+            normalized = None
+            conversion = "UNRESOLVED (no verified FX binding for this currency)"
+    return {
+        "source": observation.source_key,
+        "url": urls.get(observation.source_key, ""),
+        "digest": digests.get(observation.source_key, ""),
+        "retrieved_at": source_times.get(observation.source_key, ""),
+        "parser": observation.parser,
+        "locator": observation.locator,
+        "observed_value": observation.value,
+        "unit": observation.unit,
+        "currency": observation.currency,
+        "normalized_eur": normalized,
+        "conversion": conversion,
+    }
+
+
 def reconcile_model_facts(
     *,
     provider: str,
-    model: str,
-    upstream_model: str | None,
+    binding_model: str,
     proposed: Mapping[str, Any],
     observations: tuple[Observation, ...],
     official_source_keys: frozenset[str],
-    semantic_provenance: bool,
+    declared_sources: Mapping[str, frozenset[str]],
     fx_to_eur: Mapping[str, Decimal],
+    urls: Mapping[str, str],
     digests: Mapping[str, str],
+    source_times: Mapping[str, str],
+    fx_info: Mapping[str, Mapping[str, Any]],
     required_price_dims: tuple[str, ...] = ("input", "output"),
 ) -> tuple[list[ReconciliationFinding], dict[str, BackedFact], set[str], set[str]]:
     """Reconcile proposed financial/capability/limit facts against parsed
-    observations for one (provider, model).
+    observations for one (provider, binding model).
+
+    ``binding_model`` is the route's effective upstream model: provider
+    facts bind to provider + actual upstream model, and a public alias is
+    local routing policy, not a model whose price can be borrowed.
 
     ``proposed`` maps field names to specs:
       pricing:<dim> -> {"value": str|None, "currency": str, "required": bool}
-      model:<field> -> int | bool (only fields that are actually proposed;
-      None/False values are no claims and are not passed in)
+      model:<field> -> int | bool (only fields that are actually proposed)
 
-    Matching uses canonical semantics: money is compared in EUR after exact
-    Decimal conversion with import-contract quantization (1 == 1.0; a USD
-    observation and a EUR proposal agree when the verified FX rate makes
-    them equal). Only observations from OFFICIAL-classified sources
-    (approved publisher/kind/parser/host, digest-verified bytes, successful
-    deterministic parse) can verify a fact. Observations from
-    operator/semantic sources never verify: they can at most keep a fact in
-    REVIEW (the documented operator-input policy). Observations from any
-    other unapproved source cannot establish trust.
+    Each field is validated against the sources its own fact declares
+    (``declared_sources``): referenced-but-wrong field/model/provider
+    evidence blocks, and a match that exists only in an undeclared source
+    is a reference mismatch, never a silent repair. Authoritative
+    conflicts are detected across ALL official observations for the
+    (provider, binding model, field) context, so selective citation cannot
+    hide a conflicting supplied observation.
+
+    Matching uses canonical semantics: money compares in EUR after exact
+    Decimal conversion with import-contract quantization (1 == 1.0).
+    Observations with a missing currency or an unbound FX rate cannot be
+    assigned a currency by assertion and never verify a fact. Only
+    OFFICIAL-classified observations (approved publisher/kind/parser/host,
+    digest-verified bytes, successful deterministic parse) can verify a
+    fact; operator/semantic provenance never does.
 
     Returns (findings, backed, unresolved_required_fields, missing_fx_currencies).
     """
@@ -817,10 +980,7 @@ def reconcile_model_facts(
     unresolved: set[str] = set()
     missing_fx: set[str] = set()
 
-    names = {model}
-    if upstream_model and upstream_model != model:
-        names.add(upstream_model)
-    model_names = frozenset(names)
+    model_names = frozenset({binding_model})
 
     def _fx_convert(value: str, currency: str | None) -> Decimal | None:
         try:
@@ -829,6 +989,18 @@ def reconcile_model_facts(
             if isinstance(currency, str) and currency not in (_EUR, ""):
                 missing_fx.add(currency)
             return None
+
+    def _field_observations(field_name: str) -> tuple[tuple[Observation, ...], tuple[Observation, ...]]:
+        all_obs = observations_for(
+            observations, field_name=field_name, model_names=model_names, provider=provider
+        )
+        official_all = tuple(o for o in all_obs if o.source_key in official_source_keys)
+        declared = declared_sources.get(field_name, frozenset())
+        official_declared = tuple(o for o in official_all if o.source_key in declared)
+        return official_all, official_declared
+
+    def _record(observation: Observation) -> dict[str, Any]:
+        return _observation_record(observation, urls, digests, source_times, fx_info, fx_to_eur)
 
     for field_name in sorted(proposed):
         spec = proposed[field_name]
@@ -843,201 +1015,176 @@ def reconcile_model_facts(
             required = bool(spec.get("required")) or dim in required_price_dims
             if value is None:
                 continue  # proposed null dimension: nothing to bind
-            field_obs = observations_for(
-                observations, field_name=field_name, model_names=model_names, provider=provider
-            )
-            official_obs = tuple(
-                observation for observation in field_obs if observation.source_key in official_source_keys
-            )
-            if official_obs:
-                contradict = contradicting_values(official_obs, digests)
-                if contradict is not None:
-                    findings.append(
-                        ReconciliationFinding(
-                            "BLOCKER",
-                            "source_observations_contradict",
-                            f"distinct snapshots disagree on {field_name}: {', '.join(contradict[:4])}",
-                            provider,
-                            model,
-                        )
+            official_all, official_declared = _field_observations(field_name)
+            contradict = contradicting_values(official_all, urls, digests, fx_to_eur)
+            if contradict is not None:
+                findings.append(
+                    ReconciliationFinding(
+                        "BLOCKER",
+                        "source_observations_contradict",
+                        f"supplied official snapshots disagree on {field_name} for {provider}/{binding_model}: "
+                        + ", ".join(contradict[:4])
+                        + ("" if len(contradict) <= 4 else f" (+{len(contradict) - 4} more)"),
+                        provider,
+                        binding_model,
                     )
-                    unresolved.add(field_name)
-                    continue
-                proposed_eur = _fx_convert(value, currency)
-                if proposed_eur is None:
-                    continue
-                matching = []
-                for observation in official_obs:
+                )
+                unresolved.add(field_name)
+                continue
+            proposed_eur = _fx_convert(value, currency)
+            matching: list[Observation] = []
+            if proposed_eur is not None:
+                for observation in official_declared:
                     observed_eur = _fx_convert(observation.value, observation.currency)
                     if observed_eur is not None and observed_eur == proposed_eur:
                         matching.append(observation)
-                if matching:
-                    backed[field_name] = BackedFact(
-                        field=field_name,
-                        proposed=value,
-                        backed_by=tuple(obs.source_key for obs in matching),
-                        independent_sources=independent_digests(matching, digests),
-                        semantic_only=False,
-                    )
-                else:
-                    findings.append(
-                        ReconciliationFinding(
-                            "BLOCKER",
-                            "source_evidence_value_mismatch",
-                            f"proposed {field_name}={value} {currency or ''} does not match any parsed official snapshot value for {provider}/{model}",
-                            provider,
-                            model,
-                        )
-                    )
-                    unresolved.add(field_name)
-            else:
-                non_official_match = False
-                if field_obs:
-                    proposed_eur = _fx_convert(value, currency)
-                    if proposed_eur is not None:
-                        non_official_match = any(
-                            _fx_convert(observation.value, observation.currency) == proposed_eur
-                            for observation in field_obs
-                        )
-                if semantic_provenance:
-                    findings.append(
-                        ReconciliationFinding(
-                            "REVIEW",
-                            "source_evidence_semantic_only",
-                            f"{field_name} for {provider}/{model} has no verified deterministic observation; operator/semantic provenance is review-only"
-                            + ("" if non_official_match else "; unapproved observation disagrees with the proposal"),
-                            provider,
-                            model,
-                        )
-                    )
-                    if field_obs:
-                        backed[field_name] = BackedFact(
-                            field=field_name,
-                            proposed=value,
-                            backed_by=tuple(obs.source_key for obs in field_obs),
-                            independent_sources=independent_digests(field_obs, digests),
-                            semantic_only=True,
-                        )
-                    if required:
-                        unresolved.add(field_name)
-                elif required:
-                    findings.append(
-                        ReconciliationFinding(
-                            "BLOCKER",
-                            "source_evidence_unapproved" if field_obs else "source_evidence_unsupported",
-                            (
-                                f"required {field_name} for {provider}/{model} is backed only by unapproved source observations"
-                                if field_obs
-                                else f"required {field_name} for {provider}/{model} has no supporting snapshot observation"
-                            ),
-                            provider,
-                            model,
-                        )
-                    )
-                    unresolved.add(field_name)
-                else:
-                    findings.append(
-                        ReconciliationFinding(
-                            "REVIEW",
-                            "source_evidence_unapproved" if field_obs else "source_evidence_unsupported",
-                            (
-                                f"{field_name} for {provider}/{model} is backed only by unapproved source observations"
-                                if field_obs
-                                else f"{field_name} for {provider}/{model} has no supporting snapshot observation (not required)"
-                            ),
-                            provider,
-                            model,
-                        )
-                    )
-        else:
-            value = spec if not isinstance(spec, Mapping) else spec.get("value")
-            if value is None:
+            if matching:
+                backed[field_name] = BackedFact(
+                    field=field_name,
+                    proposed=value,
+                    proposed_normalized=str(proposed_eur) if proposed_eur is not None else None,
+                    backed_by=tuple(obs.source_key for obs in matching),
+                    independent_sources=independent_source_urls(tuple(matching), urls),
+                    observations=tuple(_record(obs) for obs in matching[:8]),
+                )
                 continue
-            field_obs = observations_for(
-                observations, field_name=field_name, model_names=model_names, provider=provider
-            )
-            official_obs = tuple(
-                observation for observation in field_obs if observation.source_key in official_source_keys
-            )
-            canonical = "true" if value is True else ("false" if value is False else str(value))
-            if official_obs:
-                contradict = contradicting_values(official_obs, digests)
-                if contradict is not None:
-                    findings.append(
-                        ReconciliationFinding(
-                            "BLOCKER",
-                            "source_observations_contradict",
-                            f"distinct snapshots disagree on {field_name}: {', '.join(contradict[:4])}",
-                            provider,
-                            model,
-                        )
-                    )
+            if proposed_eur is None:
+                if required:
+                    # missing_fx already carries the currency; the model is
+                    # blocked via fx_evidence_unbound, never converted with
+                    # an invented rate.
                     unresolved.add(field_name)
-                    continue
-                matching = [observation for observation in official_obs if observation.value == canonical]
-                if matching:
-                    backed[field_name] = BackedFact(
-                        field=field_name,
-                        proposed=canonical,
-                        backed_by=tuple(obs.source_key for obs in matching),
-                        independent_sources=independent_digests(matching, digests),
-                        semantic_only=False,
-                    )
                 else:
                     findings.append(
                         ReconciliationFinding(
-                            "BLOCKER",
-                            "source_evidence_value_mismatch",
-                            f"proposed {field_name}={canonical} does not match parsed official snapshot values for {provider}/{model}",
+                            "REVIEW",
+                            "source_evidence_unsupported",
+                            f"optional {field_name} for {provider}/{binding_model} proposed in {currency or 'unknown currency'} "
+                            "has no verified FX rate and cannot be bound",
                             provider,
-                            model,
+                            binding_model,
                         )
                     )
                     unresolved.add(field_name)
-            elif field_obs:
+                continue
+            undeclared_match = any(
+                (obs_eur := _fx_convert(observation.value, observation.currency)) is not None
+                and obs_eur == proposed_eur
+                for observation in official_all
+                if observation.source_key not in declared_sources.get(field_name, frozenset())
+            )
+            if undeclared_match:
                 findings.append(
                     ReconciliationFinding(
-                        "BLOCKER" if not semantic_provenance else "REVIEW",
-                        "source_evidence_unapproved" if not semantic_provenance else "source_evidence_semantic_only",
-                        (
-                            f"proposed {field_name}={canonical} is backed only by unapproved source observations"
-                            if not semantic_provenance
-                            else f"{field_name} for {provider}/{model} has no verified deterministic observation; operator/semantic provenance is review-only"
-                        ),
+                        "BLOCKER",
+                        "source_evidence_reference_mismatch",
+                        f"proposed {field_name} matches an official snapshot observation that is not among the "
+                        f"fact's declared sources for {provider}/{binding_model}; per-field references must bind "
+                        "the supporting evidence",
                         provider,
-                        model,
+                        binding_model,
                     )
                 )
-                if semantic_provenance:
-                    backed[field_name] = BackedFact(
-                        field=field_name,
-                        proposed=canonical,
-                        backed_by=tuple(obs.source_key for obs in field_obs),
-                        independent_sources=independent_digests(field_obs, digests),
-                        semantic_only=True,
+                unresolved.add(field_name)
+                continue
+            unresolvable_declared = any(
+                _fx_convert(observation.value, observation.currency) is None for observation in official_declared
+            )
+            if official_declared and not unresolvable_declared:
+                findings.append(
+                    ReconciliationFinding(
+                        "BLOCKER",
+                        "source_evidence_value_mismatch",
+                        f"proposed {field_name}={value} {currency or ''} does not match any parsed observation "
+                        f"from its declared sources for {provider}/{binding_model}",
+                        provider,
+                        binding_model,
                     )
-                    unresolved.add(field_name)
+                )
             else:
-                if semantic_provenance:
-                    findings.append(
-                        ReconciliationFinding(
-                            "REVIEW",
-                            "source_evidence_semantic_only",
-                            f"{field_name} for {provider}/{model} has no supporting snapshot observation; operator/semantic provenance is review-only",
-                            provider,
-                            model,
-                        )
+                findings.append(
+                    ReconciliationFinding(
+                        "BLOCKER" if required else "REVIEW",
+                        "source_evidence_unsupported",
+                        f"{'required ' if required else 'optional '}{field_name} for {provider}/{binding_model} has no "
+                        "verified snapshot observation from its declared sources (a matching digest of arbitrary "
+                        "bytes, a semantic label, or another model's observations is not evidence)",
+                        provider,
+                        binding_model,
                     )
-                    unresolved.add(field_name)
-                else:
-                    findings.append(
-                        ReconciliationFinding(
-                            "BLOCKER",
-                            "source_evidence_unsupported",
-                            f"proposed {field_name}={canonical} for {provider}/{model} has no supporting snapshot observation",
-                            provider,
-                            model,
-                        )
-                    )
-                    unresolved.add(field_name)
+                )
+            unresolved.add(field_name)
+            continue
+        # --- non-pricing model/capability fields ---------------------------
+        value = spec if not isinstance(spec, Mapping) else spec.get("value")
+        if value is None:
+            continue
+        official_all, official_declared = _field_observations(field_name)
+        contradict = contradicting_values(official_all, urls, digests, fx_to_eur)
+        if contradict is not None:
+            findings.append(
+                ReconciliationFinding(
+                    "BLOCKER",
+                    "source_observations_contradict",
+                    f"supplied official snapshots disagree on {field_name} for {provider}/{binding_model}: "
+                    + ", ".join(contradict[:4]),
+                    provider,
+                    binding_model,
+                )
+            )
+            unresolved.add(field_name)
+            continue
+        canonical = "true" if value is True else ("false" if value is False else str(value))
+        matching = [observation for observation in official_declared if observation.value == canonical]
+        if matching:
+            backed[field_name] = BackedFact(
+                field=field_name,
+                proposed=canonical,
+                proposed_normalized=canonical,
+                backed_by=tuple(obs.source_key for obs in matching),
+                independent_sources=independent_source_urls(tuple(matching), urls),
+                observations=tuple(_record(obs) for obs in matching[:8]),
+            )
+            continue
+        undeclared_match = any(
+            observation.value == canonical
+            for observation in official_all
+            if observation.source_key not in declared_sources.get(field_name, frozenset())
+        )
+        if undeclared_match:
+            findings.append(
+                ReconciliationFinding(
+                    "BLOCKER",
+                    "source_evidence_reference_mismatch",
+                    f"proposed {field_name}={canonical} matches an official snapshot observation that is not "
+                    f"among the fact's declared sources for {provider}/{binding_model}",
+                    provider,
+                    binding_model,
+                )
+            )
+            unresolved.add(field_name)
+            continue
+        if official_declared:
+            findings.append(
+                ReconciliationFinding(
+                    "BLOCKER",
+                    "source_evidence_value_mismatch",
+                    f"proposed {field_name}={canonical} does not match parsed observations from its declared "
+                    f"sources for {provider}/{binding_model}",
+                    provider,
+                    binding_model,
+                )
+            )
+        else:
+            findings.append(
+                ReconciliationFinding(
+                    "BLOCKER",
+                    "source_evidence_unsupported",
+                    f"proposed {field_name}={canonical} for {provider}/{binding_model} has no verified snapshot "
+                    "observation from its declared sources (a semantic label is not evidence)",
+                    provider,
+                    binding_model,
+                )
+            )
+        unresolved.add(field_name)
     return findings, backed, unresolved, missing_fx

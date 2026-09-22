@@ -290,16 +290,43 @@ def _obs(source_key: str, model: str, field_name: str, value: str, currency: str
     )
 
 
+def _reconcile(
+    proposed,
+    observations,
+    *,
+    official,
+    declared,
+    fx_to_eur=None,
+    urls=None,
+    digests=None,
+    provider="openrouter",
+    binding_model="m",
+):
+    """180-d contract: every field validates against the sources its own
+    fact declares; conflicts are checked across ALL official observations;
+    independence counts distinct official URLs, not source records."""
+    return se.reconcile_model_facts(
+        provider=provider,
+        binding_model=binding_model,
+        proposed=proposed,
+        observations=observations,
+        official_source_keys=frozenset(official),
+        declared_sources=declared,
+        fx_to_eur=fx_to_eur or {},
+        urls=urls or {},
+        digests=digests or {},
+        source_times={},
+        fx_info={},
+    )
+
+
 def test_canonical_semantics_one_equals_one_point_zero() -> None:
-    findings, backed, _unresolved, _missing = se.reconcile_model_facts(
-        provider="openrouter",
-        model="m",
-        upstream_model=None,
+    findings, backed, _unresolved, _missing = _reconcile(
         proposed={"pricing:input": {"value": "1", "currency": "EUR", "required": True}},
         observations=(_obs("s1", "m", "pricing:input", "1.0"),),
-        official_source_keys=frozenset({"s1"}),
-        semantic_provenance=False,
-        fx_to_eur={},
+        official={"s1"},
+        declared={"pricing:input": frozenset({"s1"})},
+        urls={"s1": "https://openrouter.ai/api/v1/models"},
         digests={"s1": "d1"},
     )
     assert findings == []
@@ -307,36 +334,38 @@ def test_canonical_semantics_one_equals_one_point_zero() -> None:
 
 
 def test_distinct_snapshots_conflicting_values_block() -> None:
-    findings, _backed, _unresolved, _missing = se.reconcile_model_facts(
-        provider="openrouter",
-        model="m",
-        upstream_model=None,
-        proposed={"pricing:input": {"value": "0.54", "currency": "USD", "required": True}},
+    findings, _backed, _unresolved, _missing = _reconcile(
+        proposed={"pricing:input": {"value": "0.5", "currency": "EUR", "required": True}},
         observations=(
-            _obs("s1", "m", "pricing:input", "0.54"),
-            _obs("s2", "m", "pricing:input", "0.648"),
+            _obs("s1", "m", "pricing:input", "0.54", "USD"),
+            _obs("s2", "m", "pricing:input", "0.648", "USD"),
         ),
-        official_source_keys=frozenset({"s1", "s2"}),
-        semantic_provenance=False,
-        fx_to_eur={},
+        official={"s1", "s2"},
+        declared={"pricing:input": frozenset({"s1", "s2"})},
+        fx_to_eur={"USD": Decimal("0.925925926")},
+        urls={
+            "s1": "https://openrouter.ai/api/v1/models",
+            "s2": "https://openrouter.ai/models/synthetic/m",
+        },
         digests={"s1": "d1", "s2": "d2"},
     )
     assert [f.code for f in findings] == ["source_observations_contradict"]
+    assert all(f.severity == "BLOCKER" for f in findings)
 
 
 def test_equal_values_with_different_decimal_spellings_agree() -> None:
-    findings, backed, _unresolved, _missing = se.reconcile_model_facts(
-        provider="openrouter",
-        model="m",
-        upstream_model=None,
+    findings, backed, _unresolved, _missing = _reconcile(
         proposed={"pricing:input": {"value": "1.0", "currency": "EUR", "required": True}},
         observations=(
             _obs("s1", "m", "pricing:input", "1"),
             _obs("s2", "m", "pricing:input", "1.0"),
         ),
-        official_source_keys=frozenset({"s1", "s2"}),
-        semantic_provenance=False,
-        fx_to_eur={},
+        official={"s1", "s2"},
+        declared={"pricing:input": frozenset({"s1", "s2"})},
+        urls={
+            "s1": "https://openrouter.ai/api/v1/models",
+            "s2": "https://openrouter.ai/models/synthetic/m",
+        },
         digests={"s1": "d1", "s2": "d2"},
     )
     assert findings == []
@@ -349,15 +378,15 @@ def test_repeated_references_to_one_snapshot_are_not_independent() -> None:
         _obs(f"s{i}", "m", "pricing:input", "0.54", "USD") for i in range(3)
     )
     digests = {f"s{i}": "same-digest" for i in range(3)}
-    findings, backed, _unresolved, _missing = se.reconcile_model_facts(
-        provider="openrouter",
-        model="m",
-        upstream_model=None,
+    # Repeated retrievals / aliases of the same official URL: one source.
+    urls = {f"s{i}": "https://openrouter.ai/api/v1/models" for i in range(3)}
+    findings, backed, _unresolved, _missing = _reconcile(
         proposed={"pricing:input": {"value": "0.5", "currency": "EUR", "required": True}},
         observations=observations,
-        official_source_keys=frozenset(digests),
-        semantic_provenance=False,
+        official=set(digests),
+        declared={"pricing:input": frozenset(digests)},
         fx_to_eur={"USD": Decimal("0.925925926")},
+        urls=urls,
         digests=digests,
     )
     assert findings == []
@@ -365,65 +394,71 @@ def test_repeated_references_to_one_snapshot_are_not_independent() -> None:
 
 
 def test_usd_observation_binds_eur_proposal_via_verified_fx() -> None:
-    findings, backed, _unresolved, missing = se.reconcile_model_facts(
-        provider="openrouter",
-        model="m",
-        upstream_model=None,
+    findings, backed, _unresolved, missing = _reconcile(
         proposed={"pricing:input": {"value": "0.5", "currency": "EUR", "required": True}},
         observations=(_obs("s1", "m", "pricing:input", "0.54", "USD"),),
-        official_source_keys=frozenset({"s1"}),
-        semantic_provenance=False,
+        official={"s1"},
+        declared={"pricing:input": frozenset({"s1"})},
         fx_to_eur={"USD": Decimal("0.925925926")},
+        urls={"s1": "https://openrouter.ai/api/v1/models"},
         digests={"s1": "d1"},
     )
     assert findings == [] and missing == set()
-    assert "pricing:input" in backed
+    fact = backed["pricing:input"]
+    assert fact.proposed_normalized == "0.500000000"
+    (record,) = fact.observations
+    assert record["observed_value"] == "0.54"
+    assert record["unit"] == "per_1m_tokens"
+    assert record["currency"] == "USD"
+    assert record["normalized_eur"] == "0.500000000"
+    assert record["locator"] == "loc:s1"
 
 
 def test_unresolvable_fx_currency_reports_unbound() -> None:
-    findings, _backed, _unresolved, missing = se.reconcile_model_facts(
-        provider="openrouter",
-        model="m",
-        upstream_model=None,
+    findings, _backed, _unresolved, missing = _reconcile(
         proposed={"pricing:input": {"value": "0.54", "currency": "USD", "required": True}},
         observations=(_obs("s1", "m", "pricing:input", "0.54", "USD"),),
-        official_source_keys=frozenset({"s1"}),
-        semantic_provenance=False,
-        fx_to_eur={},
+        official={"s1"},
+        declared={"pricing:input": frozenset({"s1"})},
+        fx_to_eur={},  # no verified USD->EUR binding
+        urls={"s1": "https://openrouter.ai/api/v1/models"},
         digests={"s1": "d1"},
     )
     assert missing == {"USD"}
+    # An unresolvable currency never agrees with a value by assertion.
+    assert findings == []
 
 
 def test_unapproved_observations_cannot_back_required_fact() -> None:
-    findings, _backed, _unresolved, _missing = se.reconcile_model_facts(
-        provider="openrouter",
-        model="m",
-        upstream_model=None,
+    findings, _backed, _unresolved, _missing = _reconcile(
         proposed={"pricing:input": {"value": "0.5", "currency": "EUR", "required": True}},
         observations=(_obs("s1", "m", "pricing:input", "0.54", "USD"),),
-        official_source_keys=frozenset(),  # off-host / unparseable source
-        semantic_provenance=False,
+        official=frozenset(),  # off-host / unparseable source: never official
+        declared={"pricing:input": frozenset({"s1"})},
         fx_to_eur={"USD": Decimal("0.925925926")},
+        urls={"s1": "https://example.invalid/models"},
         digests={"s1": "d1"},
     )
-    assert [f.code for f in findings] == ["source_evidence_unapproved"]
+    assert [f.code for f in findings] == ["source_evidence_unsupported"]
+    assert all(f.severity == "BLOCKER" for f in findings)
 
 
-def test_semantic_provenance_is_review_only_never_verified() -> None:
-    findings, backed, _unresolved, _missing = se.reconcile_model_facts(
-        provider="openrouter",
-        model="m",
-        upstream_model=None,
+def test_semantic_label_without_observations_blocks() -> None:
+    """180-d D2: a semantic extraction label with no parsed observations
+    cannot verify a required fact: the field blocks as unsupported. A
+    model-wide semantic boolean no longer produces a review-only backing."""
+    findings, backed, _unresolved, _missing = _reconcile(
         proposed={"pricing:input": {"value": "0.5", "currency": "EUR", "required": True}},
         observations=(),
-        official_source_keys=frozenset(),
-        semantic_provenance=True,
+        official=frozenset(),
+        declared={"pricing:input": frozenset({"s1"})},
         fx_to_eur={},
+        urls={},
         digests={},
     )
-    assert [f.code for f in findings] == ["source_evidence_semantic_only"]
-    assert "pricing:input" not in backed
+    assert [f.code for f in findings] == ["source_evidence_unsupported"]
+    assert all(f.severity == "BLOCKER" for f in findings)
+    assert backed == {}
 
 
 # --- full validation: family 1 adversarial inputs ------------------------------
@@ -629,10 +664,14 @@ def test_fx_two_distinct_ecb_snapshots_contradict_block() -> None:
     assert "source_observations_contradict" in _codes(report)
 
 
-def test_fx_semantic_source_is_review_only() -> None:
-    """An FX fact cited to a non-ECB docs source never verifies: the run is
-    at least READY_WITH_WARNINGS with the semantic-only finding."""
+def test_fx_semantic_source_cannot_bind_fact() -> None:
+    """180-d D2 reproducer 2: with the ECB source removed and the FX fact
+    pointed at a semantic docs_page quote whose bytes carry no numeric
+    rate, the old READY_WITH_WARNINGS + guessed-rate result is gone: the
+    fact is unbound (no verified reference quote), fx_backed is empty, and
+    the run blocks. No semantic/manual FX escape hatch."""
     payload = _usd_pricing_payload(fx=[], sources=[])
+    payload["run_id"] = "test-d2-semantic-fx"
     payload["fx"] = [
         {
             "base_currency": "EUR",
@@ -650,7 +689,7 @@ def test_fx_semantic_source_is_review_only() -> None:
             "warnings": [],
         }
     ]
-    junk = b"fx notes"
+    junk = b"fx notes with no numeric rate"
     payload["sources"].append(
         {
             "provider": "openrouter",
@@ -669,30 +708,132 @@ def test_fx_semantic_source_is_review_only() -> None:
         }
     )
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY_WITH_WARNINGS"
-    assert "fx_evidence_semantic_only" in _codes(report)
+    assert report.state == "BLOCKED", _codes(report)
+    assert "fx_evidence_unbound" in _codes(report)
+    assert report.source_evidence["fx_backed"] == []
+    # The USD proposals were never normalized with a guessed rate.
+    assert report.artifacts["pricing_rows"] == 0
 
 
 # --- inventory and partial failures (family 4) ----------------------------------
 
 
-def test_inventory_counts_unproposed_candidates() -> None:
+EXTRA_MODEL = "synthetic/unproposed-v1"
+
+
+def _proposed_extra_model_payload() -> dict:
+    """First-install bundle where the extra eligible snapshot model is also
+    explicitly proposed (model/route/pricing/source facts) under an
+    explicit subset selection."""
     payload = _first_install_payload()
-    # The snapshot also lists a model the selection does not propose.
+    # 0.5/2.0 EUR round-trips exactly through the 1.08 quote at 9 dp
+    # (like the fixture prices); 9/9 would drift one ulp.
     set_openrouter_evidence(
-        payload, {"synthetic/chat-v1": ("0.25", "1.0"), "synthetic/unproposed-v1": ("9", "9")}
+        payload, {"synthetic/chat-v1": ("0.25", "1.0"), EXTRA_MODEL: ("0.5", "2")}
+    )
+    base_model = payload["models"][0]
+    payload["models"].append(
+        {
+            **base_model,
+            "model": EXTRA_MODEL,
+            "provenance": {**base_model["provenance"], "sources": [f"openrouter|{EXTRA_MODEL}|openrouter_models_api"]},
+        }
+    )
+    base_route = payload["routes"][0]
+    payload["routes"].append(
+        {
+            **base_route,
+            "requested_model": EXTRA_MODEL,
+            "upstream_model": EXTRA_MODEL,
+            "provenance": {**base_route["provenance"], "sources": [f"openrouter|{EXTRA_MODEL}|openrouter_models_api"]},
+        }
+    )
+    base_pricing = payload["pricing"][0]
+    payload["pricing"].append(
+        {
+            **base_pricing,
+            "model": EXTRA_MODEL,
+            "dimensions": [
+                dict(dimension, value="0.5" if dimension["name"] == "input" else "2")
+                for dimension in base_pricing["dimensions"]
+            ],
+            "provenance": {**base_pricing["provenance"], "sources": [f"openrouter|{EXTRA_MODEL}|openrouter_models_api"]},
+        }
+    )
+    or_source = next(s for s in payload["sources"] if s["provider"] == "openrouter")
+    payload["sources"].append({**or_source, "model": EXTRA_MODEL})
+    payload["selection"]["model_include"] = ["synthetic/chat-v1", EXTRA_MODEL]
+    return payload
+
+
+def test_all_eligible_unexplained_omission_blocks() -> None:
+    """180-d D4 committed probe: an extra fully populated eligible text
+    model in the official snapshot with an all-eligible selection is an
+    unexplained omission - it blocks, and the per-ID disposition is in the
+    inventory (no silent count-only counter)."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-d4-omission"
+    set_openrouter_evidence(
+        payload, {"synthetic/chat-v1": ("0.25", "1.0"), EXTRA_MODEL: ("9", "9")}
     )
     _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    assert "selection_unexplained_omission" in _codes(report)
     inventory = report.source_evidence["inventory"]["openrouter"]
     assert inventory["evidence_models"] == 2
     assert inventory["selected_models"] == 1
-    assert inventory["unproposed_candidates"] == 1
-    # Counting an unproposed candidate is not a finding on its own.
-    assert report.state == "READY"
+    assert inventory["unexplained_omissions"] == 1
+    assert inventory["selection_mode"] == "all_eligible"
+    # The proposed model still creates its row; the omitted model never does.
+    assert report.artifacts["pricing_rows"] == 1
+    assert EXTRA_MODEL not in _artifacts["pricing-proposal.tsv"].decode("utf-8")
 
 
-def test_duplicate_model_id_in_snapshot_is_review_not_ready_clean() -> None:
+def test_explicit_subset_proposing_every_eligible_model_is_ready() -> None:
+    """180-d D4 positive: the same extra model, explicitly selected and
+    proposed, is a normal create - explicit subsets are preserved, not
+    forced to all-eligible."""
+    payload = _proposed_extra_model_payload()
+    payload["run_id"] = "test-d4-subset-both"
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "READY", _codes(report)
+    assert report.artifacts["pricing_rows"] == 2
+    inventory = report.source_evidence["inventory"]["openrouter"]
+    assert inventory["evidence_models"] == 2
+    assert inventory["selected_models"] == 2
+    assert inventory["unexplained_omissions"] == 0
+    assert inventory["selection_mode"] == "explicit_subset"
+
+
+def test_explicit_subset_excluding_eligible_model_is_ready_and_named() -> None:
+    """180-d D4: an explicit subset may omit eligible models; the omission
+    is named and counted in the report without a per-row warning."""
+    payload = _proposed_extra_model_payload()
+    payload["run_id"] = "test-d4-subset-exclude"
+    payload["selection"]["model_include"] = ["synthetic/chat-v1"]
+    payload["models"] = [m for m in payload["models"] if m["model"] != EXTRA_MODEL]
+    payload["routes"] = [r for r in payload["routes"] if r["requested_model"] != EXTRA_MODEL]
+    payload["pricing"] = [p for p in payload["pricing"] if p["model"] != EXTRA_MODEL]
+    payload["sources"] = [s for s in payload["sources"] if s["model"] != EXTRA_MODEL]
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "READY", _codes(report)
+    assert report.artifacts["pricing_rows"] == 1
+    inventory = report.source_evidence["inventory"]["openrouter"]
+    assert inventory["explicitly_excluded_models"] == 1
+    assert inventory["excluded_ids"] == [EXTRA_MODEL]
+    assert inventory["unexplained_omissions"] == 0
+    assert inventory["selection_mode"] == "explicit_subset"
+    # No per-row warning for a deliberately excluded model.
+    assert not any(EXTRA_MODEL in (w.detail or "") and w.severity == "REVIEW"
+                   for w in report.warnings)
+
+
+def test_identical_duplicate_rows_in_snapshot_dedupe_with_finding() -> None:
+    """Identical repeated rows in one snapshot deduplicate under an
+    explicit safe policy with a truthful REVIEW finding (the model still
+    validates; the deduplication is visible, not silent)."""
     payload = _first_install_payload()
+    payload["run_id"] = "test-dup-identical"
     data = json.loads(openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.25", "1.0")}))
     data["data"].append(dict(data["data"][0]))  # identical duplicate row
     snapshot = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
@@ -701,8 +842,36 @@ def test_duplicate_model_id_in_snapshot_is_review_not_ready_clean() -> None:
             source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
             source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY_WITH_WARNINGS"
-    assert "source_duplicate_model_id" in _codes(report)
+    assert report.state == "READY_WITH_WARNINGS", _codes(report)
+    assert "source_duplicate_rows_deduplicated" in _codes(report)
+    finding = next(w for w in report.warnings if w.code == "source_duplicate_rows_deduplicated")
+    assert finding.severity == "REVIEW"
+    # The deduplicated model still validates and its facts stay bound.
+    assert report.counts["ready"] == 1
+    assert report.source_evidence["backed_facts"]
+
+
+def test_conflicting_duplicate_rows_in_snapshot_block() -> None:
+    """Conflicting rows for one model id within ONE snapshot block: a
+    single digest disagreeing with itself is a contradiction, not a skip
+    (the 'only one digest is involved' escape is gone)."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-dup-conflict"
+    data = json.loads(openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.25", "1.0")}))
+    conflict = dict(data["data"][0])
+    conflict["pricing"] = dict(conflict["pricing"], prompt="0.00000199")
+    data["data"].append(conflict)
+    snapshot = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
+            source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    assert "source_observations_contradict" in _codes(report)
+    finding = next(w for w in report.warnings if w.code == "source_observations_contradict")
+    assert finding.severity == "BLOCKER"
+    assert report.artifacts["pricing_rows"] == 0
 
 
 def test_partial_source_failure_isolates_the_failed_model() -> None:
@@ -807,8 +976,15 @@ def test_public_alias_binds_through_upstream_identity() -> None:
     assert "pricing:input" in fields
 
 
-def test_same_model_id_is_independent_across_providers() -> None:
+def test_operator_input_mirror_cannot_verify_provider_facts() -> None:
+    """180-d D1: an operator-input mirror of a model ID in a second
+    provider is not provider evidence. The old review-only NEW row is a
+    bypass: the mirror's required facts cannot be verified, so the
+    mirrored model blocks while the original provider row is unaffected."""
+    import copy
+
     payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
+    payload["run_id"] = "test-oi-mirror-blocks"
     payload["selection"] = {"providers": ["openai", "openrouter"], "model_include": ["synthetic/stable-v1"]}
     or_model = next(
         m for m in payload["models"] if m["model"] == "synthetic/stable-v1" and m["provider"] == "openrouter"
@@ -819,8 +995,6 @@ def test_same_model_id_is_independent_across_providers() -> None:
     or_pricing = next(
         p for p in payload["pricing"] if p["model"] == "synthetic/stable-v1" and p["provider"] == "openrouter"
     )
-    import copy
-
     mirror_provenance = {
         "extractor": "fixture-deterministic/1.0",
         "extraction": "deterministic",
@@ -861,12 +1035,413 @@ def test_same_model_id_is_independent_across_providers() -> None:
     _bundle, report, _artifacts = _validate_payload(payload, baseline)
     codes = _codes(report)
     assert not ({"missing_pricing", "missing_route", "source_contradiction", "route_upstream_contradiction"} & codes)
-    # The operator-attested mirror is review-only, never verified.
-    assert report.state == "READY_WITH_WARNINGS"
-    assert "source_evidence_semantic_only" in codes
+    # The operator-attested mirror blocks: operator input is never official evidence.
+    assert report.state == "BLOCKED", codes
+    assert "source_evidence_unsupported" in codes
+    assert report.counts["new"] == 0
+    assert report.counts["blocked"] == 1
     dispositions = {(d.provider, d.model): d.disposition for d in report.dispositions}
-    assert dispositions[("openai", "synthetic/stable-v1")] == "NEW"
+    assert dispositions[("openai", "synthetic/stable-v1")] == "BLOCKED"
     assert dispositions[("openrouter", "synthetic/stable-v1")] == "UNCHANGED"
+
+
+def _openai_official_sources(model: str, input_usd: str, output_usd: str, cached_usd: str | None) -> list[dict]:
+    """Real official OpenAI source shapes: /v1/models identity JSON, a
+    pricing-docs markdown table (per-1m USD as published), and a model
+    docs block with limits (openai_models_docs kind)."""
+    models_api = json.dumps({"data": [{"id": model}]}).encode("utf-8")
+    cached_cell = f"${cached_usd}" if cached_usd else "-"
+    pricing_docs = (
+        "# Pricing\n\n"
+        "| Model | Modality | Input | Cached input | Output |\n"
+        "|---|---|---|---|---|\n"
+        f"| {model} | text | ${input_usd} | {cached_cell} | ${output_usd} |\n"
+    ).encode("utf-8")
+    models_docs = (
+        "# Models\n\n"
+        f"## {model}\n"
+        "Context length: 128000\n"
+        "Max output tokens: 8192\n"
+        "Endpoints: /v1/chat/completions\n"
+    ).encode("utf-8")
+    common = {
+        "provider": "openai",
+        "model": model,
+        "retrieved_at": "2026-09-21T11:00:00Z",
+        "published_at": None,
+        "extractor": "fixture-deterministic/1.0",
+        "extraction": "deterministic",
+        "required": True,
+        "truncated": False,
+        "warnings": [],
+    }
+    return [
+        {
+            **common,
+            "source_kind": "openai_models_api",
+            "url": "https://api.openai.com/v1/models",
+            "content_sha256": hashlib.sha256(models_api).hexdigest(),
+            "evidence_b64": base64.b64encode(models_api).decode("ascii"),
+        },
+        {
+            **common,
+            "source_kind": "openai_pricing_docs",
+            "url": "https://openai.com/api/pricing",
+            "content_sha256": hashlib.sha256(pricing_docs).hexdigest(),
+            "evidence_b64": base64.b64encode(pricing_docs).decode("ascii"),
+        },
+        {
+            **common,
+            "source_kind": "openai_models_docs",
+            "url": f"https://openai.com/index/{model.replace('.', '-')}/",
+            "content_sha256": hashlib.sha256(models_docs).hexdigest(),
+            "evidence_b64": base64.b64encode(models_docs).decode("ascii"),
+        },
+    ]
+
+
+def _openai_positive_payload() -> dict:
+    """bundle-refresh-ready plus an OpenAI provider model whose every
+    claimed fact is backed by real official OpenAI source shapes
+    (identity, per-1m USD prices + text modality, context/max-output).
+    USD observations normalize through the fixture's verified 1.08 ECB
+    quote, exactly like the OpenRouter path."""
+    import copy
+
+    payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
+    model = "gpt-5.2"
+    payload["run_id"] = "test-openai-positive"
+    payload["selection"] = {
+        "providers": ["openai", "openrouter"],
+        "model_include": ["synthetic/stable-v1", model],
+    }
+    or_model = next(
+        m for m in payload["models"] if m["model"] == "synthetic/stable-v1" and m["provider"] == "openrouter"
+    )
+    or_route = next(
+        r for r in payload["routes"] if r["requested_model"] == "synthetic/stable-v1" and r["provider"] == "openrouter"
+    )
+    or_pricing = next(
+        p for p in payload["pricing"] if p["model"] == "synthetic/stable-v1" and p["provider"] == "openrouter"
+    )
+    all_openai = [f"openai|{model}|{kind}" for kind in ("openai_models_api", "openai_pricing_docs", "openai_models_docs")]
+    pricing_only = [f"openai|{model}|openai_pricing_docs"]
+    oi_model = copy.deepcopy(or_model)
+    oi_model["provider"] = "openai"
+    oi_model["model"] = model
+    oi_model["display_name"] = "GPT-5.2 (openai)"
+    oi_model["provenance"] = {"extractor": "fixture-deterministic/1.0", "extraction": "deterministic", "sources": all_openai}
+    oi_route = copy.deepcopy(or_route)
+    oi_route["provider"] = "openai"
+    oi_route["requested_model"] = model
+    oi_route["upstream_model"] = model
+    oi_route["provenance"] = {"extractor": "fixture-deterministic/1.0", "extraction": "deterministic", "sources": all_openai}
+    oi_pricing = copy.deepcopy(or_pricing)
+    oi_pricing["provider"] = "openai"
+    oi_pricing["model"] = model
+    oi_pricing["provenance"] = {"extractor": "fixture-deterministic/1.0", "extraction": "deterministic", "sources": pricing_only}
+    payload["models"].append(oi_model)
+    payload["routes"].append(oi_route)
+    payload["pricing"].append(oi_pricing)
+    # 0.54/2.16 USD per-1m == the fixture's 0.5/2.0 EUR at the 1.08 quote.
+    payload["sources"].extend(_openai_official_sources(model, "0.54", "2.16", "0.054"))
+    return payload
+
+
+def test_openai_official_sources_bind_a_positive_path() -> None:
+    """Positive OpenAI path through the complete validator: the mirrored
+    provider's facts bind to parsed official OpenAI observations (models
+    API identity, pricing docs, models docs) - no operator-input
+    substitute, no related-model inference."""
+    payload = _openai_positive_payload()
+    baseline = load_baseline((FIXTURES / "baseline-synthetic.json").read_bytes())
+    _bundle, report, _artifacts = _validate_payload(payload, baseline)
+    codes = _codes(report)
+    assert report.state == "READY", (codes, [w.detail for w in report.warnings])
+    dispositions = {(d.provider, d.model): d.disposition for d in report.dispositions}
+    assert dispositions[("openai", "gpt-5.2")] == "NEW"
+    assert dispositions[("openrouter", "synthetic/stable-v1")] == "UNCHANGED"
+    openai_facts = {f["field"]: f for f in report.source_evidence["backed_facts"] if f["provider"] == "openai"}
+    assert {"pricing:input", "pricing:output", "model:context_length", "model:max_output_tokens", "model:capability:text"} <= set(openai_facts)
+    pricing_input = openai_facts["pricing:input"]
+    assert pricing_input["backed_by"] == ["openai|gpt-5.2|openai_pricing_docs"]
+    (obs,) = pricing_input["observations"]
+    assert obs["observed_value"] == "0.54"
+    assert obs["currency"] == "USD"
+    assert obs["normalized_eur"] == "0.500000000"
+    assert openai_facts["model:context_length"]["backed_by"] == ["openai|gpt-5.2|openai_models_docs"]
+    assert openai_facts["model:capability:text"]["backed_by"] == ["openai|gpt-5.2|openai_pricing_docs"]
+    inventory = report.source_evidence["inventory"]["openai"]
+    assert inventory["evidence_models"] == 1
+    assert inventory["selected_models"] == 1
+    assert inventory["unexplained_omissions"] == 0
+
+
+def test_openai_positive_path_through_the_cli(tmp_path: Path) -> None:
+    """The same positive OpenAI bundle passes the complete CLI review
+    (schema acceptance of openai_models_docs included) and exits 0."""
+    payload = _openai_positive_payload()
+    bundle_path = tmp_path / "bundle-openai-positive.json"
+    bundle_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path),
+         "--baseline-file", str(FIXTURES / "baseline-synthetic.json"),
+         "--run-root", str(tmp_path / "runs"), "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert result.exit_code == 0, result.output
+    assert "state: READY" in result.stdout
+    html = (tmp_path / "runs" / "test-openai-positive" / "REVIEW.html").read_text()
+    assert "gpt-5.2" in html
+    # The models-docs locator for the observed context limit is rendered.
+    assert "model_block[0].context_length" in html
+    assert "128000" in html
+
+
+def test_openai_models_docs_kind_is_registered() -> None:
+    """openai_models_docs is a coherent schema/registry entry: the
+    registered parser extracts model blocks with limits and locators."""
+    docs = (
+        "# Models\n\n"
+        "## gpt-5.2\n"
+        "Context length: 272000\n"
+        "Max output tokens: 128000\n"
+        "Endpoints: /v1/chat/completions, /v1/responses\n"
+    ).encode("utf-8")
+    parsed = se.parse_snapshot("openai", "openai_models_docs", docs)
+    assert parsed.ok, parsed.error
+    (model,) = parsed.models
+    assert model.model == "gpt-5.2"
+    assert model.context_length == 272000
+    assert model.max_output_tokens == 128000
+    assert model.locators["model:context_length"] == "model_block[0].context_length"
+    assert se.has_deterministic_parser("openai", "openai_models_docs")
+
+
+# --- 180-d: exact work-order reproducers as end-to-end regressions -----------
+
+
+def test_d1_wrong_upstream_model_blocks() -> None:
+    """180-d D1 reproducer: changing ONLY the route's upstream model to an
+    unobserved model no longer emits a pricing row at the original
+    model's prices: facts bind to the route's ACTUAL upstream, which is
+    absent from the complete snapshots."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-d1-wrong-upstream"
+    payload["routes"][0]["upstream_model"] = "synthetic/unobserved-upstream"
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    codes = _codes(report)
+    assert "source_evidence_model_missing" in codes
+    assert "source_evidence_unsupported" in codes
+    assert report.artifacts["route_rows"] == 0
+    assert report.artifacts["pricing_rows"] == 0
+    assert report.source_evidence["backed_facts"] == []
+
+
+def test_d1_pricing_citing_only_the_ecb_source_blocks() -> None:
+    """180-d D1 reproducer: pointing the pricing fact's provenance at the
+    ECB source (leaving model/route references unchanged) no longer
+    borrows the snapshot's observation: the matching observation exists
+    only in an undeclared source, so the reference mismatch blocks."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-d1-wrong-pricing-source"
+    payload["pricing"][0]["provenance"]["sources"] = ["ecb|EUR-USD|ecb_reference_xml"]
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    assert "source_evidence_reference_mismatch" in _codes(report)
+    assert report.artifacts["pricing_rows"] == 0
+
+
+def test_d1_alias_collision_other_catalog_name_price_cannot_be_borrowed() -> None:
+    """180-d D1 collision: both the public alias and another catalog model
+    exist in the snapshot at different prices. The alias may bind through
+    its upstream's evidence (covered by the alias positive), but the
+    proposal may not carry the OTHER catalog name's price."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-d1-alias-collision"
+    alias = "synthetic/alias-collide-v1"
+    set_openrouter_evidence(
+        payload, {"synthetic/chat-v1": ("0.25", "1.0"), alias: ("0.77", "3.3")}
+    )
+    for item in payload["models"] + payload["pricing"]:
+        item["model"] = alias
+        item["provenance"]["sources"] = [f"openrouter|{alias}|openrouter_models_api"]
+    for item in payload["routes"]:
+        item["requested_model"] = alias
+        item["provenance"]["sources"] = [f"openrouter|{alias}|openrouter_models_api"]
+    # The route's actual upstream is the observed model (chat-v1).
+    payload["routes"][0]["upstream_model"] = "synthetic/chat-v1"
+    # The proposal carries the other catalog name's (the alias's own) price.
+    for dimension in payload["pricing"][0]["dimensions"]:
+        dimension["value"] = "0.77" if dimension["name"] == "input" else "3.3"
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["model"] = alias
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    assert "source_evidence_value_mismatch" in _codes(report)
+    assert report.artifacts["pricing_rows"] == 0
+
+
+def test_d1_selective_citation_cannot_hide_conflicting_official_snapshot() -> None:
+    """180-d D1: a proposal may cite only one of two official snapshots
+    for a field, but an authoritative conflict across ALL official
+    observations for the context still blocks (selective citation cannot
+    hide a supplied conflicting observation)."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-d1-selective-citation"
+    # Two official snapshots of the same URL: the newer one (declared)
+    # and a stale retrieval with a different price for the same model.
+    snapshot_new = openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.25", "1.0")})
+    snapshot_stale = openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.75", "3.0")})
+    or_source = next(s for s in payload["sources"] if s["provider"] == "openrouter")
+    payload["sources"].append(
+        {**or_source, "model": "synthetic/chat-v1-stale",
+         "content_sha256": hashlib.sha256(snapshot_stale).hexdigest(),
+         "evidence_b64": base64.b64encode(snapshot_stale).decode("ascii")}
+    )
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter" and source["model"] == "synthetic/chat-v1":
+            source["content_sha256"] = hashlib.sha256(snapshot_new).hexdigest()
+            source["evidence_b64"] = base64.b64encode(snapshot_new).decode("ascii")
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    assert "source_observations_contradict" in _codes(report)
+    assert report.artifacts["pricing_rows"] == 0
+
+
+def test_d2_semantic_label_on_required_source_blocks() -> None:
+    """180-d D2 reproducer 1: required-snapshot bytes replaced by {} and
+    labelled semantic must block exactly like the deterministic label:
+    the extraction label is not evidence and not a waiver."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-d2-semantic-empty"
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["evidence_b64"] = base64.b64encode(b"{}").decode("ascii")
+            source["content_sha256"] = hashlib.sha256(b"{}").hexdigest()
+            source["extraction"] = "semantic"
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    codes = _codes(report)
+    assert "source_evidence_parse_failed" in codes
+    assert "source_evidence_unsupported" in codes
+    assert report.artifacts["pricing_rows"] == 0
+
+
+def test_d3_duplicate_inner_json_keys_block() -> None:
+    """180-d D3 reproducer: a second conflicting `prompt` key inside the
+    decoded snapshot JSON (invisible to outer-bundle duplicate checks)
+    must block as malformed official content, code-only."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-d3-duplicate-inner-key"
+    # Hand-built raw JSON text: Python dicts cannot express duplicate keys.
+    raw = (
+        b'{"data": [{"architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},'
+        b' "context_length": 128000, "deprecation": {"is_deprecated": false}, "id": "synthetic/chat-v1",'
+        b' "pricing": {"prompt": "0.00000999", "prompt": "2.7E-7", "completion": "0.00000108"},'
+        b' "top_provider": {"max_completion_tokens": 8192}}]}'
+    )
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["evidence_b64"] = base64.b64encode(raw).decode("ascii")
+            source["content_sha256"] = hashlib.sha256(raw).hexdigest()
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    assert "source_evidence_parse_failed" in _codes(report)
+    detail = next(w.detail for w in report.warnings if w.code == "source_evidence_parse_failed")
+    assert "duplicate_key" in detail
+    assert report.artifacts["pricing_rows"] == 0
+
+
+def test_d3_non_finite_json_constants_block() -> None:
+    for raw in (
+        b'{"data": [NaN]}',
+        b'{"data": [{"id": "synthetic/chat-v1", "pricing": {"prompt": Infinity}}]}',
+        b'{"data": [{"id": "synthetic/chat-v1", "context_length": -Infinity}]}',
+    ):
+        parsed = se.parse_snapshot("openrouter", "openrouter_models_api", raw)
+        assert not parsed.ok
+        assert parsed.error == "openrouter_models_api:non_finite_constant"
+        assert "NaN" not in parsed.error  # code-only, no content echo
+
+
+def test_d3_hostile_price_cells_rejected_before_conversion() -> None:
+    """Bounded raw decimal cells: hostile exponents and over-precise
+    strings are rejected code-only (no huge allocation, no uncaught
+    Decimal error); ordinary per-token precision is preserved."""
+
+    def _snapshot_with_prompt(prompt: str) -> bytes:
+        return (
+            b'{"data": [{"id": "synthetic/hostile-v1", "context_length": 128000,'
+            b' "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},'
+            b' "pricing": {"prompt": "' + prompt.encode("ascii") + b'", "completion": "0.00000108"}}]}'
+        )
+
+    for hostile in ("1e9999", "0.00000000000000005", "1e", ""):
+        parsed = se.parse_snapshot("openrouter", "openrouter_models_api", _snapshot_with_prompt(hostile))
+        assert not parsed.ok, hostile
+        assert parsed.error == "openrouter_models_api:invalid_price", hostile
+
+    parsed = se.parse_snapshot(
+        "openrouter", "openrouter_models_api", _snapshot_with_prompt("0.00000054")
+    )
+    assert parsed.ok, parsed.error
+    (model,) = parsed.models
+    assert model.prices["input"] == Decimal("0.54")
+    assert model.locators["pricing:input"] == "data[0].pricing.prompt"
+
+
+def test_d3_raw_null_row_blocks_and_row_indices_are_preserved() -> None:
+    """180-d D3 reproducer: a null row in the raw data[] is a format
+    error (rows never disappear through filtering); clean multi-row
+    payloads keep their original row indices in locators."""
+    payload = _first_install_payload()
+    payload["run_id"] = "test-d3-null-row"
+    raw = b'{"data": [null, {"id": "synthetic/chat-v1"}]}'
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["evidence_b64"] = base64.b64encode(raw).decode("ascii")
+            source["content_sha256"] = hashlib.sha256(raw).hexdigest()
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED", _codes(report)
+    detail = next(w.detail for w in report.warnings if w.code == "source_evidence_parse_failed")
+    assert "malformed_row" in detail
+
+    # Clean payload: the second model's locator keeps its raw index.
+    parsed = se.parse_snapshot(
+        "openrouter",
+        "openrouter_models_api",
+        openrouter_snapshot_bytes({"synthetic/a-v1": ("1", "2"), "synthetic/b-v1": ("3", "4")}),
+    )
+    assert parsed.ok, parsed.error
+    by_id = {m.model: m for m in parsed.models}
+    assert by_id["synthetic/b-v1"].locators["pricing:input"] == "data[1].pricing.prompt"
+    assert by_id["synthetic/a-v1"].locators["pricing:input"] == "data[0].pricing.prompt"
+
+
+def test_d5_first_install_report_contains_actual_observations(tmp_path: Path) -> None:
+    """180-d D5: the one report renders the actual derived observations -
+    observed value, unit, currency, exact locator, source URL/digest and
+    the exact normalization - not only scope/counts."""
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(FIXTURES / "bundle-first-install.json"),
+         "--first-install", "--run-root", str(tmp_path / "runs"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert result.exit_code == 0, result.output
+    html = (tmp_path / "runs" / "fixture-first-install-001" / "REVIEW.html").read_text()
+    # The exact locator and the observed USD value are in the evidence details.
+    assert "data[0].pricing.prompt" in html
+    assert "0.27" in html
+    assert "per_1m_tokens" in html
+    assert "USD" in html
+    # The exact normalization of the observed value to the comparison currency.
+    assert "0.250000000" in html
+    assert "0.925925926" in html
+    assert b"<script" not in html.lower().encode()
 
 
 # --- CLI + report + seal recomputation (family 1 end-to-end) ----------------------

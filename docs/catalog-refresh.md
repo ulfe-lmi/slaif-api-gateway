@@ -108,9 +108,26 @@ digest-verified bytes:
 | `ecb` | `ecb_reference_xml` | `ecb_reference_xml/v1` | EUR-based reference-rate quotes (date, quote currency, rate) |
 
 A "deterministic" extraction label without a registered parser demotes the
-source to REVIEW; a registered parser whose parse fails on digest-verified
-required source bytes blocks the affected plan
-(`source_evidence_parse_failed`).
+source to REVIEW; a required source whose digest-verified bytes fail
+deterministic parsing blocks the affected plan
+(`source_evidence_parse_failed`) **regardless of the extraction label** — a
+semantic label is not evidence and not a waiver, and an optional failing
+source is REVIEW-classified.
+
+**Strict snapshot parsing.** Each decoded snapshot is parsed strictly at
+every nesting level, not merely the outer bundle: duplicate JSON object keys
+and non-finite constants (`NaN`, `Infinity`) are rejected with code-only
+errors (`duplicate_key`, `non_finite_constant`); raw row structure is
+validated with original row indices preserved *before* any reused pure
+helper runs, so a malformed row or invalid model id is a format error
+(`malformed_row`, `invalid_model_id`) that never disappears through
+filtering; and raw decimal price cells are bounded in digits and exponent
+before any conversion helper is called, so hostile exponents are rejected
+code-only (`invalid_price`) instead of triggering huge allocations or
+uncaught decimal errors. OpenAI model rows are iterated on the raw payload,
+so duplicate model ids are preserved for the conflict checks below rather
+than erased by a set/dict helper. XML stays offline, with DOCTYPE and
+external entities rejected.
 
 **Bounded parsing.** Snapshots are bounded (4 MiB decoded, item/row,
 model-count, and FX-quote caps; 1 MiB for ECB XML), XML DOCTYPE and external
@@ -123,37 +140,109 @@ of proposed values stamped onto their provenance sources. An observation
 carries its source key, row/field locator, canonical value, unit, currency,
 and parser identity.
 
-**Canonical comparison.** Money compares in EUR after exact Decimal
-conversion with import-contract quantization: `1 == 1.0`, and a USD
-observation agrees with a EUR proposal exactly when the bundle's own
-verified native-to-EUR FX rate makes them equal. A currency with no
-verified rate is never converted with an invented rate: the fact reports
-unbound and blocks. Alias, priority, visibility, streaming, and match type
-are operator policy, never provider facts, and are never backed by
+**Per-field declared-source binding.** Provider facts bind to the effective
+provider **and the route's actual upstream model** (plus the applicable
+endpoint/pricing context): a public alias is local routing policy, not an
+alternative provider model whose price can be borrowed. The valid alias
+case remains — public `B` → observed upstream `A` uses `A`'s evidence when
+the evidence explicitly supports `A` — while public `A` → unobserved or
+different `B` may not use `A`'s prices, and a proposal may not carry the
+price of another catalog name that happens to exist in the same snapshot.
+Each financial/capability/limit field is validated against the sources its
+own fact declares: referenced-but-wrong field/model/provider evidence
+blocks (`source_evidence_reference_mismatch`, `source_evidence_unsupported`,
+`source_evidence_value_mismatch`), and a match that exists only in an
+undeclared source is never silently adopted. Authoritative conflicts are
+detected across **all** official observations for the provider/upstream/
+field context, so a proposal cannot hide a conflicting supplied
+observation by omitting the conflicting source from its field references
+(`source_observations_contradict`). A selected model absent from the
+complete parsed snapshots of its declared sources blocks
+(`source_evidence_model_missing`). Only OFFICIAL-classified observations
+can verify a fact; operator input and semantic provenance never do, and an
+operator-input mirror of a model ID in a second provider is not provider
 evidence.
 
-**Independence and corroboration.** Repeated references to one snapshot —
-duplicate URLs, aliases to identical bytes, several source records sharing
-one digest — count as **one** independent source; corroboration requires
-distinct content digests. Contradictions are counted only across distinct
-snapshots (one snapshot never contradicts itself).
+**Canonical comparison.** Money compares in EUR after exact Decimal
+conversion with import-contract quantization: `1 == 1.0` (equal decimal
+spellings agree), a recognized unit/currency conversion is explicit, and a
+USD observation agrees with a EUR proposal exactly when the bundle's own
+verified native-to-EUR FX rate makes them equal. A value whose unit or
+currency is missing or unknown, or whose currency has no verified rate,
+**cannot be assigned a currency by assertion**: it is its own distinct
+marker in comparisons, never silently treated as USD or per-million, and
+the affected fact reports unbound and blocks. Alias, priority, visibility,
+streaming, and match type are operator policy, never provider facts, and
+are never backed by evidence.
 
-**FX evidence binding.** An FX fact verifies only against a verified quote
-from the ECB publisher (its own source identity: provider `ecb`, kind
-`ecb_reference_xml`, EUR-based reference-rate snapshot on an official ECB
-host): the supplied quote must equal the fact's rate — or its exact Decimal
-reciprocal for EUR-to-native quotations — within 1e-8, and the fact's
-publication date must equal the quote's date. An undated or
-date-mismatched ECB-backed fact blocks; operator/semantic FX input without
-a verified quote is REVIEW-only, never verified.
+**Independence and corroboration.** Independence counts **distinct
+official source URLs**: repeated retrievals or aliases of the same official
+URL are one independent source, not corroboration — even when the content
+hashes of the repeated retrievals differ. Contradiction checks group
+observations by (URL, digest): references to identical bytes never
+contradict themselves, while distinct content at distinct (URL, digest)
+snapshots that disagree on the same field blocks. A single snapshot
+contradicting *itself* (conflicting rows for one model id within the same
+bytes) also blocks — "only one digest is involved" is not an escape.
 
-**Inventory reconciliation.** The per-provider evidence inventory is
-derived independently from complete parsed snapshots and reconciled to the
-selection: models present in evidence, models selected, and unproposed
-candidates (counted, never silently dropped). A selected model absent from
-every complete referenced snapshot blocks
-(`source_evidence_model_missing`); a duplicate model ID inside one snapshot
-is REVIEW.
+**FX evidence binding (authoritative, no semantic escape).** FX used for
+import or for source-price currency normalization must first bind to a
+parsed authoritative quote **before any normalization happens** — a
+candidate rate merely labelled verified is not verified. Every FX fact
+must pass, all at once, against the ECB publisher's own source identity
+(provider `ecb`, kind `ecb_reference_xml`, EUR-based reference-rate
+snapshot on an official ECB host):
+
+- at least one official quote exists for the pair (otherwise the fact
+  blocks: `fx_evidence_unbound`, or `source_evidence_unapproved` when only
+  unapproved sources carry quotes);
+- the fact's rate is a finite positive decimal (`fx_rate_not_finite_positive`);
+- the quote equals the fact's rate — or its exact Decimal reciprocal for
+  EUR-to-native quotations — within 1e-8 (`source_evidence_value_mismatch`);
+- the quote's source is declared in the fact's own provenance
+  (`source_evidence_reference_mismatch`);
+- the fact carries a publication date equal to the quote's date
+  (`fx_evidence_date_mismatch`).
+
+There is **no semantic/manual escape hatch**: an FX fact pointed at a
+docs-page or operator input with no verified quote blocks, its rate is
+never used to normalize any price, and affected non-EUR price facts report
+`fx_evidence_unbound` instead of converting with a guessed rate. Currency
+comparisons in the whole run use only the validated bindings built from
+the quotes themselves (direct or exact reciprocal, 9-dp precision).
+
+**Selection reconciliation (every identifier reconciled).** The
+per-provider evidence inventory is derived independently from the complete
+official parsed snapshots, and every parsed raw identifier must reconcile
+into an explicit disposition: selected/proposed; retained local (historical
+baseline state, no delete semantics); explicitly excluded by an
+explicit-subset selection (named in the report with aggregate counts, no
+low-value per-row warning); unsupported-excluded (text modality not
+observed); or an **unexplained omission**. An unexplained omission of an
+eligible model under an all-eligible selection (empty `model_include`)
+**blocks** (`selection_unexplained_omission`); explicit subsets and
+conservative profiles are preserved and are not forced to all-eligible.
+Desired scope is never defined solely by whichever proposal rows happen to
+exist, and no routes are auto-created or local rows deleted to make
+counters pass. Within one snapshot, conflicting rows for one model id
+block (`source_observations_contradict`), while identical duplicate rows
+are deduplicated under an explicit policy with a truthful REVIEW finding
+and reconciled counts (`source_duplicate_rows_deduplicated`) — never a
+silent disappearance and never a false "blocked" claim. A selected model
+absent from every complete referenced snapshot blocks
+(`source_evidence_model_missing`).
+
+**Actual observations inside the one report.** The canonical validation
+result serializes the actual derived observations that bind each proposed
+fact — observed value, unit, currency, exact row/field locator, provider/
+upstream/endpoint context, source URL, content digest, parser identity and
+retrieval time, and the exact normalized value with its transformation —
+plus the bound FX quotes (quote value, locator, URL, digest, parser,
+date, and derivation). The report renders them in expandable evidence
+details, escaped, bounded, deterministic and printable: no extra files, no
+base64 homework for the administrator, and the normal view stays compact.
+Seal verification recomputes these same fields from the same deterministic
+pipeline; there is no second semantic truth.
 
 **Exact offline scope.** Evidence assessment is an **offline replay of
 supplied snapshots**: snapshot origin and retrieval claims (`retrieved_at`,
@@ -165,7 +254,11 @@ network I/O.
 `main`: `schema_version` stays `1` within the subsystem, and
 `renderer_version` is bumped per reviewed report/evidence-contract change
 (`180.1` adds the source-evidence binding contract and its report
-sections).
+sections; `180.2` closes the remaining source-evidence bypasses: per-field
+declared-source and upstream-model binding, authoritative FX quote binding
+with no semantic escape, strict per-snapshot parsing with real locators,
+per-ID selection reconciliation with an unexplained-omission block, and
+the actual rendered observations in the one report).
 
 ## Baselines
 
@@ -302,9 +395,12 @@ disappeared models, excluded rows and reason counts, collapsed unchanged
 rows, field provenance with derived (never declared) source classification,
 the expanded source-evidence section (per-source parse status with the
 registry parser and content digest prefix, the exact parsed observations
-that bound each proposed fact with independent-source counts, FX facts
-bound to verified reference quotes, and the reconciled evidence
-inventory), every warning, full validator outputs, and the exact proposed
+that bound each proposed fact — observed value, unit, currency, exact
+locator, URL/digest/parser/time, normalized value and transformation —
+with declared backing sources and distinct-URL independence counts, FX
+facts bound to verified reference quotes with quote locator/URL/digest/
+parser/date, and the reconciled evidence inventory with per-provider
+selection dispositions and bounded ID lists), every warning, full validator outputs, and the exact proposed
 import rows — is inside the same file, on demand. The detailed evidence files
 (`validation.json`, TSV/JSON artifacts, manifest, receipt) exist for
 machines and audit; a human decision never requires opening them.
