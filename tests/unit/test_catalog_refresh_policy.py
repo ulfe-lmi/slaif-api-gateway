@@ -801,3 +801,24 @@ def test_same_model_id_is_independent_across_providers() -> None:
     dispositions = {(d.provider, d.model): d.disposition for d in report.dispositions}
     assert dispositions[("openai", "synthetic/stable-v1")] == "NEW"
     assert dispositions[("openrouter", "synthetic/stable-v1")] == "UNCHANGED"
+
+
+def test_fabricated_host_urls_are_review_not_ready() -> None:
+    """180-b R3 probe: replacing every source URL with a fabricated off-rule
+    host must not remain READY with zero warnings. A syntactically safe URL
+    is not an authoritative source: the (provider, source kind) host rule
+    fails, so each source is REVIEW-classified and the run is at least
+    READY_WITH_WARNINGS. Evidence bytes still match their digests; the host
+    rule, not the evidence, is the failure."""
+    payload = json.loads((FIXTURES / "bundle-first-install.json").read_text())
+    payload["run_id"] = "test-fabricated-hosts-001"
+    for item in payload["sources"]:
+        item["url"] = "https://example.invalid/fabricated-pricing"
+    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    report = validate_bundle(bundle, None, policy_from_document(bundle.policy))[0]
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert "source_provenance_review" in _codes(report)
+    assert report.sources, "source assessments must be present"
+    for assessment in report.sources:
+        assert assessment["classification"] == "REVIEW"
+        assert assessment["evidence_state"] == "verified"
