@@ -1847,44 +1847,151 @@ def test_standard_v1_billing_decision_openrouter() -> None:
         decision = _router_decision({key: "-1"})
         assert decision.eligible is False, key
         assert decision.reason_code == "negative_router_sentinel", key
-    # positive reasoning / per-request charges are carried as dimensions
-    # (values compared as exact decimals, never as strings)
+    # 181-c (C1/C2): positive separately billed ancillary charges EXCLUDE
+    # the row (executable billing, not TSV capacity) - values compared as
+    # exact decimals, never as strings
     decision = _router_decision({"internal_reasoning": "0.000009"})
-    assert decision.eligible is True
-    carried = {(name, Decimal(value), unit) for name, value, unit in decision.carried}
-    assert ("reasoning", Decimal("9"), "per_1m_tokens") in carried
+    assert decision.eligible is False
+    assert decision.reason_code == "reasoning_charges_unrepresentable"
     decision = _router_decision({"request": "0.1"})
+    assert decision.eligible is False
+    assert decision.reason_code == "request_charges_unrepresentable"
+    # a positive hosted-operation charge excludes (no 'accepted unreachable')
+    decision = _router_decision({"web_search": "0.01"})
+    assert decision.eligible is False
+    assert decision.reason_code == "hosted_operation_charges_unrepresentable"
+    # zero semantics: an explicit zero reasoning price is carried as a
+    # no-charge (dropping it would change actual local billing); zero
+    # request / web_search are documented no-charges, never carried
+    decision = _router_decision({"internal_reasoning": "0"})
     assert decision.eligible is True
-    carried = {(name, Decimal(value), unit) for name, value, unit in decision.carried}
-    assert ("request", Decimal("0.1"), "per_request") in carried
-    # zero request is a no-charge
+    assert decision.carried == (("reasoning", "0", "per_1m_tokens"),)
     decision = _router_decision({"request": "0"})
     assert decision.eligible is True
     assert decision.carried == ()
-    # a hosted web-search charge is accepted unreachable under the explicit
-    # tested policy, with visible evidence, never silently
-    decision = _router_decision({"web_search": "0.01"})
+    decision = _router_decision({"web_search": "0"})
     assert decision.eligible is True
     assert decision.carried == ()
-    assert decision.accepted_unreachable
-    assert any("web_search" in text for text in decision.accepted_unreachable)
-    # conflicting billable observations across rows fail closed
+    # repeat zero observations agree (a positive can never reach the carried
+    # set - it excludes the row first)
     rows = [
-        _router_row_for_decision({"internal_reasoning": "0.000009"}),
-        _router_row_for_decision({"internal_reasoning": "0.000018"}),
-    ]
-    decision = _router_decision({}, rows=rows)
-    assert decision.eligible is False
-    assert decision.reason_code == "conflicting_billing_observation"
-    # equal observations are not a conflict
-    rows = [
-        _router_row_for_decision({"internal_reasoning": "0.000009"}),
-        _router_row_for_decision({"internal_reasoning": "0.000009"}),
+        _router_row_for_decision({"internal_reasoning": "0"}),
+        _router_row_for_decision({"internal_reasoning": "0"}),
     ]
     decision = _router_decision({}, rows=rows)
     assert decision.eligible is True
-    carried = {(name, Decimal(value), unit) for name, value, unit in decision.carried}
-    assert ("reasoning", Decimal("9"), "per_1m_tokens") in carried
+    assert decision.carried == (("reasoning", "0", "per_1m_tokens"),)
+
+
+def test_wildcard_route_governs_upstream_semantics() -> None:
+    """181-c (C3): the shared coverage predicate mirrors the resolver's
+    destination rule (``upstream_model or requested``) - a fixed
+    destination governs exactly that upstream; a passthrough row governs
+    the upstreams whose identity matches the public pattern; public string
+    similarity alone is never coverage."""
+    from types import SimpleNamespace
+
+    def row(pattern, upstream, match_type):
+        return SimpleNamespace(
+            requested_model=pattern, upstream_model=upstream, match_type=match_type
+        )
+
+    # fixed destination: exactly that upstream, whatever the public pattern
+    assert se.wildcard_route_governs_upstream(row("public/", "synth/alpha", "prefix"), "synth/alpha") is True
+    assert se.wildcard_route_governs_upstream(row("public/", "synth/alpha", "prefix"), "synth/beta") is False
+    # a fixed destination elsewhere is NOT coverage by pattern similarity
+    assert se.wildcard_route_governs_upstream(row("synth/", "other/x", "prefix"), "synth/alpha") is False
+    # passthrough: the public pattern IS the destination
+    assert se.wildcard_route_governs_upstream(row("synth/", "", "prefix"), "synth/alpha") is True
+    assert se.wildcard_route_governs_upstream(row("synth/", "", "prefix"), "beta/synth") is False
+    assert se.wildcard_route_governs_upstream(row("synth/*", "", "glob"), "synth/alpha") is True
+    assert se.wildcard_route_governs_upstream(row("other/*", "", "glob"), "synth/alpha") is False
+    # exact rows are not wildcard rows
+    assert se.wildcard_route_governs_upstream(row("synth/alpha", "synth/alpha", "exact"), "synth/alpha") is False
+
+
+def test_runtime_boundary_ordinary_chat_billing_semantics() -> None:
+    """181-c (C1) runtime boundary, read-only probes with explicit
+    SYNTHETIC pricing/FX objects (repositories are poison: no DB, no
+    inference, no ledger mutation). Establishes WHY the shared eligibility
+    is conservative - it demonstrates the boundary without modifying it:
+
+    (a) the ordinary Chat admission estimate OMITS a published per-request
+        fee (the request column serves native-module contracts, it is not
+        additive ordinary Chat billing);
+    (b) admission reserves at the OUTPUT price while finalization bills
+        reasoning tokens at the REASONING price - a higher reasoning charge
+        escapes the reservation;
+    (c) an explicit ZERO reasoning price keeps finalization at zero, which
+        is why the zero is carried instead of treated as missing.
+    """
+    import asyncio
+    from datetime import UTC, datetime
+    from types import SimpleNamespace as NS
+
+    from slaif_gateway.schemas.accounting import ActualUsage
+    from slaif_gateway.schemas.pricing import FxConversionResult, PricingLookupResult
+    from slaif_gateway.services.accounting import _component_slaif_costs
+    from slaif_gateway.services.pricing import PricingService
+
+    n = 1000
+
+    async def probe(request, reasoning):
+        pricing = PricingLookupResult(
+            provider="openrouter",
+            model="synth/alpha",
+            endpoint="/v1/chat/completions",
+            currency="USD",
+            input_price_per_1m=Decimal("0.54"),
+            cached_input_price_per_1m=Decimal("0.054"),
+            output_price_per_1m=Decimal("2.16"),
+            reasoning_price_per_1m=Decimal(reasoning) if reasoning is not None else None,
+            audio_output_price_per_1m=None,
+            request_price=Decimal(request) if request is not None else None,
+            cache_write_input_price_per_1m=None,
+            cache_write_input_multiplier=None,
+            long_context_threshold_tokens=None,
+            long_context_input_multiplier=None,
+            long_context_output_multiplier=None,
+            pricing_rule_id=None,
+            valid_from=datetime.now(UTC),
+            valid_until=None,
+        )
+        svc = PricingService(pricing_rules_repository=None, fx_rates_repository=None)
+        estimate = await svc.estimate_chat_completion_cost(
+            route=NS(
+                provider="openrouter",
+                requested_model="synth/alpha",
+                resolved_model="synth/alpha",
+                provider_kind="openai_compatible",
+            ),
+            policy=NS(estimated_input_tokens=0, effective_output_tokens=n, effective_body={}),
+            pricing=pricing,
+            fx=FxConversionResult("USD", "EUR", Decimal("1"), None),
+        )
+        components, _, _ = _component_slaif_costs(
+            usage=ActualUsage(
+                prompt_tokens=0,
+                completion_tokens=n,
+                total_tokens=n,
+                reasoning_tokens=n if reasoning is not None else 0,
+            ),
+            pricing_estimate=estimate,
+        )
+        return estimate, components
+
+    # (a) a 0.1 per-request fee is published but omitted by ordinary Chat
+    estimate, _ = asyncio.run(probe("0.1", None))
+    assert estimate.estimated_total_cost_native == Decimal("0.00216")  # 1000 * 2.16/1M only
+    # (b) reasoning 9 per 1M: admission reserves at the output price ...
+    estimate, components = asyncio.run(probe(None, "9"))
+    assert estimate.estimated_total_cost_native == Decimal("0.00216")
+    # ... while finalization bills the reasoning price: final > reservation
+    assert components["output_reasoning"] == Decimal("0.009")
+    # (c) an explicit zero reasoning price keeps finalization at zero
+    estimate, components = asyncio.run(probe(None, "0"))
+    assert components["output_reasoning"] == Decimal("0")
+    assert components["output_non_reasoning"] == Decimal("0")
 
 
 def _openai_row(

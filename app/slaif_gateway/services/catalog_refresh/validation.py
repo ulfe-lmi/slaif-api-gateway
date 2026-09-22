@@ -37,7 +37,6 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field, replace
-from fnmatch import fnmatchcase
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from collections.abc import Mapping
@@ -1065,6 +1064,51 @@ def validate_bundle(
                     row.provider,
                     row.requested_model,
                 )
+        # 181-c (C3): baseline WILDCARD routes retain local authority over the
+        # upstreams they GOVERN (the resolver's destination rule: a fixed
+        # upstream_model, or the passthrough public pattern matching the
+        # upstream identity - never public string similarity against an
+        # unrelated fixed destination). Any proposed chat route for a
+        # governed upstream is a re-inserted parallel route that bypasses
+        # that local authority: BLOCK it, in live collection and
+        # supplied-bundle review alike. A wildcard retained locally is not a
+        # source disappearance (the disposition loop records NOT_FETCHED).
+        proposed_chat_by_upstream: dict[tuple[str, str], list[Any]] = {}
+        for route in bundle.routes:
+            if route.endpoint == CHAT_ENDPOINT:
+                proposed_chat_by_upstream.setdefault(
+                    (route.provider, route.upstream_model), []
+                ).append(route)
+        seen_wildcard_bypass: set[tuple[str, str, str, str, str]] = set()
+        for row in baseline.routes:
+            if row.match_type not in ("prefix", "glob") or row.endpoint != CHAT_ENDPOINT:
+                continue
+            for (prov, upstream), prows in proposed_chat_by_upstream.items():
+                if prov != row.provider:
+                    continue
+                if not se.wildcard_route_governs_upstream(row, upstream):
+                    continue
+                for prows_item in prows:
+                    identity = (
+                        row.provider,
+                        row.requested_model,
+                        upstream,
+                        prows_item.requested_model,
+                        prows_item.match_type,
+                    )
+                    if identity in seen_wildcard_bypass:
+                        continue
+                    seen_wildcard_bypass.add(identity)
+                    add(
+                        SEVERITY_BLOCKER,
+                        "wildcard_route_authority_bypassed",
+                        f"proposed {prows_item.match_type} route {prows_item.requested_model!r} "
+                        f"for upstream {upstream!r} is parallel to baseline {row.match_type} "
+                        f"route {row.requested_model!r} that retains local authority over that "
+                        "upstream; no parallel route bypasses the wildcard",
+                        row.provider,
+                        upstream,
+                    )
 
     # --- 180-d: FX facts must bind to parsed authoritative quotes BEFORE any
     # currency normalization. A candidate rate merely labelled verified
@@ -2218,8 +2262,12 @@ def validate_bundle(
                         for _dim, value, _unit in decision.carried
                     )
                 elif entry.reason_code == "baseline_contract_not_flat":
-                    # 181-b (B2): upstream-keyed - exactly one non-flat
-                    # exact row, or a covering prefix/glob baseline route.
+                    # 181-b (B2) / 181-c (C3): upstream-keyed - exactly one
+                    # non-flat exact row, or a prefix/glob baseline route
+                    # that GOVERNS the upstream under the resolver's actual
+                    # destination semantics (fixed upstream_model equality,
+                    # or passthrough pattern == upstream identity) - never
+                    # public-pattern string similarity.
                     exact_here = baseline_chat_rows_by_upstream.get(
                         (provider, model_id), []
                     )
@@ -2228,16 +2276,7 @@ def validate_bundle(
                     else:
                         verified = any(
                             row.provider == provider
-                            and (
-                                (
-                                    row.match_type == "prefix"
-                                    and model_id.startswith(row.requested_model)
-                                )
-                                or (
-                                    row.match_type == "glob"
-                                    and fnmatchcase(model_id, row.requested_model)
-                                )
-                            )
+                            and se.wildcard_route_governs_upstream(row, model_id)
                             for row in baseline_wildcard_route_rows
                         )
                 elif entry.reason_code == "baseline_multiple_routes":

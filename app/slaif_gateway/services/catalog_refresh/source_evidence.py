@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import re
+from fnmatch import fnmatchcase
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -1455,7 +1456,7 @@ EXTRA_DIM_UNITS: dict[str, str] = {
 }
 
 
-# --- 181-b: shared standard-v1 flat billing eligibility -----------------------
+# --- 181-b/181-c: shared standard-v1 flat billing eligibility -----------------
 #
 # One deterministic policy decides, from ALL authoritative observations of a
 # model (every billing tier, every context band, every published pricing key),
@@ -1464,23 +1465,42 @@ EXTRA_DIM_UNITS: dict[str, str] = {
 # the validator (recomputation over the parsed official evidence, so a
 # supplied/tampered bundle cannot bypass eligibility by dropping dimensions).
 #
-# Representable by the flat standard short-context contract: the core text
-# dims (input / cached_input / output, per-1M) plus, when published as a
-# positive charge, the reasoning dim (per-1M) and the per-request dim
-# (per_request). Excluded (fail-closed, exact machine reason): published
-# long-context standard prices, contextual override tiers, positive
-# cache-write charges, unknown billing keys, source sentinels on billable
-# dims, and conflicting billable observations. A legitimate zero is a
-# no-charge, never a missing fact; an out-of-scope dimension is ignored ONLY
-# under the explicit tested policy below, with the acceptance evidence
-# surfaced, never silently.
+# 181-c: eligibility follows EXECUTABLE billing, not TSV capacity. A value
+# fitting a pricing column is not proof the gateway can safely bill that
+# shape. The flat standard-v1 profile bills ordinary Chat: the core text dims
+# (input / cached_input / output, per-1M) plus, only when the source
+# publishes it as an explicit zero, the reasoning no-charge. Excluded
+# (fail-closed, exact machine reason): positive separately billed reasoning
+# charges (ordinary Chat admission reserves at the output price; no qualified
+# reasoning billing contract is authorized), positive per-request fees
+# (ordinary Chat admission and finalization do not bill an additive
+# per-request fee; that column serves native-module contracts), positive
+# hosted-operation charges (hosted operations are denied in the profile and
+# no reviewed per-model executable contract proves the charge cannot be
+# incurred), published long-context standard prices, contextual override
+# tiers, positive cache-write charges, unknown billing keys, and source
+# sentinels on billable dims.
+#
+# Documented zero semantics (tested): a published zero per-request fee is a
+# no-charge - ordinary Chat bills no per-request fee at all, so carrying
+# nothing changes no local billing. A published zero web-search charge is a
+# no-charge - the standard chat contract has no web-search billing dimension
+# and a zero publishes no provider-side cost. A published zero REASONING price
+# is carried, because a MISSING reasoning price makes finalization bill
+# reasoning tokens at the output price (reasoning_price_fallback_to_output),
+# which would change actual local billing; a zero must not be silently
+# treated as missing there.
 
 REASON_LONG_CONTEXT_PRICES = "long_context_prices_unrepresentable"
 REASON_CONTEXTUAL_OVERRIDES = "contextual_overrides_unrepresentable"
 REASON_CACHE_WRITE_CHARGES = "cache_write_charges_unrepresentable"
 REASON_UNKNOWN_BILLING_DIMENSION = "unknown_billing_dimension"
-REASON_CONFLICTING_BILLING = "conflicting_billing_observation"
 REASON_BILLING_SENTINEL = "negative_router_sentinel"
+# 181-c: executable-billing exclusions (a value fitting a TSV column is not
+# proof the gateway can safely bill that shape under standard-v1).
+REASON_REASONING_CHARGES = "reasoning_charges_unrepresentable"
+REASON_REQUEST_CHARGES = "request_charges_unrepresentable"
+REASON_HOSTED_CHARGES = "hosted_operation_charges_unrepresentable"
 
 #: inventory reason codes that the billing decision itself verifies
 BILLING_EXCLUSION_REASONS = frozenset(
@@ -1489,8 +1509,10 @@ BILLING_EXCLUSION_REASONS = frozenset(
         REASON_CONTEXTUAL_OVERRIDES,
         REASON_CACHE_WRITE_CHARGES,
         REASON_UNKNOWN_BILLING_DIMENSION,
-        REASON_CONFLICTING_BILLING,
         REASON_BILLING_SENTINEL,
+        REASON_REASONING_CHARGES,
+        REASON_REQUEST_CHARGES,
+        REASON_HOSTED_CHARGES,
     }
 )
 
@@ -1499,17 +1521,43 @@ BILLING_EXCLUSION_REASONS = frozenset(
 class BillingDecision:
     """One model's standard-v1 flat billing eligibility (pure, deterministic).
 
-    ``carried`` is (dimension, exact decimal string, unit) for every
-    positive charge the flat proposal MUST carry; ``accepted_unreachable``
-    carries the visible evidence for deliberately ignored out-of-scope
-    charges (an explicit tested policy, never a silent drop).
+    ``carried`` is (dimension, exact decimal string, unit) for every charge
+    the flat proposal MUST carry exactly; under the 181-c executable-billing
+    policy that is only an explicit ZERO reasoning price (carrying it keeps
+    finalization at 0 - dropping it would bill reasoning tokens at the output
+    price). Positive reasoning / per-request / hosted-operation charges
+    exclude the model instead (exact machine reason).
     """
 
     eligible: bool
     reason_code: str | None = None
     detail: str | None = None
     carried: tuple[tuple[str, str, str], ...] = ()
-    accepted_unreachable: tuple[str, ...] = ()
+
+
+def wildcard_route_governs_upstream(row: object, upstream_model: str) -> bool:
+    """181-c (C3): does one baseline prefix/glob chat route GOVERN an upstream?
+
+    Mirrors the resolver's destination rule (``upstream_model or
+    requested``): an explicit ``upstream_model`` is a FIXED destination - the
+    row governs exactly that upstream, whatever the public pattern is; an
+    empty ``upstream_model`` passes the public name through, so the row
+    governs the upstreams whose identity matches the public pattern. String
+    similarity between a public pattern and an unrelated upstream is NOT
+    coverage (that relation would not follow actual routing semantics).
+    """
+    match_type = getattr(row, "match_type", None)
+    if match_type not in ("prefix", "glob"):
+        return False
+    pattern = getattr(row, "requested_model", "") or ""
+    fixed = getattr(row, "upstream_model", "") or ""
+    if fixed:
+        return fixed == upstream_model
+    if not pattern:
+        return True  # empty pattern + passthrough: the resolver matches everything
+    if match_type == "prefix":
+        return upstream_model.startswith(pattern)
+    return fnmatchcase(upstream_model, pattern)
 
 
 def _billing_positive(value: str) -> bool:
@@ -1559,37 +1607,51 @@ def _router_billing_decision(rows: Sequence[ParsedModel]) -> BillingDecision:
                     REASON_BILLING_SENTINEL,
                     f"source -1 sentinel on billable {dim} pricing; the charge cannot be verified, fail-closed",
                 )
+    # 181-c (C1/C2): positive ancillary charges are not billable in ordinary
+    # standard-v1 Chat and EXCLUDE the row with the exact machine reason; an
+    # explicit zero reasoning price is carried (see the zero semantics in the
+    # module header). Zero request/web_search are documented no-charges.
     carried: dict[str, tuple[Decimal, str]] = {}
-    unreachable: list[str] = []
     for row in rows:
         reasoning = row.prices.get("reasoning")
         if reasoning is not None and reasoning > 0:
-            existing = carried.get("reasoning")
-            if existing is not None and existing != (reasoning, "per_1m_tokens"):
-                return BillingDecision(
-                    False, REASON_CONFLICTING_BILLING, "conflicting reasoning charge observations"
-                )
-            carried["reasoning"] = (reasoning, "per_1m_tokens")
+            return BillingDecision(
+                False,
+                REASON_REASONING_CHARGES,
+                f"published reasoning charge {reasoning} per 1M tokens is billed separately from "
+                "output while ordinary Chat admission reserves at the output price; no qualified "
+                "reasoning billing contract is authorized for standard-v1",
+            )
         request = row.request_price
         if request is not None and request > 0:
-            existing = carried.get("request")
-            if existing is not None and existing != (request, "per_request"):
-                return BillingDecision(
-                    False, REASON_CONFLICTING_BILLING, "conflicting request charge observations"
-                )
-            carried["request"] = (request, "per_request")
+            return BillingDecision(
+                False,
+                REASON_REQUEST_CHARGES,
+                f"published per-request fee {request} is not billed by ordinary Chat admission or "
+                "finalization (that column serves native-module contracts); no qualified "
+                "per-request billing contract is authorized for standard-v1",
+            )
         web_search = row.extra_pricing.get("web_search")
         if web_search is not None and _billing_positive(web_search):
-            unreachable.append(
-                f"web_search per-call charge {web_search} accepted unreachable: hosted web search is "
-                "a denied hosted operation in the standard-v1 profile"
+            return BillingDecision(
+                False,
+                REASON_HOSTED_CHARGES,
+                f"published hosted-operation charge web_search {web_search} per call; hosted "
+                "operations are denied in the standard-v1 profile and no reviewed per-model "
+                "executable contract proves this charge cannot be incurred",
             )
+        if reasoning is not None and reasoning == 0:
+            # A published zero is an explicit no-charge, never a missing fact:
+            # carrying it keeps finalization at 0 (a missing price would fall
+            # back to the output price and change actual local billing). Only
+            # a zero can reach this line - a positive charge excludes the row
+            # above - so repeat observations can only agree.
+            carried["reasoning"] = (Decimal("0"), "per_1m_tokens")
     return BillingDecision(
         True,
         None,
         None,
         tuple((dim, str(value), unit) for dim, (value, unit) in sorted(carried.items())),
-        tuple(dict.fromkeys(unreachable)),
     )
 
 
@@ -1720,10 +1782,13 @@ def derive_observations(source_key: str, parsed: SnapshotParse) -> tuple[Observa
                 )
             )
         if model.request_price is not None:
-            # 181-b: the per-request charge is a proposal-representable
-            # billable dimension; publish its observation under the standard
-            # short-context field name (the only context OpenRouter rows
-            # carry) so a carried "request" dim can bind to it.
+            # The published per-request charge is source truth: its
+            # observation is published under the standard short-context
+            # field name (the only context OpenRouter rows carry) so the
+            # report shows exactly what the official source published.
+            # 181-c: it is NOT carried into a proposal - ordinary Chat does
+            # not bill an additive per-request fee, so a row with a positive
+            # fee is excluded instead.
             effective_band = model.context_band or "short"
             request_field = (
                 "pricing:request"

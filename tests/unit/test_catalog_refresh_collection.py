@@ -829,31 +829,74 @@ def test_router_zero_cache_write_is_no_charge_not_missing() -> None:
     assert report.state == "READY", sorted(_codes(report))
 
 
-def test_router_reasoning_charge_carried_as_dimension() -> None:
-    world = _router_world_with_pricing_field("internal_reasoning", "0.000009")
+def test_router_reasoning_charge_excluded_under_standard_v1() -> None:
+    """181-c (C1) strategic reproducer: a positive separately billed
+    reasoning charge must not produce a ready standard-v1 row - ordinary
+    Chat admission reserves at the output price and no qualified reasoning
+    billing contract is authorized. Default discovery retains the flat
+    siblings; an explicitly selected excluded model BLOCKs."""
+    charged = _or_row("synth/alpha")
+    charged["pricing"]["internal_reasoning"] = "0.000009"
+    world = World()
+    world.or_rows = [charged, _or_row("synth/beta", inp="0.1", out="0.4")]
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == {"openrouter/synth/beta"}
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "reasoning_charges_unrepresentable",
+    )
+    selected = _collect(
+        world, providers=("openrouter",), model_include=("synth/alpha",)
+    )
+    report, _ = _validate(selected, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "missing_required_selection" in _codes(report)
+
+
+def test_router_zero_reasoning_charge_carried_as_no_charge() -> None:
+    """181-c (C1): a published ZERO reasoning price is an explicit
+    no-charge, never a missing fact: the proposal carries it exactly,
+    because a missing price would make finalization bill reasoning tokens
+    at the output price (a change of actual local billing)."""
+    world = _router_world_with_pricing_field("internal_reasoning", "0")
     bundle = _collect(world, providers=("openrouter",))
     assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
     pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
     dims = {d.name: (d.value, d.unit) for d in pricing.dimensions}
-    assert dims["reasoning"] == ("9", "per_1m_tokens")
+    assert dims["reasoning"] == ("0", "per_1m_tokens")
     assert dims["input"] == ("0.54", "per_1m_tokens")
     assert dims["output"] == ("2.16", "per_1m_tokens")
     report, _ = _validate(bundle, None)
     assert report.state == "READY", sorted(_codes(report))
 
 
-def test_router_request_charge_carried_as_dimension() -> None:
-    world = _router_world_with_pricing_field("request", "0.1")
+def test_router_request_charge_excluded_under_standard_v1() -> None:
+    """181-c (C1) strategic reproducer: a positive per-request fee must not
+    produce a ready standard-v1 row - ordinary Chat admission and
+    finalization do not bill an additive per-request fee (the column serves
+    native-module contracts). Flat siblings stay; explicit selection BLOCKs."""
+    charged = _or_row("synth/alpha")
+    charged["pricing"]["request"] = "0.1"
+    world = World()
+    world.or_rows = [charged, _or_row("synth/beta", inp="0.1", out="0.4")]
     bundle = _collect(world, providers=("openrouter",))
-    assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
-    pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
-    dims = {d.name: (d.value, d.unit) for d in pricing.dimensions}
-    assert dims["request"] == ("0.1", "per_request")
-    report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    assert _proposed_models(bundle) == {"openrouter/synth/beta"}
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "request_charges_unrepresentable",
+    )
+    selected = _collect(
+        world, providers=("openrouter",), model_include=("synth/alpha",)
+    )
+    report, _ = _validate(selected, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "missing_required_selection" in _codes(report)
 
 
 def test_router_zero_request_charge_is_no_charge_not_missing() -> None:
+    """181-c (C1) zero semantics: a published zero per-request fee is a
+    documented no-charge - ordinary Chat bills no per-request fee at all,
+    so carrying nothing changes no local billing."""
     world = _router_world_with_pricing_field("request", "0")
     bundle = _collect(world, providers=("openrouter",))
     assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
@@ -863,15 +906,17 @@ def test_router_zero_request_charge_is_no_charge_not_missing() -> None:
     assert report.state == "READY", sorted(_codes(report))
 
 
-def test_router_request_below_import_quantum_excluded() -> None:
-    # A positive per-request charge that quantizes to zero at the 9-dp
-    # import contract cannot be stored without becoming a free price.
+def test_router_tiny_positive_request_charge_excluded() -> None:
+    # 181-c (C1): ANY positive per-request fee excludes the row - the
+    # executable-billing gate fires before the import-quantum gate, so a
+    # below-quantum fee is excluded with the exact billing reason and never
+    # stored as a free price.
     world = _router_world_with_pricing_field("request", "0.0000000001")
     bundle = _collect(world, providers=("openrouter",))
     assert _proposed_models(bundle) == set()
     assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
         "excluded_subset",
-        "price_below_quantum",
+        "request_charges_unrepresentable",
     )
 
 
@@ -923,18 +968,61 @@ def test_router_sentinel_on_billable_extra_excluded() -> None:
     )
 
 
-def test_router_web_search_charge_accepted_unreachable_with_evidence() -> None:
-    # Hosted web search is a denied hosted operation in the standard-v1
-    # profile: the published charge is accepted unreachable under that
-    # explicit tested policy, with the evidence shown on the route.
+def test_router_web_search_charge_excluded() -> None:
+    """181-c (C2) strategic reproducer: a positive hosted-operation charge
+    is EXCLUDED with the exact machine reason - no blanket 'accepted
+    unreachable' assertion (hosted operations are denied in the profile and
+    no reviewed per-model executable contract proves the charge cannot be
+    incurred)."""
     world = _router_world_with_pricing_field("web_search", "0.01")
     bundle = _collect(world, providers=("openrouter",))
-    assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
-    route = next(r for r in bundle.routes if r.requested_model == "synth/alpha")
-    warnings = [text for text in route.warnings]
-    assert any(
-        "web_search" in text and "accepted unreachable" in text for text in warnings
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "hosted_operation_charges_unrepresentable",
     )
+    report, _ = _validate(bundle, None)
+    assert all("accepted unreachable" not in w.detail for w in report.warnings)
+    # the only observed model is excluded => the usable bootstrap is empty
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "collection_empty_bootstrap" in _codes(report)
+
+
+def test_router_online_variant_hosted_charge_excluded_and_sibling_kept() -> None:
+    """181-c (C2): model variants or intrinsic hosted-style identities are
+    never declared safe by analogy with optional tools - a :online-style ID
+    with a positive hosted charge is excluded on the price (identity is not
+    laundering), identically to an ordinary flat ID; the flat sibling stays
+    proposed."""
+    online = _or_row("synth/alpha:online")
+    online["pricing"]["web_search"] = "0.01"
+    world = World()
+    world.or_rows = [online, _or_row("synth/beta", inp="0.1", out="0.4")]
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == {"openrouter/synth/beta"}
+    assert _inventory(bundle)[("openrouter", "synth/alpha:online")] == (
+        "excluded_subset",
+        "hosted_operation_charges_unrepresentable",
+    )
+    plain = _or_row("synth/alpha")
+    plain["pricing"]["web_search"] = "0.01"
+    world2 = World()
+    world2.or_rows = [plain]
+    bundle2 = _collect(world2, providers=("openrouter",))
+    assert _inventory(bundle2)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "hosted_operation_charges_unrepresentable",
+    )
+
+
+def test_router_zero_web_search_is_no_charge_not_missing() -> None:
+    """181-c (C2) zero semantics: a published zero web-search charge is a
+    no-charge (the standard chat contract has no web-search billing
+    dimension and a zero publishes no provider-side cost): the row stays
+    proposed with core dims only."""
+    world = _router_world_with_pricing_field("web_search", "0")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
     pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
     assert {d.name for d in pricing.dimensions} == {"input", "cached_input", "output"}
     report, _ = _validate(bundle, None)
@@ -959,9 +1047,10 @@ def test_empty_usable_bootstrap_blocks() -> None:
 
 
 def test_supplied_bundle_dropping_carried_charge_blocks() -> None:
-    """Removing a published positive reasoning charge from a collected
-    bundle must block: dropping a billable dimension is not an exclusion."""
-    world = _router_world_with_pricing_field("internal_reasoning", "0.000009")
+    """181-c (C1): removing the published ZERO reasoning no-charge from a
+    collected bundle must block: the omission would change actual local
+    billing (finalization would fall back to the output price)."""
+    world = _router_world_with_pricing_field("internal_reasoning", "0")
     collected = _collect(world, providers=("openrouter",))
     bundle = _roundtrip_bundle(collected)
     pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
@@ -976,7 +1065,9 @@ def test_supplied_bundle_dropping_carried_charge_blocks() -> None:
 
 
 def test_supplied_bundle_altering_carried_charge_blocks() -> None:
-    world = _router_world_with_pricing_field("internal_reasoning", "0.000009")
+    """181-c (C1): altering the carried zero reasoning no-charge to a
+    positive value must block (it would publish an unbilled charge)."""
+    world = _router_world_with_pricing_field("internal_reasoning", "0")
     collected = _collect(world, providers=("openrouter",))
     bundle = _roundtrip_bundle(collected)
     pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
@@ -1238,13 +1329,18 @@ def test_refresh_two_aliases_are_never_reduced() -> None:
 
 
 def test_refresh_prefix_baseline_covers_upstream_retained() -> None:
+    """181-c (C3): a PASSTHROUGH prefix (no fixed upstream) governs the
+    upstreams whose identity matches the public pattern: retained locally
+    with an explicit reason, never a parallel exact route, never a
+    disappearance."""
     world = World()
     world.or_rows = [_or_row("synth/alpha")]
     baseline = _baseline_doc(routes={"synth/": {"priority": 50}})
     baseline = baseline.model_copy(
         update={
             "routes": tuple(
-                r.model_copy(update={"match_type": "prefix"}) for r in baseline.routes
+                r.model_copy(update={"match_type": "prefix", "upstream_model": ""})
+                for r in baseline.routes
             )
         }
     )
@@ -1266,6 +1362,155 @@ def test_refresh_prefix_baseline_covers_upstream_retained() -> None:
     # deterministic disposition - never a source disappearance
     dispositions = {d.model: d.disposition for d in report.dispositions if d.model == "synth/"}
     assert dispositions == {"synth/": "NOT_FETCHED"}
+
+
+def test_refresh_fixed_upstream_prefix_baseline_retained() -> None:
+    """181-c (C3) strategic reproducer: a prefix route with a FIXED
+    upstream_model governs that upstream even though the public pattern
+    differs from the upstream ID (the resolver's destination rule, not
+    public string similarity). The row is retained locally, NO parallel
+    exact route is invented, and neither side is a source disappearance."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(
+        routes={
+            "public/": {
+                "enabled": False,
+                "visible": False,
+                "streaming": False,
+                "priority": 77,
+                "caps": {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+            }
+        }
+    )
+    baseline = baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"match_type": "prefix", "upstream_model": "synth/alpha"})
+                for r in baseline.routes
+            )
+        }
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert bundle.routes == ()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "baseline_contract_not_flat",
+    )
+    detail = next(
+        e.detail for e in bundle.collection.inventory if e.model == "synth/alpha"
+    )
+    assert "public/" in detail and "synth/alpha" in detail
+    report, artifacts = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "model_disappeared" not in _codes(report)
+    assert "wildcard_route_authority_bypassed" not in _codes(report)
+    # artifact plan: the governed upstream is absent from the import artifacts
+    # (no invented parallel route, no parallel pricing row)
+    assert "synth/alpha" not in artifacts["routes-proposal.tsv"].decode()
+    assert "synth/alpha" not in artifacts["pricing-proposal.tsv"].decode()
+    dispositions = {
+        d.model: d.disposition for d in report.dispositions if d.model == "public/"
+    }
+    assert dispositions == {"public/": "NOT_FETCHED"}
+
+
+def test_refresh_glob_baseline_covers_upstream_retained() -> None:
+    """181-c (C3): passthrough glob coverage, same retain-local semantics."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(routes={"synth/*": {"priority": 50}})
+    baseline = baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"match_type": "glob", "upstream_model": ""})
+                for r in baseline.routes
+            )
+        }
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert bundle.routes == ()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "baseline_contract_not_flat",
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "model_disappeared" not in _codes(report)
+
+
+def test_refresh_multiple_wildcard_alternatives_not_reduced() -> None:
+    """181-c (C3): multiple governing wildcard rows are all recorded in the
+    retention reason - alternatives are never reduced to one row."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(routes={"public/": {"priority": 77}, "alt/": {"priority": 42}})
+    baseline = baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"match_type": "prefix", "upstream_model": "synth/alpha"})
+                for r in baseline.routes
+            )
+        }
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert bundle.routes == ()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "baseline_contract_not_flat",
+    )
+    detail = next(
+        e.detail for e in bundle.collection.inventory if e.model == "synth/alpha"
+    )
+    assert "public/" in detail and "alt/" in detail
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "model_disappeared" not in _codes(report)
+
+
+def test_refresh_fixed_prefix_to_other_upstream_not_covered() -> None:
+    """181-c (C3): a public prefix whose FIXED destination is another
+    upstream does NOT govern this model - no broadening of public-prefix
+    rules to every unconfigured model: the normal exact proposal proceeds."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(routes={"public/": {"priority": 77}})
+    baseline = baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"match_type": "prefix", "upstream_model": "other/x"})
+                for r in baseline.routes
+            )
+        }
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    (route,) = bundle.routes
+    assert route.requested_model == "synth/alpha"
+    assert route.match_type == "exact"
+    assert route.upstream_model == "synth/alpha"
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "wildcard_route_authority_bypassed" not in _codes(report)
 
 
 def test_supplied_bundle_replacing_alias_with_upstream_route_blocks() -> None:
@@ -1316,6 +1561,102 @@ def test_supplied_bundle_parallel_upstream_route_blocks() -> None:
     report, _ = _validate(bundle, baseline)
     assert report.state == "BLOCKED", sorted(_codes(report))
     assert "alias_route_replaced" in _codes(report)
+
+
+def test_supplied_bundle_parallel_wildcard_route_blocks() -> None:
+    """181-c (C3): a supplied bundle that re-inserts a parallel exact route
+    for an upstream governed by a baseline wildcard (fixed destination)
+    must BLOCK, even though the row is otherwise flat and fully priced:
+    the wildcard retains local authority over that upstream."""
+    from slaif_gateway.schemas.catalog_refresh import (
+        FieldProvenance,
+        ModelFacts,
+        ModelPricingFacts,
+        PricingDimension,
+        RouteFacts,
+    )
+
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(
+        routes={
+            "public/": {
+                "enabled": False,
+                "visible": False,
+                "streaming": False,
+                "priority": 77,
+                "caps": {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+            }
+        }
+    )
+    baseline = baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"match_type": "prefix", "upstream_model": "synth/alpha"})
+                for r in baseline.routes
+            )
+        }
+    )
+    collected = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert collected.routes == ()  # the collector retains, never invents
+    bundle = _roundtrip_bundle(collected)
+    prov = FieldProvenance(
+        sources=("openrouter|catalog|openrouter_models_api",),
+        extractor=coll.EXTRACTOR_ID,
+        extraction="deterministic",
+    )
+    route = RouteFacts(
+        provider="openrouter",
+        requested_model="synth/alpha",
+        upstream_model="synth/alpha",
+        match_type="exact",
+        endpoint="/v1/chat/completions",
+        priority=100,
+        enabled=True,
+        visible_in_models=True,
+        supports_streaming=True,
+        capabilities={"text": True, "streaming": True},
+        provenance=prov,
+    )
+    model = ModelFacts(
+        provider="openrouter",
+        model="synth/alpha",
+        display_name="synth/alpha",
+        context_length=128000,
+        max_output_tokens=8192,
+        supports_streaming=True,
+        capabilities={"text": True, "streaming": True},
+        deprecated=False,
+        provenance=prov,
+    )
+    pricing = ModelPricingFacts(
+        provider="openrouter",
+        model="synth/alpha",
+        endpoint="/v1/chat/completions",
+        currency="USD",
+        dimensions=(
+            PricingDimension(name="input", value="0.54", unit="per_1m_tokens", currency="USD"),
+            PricingDimension(name="cached_input", value="0.054", unit="per_1m_tokens", currency="USD"),
+            PricingDimension(name="output", value="2.16", unit="per_1m_tokens", currency="USD"),
+        ),
+        valid_from=collected.generated_at,
+        provenance=prov,
+    )
+    bundle = bundle.model_copy(
+        update={
+            "routes": bundle.routes + (route,),
+            "models": bundle.models + (model,),
+            "pricing": bundle.pricing + (pricing,),
+        }
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "wildcard_route_authority_bypassed" in _codes(report)
 
 
 # --- 181-b (B3): models-index inventory ----------------------------------------

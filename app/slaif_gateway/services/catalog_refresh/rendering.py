@@ -950,13 +950,15 @@ def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) ->
             "run).</p>"
         )
     parts.append(
-        "<p class='muted'>Flat standard-v1 eligibility: the collector proposes the short-context core "
-        "text dims and carries published positive reasoning (per-1M) and per-request charges; models "
-        "with published long-context standard prices, contextual override tiers, positive cache-write "
-        "charges, unknown billing keys, or source sentinels on billable dims are excluded with the "
-        "exact machine reason, and an explicitly selected one blocks the run. Hosted web-search "
-        "charges are accepted unreachable (denied hosted operation in the standard-v1 profile) with "
-        "the evidence shown on the route. Research identity: NOT_RUN — no Codex invocation occurred in "
+        "<p class='muted'>Flat standard-v1 eligibility follows executable billing, not TSV capacity: "
+        "the collector proposes the short-context core text dims plus, only when the source publishes "
+        "it as an explicit zero, the reasoning no-charge (a missing reasoning price would make the "
+        "runtime bill reasoning tokens at the output price). Positive separately billed reasoning "
+        "charges, positive per-request fees, and positive hosted-operation charges (model variants "
+        "are never declared safe by analogy) are excluded with the exact machine reason, as are "
+        "published long-context standard prices, contextual override tiers, positive cache-write "
+        "charges, unknown billing keys, and source sentinels on billable dims; an explicitly selected "
+        "excluded model blocks the run. Research identity: NOT_RUN — no Codex invocation occurred in "
         "this version. No apply or refresh command exists; the sealed run directory is the terminal output.</p>"
     )
     parts.append("</details>")

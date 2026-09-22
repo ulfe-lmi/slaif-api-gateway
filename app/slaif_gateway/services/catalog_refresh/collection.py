@@ -33,7 +33,6 @@ import base64
 import hashlib
 import socket
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from importlib.metadata import version as _package_version
@@ -188,9 +187,13 @@ def _baseline_identity_for(
     - exactly one flat-representable exact row: ``(row, None, None)`` — the
       proposal preserves that row's public alias, match type, priority,
       enabled/visibility, streaming and every approved denial;
-    - one non-flat exact row, or any covering prefix/glob route: the local
-      contract cannot be proposed flat; the model is retained locally with
-      an explicit deterministic reason and NO parallel route is proposed;
+    - one non-flat exact row, or any prefix/glob route that GOVERNS the
+      upstream (181-c C3: a fixed ``upstream_model`` destination equal to the
+      upstream, or a passthrough row whose public pattern matches the upstream
+      identity - the resolver's actual destination semantics, never public
+      string similarity): the local contract cannot be proposed flat; the
+      model is retained locally with an explicit deterministic reason and NO
+      parallel route is proposed;
     - more than one exact row: alternatives are never reduced; retained.
     """
     exact_rows = baseline_chat_rows_by_upstream.get(key, [])
@@ -208,19 +211,27 @@ def _baseline_identity_for(
             "alternatives are never reduced; retained locally"
         )
     provider, upstream_model = key
+    # 181-c (C3): coverage is the resolver's ACTUAL destination semantics
+    # (fixed upstream_model equality, or passthrough pattern == upstream
+    # identity), shared with the validator - not public-pattern string
+    # similarity. Multiple governing rows are all recorded, never reduced.
     covering = [
         row
         for row in baseline_wildcard_routes
         if row.provider == provider
-        and (
-            (row.match_type == "prefix" and upstream_model.startswith(row.requested_model))
-            or (row.match_type == "glob" and fnmatchcase(upstream_model, row.requested_model))
-        )
+        and se.wildcard_route_governs_upstream(row, upstream_model)
     ]
     if covering:
-        first = covering[0]
+        descriptions = []
+        for row in covering[:4]:
+            fixed = getattr(row, "upstream_model", "") or ""
+            if fixed:
+                descriptions.append(f"{row.match_type} {row.requested_model!r} -> {fixed!r}")
+            else:
+                descriptions.append(f"{row.match_type} {row.requested_model!r} (passthrough)")
+        more = f" (+{len(covering) - 4} more)" if len(covering) > 4 else ""
         return None, REASON_BASELINE_CONTRACT_NOT_FLAT, (
-            f"baseline {first.match_type} route {first.requested_model!r} covers this upstream; "
+            f"baseline wildcard route(s) {', '.join(descriptions)}{more} govern this upstream; "
             "a flat exact proposal cannot preserve wildcard contracts; retained locally"
         )
     return None, None, None
@@ -406,11 +417,12 @@ def collect_bundle(
                 )
             )
             continue
-        # 181-b (B1): the shared billing decision runs BEFORE proposal —
-        # capturing an observation is not enforcing it. Positive
-        # cache-write/override/unknown-dimension bills and sentinels on
-        # billable dims are excluded with the exact policy reason;
-        # positive reasoning / per-request charges are carried as dims.
+        # 181-b/181-c (B1/C1): the shared billing decision runs BEFORE
+        # proposal — capturing an observation is not enforcing it. Positive
+        # reasoning/per-request/hosted/cache-write bills, override tiers,
+        # unknown-dimension bills and sentinels on billable dims are
+        # excluded with the exact policy reason (executable billing, not
+        # TSV capacity); a published zero reasoning no-charge is carried.
         decision = se.standard_v1_billing_decision("openrouter", [row])
         if not decision.eligible:
             inventory.append(
@@ -461,7 +473,7 @@ def collect_bundle(
                 )
             )
             continue
-        proposals[key] = _router_proposal(row, baseline_row, decision, carried_dims, started_at)
+        proposals[key] = _router_proposal(row, baseline_row, carried_dims, started_at)
 
     # --- OpenAI candidates, model pages, and the models index ---------------
     openai_index_ids: set[str] = set()
@@ -642,7 +654,7 @@ def collect_bundle(
                     )
                     break
             else:
-                proposals[key] = _openai_proposal(row, page, baseline_row, decision, carried_dims, started_at)
+                proposals[key] = _openai_proposal(row, page, baseline_row, carried_dims, started_at)
         # 181-b (B3): the fetched models index is model evidence, not
         # decoration: every index-only ID (no standard pricing rows at
         # all) receives exactly one explained source disposition instead
@@ -868,7 +880,6 @@ def collect_bundle(
 def _router_proposal(
     row: se.ParsedModel,
     baseline_row: object | None,
-    decision: se.BillingDecision,
     carried_dims: list[PricingDimension],
     valid_from: datetime,
 ) -> _Proposal:
@@ -911,8 +922,9 @@ def _router_proposal(
         dims.append(
             PricingDimension(name=dim, value=text, unit="per_1m_tokens", currency="USD")
         )
-    # 181-b (B1): carried billable charges (positive reasoning per-1M and
-    # per-request) are part of the flat contract, never silently dropped.
+    # 181-c (C1): the carried set is the shared decision's executable
+    # billing set (only an explicit zero reasoning no-charge); positive
+    # reasoning / per-request / hosted charges never reach a proposal.
     dims.extend(carried_dims)
     route = RouteFacts(
         provider=provider,
@@ -926,7 +938,7 @@ def _router_proposal(
         supports_streaming=supports_streaming,
         capabilities=flat_capabilities,
         provenance=provenance,
-        warnings=decision.accepted_unreachable,
+        warnings=(),
     )
     model = ModelFacts(
         provider=provider,
@@ -955,7 +967,6 @@ def _openai_proposal(
     row: se.ParsedModel,
     page: se.ParsedModel,
     baseline_row: object | None,
-    decision: se.BillingDecision,
     carried_dims: list[PricingDimension],
     valid_from: datetime,
 ) -> _Proposal:
@@ -1000,7 +1011,7 @@ def _openai_proposal(
         dims.append(
             PricingDimension(name=dim, value=text, unit="per_1m_tokens", currency="USD")
         )
-    # 181-b (B1): carried billable charges, never silently dropped.
+    # 181-c (C1): carried set from the shared decision (see _router_proposal).
     dims.extend(carried_dims)
     route = RouteFacts(
         provider=provider,
@@ -1014,7 +1025,7 @@ def _openai_proposal(
         supports_streaming=supports_streaming,
         capabilities=flat_capabilities,
         provenance=page_provenance,
-        warnings=decision.accepted_unreachable,
+        warnings=(),
     )
     model = ModelFacts(
         provider=provider,

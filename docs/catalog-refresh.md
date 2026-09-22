@@ -165,9 +165,11 @@ collection inventory exactly once with a machine reason code:
 | `contextual_overrides_unrepresentable` | contextual override tiers (e.g. `min_prompt_tokens` blocks) publish prices the flat standard contract cannot represent |
 | `cache_write_charges_unrepresentable` | a positive cache-write charge (1h or not) is not billable in the flat standard-v1 contract |
 | `unknown_billing_dimension` | a published pricing key outside the recognized billable/observed set; fail-closed |
-| `conflicting_billing_observation` | conflicting billable observations for the same dimension |
+| `reasoning_charges_unrepresentable` | a positive separately billed reasoning charge; ordinary Chat admission reserves at the output price and no qualified reasoning billing contract is authorized for standard-v1 |
+| `request_charges_unrepresentable` | a positive per-request fee; ordinary Chat admission and finalization do not bill an additive per-request fee (that column serves native-module contracts) |
+| `hosted_operation_charges_unrepresentable` | a positive hosted-operation charge (e.g. `web_search` per call); hosted operations are denied in the profile and no reviewed per-model executable contract proves the charge cannot be incurred |
 | `price_below_quantum` | a positive charge quantizes to zero at the 9-dp import contract; excluded rather than stored as a free price |
-| `baseline_contract_not_flat` | the stored baseline route contract cannot be proposed flat (a non-flat exact route, or a prefix/glob baseline route covering the upstream); retained locally |
+| `baseline_contract_not_flat` | the stored baseline route contract cannot be proposed flat (a non-flat exact route, or a prefix/glob baseline route that governs the upstream under the resolver's destination semantics - a fixed `upstream_model` equal to the upstream, or a passthrough pattern matching the upstream identity); retained locally, all governing rows recorded |
 | `baseline_multiple_routes` | multiple local route rows (aliases/priorities) for one upstream; alternatives are never reduced; retained locally |
 | `baseline_currency_mismatch` | the stored baseline pricing currency differs from the published native currency |
 | `index_only_no_standard_prices` | listed in the official models index but no standard short-context Chat pricing is published |
@@ -232,28 +234,42 @@ does not fetch again and does not claim a new retrieval.
 
 ### Proposal scope and FX derivation
 
-The collector proposes **standard-v1 short-context core pricing**:
+Eligibility follows **executable billing, not TSV capacity**: a value
+fitting a pricing column is not proof the gateway can safely bill that
+shape. The collector proposes **standard-v1 short-context core pricing**:
 `input`, `output`, and (when published) `cached_input` per 1M tokens in the
-published native currency, plus — when published as positive charges — the
-`reasoning` dimension (per 1M tokens) and the per-request dimension
-(`per_request`). Before anything is proposed, a single deterministic shared
-policy decides flat billing eligibility for each model from **all**
-authoritative observations of it (every billing tier, every context band,
-every published pricing key); the same policy is recomputed by validation
-from the parsed official evidence, so a supplied or tampered bundle cannot
-bypass eligibility by dropping dimensions:
+published native currency, plus — only when the source publishes it as an
+**explicit zero** — the `reasoning` no-charge dimension. Before anything is
+proposed, a single deterministic shared policy decides flat billing
+eligibility for each model from **all** authoritative observations of it
+(every billing tier, every context band, every published pricing key); the
+same policy is recomputed by validation from the parsed official evidence,
+so a supplied or tampered bundle cannot bypass eligibility by dropping
+dimensions:
 
-- **Excluded, fail-closed, with the exact machine reason**: published
-  long-context standard prices (even $0 — a published contextual price),
-  contextual override tiers, positive cache-write charges (1h or not),
-  unknown published billing keys, source `-1` sentinels on any billable
-  dimension, conflicting billable observations, and positive charges that
-  quantize to zero at the 9-dp import contract (`price_below_quantum`).
-- A **legitimate zero is a no-charge, never a missing fact**.
-- A published hosted **web-search charge is accepted unreachable** under
-  the explicit tested policy (hosted web search is a denied hosted
-  operation in the standard-v1 profile), with the acceptance evidence shown
-  on the route's warnings — never silently dropped.
+- **Excluded, fail-closed, with the exact machine reason**: positive
+  separately billed **reasoning charges** (ordinary Chat admission reserves
+  at the output price; no qualified reasoning billing contract is
+  authorized), positive **per-request fees** (ordinary Chat admission and
+  finalization do not bill an additive per-request fee; that column serves
+  native-module contracts), positive **hosted-operation charges** (hosted
+  operations are denied in the profile and no reviewed per-model executable
+  contract proves the charge cannot be incurred — model variants such as
+  `:online` are never declared safe by analogy), published long-context
+  standard prices (even $0 — a published contextual price), contextual
+  override tiers, positive cache-write charges (1h or not), unknown
+  published billing keys, source `-1` sentinels on any billable dimension,
+  and positive charges that quantize to zero at the 9-dp import contract
+  (`price_below_quantum`).
+- **Zero semantics (documented, tested)**: a **legitimate zero is a
+  no-charge, never a missing fact**. A published zero `reasoning` price is
+  **carried**, because a missing reasoning price makes finalization bill
+  reasoning tokens at the output price (`reasoning_price_fallback_to_output`)
+  — a change of actual local billing. A published zero per-request fee is a
+  documented no-charge (ordinary Chat bills no per-request fee at all), and
+  a published zero web-search charge is a no-charge (the standard chat
+  contract has no web-search billing dimension and a zero publishes no
+  provider-side cost); both are never carried.
 - An excluded model's official model page is **never fetched** (eligibility
   is decided before page retrieval); explicitly selecting an ineligible
   model BLOCKs the run.
@@ -299,10 +315,19 @@ identity and is never overridden:
 - **Multiple aliases/priorities are never reduced** to one row
   (`baseline_multiple_routes`): the model is retained locally with no
   parallel route proposed.
-- A **prefix/glob baseline route covering the upstream** is retained
-  (`baseline_contract_not_flat`): a flat exact proposal cannot preserve
-  wildcard contracts, and the routing pattern itself is local state —
-  retained with an explicit disposition, never a source disappearance.
+- A **prefix/glob baseline route that GOVERNS the upstream** is retained
+  (`baseline_contract_not_flat`): coverage is the resolver's actual
+  destination semantics, never public string similarity — an explicit
+  `upstream_model` is a fixed destination (the row governs exactly that
+  upstream, whatever the public pattern is), and an empty `upstream_model`
+  passes the public name through (the row governs the upstreams whose
+  identity matches the public pattern). All governing rows are recorded in
+  the retention reason — alternatives are never reduced — a flat exact
+  proposal cannot preserve wildcard contracts, and the routing pattern
+  itself is local state: retained with an explicit disposition, never a
+  source disappearance, and no parallel route may re-insert a bypass of
+  that authority (supplied bundles are BLOCKed with
+  `wildcard_route_authority_bypassed`).
 - A **non-flat exact contract** or a **baseline pricing currency other
   than USD** retains the model locally with an explicit inventory reason
   instead of re-proposing it under a different contract.
