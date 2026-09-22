@@ -12,6 +12,7 @@ from slaif_gateway import __version__
 from slaif_gateway.cli.admin import app as admin_app
 from slaif_gateway.cli.bootstrap import app as bootstrap_app
 from slaif_gateway.cli.calibration import app as calibration_app
+from slaif_gateway.cli.catalog_refresh import app as catalog_refresh_app
 from slaif_gateway.cli.cohorts import app as cohorts_app
 from slaif_gateway.cli.codex import app as codex_app
 from slaif_gateway.cli.db import app as db_app
@@ -36,6 +37,7 @@ app = typer.Typer(help="SLAIF API Gateway CLI")
 app.add_typer(admin_app, name="admin")
 app.add_typer(bootstrap_app, name="bootstrap")
 app.add_typer(calibration_app, name="calibration")
+app.add_typer(catalog_refresh_app, name="catalog-refresh")
 app.add_typer(institutions_app, name="institutions")
 app.add_typer(cohorts_app, name="cohorts")
 app.add_typer(codex_app, name="codex")

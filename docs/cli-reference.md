@@ -104,6 +104,90 @@ slaif-gateway secrets validate-env
 Codex commands apply only to explicitly registered qualification profiles.
 Configuration validation reports bounded names/status, never secret values.
 
+## Catalog refresh (offline review)
+
+Bounded offline catalog refresh: one typed proposal bundle, one safe
+baseline, one sealed one-page report. Offline review, verify, and read-only
+export only — live source retrieval is unavailable in this version and there
+is no refresh or apply command in this version. Full semantics, policy
+thresholds, sealing, and exit codes live in
+[Catalog refresh (offline review)](catalog-refresh.md).
+
+```bash
+# Review a proposal bundle against an exported baseline (sealed run output)
+slaif-gateway catalog-refresh review /path/to/catalog-refresh.json \
+  --baseline-file /path/to/baseline.json
+
+# Review against a live read-only database snapshot
+slaif-gateway catalog-refresh review /path/to/catalog-refresh.json \
+  --db-url postgresql+asyncpg://user@host:5432/dbname
+
+# First install: explicitly empty baseline
+slaif-gateway catalog-refresh review /path/to/catalog-refresh.json --first-install
+
+# Verify a sealed run directory against the runner-owned key
+slaif-gateway catalog-refresh verify --run-dir /path/to/run --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
+
+# Export a read-only consistent baseline document
+slaif-gateway catalog-refresh export-baseline --out /path/to/baseline.json --db-url postgresql+asyncpg://user@host:5432/dbname
+```
+
+Review exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED, 65 data
+error, 2 usage error. Verify: 0 valid, 30 invalid (including a missing,
+non-directory, or symlinked run directory with an otherwise valid key),
+65 data error (missing or unsafe seal key; verify never creates keys).
+Export-baseline: 0 written, 65 data error (never overwrites output, never
+bootstraps empty).
+
+Filesystem inputs and outputs are handled by a descriptor-anchored,
+symlink-free boundary: symlinked bundle/baseline/key paths, FIFOs and
+other special files, oversized or growing inputs, and — for the writing commands — run
+roots or key parents (`review`) and the output parent (`export-baseline`)
+writable by group or other are refused with exit 65
+and a safe error that does not echo input content; a symlinked run
+directory makes `verify` invalid (exit 30). Runs are published atomically
+new-only and never overwritten; `export-baseline` writes only to a
+new output path. Full contract:
+[Catalog refresh (offline review)](catalog-refresh.md#filesystem-trust-contract).
+
+The three review baseline inputs are distinct execution paths with
+distinct SQL evidence: `--db-url` performs the live read-only export
+itself (SQL executed during this review), `--baseline-file` consumes a
+supplied document (SQL was executed historically at that document's export
+time, not during this review), and `--first-install` is the explicit empty
+baseline (no database read). A label or boolean in the bundle cannot claim
+a capture path. `export-baseline` writes one coherent `REPEATABLE READ`
+snapshot of the four allowlisted tables, retaining the recognized nested
+capability contracts and the allowlisted monetary metadata; it never
+writes to the database.
+
+### Offline source input contract
+
+The bundle's `sources` entries are replayed offline, never fetched. Only
+the registered (provider, source kind) pairs are parsed deterministically:
+`openrouter/openrouter_models_api` (official OpenRouter `/models` shape,
+per-token USD pricing), `openai/openai_models_api` (identity only),
+`openai/openai_pricing_docs`, `openai/openai_models_docs` (bounded docs
+tables), and `ecb/ecb_reference_xml` (EUR-based ECB reference-rate XML:
+provider `ecb`, model part a currency pair such as `EUR-USD`, official ECB
+host, DOCTYPE and external entities rejected). `evidence_b64` must match
+the declared `content_sha256` and parse successfully to support required
+facts; a matching digest of arbitrary or empty bytes is not content trust
+and fails the gate, regardless of any extraction label. Each decoded
+snapshot is parsed strictly (duplicate JSON keys, non-finite constants,
+malformed rows, and unbounded price cells are code-only errors), and every
+proposed field is validated against the sources its own fact declares for
+the route's actual upstream model — an unobserved upstream, a wrong
+per-field source, or a conflicting supplied observation blocks. An FX fact
+binds to an official `ecb/ecb_reference_xml` quote before any currency
+normalization (finite positive rate or exact reciprocal within 1e-8, quote
+source declared in the fact's provenance, publication date equal to the
+quote date); an unbound FX rate is never guessed or used. Selection is
+reconciled per model: an unexplained eligible-model omission under an
+all-eligible selection blocks; explicit subset exclusions are named in the
+report. Full contract:
+[Catalog refresh (offline review)](catalog-refresh.md#source-evidence-binding-offline-replay).
+
 ## Related documentation
 
 - [Configuration](configuration.md)
@@ -126,6 +210,9 @@ slaif-gateway admin reset-password
 slaif-gateway admin list
 slaif-gateway bootstrap openai-completions-catalog
 slaif-gateway calibration summarize
+slaif-gateway catalog-refresh review
+slaif-gateway catalog-refresh verify
+slaif-gateway catalog-refresh export-baseline
 slaif-gateway codex inspect
 slaif-gateway codex profile
 slaif-gateway cohorts create

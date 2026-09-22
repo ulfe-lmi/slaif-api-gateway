@@ -338,6 +338,11 @@ def test_external_tool_policy_contract_consumers_remain_allowlisted() -> (
         REPO_ROOT / "app/slaif_gateway/services/key_service.py",
         REPO_ROOT / "app/slaif_gateway/services/key_template_service.py",
         REPO_ROOT / "app/slaif_gateway/services/model_route_service.py",
+        # 180-f (F1): the catalog-refresh schema is a read-only consumer -
+        # it reuses the authoritative parser to validate/project existing
+        # route metadata into the baseline and grants no runtime
+        # hosted-tool authority.
+        REPO_ROOT / "app/slaif_gateway/schemas/catalog_refresh.py",
         REPO_ROOT / "app/slaif_gateway/services/route_import.py",
         REPO_ROOT / "app/slaif_gateway/services/openai_web_search_contract.py",
     }

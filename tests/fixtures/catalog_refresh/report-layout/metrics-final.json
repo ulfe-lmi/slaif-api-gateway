@@ -1,0 +1,501 @@
+{
+ "blocked": {
+  "case": "blocked",
+  "computed_font_px_1440": {
+   ".chip": 14,
+   ".state": 18,
+   "body": 15,
+   "dl.kv": 15,
+   "h1": 24,
+   "h2": 17,
+   "table": 14
+  },
+  "details_opened": 15,
+  "document_scroll_width_1280": 1280,
+  "document_scroll_width_1280_expanded": 1280,
+  "document_scroll_width_1440": 1440,
+  "document_scroll_width_375": 375,
+  "document_scroll_width_375_expanded": 375,
+  "findings_summary_visible_text": "All warnings and findings (4)",
+  "first_viewport_boxes_1440x900": {
+   "#changes > :nth-child(2)": {
+    "bottom": 891.0,
+    "top": 870.0
+   },
+   "#changes > h2": {
+    "bottom": 865.0,
+    "top": 842.9
+   },
+   "#checks": {
+    "bottom": 488.6,
+    "top": 182.1
+   },
+   "#findings-line": {
+    "bottom": 842.9,
+    "top": 748.3
+   },
+   "#fx-line": {
+    "bottom": 719.3,
+    "top": 698.3
+   },
+   "#per-provider": {
+    "bottom": 694.3,
+    "top": 494.6
+   },
+   "#plan-line": {
+    "bottom": 744.3,
+    "top": 723.3
+   },
+   "#scope-baseline": {
+    "bottom": 488.6,
+    "top": 182.1
+   },
+   ".state": {
+    "bottom": 176.1,
+    "top": 89.2
+   }
+  },
+  "full_digests_visible": 5,
+  "requests": 1,
+  "screenshot": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/blocked-1440.png",
+  "short_labels_single_line_1440": true,
+  "state_visible_text": "BLOCKED \u2014 4 blocking issue(s): currency_inconsistency \u2014 inconsistent currency; gate:completeness \u2014 required data incomplete; gate:pricing.complete \u2014 pricing completeness failed (+1 more codes in the f"
+ },
+ "first-install": {
+  "case": "first-install",
+  "computed_font_px_1440": {
+   ".chip": 14,
+   ".state": 18,
+   "body": 15,
+   "dl.kv": 15,
+   "h1": 24,
+   "h2": 17,
+   "table": 14
+  },
+  "details_opened": 14,
+  "document_scroll_width_1280": 1280,
+  "document_scroll_width_1280_expanded": 1280,
+  "document_scroll_width_1440": 1440,
+  "document_scroll_width_375": 375,
+  "document_scroll_width_375_expanded": 375,
+  "findings_summary_visible_text": "All warnings and findings (0)",
+  "first_viewport_boxes_1440x900": {
+   "#changes > :nth-child(2)": {
+    "bottom": 751.8,
+    "top": 730.8
+   },
+   "#changes > h2": {
+    "bottom": 725.8,
+    "top": 703.8
+   },
+   "#checks": {
+    "bottom": 419.0,
+    "top": 133.5
+   },
+   "#findings-line": {
+    "bottom": 699.8,
+    "top": 678.8
+   },
+   "#fx-line": {
+    "bottom": 649.8,
+    "top": 628.8
+   },
+   "#per-provider": {
+    "bottom": 624.8,
+    "top": 425.0
+   },
+   "#plan-line": {
+    "bottom": 674.8,
+    "top": 653.8
+   },
+   "#scope-baseline": {
+    "bottom": 419.0,
+    "top": 133.5
+   },
+   ".state": {
+    "bottom": 127.5,
+    "top": 89.2
+   }
+  },
+  "requests": 1,
+  "screenshot": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/first-install-1440.png",
+  "short_labels_single_line_1440": true,
+  "state_visible_text": "READY \u2014 all recomputed gates verified; no review findings"
+ },
+ "fx-required": {
+  "case": "fx-required",
+  "computed_font_px_1440": {
+   ".chip": 14,
+   ".state": 18,
+   "body": 15,
+   "dl.kv": 15,
+   "h1": 24,
+   "h2": 17,
+   "table": 14
+  },
+  "details_opened": 25,
+  "document_scroll_width_1280": 1280,
+  "document_scroll_width_1280_expanded": 1280,
+  "document_scroll_width_1440": 1440,
+  "document_scroll_width_375": 375,
+  "document_scroll_width_375_expanded": 375,
+  "findings_summary_visible_text": "All warnings and findings (0)",
+  "first_viewport_boxes_1440x900": {
+   "#changes > :nth-child(2)": {
+    "bottom": 835.3,
+    "top": 814.3
+   },
+   "#changes > h2": {
+    "bottom": 810.3,
+    "top": 788.2
+   },
+   "#checks": {
+    "bottom": 461.0,
+    "top": 133.5
+   },
+   "#findings-line": {
+    "bottom": 784.2,
+    "top": 763.2
+   },
+   "#fx-line": {
+    "bottom": 734.2,
+    "top": 670.8
+   },
+   "#per-provider": {
+    "bottom": 666.8,
+    "top": 467.0
+   },
+   "#plan-line": {
+    "bottom": 759.2,
+    "top": 738.2
+   },
+   "#scope-baseline": {
+    "bottom": 461.0,
+    "top": 133.5
+   },
+   ".state": {
+    "bottom": 127.5,
+    "top": 89.2
+   }
+  },
+  "full_digests_visible": 5,
+  "print_pdf": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/fx-required-expanded-print.pdf",
+  "print_pdf_bytes": 168916,
+  "requests": 1,
+  "screenshot": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/fx-required-1440.png",
+  "short_labels_single_line_1440": true,
+  "state_visible_text": "READY \u2014 all recomputed gates verified; no review findings"
+ },
+ "large-unchanged": {
+  "case": "large-unchanged",
+  "computed_font_px_1440": {
+   ".chip": 14,
+   ".state": 18,
+   "body": 15,
+   "dl.kv": 15,
+   "h1": 24,
+   "h2": 17,
+   "table": 14
+  },
+  "details_opened": 410,
+  "document_scroll_width_1280": 1280,
+  "document_scroll_width_1280_expanded": 1280,
+  "document_scroll_width_1440": 1440,
+  "document_scroll_width_375": 375,
+  "document_scroll_width_375_expanded": 375,
+  "findings_summary_visible_text": "All warnings and findings (0)",
+  "first_viewport_boxes_1440x900": {
+   "#changes > :nth-child(2)": {
+    "bottom": 793.3,
+    "top": 772.3
+   },
+   "#changes > h2": {
+    "bottom": 768.3,
+    "top": 746.2
+   },
+   "#checks": {
+    "bottom": 440.0,
+    "top": 133.5
+   },
+   "#findings-line": {
+    "bottom": 742.2,
+    "top": 721.2
+   },
+   "#fx-line": {
+    "bottom": 692.2,
+    "top": 671.2
+   },
+   "#per-provider": {
+    "bottom": 667.2,
+    "top": 446.0
+   },
+   "#plan-line": {
+    "bottom": 717.2,
+    "top": 696.2
+   },
+   "#scope-baseline": {
+    "bottom": 440.0,
+    "top": 133.5
+   },
+   ".state": {
+    "bottom": 127.5,
+    "top": 89.2
+   }
+  },
+  "full_digests_visible": 5,
+  "requests": 1,
+  "screenshot": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/large-unchanged-1440.png",
+  "short_labels_single_line_1440": true,
+  "state_visible_text": "READY \u2014 all recomputed gates verified; no review findings"
+ },
+ "price-change": {
+  "case": "price-change",
+  "computed_font_px_1440": {
+   ".chip": 14,
+   ".state": 18,
+   "body": 15,
+   "dl.kv": 15,
+   "h1": 24,
+   "h2": 17,
+   "table": 14
+  },
+  "details_opened": 22,
+  "document_scroll_width_1280": 1280,
+  "document_scroll_width_1280_expanded": 1280,
+  "document_scroll_width_1440": 1440,
+  "document_scroll_width_375": 375,
+  "document_scroll_width_375_expanded": 375,
+  "findings_summary_visible_text": "All warnings and findings (2)",
+  "first_viewport_boxes_1440x900": {
+   "#changes > :nth-child(2)": {
+    "bottom": 862.7,
+    "top": 841.7
+   },
+   "#changes > h2": {
+    "bottom": 836.7,
+    "top": 814.6
+   },
+   "#checks": {
+    "bottom": 485.3,
+    "top": 157.8
+   },
+   "#findings-line": {
+    "bottom": 814.6,
+    "top": 745.0
+   },
+   "#fx-line": {
+    "bottom": 716.0,
+    "top": 695.0
+   },
+   "#per-provider": {
+    "bottom": 691.0,
+    "top": 491.3
+   },
+   "#plan-line": {
+    "bottom": 741.0,
+    "top": 720.0
+   },
+   "#scope-baseline": {
+    "bottom": 485.3,
+    "top": 157.8
+   },
+   ".state": {
+    "bottom": 151.8,
+    "top": 89.2
+   }
+  },
+  "full_digests_visible": 5,
+  "print_pdf": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/price-change-expanded-print.pdf",
+  "print_pdf_bytes": 180862,
+  "requests": 1,
+  "screenshot": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/price-change-1440.png",
+  "short_labels_single_line_1440": true,
+  "state_visible_text": "BLOCKED \u2014 2 blocking issue(s): gate:import.pricing \u2014 pricing import plan blocked; gate:import.routes \u2014 route import plan blocked"
+ },
+ "ready": {
+  "case": "ready",
+  "computed_font_px_1440": {
+   ".chip": 14,
+   ".state": 18,
+   "body": 15,
+   "dl.kv": 15,
+   "h1": 24,
+   "h2": 17,
+   "table": 14
+  },
+  "details_opened": 15,
+  "document_scroll_width_1280": 1280,
+  "document_scroll_width_1280_expanded": 1280,
+  "document_scroll_width_1440": 1440,
+  "document_scroll_width_375": 375,
+  "document_scroll_width_375_expanded": 375,
+  "findings_summary_visible_text": "All warnings and findings (0)",
+  "first_viewport_boxes_1440x900": {
+   "#changes > :nth-child(2)": {
+    "bottom": 771.8,
+    "top": 750.8
+   },
+   "#changes > h2": {
+    "bottom": 746.8,
+    "top": 724.8
+   },
+   "#checks": {
+    "bottom": 440.0,
+    "top": 133.5
+   },
+   "#findings-line": {
+    "bottom": 720.8,
+    "top": 699.8
+   },
+   "#fx-line": {
+    "bottom": 670.8,
+    "top": 649.8
+   },
+   "#per-provider": {
+    "bottom": 645.8,
+    "top": 446.0
+   },
+   "#plan-line": {
+    "bottom": 695.8,
+    "top": 674.8
+   },
+   "#scope-baseline": {
+    "bottom": 440.0,
+    "top": 133.5
+   },
+   ".state": {
+    "bottom": 127.5,
+    "top": 89.2
+   }
+  },
+  "full_digests_visible": 5,
+  "requests": 1,
+  "screenshot": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/ready-1440.png",
+  "short_labels_single_line_1440": true,
+  "state_visible_text": "READY \u2014 all recomputed gates verified; no review findings"
+ },
+ "two-provider": {
+  "case": "two-provider",
+  "computed_font_px_1440": {
+   ".chip": 14,
+   ".state": 18,
+   "body": 15,
+   "dl.kv": 15,
+   "h1": 24,
+   "h2": 17,
+   "table": 14
+  },
+  "details_opened": 23,
+  "document_scroll_width_1280": 1280,
+  "document_scroll_width_1280_expanded": 1280,
+  "document_scroll_width_1440": 1440,
+  "document_scroll_width_375": 375,
+  "document_scroll_width_375_expanded": 375,
+  "findings_summary_visible_text": "All warnings and findings (0)",
+  "first_viewport_boxes_1440x900": {
+   "#changes > :nth-child(2)": {
+    "bottom": 799.4,
+    "top": 778.4
+   },
+   "#changes > h2": {
+    "bottom": 773.4,
+    "top": 751.3
+   },
+   "#checks": {
+    "bottom": 440.0,
+    "top": 133.5
+   },
+   "#findings-line": {
+    "bottom": 747.3,
+    "top": 726.3
+   },
+   "#fx-line": {
+    "bottom": 697.3,
+    "top": 676.3
+   },
+   "#per-provider": {
+    "bottom": 672.3,
+    "top": 446.0
+   },
+   "#plan-line": {
+    "bottom": 722.3,
+    "top": 701.3
+   },
+   "#scope-baseline": {
+    "bottom": 440.0,
+    "top": 133.5
+   },
+   ".state": {
+    "bottom": 127.5,
+    "top": 89.2
+   }
+  },
+  "full_digests_visible": 7,
+  "requests": 1,
+  "screenshot": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/two-provider-1440.png",
+  "short_labels_single_line_1440": true,
+  "state_visible_text": "READY \u2014 all recomputed gates verified; no review findings"
+ },
+ "warnings": {
+  "case": "warnings",
+  "computed_font_px_1440": {
+   ".chip": 14,
+   ".state": 18,
+   "body": 15,
+   "dl.kv": 15,
+   "h1": 24,
+   "h2": 17,
+   "table": 14
+  },
+  "details_opened": 24,
+  "document_scroll_width_1280": 1280,
+  "document_scroll_width_1280_expanded": 1280,
+  "document_scroll_width_1440": 1440,
+  "document_scroll_width_375": 375,
+  "document_scroll_width_375_expanded": 375,
+  "findings_summary_visible_text": "All warnings and findings (5)",
+  "first_viewport_boxes_1440x900": {
+   "#changes > :nth-child(2)": {
+    "bottom": 838.4,
+    "top": 817.4
+   },
+   "#changes > h2": {
+    "bottom": 812.4,
+    "top": 790.3
+   },
+   "#checks": {
+    "bottom": 461.0,
+    "top": 133.5
+   },
+   "#findings-line": {
+    "bottom": 790.3,
+    "top": 720.8
+   },
+   "#fx-line": {
+    "bottom": 691.8,
+    "top": 670.8
+   },
+   "#per-provider": {
+    "bottom": 666.8,
+    "top": 467.0
+   },
+   "#plan-line": {
+    "bottom": 716.8,
+    "top": 695.8
+   },
+   "#scope-baseline": {
+    "bottom": 461.0,
+    "top": 133.5
+   },
+   ".state": {
+    "bottom": 127.5,
+    "top": 89.2
+   }
+  },
+  "full_digests_visible": 5,
+  "requests": 1,
+  "screenshot": "/tmp/pytest-of-ubuntu/pytest-377/catalog-report0/warnings-1440.png",
+  "short_labels_single_line_1440": true,
+  "state_visible_text": "READY_WITH_WARNINGS \u2014 5 review-level finding(s); no blockers"
+ }
+}
