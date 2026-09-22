@@ -57,6 +57,7 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
 )
 from slaif_gateway.services.catalog_refresh import source_evidence as se
+from slaif_gateway.services.catalog_refresh import sources as _source_registry
 from slaif_gateway.services.catalog_refresh.bundle import (
     NormalizedFxRow,
     generate_fx_json,
@@ -731,6 +732,10 @@ def validate_bundle(
             baseline_pricing_by_key.setdefault((row.provider, row.upstream_model, row.endpoint), []).append(row)
         for row in baseline.fx:
             baseline_fx_by_pair.setdefault((row.base_currency, row.quote_currency), []).append(row)
+    baseline_model_keys: set[tuple[str, str]] = (
+        {identity[:2] for identity in baseline_routes_by_identity}
+        | {(p, m) for (p, m, _e) in baseline_pricing_by_key}
+    )
 
     # Explicitly selected models and, for an unscoped selection, the full
     # baseline scope must be considered even when the bundle carries no facts
@@ -803,6 +808,10 @@ def validate_bundle(
     source_urls: dict[str, str] = {}
     source_times: dict[str, str] = {}
     official_source_keys: set[str] = set()
+    # 181: models whose one snapshot carries same-context conflicting rows
+    # are blocked per model (the global dedupe finding alone would let a
+    # row matching one conflicting value still reach the import artifacts).
+    conflicting_model_ids: set[tuple[str, str]] = set()
     for source, assessment in zip(bundle.sources, source_assessments):
         key = f"{source.provider}|{source.model}|{source.source_kind}"
         assessment_by_key[key] = assessment
@@ -840,6 +849,7 @@ def validate_bundle(
                         duplicate_id,
                     )
                 else:
+                    conflicting_model_ids.add((source.provider, duplicate_id))
                     add(
                         SEVERITY_BLOCKER,
                         "source_observations_contradict",
@@ -1160,9 +1170,41 @@ def validate_bundle(
                         dispositions.append(Disposition(provider, model, DISPOSITION_NOT_FETCHED, "baseline model not re-fetched (source missing or truncated); not treated as disappeared"))
                         bump(provider, "not_fetched")
                 else:
-                    dispositions.append(Disposition(provider, model, DISPOSITION_DISAPPEARED, "in baseline but absent from complete sources; retain-local, no delete semantics in this version"))
-                    bump(provider, "disappeared")
-                    add(SEVERITY_REVIEW, "model_disappeared", "model present in baseline but absent from complete source retrieval; retained locally", provider, model)
+                    # 181: a collection inventory entry with a baseline-
+                    # retention reason documents WHY this observed baseline
+                    # model was not proposed (its stored contract cannot be
+                    # proposed flat). That is a documented retain-local, not
+                    # an absence from the source set; the full inventory
+                    # verification still re-checks the claim against the
+                    # baseline and blocks on any unsupported entry.
+                    _collection = bundle.collection
+                    _entry = next(
+                        (
+                            e
+                            for e in (_collection.inventory if _collection is not None else ())
+                            if e.provider == provider and e.model == model
+                        ),
+                        None,
+                    )
+                    if (
+                        _entry is not None
+                        and _entry.reason_code
+                        in ("baseline_contract_not_flat", "baseline_currency_mismatch")
+                        and (provider, model) in baseline_model_keys
+                    ):
+                        dispositions.append(
+                            Disposition(
+                                provider,
+                                model,
+                                DISPOSITION_NOT_FETCHED,
+                                f"retained locally per collection inventory ({_entry.reason_code}); observed in sources, not proposed",
+                            )
+                        )
+                        bump(provider, "not_fetched")
+                    else:
+                        dispositions.append(Disposition(provider, model, DISPOSITION_DISAPPEARED, "in baseline but absent from complete sources; retain-local, no delete semantics in this version"))
+                        bump(provider, "disappeared")
+                        add(SEVERITY_REVIEW, "model_disappeared", "model present in baseline but absent from complete source retrieval; retained locally", provider, model)
             else:
                 # explicitly selected but nothing proposed
                 if explicitly_selected:
@@ -1378,16 +1420,19 @@ def validate_bundle(
                 provider,
                 model,
             )
+        snapshot_conflict = (provider, upstream) in conflicting_model_ids
         if (
             any(finding.severity == SEVERITY_BLOCKER for finding in evidence_findings)
             or missing_fx
             or model_missing
             or deprecated_conflict
+            or snapshot_conflict
         ):
             blocked_codes = sorted(
                 {finding.code for finding in evidence_findings if finding.severity == SEVERITY_BLOCKER}
                 | ({"fx_evidence_unbound"} if missing_fx else set())
                 | ({"source_evidence_model_missing"} if model_missing else set())
+                | ({"source_observations_contradict"} if snapshot_conflict else set())
             )
             dispositions.append(
                 Disposition(provider, model, DISPOSITION_BLOCKED, "source evidence: " + ", ".join(blocked_codes))
@@ -1757,9 +1802,6 @@ def validate_bundle(
     # local state), explicitly excluded by a subset, unsupported (text
     # capability not observed), or an unexplained omission under an
     # all-eligible selection - which blocks. No silent row disappearance.
-    baseline_model_keys: set[tuple[str, str]] = {
-        identity[:2] for identity in baseline_routes_by_identity
-    } | {(p, m) for (p, m, _e) in baseline_pricing_by_key}
     evidence_ids_by_provider: dict[str, dict[str, se.ParsedModel]] = {}
     for key, parsed in parse_results.items():
         if not parsed.ok or key not in official_source_keys:
@@ -1767,6 +1809,183 @@ def validate_bundle(
         for parsed_model in deduped_models.get(key, []):
             if parsed_model.provider in selection_providers:
                 evidence_ids_by_provider.setdefault(parsed_model.provider, {})[parsed_model.model] = parsed_model
+    # --- 181: collection identity gates (live collection evidence) ---------
+    # A bundle carrying a CollectionIdentity claims this invocation actually
+    # fetched its sources. Those claims are re-checked against the bundle's
+    # own source records and the parsed official evidence: a
+    # caller-supplied success label never backs a source, never covers a
+    # failed transport/parse, and never reconciles an observed model the
+    # parsed bytes do not support. Supplied bundles (no collection identity)
+    # keep the 180 offline-replay semantics exactly.
+    collection = bundle.collection
+    collection_inventory_verified: dict[tuple[str, str], str] = {}
+    collection_report: dict[str, Any] = {}
+    if collection is not None:
+        retrieval_by_url: dict[str, Any] = {}
+        failed_retrieval_urls: set[str] = set()
+        for record in collection.retrievals:
+            if record.outcome == "ok":
+                retrieval_by_url[record.requested_url] = record
+            else:
+                failed_retrieval_urls.add(record.requested_url)
+        for source in bundle.sources:
+            record = retrieval_by_url.get(source.url)
+            if record is None or record.content_sha256 != source.content_sha256:
+                add(
+                    SEVERITY_BLOCKER,
+                    "collection_source_unbacked",
+                    f"source {source.provider}|{source.model}|{source.source_kind} has no successful "
+                    "retrieval record with a matching content digest in the collection identity",
+                    source.provider,
+                    source.model,
+                )
+        _catalog_url_by_provider = {
+            "openrouter": _source_registry.OPENROUTER_MODELS_URL,
+            "openai": _source_registry.OPENAI_PRICING_MD_URL,
+        }
+        for provider in collection.providers:
+            catalog_url = _catalog_url_by_provider.get(provider)
+            if catalog_url is not None and catalog_url not in retrieval_by_url:
+                state = "failed" if catalog_url in failed_retrieval_urls else "absent"
+                add(
+                    SEVERITY_BLOCKER,
+                    "collection_retrieval_failed",
+                    f"provider catalog retrieval for {provider} is {state}; a source outage is a "
+                    "retrieval failure, not model disappearance, and an empty bootstrap is never READY",
+                    provider,
+                    None,
+                )
+        # Evidence rows per provider (all kept rows, for claim verification).
+        evidence_rows: dict[str, dict[str, list[se.ParsedModel]]] = {}
+        page_ok_models: set[str] = set()
+        page_rows: dict[str, se.ParsedModel] = {}
+        for key, parsed in parse_results.items():
+            if not parsed.ok or key not in official_source_keys:
+                continue
+            source_kind = key.split("|", 2)[2]
+            for parsed_model in deduped_models.get(key, []):
+                if parsed_model.provider not in selection_providers:
+                    continue
+                evidence_rows.setdefault(parsed_model.provider, {}).setdefault(
+                    parsed_model.model, []
+                ).append(parsed_model)
+                if source_kind == "docs_page":
+                    page_ok_models.add(parsed_model.model)
+                    page_rows.setdefault(parsed_model.model, parsed_model)
+        baseline_model_keys_all = set(baseline_model_keys)
+        unverified_inventory: list[str] = []
+        for entry in collection.inventory:
+            provider, model_id = entry.provider, entry.model
+            rows = evidence_rows.get(provider, {}).get(model_id, [])
+            em = rows[-1] if rows else None
+            verified = False
+            if entry.disposition == "retained_local":
+                verified = (provider, model_id) in baseline_model_keys_all
+            elif entry.disposition == "deprecated":
+                verified = em is not None and em.deprecated is True
+            elif entry.disposition == "unsupported":
+                verified = em is not None and em.text_modality is not True
+            elif entry.disposition == "excluded_subset":
+                if entry.reason_code == "explicit_selection_excluded":
+                    verified = (
+                        bool(bundle.selection.model_include)
+                        and model_id not in set(bundle.selection.model_include)
+                    )
+                elif entry.reason_code == "service_variant":
+                    verified = model_id.endswith(":batch")
+                elif entry.reason_code in (
+                    "baseline_contract_not_flat",
+                    "baseline_currency_mismatch",
+                ):
+                    verified = (provider, model_id) in baseline_model_keys_all
+                else:
+                    verified = False
+            elif entry.disposition == "incomplete":
+                if em is None:
+                    verified = False
+                elif entry.reason_code == "negative_router_sentinel":
+                    verified = bool({"input", "output"} & set(em.non_representable_prices))
+                elif entry.reason_code == "missing_limits":
+                    verified = em.context_length is None or em.max_output_tokens is None
+                elif entry.reason_code == "missing_core_prices":
+                    verified = not {"input", "output"} <= set(em.prices)
+                elif entry.reason_code == "no_standard_short_prices":
+                    verified = not any(
+                        row.billing_tier in (None, "standard")
+                        and row.context_band in (None, "short")
+                        and {"input", "output"} <= set(row.prices)
+                        for row in rows
+                    )
+                elif entry.reason_code in (
+                    "page_unavailable",
+                    "page_parse_failed",
+                    "page_model_mismatch",
+                ):
+                    verified = model_id not in page_ok_models
+                elif entry.reason_code == "page_no_chat":
+                    page = page_rows.get(model_id)
+                    verified = page is not None and page.chat_supported is not True
+                elif entry.reason_code == "page_no_text":
+                    page = page_rows.get(model_id)
+                    verified = page is not None and page.text_modality is not True
+                elif entry.reason_code == "page_price_conflict":
+                    page = page_rows.get(model_id)
+                    verified = False
+                    if page is not None:
+                        for row in rows:
+                            if row.billing_tier in (None, "standard") and row.context_band in (None, "short"):
+                                for dim in ("input", "output", "cached_input"):
+                                    page_value = page.prices.get(dim)
+                                    row_value = row.prices.get(dim)
+                                    if (
+                                        page_value is not None
+                                        and row_value is not None
+                                        and page_value != row_value
+                                    ):
+                                        verified = True
+                                        break
+                            if verified:
+                                break
+                else:
+                    verified = False
+            else:  # unresolved: reconciled only when the model was not observed
+                verified = em is None
+            if verified:
+                collection_inventory_verified[(provider, model_id)] = entry.disposition
+            else:
+                unverified_inventory.append(f"{provider}/{model_id} ({entry.reason_code})")
+        if unverified_inventory:
+            add(
+                SEVERITY_BLOCKER,
+                "collection_inventory_unsupported",
+                f"{len(unverified_inventory)} collection inventory entr(ies) are not supported by the "
+                "parsed official evidence or the baseline: "
+                + ", ".join(sorted(unverified_inventory)[:8])
+                + ("" if len(unverified_inventory) <= 8 else f" (+{len(unverified_inventory) - 8} more)"),
+                None,
+                None,
+            )
+        collection_report = {
+            "tool": collection.tool,
+            "code_revision": collection.code_revision,
+            "profile": collection.profile,
+            "providers": list(collection.providers),
+            "model_include": list(collection.model_include),
+            "started_at": collection.started_at.isoformat(),
+            "finished_at": collection.finished_at.isoformat(),
+            "retrievals_total": len(collection.retrievals),
+            "retrievals_ok": sum(1 for r in collection.retrievals if r.outcome == "ok"),
+            "retrievals_failed": sum(1 for r in collection.retrievals if r.outcome == "failed"),
+            "failed_retrievals": sorted(failed_retrieval_urls),
+            "deduplicated_fetches": collection.deduplicated_fetches,
+            "inventory_entries": len(collection.inventory),
+            "inventory_by_reason": {
+                reason: sum(1 for e in collection.inventory if e.reason_code == reason)
+                for reason in sorted({e.reason_code for e in collection.inventory})
+            },
+            "inventory_unverified": len(unverified_inventory),
+        }
+
     selected_by_provider: dict[str, set[str]] = {}
     for provider, model in selected:
         selected_by_provider.setdefault(provider, set()).add(model)
@@ -1792,6 +2011,16 @@ def validate_bundle(
             if (provider, mid) in baseline_model_keys:
                 prov_counts["retained_local_models"] += 1
                 retained_ids.append(mid)
+            elif (provider, mid) in collection_inventory_verified:
+                # 181: an evidence-verified collection inventory entry
+                # reconciles the observed model (its claim was re-checked
+                # against the parsed bytes above, never trusted raw).
+                disposition = collection_inventory_verified[(provider, mid)]
+                if disposition == "excluded_subset":
+                    prov_counts["explicitly_excluded_models"] += 1
+                else:
+                    prov_counts["unsupported_excluded_models"] += 1
+                excluded_ids.append(mid)
             elif explicit_subset:
                 prov_counts["explicitly_excluded_models"] += 1
                 excluded_ids.append(mid)
@@ -1818,10 +2047,16 @@ def validate_bundle(
             None,
             None,
         )
+    live_collection = bundle.collection is not None
     source_evidence_report: dict[str, Any] = {
-        "scope": "offline_replay",
+        "scope": "live_collection" if live_collection else "offline_replay",
         "note": (
-            "supplied/cached snapshot bytes were parsed offline with registered "
+            "live collection performed by this invocation: sources were fetched "
+            "with bounded official retrieval and parsed with registered "
+            "deterministic parsers; retrieval outcomes are recorded in the "
+            "collection identity"
+            if live_collection
+            else "supplied/cached snapshot bytes were parsed offline with registered "
             "deterministic parsers; this proves extraction consistency against "
             "the supplied bytes, not a live retrieval that never occurred"
         ),
@@ -1835,6 +2070,8 @@ def validate_bundle(
             for provider, values in sorted(inventory.items())
         },
     }
+    if live_collection:
+        source_evidence_report["collection"] = collection_report
 
     # sources gate
     if any(a["classification"] == SOURCE_BLOCKED for a in source_assessments):

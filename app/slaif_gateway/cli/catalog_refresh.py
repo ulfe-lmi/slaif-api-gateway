@@ -1,9 +1,12 @@
-"""CLI commands for the bounded offline catalog refresh review workflow.
+"""CLI commands for the bounded catalog refresh collection and review workflow.
 
-Offline scope: review, verify, and read-only export-baseline only. Live
-source retrieval is unavailable in this version, and there is no refresh or
-apply command in this version; supersession/apply must never be claimed to
-work.
+Scope in this version: collect (bounded live official-source collection
+followed by review of the collected bundle), review (offline review of a
+supplied bundle), verify, and read-only export-baseline. Live collection is
+limited to the registered official catalog, pricing, and FX endpoints over
+HTTPS with bounded retries, redirects, and byte budgets; there is no refresh
+or apply command in this version, and supersession/apply must never be
+claimed to work.
 
 Exit codes:
 - 0  review state READY
@@ -27,7 +30,10 @@ from typing import Annotated, Any
 import typer
 
 from slaif_gateway.cli.common import CliError, emit_json, run_async
-from slaif_gateway.schemas.catalog_refresh import BaselineDocument
+from slaif_gateway.schemas.catalog_refresh import BaselineDocument, RefreshBundle
+from slaif_gateway.services.catalog_refresh import collection as catalog_collection
+from slaif_gateway.services.catalog_refresh import sources as catalog_sources
+from slaif_gateway.services.catalog_refresh.sources import SourceFetchError
 from slaif_gateway.services.catalog_refresh.baseline import (
     MAX_BASELINE_BYTES,
     export_baseline,
@@ -76,7 +82,7 @@ from slaif_gateway.services.catalog_refresh.validation import (
     validation_json_bytes,
 )
 
-app = typer.Typer(help="Bounded offline catalog refresh review (no refresh or apply command exists in this version)")
+app = typer.Typer(help="Bounded catalog refresh: collect, review, verify, export-baseline (no refresh or apply command exists in this version)")
 
 EXIT_READY = 0
 EXIT_READY_WITH_WARNINGS = 10
@@ -85,8 +91,13 @@ EXIT_VERIFY_INVALID = 30
 EXIT_DATA_ERROR = 65
 
 STAGE_LINE = (
-    "offline review: review/export/verify only; live source retrieval unavailable "
-    "in this version; no refresh or apply command exists in this version"
+    "offline review: review/export/verify only; no refresh or apply command exists "
+    "in this version"
+)
+STAGE_LINE_COLLECT = (
+    "live collection: bounded official-source retrieval performed by this command, "
+    "then review of the collected bundle; no refresh or apply command exists in this "
+    "version"
 )
 
 DEFAULT_SEAL_KEY = Path("~/.local/state/slaif/catalog-refresh/seal.key")
@@ -96,6 +107,12 @@ def _baseline_document_bytes(baseline: BaselineDocument) -> bytes:
     """Canonical JSON bytes for an exported baseline document."""
     payload = baseline.model_dump(mode="json")
     return (json.dumps(payload, sort_keys=True, indent=1) + "\n").encode("utf-8")
+
+
+def _settings_database_url_configured() -> bool:
+    from slaif_gateway.config import get_settings
+
+    return bool(get_settings().DATABASE_URL)
 
 
 def _settings_database_url() -> str:
@@ -250,6 +267,7 @@ def _emit_review_summary(
     warnings: int,
     blockers: int,
     json_output: bool,
+    stage: str = STAGE_LINE,
 ) -> None:
     summary: dict[str, Any] = {
         "state": state,
@@ -260,7 +278,7 @@ def _emit_review_summary(
         "changed": changed,
         "warnings": warnings,
         "blockers": blockers,
-        "stage": STAGE_LINE,
+        "stage": stage,
     }
     if json_output:
         emit_json(summary)
@@ -540,7 +558,39 @@ def _review_pipeline(
         except CatalogRefreshBlockedError as exc:
             raise CliError(f"baseline file invalid: {exc.code}") from exc
 
-    # 3) Baseline identity checks (declared identity must match the resolved document).
+    # 3-6) Shared review tail: baseline identity checks, deterministic
+    # recomputation, seal-key lifecycle, staged publish, summary.
+    return _finalize_review_pipeline(
+        bundle=bundle,
+        baseline_doc=baseline_doc,
+        sql_capture=sql_capture,
+        run_root=run_root,
+        seal_key_path=seal_key_path,
+        json_output=json_output,
+        run_root_handle=run_root_handle,
+        key_handle=key_handle,
+    )
+
+
+def _finalize_review_pipeline(
+    *,
+    bundle: RefreshBundle,
+    baseline_doc: BaselineDocument | None,
+    sql_capture: str,
+    run_root: Path,
+    seal_key_path: Path,
+    json_output: bool,
+    run_root_handle: AnchoredDir | None,
+    key_handle: AnchoredDir | None,
+    stage: str = STAGE_LINE,
+) -> int:
+    """Shared tail of review and collect.
+
+    The run-root and key-parent anchored handles are held for the whole
+    tail and their checked bindings are re-asserted before the seal-key
+    load and before publication (180-g lifecycle gates unchanged).
+    """
+    # 1) Baseline identity checks (declared identity must match the resolved document).
     if baseline_doc is not None:
         declared = bundle.baseline
         if declared.content_sha256 is not None and declared.content_sha256 != baseline_doc.content_sha256:
@@ -564,7 +614,7 @@ def _review_pipeline(
                 json_output=json_output,
             )
 
-    # 4) Deterministic recomputation.
+    # 2) Deterministic recomputation.
     policy = policy_from_document(bundle.policy)
     try:
         report, artifacts = validate_against_baseline_document(bundle, baseline_doc, policy, sql_capture=sql_capture)
@@ -577,7 +627,7 @@ def _review_pipeline(
             bundle=bundle, code=exc.code, detail=exc.detail, json_output=json_output,
         )
 
-    # 5) Seal key: lifecycle gate (checked bindings must still hold) then
+    # 3) Seal key: lifecycle gate (checked bindings must still hold) then
     #    load through the HELD key-parent descriptor (descriptor lineage).
     try:
         _assert_review_bindings(run_root, seal_key_path, run_root_handle, key_handle)
@@ -588,7 +638,7 @@ def _review_pipeline(
     except CatalogRefreshSealError as exc:
         raise CliError(f"checked path binding changed or seal key cannot be safely loaded: {exc}") from exc
 
-    # 6) Build the complete run in a private staged directory, then publish
+    # 4) Build the complete run in a private staged directory, then publish
     #    it with one atomic NEW-ONLY directory operation. The run is sealed
     #    last, so a failure at any point removes the staging tree and never
     #    leaves a publicly complete-looking unsealed review at the final
@@ -668,12 +718,267 @@ def _review_pipeline(
         warnings=len(report.warnings),
         blockers=blockers,
         json_output=json_output,
+        stage=stage,
     )
     if report.state == "READY":
         return EXIT_READY
     if report.state == "READY_WITH_WARNINGS":
         return EXIT_READY_WITH_WARNINGS
     return EXIT_BLOCKED
+
+
+@app.command("collect")
+def collect_command(
+    bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--bootstrap",
+            help="First-install collection: explicitly empty baseline; no baseline source is read.",
+        ),
+    ] = False,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Refresh collection against an existing baseline (requires --baseline-file or --db-url).",
+        ),
+    ] = False,
+    profile: Annotated[
+        str,
+        typer.Option(
+            "--profile",
+            help="Collection profile (only standard-v1 exists in this version).",
+        ),
+    ] = "standard-v1",
+    providers: Annotated[
+        str,
+        typer.Option(
+            "--providers",
+            help="Comma-separated provider list, a non-empty subset of openai,openrouter (default both).",
+        ),
+    ] = "openai,openrouter",
+    models: Annotated[
+        str | None,
+        typer.Option(
+            "--models",
+            help="Comma-separated explicit model selection (default: all eligible models).",
+        ),
+    ] = None,
+    baseline_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--baseline-file",
+            help="Explicit exported baseline document (refresh only).",
+        ),
+    ] = None,
+    db_url: Annotated[
+        str | None,
+        typer.Option(
+            "--db-url",
+            help="PostgreSQL URL for a live read-only baseline export (refresh only). Defaults to DATABASE_URL.",
+        ),
+    ] = None,
+    run_root: Annotated[
+        Path,
+        typer.Option("--run-root", help="Root directory for sealed run output."),
+    ] = Path("catalog-refresh-runs"),
+    seal_key: Annotated[
+        Path,
+        typer.Option(
+            "--seal-key",
+            help="Runner-owned seal key file (created 0600 if missing). Must be outside the run directory.",
+        ),
+    ] = DEFAULT_SEAL_KEY,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a compact JSON summary instead of text."),
+    ] = False,
+) -> None:
+    """Collect authoritative provider catalogs now, then review the collected bundle.
+
+    Bounded official retrieval only: the registered OpenRouter/OpenAI
+    catalog, pricing, and model-page endpoints plus the ECB reference XML,
+    over HTTPS with bounded retries, redirects, and byte budgets. Every
+    retrieval outcome (including failures) is recorded in the bundle's
+    collection identity and re-verified by validation. Codex research is
+    NOT_RUN in this version; no import/apply is performed.
+
+    Exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED, 65 data error.
+    """
+    try:
+        raise typer.Exit(_collect_impl(
+            bootstrap=bootstrap,
+            refresh=refresh,
+            profile=profile,
+            providers=providers,
+            models=models,
+            baseline_file=baseline_file,
+            db_url=db_url,
+            run_root=run_root,
+            seal_key=seal_key,
+            json_output=json_output,
+        ))
+    except typer.Exit:
+        raise
+    except CliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR) from exc
+    except CatalogRefreshSealError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR) from exc
+
+
+def _collect_impl(
+    *,
+    bootstrap: bool,
+    refresh: bool,
+    profile: str,
+    providers: str,
+    models: str | None,
+    baseline_file: Path | None,
+    db_url: str | None,
+    run_root: Path,
+    seal_key: Path,
+    json_output: bool,
+) -> int:
+    if bootstrap == refresh:
+        raise typer.BadParameter("exactly one of --bootstrap or --refresh is required")
+    if profile != "standard-v1":
+        raise typer.BadParameter("only the standard-v1 profile exists in this version")
+    provider_tuple = tuple(sorted({p.strip() for p in providers.split(",") if p.strip()}))
+    if not provider_tuple or any(p not in ("openai", "openrouter") for p in provider_tuple):
+        raise typer.BadParameter("providers must be a non-empty subset of openai,openrouter")
+    model_include = (
+        tuple(sorted({m.strip() for m in models.split(",") if m.strip()})) if models else ()
+    )
+    if bootstrap and (baseline_file is not None or db_url is not None):
+        raise typer.BadParameter("--bootstrap cannot be combined with --baseline-file or --db-url")
+    if baseline_file is not None and db_url is not None:
+        raise typer.BadParameter("use either --baseline-file or --db-url, not both")
+    if refresh and baseline_file is None and db_url is None and not _settings_database_url_configured():
+        raise typer.BadParameter("--refresh requires --baseline-file or --db-url (or DATABASE_URL)")
+
+    run_root = run_root.expanduser().absolute()
+    seal_key_path = Path(seal_key).expanduser().absolute()
+    run_root_handle = _open_optional_anchored_handle(run_root)
+    key_handle = _open_optional_anchored_handle(seal_key_path.parent)
+    try:
+        _check_key_containment(run_root, seal_key_path, run_root_handle, key_handle)
+
+        # 1) Resolve the baseline BEFORE collection: the collector needs the
+        #    document for refresh preservation, and the SQL capture label is
+        #    the ACTUAL path this command took.
+        if bootstrap:
+            baseline_mode = "first_install"
+            baseline_doc: BaselineDocument | None = None
+            sql_capture = SQL_CAPTURE_FIRST_INSTALL
+        elif baseline_file is not None:
+            baseline_mode = "exported_file"
+            try:
+                baseline_raw = read_user_file(baseline_file, MAX_BASELINE_BYTES)
+            except CatalogRefreshSealError as exc:
+                raise CliError(f"baseline file is not readable: {baseline_file}") from exc
+            try:
+                baseline_doc = load_baseline(baseline_raw)
+            except CatalogRefreshBlockedError as exc:
+                raise CliError(f"baseline file invalid: {exc.code}") from exc
+            sql_capture = SQL_CAPTURE_DOCUMENT
+        else:
+            baseline_mode = "db_snapshot"
+            url = db_url or _settings_database_url()
+            try:
+                baseline_doc = run_async(export_baseline(url, now=datetime.now(UTC)))
+            except CatalogRefreshBlockedError as exc:
+                digest = hashlib.sha256(f"db-export:{exc.code}".encode("utf-8")).hexdigest()[:16]
+                run_dir = _publish_blocked_run(
+                    run_root=run_root,
+                    seal_key_path=seal_key_path,
+                    run_root_handle=run_root_handle,
+                    key_handle=key_handle,
+                    run_name=f"blocked-{exc.code}-{digest}",
+                    code=exc.code,
+                    detail=exc.detail,
+                    generated_at=datetime.now(UTC).isoformat(),
+                    bundle_canonical=None,
+                )
+                _emit_review_summary(
+                    state="BLOCKED",
+                    reason=f"{exc.code}: {exc.detail}",
+                    run_id=run_dir.name,
+                    report_path=run_dir / "REVIEW.html",
+                    run_dir=run_dir,
+                    changed=0,
+                    warnings=0,
+                    blockers=1,
+                    json_output=json_output,
+                    stage=STAGE_LINE_COLLECT,
+                )
+                return EXIT_BLOCKED
+            sql_capture = SQL_CAPTURE_LIVE_EXPORT
+
+        # 2) Collection: bounded official retrieval + deterministic parsing.
+        # The collector measures its own start/finish window (passing a
+        # pre-fetch ``now`` would date the run BEFORE the retrievals it
+        # records and trip the future-timestamp gate).
+        now = datetime.now(UTC)
+        client = catalog_sources.new_client()
+        try:
+            bundle = catalog_collection.collect_bundle(
+                providers=provider_tuple,
+                model_include=model_include,
+                baseline_mode=baseline_mode,
+                baseline=baseline_doc,
+                client=client,
+            )
+        except (CatalogRefreshBlockedError, SourceFetchError) as exc:
+            code = getattr(exc, "code", None) or "collection_failed"
+            detail = getattr(exc, "detail", None) or str(exc)
+            digest = hashlib.sha256(f"{code}:{detail}".encode("utf-8")).hexdigest()[:16]
+            run_dir = _publish_blocked_run(
+                run_root=run_root,
+                seal_key_path=seal_key_path,
+                run_root_handle=run_root_handle,
+                key_handle=key_handle,
+                run_name=f"blocked-{code}-{digest}",
+                code=code,
+                detail=detail,
+                generated_at=now.isoformat(),
+                bundle_canonical=None,
+            )
+            _emit_review_summary(
+                state="BLOCKED",
+                reason=f"collection failed: {code}: {detail}",
+                run_id=run_dir.name,
+                report_path=run_dir / "REVIEW.html",
+                run_dir=run_dir,
+                changed=0,
+                warnings=0,
+                blockers=1,
+                json_output=json_output,
+                stage=STAGE_LINE_COLLECT,
+            )
+            return EXIT_DATA_ERROR
+        finally:
+            client.close()
+
+        # 3-6) Shared review tail: identity checks, deterministic
+        # recomputation, seal-key lifecycle, staged publish, summary.
+        return _finalize_review_pipeline(
+            bundle=bundle,
+            baseline_doc=baseline_doc,
+            sql_capture=sql_capture,
+            run_root=run_root,
+            seal_key_path=seal_key_path,
+            json_output=json_output,
+            run_root_handle=run_root_handle,
+            key_handle=key_handle,
+            stage=STAGE_LINE_COLLECT,
+        )
+    finally:
+        if run_root_handle is not None:
+            run_root_handle.close()
+        if key_handle is not None:
+            key_handle.close()
 
 
 def _blocked_identity(

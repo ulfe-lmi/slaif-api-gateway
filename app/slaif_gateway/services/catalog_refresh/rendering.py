@@ -38,7 +38,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse
 
-from slaif_gateway.schemas.catalog_refresh import RefreshBundle
+from slaif_gateway.schemas.catalog_refresh import (
+    CollectionInventoryEntry,
+    RefreshBundle,
+)
 
 _STATE_CLASS = {
     "READY": "state-ready",
@@ -398,7 +401,16 @@ def _source_evidence_line(report: dict[str, Any]) -> str:
         f"{evidence_models} model(s) in official snapshots: {selected} selected, "
         f"{retained} retained local, {excluded} excluded, {unexplained} unexplained omission(s)"
     )
-    parts.append("offline replay of supplied bytes — registered deterministic parsers, not a live retrieval")
+    if evidence.get("scope") == "live_collection":
+        parts.append(
+            "live collection (recorded collection identity) — bounded official retrieval, "
+            "registered deterministic parsers"
+        )
+    else:
+        parts.append(
+            "offline replay of supplied bytes — registered deterministic parsers, "
+            "not a live retrieval"
+        )
     return esc(" · ".join(parts))
 
 
@@ -494,6 +506,17 @@ def _render_scope_card(bundle: RefreshBundle, report: dict[str, Any]) -> str:
     else:
         baseline_text = "Supplied export — not checked against a live database"
     revision = bundle.revision
+    collection_line = ""
+    if bundle.collection is not None:
+        collection = bundle.collection
+        ok = sum(1 for r in collection.retrievals if r.outcome == "ok")
+        failed = len(collection.retrievals) - ok
+        collection_line = (
+            f"<dt>Collection</dt><dd>live (recorded collection identity): {esc(collection.tool)} · revision "
+            f"{esc(collection.code_revision)} · {esc(collection.started_at.isoformat())} → "
+            f"{esc(collection.finished_at.isoformat())} · retrievals {ok} ok / {failed} failed · "
+            "<a href='#collection-details'>details</a></dd>"
+        )
     return (
         "<section class='card' id='scope-baseline'>"
         "<h2>Scope &amp; baseline</h2>"
@@ -502,6 +525,7 @@ def _render_scope_card(bundle: RefreshBundle, report: dict[str, Any]) -> str:
         f" ({esc(counts.get('considered', 0))} considered, {esc(counts.get('selected', 0))} selected)</dd>"
         f"<dt>Profile</dt><dd>{profile_text}</dd>"
         f"<dt>Baseline</dt><dd>{baseline_text}</dd>"
+        f"{collection_line}"
         f"<dt>Source evidence</dt><dd>{_source_evidence_line(report)}</dd>"
         "</dl>"
         f"<p class='annot' id='run-identity-compact'>Run <code class='wrap'>{esc(report.get('run_id'))}</code> · generated at "
@@ -820,9 +844,113 @@ def _kv_block(pairs: list[tuple[str, Any]], html_keys: frozenset[str] = frozense
     return "<dl class='kv'>" + "".join(rows) + "</dl>"
 
 
+def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) -> list[str]:
+    """181: measured live-collection evidence.
+
+    Rendered FIRST in the detail sections: the identity of the collecting
+    invocation, its real retrieval outcomes, and the observed-but-not-
+    proposed inventory. Absent for supplied-bundle replays (offline scope
+    never claims a live retrieval).
+    """
+    if bundle.collection is None:
+        return []
+    collection = bundle.collection
+    ok = sum(1 for r in collection.retrievals if r.outcome == "ok")
+    failed = len(collection.retrievals) - ok
+    parts: list[str] = [
+        f"<details id='collection-details' open><summary>Collection details — live retrieval recorded by the collection identity "
+        f"({len(collection.retrievals)} retrievals: {ok} ok, {failed} failed · "
+        f"{len(collection.inventory)} observed inventory entries)</summary>"
+    ]
+    parts.append(_kv_block([
+        ("Tool", collection.tool),
+        ("Code revision", collection.code_revision),
+        ("Profile", collection.profile),
+        ("Providers", ", ".join(collection.providers)),
+        ("Model selection", ", ".join(collection.model_include) or "all eligible models of selected providers"),
+        ("Started (UTC)", collection.started_at.isoformat()),
+        ("Finished (UTC)", collection.finished_at.isoformat()),
+        ("Retrievals", f"{len(collection.retrievals)} total · {ok} ok · {failed} failed (attempts include bounded retries)"),
+        ("Deduplicated fetches", "yes" if collection.deduplicated_fetches else "no"),
+    ]))
+    parts.append("<h3>Measured retrieval records</h3>")
+    if collection.retrievals:
+        parts.append(
+            "<div class='table-scroll'><table><thead><tr><th>Requested URL</th><th>Outcome</th>"
+            "<th>Status</th><th>Bytes</th><th>SHA-256 (prefix)</th><th>Attempts</th><th>Redirects</th>"
+            "<th>Failure code</th></tr></thead><tbody>"
+        )
+        for record in collection.retrievals:
+            final_note = (
+                f" \u2192 {esc(record.final_url)}"
+                if record.final_url and record.final_url != record.requested_url
+                else ""
+            )
+            parts.append(
+                "<tr>"
+                f"<td class='wrap'>{esc(record.requested_url)}{final_note}</td>"
+                f"<td>{esc(record.outcome)}</td>"
+                f"<td>{esc(record.status) if record.status is not None else esc(chr(8212))}</td>"
+                f"<td class='num'>{esc(record.content_bytes) if record.content_bytes is not None else esc(chr(8212))}</td>"
+                f"<td class='wrap'>{esc(record.content_sha256[:16]) if record.content_sha256 else esc(chr(8212))}</td>"
+                f"<td class='num'>{record.attempts}</td>"
+                f"<td class='num'>{record.redirects}</td>"
+                f"<td class='wrap'>{esc(record.failure_code) if record.failure_code else esc(chr(8212))}</td>"
+                "</tr>"
+            )
+        parts.append("</tbody></table></div>")
+        parts.append(
+            "<p class='muted'>Retrieval time is fetch time, never publication time. Failed retrievals "
+            "record a safe code only — no response bodies, no exception text, no credentials. A "
+            "failed provider catalog retrieval blocks the run as a retrieval failure (source "
+            "outage), never as model disappearance.</p>"
+        )
+    else:
+        parts.append("<p class='muted'>No retrievals recorded.</p>")
+    if collection.inventory:
+        by_reason: dict[str, list[CollectionInventoryEntry]] = {}
+        for entry in collection.inventory:
+            by_reason.setdefault(entry.reason_code, []).append(entry)
+        parts.append(
+            f"<h3>Observed inventory — {len(collection.inventory)} observed model(s) reconciled, "
+            "none proposed</h3>"
+        )
+        parts.append(
+            "<div class='table-scroll'><table><thead><tr><th>Reason</th><th>Disposition</th>"
+            "<th>Count</th><th>Examples</th></tr></thead><tbody>"
+        )
+        for reason in sorted(by_reason):
+            entries = by_reason[reason]
+            examples = ", ".join(esc(f"{e.provider}/{e.model}") for e in entries[:6])
+            if len(entries) > 6:
+                examples += f" (+{len(entries) - 6} more)"
+            parts.append(
+                f"<tr><td class='wrap'>{esc(reason)}</td><td>{esc(entries[0].disposition)}</td>"
+                f"<td class='num'>{len(entries)}</td><td class='wrap'>{examples}</td></tr>"
+            )
+        parts.append("</tbody></table></div>")
+        parts.append(
+            "<p class='muted'>Every model the collected sources observed is reconciled exactly once: "
+            "proposed models appear in the proposal detail below; every other observed model appears "
+            "here with a machine reason. Inventory claims are re-verified against the parsed official "
+            "evidence and the baseline before the report accepts them (unsupported entries block the "
+            "run).</p>"
+        )
+    parts.append(
+        "<p class='muted'>Observed-but-not-proposed dimensions (cache-write tiers, long-context "
+        "bands, per-dimension pricing overrides, non-text modalities) are counted in the source "
+        "evidence and inventory; the collector proposes standard-v1 short-context core pricing only. "
+        "Research identity: NOT_RUN — no Codex invocation occurred in this version. No apply or "
+        "refresh command exists; the sealed run directory is the terminal output.</p>"
+    )
+    parts.append("</details>")
+    return parts
+
+
 def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index: dict[str, dict[str, Any]]) -> list[str]:
     assessments = _assessment_index(report)
     parts: list[str] = []
+    parts.extend(_render_collection_details(bundle, report))
     dispositions = report.get("dispositions", [])
     models_by_key = {(m.provider, m.model): m for m in bundle.models}
 
@@ -876,8 +1004,13 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
         parts.append("</details>")
     disappeared = group("DISAPPEARED")
     if disappeared:
+        source_set_note = (
+            "the complete live-collected source set of this run"
+            if bundle.collection is not None
+            else "the complete offline source set"
+        )
         parts.append(f"<details open><summary>Disappeared models — retain-local, no delete ({len(disappeared)})</summary>")
-        parts.append("<p class='muted'>These models exist in the baseline but were absent from the complete offline source set. This version never deletes; the local rows are retained. Disappearance is a REVIEW, not an error; outage, truncated retrieval, or missing mandatory selection is never reported as disappearance.</p>")
+        parts.append(f"<p class='muted'>These models exist in the baseline but were absent from {source_set_note}. This version never deletes; the local rows are retained. Disappearance is a REVIEW, not an error; outage, truncated retrieval, or missing mandatory selection is never reported as disappearance.</p>")
         parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Note</th></tr></thead><tbody>")
         for d in disappeared:
             parts.append(f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td></tr>")
@@ -1014,6 +1147,15 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
         parts.append("<p class='muted'>OFFICIAL requires the exact official host for the (provider, source kind) rule, a reviewed registered deterministic parser, supplied evidence whose bytes match the declared digest, and a successful bounded parse of those bytes. A matching digest of arbitrary bytes is not content trust: a safe URL is not an authoritative source (operator-supplied, semantic, off-host, or unverifiable-offline sources classify as REVIEW), and unsupported, contradictory, or unparseable required sources classify as BLOCKED. Supplied/cached evidence parsed offline is explicitly distinguished from live retrieval, which this process never performs.</p>")
     else:
         parts.append("<p class='muted'>No sources recorded in the bundle.</p>")
+    closing = (
+        "This run\u2019s retrievals are the measured live fetches recorded in the collection "
+        "identity; a supplied bundle replayed offline still distinguishes supplied bytes from any "
+        "live retrieval."
+        if bundle.collection is not None
+        else "Supplied/cached evidence parsed offline is explicitly distinguished from live "
+        "retrieval, which this process never performs."
+    )
+    parts.append("<p class='muted'>OFFICIAL requires the exact official host for the (provider, source kind) rule, a reviewed registered deterministic parser, supplied evidence whose bytes match the declared digest, and a successful bounded parse of those bytes. A matching digest of arbitrary bytes is not content trust: a safe URL is not an authoritative source (operator-supplied, semantic, off-host, or unverifiable-offline sources classify as REVIEW), and unsupported, contradictory, or unparseable required sources classify as BLOCKED. " + closing + "</p>")
     parts.append("</details>")
 
     parts.extend(_render_source_evidence_details(report))
@@ -1086,14 +1228,28 @@ def _render_source_evidence_details(report: dict[str, Any]) -> list[str]:
     observations that bound each proposed fact, conflicts, and the
     independently derived snapshot inventory. All values escaped; no JS or
     network."""
-    parts: list[str] = [
-        "<details id='source-evidence'><summary>Source evidence — parsed snapshot observations (offline replay)</summary>"
-    ]
     evidence = report.get("source_evidence", {}) or {}
+    scope_label = (
+        "live collection (this run)"
+        if evidence.get("scope") == "live_collection"
+        else "offline replay"
+    )
+    if evidence.get("scope") == "live_collection":
+        claim_note = (
+            "Retrieval times are the measured fetch times of this invocation; published_at "
+            "values are source-declared publication labels, never retrieval times."
+        )
+    else:
+        claim_note = (
+            "Snapshot origin/retrieval claims (retrieved_at, published_at) are caller-supplied "
+            "labels assessed against freshness policy; they are not authenticated retrievals."
+        )
+    parts: list[str] = [
+        f"<details id='source-evidence'><summary>Source evidence — parsed snapshot observations ({scope_label})</summary>"
+    ]
     parts.append(
         f"<p class='muted'>{esc(evidence.get('note', 'offline replay of supplied snapshots'))}. "
-        "Snapshot origin/retrieval claims (retrieved_at, published_at) are caller-supplied "
-        "labels assessed against freshness policy; they are not authenticated retrievals.</p>"
+        f"{claim_note}</p>"
     )
     sources = report.get("sources", []) or []
     if sources:
@@ -1209,19 +1365,36 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
         "<main>",
         "<header>",
         "<h1>SLAIF catalog refresh review</h1>",
-        "<p class='sub'>One-page offline review artifact. This version reviews supplied snapshots; live collection and apply are not implemented. "
-        "Everything needed for the decision is inside this file; detailed evidence is in the expandable sections below. "
-        "No external resources, no JavaScript, no network on open.</p>",
+        (
+            "<p class='sub'>"
+            + (
+                "One-page review artifact of a live-collected catalog: the sources below were "
+                "fetched through bounded official retrieval by the collector invocation recorded in "
+                "the collection identity; apply is not implemented. "
+                if bundle.collection is not None
+                else "One-page offline review artifact. This version reviews supplied snapshots; live "
+                "collection and apply are not implemented. "
+            )
+            + "Everything needed for the decision is inside this file; detailed evidence is in the expandable sections below. "
+            "No external resources, no JavaScript, no network on open.</p>"
+        ),
         "</header>",
     ]
     parts.extend(_render_first_screen(bundle, report))
     parts.extend(_render_changes(bundle, report, source_index))
     parts.extend(_render_details(bundle, report, source_index))
+    footer_scope = (
+        "live-collection scope: bounded official retrieval was performed by the recorded collector "
+        "invocation; apply is unavailable in this version. "
+        if bundle.collection is not None
+        else "offline scope: review/export/verify only — live source retrieval and apply are "
+        "unavailable in this version. "
+    )
     parts.append(
         "<footer>"
         f"Run {esc(report.get('run_id'))} · generated at {esc(report.get('generated_at'))} · "
         f"renderer {esc(bundle.revision.renderer_version)} · policy v{esc(report.get('policy_version'))} · "
-        "offline scope: review/export/verify only — live source retrieval and apply are unavailable in this version. "
+        f"{footer_scope}"
         "Print behaviour: state borders and textual labels are preserved (colour is not relied on), long values wrap instead of clipping, "
         "and opened (expanded) sections print in full; closed sections print their summary line only. "
         "This file is self-contained: no network requests, no scripts, no external assets."
