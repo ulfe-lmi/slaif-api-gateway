@@ -22,6 +22,7 @@ import hashlib
 import json
 import uuid
 from urllib.parse import urlparse
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -144,12 +145,14 @@ async def _seed_catalog(database_url: str) -> None:
                 ),
                 {"provider": PROVIDER, "models": list(MODELS)},
             )
+            # provider_configs.provider is UNIQUE: converge on the provider
+            # identity this seed owns, not only on its display name (another
+            # test file may have left a differently-labelled row for the same
+            # provider; the seed replaces it, and the file's cleanup removes
+            # it by provider identity afterwards).
             await connection.execute(
-                text(
-                    "DELETE FROM provider_configs WHERE provider = :provider"
-                    " AND display_name = :display_name"
-                ),
-                {"provider": PROVIDER, "display_name": "Synthetic OpenRouter (integration)"},
+                text("DELETE FROM provider_configs WHERE provider = :provider"),
+                {"provider": PROVIDER},
             )
             await connection.execute(
                 text(
@@ -319,6 +322,56 @@ async def _counts(database_url: str) -> dict[str, int]:
             }
     finally:
         await engine.dispose()
+
+
+async def _delete_all_synthetic_rows(database_url: str) -> None:
+    """Delete every row this file's seeds can leave behind.
+
+    The CI integration database is session-scoped across test FILES, so no
+    synthetic seed row may outlive a test in this file: a later file's
+    ``routes list --limit 1000`` scans (and exact-model disable passes)
+    assume a small pre-existing route set.
+    """
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "DELETE FROM model_routes WHERE (provider = 'openrouter'"
+                    " AND requested_model = ANY(:models))"
+                    " OR (provider = 'openai' AND requested_model LIKE 'synthetic/%')"
+                ),
+                {"models": list(MODELS)},
+            )
+            await connection.execute(
+                text(
+                    "DELETE FROM pricing_rules WHERE (provider = 'openrouter'"
+                    " AND upstream_model = ANY(:models))"
+                    " OR (provider = 'openai' AND upstream_model LIKE 'synthetic/%')"
+                ),
+                {"models": list(MODELS)},
+            )
+            await connection.execute(
+                text(
+                    "DELETE FROM fx_rates WHERE source IN"
+                    " ('https://synthetic.example.invalid/fx', 'obj180e-barrier-fx')"
+                )
+            )
+            await connection.execute(
+                text(
+                    "DELETE FROM provider_configs WHERE provider = 'openrouter'"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _no_synthetic_rows_left_behind(migrated_postgres_url: str) -> Iterator[None]:
+    """The shared CI integration database is session-scoped across files:
+    after every test in this file, no synthetic seed row may remain."""
+    yield
+    asyncio.run(_delete_all_synthetic_rows(migrated_postgres_url))
 
 
 def _flat_standard_capabilities(nested: dict | None) -> dict:
@@ -680,6 +733,9 @@ def test_export_baseline_outage_never_bootstraps() -> None:
 
 
 def test_stale_baseline_file_rejected_by_cli(migrated_postgres_url: str, tmp_path: Path) -> None:
+    # Seed one route so the test is self-contained on a clean database;
+    # the session-scoped CI database may have no model_routes before this file.
+    asyncio.run(_seed_pad_routes(migrated_postgres_url, 1))
     doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
     bundle_path = tmp_path / "bundle.json"
     bundle_path.write_text(
