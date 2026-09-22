@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 import socket
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 
@@ -35,7 +35,10 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineTarget,
 )
 from slaif_gateway.services.catalog_refresh import collection as coll
+from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh import sources as src
+from slaif_gateway.services.catalog_refresh.baseline import canonical_baseline_content
+from slaif_gateway.services.catalog_refresh.bundle import canonical_bundle_bytes
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 from slaif_gateway.services.catalog_refresh.policy import policy_from_document
 from slaif_gateway.services.catalog_refresh.validation import validate_bundle
@@ -195,8 +198,35 @@ class World:
             "gpt-syn-2": _page("gpt-syn-2", inp="1.08", cached="0.108", out="4.32"),
         }
     )
-    models_md: bytes = b"# Models index\n"
-    ecb: bytes = _ecb_xml()
+    # Current official linked-index format (bounded synthetic fixture):
+    # model-page bullets (ID from the path, never the display name), a
+    # duplicate across sections, and the documented specialized-models
+    # bullet that declares its Model ID inline.
+    models_md: bytes = field(
+        default_factory=lambda: (
+            "# Models\n\n"
+            "## Featured models\n\n"
+            "- [Synth One](/api/docs/models/gpt-syn-1.md): Start here.\n"
+            "- [Synth Two](/api/docs/models/gpt-syn-2.md): Balanced.\n\n"
+            "## Browse our full catalog of models\n\n"
+            "- [gpt-syn-1](/api/docs/models/gpt-syn-1.md): Replacement for gpt-syn-0\n"
+            "- [gpt-syn-2](/api/docs/models/gpt-syn-2.md): Balanced model\n"
+            "- [gpt-syn-long](/api/docs/models/gpt-syn-long.md): Long context only\n"
+            "- [Synth Special](/api/docs/pricing#specialized-models): "
+            "Specialized. Model ID: `gpt-syn-special`.\n"
+        ).encode("utf-8")
+    )
+    # Dynamic ECB publication date (current UTC date): the freshness gate
+    # compares quote date against the review clock, so a static fixture
+    # date is calendar-sensitive and would start blocking without any
+    # code change. The CLI freshness-boundary tests pass explicit dates.
+    ecb: bytes = field(
+        default_factory=lambda: _ecb_xml(date_s=datetime.now(UTC).date().isoformat())
+    )
+    # Optional full replacement of the pricing document (tiered tables
+    # beyond the standard six-column shape, e.g. Batch tier or cache-write
+    # columns).
+    pricing_md: bytes | None = None
     statuses: dict[str, int] = field(default_factory=dict)
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -206,7 +236,12 @@ class World:
         if url == OR_URL:
             return httpx.Response(200, content=_or_payload(self.or_rows))
         if url == PRICING_URL:
-            return httpx.Response(200, content=_pricing_md(self.pricing_rows))
+            content = (
+                self.pricing_md
+                if self.pricing_md is not None
+                else _pricing_md(self.pricing_rows)
+            )
+            return httpx.Response(200, content=content)
         if url == MODELS_MD_URL:
             return httpx.Response(200, content=self.models_md)
         if url == ECB_URL:
@@ -367,10 +402,13 @@ def test_bootstrap_collection_both_providers_ready() -> None:
     assert bundle.run_id.startswith("collect-")
     assert bundle.research.status == "NOT_RUN"
 
+    # 181-b (B1): gpt-syn-1 publishes long-context standard prices, so the
+    # flat standard proposal cannot bill it faithfully: it is excluded with
+    # the exact policy reason (its page is never even fetched), while the
+    # flat, complete siblings stay usable.
     assert _proposed_models(bundle) == {
         "openrouter/synth/alpha",
         "openrouter/synth/beta",
-        "openai/gpt-syn-1",
         "openai/gpt-syn-2",
     }
     inv = _inventory(bundle)
@@ -380,30 +418,51 @@ def test_bootstrap_collection_both_providers_ready() -> None:
     assert inv[("openrouter", "synth/sentinel")] == ("incomplete", "negative_router_sentinel")
     assert inv[("openrouter", "synth/image")] == ("unsupported", "non_text_modality")
     assert inv[("openrouter", "synth/halfprice")] == ("incomplete", "missing_core_prices")
+    assert inv[("openai", "gpt-syn-1")] == (
+        "excluded_subset",
+        "long_context_prices_unrepresentable",
+    )
     assert inv[("openai", "gpt-syn-long")] == ("incomplete", "no_standard_short_prices")
-    # every observed model reconciled exactly once
+    # 181-b (B3): the fetched models index is model evidence; the
+    # index-only ID (no standard pricing rows at all) is reconciled with
+    # exactly one explained disposition.
+    assert inv[("openai", "gpt-syn-special")] == (
+        "incomplete",
+        "index_only_no_standard_prices",
+    )
+    # every observed model reconciled exactly once (pricing rows AND the
+    # index identities, source counts distinct from route/alias rows)
+    index_ids = {"gpt-syn-1", "gpt-syn-2", "gpt-syn-long", "gpt-syn-special"}
     observed = {
         ("openrouter", r["id"]) for r in World().or_rows
-    } | {("openai", row[0]) for row in World().pricing_rows}
+    } | {("openai", row[0]) for row in World().pricing_rows} | {("openai", m) for m in index_ids}
     assert set(inv) | {
         (m.provider, m.model) for m in bundle.models
     } == observed
+    # source model counts: distinct observed source identities per provider
+    assert bundle.collection.source_model_counts == {"openai": 4, "openrouter": 8}
 
-    # retrieval records: one per unique URL fetched (4 phase-1 + 2 pages + 1 ecb)
+    # retrieval records: one per unique URL fetched (4 phase-1 + 1 page + 1 ecb);
+    # gpt-syn-1's page is never fetched (excluded before retrieval)
     urls = {r.requested_url for r in bundle.collection.retrievals}
     assert OR_URL in urls and PRICING_URL in urls and MODELS_MD_URL in urls
-    assert f"{PAGE_PREFIX}gpt-syn-1.md" in urls and f"{PAGE_PREFIX}gpt-syn-2.md" in urls
+    assert f"{PAGE_PREFIX}gpt-syn-2.md" in urls
+    assert f"{PAGE_PREFIX}gpt-syn-1.md" not in urls
     assert ECB_URL in urls
     assert all(r.outcome == "ok" for r in bundle.collection.retrievals)
 
     report, artifacts = _validate(bundle, None)
     assert report.state == "READY", (report.state, sorted(_codes(report)))
     assert report.to_dict()["source_evidence"]["scope"] == "live_collection"
+    assert report.to_dict()["source_evidence"]["collection"]["source_model_counts"] == {
+        "openai": 4,
+        "openrouter": 8,
+    }
 
     # standard-v1 proposes short-context core pricing only (never long band)
-    gpt1 = next(p for p in bundle.pricing if p.model == "gpt-syn-1")
-    dims = {d.name: d.value for d in gpt1.dimensions}
-    assert dims == {"input": "0.54", "cached_input": "0.054", "output": "2.16"}
+    gpt2 = next(p for p in bundle.pricing if p.model == "gpt-syn-2")
+    dims = {d.name: d.value for d in gpt2.dimensions}
+    assert dims == {"input": "1.08", "cached_input": "0.108", "output": "4.32"}
     # FX fact is the published ECB quote AS PUBLISHED (EUR-USD 1.08); the
     # native -> EUR rate is derived by the tested FX gate and marked
     # derived_reciprocal with the original pair recorded.
@@ -421,20 +480,43 @@ def test_bootstrap_collection_both_providers_ready() -> None:
 
 def test_single_model_selection_limits_pages_and_proposals() -> None:
     bundle = _collect(
-        World(), providers=("openai",), model_include=("gpt-syn-1",)
+        World(), providers=("openai",), model_include=("gpt-syn-2",)
     )
-    assert _proposed_models(bundle) == {"openai/gpt-syn-1"}
+    assert _proposed_models(bundle) == {"openai/gpt-syn-2"}
     inv = _inventory(bundle)
-    assert inv[("openai", "gpt-syn-2")] == (
+    # the ineligible sibling carries its exact billing reason (checked
+    # before selection), not a selection reason
+    assert inv[("openai", "gpt-syn-1")] == (
         "excluded_subset",
-        "explicit_selection_excluded",
+        "long_context_prices_unrepresentable",
     )
     assert inv[("openai", "gpt-syn-long")] == ("incomplete", "no_standard_short_prices")
     # only the selected model's page was fetched
     page_urls = [u for u in {r.requested_url for r in bundle.collection.retrievals} if u.startswith(PAGE_PREFIX)]
-    assert page_urls == [f"{PAGE_PREFIX}gpt-syn-1.md"]
+    assert page_urls == [f"{PAGE_PREFIX}gpt-syn-2.md"]
     report, _ = _validate(bundle, None)
     assert report.state == "READY", (report.state, sorted(_codes(report)))
+
+
+def test_explicit_selection_of_billing_ineligible_model_blocks() -> None:
+    """181-b (B1) strategic reproducer: an OpenAI model with published
+    long-context standard prices is explicitly selected. The collector
+    must not flatten the long tier into the short band: the model is
+    excluded with the exact policy reason and the explicit selection
+    BLOCKS (missing_required_selection), never READY."""
+    world = World()
+    world.pages["gpt-syn-1"] = _page("gpt-syn-1", context=1000000)
+    bundle = _collect(world, providers=("openai",), model_include=("gpt-syn-1",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openai", "gpt-syn-1")] == (
+        "excluded_subset",
+        "long_context_prices_unrepresentable",
+    )
+    report, _ = _validate(bundle, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "missing_required_selection" in _codes(report)
+    # no proposal leaked long-band values at short-band identity
+    assert bundle.pricing == ()
 
 
 def test_explicit_selection_of_ineligible_model_blocks() -> None:
@@ -480,14 +562,19 @@ def test_long_band_prices_never_proposed() -> None:
 
 def test_page_price_conflict_is_not_proposed() -> None:
     world = World()
-    # page says input 0.99, table says 0.54 -> authoritative conflict
-    world.pages["gpt-syn-1"] = _page("gpt-syn-1", inp="0.99")
-    bundle = _collect(world, providers=("openai",))
-    assert "openai/gpt-syn-1" not in _proposed_models(bundle)
-    assert _inventory(bundle)[("openai", "gpt-syn-1")] == (
+    # page says input 0.99, table says 1.08 -> authoritative conflict
+    world.pages["gpt-syn-2"] = _page("gpt-syn-2", inp="0.99", cached="0.108", out="4.32")
+    bundle = _collect(world)
+    assert "openai/gpt-syn-2" not in _proposed_models(bundle)
+    assert _inventory(bundle)[("openai", "gpt-syn-2")] == (
         "incomplete",
         "page_price_conflict",
     )
+    # flat, complete siblings stay usable in default discovery
+    assert _proposed_models(bundle) == {
+        "openrouter/synth/alpha",
+        "openrouter/synth/beta",
+    }
     report, _ = _validate(bundle, None)
     assert report.state == "READY", sorted(_codes(report))
 
@@ -495,14 +582,14 @@ def test_page_price_conflict_is_not_proposed() -> None:
 def test_page_with_conflicting_tables_parse_fails_closed() -> None:
     world = World()
     double_table = (
-        _page("gpt-syn-1")
+        _page("gpt-syn-2", inp="1.08", cached="0.108", out="4.32")
         + b"\n## Text tokens\n\n| Metric | Price | Unit |\n|---|---|---|\n"
-        b"| Input | $0.99 | 1M tokens |\n| Output | $2.16 | 1M tokens |\n"
+        b"| Input | $0.99 | 1M tokens |\n| Output | $4.32 | 1M tokens |\n"
     )
-    world.pages["gpt-syn-1"] = double_table
+    world.pages["gpt-syn-2"] = double_table
     bundle = _collect(world, providers=("openai",))
-    assert "openai/gpt-syn-1" not in _proposed_models(bundle)
-    assert _inventory(bundle)[("openai", "gpt-syn-1")] == (
+    assert "openai/gpt-syn-2" not in _proposed_models(bundle)
+    assert _inventory(bundle)[("openai", "gpt-syn-2")] == (
         "incomplete",
         "page_parse_failed",
     )
@@ -510,17 +597,22 @@ def test_page_with_conflicting_tables_parse_fails_closed() -> None:
 
 def test_page_404_records_failed_retrieval_and_incomplete() -> None:
     world = World()
-    del world.pages["gpt-syn-1"]
-    bundle = _collect(world, providers=("openai",))
-    assert "openai/gpt-syn-1" not in _proposed_models(bundle)
-    assert _inventory(bundle)[("openai", "gpt-syn-1")] == ("incomplete", "page_unavailable")
+    del world.pages["gpt-syn-2"]
+    bundle = _collect(world)
+    assert "openai/gpt-syn-2" not in _proposed_models(bundle)
+    assert _inventory(bundle)[("openai", "gpt-syn-2")] == ("incomplete", "page_unavailable")
     failed = [r for r in bundle.collection.retrievals if r.outcome == "failed"]
     assert len(failed) == 1
     assert failed[0].status == 404
     assert failed[0].failure_code == "http_404"
     assert failed[0].content_sha256 is None
+    # siblings stay usable; the 404 is an observed incompleteness, not a
+    # disappearance and not a provider-wide failure
+    assert _proposed_models(bundle) == {
+        "openrouter/synth/alpha",
+        "openrouter/synth/beta",
+    }
     report, _ = _validate(bundle, None)
-    # an optional page 404 is an observed incompleteness, not a disappearance
     assert report.state == "READY", sorted(_codes(report))
 
 
@@ -681,6 +773,591 @@ def test_supplied_bundle_replay_is_offline_scope() -> None:
     assert live_report.to_dict()["source_evidence"]["scope"] == "live_collection"
 
 
+# --- 181-b (B1): shared flat billing eligibility ---------------------------------
+
+
+def _router_world_with_pricing_field(field_name: str, value: str) -> World:
+    """Single OpenRouter world carrying one extra published pricing key."""
+    row = _or_row("synth/alpha")
+    row["pricing"][field_name] = value
+    world = World()
+    world.or_rows = [row]
+    return world
+
+
+def _rebuild_frozen(model, **updates):
+    """Rebuild a frozen fact model with field updates (schema round-trip)."""
+    return type(model).model_validate({**model.model_dump(mode="json"), **updates})
+
+
+def test_router_cache_write_charge_excluded_and_selection_blocks() -> None:
+    """181-b (B1) strategic reproducer: a positive cache-write charge must
+    never be silently dropped from the proposal. The row is excluded with
+    the exact policy reason, and explicitly requesting that row BLOCKs."""
+    world = _router_world_with_pricing_field("input_cache_write", "0.000009")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "cache_write_charges_unrepresentable",
+    )
+    selected = _collect(
+        world, providers=("openrouter",), model_include=("synth/alpha",)
+    )
+    report, _ = _validate(selected, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "missing_required_selection" in _codes(report)
+
+
+def test_router_1h_cache_write_charge_excluded() -> None:
+    world = _router_world_with_pricing_field("input_cache_write_1h", "0.000009")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "cache_write_charges_unrepresentable",
+    )
+
+
+def test_router_zero_cache_write_is_no_charge_not_missing() -> None:
+    world = _router_world_with_pricing_field("input_cache_write", "0")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
+    pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
+    assert {d.name for d in pricing.dimensions} == {"input", "cached_input", "output"}
+    report, _ = _validate(bundle, None)
+    assert report.state == "READY", sorted(_codes(report))
+
+
+def test_router_reasoning_charge_carried_as_dimension() -> None:
+    world = _router_world_with_pricing_field("internal_reasoning", "0.000009")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
+    pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
+    dims = {d.name: (d.value, d.unit) for d in pricing.dimensions}
+    assert dims["reasoning"] == ("9", "per_1m_tokens")
+    assert dims["input"] == ("0.54", "per_1m_tokens")
+    assert dims["output"] == ("2.16", "per_1m_tokens")
+    report, _ = _validate(bundle, None)
+    assert report.state == "READY", sorted(_codes(report))
+
+
+def test_router_request_charge_carried_as_dimension() -> None:
+    world = _router_world_with_pricing_field("request", "0.1")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
+    pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
+    dims = {d.name: (d.value, d.unit) for d in pricing.dimensions}
+    assert dims["request"] == ("0.1", "per_request")
+    report, _ = _validate(bundle, None)
+    assert report.state == "READY", sorted(_codes(report))
+
+
+def test_router_zero_request_charge_is_no_charge_not_missing() -> None:
+    world = _router_world_with_pricing_field("request", "0")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
+    pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
+    assert {d.name for d in pricing.dimensions} == {"input", "cached_input", "output"}
+    report, _ = _validate(bundle, None)
+    assert report.state == "READY", sorted(_codes(report))
+
+
+def test_router_request_below_import_quantum_excluded() -> None:
+    # A positive per-request charge that quantizes to zero at the 9-dp
+    # import contract cannot be stored without becoming a free price.
+    world = _router_world_with_pricing_field("request", "0.0000000001")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "price_below_quantum",
+    )
+
+
+def test_router_contextual_overrides_excluded() -> None:
+    world = _router_world_with_pricing_field(
+        "overrides",
+        [{"prompt": "0.000009", "completion": "0.000018", "min_prompt_tokens": 200000}],
+    )
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "contextual_overrides_unrepresentable",
+    )
+
+
+def test_router_stringified_overrides_excluded() -> None:
+    world = _router_world_with_pricing_field(
+        "overrides",
+        "[{'prompt': '0.000009', 'completion': '0.000018', 'min_prompt_tokens': 200000}]",
+    )
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "contextual_overrides_unrepresentable",
+    )
+
+
+def test_router_unknown_pricing_key_excluded_fail_closed() -> None:
+    world = _router_world_with_pricing_field("per_image", "0.000000001")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "unknown_billing_dimension",
+    )
+
+
+def test_router_sentinel_on_billable_extra_excluded() -> None:
+    # A -1 sentinel on a billable extra dimension is an unverifiable
+    # charge: fail-closed exclusion, never a silent no-charge.
+    world = _router_world_with_pricing_field("input_cache_write", "-1")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "negative_router_sentinel",
+    )
+
+
+def test_router_web_search_charge_accepted_unreachable_with_evidence() -> None:
+    # Hosted web search is a denied hosted operation in the standard-v1
+    # profile: the published charge is accepted unreachable under that
+    # explicit tested policy, with the evidence shown on the route.
+    world = _router_world_with_pricing_field("web_search", "0.01")
+    bundle = _collect(world, providers=("openrouter",))
+    assert _proposed_models(bundle) == {"openrouter/synth/alpha"}
+    route = next(r for r in bundle.routes if r.requested_model == "synth/alpha")
+    warnings = [text for text in route.warnings]
+    assert any(
+        "web_search" in text and "accepted unreachable" in text for text in warnings
+    )
+    pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
+    assert {d.name for d in pricing.dimensions} == {"input", "cached_input", "output"}
+    report, _ = _validate(bundle, None)
+    assert report.state == "READY", sorted(_codes(report))
+
+
+def test_empty_usable_bootstrap_blocks() -> None:
+    """181-b (B1): every observed model excluded => the usable bootstrap is
+    empty and BLOCKs instead of publishing an empty proposal as READY."""
+    world = World()
+    world.or_rows = [_or_row("synth/sentinel", prompt="-1")]
+    world.pricing_rows = [("gpt-syn-1", "0.54", "0.054", "2.16", "1.08", "4.32")]
+    world.pages = {}
+    bundle = _collect(world)
+    assert _proposed_models(bundle) == set()
+    report, _ = _validate(bundle, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "collection_empty_bootstrap" in _codes(report)
+
+
+# --- 181-b (B1): bypass negatives through supplied-bundle validation ----------
+
+
+def test_supplied_bundle_dropping_carried_charge_blocks() -> None:
+    """Removing a published positive reasoning charge from a collected
+    bundle must block: dropping a billable dimension is not an exclusion."""
+    world = _router_world_with_pricing_field("internal_reasoning", "0.000009")
+    collected = _collect(world, providers=("openrouter",))
+    bundle = _roundtrip_bundle(collected)
+    pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
+    stripped = _rebuild_frozen(
+        pricing,
+        dimensions=[d for d in pricing.dimensions if d.name != "reasoning"],
+    )
+    bundle = bundle.model_copy(update={"pricing": (stripped,)})
+    report, _ = _validate(bundle, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "proposed_row_billing_dim_missing" in _codes(report)
+
+
+def test_supplied_bundle_altering_carried_charge_blocks() -> None:
+    world = _router_world_with_pricing_field("internal_reasoning", "0.000009")
+    collected = _collect(world, providers=("openrouter",))
+    bundle = _roundtrip_bundle(collected)
+    pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
+    tampered = _rebuild_frozen(
+        pricing,
+        dimensions=[
+            d
+            if d.name != "reasoning"
+            else _rebuild_frozen(d, value="8")
+            for d in pricing.dimensions
+        ],
+    )
+    bundle = bundle.model_copy(update={"pricing": (tampered,)})
+    report, _ = _validate(bundle, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "proposed_row_billing_dim_mismatch" in _codes(report)
+
+
+def test_supplied_bundle_ineligible_proposal_blocks() -> None:
+    """Injecting a ready proposal for a model whose official observations
+    are not flat-billable must block with the exact policy reason."""
+    from slaif_gateway.schemas.catalog_refresh import (
+        FieldProvenance,
+        ModelFacts,
+        ModelPricingFacts,
+        PricingDimension,
+        RouteFacts,
+    )
+
+    world = _router_world_with_pricing_field("input_cache_write", "0.000009")
+    collected = _collect(world, providers=("openrouter",))
+    bundle = _roundtrip_bundle(collected)
+    prov = FieldProvenance(
+        sources=("openrouter|catalog|openrouter_models_api",),
+        extractor=coll.EXTRACTOR_ID,
+        extraction="deterministic",
+    )
+    route = RouteFacts(
+        provider="openrouter",
+        requested_model="synth/alpha",
+        upstream_model="synth/alpha",
+        match_type="exact",
+        endpoint="/v1/chat/completions",
+        priority=100,
+        enabled=True,
+        visible_in_models=True,
+        supports_streaming=True,
+        capabilities={"text": True, "streaming": True},
+        provenance=prov,
+    )
+    model = ModelFacts(
+        provider="openrouter",
+        model="synth/alpha",
+        display_name="synth/alpha",
+        context_length=128000,
+        max_output_tokens=8192,
+        supports_streaming=True,
+        capabilities={"text": True, "streaming": True},
+        deprecated=False,
+        provenance=prov,
+    )
+    pricing = ModelPricingFacts(
+        provider="openrouter",
+        model="synth/alpha",
+        endpoint="/v1/chat/completions",
+        currency="USD",
+        dimensions=(
+            PricingDimension(name="input", value="0.54", unit="per_1m_tokens", currency="USD"),
+            PricingDimension(name="cached_input", value="0.054", unit="per_1m_tokens", currency="USD"),
+            PricingDimension(name="output", value="2.16", unit="per_1m_tokens", currency="USD"),
+        ),
+        valid_from=collected.generated_at,
+        provenance=prov,
+    )
+    bundle = bundle.model_copy(
+        update={
+            "routes": bundle.routes + (route,),
+            "models": bundle.models + (model,),
+            "pricing": bundle.pricing + (pricing,),
+        }
+    )
+    report, _ = _validate(bundle, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "proposed_row_billing_ineligible" in _codes(report)
+    ineligible = next(
+        w for w in report.warnings if w.code == "proposed_row_billing_ineligible"
+    )
+    assert "cache_write_charges_unrepresentable" in ineligible.detail
+
+
+# --- 181-b (B1): OpenAI tier, band, and extra-dimension cases ------------------
+
+
+def test_openai_long_zero_price_still_excluded() -> None:
+    # A published $0 long-context standard price is still a contextual
+    # price: the flat short-band proposal cannot bill the model faithfully.
+    world = World()
+    world.pricing_rows = [
+        ("gpt-syn-2", "1.08", "0.108", "4.32", "0", "0"),
+        ("gpt-syn-3", "0.54", "0.054", "2.16", None, None),
+    ]
+    world.pages = {
+        "gpt-syn-2": _page("gpt-syn-2", inp="1.08", cached="0.108", out="4.32"),
+        "gpt-syn-3": _page("gpt-syn-3"),
+    }
+    bundle = _collect(world, providers=("openai",))
+    assert _proposed_models(bundle) == {"openai/gpt-syn-3"}
+    assert _inventory(bundle)[("openai", "gpt-syn-2")] == (
+        "excluded_subset",
+        "long_context_prices_unrepresentable",
+    )
+    # eligibility is decided before page retrieval: no wasted fetch
+    page_urls = [
+        u
+        for u in {r.requested_url for r in bundle.collection.retrievals}
+        if u.startswith(PAGE_PREFIX)
+    ]
+    assert page_urls == [f"{PAGE_PREFIX}gpt-syn-3.md"]
+    report, _ = _validate(bundle, None)
+    assert report.state == "READY", sorted(_codes(report))
+
+
+def test_openai_batch_tier_is_service_variant_not_context_band() -> None:
+    # Batch is a distinct service variant of the same model (mirroring the
+    # OpenRouter :batch handling): it never blocks the standard tier.
+    world = World()
+    world.pricing_rows = []
+    world.pricing_md = (
+        "# Pricing\n\n"
+        "### Standard pricing data\n\n"
+        "| Model | Short context input | Short context output |\n"
+        "|---|---|---|\n"
+        "| gpt-syn-batch | $0.54 | $2.16 |\n\n"
+        "### Batch pricing data\n\n"
+        "| Model | Short context input | Short context output |\n"
+        "|---|---|---|\n"
+        "| gpt-syn-batch | $0.10 | $0.40 |\n"
+    ).encode("utf-8")
+    world.pages = {"gpt-syn-batch": _page("gpt-syn-batch")}
+    bundle = _collect(world, providers=("openai",))
+    assert _proposed_models(bundle) == {"openai/gpt-syn-batch"}
+    assert ("openai", "gpt-syn-batch") not in _inventory(bundle)
+    report, _ = _validate(bundle, None)
+    assert report.state == "READY", sorted(_codes(report))
+
+
+def test_openai_cache_write_charge_excluded() -> None:
+    world = World()
+    world.pricing_rows = []
+    world.pricing_md = (
+        "# Pricing\n\n"
+        "### Standard pricing data\n\n"
+        "| Model | Short context input | Short context cache writes | Short context output |\n"
+        "|---|---|---|---|\n"
+        "| gpt-syn-cw | $0.54 | $0.054 | $2.16 |\n"
+    ).encode("utf-8")
+    bundle = _collect(world, providers=("openai",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openai", "gpt-syn-cw")] == (
+        "excluded_subset",
+        "cache_write_charges_unrepresentable",
+    )
+
+
+# --- 181-b (B2): local route authority preservation ----------------------------
+
+
+def _alias_baseline(**route_spec) -> BaselineDocument:
+    """Baseline holding ONE genuine public alias (name != upstream)."""
+    baseline = _baseline_doc(routes={"public-alias": route_spec})
+    return baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"upstream_model": "synth/alpha"})
+                for r in baseline.routes
+            )
+        }
+    )
+
+
+def test_refresh_alias_preserves_local_route_identity_and_denials() -> None:
+    """181-b (B2) strategic reproducer: a disabled/invisible/nonstreaming
+    public alias with priority 77 and an explicit streaming denial must be
+    preserved exactly - no new enabled upstream-named route, no false
+    disappearance."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _alias_baseline(
+        enabled=False,
+        visible=False,
+        streaming=False,
+        priority=77,
+        caps={"chat_completions": {"chat_text": True, "chat_streaming": False}},
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert [r.requested_model for r in bundle.routes] == ["public-alias"]
+    (route,) = bundle.routes
+    assert route.upstream_model == "synth/alpha"
+    assert route.match_type == "exact"
+    assert route.priority == 77
+    assert route.enabled is False
+    assert route.visible_in_models is False
+    assert route.supports_streaming is False
+    # explicit denial preserved: text kept, streaming denied, nothing granted
+    assert route.capabilities == {"text": True, "streaming": False}
+    assert "function_tools" not in route.capabilities
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "model_disappeared" not in _codes(report)
+    assert "alias_route_replaced" not in _codes(report)
+
+
+def test_refresh_two_aliases_are_never_reduced() -> None:
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(
+        routes={
+            "alias-one": {
+                "enabled": False,
+                "visible": False,
+                "streaming": False,
+                "priority": 77,
+                "caps": {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+            },
+            "alias-two": {"priority": 33},
+        }
+    )
+    baseline = baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"upstream_model": "synth/alpha"})
+                for r in baseline.routes
+            )
+        }
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert bundle.routes == ()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "baseline_multiple_routes",
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "model_disappeared" not in _codes(report)
+    dispositions = {
+        d.model: d.disposition for d in report.dispositions if d.model in ("alias-one", "alias-two")
+    }
+    assert dispositions == {"alias-one": "NOT_FETCHED", "alias-two": "NOT_FETCHED"}
+
+
+def test_refresh_prefix_baseline_covers_upstream_retained() -> None:
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(routes={"synth/": {"priority": 50}})
+    baseline = baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"match_type": "prefix"}) for r in baseline.routes
+            )
+        }
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert bundle.routes == ()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "baseline_contract_not_flat",
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "model_disappeared" not in _codes(report)
+    # the routing pattern is local state, retained with an explicit
+    # deterministic disposition - never a source disappearance
+    dispositions = {d.model: d.disposition for d in report.dispositions if d.model == "synth/"}
+    assert dispositions == {"synth/": "NOT_FETCHED"}
+
+
+def test_supplied_bundle_replacing_alias_with_upstream_route_blocks() -> None:
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _alias_baseline(
+        enabled=False,
+        visible=False,
+        streaming=False,
+        priority=77,
+        caps={"chat_completions": {"chat_text": True, "chat_streaming": False}},
+    )
+    collected = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    bundle = _roundtrip_bundle(collected)
+    (alias_route,) = bundle.routes
+    renamed = _rebuild_frozen(alias_route, requested_model="synth/alpha")
+    bundle = bundle.model_copy(update={"routes": (renamed,)})
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "alias_route_replaced" in _codes(report)
+
+
+def test_supplied_bundle_parallel_upstream_route_blocks() -> None:
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _alias_baseline(
+        enabled=False,
+        visible=False,
+        streaming=False,
+        priority=77,
+        caps={"chat_completions": {"chat_text": True, "chat_streaming": False}},
+    )
+    collected = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    bundle = _roundtrip_bundle(collected)
+    (alias_route,) = bundle.routes
+    parallel = _rebuild_frozen(alias_route, requested_model="synth/alpha")
+    bundle = bundle.model_copy(update={"routes": bundle.routes + (parallel,)})
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "alias_route_replaced" in _codes(report)
+
+
+# --- 181-b (B3): models-index inventory ----------------------------------------
+
+
+def test_index_only_model_explicit_selection_blocks() -> None:
+    world = World()
+    bundle = _collect(world, providers=("openai",), model_include=("gpt-syn-special",))
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openai", "gpt-syn-special")] == (
+        "incomplete",
+        "index_only_no_standard_prices",
+    )
+    report, _ = _validate(bundle, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "missing_required_selection" in _codes(report)
+
+
+def test_legacy_models_docs_format_still_parses() -> None:
+    parsed = se.parse_snapshot(
+        "openai",
+        "openai_models_docs",
+        (
+            b"# Models\n\n## gpt-legacy\nContext length: 128000\n"
+            b"Max output tokens: 8192\nEndpoints: /v1/chat/completions\n"
+        ),
+    )
+    assert parsed.ok, parsed.error
+    (model,) = parsed.models
+    assert model.model == "gpt-legacy"
+    assert model.context_length == 128000
+    assert model.max_output_tokens == 8192
+    assert model.parser == "openai_models_docs/v1"
+    assert model.identity_only is False
+    # a non-index document keeps legacy behavior end to end: no
+    # index-only inventory entry, counts reflect pricing rows only
+    world = World()
+    world.models_md = b"# Models index\n"
+    bundle = _collect(world, providers=("openai",))
+    assert ("openai", "gpt-syn-special") not in _inventory(bundle)
+    assert bundle.collection.source_model_counts == {"openai": 3}
+
 # --- collector input contract ---------------------------------------------------
 
 
@@ -799,6 +1476,314 @@ def test_cli_collect_blocked_world_publishes_blocked_run(tmp_path, monkeypatch) 
     assert result.exit_code == 20, result.output
     run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
     assert len(run_dirs) == 1
+    validation = json.loads((run_dirs[0] / "validation.json").read_text())
+    assert validation["state"] == "BLOCKED"
+    assert "collection_retrieval_failed" in validation["state_reason"]
+
+# --- 181-b (AP-B2/AP-B4): CLI exit status and stage pinning --------------------
+
+
+def _cli_collect(monkeypatch, world: World, *args: str):
+    """Invoke the real collect command against a fully mocked world.
+
+    The CLI's real ``collect_bundle`` defaults to ``socket.getaddrinfo`` for
+    its destination check; a fully mocked public resolver is injected so no
+    unit test performs a live DNS lookup (AP-B4). The JSON summary lands on
+    stdout; httpx logging lands on stderr.
+    """
+    from typer.testing import CliRunner
+
+    from slaif_gateway.cli.main import app
+
+    real_collect = coll.collect_bundle
+
+    def collect_with_resolver(**kw):
+        kw["resolve"] = _resolve_public
+        return real_collect(**kw)
+
+    monkeypatch.setattr(src, "new_client", lambda: world.client())
+    monkeypatch.setattr(coll, "collect_bundle", collect_with_resolver)
+    return CliRunner().invoke(app, list(args))
+
+
+def _cli_json(result) -> dict:
+    return json.loads(result.stdout)
+
+
+def test_cli_collect_bootstrap_ready_exit_0(tmp_path, monkeypatch) -> None:
+    world = World()
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openrouter",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
+        "--json",
+    )
+    assert result.exit_code == 0, result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "READY"
+    assert summary["stage"].startswith("live collection")
+    from typer.testing import CliRunner
+
+    from slaif_gateway.cli.main import app
+
+    run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
+    assert len(run_dirs) == 1
+    verify = CliRunner().invoke(
+        app,
+        [
+            "catalog-refresh",
+            "verify",
+            "--run-dir",
+            str(run_dirs[0]),
+            "--seal-key",
+            str(key),
+        ],
+    )
+    assert verify.exit_code == 0, verify.output
+
+
+def test_cli_collect_refresh_baseline_file_ready_exit_0(tmp_path, monkeypatch) -> None:
+    """181-b (B2) strategic reproducer: a real collect --refresh
+    --baseline-file against a valid canonical-digest baseline now succeeds
+    (it returned 20/baseline_target_mismatch before the target
+    representation fix)."""
+    world = World()
+    baseline = _baseline_doc(
+        routes={"synth/alpha": {}},
+        pricing={"synth/alpha": {"input": "0.54", "output": "2.16", "cached": "0.054"}},
+    )
+    baseline = baseline.model_copy(
+        update={
+            "content_sha256": sha256(canonical_baseline_content(baseline)).hexdigest()
+        }
+    )
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(baseline.model_dump_json(), encoding="utf-8")
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--refresh",
+        "--providers",
+        "openrouter",
+        "--baseline-file",
+        str(baseline_path),
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
+        "--json",
+    )
+    assert result.exit_code == 0, result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "READY"
+    assert summary["stage"].startswith("live collection")
+
+
+def test_cli_review_substituted_baseline_digest_rejected(tmp_path, monkeypatch) -> None:
+    world = World()
+    baseline_a = _baseline_doc(routes={"synth/alpha": {}})
+    collected = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline_a,
+        baseline_mode="exported_file",
+    )
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_bytes(canonical_bundle_bytes(collected))
+    # a different document (same row counts, different content): the
+    # declared digest can no longer bind it
+    baseline_b = baseline_a.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(update={"priority": r.priority + 1})
+                for r in baseline_a.routes
+            )
+        }
+    )
+    baseline_b = baseline_b.model_copy(
+        update={
+            "content_sha256": sha256(canonical_baseline_content(baseline_b)).hexdigest()
+        }
+    )
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(baseline_b.model_dump_json(), encoding="utf-8")
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    from typer.testing import CliRunner
+
+    from slaif_gateway.cli.main import app
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "catalog-refresh",
+            "review",
+            str(bundle_path),
+            "--baseline-file",
+            str(baseline_path),
+            "--run-root",
+            str(run_root),
+            "--seal-key",
+            str(key),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 20, result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "BLOCKED"
+    assert "baseline_identity_mismatch" in summary["reason"]
+
+
+def test_cli_review_target_mismatch_rejected(tmp_path, monkeypatch) -> None:
+    world = World()
+    baseline = _baseline_doc(routes={"synth/alpha": {}})
+    baseline = baseline.model_copy(
+        update={
+            "content_sha256": sha256(canonical_baseline_content(baseline)).hexdigest()
+        }
+    )
+    collected = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    bundle_path = tmp_path / "bundle.json"
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(baseline.model_dump_json(), encoding="utf-8")
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    from typer.testing import CliRunner
+
+    from slaif_gateway.cli.main import app
+
+    for tamper in (
+        {"target_database": "other-db"},
+        {"target_host": "10.0.0.9"},
+    ):
+        tampered = collected.model_copy(
+            update={"baseline": collected.baseline.model_copy(update=tamper)}
+        )
+        bundle_path.write_bytes(canonical_bundle_bytes(tampered))
+        result = CliRunner().invoke(
+            app,
+            [
+                "catalog-refresh",
+                "review",
+                str(bundle_path),
+                "--baseline-file",
+                str(baseline_path),
+                "--run-root",
+                str(run_root),
+                "--seal-key",
+                str(key),
+                "--json",
+            ],
+        )
+        assert result.exit_code == 20, (tamper, result.output)
+        summary = _cli_json(result)
+        assert summary["state"] == "BLOCKED"
+        assert "baseline_target_mismatch" in summary["reason"]
+
+
+def test_cli_collect_stale_fx_review_exit_10(tmp_path, monkeypatch) -> None:
+    world = World()
+    world.ecb = _ecb_xml(
+        date_s=(datetime.now(UTC).date() - timedelta(days=4)).isoformat()
+    )
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openrouter",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
+        "--json",
+    )
+    assert result.exit_code == 10, result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "READY_WITH_WARNINGS"
+    run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
+    validation = json.loads((run_dirs[0] / "validation.json").read_text())
+    assert any(
+        w["code"] == "fx_stale_review" for w in validation["warnings"]
+    )
+
+
+def test_cli_collect_fx_fresh_boundary_exit_0(tmp_path, monkeypatch) -> None:
+    # calendar age exactly at the fresh boundary (3 days) stays READY
+    world = World()
+    world.ecb = _ecb_xml(
+        date_s=(datetime.now(UTC).date() - timedelta(days=3)).isoformat()
+    )
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openrouter",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
+        "--json",
+    )
+    assert result.exit_code == 0, result.output
+    assert _cli_json(result)["state"] == "READY"
+
+
+def test_cli_collect_blocked_exit_20_collect_stage(tmp_path, monkeypatch) -> None:
+    """A semantically blocked collect publishes a BLOCKED run and exits 20
+    with the live-collection stage wording (65 is reserved for unpublished
+    data errors)."""
+    world = World()
+    world.statuses[OR_URL] = 503
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openrouter",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
+        "--json",
+    )
+    assert result.exit_code == 20, result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "BLOCKED"
+    assert summary["stage"].startswith("live collection")
+    run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
     validation = json.loads((run_dirs[0] / "validation.json").read_text())
     assert validation["state"] == "BLOCKED"
     assert "collection_retrieval_failed" in validation["state_reason"]

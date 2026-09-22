@@ -591,6 +591,12 @@ def _finalize_review_pipeline(
     load and before publication (180-g lifecycle gates unchanged).
     """
     # 1) Baseline identity checks (declared identity must match the resolved document).
+    # 181-b (B2): the database name is compared as before, and when the
+    # bundle declares explicit host/port identity fields they must match
+    # too. The full target identity remains bound inside the content
+    # digest (a substituted document is rejected above), so nothing is
+    # weakened; the comparison is now consistent with the collector's
+    # declared representation.
     if baseline_doc is not None:
         declared = bundle.baseline
         if declared.content_sha256 is not None and declared.content_sha256 != baseline_doc.content_sha256:
@@ -602,6 +608,7 @@ def _finalize_review_pipeline(
                 bundle=bundle, code="baseline_identity_mismatch",
                 detail="baseline content digest does not match the bundle's declared baseline identity",
                 json_output=json_output,
+                stage=stage,
             )
         if declared.target_database is not None and declared.target_database != baseline_doc.target.database:
             _blocked_identity(
@@ -612,6 +619,24 @@ def _finalize_review_pipeline(
                 bundle=bundle, code="baseline_target_mismatch",
                 detail=f"baseline target {baseline_doc.target.database!r} does not match declared {declared.target_database!r}",
                 json_output=json_output,
+                stage=stage,
+            )
+        if declared.target_host is not None and (
+            declared.target_host != baseline_doc.target.server_host
+            or declared.target_port != baseline_doc.target.server_port
+        ):
+            _blocked_identity(
+                run_root=run_root,
+                seal_key_path=seal_key_path,
+                run_root_handle=run_root_handle,
+                key_handle=key_handle,
+                bundle=bundle, code="baseline_target_mismatch",
+                detail=(
+                    f"baseline target host:port {baseline_doc.target.server_host}:{baseline_doc.target.server_port} "
+                    f"does not match declared {declared.target_host}:{declared.target_port}"
+                ),
+                json_output=json_output,
+                stage=stage,
             )
 
     # 2) Deterministic recomputation.
@@ -625,6 +650,7 @@ def _finalize_review_pipeline(
             run_root_handle=run_root_handle,
             key_handle=key_handle,
             bundle=bundle, code=exc.code, detail=exc.detail, json_output=json_output,
+            stage=stage,
         )
 
     # 3) Seal key: lifecycle gate (checked bindings must still hold) then
@@ -957,7 +983,10 @@ def _collect_impl(
                 json_output=json_output,
                 stage=STAGE_LINE_COLLECT,
             )
-            return EXIT_DATA_ERROR
+            # 181-b (B4): the run was published as state BLOCKED; a
+            # semantically blocked collect exits 20 (65 is reserved for
+            # data errors where no blocked run is published).
+            return EXIT_BLOCKED
         finally:
             client.close()
 
@@ -991,6 +1020,7 @@ def _blocked_identity(
     code: str,
     detail: str,
     json_output: bool,
+    stage: str = STAGE_LINE,
 ) -> None:
     canonical = canonical_bundle_bytes(bundle)
     run_dir = _publish_blocked_run(
@@ -1014,6 +1044,7 @@ def _blocked_identity(
         warnings=0,
         blockers=1,
         json_output=json_output,
+        stage=stage,
     )
     raise typer.Exit(EXIT_BLOCKED)
 

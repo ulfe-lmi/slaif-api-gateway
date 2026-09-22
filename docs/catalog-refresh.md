@@ -95,9 +95,11 @@ Exactly one of `--bootstrap` / `--refresh` is required; `--refresh` requires
 `standard-v1` (the only profile in this version), `--providers` is a
 non-empty subset of `openai,openrouter`, and `--models` is an optional
 explicit selection (a single model is a valid selection). Exit codes:
-0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED (a blocked run is published
-when a bundle exists), 65 data error (including collection-level failures
-such as an exhausted collection budget), 2 usage error.
+0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED — including semantically
+blocked collect runs, which always publish a blocked run with the
+`live collection` stage wording — 65 data error (input problems where no
+blocked run is published, e.g. an unreadable or invalid `--baseline-file`),
+2 usage error.
 
 ### The bounded official source registry
 
@@ -150,7 +152,7 @@ collection inventory exactly once with a machine reason code:
 |---|---|
 | `service_variant` | `:batch` service variant (the canonical chat row is proposed) |
 | `deprecated_model` | source deprecation flag set |
-| `negative_router_sentinel` | router `-1` pricing sentinel |
+| `negative_router_sentinel` | router `-1` pricing sentinel on a billable dimension (the charge cannot be verified; never converted to zero) |
 | `missing_limits` | context length and/or max output not published |
 | `non_text_modality` | text is not an input and output modality |
 | `missing_core_prices` | input and/or output price not representable |
@@ -159,11 +161,41 @@ collection inventory exactly once with a machine reason code:
 | `page_no_chat` / `page_no_text` | the model page does not list Chat Completions support / text output |
 | `page_price_conflict` | the model page's text prices conflict with the pricing table |
 | `explicit_selection_excluded` | observed but not in the explicit `--models` selection |
-| `baseline_contract_not_flat` | the stored baseline route contract cannot be proposed flat; retained locally |
+| `long_context_prices_unrepresentable` | the standard tier publishes long-context prices (even $0 — a published contextual price); the flat short-band proposal cannot bill the model faithfully |
+| `contextual_overrides_unrepresentable` | contextual override tiers (e.g. `min_prompt_tokens` blocks) publish prices the flat standard contract cannot represent |
+| `cache_write_charges_unrepresentable` | a positive cache-write charge (1h or not) is not billable in the flat standard-v1 contract |
+| `unknown_billing_dimension` | a published pricing key outside the recognized billable/observed set; fail-closed |
+| `conflicting_billing_observation` | conflicting billable observations for the same dimension |
+| `price_below_quantum` | a positive charge quantizes to zero at the 9-dp import contract; excluded rather than stored as a free price |
+| `baseline_contract_not_flat` | the stored baseline route contract cannot be proposed flat (a non-flat exact route, or a prefix/glob baseline route covering the upstream); retained locally |
+| `baseline_multiple_routes` | multiple local route rows (aliases/priorities) for one upstream; alternatives are never reduced; retained locally |
 | `baseline_currency_mismatch` | the stored baseline pricing currency differs from the published native currency |
+| `index_only_no_standard_prices` | listed in the official models index but no standard short-context Chat pricing is published |
 
 A page 404 or parse failure for an **optional** model page is an observed
 incompleteness, never a disappearance and never an outage claim.
+
+### The models index is model evidence
+
+The fetched OpenAI models index is model evidence, not decoration. The
+current linked-index format is parsed with a bounded deterministic
+extraction: model-page bullets whose link is
+`/api/docs/models/<id>.md` — the ID is the page path, **never the display
+name** (display names include aliases that differ from API IDs); the
+documented specialized-models exception that links elsewhere and declares
+`Model ID: \`<id>\`` inline (exactly one such ID is accepted; zero or
+more than one deterministically skip the bullet); duplicates across
+sections deduplicate to the first occurrence. Non-bullet prose links are
+never extracted. Index rows are identity-only (limits and prices come from
+the model pages and the pricing document).
+
+Every observed model ID — including index-only IDs with no pricing at
+all — receives exactly one explained inventory disposition
+(`index_only_no_standard_prices` for the index-only case). The report's
+`source_model_counts` records distinct observed source identities per
+provider, deliberately distinct from local route/alias rows: a source
+catalog is not a route table, and pricing rows are not the entire official
+model catalog.
 
 ### Collection versus replay (validation re-verification)
 
@@ -177,7 +209,20 @@ A bundle that carries a collection identity is **re-verified, not trusted**:
   bootstrap is never READY;
 - `collection_inventory_unsupported` — every inventory entry is re-checked
   against the parsed official evidence and the baseline; a fabricated or
-  stale entry blocks the run.
+  stale entry blocks the run;
+- `collection_empty_bootstrap` — a live collection that fetched its sources
+  but proposed no model, route, or pricing is never READY (a refresh
+  against an existing baseline may legitimately propose nothing while
+  retaining every baseline model);
+- billing eligibility is **recomputed** with the shared standard-v1 policy
+  from the parsed official evidence for every bundle — live collection and
+  offline supplied-bundle replay alike: an ineligible proposal blocks
+  (`proposed_row_billing_ineligible`), and a published positive charge that
+  the proposal drops or alters blocks
+  (`proposed_row_billing_dim_missing` / `proposed_row_billing_dim_mismatch`);
+- `alias_route_replaced` — a baseline public alias still mapped to a present
+  upstream is never replaced by proposed route names, and no parallel
+  upstream-named route bypasses it.
 
 The report scope states which one it is: `live_collection` (the recorded
 collection identity was re-verified in this review) or `offline_replay`
@@ -187,21 +232,47 @@ does not fetch again and does not claim a new retrieval.
 
 ### Proposal scope and FX derivation
 
-The collector proposes **standard-v1 short-context core pricing only**:
+The collector proposes **standard-v1 short-context core pricing**:
 `input`, `output`, and (when published) `cached_input` per 1M tokens in the
-published native currency. Observed-but-not-proposed dimensions — cache-write
-tiers, long-context bands, per-dimension pricing overrides, non-text
-modalities — are counted in the source evidence and inventory, never
-proposed. Provider-alias rows (`~` prefix) are proposed under their **exact
-observed identity** (the prefix is part of the published model ID; no alias
-mapping is asserted), and `:batch` variants are excluded as service
-variants.
+published native currency, plus — when published as positive charges — the
+`reasoning` dimension (per 1M tokens) and the per-request dimension
+(`per_request`). Before anything is proposed, a single deterministic shared
+policy decides flat billing eligibility for each model from **all**
+authoritative observations of it (every billing tier, every context band,
+every published pricing key); the same policy is recomputed by validation
+from the parsed official evidence, so a supplied or tampered bundle cannot
+bypass eligibility by dropping dimensions:
+
+- **Excluded, fail-closed, with the exact machine reason**: published
+  long-context standard prices (even $0 — a published contextual price),
+  contextual override tiers, positive cache-write charges (1h or not),
+  unknown published billing keys, source `-1` sentinels on any billable
+  dimension, conflicting billable observations, and positive charges that
+  quantize to zero at the 9-dp import contract (`price_below_quantum`).
+- A **legitimate zero is a no-charge, never a missing fact**.
+- A published hosted **web-search charge is accepted unreachable** under
+  the explicit tested policy (hosted web search is a denied hosted
+  operation in the standard-v1 profile), with the acceptance evidence shown
+  on the route's warnings — never silently dropped.
+- An excluded model's official model page is **never fetched** (eligibility
+  is decided before page retrieval); explicitly selecting an ineligible
+  model BLOCKs the run.
+- OpenAI `batch`/`flex`/`fast` tiers are **service variants** of the same
+  model (mirroring the OpenRouter `:batch` handling): they never block or
+  flatten the standard tier; a model with only non-standard rows is
+  `no_standard_short_prices`.
+- A collection that fetched sources but produced no usable proposal is
+  `collection_empty_bootstrap` (BLOCKED), never an empty READY bootstrap.
+
+Provider-alias rows (`~` prefix) are proposed under their **exact observed
+identity** (the prefix is part of the published model ID; no alias mapping
+is asserted), and `:batch` variants are excluded as service variants.
 
 OpenAI candidates come from the pricing document's standard short-context
-rows; each candidate's official model page is fetched (bounded to 64 pages
-per run) and must declare the matching Model ID, Chat Completions support,
-text output, a context window, and text prices that **exactly match** the
-pricing table (otherwise `page_price_conflict`).
+rows; each eligible candidate's official model page is fetched (bounded to
+64 pages per run) and must declare the matching Model ID, Chat Completions
+support, text output, a context window, and text prices that **exactly
+match** the pricing table (otherwise `page_price_conflict`).
 
 FX is fetched only when a proposed price is non-EUR: the ECB EUR-base daily
 reference XML is parsed and the latest quote for each needed pair is recorded
@@ -214,15 +285,36 @@ failure blocks the run as an unbound FX fact — never as a missing model.
 
 ### Refresh preservation
 
-For `--refresh`, an existing exact-route baseline row preserves its
-`priority`, `enabled`, `visible_in_models`, and `supports_streaming`
-values, and its capability block projects onto flat standard keys **only
-when the contract is exactly one `chat_completions` block** — including
-explicit denials (a denied capability stays denied; nothing is granted).
-A baseline contract that is not flat-representable, or a baseline pricing
-currency other than USD, excludes the model with an explicit inventory
-reason and retains it locally instead of re-proposing it under a different
-contract.
+For `--refresh`, local route authority is keyed by the **upstream**
+identity and is never overridden:
+
+- A single flat-representable exact-route baseline row is a **local route
+  identity**: the proposal preserves its public alias (`requested_model`),
+  match type, `priority`, `enabled`, `visible_in_models`, and
+  `supports_streaming` values, and its capability block projects onto flat
+  standard keys **only when the contract is exactly one `chat_completions`
+  block** — including explicit denials (a denied capability stays denied;
+  nothing is granted). A genuinely unconfigured model keeps the exact
+  upstream name.
+- **Multiple aliases/priorities are never reduced** to one row
+  (`baseline_multiple_routes`): the model is retained locally with no
+  parallel route proposed.
+- A **prefix/glob baseline route covering the upstream** is retained
+  (`baseline_contract_not_flat`): a flat exact proposal cannot preserve
+  wildcard contracts, and the routing pattern itself is local state —
+  retained with an explicit disposition, never a source disappearance.
+- A **non-flat exact contract** or a **baseline pricing currency other
+  than USD** retains the model locally with an explicit inventory reason
+  instead of re-proposing it under a different contract.
+- An alias **remaining mapped to a present upstream is not a disappeared
+  model**. A supplied bundle that replaces the alias with an
+  upstream-named route, or adds a parallel upstream-named route, BLOCKs
+  (`alias_route_replaced`).
+- The declared baseline target is the **database name plus explicit host
+  and port identity fields**; the full `host:port/database` identity
+  remains bound inside the hashed baseline content, so a substituted
+  document is still rejected (`baseline_identity_mismatch`), and any
+  database/host/port mismatch BLOCKs (`baseline_target_mismatch`).
 
 ### Limits
 
@@ -939,6 +1031,11 @@ apply must consume the authenticated snapshot rather than reread paths.
 
 | Command | Code | Meaning |
 |---|---|---|
+| `collect` | 0 | READY |
+| `collect` | 10 | READY_WITH_WARNINGS |
+| `collect` | 20 | BLOCKED — a blocked run is always published, with the `live collection` stage wording (retrieval failure, semantic blockers, baseline identity mismatch) |
+| `collect` | 65 | data error where no blocked run is published (unreadable/invalid `--baseline-file`, unsafe directory configuration, seal key problem) |
+| `collect` | 2 | usage error (contradictory options) |
 | `review` | 0 | READY |
 | `review` | 10 | READY_WITH_WARNINGS |
 | `review` | 20 | BLOCKED (safe blocked run published when possible) |

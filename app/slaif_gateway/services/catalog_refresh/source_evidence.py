@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -123,6 +124,13 @@ class ParsedModel:
     # proposal contract; the observed block count is recorded so they are
     # accounted for, never silently ignored and never proposed.
     pricing_overrides: int | None = None
+    # 181-b: the OpenRouter "request" key publishes a per-REQUEST charge
+    # (USD per request, NOT per-1M). None = not published; a source -1
+    # sentinel on this key is recorded on non_representable_prices.
+    request_price: Decimal | None = None
+    # 181-b: published pricing keys outside the recognized billable/observed
+    # set, recorded (never silently dropped) and fail-closed at eligibility.
+    unknown_pricing_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -303,6 +311,23 @@ def _openrouter_validated_rows(payload: Any, *, kind: str) -> list[Mapping[str, 
             raise SnapshotFormatError(f"{kind}:invalid_model_id")
     return list(data)
 
+
+# 181-b: the complete set of recognized OpenRouter top-level pricing keys.
+# Anything else published is an unknown billing dimension (recorded and
+# fail-closed at eligibility), never silently accepted as harmless.
+_OPENROUTER_PRICING_KEYS = frozenset(
+    {
+        "prompt",
+        "input_cache_read",
+        "completion",
+        "internal_reasoning",
+        "input_cache_write",
+        "input_cache_write_1h",
+        "web_search",
+        "request",
+        "overrides",
+    }
+)
 
 _OPENROUTER_OVERRIDE_BLOCK = re.compile(r"\{[^{}]*\}")
 # Key set grounded in the live 2026-09-22 /models payload (observed blocks
@@ -489,6 +514,38 @@ def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
                         raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
                     extra_pricing[extra_dim] = _decimal_to_string(converted)
                 locators[f"pricing:{extra_dim}"] = f"{prefix}.pricing.{key}"
+        # 181-b: the "request" key publishes a per-REQUEST charge (USD per
+        # request). It is strictly parsed with the same value-level bounds
+        # as the per-call dims (no per-1M conversion); a -1 sentinel is a
+        # non-representable billable value (fail-closed), never zero.
+        request_price: Decimal | None = None
+        if "request" in pricing:
+            raw_cell = pricing.get("request")
+            if not isinstance(raw_cell, str) or not _OPENROUTER_PRICE_SYNTAX.fullmatch(raw_cell.strip()):
+                raise SnapshotFormatError("openrouter_models_api:invalid_price")
+            cell = raw_cell.strip()
+            if cell == "-1":
+                non_representable["request"] = "negative_router_sentinel"
+                locators["pricing:request:non_representable"] = f"{prefix}.pricing.request"
+            else:
+                try:
+                    amount = Decimal(cell)
+                except InvalidOperation:
+                    raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
+                if (
+                    not amount.is_finite()
+                    or amount < 0
+                    or len(amount.as_tuple().digits) > 18
+                    or amount >= _OPENROUTER_PER_1M_MAGNITUDE_CAP
+                ):
+                    raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
+                request_price = amount
+                locators["pricing:request"] = f"{prefix}.pricing.request"
+        # 181-b: published pricing keys outside the recognized set are
+        # recorded on the row (never silently dropped) and fail closed at
+        # eligibility; they are NOT a snapshot format error, so the row's
+        # identity and the other dims remain observable and explainable.
+        unknown_pricing_keys = tuple(sorted(set(pricing) - _OPENROUTER_PRICING_KEYS))
         # 181: the "overrides" key publishes contextual (long-context /
         # time-of-day) price tiers as a stringified list. The current
         # published shape is a string; any other shape is a format error
@@ -543,6 +600,8 @@ def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
                 extra_pricing=extra_pricing,
                 non_representable_prices=non_representable,
                 pricing_overrides=pricing_overrides,
+                request_price=request_price,
+                unknown_pricing_keys=unknown_pricing_keys,
             )
         )
     if len(models) > MAX_MODELS_PER_SNAPSHOT:
@@ -902,9 +961,79 @@ def _locate_openai_pricing_row(
     return "unresolved"
 
 
+_OPENAI_INDEX_BULLET = re.compile(
+    r"^- \[(?P<text>[^\]]+)\]\((?P<path>[^()\s]+)\)(?::\s*(?P<desc>.*?))?\s*$"
+)
+_OPENAI_INDEX_MODEL_PAGE = re.compile(r"^/api/docs/models/(?P<id>[^/]+)\.md$")
+_OPENAI_INDEX_INLINE_MODEL_ID = re.compile(r"Model ID:\s*`(?P<id>[^`]+)`")
+
+
+def _openai_index_ids(text: str) -> tuple[tuple[str, str], ...] | None:
+    """Bounded identity extraction from the current linked-index format.
+
+    The current official models index lists models as Markdown bullets
+    whose link is the model page (``/api/docs/models/<id>.md``); the ID is
+    the page path, NEVER the display name (display names include aliases
+    that differ from API IDs). One documented exception links elsewhere
+    (specialized models) and declares ``Model ID: `<id>``` inline in its
+    description: exactly one such ID is accepted, zero or more than one
+    deterministically skip the bullet (no guessing). Duplicates across
+    sections deduplicate to the first occurrence. Returns None when the
+    document is not in the linked-index format (legacy block handling).
+    """
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    is_index_format = False
+    for index, line in enumerate(text.splitlines()):
+        match = _OPENAI_INDEX_BULLET.match(line.strip())
+        if match is None:
+            continue
+        model_id: str | None = None
+        page = _OPENAI_INDEX_MODEL_PAGE.fullmatch(match.group("path"))
+        if page is not None:
+            model_id = page.group("id")
+        else:
+            inline = _OPENAI_INDEX_INLINE_MODEL_ID.findall(match.group("desc") or "")
+            if len(inline) == 1:
+                model_id = inline[0]
+        if model_id is None:
+            continue
+        if not _OPENAI_V2_MODEL_ID.fullmatch(model_id):
+            raise SnapshotFormatError("openai_models_docs:invalid_model_id")
+        is_index_format = True
+        if model_id not in seen:
+            seen.add(model_id)
+            found.append((model_id, f"line[{index}]"))
+    if not is_index_format:
+        return None
+    return tuple(found)
+
+
 def parse_openai_models_docs_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]:
-    """Parse cached OpenAI model docs blocks: limits/identity, no prices."""
+    """Parse the official OpenAI models index (current linked-index format
+    or the legacy block format): identity/limits, no prices.
+
+    - current linked index (2026-09): ``- [Display](/api/docs/models/<id>.md)``
+      bullets; identity-only rows (the per-model pages and the pricing
+      document carry limits and prices), duplicates across the Featured
+      and catalog sections deduplicated explicitly;
+    - legacy block format (180/181-a fixtures): unchanged behavior.
+    """
     text = _decode_bounded(evidence, kind="openai_models_docs", max_bytes=MAX_SNAPSHOT_BYTES)
+    index_ids = _openai_index_ids(text)
+    if index_ids is not None:
+        if len(index_ids) > MAX_MODELS_PER_SNAPSHOT:
+            raise SnapshotFormatError("openai_models_docs:too_many_models")
+        return tuple(
+            ParsedModel(
+                provider="openai",
+                model=model_id,
+                identity_only=True,
+                locators={"model:identity": locator},
+                parser="openai_models_docs/v2",
+            )
+            for model_id, locator in index_ids
+        )
     records = _parse_openai_models_docs(text=text, source_url="offline-replay")
     if len(records) > MAX_MODELS_PER_SNAPSHOT:
         raise SnapshotFormatError("openai_models_docs:too_many_models")
@@ -1234,6 +1363,8 @@ def _parsed_model_signature(model: ParsedModel) -> tuple:
         tuple(sorted((dim, value) for dim, value in model.extra_pricing.items())),
         tuple(sorted((dim, value) for dim, value in model.non_representable_prices.items())),
         model.pricing_overrides,
+        model.request_price,
+        model.unknown_pricing_keys,
         model.chat_supported,
         model.context_length,
         model.max_output_tokens,
@@ -1324,6 +1455,190 @@ EXTRA_DIM_UNITS: dict[str, str] = {
 }
 
 
+# --- 181-b: shared standard-v1 flat billing eligibility -----------------------
+#
+# One deterministic policy decides, from ALL authoritative observations of a
+# model (every billing tier, every context band, every published pricing key),
+# whether the standard-v1 flat proposal may carry it. The SAME function runs
+# in the collector (exclusion with a machine reason before proposal) and in
+# the validator (recomputation over the parsed official evidence, so a
+# supplied/tampered bundle cannot bypass eligibility by dropping dimensions).
+#
+# Representable by the flat standard short-context contract: the core text
+# dims (input / cached_input / output, per-1M) plus, when published as a
+# positive charge, the reasoning dim (per-1M) and the per-request dim
+# (per_request). Excluded (fail-closed, exact machine reason): published
+# long-context standard prices, contextual override tiers, positive
+# cache-write charges, unknown billing keys, source sentinels on billable
+# dims, and conflicting billable observations. A legitimate zero is a
+# no-charge, never a missing fact; an out-of-scope dimension is ignored ONLY
+# under the explicit tested policy below, with the acceptance evidence
+# surfaced, never silently.
+
+REASON_LONG_CONTEXT_PRICES = "long_context_prices_unrepresentable"
+REASON_CONTEXTUAL_OVERRIDES = "contextual_overrides_unrepresentable"
+REASON_CACHE_WRITE_CHARGES = "cache_write_charges_unrepresentable"
+REASON_UNKNOWN_BILLING_DIMENSION = "unknown_billing_dimension"
+REASON_CONFLICTING_BILLING = "conflicting_billing_observation"
+REASON_BILLING_SENTINEL = "negative_router_sentinel"
+
+#: inventory reason codes that the billing decision itself verifies
+BILLING_EXCLUSION_REASONS = frozenset(
+    {
+        REASON_LONG_CONTEXT_PRICES,
+        REASON_CONTEXTUAL_OVERRIDES,
+        REASON_CACHE_WRITE_CHARGES,
+        REASON_UNKNOWN_BILLING_DIMENSION,
+        REASON_CONFLICTING_BILLING,
+        REASON_BILLING_SENTINEL,
+    }
+)
+
+
+@dataclass(frozen=True)
+class BillingDecision:
+    """One model's standard-v1 flat billing eligibility (pure, deterministic).
+
+    ``carried`` is (dimension, exact decimal string, unit) for every
+    positive charge the flat proposal MUST carry; ``accepted_unreachable``
+    carries the visible evidence for deliberately ignored out-of-scope
+    charges (an explicit tested policy, never a silent drop).
+    """
+
+    eligible: bool
+    reason_code: str | None = None
+    detail: str | None = None
+    carried: tuple[tuple[str, str, str], ...] = ()
+    accepted_unreachable: tuple[str, ...] = ()
+
+
+def _billing_positive(value: str) -> bool:
+    try:
+        decimal = Decimal(value)
+    except InvalidOperation:
+        return False
+    return decimal.is_finite() and decimal > 0
+
+
+def _router_billing_decision(rows: Sequence[ParsedModel]) -> BillingDecision:
+    unknown = sorted({key for row in rows for key in row.unknown_pricing_keys})
+    if unknown:
+        return BillingDecision(
+            False,
+            REASON_UNKNOWN_BILLING_DIMENSION,
+            "unknown billing dimension(s) in official pricing: " + ",".join(unknown[:4]),
+        )
+    for row in rows:
+        if row.pricing_overrides:
+            return BillingDecision(
+                False,
+                REASON_CONTEXTUAL_OVERRIDES,
+                f"{row.pricing_overrides} contextual override block(s) publish prices the flat standard contract cannot represent",
+            )
+        for extra in ("cache_write", "cache_write_1h"):
+            value = row.extra_pricing.get(extra)
+            if value is not None and _billing_positive(value):
+                return BillingDecision(
+                    False,
+                    REASON_CACHE_WRITE_CHARGES,
+                    f"published {extra.replace('_', ' ')} charge {value} per 1M tokens is not billable in the flat standard-v1 contract",
+                )
+        for dim in (
+            "input",
+            "output",
+            "cached_input",
+            "reasoning",
+            "request",
+            "cache_write",
+            "cache_write_1h",
+            "web_search",
+        ):
+            if dim in row.non_representable_prices:
+                return BillingDecision(
+                    False,
+                    REASON_BILLING_SENTINEL,
+                    f"source -1 sentinel on billable {dim} pricing; the charge cannot be verified, fail-closed",
+                )
+    carried: dict[str, tuple[Decimal, str]] = {}
+    unreachable: list[str] = []
+    for row in rows:
+        reasoning = row.prices.get("reasoning")
+        if reasoning is not None and reasoning > 0:
+            existing = carried.get("reasoning")
+            if existing is not None and existing != (reasoning, "per_1m_tokens"):
+                return BillingDecision(
+                    False, REASON_CONFLICTING_BILLING, "conflicting reasoning charge observations"
+                )
+            carried["reasoning"] = (reasoning, "per_1m_tokens")
+        request = row.request_price
+        if request is not None and request > 0:
+            existing = carried.get("request")
+            if existing is not None and existing != (request, "per_request"):
+                return BillingDecision(
+                    False, REASON_CONFLICTING_BILLING, "conflicting request charge observations"
+                )
+            carried["request"] = (request, "per_request")
+        web_search = row.extra_pricing.get("web_search")
+        if web_search is not None and _billing_positive(web_search):
+            unreachable.append(
+                f"web_search per-call charge {web_search} accepted unreachable: hosted web search is "
+                "a denied hosted operation in the standard-v1 profile"
+            )
+    return BillingDecision(
+        True,
+        None,
+        None,
+        tuple((dim, str(value), unit) for dim, (value, unit) in sorted(carried.items())),
+        tuple(dict.fromkeys(unreachable)),
+    )
+
+
+def _openai_billing_decision(rows: Sequence[ParsedModel]) -> BillingDecision:
+    # Non-standard tiers (batch/flex/fast) are distinct service variants of
+    # the same model, not context bands of the standard contract: the
+    # standard-v1 flat proposal bills the standard tier only, mirroring the
+    # OpenRouter :batch service-variant handling. A model with ONLY
+    # non-standard rows is handled by no_standard_short_prices, not here.
+    for row in rows:
+        if row.billing_tier not in (None, "standard"):
+            continue
+        if row.prices_long:
+            dims = ",".join(sorted(row.prices_long)[:4])
+            return BillingDecision(
+                False,
+                REASON_LONG_CONTEXT_PRICES,
+                f"standard tier publishes long-context prices ({dims}); the flat standard proposal bills the short band only",
+            )
+        for extra in ("cache_write", "cache_write_long"):
+            value = row.extra_pricing.get(extra)
+            if value is not None and _billing_positive(value):
+                return BillingDecision(
+                    False,
+                    REASON_CACHE_WRITE_CHARGES,
+                    f"published {extra.replace('_', ' ')} charge {value} per 1M tokens is not billable in the flat standard-v1 contract",
+                )
+    return BillingDecision(True)
+
+
+def standard_v1_billing_decision(
+    provider: str, rows: Sequence[ParsedModel]
+) -> BillingDecision:
+    """Deterministic standard-v1 flat billing eligibility for one model.
+
+    Considers EVERY observed row of the model (all billing tiers, all
+    context bands, every published pricing key). Missing, negative
+    sentinel, malformed, non-finite, conflicting and ambiguous billable
+    values are fail-closed exclusions with an exact machine reason; a
+    legitimate zero stays a documented no-charge; the accepted
+    out-of-scope dimensions carry their tested-policy evidence.
+    """
+    if provider == "openrouter":
+        return _router_billing_decision(rows)
+    if provider == "openai":
+        return _openai_billing_decision(rows)
+    return BillingDecision(False, REASON_UNKNOWN_BILLING_DIMENSION, f"unsupported provider {provider!r}")
+
+
 def _pricing_field_name(model: ParsedModel, dim: str, *, band: str | None = None, extra: bool = False) -> str:
     """181: observation field name with full billing context.
 
@@ -1400,6 +1715,31 @@ def derive_observations(source_key: str, parsed: SnapshotParse) -> tuple[Observa
                     locator=model.locators.get(f"pricing:{dim}", "unresolved"),
                     value=model.extra_pricing[dim],
                     unit=EXTRA_DIM_UNITS.get(dim, "per_1m_tokens"),
+                    currency=model.price_currency,
+                    parser=model.parser,
+                )
+            )
+        if model.request_price is not None:
+            # 181-b: the per-request charge is a proposal-representable
+            # billable dimension; publish its observation under the standard
+            # short-context field name (the only context OpenRouter rows
+            # carry) so a carried "request" dim can bind to it.
+            effective_band = model.context_band or "short"
+            request_field = (
+                "pricing:request"
+                if model.billing_tier in (None, "standard")
+                and effective_band == "short"
+                else f"pricing:request:{model.billing_tier or 'plain'}:{effective_band}"
+            )
+            observations.append(
+                Observation(
+                    source_key=source_key,
+                    provider=model.provider,
+                    model=model.model,
+                    field=request_field,
+                    locator=model.locators.get("pricing:request", "unresolved"),
+                    value=str(model.request_price),
+                    unit="per_request",
                     currency=model.price_currency,
                     parser=model.parser,
                 )

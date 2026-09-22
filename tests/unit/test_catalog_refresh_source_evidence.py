@@ -1795,3 +1795,201 @@ def test_snapshot_text_cannot_become_report_markup() -> None:
     assert not re.search(r"<img\b", html, flags=re.IGNORECASE)
     assert "onerror=alert(1)" in html  # present only in escaped form
     assert "&lt;img" in html
+
+
+# --- 181-b: shared standard-v1 flat billing eligibility ------------------------
+
+
+def _router_row_for_decision(pricing: dict) -> dict:
+    return {
+        "id": "synth/dec",
+        "context_length": 128000,
+        "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+        "top_provider": {"max_completion_tokens": 8192},
+        "deprecation": {"is_deprecated": False},
+        "pricing": {
+            "prompt": "0.000000540",
+            "completion": "0.000002160",
+            "input_cache_read": "0.0000000540",
+            **pricing,
+        },
+    }
+
+
+def _router_decision(pricing: dict, *, rows: list[dict] | None = None):
+    payload = (json.dumps({"data": rows or [_router_row_for_decision(pricing)]}, sort_keys=True) + "\n").encode("utf-8")
+    parsed = se.parse_openrouter_models_snapshot(payload)
+    return se.standard_v1_billing_decision("openrouter", list(parsed))
+
+
+def test_standard_v1_billing_decision_openrouter() -> None:
+    # positive cache-write charges are unrepresentable flat
+    for key in ("input_cache_write", "input_cache_write_1h"):
+        decision = _router_decision({key: "0.000009"})
+        assert decision.eligible is False
+        assert decision.reason_code == "cache_write_charges_unrepresentable"
+    # a legitimate zero is a no-charge, never a missing fact
+    decision = _router_decision({"input_cache_write": "0"})
+    assert decision.eligible is True
+    assert decision.carried == ()
+    # contextual override tiers (JSON array and stringified list shapes)
+    overrides = [{"prompt": "0.000009", "completion": "0.000018", "min_prompt_tokens": 200000}]
+    for shape in (overrides, json.dumps(overrides)):
+        decision = _router_decision({"overrides": shape})
+        assert decision.eligible is False
+        assert decision.reason_code == "contextual_overrides_unrepresentable"
+    # unknown published billing dimensions fail closed
+    decision = _router_decision({"per_image": "0.000000001"})
+    assert decision.eligible is False
+    assert decision.reason_code == "unknown_billing_dimension"
+    # -1 sentinels on billable dims are unverifiable charges
+    for key in ("internal_reasoning", "request", "input_cache_write", "web_search"):
+        decision = _router_decision({key: "-1"})
+        assert decision.eligible is False, key
+        assert decision.reason_code == "negative_router_sentinel", key
+    # positive reasoning / per-request charges are carried as dimensions
+    # (values compared as exact decimals, never as strings)
+    decision = _router_decision({"internal_reasoning": "0.000009"})
+    assert decision.eligible is True
+    carried = {(name, Decimal(value), unit) for name, value, unit in decision.carried}
+    assert ("reasoning", Decimal("9"), "per_1m_tokens") in carried
+    decision = _router_decision({"request": "0.1"})
+    assert decision.eligible is True
+    carried = {(name, Decimal(value), unit) for name, value, unit in decision.carried}
+    assert ("request", Decimal("0.1"), "per_request") in carried
+    # zero request is a no-charge
+    decision = _router_decision({"request": "0"})
+    assert decision.eligible is True
+    assert decision.carried == ()
+    # a hosted web-search charge is accepted unreachable under the explicit
+    # tested policy, with visible evidence, never silently
+    decision = _router_decision({"web_search": "0.01"})
+    assert decision.eligible is True
+    assert decision.carried == ()
+    assert decision.accepted_unreachable
+    assert any("web_search" in text for text in decision.accepted_unreachable)
+    # conflicting billable observations across rows fail closed
+    rows = [
+        _router_row_for_decision({"internal_reasoning": "0.000009"}),
+        _router_row_for_decision({"internal_reasoning": "0.000018"}),
+    ]
+    decision = _router_decision({}, rows=rows)
+    assert decision.eligible is False
+    assert decision.reason_code == "conflicting_billing_observation"
+    # equal observations are not a conflict
+    rows = [
+        _router_row_for_decision({"internal_reasoning": "0.000009"}),
+        _router_row_for_decision({"internal_reasoning": "0.000009"}),
+    ]
+    decision = _router_decision({}, rows=rows)
+    assert decision.eligible is True
+    carried = {(name, Decimal(value), unit) for name, value, unit in decision.carried}
+    assert ("reasoning", Decimal("9"), "per_1m_tokens") in carried
+
+
+def _openai_row(
+    model: str = "gpt-dec",
+    *,
+    short: dict | None = None,
+    long_: dict | None = None,
+    extra: dict | None = None,
+    tier: str | None = "standard",
+):
+    return se.ParsedModel(
+        provider="openai",
+        model=model,
+        prices={dim: Decimal(value) for dim, value in (short or {}).items()},
+        prices_long={dim: Decimal(value) for dim, value in (long_ or {}).items()},
+        extra_pricing=dict(extra or {}),
+        price_currency="USD" if (short or long_) else None,
+        billing_tier=tier,
+        context_band="short",
+        parser="openai_pricing_docs/v2",
+    )
+
+
+def test_standard_v1_billing_decision_openai() -> None:
+    # published long-context standard prices exclude, even when zero
+    for long_values in ({"input": "1.08", "output": "4.32"}, {"input": "0", "output": "0"}):
+        row = _openai_row(short={"input": "0.54", "output": "2.16"}, long_=long_values)
+        decision = se.standard_v1_billing_decision("openai", [row])
+        assert decision.eligible is False
+        assert decision.reason_code == "long_context_prices_unrepresentable"
+    # non-standard tiers are service variants: they never block the standard
+    standard = _openai_row(short={"input": "0.54", "output": "2.16"})
+    batch = _openai_row(tier="batch", short={"input": "0.10", "output": "0.40"})
+    flex = _openai_row(tier="flex", short={"input": "0.27", "output": "1.08"})
+    decision = se.standard_v1_billing_decision("openai", [standard, batch, flex])
+    assert decision.eligible is True
+    # a positive cache-write charge excludes
+    row = _openai_row(
+        short={"input": "0.54", "output": "2.16"},
+        extra={"cache_write": "0.054"},
+    )
+    decision = se.standard_v1_billing_decision("openai", [row])
+    assert decision.eligible is False
+    assert decision.reason_code == "cache_write_charges_unrepresentable"
+    # a zero cache-write is a no-charge
+    row = _openai_row(
+        short={"input": "0.54", "output": "2.16"},
+        extra={"cache_write": "0"},
+    )
+    decision = se.standard_v1_billing_decision("openai", [row])
+    assert decision.eligible is True
+    # short-only standard rows stay eligible
+    decision = se.standard_v1_billing_decision("openai", [standard])
+    assert decision.eligible is True
+
+
+def test_openrouter_request_and_unknown_keys_parsed() -> None:
+    row = _router_row_for_decision({"request": "0.1", "per_image": "0.000000001"})
+    payload = (json.dumps({"data": [row]}, sort_keys=True) + "\n").encode("utf-8")
+    (parsed,) = se.parse_openrouter_models_snapshot(payload)
+    assert parsed.request_price == Decimal("0.1")
+    assert parsed.locators["pricing:request"].endswith(".pricing.request")
+    assert parsed.unknown_pricing_keys == ("per_image",)
+    # the recognized set never swallows the request key
+    assert "request" not in parsed.unknown_pricing_keys
+
+
+def test_openai_models_docs_linked_index_current_format() -> None:
+    fixture = (FIXTURES / "collection" / "models-index-current.md").read_bytes()
+    parsed = se.parse_snapshot("openai", "openai_models_docs", fixture)
+    assert parsed.ok, parsed.error
+    ids = [m.model for m in parsed.models]
+    # display names are never IDs; the ID is the page path; duplicates across
+    # sections deduplicate to the first occurrence; the documented
+    # specialized-models bullet declares its ID inline
+    assert ids == [
+        "gpt-syn-astra",
+        "gpt-syn-terra",
+        "gpt-syn-luna",
+        "gpt-syn-mini",
+        "gpt-syn-mini-2026-08-31",
+        "gpt-syn-special-research",
+    ]
+    for model in parsed.models:
+        assert model.identity_only is True
+        assert model.parser == "openai_models_docs/v2"
+        assert model.context_length is None
+        assert model.prices == {}
+    # prose (non-bullet) links are never extracted
+    assert "gpt-syn-prose-only" not in ids
+
+
+def test_openai_models_docs_index_bad_shapes_fail_closed() -> None:
+    # two inline IDs in one bullet: no guessing, the bullet is skipped
+    text = (
+        "# Models\n\n"
+        "- [ok](/api/docs/models/gpt-syn-a.md): fine\n"
+        "- [bad](/api/docs/pricing#specialized-models): "
+        "Model ID: `gpt-syn-a2`. Model ID: `gpt-syn-a3`.\n"
+    ).encode("utf-8")
+    parsed = se.parse_snapshot("openai", "openai_models_docs", text)
+    assert parsed.ok, parsed.error
+    assert [m.model for m in parsed.models] == ["gpt-syn-a"]
+    # an uppercase ID in the page path is a format error, never a guess
+    bad = b"# Models\n\n- [Bad](/api/docs/models/GPT-SYN-BAD.md): nope\n"
+    parsed_bad = se.parse_snapshot("openai", "openai_models_docs", bad)
+    assert parsed_bad.ok is False
+    assert parsed_bad.error == "openai_models_docs:invalid_model_id"

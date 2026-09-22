@@ -52,6 +52,18 @@ baseline input is part of the SQL evidence: `--db-url` is a live export
 file does not verify that execution), `--first-install` read no database,
 and `verify` replays the sealed bytes without executing SQL.
 
+Collection proposes the flat standard-v1 short-context core text prices and
+carries published positive reasoning (per 1M) and per-request charges.
+Models with published long-context standard prices (even $0), contextual
+override tiers, positive cache-write charges, unknown billing keys, or
+source sentinels on billable dimensions are excluded with the exact machine
+reason, and explicitly selecting one blocks the run. Refresh preserves
+local route authority: one flat baseline row keeps its public alias, match
+type, priority, enabled/visible/streaming state, and every approved denial;
+multiple aliases and wildcard-covered or non-flat contracts are retained
+locally, never reduced or bypassed, and a baseline alias still mapped to a
+present upstream is never reported as disappeared.
+
 ## Preparing source evidence (offline replay)
 
 The `collect` command is the live alternative: it fetches the registered

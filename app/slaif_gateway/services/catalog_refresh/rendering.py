@@ -862,7 +862,7 @@ def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) ->
         f"({len(collection.retrievals)} retrievals: {ok} ok, {failed} failed · "
         f"{len(collection.inventory)} observed inventory entries)</summary>"
     ]
-    parts.append(_kv_block([
+    kv_rows = [
         ("Tool", collection.tool),
         ("Code revision", collection.code_revision),
         ("Profile", collection.profile),
@@ -872,7 +872,20 @@ def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) ->
         ("Finished (UTC)", collection.finished_at.isoformat()),
         ("Retrievals", f"{len(collection.retrievals)} total · {ok} ok · {failed} failed (attempts include bounded retries)"),
         ("Deduplicated fetches", "yes" if collection.deduplicated_fetches else "no"),
-    ]))
+    ]
+    if collection.source_model_counts:
+        counts_text = " · ".join(
+            f"{provider} {count}"
+            for provider, count in sorted(collection.source_model_counts.items())
+        )
+        kv_rows.append(
+            (
+                "Source models observed",
+                f"{counts_text} (source catalog identities; distinct from local "
+                "route/alias rows)",
+            )
+        )
+    parts.append(_kv_block(kv_rows))
     parts.append("<h3>Measured retrieval records</h3>")
     if collection.retrievals:
         parts.append(
@@ -937,11 +950,14 @@ def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) ->
             "run).</p>"
         )
     parts.append(
-        "<p class='muted'>Observed-but-not-proposed dimensions (cache-write tiers, long-context "
-        "bands, per-dimension pricing overrides, non-text modalities) are counted in the source "
-        "evidence and inventory; the collector proposes standard-v1 short-context core pricing only. "
-        "Research identity: NOT_RUN — no Codex invocation occurred in this version. No apply or "
-        "refresh command exists; the sealed run directory is the terminal output.</p>"
+        "<p class='muted'>Flat standard-v1 eligibility: the collector proposes the short-context core "
+        "text dims and carries published positive reasoning (per-1M) and per-request charges; models "
+        "with published long-context standard prices, contextual override tiers, positive cache-write "
+        "charges, unknown billing keys, or source sentinels on billable dims are excluded with the "
+        "exact machine reason, and an explicitly selected one blocks the run. Hosted web-search "
+        "charges are accepted unreachable (denied hosted operation in the standard-v1 profile) with "
+        "the evidence shown on the route. Research identity: NOT_RUN — no Codex invocation occurred in "
+        "this version. No apply or refresh command exists; the sealed run directory is the terminal output.</p>"
     )
     parts.append("</details>")
     return parts

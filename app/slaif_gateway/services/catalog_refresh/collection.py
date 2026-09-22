@@ -33,6 +33,7 @@ import base64
 import hashlib
 import socket
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from importlib.metadata import version as _package_version
@@ -95,6 +96,8 @@ REASON_PAGE_NO_TEXT = "page_no_text"
 REASON_PAGE_PRICE_CONFLICT = "page_price_conflict"
 REASON_BASELINE_CONTRACT_NOT_FLAT = "baseline_contract_not_flat"
 REASON_BASELINE_CURRENCY_MISMATCH = "baseline_currency_mismatch"
+REASON_BASELINE_MULTIPLE_ROUTES = "baseline_multiple_routes"
+REASON_INDEX_ONLY = "index_only_no_standard_prices"
 REASON_EXPLICIT_SELECTION_EXCLUDED = "explicit_selection_excluded"
 REASON_PRICE_BELOW_QUANTUM = "price_below_quantum"
 
@@ -171,6 +174,75 @@ class _Proposal:
     pricing: ModelPricingFacts
 
 
+def _baseline_identity_for(
+    key: tuple[str, str],
+    baseline_chat_rows_by_upstream: dict[tuple[str, str], list[object]],
+    baseline_wildcard_routes: list[object],
+) -> tuple[object | None, str | None, str | None]:
+    """Resolve the local route authority for one upstream candidate.
+
+    Returns (row, reason_code, reason_detail):
+
+    - no exact row and no covering wildcard route: ``(None, None, None)`` —
+      a genuinely unconfigured model, default proposal identity;
+    - exactly one flat-representable exact row: ``(row, None, None)`` — the
+      proposal preserves that row's public alias, match type, priority,
+      enabled/visibility, streaming and every approved denial;
+    - one non-flat exact row, or any covering prefix/glob route: the local
+      contract cannot be proposed flat; the model is retained locally with
+      an explicit deterministic reason and NO parallel route is proposed;
+    - more than one exact row: alternatives are never reduced; retained.
+    """
+    exact_rows = baseline_chat_rows_by_upstream.get(key, [])
+    if len(exact_rows) == 1:
+        row = exact_rows[0]
+        if _baseline_route_flat_capable(row):
+            return row, None, None
+        return None, REASON_BASELINE_CONTRACT_NOT_FLAT, (
+            "baseline route capability contract is not flat-representable; retained locally"
+        )
+    if len(exact_rows) > 1:
+        return None, REASON_BASELINE_MULTIPLE_ROUTES, (
+            f"{len(exact_rows)} local route rows for this upstream "
+            f"({', '.join(sorted(str(r.requested_model) for r in exact_rows))[:160]}); "
+            "alternatives are never reduced; retained locally"
+        )
+    provider, upstream_model = key
+    covering = [
+        row
+        for row in baseline_wildcard_routes
+        if row.provider == provider
+        and (
+            (row.match_type == "prefix" and upstream_model.startswith(row.requested_model))
+            or (row.match_type == "glob" and fnmatchcase(upstream_model, row.requested_model))
+        )
+    ]
+    if covering:
+        first = covering[0]
+        return None, REASON_BASELINE_CONTRACT_NOT_FLAT, (
+            f"baseline {first.match_type} route {first.requested_model!r} covers this upstream; "
+            "a flat exact proposal cannot preserve wildcard contracts; retained locally"
+        )
+    return None, None, None
+
+
+def _carried_dimensions(decision: se.BillingDecision) -> tuple[list[PricingDimension], str | None]:
+    """Format the decision's carried charges into import-contract dims.
+
+    Returns (dims, below_quantum_dim): a positive charge that quantizes to
+    zero at the 9-dp import contract cannot be stored without becoming a
+    free price; the dimension name is returned so the caller excludes the
+    model with REASON_PRICE_BELOW_QUANTUM instead of a guessed/zero value.
+    """
+    dims: list[PricingDimension] = []
+    for dim, value_text, unit in decision.carried:
+        text_value = _money_string(Decimal(value_text))
+        if text_value is None:
+            return [], dim
+        dims.append(PricingDimension(name=dim, value=text_value, unit=unit, currency="USD"))
+    return dims, None
+
+
 def collect_bundle(
     *,
     providers: tuple[str, ...],
@@ -219,6 +291,7 @@ def collect_bundle(
 
     openrouter_rows: list[se.ParsedModel] = []
     openai_pricing_rows: list[se.ParsedModel] = []
+    openai_index_rows: list[se.ParsedModel] = []
     for result in phase1:
         if not result.ok or result.content is None:
             continue
@@ -233,14 +306,29 @@ def collect_bundle(
         elif result.spec.provider == "openai" and result.spec.source_kind == "openai_pricing_docs":
             kept, _duplicates = se.dedupe_parsed_models(parsed)
             openai_pricing_rows.extend(kept)
+        elif result.spec.provider == "openai" and result.spec.source_kind == "openai_models_docs":
+            kept, _duplicates = se.dedupe_parsed_models(parsed)
+            openai_index_rows.extend(kept)
 
-    # --- baseline indexes (refresh preservation) ---------------------------
-    baseline_route_attrs: dict[tuple[str, str], object] = {}
+    # --- baseline indexes (refresh preservation, 181-b) --------------------
+    # Local route authority is keyed by the UPSTREAM identity, never reduced:
+    # every exact chat route row for one upstream is kept (multiple
+    # aliases/priorities are never collapsed by setdefault), and
+    # prefix/glob rows are kept as covering contracts a flat exact
+    # proposal cannot preserve.
+    baseline_chat_rows_by_upstream: dict[tuple[str, str], list[object]] = {}
+    baseline_wildcard_routes: list[object] = []
     baseline_pricing_currencies: dict[tuple[str, str], set[str]] = {}
     if baseline is not None:
         for row in baseline.routes:
-            if row.match_type == "exact" and row.endpoint == CHAT_ENDPOINT:
-                baseline_route_attrs.setdefault((row.provider, row.requested_model), row)
+            if row.endpoint != CHAT_ENDPOINT:
+                continue
+            if row.match_type == "exact":
+                baseline_chat_rows_by_upstream.setdefault(
+                    (row.provider, row.upstream_model), []
+                ).append(row)
+            else:
+                baseline_wildcard_routes.append(row)
         for row in baseline.pricing:
             if row.endpoint == CHAT_ENDPOINT:
                 baseline_pricing_currencies.setdefault((row.provider, row.upstream_model), set()).add(row.currency)
@@ -318,6 +406,21 @@ def collect_bundle(
                 )
             )
             continue
+        # 181-b (B1): the shared billing decision runs BEFORE proposal —
+        # capturing an observation is not enforcing it. Positive
+        # cache-write/override/unknown-dimension bills and sentinels on
+        # billable dims are excluded with the exact policy reason;
+        # positive reasoning / per-request charges are carried as dims.
+        decision = se.standard_v1_billing_decision("openrouter", [row])
+        if not decision.eligible:
+            inventory.append(
+                CollectionInventoryEntry(
+                    provider="openrouter", model=model_id, disposition="excluded_subset",
+                    reason_code=decision.reason_code or "billing_unrepresentable",
+                    detail=(decision.detail or "")[:240],
+                )
+            )
+            continue
         if include_set and model_id not in include_set:
             inventory.append(
                 CollectionInventoryEntry(
@@ -337,19 +440,31 @@ def collect_bundle(
                 )
             )
             continue
-        baseline_row = baseline_route_attrs.get(key)
-        if baseline_row is not None and not _baseline_route_flat_capable(baseline_row):
+        baseline_row, retain_reason, retain_detail = _baseline_identity_for(
+            key, baseline_chat_rows_by_upstream, baseline_wildcard_routes
+        )
+        if retain_reason is not None:
             inventory.append(
                 CollectionInventoryEntry(
                     provider="openrouter", model=model_id, disposition="excluded_subset",
-                    reason_code=REASON_BASELINE_CONTRACT_NOT_FLAT,
-                    detail="baseline route capability contract is not flat-representable; retained locally",
+                    reason_code=retain_reason, detail=(retain_detail or "")[:240],
                 )
             )
             continue
-        proposals[key] = _router_proposal(row, baseline_row, started_at)
+        carried_dims, below_quantum = _carried_dimensions(decision)
+        if below_quantum is not None:
+            inventory.append(
+                CollectionInventoryEntry(
+                    provider="openrouter", model=model_id, disposition="excluded_subset",
+                    reason_code=REASON_PRICE_BELOW_QUANTUM,
+                    detail=f"positive {below_quantum} charge quantizes to zero at the 9-dp import contract; excluded rather than stored as a free price",
+                )
+            )
+            continue
+        proposals[key] = _router_proposal(row, baseline_row, decision, carried_dims, started_at)
 
-    # --- OpenAI candidates and model pages ----------------------------------
+    # --- OpenAI candidates, model pages, and the models index ---------------
+    openai_index_ids: set[str] = set()
     if "openai" in providers:
         standard_rows: dict[str, se.ParsedModel] = {}
         observed: dict[str, list[se.ParsedModel]] = {}
@@ -362,7 +477,27 @@ def collect_bundle(
                 and row.model not in standard_rows
             ):
                 standard_rows[row.model] = row
-        candidates = sorted(standard_rows)
+        for row in openai_index_rows:
+            openai_index_ids.add(row.model)
+        # 181-b (B1): billing eligibility is decided from ALL observed rows
+        # of each standard candidate BEFORE any model page is fetched. A
+        # model with published long-context standard prices or cache-write
+        # charges is excluded with the exact policy reason and its page is
+        # never fetched: no wasted retrieval, no flattened proposal.
+        eligible_rows: dict[str, se.BillingDecision] = {}
+        for model_id in sorted(standard_rows):
+            decision = se.standard_v1_billing_decision("openai", observed[model_id])
+            if decision.eligible:
+                eligible_rows[model_id] = decision
+            else:
+                inventory.append(
+                    CollectionInventoryEntry(
+                        provider="openai", model=model_id, disposition="excluded_subset",
+                        reason_code=decision.reason_code or "billing_unrepresentable",
+                        detail=(decision.detail or "")[:240],
+                    )
+                )
+        candidates = sorted(eligible_rows)
         if include_set:
             candidates = [m for m in candidates if m in include_set]
         if len(candidates) > MAX_OPENAI_MODEL_PAGES:
@@ -406,6 +541,9 @@ def collect_bundle(
                     )
                 )
                 continue
+            if model_id not in eligible_rows:
+                continue  # already reconciled above with its exact billing reason
+            decision = eligible_rows[model_id]
             if include_set and model_id not in include_set:
                 inventory.append(
                     CollectionInventoryEntry(
@@ -425,13 +563,24 @@ def collect_bundle(
                     )
                 )
                 continue
-            baseline_row = baseline_route_attrs.get(key)
-            if baseline_row is not None and not _baseline_route_flat_capable(baseline_row):
+            baseline_row, retain_reason, retain_detail = _baseline_identity_for(
+                key, baseline_chat_rows_by_upstream, baseline_wildcard_routes
+            )
+            if retain_reason is not None:
                 inventory.append(
                     CollectionInventoryEntry(
                         provider="openai", model=model_id, disposition="excluded_subset",
-                        reason_code=REASON_BASELINE_CONTRACT_NOT_FLAT,
-                        detail="baseline route capability contract is not flat-representable; retained locally",
+                        reason_code=retain_reason, detail=(retain_detail or "")[:240],
+                    )
+                )
+                continue
+            carried_dims, below_quantum = _carried_dimensions(decision)
+            if below_quantum is not None:
+                inventory.append(
+                    CollectionInventoryEntry(
+                        provider="openai", model=model_id, disposition="excluded_subset",
+                        reason_code=REASON_PRICE_BELOW_QUANTUM,
+                        detail=f"positive {below_quantum} charge quantizes to zero at the 9-dp import contract; excluded rather than stored as a free price",
                     )
                 )
                 continue
@@ -493,7 +642,19 @@ def collect_bundle(
                     )
                     break
             else:
-                proposals[key] = _openai_proposal(row, page, baseline_row, started_at)
+                proposals[key] = _openai_proposal(row, page, baseline_row, decision, carried_dims, started_at)
+        # 181-b (B3): the fetched models index is model evidence, not
+        # decoration: every index-only ID (no standard pricing rows at
+        # all) receives exactly one explained source disposition instead
+        # of being silently ignored.
+        for model_id in sorted(openai_index_ids - set(observed)):
+            inventory.append(
+                CollectionInventoryEntry(
+                    provider="openai", model=model_id, disposition="incomplete",
+                    reason_code=REASON_INDEX_ONLY,
+                    detail="listed in the official model index; no standard short-context Chat pricing published",
+                )
+            )
 
     # --- FX: only pairs a proposed non-EUR price actually needs -------------
     # The bundle records each needed quote EXACTLY AS PUBLISHED (EUR is the
@@ -619,10 +780,15 @@ def collect_bundle(
         else BaselineIdentity(
             mode=baseline_mode,
             exported_at=baseline.exported_at,
-            target_database=(
-                f"{baseline.target.server_host}:{baseline.target.server_port}/"
-                f"{baseline.target.database}"
-            ),
+            # 181-b (B2): the declared target is the DATABASE NAME; host and
+            # port are their own identity fields. The full host:port/db
+            # identity remains bound inside the hashed baseline content
+            # (the digest check is unchanged and still rejects a
+            # substituted document); the explicit fields make the
+            # target comparison consistent with what the finalizer sees.
+            target_database=baseline.target.database,
+            target_host=baseline.target.server_host,
+            target_port=baseline.target.server_port,
             postgres_version=baseline.target.postgres_version,
             sql_checked=baseline.sql_checked,
             row_counts={
@@ -634,6 +800,14 @@ def collect_bundle(
             content_sha256=baseline.content_sha256,
         )
     )
+
+    source_model_counts: dict[str, int] = {}
+    if "openrouter" in providers:
+        source_model_counts["openrouter"] = len({row.model for row in openrouter_rows})
+    if "openai" in providers:
+        source_model_counts["openai"] = len(
+            {row.model for row in openai_pricing_rows} | openai_index_ids
+        )
 
     version = package_version()
     return RefreshBundle(
@@ -662,6 +836,11 @@ def collect_bundle(
             retrievals=retrieval_records,
             inventory=tuple(inventory),
             deduplicated_fetches=True,
+            # 181-b (B3): source model counts (distinct observed upstream
+            # identities per collected provider) are reported separately
+            # from local route/alias rows - a source catalog is not a
+            # route table.
+            source_model_counts=source_model_counts,
         ),
         policy=PolicyDocument(),
         profile=ProfileContract(
@@ -687,7 +866,11 @@ def collect_bundle(
 
 
 def _router_proposal(
-    row: se.ParsedModel, baseline_row: object | None, valid_from: datetime
+    row: se.ParsedModel,
+    baseline_row: object | None,
+    decision: se.BillingDecision,
+    carried_dims: list[PricingDimension],
+    valid_from: datetime,
 ) -> _Proposal:
     provider, model_id = "openrouter", row.model
     provenance = FieldProvenance(
@@ -700,7 +883,16 @@ def _router_proposal(
     priority = 100
     enabled = True
     visible = True
+    requested_model = model_id
+    match_type = "exact"
     if baseline_row is not None:
+        # 181-b (B2): a single flat-representable baseline row is a LOCAL
+        # route identity: the proposal preserves its public alias, match
+        # type, priority, enabled/visibility, streaming and every approved
+        # denial. A new genuinely unconfigured model keeps the exact
+        # upstream identity.
+        requested_model = baseline_row.requested_model
+        match_type = baseline_row.match_type
         priority = baseline_row.priority
         enabled = baseline_row.enabled
         visible = baseline_row.visible_in_models
@@ -719,11 +911,14 @@ def _router_proposal(
         dims.append(
             PricingDimension(name=dim, value=text, unit="per_1m_tokens", currency="USD")
         )
+    # 181-b (B1): carried billable charges (positive reasoning per-1M and
+    # per-request) are part of the flat contract, never silently dropped.
+    dims.extend(carried_dims)
     route = RouteFacts(
         provider=provider,
-        requested_model=model_id,
+        requested_model=requested_model,
         upstream_model=model_id,
-        match_type="exact",
+        match_type=match_type,
         endpoint=CHAT_ENDPOINT,
         priority=priority,
         enabled=enabled,
@@ -731,6 +926,7 @@ def _router_proposal(
         supports_streaming=supports_streaming,
         capabilities=flat_capabilities,
         provenance=provenance,
+        warnings=decision.accepted_unreachable,
     )
     model = ModelFacts(
         provider=provider,
@@ -759,6 +955,8 @@ def _openai_proposal(
     row: se.ParsedModel,
     page: se.ParsedModel,
     baseline_row: object | None,
+    decision: se.BillingDecision,
+    carried_dims: list[PricingDimension],
     valid_from: datetime,
 ) -> _Proposal:
     provider, model_id = "openai", row.model
@@ -778,7 +976,12 @@ def _openai_proposal(
     priority = 100
     enabled = True
     visible = True
+    requested_model = model_id
+    match_type = "exact"
     if baseline_row is not None:
+        # 181-b (B2): same local-identity preservation as the router path.
+        requested_model = baseline_row.requested_model
+        match_type = baseline_row.match_type
         priority = baseline_row.priority
         enabled = baseline_row.enabled
         visible = baseline_row.visible_in_models
@@ -797,11 +1000,13 @@ def _openai_proposal(
         dims.append(
             PricingDimension(name=dim, value=text, unit="per_1m_tokens", currency="USD")
         )
+    # 181-b (B1): carried billable charges, never silently dropped.
+    dims.extend(carried_dims)
     route = RouteFacts(
         provider=provider,
-        requested_model=model_id,
+        requested_model=requested_model,
         upstream_model=model_id,
-        match_type="exact",
+        match_type=match_type,
         endpoint=CHAT_ENDPOINT,
         priority=priority,
         enabled=enabled,
@@ -809,6 +1014,7 @@ def _openai_proposal(
         supports_streaming=supports_streaming,
         capabilities=flat_capabilities,
         provenance=page_provenance,
+        warnings=decision.accepted_unreachable,
     )
     model = ModelFacts(
         provider=provider,

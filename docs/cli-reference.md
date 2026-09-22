@@ -141,9 +141,10 @@ slaif-gateway catalog-refresh verify --run-dir /path/to/run --seal-key ~/.local/
 slaif-gateway catalog-refresh export-baseline --out /path/to/baseline.json --db-url postgresql+asyncpg://user@host:5432/dbname
 ```
 
-Collect exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED, 65 data
-error (including collection-level failures such as an exhausted collection
-budget), 2 usage error. Review exit codes: 0 READY, 10
+Collect exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED (a blocked
+run is always published, including semantically blocked collects, with the
+`live collection` stage wording), 65 data error where no blocked run is
+published (e.g. an unreadable or invalid `--baseline-file`), 2 usage error. Review exit codes: 0 READY, 10
 READY_WITH_WARNINGS, 20 BLOCKED, 65 data error, 2 usage error. Verify: 0 valid, 30 invalid (including a missing,
 non-directory, or symlinked run directory with an otherwise valid key),
 65 data error (missing or unsafe seal key; verify never creates keys).

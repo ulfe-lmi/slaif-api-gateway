@@ -347,6 +347,11 @@ class CollectionIdentity(CatalogRefreshModel):
     retrievals: tuple[SourceRetrievalRecord, ...] = Field(default=(), max_length=512)
     inventory: tuple[CollectionInventoryEntry, ...] = Field(default=(), max_length=2048)
     deduplicated_fetches: bool = False
+    # 181-b (B3): distinct observed SOURCE model identities per collected
+    # provider (the catalog the sources actually listed). Deliberately
+    # separate from local route/alias rows: a source model count is not a
+    # route count, and the report must not conflate the two.
+    source_model_counts: dict[str, int] = Field(default_factory=dict, max_length=8)
 
     @model_validator(mode="after")
     def _check(self) -> "CollectionIdentity":
@@ -371,6 +376,11 @@ class CollectionIdentity(CatalogRefreshModel):
             raise ValueError(
                 "inventory entries must reconcile each observed model exactly once"
             )
+        for provider, count in self.source_model_counts.items():
+            if provider not in KNOWN_PROVIDERS:
+                raise ValueError(f"unknown provider {provider!r} in source model counts")
+            if count < 0:
+                raise ValueError("source model counts must be non-negative")
         return self
 
 
@@ -626,6 +636,12 @@ class BaselineIdentity(CatalogRefreshModel):
     mode: Literal["first_install", "db_snapshot", "exported_file"]
     exported_at: datetime | None = None
     target_database: str | None = Field(default=None, max_length=256)
+    # 181-b (B2): explicit host/port identity fields. 180-era bundles
+    # predate them (None) and keep the database-name-only comparison;
+    # the full target identity is additionally bound inside the hashed
+    # baseline content digest in every mode.
+    target_host: str | None = Field(default=None, max_length=256)
+    target_port: int | None = Field(default=None, ge=1, le=65535)
     postgres_version: str | None = Field(default=None, max_length=32)
     sql_checked: bool = False
     row_counts: dict[str, int] = Field(default_factory=dict)
@@ -634,7 +650,12 @@ class BaselineIdentity(CatalogRefreshModel):
     @model_validator(mode="after")
     def _check(self) -> BaselineIdentity:
         if self.mode == "first_install":
-            if self.exported_at is not None or self.target_database is not None:
+            if (
+                self.exported_at is not None
+                or self.target_database is not None
+                or self.target_host is not None
+                or self.target_port is not None
+            ):
                 raise ValueError("first_install baseline must be explicitly empty")
             if self.sql_checked or self.content_sha256 is not None:
                 raise ValueError("first_install baseline carries no SQL evidence")
@@ -655,6 +676,10 @@ class BaselineIdentity(CatalogRefreshModel):
                 "@" in self.target_database or "://" in self.target_database
             ):
                 raise ValueError("target_database must not carry credentials")
+            if self.target_host is not None and (
+                "@" in self.target_host or "://" in self.target_host
+            ):
+                raise ValueError("target_host must not carry credentials")
         for key, value in self.row_counts.items():
             if not (1 <= len(key) <= 64) or value < 0:
                 raise ValueError("row_counts must map bounded names to non-negative ints")
