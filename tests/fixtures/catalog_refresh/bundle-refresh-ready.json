@@ -13,7 +13,25 @@
   "sql_checked": true,
   "target_database": "slaif-synthetic-baseline"
  },
- "fx": [],
+ "fx": [
+  {
+   "base_currency": "EUR",
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "ecb|EUR-USD|ecb_reference_xml"
+    ]
+   },
+   "published_at": "2026-09-21T00:00:00Z",
+   "quote_currency": "USD",
+   "rate": "1.08",
+   "source": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-usd.en.html",
+   "valid_from": "2026-09-21T00:00:00Z",
+   "valid_until": null,
+   "warnings": []
+  }
+ ],
  "generated_at": "2026-09-21T12:00:00Z",
  "models": [
   {
@@ -195,7 +213,7 @@
  },
  "revision": {
   "policy_version": 1,
-  "renderer_version": "180.0",
+  "renderer_version": "180.1",
   "schema_version": "1",
   "slaif_revision": "fixture-revision-180"
  },
@@ -284,8 +302,8 @@
  },
  "sources": [
   {
-   "content_sha256": "a2e9516c69453794600ad497bfeaf2dbbe3ecc4246c8b37c620cc2181a5c0636",
-   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9zdGFibGUtdjF8b3BlbnJvdXRlcl9tb2RlbHNfYXBpIiwic25hcHNob3QiOiJzeW50aGV0aWMtb2ZmbGluZS1ldmlkZW5jZSJ9",
+   "content_sha256": "bf1f63790a64f4ed8779806e35a974a43c5b3f1a00b9e50e66f7672e80d49056",
+   "evidence_b64": "eyJkYXRhIjogW3siYXJjaGl0ZWN0dXJlIjogeyJpbnB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il0sICJvdXRwdXRfbW9kYWxpdGllcyI6IFsidGV4dCJdfSwgImNvbnRleHRfbGVuZ3RoIjogMTI4MDAwLCAiZGVwcmVjYXRpb24iOiB7ImlzX2RlcHJlY2F0ZWQiOiBmYWxzZX0sICJpZCI6ICJzeW50aGV0aWMvc3RhYmxlLXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiMC4wMDAwMDIxNiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjUuNEUtOCIsICJwcm9tcHQiOiAiNS40RS03In0sICJ0b3BfcHJvdmlkZXIiOiB7Im1heF9jb21wbGV0aW9uX3Rva2VucyI6IDgxOTJ9fSwgeyJhcmNoaXRlY3R1cmUiOiB7ImlucHV0X21vZGFsaXRpZXMiOiBbInRleHQiXSwgIm91dHB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il19LCAiY29udGV4dF9sZW5ndGgiOiAxMjgwMDAsICJkZXByZWNhdGlvbiI6IHsiaXNfZGVwcmVjYXRlZCI6IGZhbHNlfSwgImlkIjogInN5bnRoZXRpYy91cGRhdGVkLXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiMC4wMDAwMDQzMiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjEuMjk2RS03IiwgInByb21wdCI6ICIwLjAwMDAwMTI5NiJ9LCAidG9wX3Byb3ZpZGVyIjogeyJtYXhfY29tcGxldGlvbl90b2tlbnMiOiA4MTkyfX0sIHsiYXJjaGl0ZWN0dXJlIjogeyJpbnB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il0sICJvdXRwdXRfbW9kYWxpdGllcyI6IFsidGV4dCJdfSwgImNvbnRleHRfbGVuZ3RoIjogMTI4MDAwLCAiZGVwcmVjYXRpb24iOiB7ImlzX2RlcHJlY2F0ZWQiOiBmYWxzZX0sICJpZCI6ICJzeW50aGV0aWMvbmV3LXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiNC4zMkUtNyIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjEuMDhFLTgiLCAicHJvbXB0IjogIjEuMDhFLTcifSwgInRvcF9wcm92aWRlciI6IHsibWF4X2NvbXBsZXRpb25fdG9rZW5zIjogODE5Mn19XX0K",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/stable-v1",
@@ -299,8 +317,8 @@
    "warnings": []
   },
   {
-   "content_sha256": "dabe1d929f0dac876fdcbbda3d55065a7ba64ee33cc421b807eecc8baad872b2",
-   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy91cGRhdGVkLXYxfG9wZW5yb3V0ZXJfbW9kZWxzX2FwaSIsInNuYXBzaG90Ijoic3ludGhldGljLW9mZmxpbmUtZXZpZGVuY2UifQ==",
+   "content_sha256": "bf1f63790a64f4ed8779806e35a974a43c5b3f1a00b9e50e66f7672e80d49056",
+   "evidence_b64": "eyJkYXRhIjogW3siYXJjaGl0ZWN0dXJlIjogeyJpbnB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il0sICJvdXRwdXRfbW9kYWxpdGllcyI6IFsidGV4dCJdfSwgImNvbnRleHRfbGVuZ3RoIjogMTI4MDAwLCAiZGVwcmVjYXRpb24iOiB7ImlzX2RlcHJlY2F0ZWQiOiBmYWxzZX0sICJpZCI6ICJzeW50aGV0aWMvc3RhYmxlLXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiMC4wMDAwMDIxNiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjUuNEUtOCIsICJwcm9tcHQiOiAiNS40RS03In0sICJ0b3BfcHJvdmlkZXIiOiB7Im1heF9jb21wbGV0aW9uX3Rva2VucyI6IDgxOTJ9fSwgeyJhcmNoaXRlY3R1cmUiOiB7ImlucHV0X21vZGFsaXRpZXMiOiBbInRleHQiXSwgIm91dHB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il19LCAiY29udGV4dF9sZW5ndGgiOiAxMjgwMDAsICJkZXByZWNhdGlvbiI6IHsiaXNfZGVwcmVjYXRlZCI6IGZhbHNlfSwgImlkIjogInN5bnRoZXRpYy91cGRhdGVkLXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiMC4wMDAwMDQzMiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjEuMjk2RS03IiwgInByb21wdCI6ICIwLjAwMDAwMTI5NiJ9LCAidG9wX3Byb3ZpZGVyIjogeyJtYXhfY29tcGxldGlvbl90b2tlbnMiOiA4MTkyfX0sIHsiYXJjaGl0ZWN0dXJlIjogeyJpbnB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il0sICJvdXRwdXRfbW9kYWxpdGllcyI6IFsidGV4dCJdfSwgImNvbnRleHRfbGVuZ3RoIjogMTI4MDAwLCAiZGVwcmVjYXRpb24iOiB7ImlzX2RlcHJlY2F0ZWQiOiBmYWxzZX0sICJpZCI6ICJzeW50aGV0aWMvbmV3LXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiNC4zMkUtNyIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjEuMDhFLTgiLCAicHJvbXB0IjogIjEuMDhFLTcifSwgInRvcF9wcm92aWRlciI6IHsibWF4X2NvbXBsZXRpb25fdG9rZW5zIjogODE5Mn19XX0K",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/updated-v1",
@@ -314,8 +332,8 @@
    "warnings": []
   },
   {
-   "content_sha256": "c9c08816b2a66d8487d722b0eeb5b40d532baf5f68187da532184476e76aa377",
-   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9uZXctdjF8b3BlbnJvdXRlcl9tb2RlbHNfYXBpIiwic25hcHNob3QiOiJzeW50aGV0aWMtb2ZmbGluZS1ldmlkZW5jZSJ9",
+   "content_sha256": "bf1f63790a64f4ed8779806e35a974a43c5b3f1a00b9e50e66f7672e80d49056",
+   "evidence_b64": "eyJkYXRhIjogW3siYXJjaGl0ZWN0dXJlIjogeyJpbnB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il0sICJvdXRwdXRfbW9kYWxpdGllcyI6IFsidGV4dCJdfSwgImNvbnRleHRfbGVuZ3RoIjogMTI4MDAwLCAiZGVwcmVjYXRpb24iOiB7ImlzX2RlcHJlY2F0ZWQiOiBmYWxzZX0sICJpZCI6ICJzeW50aGV0aWMvc3RhYmxlLXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiMC4wMDAwMDIxNiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjUuNEUtOCIsICJwcm9tcHQiOiAiNS40RS03In0sICJ0b3BfcHJvdmlkZXIiOiB7Im1heF9jb21wbGV0aW9uX3Rva2VucyI6IDgxOTJ9fSwgeyJhcmNoaXRlY3R1cmUiOiB7ImlucHV0X21vZGFsaXRpZXMiOiBbInRleHQiXSwgIm91dHB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il19LCAiY29udGV4dF9sZW5ndGgiOiAxMjgwMDAsICJkZXByZWNhdGlvbiI6IHsiaXNfZGVwcmVjYXRlZCI6IGZhbHNlfSwgImlkIjogInN5bnRoZXRpYy91cGRhdGVkLXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiMC4wMDAwMDQzMiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjEuMjk2RS03IiwgInByb21wdCI6ICIwLjAwMDAwMTI5NiJ9LCAidG9wX3Byb3ZpZGVyIjogeyJtYXhfY29tcGxldGlvbl90b2tlbnMiOiA4MTkyfX0sIHsiYXJjaGl0ZWN0dXJlIjogeyJpbnB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il0sICJvdXRwdXRfbW9kYWxpdGllcyI6IFsidGV4dCJdfSwgImNvbnRleHRfbGVuZ3RoIjogMTI4MDAwLCAiZGVwcmVjYXRpb24iOiB7ImlzX2RlcHJlY2F0ZWQiOiBmYWxzZX0sICJpZCI6ICJzeW50aGV0aWMvbmV3LXYxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiNC4zMkUtNyIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjEuMDhFLTgiLCAicHJvbXB0IjogIjEuMDhFLTcifSwgInRvcF9wcm92aWRlciI6IHsibWF4X2NvbXBsZXRpb25fdG9rZW5zIjogODE5Mn19XX0K",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/new-v1",
@@ -326,6 +344,21 @@
    "source_kind": "openrouter_models_api",
    "truncated": false,
    "url": "https://openrouter.ai/api/v1/models",
+   "warnings": []
+  },
+  {
+   "content_sha256": "5570b90dbf7fc69971877640bb645af43cfacd92966752c37cf7a4ee631f85a3",
+   "evidence_b64": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPGdlc21lczpFbnZlbG9wZSB4bWxuczpnZXNtZXM9Imh0dHA6Ly93d3cuZ2VzbWVzLm9yZy94bWwvMjAwMi0wOC0wMSIgeG1sbnM9Imh0dHA6Ly93d3cuZWNiLmludC92b2NhYnVsYXJ5LzIwMDItMDgtMDEvZXVyb2Z4cmVmIj4KICA8Z2VzbWVzOnN1YmplY3Q+UmVmZXJlbmNlIHJhdGVzPC9nZXNtZXM6c3ViamVjdD4KICA8Z2VzbWVzOlNlbmRlcj4KICAgIDxnZXNtZXM6TmFtZT5FQ0I8L2dlc21lczpOYW1lPgogIDwvZ2VzbWVzOlNlbmRlcj4KICA8Q3ViZT4KICAgIDxDdWJlIHRpbWU9IjIwMjYtMDktMjEiPgogICAgICA8Q3ViZSBjdXJyZW5jeT0iVVNEIiByYXRlPSIxLjA4Ii8+CiAgICA8L0N1YmU+CiAgPC9DdWJlPgo8L2dlc21lczpFbnZlbG9wZT4K",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "EUR-USD",
+   "provider": "ecb",
+   "published_at": "2026-09-21T00:00:00Z",
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "ecb_reference_xml",
+   "truncated": false,
+   "url": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-usd.en.html",
    "warnings": []
   }
  ]

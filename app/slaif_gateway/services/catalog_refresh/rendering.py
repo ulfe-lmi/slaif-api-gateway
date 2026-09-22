@@ -243,6 +243,24 @@ def _plan_lines(report: dict[str, Any]) -> tuple[list[str], bool]:
     return lines, blocked
 
 
+def _source_evidence_line(report: dict[str, Any]) -> str:
+    """Compact truthful source-evidence summary for the decision box."""
+    evidence = report.get("source_evidence", {}) or {}
+    backed = evidence.get("backed_facts", []) or []
+    verified = [item for item in backed if not item.get("semantic_only")]
+    semantic = [item for item in backed if item.get("semantic_only")]
+    inventory = evidence.get("inventory", {}) or {}
+    evidence_models = sum(values.get("evidence_models", 0) for values in inventory.values())
+    unproposed = sum(values.get("unproposed_candidates", 0) for values in inventory.values())
+    parts = [
+        f"{len(verified)} fact(s) bound to parsed snapshot observations (deterministic parsers)"
+        + (f", {len(semantic)} review-only (operator/semantic provenance)" if semantic else "")
+    ]
+    parts.append(f"{evidence_models} model(s) present in complete parsed snapshots, {unproposed} unproposed candidate(s)")
+    parts.append(evidence.get("note", "offline replay of supplied snapshots"))
+    return esc(" · ".join(parts))
+
+
 def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[str]:
     state = report["state"]
     counts = report.get("counts", {})
@@ -287,6 +305,7 @@ def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[
         + "</dd>"
         f"<dt>Baseline SQL evidence</dt><dd>{esc(sql_note)}</dd>"
         f"<dt>Live research</dt><dd>{esc(report.get('research', {}).get('status'))} — live source retrieval is unavailable in this version; only supplied offline evidence is assessed</dd>"
+        f"<dt>Source evidence</dt><dd>{_source_evidence_line(report)}</dd>"
         "</dl></div>"
     )
 
@@ -579,15 +598,20 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
 
     parts.append("<details><summary>Source inventory and reconciliation (trust derived, never declared)</summary>")
     if bundle.sources:
-        parts.append("<table><thead><tr><th>Source</th><th>Kind</th><th>URL</th><th>Derived classification</th><th>Evidence</th><th>Age</th><th>Retrieved</th><th>Published</th><th>Extractor</th><th>Method</th><th>Required</th><th>Truncated</th><th>SHA-256</th></tr></thead><tbody>")
+        parts.append("<table><thead><tr><th>Source</th><th>Kind</th><th>URL</th><th>Derived classification</th><th>Evidence</th><th>Parser (registry)</th><th>Parse</th><th>Models parsed</th><th>FX quotes</th><th>Age</th><th>Retrieved</th><th>Published</th><th>Extractor</th><th>Method</th><th>Required</th><th>Truncated</th><th>SHA-256</th></tr></thead><tbody>")
         for source in sorted(bundle.sources, key=lambda s: (s.provider, s.model, s.source_kind)):
             assessment = assessments.get(f"{source.provider}|{source.model}|{source.source_kind}", {})
             classification = assessment.get("classification", "—")
+            parse_state = assessment.get("parse_state", "—")
             parts.append(
                 f"<tr><td>{esc(source.provider)}/{esc(source.model)}</td><td>{esc(source.source_kind)}</td>"
                 f"<td>{_link(source.url)}</td>"
                 f"<td class='{_CLASSIFICATION_CLASS.get(classification, 'ev-na')}'>{esc(classification)}</td>"
                 f"<td>{esc(_evidence_label(assessment or None))}</td>"
+                f"<td>{esc(assessment.get('parser') or '—')}</td>"
+                f"<td>{esc(parse_state)}</td>"
+                f"<td class='num'>{esc(assessment.get('parsed_models', 0))}</td>"
+                f"<td class='num'>{esc(assessment.get('parsed_fx_quotes', 0))}</td>"
                 f"<td>{esc(assessment.get('age_state', '—'))}</td>"
                 f"<td>{esc(source.retrieved_at.isoformat())}</td>"
                 f"<td>{_cell(source.published_at.isoformat() if source.published_at else None)}</td>"
@@ -596,10 +620,12 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
                 f"<td class='muted'>{esc(source.content_sha256[:16])}…</td></tr>"
             )
         parts.append("</tbody></table>")
-        parts.append("<p class='muted'>OFFICIAL requires the exact official host for the (provider, source kind) rule plus supplied evidence whose bytes match the declared digest. A safe URL is not an authoritative source: operator-supplied, semantic, off-host, or unverifiable-offline sources classify as REVIEW, and unsupported or contradictory sources classify as BLOCKED. Supplied/cached evidence is explicitly distinguished from live retrieval, which this process never performs.</p>")
+        parts.append("<p class='muted'>OFFICIAL requires the exact official host for the (provider, source kind) rule, a reviewed registered deterministic parser, supplied evidence whose bytes match the declared digest, and a successful bounded parse of those bytes. A matching digest of arbitrary bytes is not content trust: a safe URL is not an authoritative source (operator-supplied, semantic, off-host, or unverifiable-offline sources classify as REVIEW), and unsupported, contradictory, or unparseable required sources classify as BLOCKED. Supplied/cached evidence parsed offline is explicitly distinguished from live retrieval, which this process never performs.</p>")
     else:
         parts.append("<p class='muted'>No sources recorded in the bundle.</p>")
     parts.append("</details>")
+
+    parts.extend(_render_source_evidence_details(report))
 
     baseline = report.get("baseline", {})
     sql_checks = report.get("sql_checks", {})
@@ -645,6 +671,87 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
 
     if bundle.notes:
         parts.append(f"<details><summary>Bundle notes</summary><p>{esc(bundle.notes)}</p></details>")
+    return parts
+
+
+def _render_source_evidence_details(report: dict[str, Any]) -> list[str]:
+    """Expanded offline evidence: per-source parse status, the exact
+    observations that bound each proposed fact, conflicts, and the
+    independently derived snapshot inventory. All values escaped; no JS or
+    network."""
+    parts: list[str] = [
+        "<details><summary>Source evidence — parsed snapshot observations (offline replay)</summary>"
+    ]
+    evidence = report.get("source_evidence", {}) or {}
+    parts.append(
+        f"<p class='muted'>{esc(evidence.get('note', 'offline replay of supplied snapshots'))}. "
+        "Snapshot origin/retrieval claims (retrieved_at, published_at) are caller-supplied "
+        "labels assessed against freshness policy; they are not authenticated retrievals.</p>"
+    )
+    sources = report.get("sources", []) or []
+    if sources:
+        parts.append("<h3>Source parse status (registry parser, bounded deterministic parsing)</h3>")
+        parts.append("<table><thead><tr><th>Source</th><th>Parser (registry)</th><th>Parse</th><th>Models parsed</th><th>FX quotes</th><th>Classification</th><th>Evidence</th><th>Content digest</th></tr></thead><tbody>")
+        for assessment in sources:
+            parse_state = assessment.get("parse_state", "—")
+            parts.append(
+                f"<tr><td>{esc(assessment.get('provider'))}/{esc(assessment.get('model'))} ({esc(assessment.get('source_kind'))})</td>"
+                f"<td>{esc(assessment.get('parser') or '—')}</td>"
+                f"<td>{esc(parse_state)}</td>"
+                f"<td class='num'>{esc(assessment.get('parsed_models', 0))}</td>"
+                f"<td class='num'>{esc(assessment.get('parsed_fx_quotes', 0))}</td>"
+                f"<td class='{_CLASSIFICATION_CLASS.get(assessment.get('classification', ''), 'ev-na')}'>{esc(assessment.get('classification', '—'))}</td>"
+                f"<td>{esc(_evidence_label(assessment))}</td>"
+                f"<td class='muted'>{esc(str(assessment.get('content_sha256', ''))[:16])}…</td></tr>"
+            )
+        parts.append("</tbody></table>")
+    else:
+        parts.append("<p class='muted'>No sources recorded in the bundle.</p>")
+    backed = evidence.get("backed_facts", []) or []
+    parts.append(f"<h3>Proposed facts bound to parsed observations ({len(backed)})</h3>")
+    if backed:
+        parts.append("<table><thead><tr><th>Provider/Model</th><th>Field</th><th>Proposed</th><th>Backing sources (distinct digests counted once)</th><th>Independent sources</th><th>State</th></tr></thead><tbody>")
+        for item in backed:
+            state = (
+                "<span class='ev-review'>REVIEW (operator/semantic provenance — review-only, never verified)</span>"
+                if item.get("semantic_only")
+                else "<span class='ev-verified'>BOUND (deterministic parser)</span>"
+            )
+            parts.append(
+                f"<tr><td>{esc(item.get('provider'))}/{esc(item.get('model'))}</td>"
+                f"<td>{esc(item.get('field'))}</td><td>{esc(item.get('proposed'))}</td>"
+                f"<td>{esc(', '.join(item.get('backed_by', []))) or '—'}</td>"
+                f"<td class='num'>{esc(item.get('independent_sources', 0))}</td><td>{state}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+        parts.append("<p class='muted'>Repeated references to one snapshot (duplicate URLs, aliases to identical bytes) count as one independent source, not corroboration. Facts that could not be bound appear in the findings table with their blocker/REVIEW code; a fact with no supporting observation is never silently treated as verified.</p>")
+    else:
+        parts.append("<p class='muted'>No proposed facts carried bindable non-null values in this run.</p>")
+    fx_backed = evidence.get("fx_backed", []) or []
+    if fx_backed:
+        parts.append("<h3>FX facts bound to verified reference quotes</h3>")
+        parts.append("<table><thead><tr><th>Pair</th><th>Proposed rate</th><th>Observed quote</th><th>Derivation</th><th>Quote date</th><th>Backing source</th></tr></thead><tbody>")
+        for item in fx_backed:
+            parts.append(
+                f"<tr><td>{esc(item.get('pair'))}</td><td class='num'>{esc(item.get('rate'))}</td>"
+                f"<td class='num'>{esc(item.get('observed_quote'))}</td>"
+                f"<td>{'reciprocal of native quote' if item.get('derived_reciprocal') else 'native quote'}</td>"
+                f"<td>{esc(item.get('quote_date'))}</td><td>{esc(item.get('backed_by'))}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+    inventory = evidence.get("inventory", {}) or {}
+    if inventory:
+        parts.append("<h3>Inventory (independently derived from parsed snapshots, reconciled to selection)</h3>")
+        parts.append("<table><thead><tr><th>Provider</th><th>Models in complete snapshots</th><th>Selected</th><th>Unproposed candidates (counted, not silently dropped)</th></tr></thead><tbody>")
+        for provider, values in inventory.items():
+            parts.append(
+                f"<tr><td>{esc(provider)}</td>"
+                f"<td class='num'>{esc(values.get('evidence_models', 0))}</td>"
+                f"<td class='num'>{esc(values.get('selected_models', 0))}</td>"
+                f"<td class='num'>{esc(values.get('unproposed_candidates', 0))}</td></tr>"
+            )
+        parts.append("</tbody></table>")
+    parts.append("</details>")
     return parts
 
 

@@ -5,6 +5,18 @@ review workflow. The bundle carries *facts and provenance only*: readiness
 state, confidence scores, counters, and validator results are deliberately
 absent because they are always recomputed by deterministic validation and
 must never be trusted from caller-supplied JSON.
+
+Versioning decision (180-c): the catalog-refresh subsystem is still unmerged,
+so the typed bundle contract deliberately evolves within schema v1 instead of
+branching a v2. The 180-c evolution is additive: sources may now cite the ECB
+as the FX reference publisher (``ecb_reference_xml`` with a currency-pair
+model), and the validator derives typed observations from the supplied
+``evidence_b64`` bytes with registered deterministic parsers, binding
+proposed facts to parsed snapshot values. No new top-level bundle fields are
+introduced, no existing field changes meaning, and incompatible inputs
+(unknown provider/source-kind combinations, malformed snapshots, digests that
+contradict the bytes) are rejected clearly at load time or classified
+BLOCKED/REVIEW at validation time — never silently accepted.
 """
 
 from __future__ import annotations
@@ -18,7 +30,7 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SCHEMA_VERSION = "1"
-RENDERER_VERSION = "180.0"
+RENDERER_VERSION = "180.1"
 POLICY_VERSION = 1
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -39,8 +51,12 @@ SOURCE_KINDS: frozenset[str] = frozenset(
         "openai_pricing_docs",
         "docs_page",
         "operator_input",
+        "ecb_reference_xml",
     }
 )
+# FX reference sources use a currency-pair "model" part (e.g. "EUR-USD");
+# the pair's direction is the publisher's native quote direction.
+FX_PAIR_PATTERN = re.compile(r"^[A-Z]{3}-[A-Z]{3}$")
 CAPABILITY_KEYS: frozenset[str] = frozenset(
     {
         "text",
@@ -204,10 +220,14 @@ class SourceRecord(CatalogRefreshModel):
     published_at: datetime | None = None
     content_sha256: str
     # Optional inline evidence bytes (base64). When present, the validator
-    # binds them to the declared content digest; when absent, the digest is
-    # unprovable offline and the source classifies as REVIEW ("not verifiable
-    # offline"), never VERIFIED. Bounded so a hostile bundle cannot carry
-    # unbounded payloads (4 MiB of decoded bytes).
+    # (a) binds them to the declared content digest and (b) parses them with
+    # the registered deterministic parser for (provider, source_kind),
+    # deriving typed observations that proposed facts must be bound to. A
+    # matching digest of arbitrary bytes is not content trust: empty,
+    # unrelated, or contradictory bytes fail the evidence gate. When absent,
+    # the digest is unprovable offline and the source classifies as REVIEW
+    # ("not verifiable offline"), never VERIFIED. Bounded so a hostile bundle
+    # cannot carry unbounded payloads (4 MiB of decoded bytes).
     evidence_b64: str | None = Field(default=None, max_length=6_000_000)
     extractor: str = Field(min_length=1, max_length=128)
     extraction: Literal["deterministic", "semantic"]
@@ -218,7 +238,15 @@ class SourceRecord(CatalogRefreshModel):
     @model_validator(mode="after")
     def _check(self) -> SourceRecord:
         validate_safe_url(self.url, field="url")
-        if self.provider not in KNOWN_PROVIDERS:
+        if self.provider == "ecb":
+            # ECB is the FX reference publisher, not a model provider: its
+            # sources must carry the EUR-based reference-rate snapshot kind
+            # and a currency-pair model part.
+            if self.source_kind != "ecb_reference_xml":
+                raise ValueError("ecb sources must use source kind ecb_reference_xml")
+            if not FX_PAIR_PATTERN.fullmatch(self.model):
+                raise ValueError("ecb sources must carry a currency-pair model (e.g. EUR-USD)")
+        elif self.provider not in KNOWN_PROVIDERS:
             raise ValueError(f"unknown provider {self.provider!r}")
         if self.source_kind not in SOURCE_KINDS:
             raise ValueError(f"unknown source kind {self.source_kind!r}")

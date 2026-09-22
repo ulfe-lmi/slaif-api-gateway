@@ -17,6 +17,8 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineRouteRow,
     BaselineTarget,
 )
+import test_catalog_refresh_source_evidence as _evidence_tests
+
 from slaif_gateway.services.catalog_refresh.baseline import canonical_baseline_content, load_baseline
 from slaif_gateway.services.catalog_refresh.bundle import load_bundle
 from slaif_gateway.services.catalog_refresh.policy import policy_from_document
@@ -166,7 +168,10 @@ def test_unchanged_only_plan_is_truthful_no_changes() -> None:
     payload["models"] = [m for m in payload["models"] if m["model"] == "synthetic/stable-v1"]
     payload["routes"] = [r for r in payload["routes"] if r["requested_model"] == "synthetic/stable-v1"]
     payload["pricing"] = [p for p in payload["pricing"] if p["model"] == "synthetic/stable-v1"]
-    payload["sources"] = [s for s in payload["sources"] if s["model"] == "synthetic/stable-v1"]
+    payload["sources"] = [
+        s for s in payload["sources"]
+        if s["model"] == "synthetic/stable-v1" or s["provider"] == "ecb"
+    ]
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     report = _report_for(bundle, _baseline())
     assert report.state == OVERALL_READY
@@ -192,6 +197,11 @@ def test_ready_with_warnings_report_shows_findings() -> None:
             for dimension in item["dimensions"]:
                 if dimension["name"] == "input":
                     dimension["value"] = "1"
+    # The evidence must carry the proposed price (the fixture snapshot pins
+    # 1.2/4 EUR for updated-v1; the baseline carries 1/4).
+    _evidence_tests.set_openrouter_evidence(
+        payload, {**_evidence_tests.DEFAULT_PRICES, "synthetic/updated-v1": ("1", "4")}
+    )
     for route in payload["routes"]:
         if route["requested_model"] == "synthetic/updated-v1":
             route["priority"] = 100
@@ -204,8 +214,9 @@ def test_ready_with_warnings_report_shows_findings() -> None:
     html_text = render_report(bundle, report.to_dict()).decode("utf-8")
     assert "READY_WITH_WARNINGS" in html_text
     assert "source_stale_review" in html_text
-    # Three aged sources plus the derived sources-gate finding.
-    assert "All warnings and findings (4)" in html_text
+    # Four aged sources (three openrouter plus the ecb reference source)
+    # plus the derived sources-gate finding.
+    assert "All warnings and findings (5)" in html_text
 
 
 def test_blocked_report_lists_blockers_on_first_screen() -> None:
@@ -269,17 +280,26 @@ def _big_unchanged_case(model_count: int) -> tuple[object, object]:
     ).hexdigest()
     baseline = baseline.model_copy(update={"content_sha256": digest})
 
+    # One real OpenRouter /models snapshot (official shape, per-token USD at
+    # the 1.08 reference quote) carrying every model at 0.10/0.40 EUR
+    # equivalents; all per-model source records reference the same digest
+    # (repeated references are one observation, not corroboration).
+    snapshot = _evidence_tests.openrouter_snapshot_bytes(
+        {f"big/model-{i:02d}": ("0.10", "0.40") for i in range(model_count)}
+    )
+    snapshot_digest = hashlib.sha256(snapshot).hexdigest()
+    snapshot_b64 = base64.b64encode(snapshot).decode("ascii")
+
     models, routes_b, pricing_b, sources = [], [], [], []
     for i in range(model_count):
         model = f"big/model-{i:02d}"
         source_ref = f"openrouter|{model}|openrouter_models_api"
-        evidence = f"big-source-{i}".encode()
         sources.append({
             "provider": "openrouter", "model": model, "source_kind": "openrouter_models_api",
             "url": "https://openrouter.ai/api/v1/models",
             "retrieved_at": "2026-09-21T11:00:00+00:00", "published_at": None,
-            "content_sha256": hashlib.sha256(evidence).hexdigest(),
-            "evidence_b64": base64.b64encode(evidence).decode("ascii"),
+            "content_sha256": snapshot_digest,
+            "evidence_b64": snapshot_b64,
             "extractor": "fixture-deterministic/1.0", "extraction": "deterministic",
             "required": True, "truncated": False, "warnings": [],
         })
@@ -323,8 +343,9 @@ def _big_unchanged_case(model_count: int) -> tuple[object, object]:
                      "supports_streaming": True, "local_models_visible": True,
                      "capability_allowlist": []},
         "selection": {"providers": ["openrouter"], "model_include": []},
-        "sources": sources, "models": models, "routes": routes_b, "pricing": pricing_b,
-        "fx": [],
+        "sources": sources + [_evidence_tests.ecb_source_dict()],
+        "models": models, "routes": routes_b, "pricing": pricing_b,
+        "fx": [_evidence_tests.fx_fact_dict("1.08", "EUR-USD", "2026-09-21T00:00:00Z")],
         "baseline": {
             "mode": "exported_file", "exported_at": "2026-09-21T10:00:00+00:00",
             "target_database": "slaif-synthetic-baseline", "sql_checked": True,

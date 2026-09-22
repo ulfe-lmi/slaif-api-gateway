@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+import test_catalog_refresh_source_evidence as _evidence_tests
+
 from slaif_gateway.schemas.catalog_refresh import (
     BaselineCounts,
     BaselineDocument,
@@ -78,6 +80,36 @@ def _codes(report) -> set[str]:
     return {warning.code for warning in report.warnings}
 
 
+# Per-1m USD values carried by the fixture OpenRouter snapshot (the 1.08
+# reference quote of the EUR fixture prices). Pricing a whole bundle in
+# these exact values keeps the price facts bound to parsed observations for
+# any claimed FX rate, so FX tests exercise the FX gate, not price binding.
+USD_PER_1M = {
+    "synthetic/stable-v1": ("0.54", "2.16"),
+    "synthetic/updated-v1": ("1.296", "4.32"),
+    "synthetic/new-v1": ("0.108", "0.432"),
+}
+
+
+def _usd_pricing(payload: dict) -> None:
+    for item in payload["pricing"]:
+        input_v, output_v = USD_PER_1M[item["model"]]
+        item["currency"] = "USD"
+        for dimension in item["dimensions"]:
+            dimension["currency"] = "USD"
+            dimension["value"] = input_v if dimension["name"] == "input" else output_v
+
+
+def _mini_usd_baseline(*, fx: list[dict] | None = None) -> BaselineDocument:
+    return _mini_baseline(
+        pricing={
+            model: {"input": in_v, "output": out_v} for model, (in_v, out_v) in USD_PER_1M.items()
+        },
+        fx=fx,
+        currencies={model: "USD" for model in USD_PER_1M},
+    )
+
+
 # --- programmatic mini-baseline (exact scope control) ----------------------
 
 def _fx_source_dict(model_part: str = "USD-EUR") -> dict:
@@ -100,7 +132,14 @@ def _fx_source_dict(model_part: str = "USD-EUR") -> dict:
     }
 
 
-def _fx_facts_dict(rate: str, *, pair: str = "USD-EUR", published_hours_ago: float | None = 1) -> dict:
+def _fx_facts_dict(
+    rate: str,
+    *,
+    pair: str = "USD-EUR",
+    published_hours_ago: float | None = 1,
+    provider: str = "ecb",
+    kind: str = "ecb_reference_xml",
+) -> dict:
     base, quote = pair.split("-")
     published = (
         (GENERATED_AT - timedelta(hours=published_hours_ago)).isoformat()
@@ -111,12 +150,12 @@ def _fx_facts_dict(rate: str, *, pair: str = "USD-EUR", published_hours_ago: flo
         "base_currency": base,
         "quote_currency": quote,
         "rate": rate,
-        "valid_from": "2026-09-21T00:00:00+00:00",
+        "valid_from": "2026-09-20T00:00:00+00:00",
         "valid_until": None,
         "published_at": published,
         "source": "https://www.ecb.europa.eu/stats/eurofxref.html",
         "provenance": {
-            "sources": [f"openrouter|{pair}|docs_page"],
+            "sources": [f"{provider}|{pair}|{kind}"],
             "extractor": "fixture-deterministic/1.0",
             "extraction": "deterministic",
         },
@@ -282,6 +321,12 @@ def _price_move_report(input_value: str):
             for dimension in item["dimensions"]:
                 if dimension["name"] == "input":
                     dimension["value"] = input_value
+    # The evidence must carry the proposed price: re-emit the shared
+    # OpenRouter snapshot so the proposed value matches a parsed
+    # observation (the fixture snapshot pins 1.2/4 EUR for updated-v1).
+    _evidence_tests.set_openrouter_evidence(
+        payload, {**_evidence_tests.DEFAULT_PRICES, "synthetic/updated-v1": (input_value, "4")}
+    )
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     # updated-v1 baseline input is 1.0, so the threshold is exercised
     # directly against 1.25/1.26.
@@ -321,6 +366,9 @@ def test_price_zero_transitions_are_review_without_percent_division() -> None:
             for dimension in item["dimensions"]:
                 if dimension["name"] == "input":
                     dimension["value"] = "0"
+    _evidence_tests.set_openrouter_evidence(
+        payload, {**_evidence_tests.DEFAULT_PRICES, "synthetic/stable-v1": ("0", "2")}
+    )
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     baseline = _mini_baseline()  # stable baseline input 0.5
     report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
@@ -454,24 +502,39 @@ def test_future_source_timestamp_blocks() -> None:
 # --- FX direction and publication age ---------------------------------------
 
 def _fx_report(rate: str, published_hours_ago: float | None, *, pair: str = "USD-EUR"):
-    """USD-priced bundle with one FX fact; mini baseline controls the pair."""
+    """USD-priced bundle with one FX fact bound to a supplied ECB reference
+    quote; the mini baseline controls the pair. ``published_hours_ago`` must
+    be a number: an ECB-backed fact without a publication date blocks, while
+    the review-only undated case is exercised by
+    test_fx_missing_publication_date_is_review."""
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-policy-001"
-    for item in payload["pricing"]:
-        if item["model"] == "synthetic/updated-v1":
-            item["currency"] = "USD"
-            for dimension in item["dimensions"]:
-                dimension["currency"] = "USD"
+    _usd_pricing(payload)  # fixture snapshot carries exactly these USD values
     # Keep the mini-baseline FX scope consistent with the proposed pair.
-    base, quote = pair.split("-")
     if pair == "USD-EUR":
         fx = [{"base": "USD", "quote": "EUR", "rate": "1", "valid_from": "2026-09-20T00:00:00+00:00"}]
     else:
         fx = []
+    published = GENERATED_AT - timedelta(hours=published_hours_ago)
+    # The ECB snapshot is EUR-based: the supplied quote must equal the
+    # proposed fact (EUR->USD) or its exact Decimal reciprocal (USD->EUR).
+    if pair == "EUR-USD":
+        xml_rate = rate
+    else:
+        xml_rate = str((Decimal(1) / Decimal(rate)).quantize(Decimal("0.000000001")))
     payload["fx"] = [_fx_facts_dict(rate, pair=pair, published_hours_ago=published_hours_ago)]
-    payload["sources"].append(_fx_source_dict(pair))
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
+    payload["sources"].append(
+        _evidence_tests.ecb_source_dict(
+            pair_model=pair,
+            date_s=published.date().isoformat(),
+            rate=xml_rate,
+            retrieved_at=(GENERATED_AT - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+            published_at=published.isoformat().replace("+00:00", "Z"),
+        )
+    )
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    baseline = _mini_baseline(fx=fx, currencies={"synthetic/updated-v1": "USD"})
+    baseline = _mini_usd_baseline(fx=fx)
     report, artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))
     return report, artifacts
 
@@ -515,7 +578,7 @@ def test_fx_eur_to_native_is_reciprocated_deterministically() -> None:
             "quote_currency": "EUR",
             "rate": "0.925925926",
             "source": "https://www.ecb.europa.eu/stats/eurofxref.html",
-            "valid_from": "2026-09-21T00:00:00+00:00",
+            "valid_from": "2026-09-20T00:00:00+00:00",
             "valid_until": None,
             "metadata": {
                 "published_at": (GENERATED_AT - timedelta(hours=1)).isoformat(),
@@ -532,19 +595,18 @@ def test_fx_eur_to_native_is_reciprocated_deterministically() -> None:
 def test_fx_direct_and_reciprocal_must_agree() -> None:
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-contradiction-001"
-    for item in payload["pricing"]:
-        if item["model"] == "synthetic/updated-v1":
-            item["currency"] = "USD"
-            for dimension in item["dimensions"]:
-                dimension["currency"] = "USD"
+    _usd_pricing(payload)
     payload["fx"] = [
-        _fx_facts_dict("0.9", pair="USD-EUR"),
-        _fx_facts_dict("1.08", pair="EUR-USD"),  # reciprocal 0.925925926 != 0.9
+        _fx_facts_dict("0.9", pair="USD-EUR", provider="openrouter", kind="docs_page"),
+        _fx_facts_dict(  # reciprocal 0.925925926 != 0.9
+            "1.08", pair="EUR-USD", provider="openrouter", kind="docs_page"
+        ),
     ]
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
     payload["sources"].append(_fx_source_dict("USD-EUR"))
     payload["sources"].append(_fx_source_dict("EUR-USD"))
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
     assert "fx_contradictory_rates" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -552,18 +614,15 @@ def test_fx_direct_and_reciprocal_must_agree() -> None:
 def test_fx_ambiguous_active_rows_block() -> None:
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-ambiguous-001"
-    for item in payload["pricing"]:
-        if item["model"] == "synthetic/updated-v1":
-            item["currency"] = "USD"
-            for dimension in item["dimensions"]:
-                dimension["currency"] = "USD"
-    first = _fx_facts_dict("0.9", pair="USD-EUR")
-    second = _fx_facts_dict("0.91", pair="USD-EUR")
+    _usd_pricing(payload)
+    first = _fx_facts_dict("0.9", pair="USD-EUR", provider="openrouter", kind="docs_page")
+    second = _fx_facts_dict("0.91", pair="USD-EUR", provider="openrouter", kind="docs_page")
     second["valid_from"] = "2026-09-21T06:00:00+00:00"  # overlapping window, new identity
     payload["fx"] = [first, second]
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
     payload["sources"].append(_fx_source_dict("USD-EUR"))
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
     assert any(code.startswith("fx_ambiguous_") for code in _codes(report))
     assert report.state == OVERALL_BLOCKED
 
@@ -577,24 +636,64 @@ def test_fx_publication_age_boundaries_are_calendar_days() -> None:
 
 
 def test_fx_missing_publication_date_is_review() -> None:
-    report, _ = _fx_report("1", None)
+    """An undated FX fact with operator/semantic provenance (no verified
+    reference quote) stays a REVIEW finding; an ECB-backed fact without a
+    date blocks instead (fx_evidence_date_mismatch, covered in the 180-c
+    independent-input module)."""
+    payload = _bundle_payload()
+    payload["run_id"] = "test-fx-nodate-001"
+    _usd_pricing(payload)
+    # Truthful USD->EUR rate (reciprocal of the snapshot's 1.08 quote) so
+    # the only failure under test is the missing publication date.
+    fact = _fx_facts_dict(
+        "0.925925926",
+        pair="USD-EUR",
+        published_hours_ago=None,
+        provider="openrouter",
+        kind="docs_page",
+    )
+    fact["provenance"]["extraction"] = "semantic"
+    junk = b"fx notes without a date"
+    payload["fx"] = [fact]
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
+    payload["sources"].append(
+        {
+            "provider": "openrouter",
+            "model": "USD-EUR",
+            "source_kind": "docs_page",
+            "url": "https://openrouter.ai/docs/fx",
+            "retrieved_at": (GENERATED_AT - timedelta(hours=1)).isoformat(),
+            "published_at": None,
+            "content_sha256": hashlib.sha256(junk).hexdigest(),
+            "evidence_b64": base64.b64encode(junk).decode("ascii"),
+            "extractor": "fixture-deterministic/1.0",
+            "extraction": "semantic",
+            "required": True,
+            "truncated": False,
+            "warnings": [],
+        }
+    )
+    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    baseline = _mini_usd_baseline(
+        fx=[{"base": "USD", "quote": "EUR", "rate": "0.925925926", "valid_from": "2026-09-20T00:00:00+00:00"}]
+    )
+    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
     assert "fx_no_publication_date" in _codes(report)
+    assert "fx_evidence_semantic_only" in _codes(report)
+    assert report.state == OVERALL_READY_WITH_WARNINGS
 
 
 def test_fx_future_publication_blocks() -> None:
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-future-001"
-    for item in payload["pricing"]:
-        if item["model"] == "synthetic/updated-v1":
-            item["currency"] = "USD"
-            for dimension in item["dimensions"]:
-                dimension["currency"] = "USD"
-    facts = _fx_facts_dict("1", pair="USD-EUR")
+    _usd_pricing(payload)
+    facts = _fx_facts_dict("1", pair="USD-EUR", provider="openrouter", kind="docs_page")
     facts["published_at"] = (GENERATED_AT + timedelta(hours=1)).isoformat()
     payload["fx"] = [facts]
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
     payload["sources"].append(_fx_source_dict("USD-EUR"))
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
     assert "fx_future_publication" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -602,18 +701,17 @@ def test_fx_future_publication_blocks() -> None:
 def test_fx_provenance_may_not_borrow_a_model_source() -> None:
     payload = _bundle_payload()
     payload["run_id"] = "test-fx-provenance-001"
-    for item in payload["pricing"]:
-        if item["model"] == "synthetic/updated-v1":
-            item["currency"] = "USD"
-            for dimension in item["dimensions"]:
-                dimension["currency"] = "USD"
-    facts = _fx_facts_dict("1", pair="USD-EUR")
+    _usd_pricing(payload)
+    facts = _fx_facts_dict(
+        "0.925925926", pair="USD-EUR", provider="openrouter", kind="docs_page"
+    )
     # Borrowing a model's OpenRouter API reference is schema-shaped but
     # semantically invalid for an FX fact.
     facts["provenance"]["sources"] = ["openrouter|synthetic/stable-v1|openrouter_models_api"]
     payload["fx"] = [facts]
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
     assert "fx_provenance_invalid_reference" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -634,8 +732,24 @@ def test_missing_required_pair_blocks_when_non_eur_pricing_selected() -> None:
             item["currency"] = "USD"
             for dimension in item["dimensions"]:
                 dimension["currency"] = "USD"
+                if dimension["name"] == "input":
+                    dimension["value"] = "1.296"
+                elif dimension["name"] == "output":
+                    dimension["value"] = "4.32"
+    payload["fx"] = []  # no FX fact at all
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
+    _evidence_tests.set_openrouter_evidence(
+        payload, {**_evidence_tests.DEFAULT_PRICES, "synthetic/updated-v1": ("1.296", "4.32")}
+    )
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    baseline = _mini_baseline(
+        pricing={
+            "synthetic/stable-v1": {"input": "0.5", "output": "2"},
+            "synthetic/updated-v1": {"input": "1.296", "output": "4.32"},
+        },
+        currencies={"synthetic/updated-v1": "USD"},
+    )
+    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
     assert "fx_missing_required_pair" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -718,16 +832,12 @@ def test_public_alias_pairs_by_upstream_model() -> None:
         if item["requested_model"] == "synthetic/stable-v1":
             item["requested_model"] = "synthetic/alias-v1"
             item["provenance"]["sources"] = ["openrouter|synthetic/alias-v1|openrouter_models_api"]
-    evidence = json.dumps(
-        {"reference": "openrouter|synthetic/alias-v1|openrouter_models_api",
-         "snapshot": "synthetic-offline-evidence"},
-        sort_keys=True,
-    ).encode("utf-8")
+    # Keep the fixture snapshot bytes: they carry the upstream row
+    # synthetic/stable-v1 that the alias binds through. Only the source's
+    # model label is renamed to the public alias.
     for item in payload["sources"]:
         if item["model"] == "synthetic/stable-v1":
             item["model"] = "synthetic/alias-v1"
-            item["content_sha256"] = hashlib.sha256(evidence).hexdigest()
-            item["evidence_b64"] = base64.b64encode(evidence).decode("ascii")
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     report, artifacts = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))
     codes = _codes(report)
@@ -761,27 +871,32 @@ def test_same_model_id_is_independent_across_providers() -> None:
                       if pt["model"] == "synthetic/stable-v1" and pt["provider"] == "openrouter")
     or_source = next(s for s in payload["sources"]
                      if s["model"] == "synthetic/stable-v1" and s["provider"] == "openrouter")
+    mirror_provenance = {
+        "extractor": "fixture-deterministic/1.0",
+        "extraction": "deterministic",
+        "sources": ["openai|synthetic/stable-v1|operator_input"],
+    }
     oi_model = copy.deepcopy(or_model)
     oi_model["provider"] = "openai"
     oi_model["display_name"] = "Synthetic Stable-V1 (openai mirror)"
-    oi_model["provenance"]["sources"] = ["openai|synthetic/stable-v1|openai_models_api"]
+    oi_model["provenance"] = copy.deepcopy(mirror_provenance)
     oi_route = copy.deepcopy(or_route)
     oi_route["provider"] = "openai"
-    oi_route["provenance"]["sources"] = ["openai|synthetic/stable-v1|openai_models_api"]
+    oi_route["provenance"] = copy.deepcopy(mirror_provenance)
     oi_pricing = copy.deepcopy(or_pricing)
     oi_pricing["provider"] = "openai"
-    oi_pricing["provenance"]["sources"] = ["openai|synthetic/stable-v1|openai_models_api"]
-    evidence = json.dumps(
-        {"reference": "openai|synthetic/stable-v1|openai_models_api",
-         "snapshot": "synthetic-offline-evidence"},
-        sort_keys=True,
-    ).encode("utf-8")
+    oi_pricing["provenance"] = copy.deepcopy(mirror_provenance)
+    # Operator attestation bytes (digest-bound): review-only provenance,
+    # never a verified provider fact. A synthetic ID could not parse from a
+    # real OpenAI snapshot anyway, so no fabricated models-API source.
+    attestation = b"operator attestation for openai mirror (review-only)"
     oi_source = copy.deepcopy(or_source)
     oi_source["provider"] = "openai"
-    oi_source["source_kind"] = "openai_models_api"
-    oi_source["url"] = "https://api.openai.com/v1/models"
-    oi_source["content_sha256"] = hashlib.sha256(evidence).hexdigest()
-    oi_source["evidence_b64"] = base64.b64encode(evidence).decode("ascii")
+    oi_source["source_kind"] = "operator_input"
+    oi_source["url"] = "https://openai.com/docs/pricing"
+    oi_source["published_at"] = None
+    oi_source["content_sha256"] = hashlib.sha256(attestation).hexdigest()
+    oi_source["evidence_b64"] = base64.b64encode(attestation).decode("ascii")
     payload["models"].append(oi_model)
     payload["routes"].append(oi_route)
     payload["pricing"].append(oi_pricing)
@@ -794,7 +909,9 @@ def test_same_model_id_is_independent_across_providers() -> None:
          "source_provenance_blocked", "route_upstream_contradiction"}
         & codes
     )
-    assert report.state == OVERALL_READY
+    # The operator-attested mirror is review-only, never verified.
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert "source_evidence_semantic_only" in codes
     # openai mirror is a genuine NEW create; the openrouter row is unchanged.
     assert report.counts["new"] == 1
     assert report.counts["unchanged"] == 1
@@ -804,20 +921,22 @@ def test_same_model_id_is_independent_across_providers() -> None:
 
 
 def test_fabricated_host_urls_are_review_not_ready() -> None:
-    """180-b R3 probe: replacing every source URL with a fabricated off-rule
-    host must not remain READY with zero warnings. A syntactically safe URL
+    """180-b R3 probe, 180-c semantics: replacing every source URL with a
+    fabricated off-rule host must not remain READY. A syntactically safe URL
     is not an authoritative source: the (provider, source kind) host rule
-    fails, so each source is REVIEW-classified and the run is at least
-    READY_WITH_WARNINGS. Evidence bytes still match their digests; the host
-    rule, not the evidence, is the failure."""
+    fails, so each source is REVIEW-classified. Evidence bytes still match
+    their digests (the host rule, not the evidence, is the failure), but an
+    off-host source cannot back a required fact, so the run blocks with
+    source_evidence_unapproved."""
     payload = json.loads((FIXTURES / "bundle-first-install.json").read_text())
     payload["run_id"] = "test-fabricated-hosts-001"
     for item in payload["sources"]:
         item["url"] = "https://example.invalid/fabricated-pricing"
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     report = validate_bundle(bundle, None, policy_from_document(bundle.policy))[0]
-    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert report.state == OVERALL_BLOCKED
     assert "source_provenance_review" in _codes(report)
+    assert "source_evidence_unapproved" in _codes(report)
     assert report.sources, "source assessments must be present"
     for assessment in report.sources:
         assert assessment["classification"] == "REVIEW"

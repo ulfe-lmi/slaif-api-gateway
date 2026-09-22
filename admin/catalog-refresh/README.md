@@ -31,6 +31,23 @@ slaif-gateway catalog-refresh verify \
 Exit codes: review 0/10/20/65/2, verify 0/30/65, export-baseline 0/65
 (see the docs page for the table).
 
+## Preparing source evidence (offline replay)
+
+Bundle sources are replayed offline, never fetched. Only the registered
+(provider, source kind) pairs are parsed: `openrouter/openrouter_models_api`
+(official OpenRouter `/models` shape with per-token USD pricing),
+`openai/openai_models_api` (identity only), `openai/openai_pricing_docs`,
+`openai/openai_models_docs`, and `ecb/ecb_reference_xml` (EUR-based ECB
+reference-rate XML; provider `ecb`, currency-pair model such as `EUR-USD`,
+official ECB host). Each source's `evidence_b64` must match its declared
+`content_sha256` and parse successfully to support required facts: a
+matching digest of arbitrary or empty bytes is not content trust and blocks
+the run, and repeated references to identical bytes count as one
+independent source. FX facts verify only against an official
+`ecb/ecb_reference_xml` quote (rate or exact reciprocal within 1e-8,
+publication date equal to the quote date). Details and the exact offline
+scope: [catalog refresh documentation](../../docs/catalog-refresh.md#source-evidence-binding-offline-replay).
+
 The seal key is runner-owned, mode `0600`, created only if missing, and must
 live outside the run tree. It is a local integrity key: protect it, rotate
 it on trust-boundary changes, and never hand it to research or provider

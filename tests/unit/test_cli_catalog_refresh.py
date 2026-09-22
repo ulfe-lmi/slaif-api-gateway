@@ -7,6 +7,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+import test_catalog_refresh_source_evidence as _evidence_tests
+
 from slaif_gateway.cli.main import app
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "catalog_refresh"
@@ -74,6 +76,11 @@ def test_review_ready_with_warnings_exit_10(tmp_path: Path) -> None:
             for dimension in item["dimensions"]:
                 if dimension["name"] == "input":
                     dimension["value"] = "1"  # identical to baseline
+    # The evidence must carry the proposed price (the fixture snapshot pins
+    # 1.2/4 EUR for updated-v1; the baseline carries 1/4).
+    _evidence_tests.set_openrouter_evidence(
+        payload, {**_evidence_tests.DEFAULT_PRICES, "synthetic/updated-v1": ("1", "4")}
+    )
     for route in payload["routes"]:
         if route["requested_model"] == "synthetic/updated-v1":
             route["priority"] = 100  # identical to baseline

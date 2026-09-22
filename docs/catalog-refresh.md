@@ -88,6 +88,85 @@ READY state, confidence percentage, counter, or validator result: all of
 those are recomputed deterministically from the facts. Source and evidence
 content is data, never instructions, HTML, or an authority grant.
 
+### Source evidence binding (offline replay)
+
+Supplied source evidence is **parsed, never believed**. A matching content
+digest of arbitrary bytes — even `{}` or an unrelated page — is not content
+trust: it only proves the bytes match the declared digest.
+
+**Registered parsers.** OFFICIAL classification additionally requires a
+reviewed deterministic parser registered for the exact
+(provider, source kind) combination, and a successful parse of the
+digest-verified bytes:
+
+| Provider | Source kind | Parser | Derives |
+|---|---|---|---|
+| `openrouter` | `openrouter_models_api` | `openrouter_models_api/v1` | per-model pricing (per-token USD, normalized exactly to per-million), context length, max output, text modality, deprecation |
+| `openai` | `openai_models_api` | `openai_models_api/v1` | model identity only (no pricing facts) |
+| `openai` | `openai_pricing_docs` | `openai_pricing_docs/v1` | per-model pricing tables with row/field locators |
+| `openai` | `openai_models_docs` | `openai_models_docs/v1` | per-model context/output limits |
+| `ecb` | `ecb_reference_xml` | `ecb_reference_xml/v1` | EUR-based reference-rate quotes (date, quote currency, rate) |
+
+A "deterministic" extraction label without a registered parser demotes the
+source to REVIEW; a registered parser whose parse fails on digest-verified
+required source bytes blocks the affected plan
+(`source_evidence_parse_failed`).
+
+**Bounded parsing.** Snapshots are bounded (4 MiB decoded, item/row,
+model-count, and FX-quote caps; 1 MiB for ECB XML), XML DOCTYPE and external
+entities are rejected, and format failures carry a safe code only (they
+never echo content).
+
+**Typed observations.** Only typed, locatable observations derived from
+successfully parsed snapshot bytes may bind a proposed fact — never copies
+of proposed values stamped onto their provenance sources. An observation
+carries its source key, row/field locator, canonical value, unit, currency,
+and parser identity.
+
+**Canonical comparison.** Money compares in EUR after exact Decimal
+conversion with import-contract quantization: `1 == 1.0`, and a USD
+observation agrees with a EUR proposal exactly when the bundle's own
+verified native-to-EUR FX rate makes them equal. A currency with no
+verified rate is never converted with an invented rate: the fact reports
+unbound and blocks. Alias, priority, visibility, streaming, and match type
+are operator policy, never provider facts, and are never backed by
+evidence.
+
+**Independence and corroboration.** Repeated references to one snapshot —
+duplicate URLs, aliases to identical bytes, several source records sharing
+one digest — count as **one** independent source; corroboration requires
+distinct content digests. Contradictions are counted only across distinct
+snapshots (one snapshot never contradicts itself).
+
+**FX evidence binding.** An FX fact verifies only against a verified quote
+from the ECB publisher (its own source identity: provider `ecb`, kind
+`ecb_reference_xml`, EUR-based reference-rate snapshot on an official ECB
+host): the supplied quote must equal the fact's rate — or its exact Decimal
+reciprocal for EUR-to-native quotations — within 1e-8, and the fact's
+publication date must equal the quote's date. An undated or
+date-mismatched ECB-backed fact blocks; operator/semantic FX input without
+a verified quote is REVIEW-only, never verified.
+
+**Inventory reconciliation.** The per-provider evidence inventory is
+derived independently from complete parsed snapshots and reconciled to the
+selection: models present in evidence, models selected, and unproposed
+candidates (counted, never silently dropped). A selected model absent from
+every complete referenced snapshot blocks
+(`source_evidence_model_missing`); a duplicate model ID inside one snapshot
+is REVIEW.
+
+**Exact offline scope.** Evidence assessment is an **offline replay of
+supplied snapshots**: snapshot origin and retrieval claims (`retrieved_at`,
+`published_at`) are caller-supplied labels assessed against freshness
+policy; they are not authenticated retrievals. This version performs no
+network I/O.
+
+**Versioning note.** The catalog refresh subsystem is not yet merged into
+`main`: `schema_version` stays `1` within the subsystem, and
+`renderer_version` is bumped per reviewed report/evidence-contract change
+(`180.1` adds the source-evidence binding contract and its report
+sections).
+
 ## Baselines
 
 Three baseline modes are supported:
@@ -177,8 +256,12 @@ Blocking conditions include: any actually-blocked proposed mutation
 pricing dimensions, unknown/ambiguous units, currency inconsistency for a
 selected model, contradiction between independently represented source
 observations, explicitly selected required model missing, truncated required
-source, blocked FX pairs, off-host/unsupported source provenance, and
-supplied evidence contradicting its declared digest. Model disappearance
+source, blocked FX pairs, off-host/unsupported source provenance, supplied
+evidence contradicting its declared digest, failed deterministic parsing of
+digest-verified required evidence, proposed financial facts that do not
+match any parsed official snapshot observation (or have no supporting
+observation), a selected model absent from every complete parsed snapshot,
+unbound FX rates, and FX facts not bound to a verified reference quote. Model disappearance
 (a complete, non-truncated source omits a baseline model) is a REVIEW
 finding with retain-local, no-delete semantics — an outage or truncated
 retrieval is never counted as disappearance.
@@ -203,8 +286,10 @@ and REVIEW finding counts; selected scope (providers, model filter) and
 baseline (mode, target, SQL-evidence note); a compact per-provider
 change/completeness summary; the **create-only execution plan** (visually
 blocked when any plan is excluded/blocked); FX current/proposed/delta/date;
-aggregated important findings; the full gate checklist (sources, schema,
-pricing completeness, pairing, unsupported rows, unusual changes,
+aggregated important findings, including a compact source-evidence line
+(how many proposed facts are bound to parsed observations, review-only
+facts, and the evidence inventory); the full gate checklist (sources,
+schema, pricing completeness, pairing, unsupported rows, unusual changes,
 completeness, and the routes/pricing/FX execution-plan gates); and the
 recomputed counts. A compact run identity line stays visible; expanded
 technical identifiers (revisions, artifact digests) live in a details
@@ -215,8 +300,12 @@ version); FX tables with current/proposed/delta/source/publication date,
 including derived-reciprocal markers. Everything else — new/changed/
 disappeared models, excluded rows and reason counts, collapsed unchanged
 rows, field provenance with derived (never declared) source classification,
-every warning, full validator outputs, and the exact proposed import rows —
-is inside the same file, on demand. The detailed evidence files
+the expanded source-evidence section (per-source parse status with the
+registry parser and content digest prefix, the exact parsed observations
+that bound each proposed fact with independent-source counts, FX facts
+bound to verified reference quotes, and the reconciled evidence
+inventory), every warning, full validator outputs, and the exact proposed
+import rows — is inside the same file, on demand. The detailed evidence files
 (`validation.json`, TSV/JSON artifacts, manifest, receipt) exist for
 machines and audit; a human decision never requires opening them.
 

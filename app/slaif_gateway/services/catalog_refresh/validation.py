@@ -35,7 +35,6 @@ import base64
 import binascii
 import hashlib
 import json
-import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -45,10 +44,12 @@ from urllib.parse import urlparse
 
 from slaif_gateway.schemas.catalog_refresh import (
     CAPABILITY_KEYS,
+    FX_PAIR_PATTERN,
     BaselineDocument,
     RefreshBundle,
     RouteFacts,
 )
+from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh.bundle import (
     NormalizedFxRow,
     generate_fx_json,
@@ -140,14 +141,17 @@ _OFFICIAL_HOST_RULES: dict[tuple[str, str], frozenset[str]] = {
     ("openai", "openai_pricing_docs"): frozenset({"openai.com"}),
     ("openai", "docs_page"): frozenset({"openai.com"}),
     ("openrouter", "docs_page"): frozenset({"openrouter.ai"}),
+    # ECB is the FX reference publisher (its own identity, never a model
+    # provider's source): only the EUR-based reference-rate snapshot kind.
+    ("ecb", "ecb_reference_xml"): frozenset({"www.ecb.europa.eu", "data-api.ecb.europa.eu"}),
 }
-# FX sources are identified by a currency-pair "model" part and may cite the
-# official FX reference publisher in addition to the provider docs host.
-_FX_PAIR_PATTERN = re.compile(r"^[A-Z]{3}-[A-Z]{3}$")
-_FX_DOCS_HOSTS: frozenset[str] = frozenset({"www.ecb.europa.eu"})
+# FX sources are identified by a currency-pair "model" part (FX_PAIR_PATTERN
+# from the schema) and may cite the official FX reference publisher in
+# addition to the provider docs host.
+_FX_DOCS_HOSTS: frozenset[str] = frozenset({"www.ecb.europa.eu", "data-api.ecb.europa.eu"})
 # FX provenance references must use an FX-specific source kind (a model's
 # OpenRouter reference may never be borrowed to satisfy an FX fact).
-_FX_SOURCE_KINDS: frozenset[str] = frozenset({"operator_input", "docs_page"})
+_FX_SOURCE_KINDS: frozenset[str] = frozenset({"operator_input", "docs_page", "ecb_reference_xml"})
 
 EVIDENCE_MAX_BYTES = 4 * 1024 * 1024
 _RECIPROCAL_QUANTUM = Decimal("0.000000001")
@@ -225,6 +229,7 @@ class ValidationReport:
     sql_checks: dict[str, Any] = field(default_factory=dict)
     sources: list[dict[str, Any]] = field(default_factory=list)
     fx_comparisons: list[dict[str, Any]] = field(default_factory=list)
+    source_evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         order = {name: index for index, name in enumerate(_GATE_ORDER)}
@@ -304,6 +309,7 @@ class ValidationReport:
                     self.sources, key=lambda s: (s["provider"], s["model"], s["source_kind"])
                 )
             ],
+            "source_evidence": self.source_evidence,
             "fx_comparisons": [
                 dict(sorted(item.items())) for item in sorted(
                     self.fx_comparisons, key=lambda f: str(f.get("pair", ""))
@@ -434,10 +440,16 @@ def _classify_source(
         add(SEVERITY_REVIEW, "source_warning", warning, provider, model)
 
     # --- host / kind rules ------------------------------------------------
-    pair_model = bool(_FX_PAIR_PATTERN.fullmatch(model))
+    pair_model = bool(FX_PAIR_PATTERN.fullmatch(model))
     hosts = _OFFICIAL_HOST_RULES.get((provider, kind))
     if hosts is None:
-        if kind in ("openrouter_models_api", "openrouter_model_detail", "openai_models_api", "openai_pricing_docs"):
+        if kind in (
+            "openrouter_models_api",
+            "openrouter_model_detail",
+            "openai_models_api",
+            "openai_pricing_docs",
+            "ecb_reference_xml",
+        ):
             findings.append(("mismatch", f"source kind {kind} does not match provider {provider}"))
             host_ok = False
         elif kind == "operator_input":
@@ -487,6 +499,19 @@ def _classify_source(
         classification = SOURCE_REVIEW
     else:
         classification = SOURCE_OFFICIAL
+        # A caller-declared "deterministic" label alone never establishes
+        # trust: OFFICIAL additionally requires a reviewed registered parser
+        # for (provider, source_kind). The parse itself is verified in the
+        # evidence phase (a failed parse demotes or blocks the source).
+        if not se.has_deterministic_parser(provider, kind):
+            add(
+                SEVERITY_REVIEW,
+                "source_evidence_unapproved",
+                "deterministic extraction claimed without a reviewed registered parser; source cannot be OFFICIAL",
+                provider,
+                model,
+            )
+            classification = SOURCE_REVIEW
 
     if classification == SOURCE_BLOCKED:
         add(SEVERITY_BLOCKER, "source_provenance_blocked", "; ".join(text for _, text in findings)[:400], provider, model)
@@ -504,6 +529,7 @@ def _classify_source(
         "model": model,
         "source_kind": kind,
         "url": source.url,
+        "content_sha256": source.content_sha256,
         "retrieved_at": source.retrieved_at.isoformat(),
         "published_at": source.published_at.isoformat() if source.published_at else None,
         "truncated": source.truncated,
@@ -607,6 +633,7 @@ def validate_bundle(
             if row.provider in selection_providers:
                 selected.add((row.provider, row.upstream_model))
 
+    evidence_backed_facts: list[dict[str, Any]] = []
     models_by_key = {(item.provider, item.model): item for item in bundle.models}
     pricing_by_key: dict[tuple[str, str], list[Any]] = {}
     for item in bundle.pricing:
@@ -630,12 +657,104 @@ def validate_bundle(
     selected_source_keys: set[tuple[str, str, str]] = set()
     for source in bundle.sources:
         in_scope = (source.provider, source.model) in selected or bool(
-            _FX_PAIR_PATTERN.fullmatch(source.model)
+            FX_PAIR_PATTERN.fullmatch(source.model)
         )
         assessment = _classify_source(source, now=now, policy=policy, add=add)
         source_assessments.append(assessment)
         if in_scope:
             selected_source_keys.add((source.provider, source.model, source.source_kind))
+
+    # --- 180-c: bounded deterministic evidence parsing (trust is parsed,
+    # never declared). Digest-verified bytes are parsed with the registered
+    # parser; derived observations are the only things that may bind
+    # proposed facts. A matching hash of arbitrary bytes is not content
+    # trust: empty, unrelated, or contradictory bytes fail the gate. ------
+    assessment_by_key: dict[str, dict[str, Any]] = {}
+    parse_results: dict[str, se.SnapshotParse] = {}
+    fx_quotes: list[tuple[str, se.ParsedFxQuote]] = []
+    all_observations: list[se.Observation] = []
+    source_digests: dict[str, str] = {}
+    official_source_keys: set[str] = set()
+    semantic_source_keys: set[str] = set()
+    for source, assessment in zip(bundle.sources, source_assessments):
+        key = f"{source.provider}|{source.model}|{source.source_kind}"
+        assessment_by_key[key] = assessment
+        assessment["parser"] = se.PARSER_IDS.get((source.provider, source.source_kind), "")
+        if source.source_kind == "operator_input" or source.extraction == "semantic":
+            semantic_source_keys.add(key)
+        if source.truncated or source.evidence_b64 is None:
+            assessment["parse_state"] = "truncated" if source.truncated else "no_evidence"
+            assessment["parsed_models"] = 0
+            assessment["parsed_fx_quotes"] = 0
+            continue
+        if assessment["evidence_state"] != EVIDENCE_OK:
+            assessment["parse_state"] = "evidence_invalid"
+            assessment["parsed_models"] = 0
+            assessment["parsed_fx_quotes"] = 0
+            continue
+        evidence_bytes = base64.b64decode(source.evidence_b64, validate=True)
+        parsed = se.parse_snapshot(source.provider, source.source_kind, evidence_bytes)
+        parse_results[key] = parsed
+        if parsed.ok:
+            source_digests[key] = source.content_sha256
+            all_observations.extend(se.derive_observations(key, parsed))
+            for quote in parsed.fx_quotes:
+                fx_quotes.append((key, quote))
+            if assessment["classification"] == SOURCE_OFFICIAL:
+                official_source_keys.add(key)
+        elif source.extraction == "deterministic" and se.has_deterministic_parser(
+            source.provider, source.source_kind
+        ):
+            # Registered deterministic parser, digest-verified bytes, and the
+            # parse still failed: the bytes are not the claimed content.
+            detail = f"required source failed deterministic parsing ({parsed.error})" if source.required else (
+                "optional source failed deterministic parsing (" + str(parsed.error) + ")"
+            )
+            if source.required:
+                add(SEVERITY_BLOCKER, "source_evidence_parse_failed", detail, source.provider, source.model)
+                assessment["classification"] = SOURCE_BLOCKED
+            else:
+                add(SEVERITY_REVIEW, "source_evidence_parse_failed", detail, source.provider, source.model)
+                assessment["classification"] = SOURCE_REVIEW
+        assessment["parse_state"] = "ok" if parsed.ok else (parsed.error or "no_registered_parser")
+        assessment["parsed_models"] = len(parsed.models)
+        assessment["parsed_fx_quotes"] = len(parsed.fx_quotes)
+        if parsed.ok:
+            id_counts: dict[str, int] = {}
+            for parsed_model in parsed.models:
+                id_counts[parsed_model.model] = id_counts.get(parsed_model.model, 0) + 1
+            for duplicate_id in sorted(model_id for model_id, count in id_counts.items() if count > 1):
+                add(
+                    SEVERITY_REVIEW,
+                    "source_duplicate_model_id",
+                    f"source {key} parses {id_counts[duplicate_id]} rows for model {duplicate_id}; duplicate IDs are not independent evidence",
+                    source.provider,
+                    duplicate_id,
+                )
+
+    # Verified native -> EUR rates from the bundle's own FX facts (the same
+    # strict active selection the FX gate uses; a rate that cannot be
+    # resolved deterministically is never invented).
+    fx_to_eur_candidates: dict[str, set[Decimal]] = {}
+    for facts in bundle.fx:
+        active, ambiguous = _select_active_fx(
+            [f for f in bundle.fx if f.base_currency == facts.base_currency and f.quote_currency == facts.quote_currency],
+            now,
+        )
+        if ambiguous or active is None:
+            continue
+        rate = Decimal(active.rate)
+        if active.quote_currency == "EUR":
+            fx_to_eur_candidates.setdefault(active.base_currency, set()).add(rate)
+        elif active.base_currency == "EUR" and rate > 0:
+            derived = _reciprocal(rate)
+            if derived > 0:
+                fx_to_eur_candidates.setdefault(active.quote_currency, set()).add(derived)
+    fx_to_eur: dict[str, Decimal] = {
+        currency: next(iter(rates))
+        for currency, rates in fx_to_eur_candidates.items()
+        if len(rates) == 1
+    }
 
     # --- per-selected-model dispositions ----------------------------------
     dispositions: list[Disposition] = []
@@ -785,6 +904,102 @@ def validate_bundle(
             bump(provider, "blocked")
             continue
         upstream_by_key[pricing_key] = upstream
+
+        # --- 180-c: bind proposed facts to parsed snapshot observations ---
+        # Only OFFICIAL-source observations (approved publisher/kind/parser/
+        # host, digest-verified bytes, successful deterministic parse) can
+        # verify a fact. Operator/semantic provenance keeps a fact in REVIEW
+        # only; unapproved observations establish nothing.
+        fact_sources = {
+            source_ref
+            for facts_ in (facts, primary_route, pricing_facts)
+            if facts_ is not None
+            for source_ref in facts_.provenance.sources
+        }
+        semantic_provenance = any(key in semantic_source_keys for key in fact_sources)
+        proposed: dict[str, Any] = {}
+        for dimension in pricing_facts.dimensions:
+            proposed[f"pricing:{dimension.name}"] = {
+                "value": dimension.value,
+                "currency": dimension.currency,
+                "required": dimension.name in ("input", "output"),
+            }
+        if facts is not None:
+            if facts.context_length is not None:
+                proposed["model:context_length"] = facts.context_length
+            if facts.max_output_tokens is not None:
+                proposed["model:max_output_tokens"] = facts.max_output_tokens
+            if facts.deprecated:
+                proposed["model:deprecated"] = True
+            if facts.capabilities.get("text"):
+                proposed["model:capability:text"] = True
+        evidence_findings, backed_facts, _unresolved_fields, missing_fx = se.reconcile_model_facts(
+            provider=provider,
+            model=model,
+            upstream_model=upstream,
+            proposed=proposed,
+            observations=tuple(all_observations),
+            official_source_keys=frozenset(official_source_keys),
+            semantic_provenance=semantic_provenance,
+            fx_to_eur=fx_to_eur,
+            digests=source_digests,
+        )
+        for finding in evidence_findings:
+            add(finding.severity, finding.code, finding.detail, finding.provider, finding.model)
+        for backed_field in sorted(backed_facts):
+            backed_fact = backed_facts[backed_field]
+            evidence_backed_facts.append(
+                {
+                    "provider": provider,
+                    "model": model,
+                    "field": backed_fact.field,
+                    "proposed": backed_fact.proposed,
+                    "backed_by": list(backed_fact.backed_by),
+                    "independent_sources": backed_fact.independent_sources,
+                    "semantic_only": backed_fact.semantic_only,
+                }
+            )
+        if missing_fx:
+            add(
+                SEVERITY_BLOCKER,
+                "fx_evidence_unbound",
+                f"no verified {', '.join(sorted(missing_fx))} to EUR FX rate; price facts cannot be bound to snapshot evidence",
+                provider,
+                model,
+            )
+        model_names = {model, upstream}
+        complete_keys = [
+            key
+            for key in fact_sources
+            if parse_results.get(key) is not None and parse_results[key].ok
+        ]
+        model_missing = bool(
+            complete_keys
+            and not any(
+                parsed_model.model in model_names
+                for key in complete_keys
+                for parsed_model in parse_results[key].models
+            )
+        )
+        if model_missing:
+            add(
+                SEVERITY_BLOCKER,
+                "source_evidence_model_missing",
+                f"selected model is absent from the complete parsed snapshots of its {len(complete_keys)} source(s)",
+                provider,
+                model,
+            )
+        if any(finding.severity == SEVERITY_BLOCKER for finding in evidence_findings) or missing_fx or model_missing:
+            blocked_codes = sorted(
+                {finding.code for finding in evidence_findings if finding.severity == SEVERITY_BLOCKER}
+                | ({"fx_evidence_unbound"} if missing_fx else set())
+                | ({"source_evidence_model_missing"} if model_missing else set())
+            )
+            dispositions.append(
+                Disposition(provider, model, DISPOSITION_BLOCKED, "source evidence: " + ", ".join(blocked_codes))
+            )
+            bump(provider, "blocked")
+            continue
 
         # --- baseline comparison (strict active selection, no fallback) ----
         old_rows = baseline_pricing_by_key.get((provider, upstream, primary_route.endpoint), []) if baseline else []
@@ -1018,6 +1233,113 @@ def validate_bundle(
     )
     fx_json = generate_fx_json(fx_rows)
 
+    # --- 180-c: bind FX facts to parsed ECB reference quotes ---------------
+    # An FX fact is verified only when a verified quote from the ECB
+    # publisher (own identity, ecb_reference_xml kind) carries the same pair
+    # (or its native inverse, reciprocated with the exact Decimal rule the
+    # FX gate uses) and the fact's publication date equals the quote date.
+    fx_backed: list[dict[str, Any]] = []
+    for facts in bundle.fx:
+        pair = (facts.base_currency, facts.quote_currency)
+        pair_names = {f"{pair[0]}-{pair[1]}", f"{pair[1]}-{pair[0]}"}
+        field_quotes = [
+            (source_key, quote)
+            for source_key, quote in fx_quotes
+            if f"{quote.base_currency}-{quote.quote_currency}" in pair_names
+        ]
+        official_quotes = [
+            item for item in field_quotes if item[0] in official_source_keys
+        ]
+        fact_semantic = any(key in semantic_source_keys for key in facts.provenance.sources)
+        if not official_quotes:
+            if field_quotes:
+                add(
+                    SEVERITY_BLOCKER,
+                    "source_evidence_unapproved",
+                    f"FX fact {pair[0]} to {pair[1]} is backed only by unapproved source quotes",
+                    None,
+                    None,
+                )
+            elif fact_semantic:
+                add(
+                    SEVERITY_REVIEW,
+                    "fx_evidence_semantic_only",
+                    f"FX fact {pair[0]} to {pair[1]} is operator/semantic input without a verified reference quote",
+                    None,
+                    None,
+                )
+            else:
+                add(
+                    SEVERITY_BLOCKER,
+                    "fx_evidence_unbound",
+                    f"FX fact {pair[0]} to {pair[1]} has no verified reference quote",
+                    None,
+                    None,
+                )
+            continue
+        rates = {str(quote.rate) for _key, quote in official_quotes}
+        if len(rates) > 1:
+            add(
+                SEVERITY_BLOCKER,
+                "source_observations_contradict",
+                f"distinct FX snapshots disagree on {pair[0]}-{pair[1]}: {', '.join(sorted(rates)[:4])}",
+                None,
+                None,
+            )
+            continue
+        fact_rate = Decimal(facts.rate)
+        matched: tuple[str, se.ParsedFxQuote, bool] | None = None
+        for source_key, quote in official_quotes:
+            same_direction = (
+                quote.base_currency,
+                quote.quote_currency,
+            ) == pair
+            if same_direction:
+                agrees = abs(quote.rate - fact_rate) <= se.FX_BINDING_TOLERANCE
+            else:
+                agrees = abs(quote.rate - _reciprocal(fact_rate)) <= se.FX_BINDING_TOLERANCE
+            if agrees:
+                matched = (source_key, quote, same_direction)
+                break
+        if matched is None:
+            add(
+                SEVERITY_BLOCKER,
+                "source_evidence_value_mismatch",
+                f"FX rate {facts.rate} does not match any verified {pair[0]}/{pair[1]} reference quote or its reciprocal",
+                None,
+                None,
+            )
+            continue
+        source_key, quote, same_direction = matched
+        if facts.published_at is None:
+            add(
+                SEVERITY_BLOCKER,
+                "fx_evidence_date_mismatch",
+                f"FX fact {pair[0]} to {pair[1]} carries no publication date; the verified quote is dated {quote.published_date.isoformat()}",
+                None,
+                None,
+            )
+            continue
+        if facts.published_at.date() != quote.published_date:
+            add(
+                SEVERITY_BLOCKER,
+                "fx_evidence_date_mismatch",
+                f"FX fact publication date {facts.published_at.date().isoformat()} does not match the verified quote date {quote.published_date.isoformat()}",
+                None,
+                None,
+            )
+            continue
+        fx_backed.append(
+            {
+                "pair": f"{pair[0]} to {pair[1]}",
+                "rate": facts.rate,
+                "backed_by": source_key,
+                "observed_quote": str(quote.rate),
+                "derived_reciprocal": not same_direction,
+                "quote_date": quote.published_date.isoformat(),
+            }
+        )
+
     route_gate = _run_route_gate(bundle, baseline, route_tsv, excluded_route_mutations, baseline is not None)
     pricing_gate = _run_pricing_gate(baseline, pricing_tsv, excluded_pricing_mutations, baseline is not None)
 
@@ -1046,16 +1368,62 @@ def validate_bundle(
         unsupported_detail = "no unsupported rows"
         unsupported_evidence = EVIDENCE_VERIFIED
 
+    # inventory: derived independently from the parsed snapshots, then
+    # reconciled against the selection (considered is len(selected); the
+    # inventory is a separate projection, never a re-derivation of it).
+    evidence_models_by_provider: dict[str, set[str]] = {}
+    for key, parsed in parse_results.items():
+        if not parsed.ok:
+            continue
+        for parsed_model in parsed.models:
+            evidence_models_by_provider.setdefault(parsed_model.provider, set()).add(parsed_model.model)
+    selected_by_provider: dict[str, set[str]] = {}
+    for provider, model in selected:
+        selected_by_provider.setdefault(provider, set()).add(model)
+    upstream_by_provider: dict[str, set[str]] = {}
+    for route in bundle.routes:
+        if (route.provider, route.requested_model) in selected:
+            upstream_by_provider.setdefault(route.provider, set()).add(route.upstream_model)
+    inventory: dict[str, dict[str, int]] = {}
+    for provider in sorted(set(evidence_models_by_provider) | set(selected_by_provider)):
+        evidence = evidence_models_by_provider.get(provider, set())
+        accounted = selected_by_provider.get(provider, set()) | upstream_by_provider.get(provider, set())
+        inventory[provider] = {
+            "evidence_models": len(evidence),
+            "selected_models": len(selected_by_provider.get(provider, set())),
+            "unproposed_candidates": len(evidence - accounted),
+        }
+    source_evidence_report: dict[str, Any] = {
+        "scope": "offline_replay",
+        "note": (
+            "supplied/cached snapshot bytes were parsed offline with registered "
+            "deterministic parsers; this proves extraction consistency against "
+            "the supplied bytes, not a live retrieval that never occurred"
+        ),
+        "backed_facts": sorted(
+            evidence_backed_facts,
+            key=lambda item: (item["provider"], item["model"], item["field"]),
+        ),
+        "fx_backed": sorted(fx_backed, key=lambda item: item["pair"]),
+        "inventory": {
+            provider: dict(sorted(values.items()))
+            for provider, values in sorted(inventory.items())
+        },
+    }
+
     # sources gate
     if any(a["classification"] == SOURCE_BLOCKED for a in source_assessments):
         sources_evidence = EVIDENCE_BLOCKED
-        sources_detail = f"{sum(1 for a in source_assessments if a['classification'] == SOURCE_BLOCKED)} source(s) failed provenance rules"
+        sources_detail = f"{sum(1 for a in source_assessments if a['classification'] == SOURCE_BLOCKED)} source(s) failed provenance or deterministic parsing rules"
     elif any(a["classification"] == SOURCE_REVIEW or a["age_state"] != "fresh" for a in source_assessments):
         sources_evidence = EVIDENCE_REVIEW
-        sources_detail = "all required sources present; some sources are REVIEW-classified or aged"
+        sources_detail = "all required sources present; some sources are REVIEW-classified, aged, or not deterministically parseable"
     else:
         sources_evidence = EVIDENCE_VERIFIED
-        sources_detail = "all sources fresh, official-host, and evidence-verified"
+        sources_detail = (
+            "all sources fresh, official-host, evidence-verified, and deterministically "
+            "parsed; proposed required facts are bound to parsed snapshot observations"
+        )
 
     # pricing completeness gate
     if missing_required_dimensions:
@@ -1169,6 +1537,7 @@ def validate_bundle(
         },
         sources=source_assessments,
         fx_comparisons=fx_comparisons,
+        source_evidence=source_evidence_report,
     )
     artifacts = {"routes-proposal.tsv": route_tsv, "pricing-proposal.tsv": pricing_tsv, "fx-proposal.json": fx_json}
     return report, artifacts
@@ -1365,6 +1734,9 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
         for source_ref in facts.provenance.sources:
             provider, model_part, kind = source_ref.split("|")
             allowed_pairs = {f"{facts.base_currency}-{facts.quote_currency}", f"{facts.quote_currency}-{facts.base_currency}"}
+            if kind == "ecb_reference_xml" and provider != "ecb":
+                fx_add(SEVERITY_BLOCKER, "fx_provenance_invalid_reference", f"FX provenance reference {source_ref} uses the ECB reference kind but is not an ecb publisher source")
+                continue
             if model_part not in allowed_pairs or kind not in _FX_SOURCE_KINDS:
                 fx_add(SEVERITY_BLOCKER, "fx_provenance_invalid_reference", f"FX provenance reference {provider}|{model_part}|{kind} is not a currency-pair source of an FX-specific kind")
 
@@ -1509,7 +1881,7 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
     elif required_currencies:
         result.gates.append(Gate(FX_GATE, EVIDENCE_BLOCKED, "required FX pairs missing for: " + ", ".join(sorted(required_currencies))))
     else:
-        result.gates.append(Gate(FX_GATE, EVIDENCE_NA, "no FX rows required"))
+        result.gates.append(Gate(FX_GATE, EVIDENCE_NA, "all selected prices are EUR; no FX rows required"))
     result.import_gate = ImportGate(
         "fx",
         True,

@@ -44,6 +44,12 @@ from slaif_gateway.services.catalog_refresh.baseline import (
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 
 from slaif_gateway.services.catalog_refresh.validation import _reciprocal
+
+from tests.unit.test_catalog_refresh_source_evidence import (
+    ECB_URL,
+    ecb_source_dict,
+    openrouter_snapshot_bytes,
+)
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import FxRateNotFoundError
 
@@ -246,6 +252,7 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
     routes_payload = []
     pricing_payload = []
     sources_payload = []
+    model_prices: dict[str, tuple[str, str]] = {}
     for route in doc.routes:
         if route.provider != PROVIDER or route.requested_model not in MODELS:
             continue
@@ -282,6 +289,8 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
         if rule.provider != PROVIDER or rule.upstream_model not in MODELS:
             continue
         model = rule.upstream_model
+        if rule.input_price_per_1m is not None and rule.output_price_per_1m is not None:
+            model_prices[model] = (rule.input_price_per_1m, rule.output_price_per_1m)
         dimensions = []
         for name, value in (
             ("input", rule.input_price_per_1m),
@@ -312,11 +321,17 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
                 "warnings": [],
             }
         )
-        # The bundle's source record points at the official models API host
-        # and binds offline evidence bytes to the declared digest (the DB
-        # base_url is provider configuration, not the bundle's source of
-        # truth). Trust must classify as OFFICIAL/VERIFIED for a READY replay.
-        evidence = f"integration-offline-evidence:{model}".encode("utf-8")
+    # One real OpenRouter /models snapshot (official shape, per-token USD
+    # at the 1.08 reference quote) carries every priced model. Each bundle
+    # source record points at the official models API host and binds the
+    # same offline evidence bytes to the declared digest (the DB base_url is
+    # provider configuration, not the bundle's source of truth). Repeated
+    # references to identical bytes are one observation, not corroboration;
+    # trust must classify as OFFICIAL/VERIFIED for a READY replay.
+    snapshot = openrouter_snapshot_bytes(model_prices)
+    snapshot_digest = hashlib.sha256(snapshot).hexdigest()
+    snapshot_b64 = base64.b64encode(snapshot).decode("ascii")
+    for model in sorted(model_prices):
         sources_payload.append(
             {
                 "provider": PROVIDER,
@@ -325,8 +340,8 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
                 "url": "https://openrouter.ai/api/v1/models",
                 "retrieved_at": RETRIEVED_AT,
                 "published_at": None,
-                "content_sha256": hashlib.sha256(evidence).hexdigest(),
-                "evidence_b64": base64.b64encode(evidence).decode("ascii"),
+                "content_sha256": snapshot_digest,
+                "evidence_b64": snapshot_b64,
                 "extractor": "integration/1.0",
                 "extraction": "deterministic",
                 "required": True,
@@ -334,6 +349,16 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
                 "warnings": [],
             }
         )
+    # EUR pricing is normalized through the supplied ECB reference quote
+    # (own publisher identity, ecb_reference_xml kind, EUR-based snapshot).
+    sources_payload.append(
+        ecb_source_dict(
+            date_s="2026-09-22",
+            rate="1.08",
+            retrieved_at=RETRIEVED_AT,
+            published_at="2026-09-22T00:00:00+00:00",
+        )
+    )
     return {
         "schema_version": "1",
         "run_id": "obj180-replay-001",
@@ -341,7 +366,7 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
         "revision": {
             "schema_version": "1",
             "slaif_revision": "obj180-integration-revision",
-            "renderer_version": "180.0",
+            "renderer_version": "180.1",
             "policy_version": 1,
         },
         "research": {
@@ -385,7 +410,23 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
         "models": models_payload,
         "routes": routes_payload,
         "pricing": pricing_payload,
-        "fx": [],
+        "fx": [
+            {
+                "base_currency": "EUR",
+                "quote_currency": "USD",
+                "rate": "1.08",
+                "valid_from": "2026-09-22T00:00:00+00:00",
+                "valid_until": None,
+                "published_at": "2026-09-22T00:00:00+00:00",
+                "source": ECB_URL,
+                "provenance": {
+                    "extractor": "integration/1.0",
+                    "extraction": "deterministic",
+                    "sources": ["ecb|EUR-USD|ecb_reference_xml"],
+                },
+                "warnings": [],
+            }
+        ],
         "sources": sources_payload,
         "notes": "Objective 180 integration replay: mirrors the live exported baseline exactly.",
     }

@@ -137,6 +137,23 @@ error, 2 usage error. Verify: 0 valid, 30 invalid, 65 data error.
 Export-baseline: 0 written, 65 data error (never overwrites output, never
 bootstraps empty).
 
+### Offline source input contract
+
+The bundle's `sources` entries are replayed offline, never fetched. Only
+the registered (provider, source kind) pairs are parsed deterministically:
+`openrouter/openrouter_models_api` (official OpenRouter `/models` shape,
+per-token USD pricing), `openai/openai_models_api` (identity only),
+`openai/openai_pricing_docs`, `openai/openai_models_docs` (bounded docs
+tables), and `ecb/ecb_reference_xml` (EUR-based ECB reference-rate XML:
+provider `ecb`, model part a currency pair such as `EUR-USD`, official ECB
+host, DOCTYPE and external entities rejected). `evidence_b64` must match
+the declared `content_sha256` and parse successfully to support required
+facts; a matching digest of arbitrary or empty bytes is not content trust
+and fails the gate. An FX fact is verified only against an official
+`ecb/ecb_reference_xml` quote (rate or exact reciprocal within 1e-8, and
+publication date equal to the quote date). Full contract:
+[Catalog refresh (offline review)](catalog-refresh.md#source-evidence-binding-offline-replay).
+
 ## Related documentation
 
 - [Configuration](configuration.md)

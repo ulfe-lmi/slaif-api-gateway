@@ -43,7 +43,7 @@
  },
  "revision": {
   "policy_version": 1,
-  "renderer_version": "180.0",
+  "renderer_version": "180.1",
   "schema_version": "1",
   "slaif_revision": "fixture-revision-180"
  },
@@ -60,8 +60,8 @@
  },
  "sources": [
   {
-   "content_sha256": "1624caa9a36a185dfd54d0b06d9c3fefb45b70740cebb629db8cbba304eba08c",
-   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9nb25lLXYxfG9wZW5yb3V0ZXJfbW9kZWxzX2FwaSIsInNuYXBzaG90Ijoic3ludGhldGljLW9mZmxpbmUtZXZpZGVuY2UifQ==",
+   "content_sha256": "8f21a80706e32bf2be3046f48a47bb185c1e5a0ac8e74b06bae747018c1c2830",
+   "evidence_b64": null,
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/gone-v1",
