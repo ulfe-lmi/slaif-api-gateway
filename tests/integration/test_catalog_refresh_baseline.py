@@ -2,10 +2,12 @@
 
 Covers AP-6 against a real migrated PostgreSQL instance (TEST_DATABASE_URL
 or Testcontainers via tests/integration/conftest.py): complete, consistent,
-read-only export with secret redaction, deterministic content digests,
-keyset pagination beyond one page, outage safety (never an empty bootstrap),
-stale/wrong baseline rejection by the CLI, and offline replay equivalence
-(live export -> CLI review twice -> byte-identical artifacts -> verify).
+read-only allowlisted export with ordinary private-content canaries (no
+free-form notes/metadata at all), deterministic content digests, snapshot
+consistency under concurrent writes, keyset pagination beyond one page,
+outage safety (never an empty bootstrap), stale/wrong baseline rejection by
+the CLI, and offline replay equivalence (live export -> CLI review twice ->
+byte-identical artifacts -> verify).
 
 All seeded data is synthetic; the provider string is ``openrouter`` because
 the bundle schema enforces KNOWN_PROVIDERS, and the test database is a
@@ -15,26 +17,35 @@ disposable task-owned instance, so no real catalog state is touched.
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import uuid
 from urllib.parse import urlparse
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from typer.testing import CliRunner
 
 from slaif_gateway.cli.catalog_refresh import _baseline_document_bytes
 from slaif_gateway.cli.main import app
+from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
+from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.schemas.catalog_refresh import BaselineDocument
+from slaif_gateway.schemas.pricing import FxConversionResult
 from slaif_gateway.services.catalog_refresh.baseline import (
     canonical_baseline_content,
     export_baseline,
 )
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
+
+from slaif_gateway.services.catalog_refresh.validation import _reciprocal
+from slaif_gateway.services.pricing import PricingService
+from slaif_gateway.services.pricing_errors import FxRateNotFoundError
 
 runner = CliRunner()
 
@@ -57,6 +68,11 @@ PROVIDER_SECRET = "sk-or-syntheticproviderkey0001"
 ROUTE_SECRET = "sk-route-secret-abc123456789"
 METADATA_SECRET = "sk-meta-secret-abcdef123456"
 FLOAT_METADATA = "0.97"
+# Ordinary private content (not a secret pattern): regex secret redaction is
+# not an allowlist for unrelated request/personal content, so the default
+# export carries no free-form fields at all and this canary must not appear
+# anywhere in the document.
+PRIVATE_CANARY = "Synthetic private customer conversation content: sample only."
 
 
 async def _seed_catalog(database_url: str) -> None:
@@ -114,7 +130,7 @@ async def _seed_catalog(database_url: str) -> None:
                     "provider": PROVIDER,
                     "base_url": BASE_URL,
                     "env_var": API_KEY_ENV_VAR,
-                    "notes": f"upstream credential {PROVIDER_SECRET} managed by env var {API_KEY_ENV_VAR}",
+                    "notes": f"upstream credential {PROVIDER_SECRET} managed by env var {API_KEY_ENV_VAR}; {PRIVATE_CANARY}",
                 },
             )
             for model in MODELS:
@@ -132,7 +148,7 @@ async def _seed_catalog(database_url: str) -> None:
                         "model": model,
                         "provider": PROVIDER,
                         "capabilities": json.dumps({"text": True, "streaming": True}),
-                        "notes": f"api_key={ROUTE_SECRET}",
+                        "notes": f"api_key={ROUTE_SECRET}; {PRIVATE_CANARY}",
                     },
                 )
                 await connection.execute(
@@ -154,6 +170,7 @@ async def _seed_catalog(database_url: str) -> None:
                                 "api_key": METADATA_SECRET,
                                 "confidence": 0.97,
                                 "region": "eu-central",
+                                "transcript": PRIVATE_CANARY,
                             }
                         ),
                         "valid_from": VALID_FROM,
@@ -224,7 +241,6 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
     provenance = {
         "extractor": "integration/1.0",
         "extraction": "deterministic",
-        "authoritative": True,
     }
     models_payload = []
     routes_payload = []
@@ -296,15 +312,21 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
                 "warnings": [],
             }
         )
+        # The bundle's source record points at the official models API host
+        # and binds offline evidence bytes to the declared digest (the DB
+        # base_url is provider configuration, not the bundle's source of
+        # truth). Trust must classify as OFFICIAL/VERIFIED for a READY replay.
+        evidence = f"integration-offline-evidence:{model}".encode("utf-8")
         sources_payload.append(
             {
                 "provider": PROVIDER,
                 "model": model,
                 "source_kind": "openrouter_models_api",
-                "url": BASE_URL,
+                "url": "https://openrouter.ai/api/v1/models",
                 "retrieved_at": RETRIEVED_AT,
                 "published_at": None,
-                "content_sha256": hashlib.sha256(model.encode("utf-8")).hexdigest(),
+                "content_sha256": hashlib.sha256(evidence).hexdigest(),
+                "evidence_b64": base64.b64encode(evidence).decode("ascii"),
                 "extractor": "integration/1.0",
                 "extraction": "deterministic",
                 "required": True,
@@ -407,18 +429,23 @@ def test_export_baseline_complete_redacted_and_deterministic(migrated_postgres_u
     for secret in (PROVIDER_SECRET, ROUTE_SECRET, METADATA_SECRET, FLOAT_METADATA):
         assert secret not in document_text
 
-    # Explicit redaction/shape behavior on the free-form fields.
-    assert PROVIDER_SECRET not in (our_provider.notes_redacted or "")
-    assert "***" in (our_provider.notes_redacted or "")
-    route_notes = {row.requested_model: row.notes_redacted for row in doc_a.routes}
-    for model in MODELS:
-        assert ROUTE_SECRET not in (route_notes[model] or "")
-        assert "api_key=***" in (route_notes[model] or "")
-    metadata = {row.upstream_model: row.pricing_metadata for row in doc_a.pricing}
-    for model in MODELS:
-        assert metadata[model]["api_key"] == "***"
-        assert metadata[model]["confidence"] == "<redacted>"
-        assert metadata[model]["region"] == "eu-central"
+    # R4: no free-form fields exist in the export at all; ordinary private
+    # content (not just secret patterns) cannot survive into the document.
+    provider_dump = our_provider.model_dump()
+    route_dumps = [row.model_dump() for row in doc_a.routes]
+    pricing_dumps = [row.model_dump() for row in doc_a.pricing]
+    assert "notes_redacted" not in provider_dump and "notes" not in provider_dump
+    for dump in route_dumps:
+        assert "notes_redacted" not in dump and "notes" not in dump
+    for dump in pricing_dumps:
+        assert "pricing_metadata" not in dump and "notes_redacted" not in dump
+    for canary in (PRIVATE_CANARY, PROVIDER_SECRET, ROUTE_SECRET, METADATA_SECRET, FLOAT_METADATA):
+        assert canary not in document_text
+    # The exported target is compared against the parsed configured URL, not
+    # a hardcoded suffix or port.
+    parsed_target = urlparse(migrated_postgres_url)
+    assert doc_a.target.server_host == (parsed_target.hostname or "localhost")
+    assert doc_a.target.database == (parsed_target.path or "/").lstrip("/")
 
     # Deterministic content digest: exported_at never enters the digest.
     assert doc_a.exported_at != doc_b.exported_at
@@ -432,6 +459,65 @@ def test_export_baseline_is_read_only(migrated_postgres_url: str) -> None:
     after = asyncio.run(_counts(migrated_postgres_url))
     assert before == after
     assert before["audit_log"] == after["audit_log"]
+
+def test_export_snapshot_is_consistent_under_concurrent_writer(migrated_postgres_url: str) -> None:
+    """REPEATABLE READ: an uncommitted concurrent insert must not appear in
+    the exported snapshot; after the writer commits, a second export sees it.
+    The export itself never reads or writes anything but the four tables."""
+
+    async def scenario() -> tuple[int, int]:
+        writer = create_async_engine(migrated_postgres_url, future=True)
+        reader_url = migrated_postgres_url
+        try:
+            async with writer.connect() as writer_conn:
+                writer_txn = await writer_conn.begin()
+                await writer_conn.execute(
+                    text(
+                        "INSERT INTO model_routes (id, requested_model, match_type, endpoint,"
+                        " provider, upstream_model, priority, enabled, visible_in_models,"
+                        " supports_streaming, capabilities, created_at, updated_at) VALUES"
+                        " (:id, 'synthetic/concurrent-v1', 'exact', '/v1/chat/completions',"
+                        " 'openai', 'synthetic/concurrent-v1', 100, true, true, true,"
+                        " :capabilities, now(), now())"
+                    ),
+                    {"id": str(uuid.uuid4()), "capabilities": json.dumps({"text": True})},
+                )
+                # Snapshot while the writer's row is uncommitted.
+                doc_snapshot = await export_baseline(reader_url, now=datetime.now(UTC))
+                # A concurrent second export in the same window is identical
+                # (same snapshot semantics, read-only, deterministic rows).
+                doc_second = await export_baseline(reader_url, now=datetime.now(UTC))
+                assert doc_snapshot.content_sha256 == doc_second.content_sha256
+                # The uncommitted row must NOT be visible.
+                assert not any(
+                    row.requested_model == "synthetic/concurrent-v1" for row in doc_snapshot.routes
+                )
+                await writer_txn.commit()
+            doc_after = await export_baseline(reader_url, now=datetime.now(UTC))
+            assert any(
+                row.requested_model == "synthetic/concurrent-v1" for row in doc_after.routes
+            )
+            return (
+                sum(1 for row in doc_snapshot.routes if row.requested_model == "synthetic/concurrent-v1"),
+                sum(1 for row in doc_after.routes if row.requested_model == "synthetic/concurrent-v1"),
+            )
+        finally:
+            # Cleanup: remove the probe row so re-runs stay idempotent.
+            cleanup = create_async_engine(migrated_postgres_url, future=True)
+            try:
+                async with cleanup.begin() as connection:
+                    await connection.execute(
+                        text(
+                            "DELETE FROM model_routes WHERE provider = 'openai'"
+                            " AND requested_model = 'synthetic/concurrent-v1'"
+                        )
+                    )
+            finally:
+                await cleanup.dispose()
+
+    before, after = asyncio.run(scenario())
+    assert before == 0
+    assert after == 1
 
 
 def test_export_baseline_paginates_beyond_one_page(migrated_postgres_url: str) -> None:
@@ -600,3 +686,105 @@ def test_offline_replay_equivalence_and_verify(migrated_postgres_url: str, tmp_p
         assert verify.exit_code == 0, verify.output
         assert "valid: yes" in verify.stdout
         assert "state: READY" in verify.stdout
+
+
+def test_fx_normalization_matches_runtime_pricing_lookup(migrated_postgres_url: str) -> None:
+    """R2 FX proof: offline normalization must agree with the runtime path.
+
+    Proves, with disposable fx_rates rows and the real
+    PricingService.convert_to_eur lookup:
+    (a) a USD-denominated price normalized to the canonical native-to-EUR
+        pair (USD->EUR) converts at runtime to exactly the expected EUR
+        cost;
+    (b) the runtime never silently inverts an EUR->USD row, so a USD
+        lookup with only the inverse pair present must raise; this is why
+        the offline validator derives the reciprocal deterministically
+        instead of relabeling a direction;
+    (c) the validator reciprocal is deterministic at 9 decimal places
+        (ROUND_HALF_UP) and stable under double inversion.
+    """
+    source = f"obj180b-fx-proof-{uuid.uuid4().hex[:12]}"
+    at = datetime(2026, 9, 22, 12, 0, tzinfo=UTC)
+
+    async def _seed(pair: tuple[str, str], rate: str, source_: str) -> uuid.UUID:
+        engine = create_async_engine(migrated_postgres_url, future=True)
+        try:
+            async with engine.begin() as connection:
+                row_id = uuid.uuid4()
+                await connection.execute(
+                    text(
+                        "INSERT INTO fx_rates (id, base_currency, quote_currency, rate,"
+                        " valid_from, source, created_at) VALUES"
+                        " (:id, :base, :quote, :rate, :valid_from, :source, now())"
+                    ),
+                    {
+                        "id": str(row_id),
+                        "base": pair[0],
+                        "quote": pair[1],
+                        "rate": rate,
+                        "valid_from": datetime(2026, 1, 1, tzinfo=UTC),
+                        "source": source_,
+                    },
+                )
+                return row_id
+        finally:
+            await engine.dispose()
+
+    async def _cleanup(source_: str) -> None:
+        engine = create_async_engine(migrated_postgres_url, future=True)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text("DELETE FROM fx_rates WHERE source = :source"),
+                    {"source": source_},
+                )
+        finally:
+            await engine.dispose()
+
+    async def _convert_or_raise(
+        amount: Decimal, currency: str
+    ) -> tuple[Decimal, FxConversionResult]:
+        engine = create_async_engine(migrated_postgres_url, future=True)
+        try:
+            async with engine.connect() as connection:
+                transaction = await connection.begin()
+                session_factory = async_sessionmaker(
+                    bind=connection, class_=AsyncSession, expire_on_commit=False
+                )
+                try:
+                    async with session_factory() as session:
+                        service = PricingService(
+                            pricing_rules_repository=PricingRulesRepository(session),
+                            fx_rates_repository=FxRatesRepository(session),
+                        )
+                        return await service.convert_to_eur(amount, currency, at=at)
+                finally:
+                    await transaction.rollback()
+        finally:
+            await engine.dispose()
+
+    # (a) Canonical native-to-EUR pair: USD->EUR. The emitted normalized
+    #     rate must produce exactly the expected EUR cost at runtime.
+    seeded = asyncio.run(_seed(("USD", "EUR"), "0.925925926", source))
+    try:
+        eur_cost, conversion = asyncio.run(_convert_or_raise(Decimal("1.00"), "USD"))
+        assert eur_cost == Decimal("0.925925926")
+        assert conversion.rate == Decimal("0.925925926")
+        assert conversion.from_currency == "USD"
+        assert conversion.to_currency == "EUR"
+        assert conversion.fx_rate_id == seeded
+    finally:
+        asyncio.run(_cleanup(source))
+
+    # (b) Only the inverse pair present: the runtime must not invert it.
+    inverse_source = f"{source}-inverse"
+    asyncio.run(_seed(("EUR", "USD"), "1.08", inverse_source))
+    try:
+        with pytest.raises(FxRateNotFoundError):
+            asyncio.run(_convert_or_raise(Decimal("1.00"), "USD"))
+    finally:
+        asyncio.run(_cleanup(inverse_source))
+
+    # (c) Deterministic reciprocal: 9dp ROUND_HALF_UP, double-inversion stable.
+    assert _reciprocal(Decimal("1.08")) == Decimal("0.925925926")
+    assert _reciprocal(_reciprocal(Decimal("1.08"))) == Decimal("1.080000000")

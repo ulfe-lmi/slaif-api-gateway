@@ -22,6 +22,16 @@ class RefreshPolicy:
     fx_stale_blocked: timedelta
 
     def source_age_state(self, age: timedelta) -> str:
+        """Source freshness with exact boundaries (defaults: 24h / 72h).
+
+        - ``fresh``   when age < review threshold
+        - ``review``  when review threshold <= age <= blocked threshold
+        - ``blocked`` when age > blocked threshold
+
+        The reference time for offline review is the bundle's
+        ``generated_at`` (a deterministic, replayable clock); a future live
+        apply re-checks freshness against its own current clock.
+        """
         if age < self.source_stale_review:
             return "fresh"
         if age <= self.source_stale_blocked:
@@ -29,6 +39,7 @@ class RefreshPolicy:
         return "blocked"
 
     def fx_age_state(self, age: timedelta) -> str:
+        """FX publication-age state with the same boundary shape (defaults: 3d / 7d)."""
         if age < self.fx_stale_review:
             return "fresh"
         if age <= self.fx_stale_blocked:

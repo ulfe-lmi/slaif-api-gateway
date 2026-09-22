@@ -1,7 +1,8 @@
 # Admin: catalog refresh (offline review)
 
 Operator entry points for the working offline slice of the catalog refresh
-workflow (objective 180). Full semantics live in
+workflow. Live source retrieval is unavailable in this version and no
+refresh or apply command exists in this version. Full semantics live in
 [`docs/catalog-refresh.md`](../../docs/catalog-refresh.md).
 
 ## Current entry points
@@ -38,17 +39,19 @@ tooling.
 ## What does not exist yet
 
 - **No refresh command.** Live source retrieval (provider APIs, ECB FX) and
-  Codex-assisted research are planned for objective 181 and are not
-  implemented. Bundles are produced out-of-band and reviewed here.
+  Codex-assisted research are planned for a later slice and are not
+  implemented in this version. Bundles are produced out-of-band and reviewed
+  here.
 - **No apply command.** Supersession/update of existing rows with accounting
-  protections is planned for objective 182. Until then, every execution plan
-  is create-only and the report marks existing-row apply as NOT_SUPPORTED.
+  protections is planned for a later slice. Until it exists, every execution
+  plan is create-only and the report marks existing-row apply as BLOCKED (no
+  apply operation in this version).
 
 Do not add shell scripts or dashboard buttons that claim to refresh or apply
-catalog data before those objectives exist; an honest NOT_SUPPORTED label is
-part of the contract.
+catalog data before those slices exist; an honest blocked label is part of
+the contract.
 
-## Eventual wrapper contract (planned, objective 183)
+## Eventual wrapper contract (planned for a later slice)
 
 When the live-research and audited-apply slices land, the intended admin
 surface will be a thin wrapper around the same primitives documented here:

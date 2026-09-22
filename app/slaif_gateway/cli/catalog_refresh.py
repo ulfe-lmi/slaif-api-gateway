@@ -1,8 +1,9 @@
 """CLI commands for the bounded offline catalog refresh review workflow.
 
-Objective 180 scope: review, verify, and read-only export-baseline only.
-There is no refresh command and no apply command; supersession/apply is
-NOT_SUPPORTED until objective 182 and must never be claimed to work.
+Offline scope: review, verify, and read-only export-baseline only. Live
+source retrieval is unavailable in this version, and there is no refresh or
+apply command in this version; supersession/apply must never be claimed to
+work.
 
 Exit codes:
 - 0  review state READY
@@ -19,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -59,7 +61,7 @@ from slaif_gateway.services.catalog_refresh.validation import (
     validation_json_bytes,
 )
 
-app = typer.Typer(help="Bounded offline catalog refresh review (no apply exists yet)")
+app = typer.Typer(help="Bounded offline catalog refresh review (no refresh or apply command exists in this version)")
 
 EXIT_READY = 0
 EXIT_READY_WITH_WARNINGS = 10
@@ -68,8 +70,8 @@ EXIT_VERIFY_INVALID = 30
 EXIT_DATA_ERROR = 65
 
 STAGE_LINE = (
-    "offline review (objective 180): review/export/verify only; no apply command "
-    "exists; supersession/apply NOT_SUPPORTED until 182"
+    "offline review: review/export/verify only; live source retrieval unavailable "
+    "in this version; no refresh or apply command exists in this version"
 )
 
 DEFAULT_SEAL_KEY = Path("~/.local/state/slaif/catalog-refresh/seal.key")
@@ -83,13 +85,16 @@ def _atomic_write(path: Path, data: bytes, mode: int) -> None:
         with os.fdopen(fd, "wb") as handle:
             handle.write(data)
             handle.flush()
+            os.fchmod(handle.fileno(), mode)  # exact mode before the rename
             os.fsync(handle.fileno())
-        os.chmod(tmp_name, mode)
         os.replace(tmp_name, path)
     except BaseException:
         try:
             os.unlink(tmp_name)
         except OSError:
+            # The temp file may already be gone (renamed or cleaned by a
+            # concurrent failure path); unlink ENOENT is expected here and
+            # must not mask the original exception being re-raised.
             pass
         raise
     dir_fd = os.open(directory, os.O_RDONLY)
@@ -161,7 +166,7 @@ def _minimal_blocked_html(*, run_id: str, code: str, detail: str, generated_at: 
         f"<dt>Generated at</dt><dd>{esc(generated_at)}</dd>",
         "</dl>",
         "<p class='muted'>This minimal blocked run is not sealed: sealing requires the complete canonical input set, which was unavailable for this run.</p>",
-        "<footer>Offline scope: review/export/verify only — no refresh or apply command exists yet; supersession apply is NOT_SUPPORTED until objective 182.</footer>",
+        "<footer>Offline scope: review/export/verify only — live source retrieval is unavailable in this version and no refresh or apply command exists in this version.</footer>",
         "</main>",
         "</body>",
         "</html>",
@@ -190,17 +195,31 @@ def _publish_blocked_run(
     generated_at: str,
     bundle_canonical: bytes | None,
 ) -> Path:
-    """Publish a safe, unsealed BLOCKED run directory (new only, atomic)."""
+    """Publish a safe, unsealed BLOCKED run directory (new only, atomic).
+
+    The small run is assembled in a private staging directory and published
+    with one atomic directory rename; a failure leaves nothing at the final
+    path.
+    """
     run_dir = run_root / run_name
     run_root.mkdir(parents=True, exist_ok=True)
-    try:
-        run_dir.mkdir()
-    except FileExistsError as exc:
-        raise CliError(f"run directory already exists; refusing to overwrite: {run_dir}") from exc
-    _atomic_write(run_dir / "REVIEW.html", _minimal_blocked_html(run_id=run_name, code=code, detail=detail, generated_at=generated_at), 0o644)
-    _atomic_write(run_dir / "validation.json", _minimal_blocked_validation_json(run_id=run_name, code=code, detail=detail, generated_at=generated_at), 0o644)
+    if run_dir.exists() or run_dir.is_symlink():
+        raise CliError(f"run directory already exists; refusing to overwrite: {run_dir}")
+    files: dict[str, bytes] = {
+        "REVIEW.html": _minimal_blocked_html(run_id=run_name, code=code, detail=detail, generated_at=generated_at),
+        "validation.json": _minimal_blocked_validation_json(run_id=run_name, code=code, detail=detail, generated_at=generated_at),
+    }
     if bundle_canonical is not None:
-        _atomic_write(run_dir / "catalog-refresh.json", bundle_canonical, 0o644)
+        files["catalog-refresh.json"] = bundle_canonical
+    staging = Path(tempfile.mkdtemp(prefix=f".staging-{run_name}-", dir=run_root))
+    try:
+        for name in sorted(files):
+            _atomic_write(staging / name, files[name], 0o644)
+        os.chmod(staging, 0o755)
+        os.replace(staging, run_dir)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     return run_dir
 
 
@@ -425,7 +444,10 @@ def _review_impl(
             run_root=run_root, bundle=bundle, code=exc.code, detail=exc.detail, json_output=json_output,
         )
 
-    # 5) Publish the sealed run (new directory only, atomic, sealed last).
+    # 5) Build the complete run in a private staging directory, then publish
+    #    it with one atomic directory rename. The run is sealed last, so a
+    #    failure at any point removes the staging tree and never leaves a
+    #    publicly complete-looking unsealed review at the final path.
     content: dict[str, bytes] = {
         "catalog-refresh.json": canonical_bundle_bytes(bundle),
         "catalog-baseline.json": (
@@ -440,14 +462,21 @@ def _review_impl(
     key_bytes = ensure_seal_key(seal_key_path)
     run_dir = run_root / bundle.run_id
     run_root.mkdir(parents=True, exist_ok=True)
+    if run_dir.exists() or run_dir.is_symlink():
+        raise CliError(f"run directory already exists; refusing to overwrite completed output: {run_dir}")
+    staging = Path(tempfile.mkdtemp(prefix=f".staging-{bundle.run_id}-", dir=run_root))
     try:
-        run_dir.mkdir()
-    except FileExistsError as exc:
-        raise CliError(f"run directory already exists; refusing to overwrite completed output: {run_dir}") from exc
-    for name in sorted(content):
-        _atomic_write(run_dir / name, content[name], 0o644)
-    _atomic_write(run_dir / "manifest.json", build_manifest(content), 0o644)
-    seal_run(run_dir, key_bytes)
+        for name in sorted(content):
+            _atomic_write(staging / name, content[name], 0o644)
+        _atomic_write(staging / "manifest.json", build_manifest(content), 0o644)
+        seal_run(staging, key_bytes)  # receipt.json is the final file
+        os.chmod(staging, 0o755)  # standard run directory mode at publication
+        os.replace(staging, run_dir)  # atomic same-filesystem directory rename
+    except BaseException:
+        # Never leave a partial, unsealed run behind; the original error is
+        # re-raised to the caller after the staging tree is removed.
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
     blockers = sum(1 for warning in report.warnings if warning.severity == "BLOCKER")
     _emit_review_summary(

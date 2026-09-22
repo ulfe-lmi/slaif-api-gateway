@@ -168,10 +168,11 @@ def test_symlink_content_file_is_refused(sealed_run: tuple[Path, Path]) -> None:
 
 
 def test_file_size_bound_is_enforced(sealed_run: tuple[Path, Path]) -> None:
+    """A single run file above the 32 MiB acceptance bound is refused."""
     run_dir, seal_key = sealed_run
     victim = run_dir / "REVIEW.html"
     data = victim.read_bytes()
-    victim.write_bytes(data + b"x" * (17 * 1024 * 1024))
+    victim.write_bytes(data + b"x" * (33 * 1024 * 1024))
     try:
         assert not verify_run(run_dir, _raw_key(seal_key)).valid
     finally:
@@ -273,3 +274,124 @@ def test_no_key_material_in_artifacts(sealed_run: tuple[Path, Path]) -> None:
         data = (run_dir / name).read_bytes()
         assert secret_hex not in data.decode("utf-8", errors="replace")
         assert bytes.fromhex(secret_hex) not in data
+
+# --- 180-b adversarial additions ---------------------------------------------
+
+
+def test_parent_symlink_component_is_refused(sealed_run: tuple[Path, Path]) -> None:
+    run_dir, seal_key = sealed_run
+    outside = run_dir.parent / "outside-dir"
+    outside.mkdir()
+    (outside / "sneaky.json").write_bytes(b"{}")
+    inner = run_dir / "sub"
+    inner.mkdir()
+    os.symlink(outside, inner / "link")
+    try:
+        manifest = json.loads((run_dir / "manifest.json").read_bytes())
+        manifest["files"].append(
+            {"path": "sub/link/sneaky.json", "sha256": hashlib.sha256(b"{}").hexdigest(), "bytes": 2}
+        )
+        (run_dir / "manifest.json").write_bytes((json.dumps(manifest, sort_keys=True, indent=1) + "\n").encode("utf-8"))
+        assert not verify_run(run_dir, _raw_key(seal_key)).valid
+    finally:
+        (inner / "link").unlink()
+        inner.rmdir()
+        (outside / "sneaky.json").unlink()
+        outside.rmdir()
+
+
+def test_dangling_symlink_content_file_is_refused(sealed_run: tuple[Path, Path]) -> None:
+    run_dir, seal_key = sealed_run
+    target = run_dir / "validation.json"
+    data = target.read_bytes()
+    target.unlink()
+    os.symlink(run_dir.parent / "nonexistent-target", target)
+    try:
+        assert not verify_run(run_dir, _raw_key(seal_key)).valid
+    finally:
+        target.unlink()
+        target.write_bytes(data)
+
+
+def test_concurrent_seal_key_initialization_single_winner(tmp_path: Path) -> None:
+    """Race-safe O_EXCL key creation: one winner, the rest reuse its key."""
+    import threading
+
+    key_path = tmp_path / "concurrent.key"
+    results: list[bytes] = []
+    errors: list[Exception] = []
+
+    def worker() -> None:
+        try:
+            results.append(ensure_seal_key(key_path))
+        except Exception as exc:  # pragma: no cover - surfaced via errors
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert not errors
+    assert len(results) == 8
+    assert len({result.hex() for result in results}) == 1  # one key won
+    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+    # A follow-up load returns the same bytes; the key was never replaced.
+    assert ensure_seal_key(key_path) == results[0]
+
+
+def test_concurrent_existing_invalid_key_is_never_replaced(tmp_path: Path) -> None:
+    """A loser in the race must fail on an invalid winner key, not overwrite it."""
+    key_path = tmp_path / "invalid.key"
+    key_path.write_bytes(b"not-a-valid-key")
+    with pytest.raises(CatalogRefreshSealError):
+        ensure_seal_key(key_path)
+    assert key_path.read_bytes() == b"not-a-valid-key"
+
+
+def test_manifest_duplicate_path_is_refused(sealed_run: tuple[Path, Path]) -> None:
+    run_dir, seal_key = sealed_run
+    manifest = json.loads((run_dir / "manifest.json").read_bytes())
+    first = dict(manifest["files"][0])
+    manifest["files"].append(first)
+    try:
+        (run_dir / "manifest.json").write_bytes((json.dumps(manifest, sort_keys=True, indent=1) + "\n").encode("utf-8"))
+        assert not verify_run(run_dir, _raw_key(seal_key)).valid
+    finally:
+        manifest["files"] = manifest["files"][: -1]
+        (run_dir / "manifest.json").write_bytes((json.dumps(manifest, sort_keys=True, indent=1) + "\n").encode("utf-8"))
+
+
+def test_malformed_manifest_shape_is_refused(sealed_run: tuple[Path, Path]) -> None:
+    run_dir, seal_key = sealed_run
+    original = (run_dir / "manifest.json").read_bytes()
+    for payload in (b"[]", b'{"schema_version": "2", "files": []}', b'{"files": []}',
+                    b'{"schema_version": "1", "files": [{"path": "a"}]}'):
+        (run_dir / "manifest.json").write_bytes(payload)
+        assert not verify_run(run_dir, _raw_key(seal_key)).valid
+    (run_dir / "manifest.json").write_bytes(original)
+
+
+def test_review_failure_leaves_no_partial_run(tmp_path: Path, monkeypatch) -> None:
+    """A failure during staging/publish must leave nothing at the final path."""
+    import slaif_gateway.cli.catalog_refresh as cr
+
+    def boom(_run_dir, _key):
+        raise CatalogRefreshSealError("simulated seal failure")
+
+    monkeypatch.setattr(cr, "seal_run", boom)
+    result = runner.invoke(
+        app,
+        [
+            "catalog-refresh", "review",
+            str(FIXTURES / "bundle-first-install.json"),
+            "--first-install",
+            "--run-root", str(tmp_path / "runs"),
+            "--seal-key", str(tmp_path / "seal.key"),
+        ],
+    )
+    assert result.exit_code == 65, result.output
+    run_root = tmp_path / "runs"
+    assert not (run_root / "fixture-first-install-001").exists()
+    leftovers = [p.name for p in run_root.iterdir()] if run_root.exists() else []
+    assert leftovers == [], f"staging leftovers: {leftovers}"

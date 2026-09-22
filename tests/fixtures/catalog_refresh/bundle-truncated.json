@@ -1,6 +1,6 @@
 {
  "baseline": {
-  "content_sha256": "9abb0311363e706e84ae27b8567ddc697041b7c7ec38d183f667ea42db7b22bc",
+  "content_sha256": "97c66adbe5886d8dadbae6dc2760212ab84c1a49edf341415d033f573f6a3666",
   "exported_at": "2026-09-21T10:00:00Z",
   "mode": "exported_file",
   "postgres_version": null,
@@ -60,7 +60,8 @@
  },
  "sources": [
   {
-   "content_sha256": "d3469350ec6492ad9991ce80f3fe9e5f9f063a0946666da39861c3164e240ad1",
+   "content_sha256": "1624caa9a36a185dfd54d0b06d9c3fefb45b70740cebb629db8cbba304eba08c",
+   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9nb25lLXYxfG9wZW5yb3V0ZXJfbW9kZWxzX2FwaSIsInNuYXBzaG90Ijoic3ludGhldGljLW9mZmxpbmUtZXZpZGVuY2UifQ==",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/gone-v1",

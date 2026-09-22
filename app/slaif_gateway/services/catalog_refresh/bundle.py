@@ -3,6 +3,12 @@
 The bundle is the single source of proposal semantics. Everything downstream
 (import TSVs/JSON, validation, report, seal) is derived from its normalized
 bytes so that re-running the pipeline on the same input is byte-stable.
+
+Artifact rules (180-b): executable import artifacts carry *only* the
+permitted intended operations — create rows. Duplicates (no-op rows),
+updates, and excluded rows never leak into the TSV/JSON deltas; the full
+catalog facts, including excluded rows, remain in the canonical bundle and
+the review report.
 """
 
 from __future__ import annotations
@@ -12,12 +18,13 @@ import io
 import json
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Sequence
 
 from pydantic import ValidationError
 
 from slaif_gateway.schemas.catalog_refresh import (
     RefreshBundle,
+    RouteFacts,
     SourceRecord,
 )
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
@@ -122,17 +129,17 @@ def _utc():
     return UTC
 
 
-def generate_route_tsv(bundle: RefreshBundle, selected: set[tuple[str, str]]) -> bytes:
-    """Deterministic routes-proposal.tsv for the selected routable rows."""
+def generate_route_tsv(bundle: RefreshBundle, routes: Sequence[RouteFacts]) -> bytes:
+    """Deterministic routes-proposal.tsv for exactly the permitted create rows.
+
+    The caller (validation) decides which routes are executable creates;
+    this function only serializes them. Duplicates/updates/excluded rows are
+    never passed in and therefore never leak into the executable artifact.
+    """
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=ROUTE_TSV_FIELDS, delimiter="\t")
     writer.writeheader()
-    rows = [
-        route
-        for route in bundle.routes
-        if (route.provider, route.requested_model) in selected
-    ]
-    for route in sorted(rows, key=lambda r: (r.provider, r.requested_model, r.match_type, r.endpoint)):
+    for route in sorted(routes, key=lambda r: (r.provider, r.requested_model, r.match_type, r.endpoint)):
         writer.writerow(
             {
                 "requested_model": route.requested_model,
@@ -151,16 +158,20 @@ def generate_route_tsv(bundle: RefreshBundle, selected: set[tuple[str, str]]) ->
     return buffer.getvalue().encode("utf-8")
 
 
-def generate_pricing_tsv(bundle: RefreshBundle, selected: set[tuple[str, str]]) -> bytes:
-    """Deterministic pricing-proposal.tsv for the selected priced rows."""
+def generate_pricing_tsv(
+    bundle: RefreshBundle,
+    rows: Sequence[Any],
+    upstream_by_key: dict[tuple[str, str], str],
+) -> bytes:
+    """Deterministic pricing-proposal.tsv for exactly the permitted create rows.
+
+    The ``model`` column carries the *upstream* model ID that the paired
+    route forwards to (public aliases need not equal upstream IDs); the
+    caller resolves the mapping through ``upstream_by_key``.
+    """
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=PRICING_TSV_FIELDS, delimiter="\t")
     writer.writeheader()
-    rows = [
-        pricing
-        for pricing in bundle.pricing
-        if (pricing.provider, pricing.model) in selected
-    ]
 
     def _dim(pricing, name: str) -> str:
         for dimension in pricing.dimensions:
@@ -169,11 +180,12 @@ def generate_pricing_tsv(bundle: RefreshBundle, selected: set[tuple[str, str]]) 
         return ""
 
     for pricing in sorted(rows, key=lambda p: (p.provider, p.model, p.currency)):
+        upstream = upstream_by_key.get((pricing.provider, pricing.model), pricing.model)
         first_source = pricing.provenance.sources[0]
         writer.writerow(
             {
                 "provider": pricing.provider,
-                "model": pricing.model,
+                "model": upstream,
                 "endpoint": pricing.endpoint,
                 "currency": pricing.currency,
                 "input_price_per_1m": _dim(pricing, "input"),
@@ -182,7 +194,7 @@ def generate_pricing_tsv(bundle: RefreshBundle, selected: set[tuple[str, str]]) 
                 "reasoning_price_per_1m": _dim(pricing, "reasoning"),
                 "request_price": _dim(pricing, "request"),
                 "valid_from": pricing.valid_from.astimezone(_utc()).isoformat(),
-                "source_url": _first_authoritative_url(bundle, pricing),
+                "source_url": _first_provenance_url(bundle, pricing),
                 "source_retrieved_at": _source_retrieved_at(bundle, first_source),
                 "pricing_metadata": json.dumps(
                     {"dimensions": {d.name: {"value": d.value, "unit": d.unit} for d in pricing.dimensions}},
@@ -195,25 +207,55 @@ def generate_pricing_tsv(bundle: RefreshBundle, selected: set[tuple[str, str]]) 
     return buffer.getvalue().encode("utf-8")
 
 
-def generate_fx_json(bundle: RefreshBundle) -> bytes:
-    """Deterministic fx-proposal.json (FX import supports JSON, not TSV)."""
-    rows = [
+@dataclass(frozen=True, slots=True)
+class NormalizedFxRow:
+    """One executable FX create row in the canonical runtime direction.
+
+    The runtime converts costs with
+    ``find_latest_rate(base_currency=native, quote_currency=EUR)``, so the
+    import-ready pair is always native -> EUR. Rows derived as the reciprocal
+    of a supplied EUR -> native quotation keep the original pair recorded so
+    the direction is never silently relabeled.
+    """
+
+    base_currency: str
+    quote_currency: str
+    rate: str
+    source: str | None
+    valid_from: Any
+    valid_until: Any | None
+    published_at: Any | None
+    derived_reciprocal: bool
+    source_pair: str | None = None
+
+
+def generate_fx_json(rows: Sequence[NormalizedFxRow]) -> bytes:
+    """Deterministic fx-proposal.json for exactly the permitted create rows.
+
+    Every row is in the canonical native -> EUR direction the runtime uses;
+    derived reciprocals are recorded (never relabeled) in the row metadata.
+    """
+    payload_rows = [
         {
-            "base_currency": fx.base_currency,
-            "quote_currency": fx.quote_currency,
-            "rate": str(Decimal(fx.rate)),
-            "source": fx.source,
-            "valid_from": fx.valid_from.astimezone(_utc()).isoformat(),
-            "valid_until": fx.valid_until.astimezone(_utc()).isoformat() if fx.valid_until else None,
-            "metadata": {"published_at": fx.published_at.astimezone(_utc()).isoformat() if fx.published_at else None},
+            "base_currency": row.base_currency,
+            "quote_currency": row.quote_currency,
+            "rate": str(Decimal(row.rate)),
+            "source": row.source,
+            "valid_from": row.valid_from.astimezone(_utc()).isoformat(),
+            "valid_until": row.valid_until.astimezone(_utc()).isoformat() if row.valid_until else None,
+            "metadata": {
+                "published_at": row.published_at.astimezone(_utc()).isoformat() if row.published_at else None,
+                "derived_reciprocal": row.derived_reciprocal,
+                "source_pair": row.source_pair,
+            },
             "notes": "",
         }
-        for fx in sorted(bundle.fx, key=lambda f: (f.base_currency, f.quote_currency, f.valid_from))
+        for row in sorted(rows, key=lambda r: (r.base_currency, r.quote_currency, str(r.valid_from)))
     ]
-    return (json.dumps(rows, sort_keys=True, indent=1) + "\n").encode("utf-8")
+    return (json.dumps(payload_rows, sort_keys=True, indent=1) + "\n").encode("utf-8")
 
 
-def _first_authoritative_url(bundle: RefreshBundle, pricing) -> str:
+def _first_provenance_url(bundle: RefreshBundle, pricing: Any) -> str:
     for source_key in pricing.provenance.sources:
         for source in bundle.sources:
             if f"{source.provider}|{source.model}|{source.source_kind}" == source_key:
@@ -221,74 +263,24 @@ def _first_authoritative_url(bundle: RefreshBundle, pricing) -> str:
     return ""
 
 
-@dataclass(frozen=True, slots=True)
-class BaselineRowProxy:
-    """Attribute proxy so baseline rows feed the existing import classifiers."""
-
-    requested_model: str | None = None
-    match_type: str | None = None
-    endpoint: str | None = None
-    provider: str | None = None
-    upstream_model: str | None = None
-    priority: int | None = None
-    enabled: bool = False
-    visible_in_models: bool = False
-    supports_streaming: bool = False
-    capabilities: dict[str, object] | None = None
-    notes: str | None = None
-    currency: str | None = None
-    valid_from: object | None = None
-    valid_until: object | None = None
-    base_currency: str | None = None
-    quote_currency: str | None = None
-    rate: str | None = None
-    source: str | None = None
-
-
-def route_proxy(row: Any) -> BaselineRowProxy:
-    return BaselineRowProxy(
-        requested_model=row.requested_model,
-        match_type=row.match_type,
-        endpoint=row.endpoint,
-        provider=row.provider,
-        upstream_model=row.upstream_model,
-        priority=row.priority,
-        enabled=row.enabled,
-        visible_in_models=row.visible_in_models,
-        supports_streaming=row.supports_streaming,
-        capabilities=dict(row.capabilities or {}),
-        notes=None,
-    )
-
-
-def pricing_proxy(row: Any) -> BaselineRowProxy:
-    return BaselineRowProxy(
-        provider=row.provider,
-        upstream_model=row.upstream_model,
-        endpoint=row.endpoint,
-        currency=row.currency,
-        enabled=row.enabled,
-        valid_from=row.valid_from,
-        valid_until=row.valid_until,
-    )
-
-
-def fx_proxy(row: Any) -> BaselineRowProxy:
-    return BaselineRowProxy(
-        base_currency=row.base_currency,
-        quote_currency=row.quote_currency,
-        rate=row.rate,
-        source=row.source,
-        enabled=True,
-        valid_from=row.valid_from,
-        valid_until=row.valid_until,
-    )
-
-
 def selected_model_keys(bundle: RefreshBundle) -> set[tuple[str, str]]:
-    """(provider, model) keys selected by the bundle selection filters."""
+    """(provider, public model) keys selected by the bundle selection filters.
+
+    Pricing facts keyed by an upstream model ID that a selected route of the
+    same provider forwards to are normalized onto that route's public name,
+    so alias cases do not create phantom selected models.
+    """
     providers = set(bundle.selection.providers)
     included = set(bundle.selection.model_include)
+
+    public_by_upstream: dict[tuple[str, str], set[str]] = {}
+    public_names: set[tuple[str, str]] = set()
+    for route in bundle.routes:
+        if route.provider not in providers:
+            continue
+        public_by_upstream.setdefault((route.provider, route.upstream_model), set()).add(route.requested_model)
+        public_names.add((route.provider, route.requested_model))
+
     keys: set[tuple[str, str]] = set()
     for provider, model in {
         (item.provider, getattr(item, "model", None) or item.requested_model)
@@ -296,9 +288,17 @@ def selected_model_keys(bundle: RefreshBundle) -> set[tuple[str, str]]:
     }:
         if provider not in providers:
             continue
-        if included and model not in included:
-            continue
-        keys.add((provider, model))
+        # A fact key that is already a public route name stays as-is; a key
+        # that is not a public name is resolved through the route(s) of this
+        # provider that forward to that upstream model.
+        if (provider, model) in public_names:
+            resolved = {model}
+        else:
+            resolved = public_by_upstream.get((provider, model)) or {model}
+        for candidate in sorted(resolved):
+            if included and candidate not in included:
+                continue
+            keys.add((provider, candidate))
     return keys
 
 

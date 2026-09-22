@@ -1,13 +1,15 @@
 # Catalog Refresh (Offline Review)
 
-> **Status:** Working offline slice (objective 180 of the catalog refresh thread)
+> **Status:** Working offline slice of the catalog refresh workflow
 > **Audience:** Administrators and maintainers who refresh provider catalogs
-> **Boundary:** Offline review, export, and verify only. No live retrieval and no apply command exist yet.
+> **Boundary:** Offline review, export, and verify only. Live source retrieval
+> is unavailable in this version and no refresh or apply command exists in
+> this version.
 
 SLAIF catalog refresh is a staged workflow whose end goal is: one refresh,
 one trustworthy one-page report, and one explicit audited apply command.
 This page documents the **working offline slice** and clearly separates it
-from the planned later slices.
+from later slices that do not exist yet.
 
 ## What exists now (offline)
 
@@ -40,18 +42,18 @@ their rules.
 
 ## What is planned later (not implemented, do not claim)
 
-- **Live sources and research (objective 181):** deterministic live provider
-  source retrieval (including ECB FX) and isolated Codex-assisted research.
+- **Live sources and research:** deterministic live provider source
+  retrieval (including ECB FX) and isolated Codex-assisted research.
   Nothing in this slice fetches from the network.
-- **Audited supersession and apply (objective 182):** atomic, audited
-  update/supersession of existing rows with accounting protections. Until
-  then, every execution plan is create-only and any represented
-  existing-row change is displayed as **NOT_SUPPORTED** for apply, never
+- **Audited supersession and apply:** atomic, audited update/supersession of
+  existing rows with accounting protections. Until it exists, every
+  execution plan is create-only and any represented existing-row change is
+  displayed as **BLOCKED** (no apply operation in this version), never
   executed.
-- **Shell UX, E2E, and docs completion (objective 183).**
+- **Shell UX, E2E, and docs completion.**
 
 No refresh or apply command exists. Any tool or script that claims to
-"apply" a catalog refresh before objective 182 is out of contract.
+"apply" a catalog refresh is out of contract.
 
 ## The proposal bundle (`catalog-refresh.json`)
 
@@ -65,15 +67,23 @@ provenance only**:
 - provider and model selection (an include filter may select a single model;
   there is no ten-model bootstrap requirement);
 - per-field provenance: provider, model, field, value, unit, currency,
-  authoritative URL, retrieval/publication times, extractor identity and
-  method, deterministic-versus-semantic extraction, and supporting sources;
-- source inventory with truncation and required/optional marking;
+  URL, retrieval/publication times, extractor identity and method,
+  deterministic-versus-semantic extraction, and supporting sources. Trust is
+  **derived, never declared**: no caller-supplied "authoritative" label
+  exists in the schema; classification (OFFICIAL / REVIEW / BLOCKED) comes
+  from (provider, source kind) → official-host rules plus evidence binding;
+- source inventory with truncation and required/optional marking, plus
+  optional inline evidence bytes bound to the declared content digest
+  (without supplied matching evidence a digest is unprovable offline and the
+  source classifies as REVIEW, not VERIFIED);
 - baseline identity and mode.
 
 The bundle is strict: unknown fields are rejected, identities are unique,
-money and FX are exact decimal strings (floats are rejected), datetimes are
-timezone-aware, URLs are bounded and credential-free, and duplicate JSON keys
-and non-finite values fail. A bundle can never carry a caller-supplied
+money and FX are exact decimal strings bounded to the database
+`Numeric(18,9)` contract (floats, huge exponents, and values beyond nine
+decimal places are rejected before any arithmetic), datetimes are
+timezone-aware, URLs are bounded and credential-free, and duplicate JSON
+keys and non-finite values fail. A bundle can never carry a caller-supplied
 READY state, confidence percentage, counter, or validator result: all of
 those are recomputed deterministically from the facts. Source and evidence
 content is data, never instructions, HTML, or an authority grant.
@@ -96,15 +106,24 @@ silent truncation. It exports metadata, not ORM dumps or settings:
 - provider **secret environment variable names may be retained (names only)**;
   values, connection strings, keys, token digests, users, sessions, request
   content, and unrelated data are never exported;
-- free-form notes and metadata are redacted and shape-bounded before export;
-- the document is self-authenticating: `content_sha256` covers the canonical
-  target identity plus rows (never the export timestamp), and `load`/`review`
-  recompute and reject mismatches. A stale or tampered baseline file is a
-  data error, not a valid baseline.
+- free-form notes and unrelated metadata are **not exported at all**: the
+  export is a field-specific allowlist (route/pricing/FX financial facts,
+  validity windows, capability booleans). There is no redaction regex and no
+  shape-bounded free text — ordinary private content in database notes or
+  metadata cannot survive into the document;
+- the `content_sha256` field is an **integrity check**, not
+  "self-authenticating": it covers the canonical target identity plus rows
+  (never the export timestamp), and `load`/`review` recompute and reject
+  mismatches. It detects later modification; it is not authentication and
+  not proof that the baseline is current. `sql_checked` records that SQL was
+  executed **when the document was exported** (a historical capture fact);
+  a review that consumes the document from a file states that separately. A
+  stale or tampered baseline file is a data error, not a valid baseline.
 
 Connection failure never becomes an empty bootstrap. The report always shows
-baseline mode, baseline age, target identity (without credentials), and
-whether SQL was actually checked.
+baseline mode, baseline age, target identity (without credentials), whether
+SQL was executed at the historical document export, and whether SQL was
+executed during the current review.
 
 ## Deterministic readiness
 
@@ -113,31 +132,63 @@ Warning severity is exactly `BLOCKER`, `REVIEW`, or `INFO`. Structural
 evidence is `VERIFIED`, `REVIEW`, or `BLOCKED`. No probability, confidence
 score, or model judgment may set state.
 
-Versioned operator policy defaults (deterministic, configurable per bundle
-policy block, tested at their boundaries):
+**State model.** A genuinely unchanged row is a no-op: it is excluded from
+the mutation plan and the executable artifacts and carries no gate impact, so
+a true no-change refresh is `READY` (NO CHANGES) with zero mutations. An
+actually **changed** existing row requires an update/supersession that no
+create-only executor can run, so it is an excluded mutation that makes the
+overall state `BLOCKED` (its apply operation does not exist in this
+version). `READY_WITH_WARNINGS` requires at least one REVIEW finding and no
+blockers. Gate failures are first-class findings: every `BLOCKED`/`REVIEW`
+gate appears in the warning list and counts, so `BLOCKED` is never shown
+with zero blocking issues. Executable import artifacts contain only permitted
+create rows; excluded, updated, and duplicate rows never leak into them
+while full facts remain in the bundle and report.
 
-| Rule | Threshold |
+Versioned operator policy defaults (deterministic, configurable per bundle
+policy block, tested at their exact boundaries; the offline reference time is
+the bundle `generated_at` — a future live apply re-checks freshness against
+its own clock):
+
+| Rule | Boundary (exact) |
 |---|---|
-| Price movement review | > 25% (exact 25% is not a review) |
-| Zero transition | any zero ↔ non-zero crossing is REVIEW, never a percentage |
-| FX movement review | > 3% |
-| Source retrieval age | > 24 h REVIEW, > 72 h BLOCKED for required sources |
-| FX publication age | > 3 calendar days REVIEW, > 7 days BLOCKED |
+| Price movement review | relative change > 25% (exact 25% is not a review) |
+| Zero transition | any zero ↔ non-zero crossing is REVIEW, never a percentage (no division by zero) |
+| FX movement review | normalized-pair relative change > 3% (exact 3% is not a review) |
+| Source retrieval age | age < 24 h fresh; 24 h ≤ age ≤ 72 h REVIEW; age > 72 h BLOCKED |
+| FX publication age | age < 3 calendar days fresh; 3 ≤ age ≤ 7 days REVIEW; age > 7 days BLOCKED |
 | Future/inconsistent timestamps | BLOCKED |
 
-Blocking conditions include: missing required pricing dimensions,
-unknown/ambiguous units, currency inconsistency for a selected model,
-authoritative contradiction, explicitly selected required model missing,
-truncated required source, and blocked FX pairs. Model disappearance
+FX direction: the canonical import-ready pair is **native currency → EUR**,
+the exact pair the runtime `PricingService.convert_to_eur` lookup uses
+(`find_latest_rate(base_currency=native, quote_currency=EUR)`). A supplied
+`EUR → native` quotation is reciprocated deterministically with `Decimal`
+and explicit 9-decimal precision, recorded as **derived** (with its source
+pair) and never silently relabeled; direct and reciprocal facts for the same
+pair must agree within 1e-8 or the run blocks. Baseline current prices and
+rates mirror the active lookup: disabled rows excluded, strict
+`valid_from ≤ t < valid_until`, no fallback to expired/future rows, and
+ambiguous overlapping active rows are reported instead of inventing a
+before-value. Currencies are compared before any delta; zero-crossings are
+explicit states, not percentages.
+
+Blocking conditions include: any actually-blocked proposed mutation
+(update/supersession excluded from a create-only plan), missing required
+pricing dimensions, unknown/ambiguous units, currency inconsistency for a
+selected model, contradiction between independently represented source
+observations, explicitly selected required model missing, truncated required
+source, blocked FX pairs, off-host/unsupported source provenance, and
+supplied evidence contradicting its declared digest. Model disappearance
 (a complete, non-truncated source omits a baseline model) is a REVIEW
 finding with retain-local, no-delete semantics — an outage or truncated
 retrieval is never counted as disappearance.
 
 All counts are recomputed from the inventory and row dispositions:
-considered = ready + excluded + blocked/incomplete; ready = new + changed +
-unchanged; prior-baseline missing or deprecated models are tracked
-separately. A no-change refresh is a truthful NO CHANGES result, not an
-invalid import.
+considered = ready + changed + excluded + blocked/incomplete + disappeared +
+deprecated + not-fetched; **ready = new + unchanged** (changed rows are not
+ready); prior-baseline missing or deprecated models are tracked separately.
+A no-change refresh is a truthful NO CHANGES result, not an invalid
+import.
 
 ## The one-page report (`REVIEW.html`)
 
@@ -147,16 +198,25 @@ network fetches, print-friendly, and safe on an ordinary laptop width. All
 data is escaped; evidence links are allowlisted; a restrictive CSP is added
 as defense-in-depth.
 
-The first screen answers: overall state and why; bootstrap/refresh mode and
-target baseline; provider/profile scope; recomputed counts; the ranked
-warning summary; and the gate checklist (retrieval, schema, completeness,
-pairing, change, unsupported, FX, import gates). The main content is
-**what changed**: price tables with old/new values, units, currencies, and
-percentages; route tables with current/proposed/reason; FX tables with
-current/proposed/delta/source/date. Everything else — new/changed/disappeared
-models, excluded rows and reason counts, collapsed unchanged rows, field
-provenance, every warning, full validator outputs, and the exact proposed
-import rows — is inside the same file. The detailed evidence files
+The first screen prioritizes the decision: overall state and why; blocker
+and REVIEW finding counts; selected scope (providers, model filter) and
+baseline (mode, target, SQL-evidence note); a compact per-provider
+change/completeness summary; the **create-only execution plan** (visually
+blocked when any plan is excluded/blocked); FX current/proposed/delta/date;
+aggregated important findings; the full gate checklist (sources, schema,
+pricing completeness, pairing, unsupported rows, unusual changes,
+completeness, and the routes/pricing/FX execution-plan gates); and the
+recomputed counts. A compact run identity line stays visible; expanded
+technical identifiers (revisions, artifact digests) live in a details
+section. The main content is **what changed**: price tables with old/new
+values, units, currencies, and signed percentages; route tables with current
+→ proposed values and the reason (no apply operation exists in this
+version); FX tables with current/proposed/delta/source/publication date,
+including derived-reciprocal markers. Everything else — new/changed/
+disappeared models, excluded rows and reason counts, collapsed unchanged
+rows, field provenance with derived (never declared) source classification,
+every warning, full validator outputs, and the exact proposed import rows —
+is inside the same file, on demand. The detailed evidence files
 (`validation.json`, TSV/JSON artifacts, manifest, receipt) exist for
 machines and audit; a human decision never requires opening them.
 
@@ -168,9 +228,13 @@ validation results, report, and provider/profile/policy/baseline
 identities. The seal key is runner-owned:
 
 - lives **outside** the run directory (enforced by the CLI);
-- is created atomically with mode `0600` and never silently overwritten;
+- is created race-safe (the winner completes a private temp file and
+  publishes it with an atomic link, so the final path only ever holds a
+  complete key; concurrent initializers reuse the verified key or fail)
+  with mode `0600` and is never silently overwritten;
 - must never be a provider, session, or other runtime key;
-- `verify` requires an existing key and never creates one.
+- `verify` requires an existing key and never creates one; it never writes
+  and never re-signs mutated input.
 
 The seal proves local integrity and correspondence between the report and
 its inputs. It is a local trust scope: an administrator who controls the key
@@ -181,9 +245,13 @@ sealed them.
 Tampering fails closed: altering any content file, the manifest, or the
 receipt — including coordinated tampering that recomputes all ordinary
 digests from local knowledge — fails verification without the sealing
-authority. Publication is immutable: a run directory is new-only, atomic,
-and refuses to overwrite completed output; manifest paths are strict
-relative regular files with no symlinks, traversal, or size/depth escapes.
+authority. Publication is immutable: a run is built in a **private staging
+directory** and published with one atomic directory rename (new-only,
+refuses existing output), so a failure leaves nothing complete-looking at
+the final path; manifest paths are strict relative regular files with no
+symlink components (leaf, parent, or dangling), traversal, or
+size/depth escapes, and every read is bounded through an `O_NOFOLLOW`
+descriptor with an `fstat`-fixed size.
 
 ## Exit codes
 
@@ -203,9 +271,10 @@ relative regular files with no symlinks, traversal, or size/depth escapes.
 ## Limits
 
 - Offline only: this slice makes no network calls and performs no Codex
-  research.
-- Apply is NOT_SUPPORTED: represented existing-row changes are displayed,
-  their execution plans are blocked, and no apply entry point exists.
+  research; live source retrieval is unavailable in this version.
+- Apply is unavailable: represented existing-row changes are displayed,
+  their execution plans are blocked, and no refresh or apply entry point
+  exists in this version.
 - The seal is a local integrity tool, not a substitute for GitHub/audit
   authority or protection against a key-holding administrator.
 - Baseline export reads four metadata tables; it is not a database backup

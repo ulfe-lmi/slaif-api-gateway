@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
@@ -87,31 +88,46 @@ def _assert_no_external_or_executable_resources(html_text: str) -> None:
 
 
 def test_first_screen_contains_required_decision_facts() -> None:
-    bundle = _bundle("bundle-refresh-ready.json")
-    report = _report_for(bundle, _baseline())
+    bundle = _bundle("bundle-first-install.json")
+    report = _report_for(bundle, None)
+    assert report.state == OVERALL_READY
     html_text = render_report(bundle, report.to_dict()).decode("utf-8")
     assert html_text.startswith("<!DOCTYPE html>")
     assert "<h1>SLAIF catalog refresh review</h1>" in html_text
-    assert "READY" in html_text
-    assert "fixture-refresh-ready-001" in html_text
-    for label in (
-        "Run ID",
-        "Generated at (run time)",
-        "SLAIF revision",
-        "Profile",
-        "Providers",
-        "Baseline",
-        "SQL checked",
-        "Research",
-    ):
-        assert f"<dt>{label}</dt>" in html_text
+    assert "fixture-first-install-001" in html_text
+    # State and why, with blocker/review counts, on the first screen.
+    assert "<strong>READY</strong>" in html_text
+    assert "Why this state" in html_text
+    assert "Blockers" in html_text
+    assert "Review findings" in html_text
+    assert "Selected scope" in html_text
+    assert "Baseline" in html_text
     assert "NOT_RUN" in html_text
-    assert "Counts (recomputed)" in html_text
-    assert "Gate checklist" in html_text
+    # Compact scope/baseline/plan/FX/gates/counts all above the details.
     assert "Per-provider summary" in html_text
+    assert "Execution plan (create-only)" in html_text
+    assert "FX (current vs proposed, native → EUR)" in html_text
+    assert "Gate checklist" in html_text
+    assert "Counts (recomputed)" in html_text
     assert "What changed" in html_text
-    assert "no refresh or apply command exists yet" in html_text
+    assert "Run identity (expanded)" in html_text
+    # Product language: no internal objective numbers anywhere in the report.
+    import re as _re
+
+    assert not _re.search(r"objective\s+\d+", html_text, flags=_re.IGNORECASE)
+    assert "live source retrieval is unavailable in this version" in html_text
     _assert_no_external_or_executable_resources(html_text)
+
+
+def test_first_screen_blocks_are_visually_blocked() -> None:
+    bundle = _bundle("bundle-blocked.json")
+    report = _report_for(bundle, _baseline())
+    html_text = render_report(bundle, report.to_dict()).decode("utf-8")
+    assert "<strong>BLOCKED</strong>" in html_text
+    assert "state-blocked" in html_text
+    assert "At least one execution plan is BLOCKED" in html_text
+    assert "currency_inconsistency" in html_text
+    assert "missing_required_dimension" in html_text
 
 
 def test_source_strings_are_escaped_and_event_attributes_cannot_inject() -> None:
@@ -164,19 +180,32 @@ def test_unchanged_only_plan_is_truthful_no_changes() -> None:
 
 
 def test_ready_with_warnings_report_shows_findings() -> None:
+    """A source-age REVIEW (no mutations) is the canonical READY_WITH_WARNINGS."""
+    from datetime import UTC, datetime, timedelta
+
     payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
+    payload["run_id"] = "test-stale-source-001"
+    # Make updated-v1 identical to the baseline so the only finding is the
+    # aged source (25h: past the 24h review threshold, below the 72h block).
     for item in payload["pricing"]:
         if item["model"] == "synthetic/updated-v1":
             for dimension in item["dimensions"]:
                 if dimension["name"] == "input":
-                    dimension["value"] = "1.3"
+                    dimension["value"] = "1"
+    for route in payload["routes"]:
+        if route["requested_model"] == "synthetic/updated-v1":
+            route["priority"] = 100
+    retrieved = (datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC) - timedelta(hours=25)).isoformat()
+    for source in payload["sources"]:
+        source["retrieved_at"] = retrieved
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     report = _report_for(bundle, _baseline())
     assert report.state == OVERALL_READY_WITH_WARNINGS
     html_text = render_report(bundle, report.to_dict()).decode("utf-8")
     assert "READY_WITH_WARNINGS" in html_text
-    assert "price_moved_review" in html_text
-    assert "All warnings and findings (1)" in html_text
+    assert "source_stale_review" in html_text
+    # Three aged sources plus the derived sources-gate finding.
+    assert "All warnings and findings (4)" in html_text
 
 
 def test_blocked_report_lists_blockers_on_first_screen() -> None:
@@ -209,23 +238,22 @@ def _big_unchanged_case(model_count: int) -> tuple[object, object]:
         id="11111111-1111-4111-8111-111111111111", provider="openrouter",
         display_name="OpenRouter (synthetic)", kind="openai_compatible",
         base_url="https://openrouter.ai/api/v1", api_key_env_var="OPENROUTER_API_KEY",
-        enabled=True, timeout_seconds=300, max_retries=2, notes_redacted=None,
+        enabled=True, timeout_seconds=300, max_retries=2,
         created_at="2026-09-01T00:00:00+00:00", updated_at="2026-09-01T00:00:00+00:00"),)
     routes = tuple(BaselineRouteRow(
         id=f"22222222-0000-4000-8000-{i:012d}", requested_model=f"big/model-{i:02d}",
         match_type="exact", endpoint="/v1/chat/completions", provider="openrouter",
         upstream_model=f"big/model-{i:02d}", priority=100, enabled=True,
         visible_in_models=True, supports_streaming=True,
-        capabilities={"text": True, "streaming": True}, notes_redacted=None,
+        capabilities={"text": True, "streaming": True},
         created_at="2026-09-01T00:00:00+00:00", updated_at="2026-09-01T00:00:00+00:00",
     ) for i in range(model_count))
     pricing = tuple(BaselinePricingRow(
         id=f"33333333-0000-4000-8000-{i:012d}", provider="openrouter",
         upstream_model=f"big/model-{i:02d}", endpoint="/v1/chat/completions",
         currency="EUR", input_price_per_1m="0.10", output_price_per_1m="0.40",
-        pricing_metadata={}, valid_from="2026-09-01T00:00:00+00:00", valid_until=None,
+        valid_from="2026-09-01T00:00:00+00:00", valid_until=None,
         enabled=True, source_url="https://openrouter.ai/models",
-        notes_redacted=None,
         created_at="2026-09-01T00:00:00+00:00", updated_at="2026-09-01T00:00:00+00:00",
     ) for i in range(model_count))
     baseline = BaselineDocument(
@@ -245,11 +273,13 @@ def _big_unchanged_case(model_count: int) -> tuple[object, object]:
     for i in range(model_count):
         model = f"big/model-{i:02d}"
         source_ref = f"openrouter|{model}|openrouter_models_api"
+        evidence = f"big-source-{i}".encode()
         sources.append({
             "provider": "openrouter", "model": model, "source_kind": "openrouter_models_api",
             "url": "https://openrouter.ai/api/v1/models",
             "retrieved_at": "2026-09-21T11:00:00+00:00", "published_at": None,
-            "content_sha256": hashlib.sha256(f"big-source-{i}".encode()).hexdigest(),
+            "content_sha256": hashlib.sha256(evidence).hexdigest(),
+            "evidence_b64": base64.b64encode(evidence).decode("ascii"),
             "extractor": "fixture-deterministic/1.0", "extraction": "deterministic",
             "required": True, "truncated": False, "warnings": [],
         })
@@ -258,7 +288,7 @@ def _big_unchanged_case(model_count: int) -> tuple[object, object]:
             "context_length": 128000, "max_output_tokens": 8192, "supports_streaming": True,
             "capabilities": {"text": True, "streaming": True}, "deprecated": False,
             "provenance": {"sources": [source_ref], "extractor": "fixture-deterministic/1.0",
-                            "extraction": "deterministic", "authoritative": True},
+                            "extraction": "deterministic"},
             "warnings": [],
         })
         routes_b.append({
@@ -267,7 +297,7 @@ def _big_unchanged_case(model_count: int) -> tuple[object, object]:
             "enabled": True, "visible_in_models": True, "supports_streaming": True,
             "capabilities": {"text": True, "streaming": True},
             "provenance": {"sources": [source_ref], "extractor": "fixture-deterministic/1.0",
-                            "extraction": "deterministic", "authoritative": True},
+                            "extraction": "deterministic"},
             "warnings": [],
         })
         pricing_b.append({
@@ -279,7 +309,7 @@ def _big_unchanged_case(model_count: int) -> tuple[object, object]:
             ],
             "valid_from": "2026-09-01T00:00:00+00:00",
             "provenance": {"sources": [source_ref], "extractor": "fixture-deterministic/1.0",
-                            "extraction": "deterministic", "authoritative": True},
+                            "extraction": "deterministic"},
             "warnings": [],
         })
     bundle_payload = {

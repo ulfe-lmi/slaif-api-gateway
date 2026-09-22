@@ -1,6 +1,6 @@
 {
  "baseline": {
-  "content_sha256": "9abb0311363e706e84ae27b8567ddc697041b7c7ec38d183f667ea42db7b22bc",
+  "content_sha256": "97c66adbe5886d8dadbae6dc2760212ab84c1a49edf341415d033f573f6a3666",
   "exported_at": "2026-09-21T10:00:00Z",
   "mode": "exported_file",
   "postgres_version": null,
@@ -27,7 +27,6 @@
    "max_output_tokens": 8192,
    "model": "synthetic/stable-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -49,7 +48,6 @@
    "max_output_tokens": 8192,
    "model": "synthetic/updated-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -71,7 +69,6 @@
    "max_output_tokens": 8192,
    "model": "synthetic/new-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -113,7 +110,6 @@
    "endpoint": "/v1/chat/completions",
    "model": "synthetic/stable-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -143,7 +139,6 @@
    "endpoint": "/v1/chat/completions",
    "model": "synthetic/updated-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -173,7 +168,6 @@
    "endpoint": "/v1/chat/completions",
    "model": "synthetic/new-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -216,7 +210,6 @@
    "match_type": "exact",
    "priority": 100,
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -240,7 +233,6 @@
    "match_type": "exact",
    "priority": 200,
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -264,7 +256,6 @@
    "match_type": "exact",
    "priority": 100,
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -293,7 +284,8 @@
  },
  "sources": [
   {
-   "content_sha256": "d5849794cd0d2fe92d635ee60225b3a2db91e9cfd3f4c1d77e06c43fbaa33095",
+   "content_sha256": "a2e9516c69453794600ad497bfeaf2dbbe3ecc4246c8b37c620cc2181a5c0636",
+   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9zdGFibGUtdjF8b3BlbnJvdXRlcl9tb2RlbHNfYXBpIiwic25hcHNob3QiOiJzeW50aGV0aWMtb2ZmbGluZS1ldmlkZW5jZSJ9",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/stable-v1",
@@ -307,7 +299,8 @@
    "warnings": []
   },
   {
-   "content_sha256": "320dd4f523dae4682a092b79af80b377a47b0a91cc9d16652f8a2d54b61f43f9",
+   "content_sha256": "dabe1d929f0dac876fdcbbda3d55065a7ba64ee33cc421b807eecc8baad872b2",
+   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy91cGRhdGVkLXYxfG9wZW5yb3V0ZXJfbW9kZWxzX2FwaSIsInNuYXBzaG90Ijoic3ludGhldGljLW9mZmxpbmUtZXZpZGVuY2UifQ==",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/updated-v1",
@@ -321,7 +314,8 @@
    "warnings": []
   },
   {
-   "content_sha256": "04c06ebb10e5d3b8148fb629da9131ca0f62a1bccea12862efda619da1dbb1eb",
+   "content_sha256": "c9c08816b2a66d8487d722b0eeb5b40d532baf5f68187da532184476e76aa377",
+   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9uZXctdjF8b3BlbnJvdXRlcl9tb2RlbHNfYXBpIiwic25hcHNob3QiOiJzeW50aGV0aWMtb2ZmbGluZS1ldmlkZW5jZSJ9",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/new-v1",

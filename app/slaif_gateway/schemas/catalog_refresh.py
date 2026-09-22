@@ -57,8 +57,20 @@ CAPABILITY_KEYS: frozenset[str] = frozenset(
 MATCH_TYPES: frozenset[str] = frozenset({"exact", "prefix", "glob"})
 
 
+# The import/database monetary contract is PostgreSQL Numeric(18,9): at most
+# 18 significant digits with 9 after the decimal point. Hostile huge
+# exponent/precision values (e.g. Decimal("1E+100")) are rejected before any
+# expensive formatting or arithmetic and never accepted into a bundle.
+_MONEY_MAX = Decimal("999999999.999999999")
+_MONEY_MAX_EXPONENT = -9
+
+
 def parse_decimal_text(raw: Any, *, field: str, non_negative: bool = False) -> str:
-    """Accept only exact decimal strings; reject floats, NaN, and Infinity."""
+    """Accept only exact decimal strings bounded to the Numeric(18,9) contract.
+
+    Rejects floats, NaN/Infinity, values beyond the 9-integer/9-fractional
+    digit bound, and values requiring more than 9 decimal places.
+    """
     if isinstance(raw, bool) or not isinstance(raw, str):
         raise ValueError(f"{field} must be an exact decimal string (floats are rejected)")
     text = raw.strip()
@@ -68,6 +80,11 @@ def parse_decimal_text(raw: Any, *, field: str, non_negative: bool = False) -> s
         raise ValueError(f"{field} is not a finite decimal: {field}") from exc
     if not value.is_finite():
         raise ValueError(f"{field} must be finite")
+    if abs(value) > _MONEY_MAX:
+        raise ValueError(f"{field} exceeds the database Numeric(18,9) magnitude bound")
+    _sign, _digits, exponent = value.as_tuple()
+    if exponent < _MONEY_MAX_EXPONENT:
+        raise ValueError(f"{field} exceeds 9 decimal places (database Numeric(18,9))")
     if non_negative and value < 0:
         raise ValueError(f"{field} must be non-negative")
     return str(value)
@@ -186,6 +203,12 @@ class SourceRecord(CatalogRefreshModel):
     retrieved_at: datetime
     published_at: datetime | None = None
     content_sha256: str
+    # Optional inline evidence bytes (base64). When present, the validator
+    # binds them to the declared content digest; when absent, the digest is
+    # unprovable offline and the source classifies as REVIEW ("not verifiable
+    # offline"), never VERIFIED. Bounded so a hostile bundle cannot carry
+    # unbounded payloads (4 MiB of decoded bytes).
+    evidence_b64: str | None = Field(default=None, max_length=6_000_000)
     extractor: str = Field(min_length=1, max_length=128)
     extraction: Literal["deterministic", "semantic"]
     required: bool = True
@@ -201,6 +224,8 @@ class SourceRecord(CatalogRefreshModel):
             raise ValueError(f"unknown source kind {self.source_kind!r}")
         if not _HEX64_PATTERN.fullmatch(self.content_sha256):
             raise ValueError("content_sha256 must be 64 lowercase hex characters")
+        if self.evidence_b64 is not None and len(self.evidence_b64) % 4 != 0:
+            raise ValueError("evidence_b64 must be base64 with padding")
         if self.retrieved_at.tzinfo is None or self.retrieved_at.utcoffset() is None:
             raise ValueError("retrieved_at must be timezone-aware")
         if self.published_at is not None and (
@@ -216,10 +241,16 @@ class SourceRecord(CatalogRefreshModel):
 
 
 class FieldProvenance(CatalogRefreshModel):
+    """Provenance references only. Authority is never caller-supplied.
+
+    The caller-declared "authoritative" boolean was removed in 180-b: trust
+    is derived deterministically from (provider, source_kind) -> official-host
+    rules and the supporting evidence, never declared by the bundle author.
+    """
+
     sources: tuple[str, ...] = Field(min_length=1)
     extractor: str = Field(min_length=1, max_length=128)
     extraction: Literal["deterministic", "semantic"]
-    authoritative: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> FieldProvenance:
@@ -509,9 +540,29 @@ class BaselineProviderRow(CatalogRefreshModel):
     enabled: bool
     timeout_seconds: int
     max_retries: int
-    notes_redacted: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+def validate_strict_capabilities(raw: dict[str, Any], *, field: str) -> dict[str, bool]:
+    """Strict shape for route capabilities retained in a baseline export.
+
+    Capabilities are the one semantically necessary free-form map kept in the
+    default export. They are validated (boolean values, bounded keys) and a
+    non-conforming value fails with a safe, explicit issue instead of being
+    silently truncated.
+    """
+    if len(raw) > 32:
+        raise ValueError(f"{field} may contain at most 32 keys")
+    result: dict[str, bool] = {}
+    for key, value in raw.items():
+        key_text = str(key)
+        if len(key_text) > 64:
+            raise ValueError(f"{field} keys are bounded to 64 characters")
+        if not isinstance(value, bool):
+            raise ValueError(f"{field}.{key_text} must be a boolean")
+        result[key_text] = value
+    return result
 
 
 class BaselineRouteRow(CatalogRefreshModel):
@@ -525,10 +576,14 @@ class BaselineRouteRow(CatalogRefreshModel):
     enabled: bool
     visible_in_models: bool
     supports_streaming: bool
-    capabilities: dict[str, object] = Field(default_factory=dict)
-    notes_redacted: str | None = None
+    capabilities: dict[str, bool] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def _check(self) -> BaselineRouteRow:
+        validate_strict_capabilities(self.capabilities, field="capabilities")
+        return self
 
 
 class BaselinePricingRow(CatalogRefreshModel):
@@ -542,12 +597,10 @@ class BaselinePricingRow(CatalogRefreshModel):
     output_price_per_1m: str | None = None
     reasoning_price_per_1m: str | None = None
     request_price: str | None = None
-    pricing_metadata: dict[str, object] = Field(default_factory=dict)
     valid_from: datetime
     valid_until: datetime | None = None
     enabled: bool
     source_url: str | None = None
-    notes_redacted: str | None = None
     created_at: datetime
     updated_at: datetime
 

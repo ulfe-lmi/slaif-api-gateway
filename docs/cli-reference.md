@@ -108,9 +108,9 @@ Configuration validation reports bounded names/status, never secret values.
 
 Bounded offline catalog refresh: one typed proposal bundle, one safe
 baseline, one sealed one-page report. Offline review, verify, and read-only
-export only — there is no refresh command and no apply command; supersession
-apply is NOT_SUPPORTED until the audited-apply objective lands. Full
-semantics, policy thresholds, sealing, and exit codes live in
+export only — live source retrieval is unavailable in this version and there
+is no refresh or apply command in this version. Full semantics, policy
+thresholds, sealing, and exit codes live in
 [Catalog refresh (offline review)](catalog-refresh.md).
 
 ```bash

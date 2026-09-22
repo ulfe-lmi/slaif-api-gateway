@@ -33,31 +33,53 @@ def test_review_first_install_is_ready(tmp_path: Path) -> None:
     assert "changed: 0" in lines
     assert "warnings: 0" in lines
     assert "blockers: 0" in lines
-    assert any(line.startswith("stage: offline review (objective 180)") for line in lines)
+    assert any(line.startswith("stage: offline review:") for line in lines)
     assert "review these ten files" not in result.stdout
     report = tmp_path / "runs" / "fixture-first-install-001" / "REVIEW.html"
     assert report.is_file()
     assert (tmp_path / "runs" / "fixture-first-install-001" / "receipt.json").is_file()
 
 
-def test_review_refresh_ready(tmp_path: Path) -> None:
+def test_review_refresh_with_changes_is_blocked(tmp_path: Path) -> None:
+    """The fixture's changed row is an update: no apply operation exists in
+    this version, so the run is BLOCKED even though it is sealed/verifiable."""
     result = _review(
         [str(FIXTURES / "bundle-refresh-ready.json"),
          "--baseline-file", str(FIXTURES / "baseline-synthetic.json")],
         tmp_path,
     )
-    assert result.exit_code == 0, result.output
-    assert result.stdout.splitlines()[0] == "state: READY"
+    assert result.exit_code == 20, result.output
+    assert result.stdout.splitlines()[0] == "state: BLOCKED"
     assert "changed: 1" in result.stdout
+    verify = runner.invoke(
+        app,
+        ["catalog-refresh", "verify",
+         "--run-dir", str(tmp_path / "runs" / "fixture-refresh-ready-001"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert verify.exit_code == 0, verify.output  # verify checks seal integrity
+    assert "valid: yes" in verify.stdout
+    assert "state: BLOCKED" in verify.stdout  # the review state is BLOCKED
 
 
 def test_review_ready_with_warnings_exit_10(tmp_path: Path) -> None:
+    """Aged sources (25h) are REVIEW; with no mutations the state is
+    READY_WITH_WARNINGS, not BLOCKED."""
+    from datetime import UTC, datetime, timedelta
+
     payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
+    payload["run_id"] = "test-cli-warnings-001"
     for item in payload["pricing"]:
         if item["model"] == "synthetic/updated-v1":
             for dimension in item["dimensions"]:
                 if dimension["name"] == "input":
-                    dimension["value"] = "1.3"
+                    dimension["value"] = "1"  # identical to baseline
+    for route in payload["routes"]:
+        if route["requested_model"] == "synthetic/updated-v1":
+            route["priority"] = 100  # identical to baseline
+    retrieved = (datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC) - timedelta(hours=25)).isoformat()
+    for source in payload["sources"]:
+        source["retrieved_at"] = retrieved
     bundle_path = tmp_path / "bundle-warnings.json"
     bundle_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
     result = _review([str(bundle_path), "--baseline-file", str(FIXTURES / "baseline-synthetic.json")], tmp_path)
@@ -332,3 +354,21 @@ def test_export_baseline_refuses_existing_output(tmp_path: Path, monkeypatch) ->
     result = runner.invoke(app, ["catalog-refresh", "export-baseline", "--out", str(out)])
     assert result.exit_code == 65
     assert out.read_bytes() == b"{}"
+
+def test_review_failure_leaves_no_partial_run_at_final_path(tmp_path: Path, monkeypatch) -> None:
+    """A publish failure must not leave an unsealed, complete-looking run."""
+    import slaif_gateway.cli.catalog_refresh as cr
+    from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshSealError
+
+    def boom(_run_dir, _key):
+        raise CatalogRefreshSealError("simulated seal failure")
+
+    monkeypatch.setattr(cr, "seal_run", boom)
+    result = _review(
+        [str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path
+    )
+    assert result.exit_code == 65, result.output
+    run_root = tmp_path / "runs"
+    assert not (run_root / "fixture-first-install-001").exists()
+    leftovers = sorted(p.name for p in run_root.iterdir()) if run_root.exists() else []
+    assert leftovers == [], f"staging leftovers: {leftovers}"

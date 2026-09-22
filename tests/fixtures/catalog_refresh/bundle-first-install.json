@@ -22,7 +22,6 @@
    "max_output_tokens": 8192,
    "model": "synthetic/chat-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -64,7 +63,6 @@
    "endpoint": "/v1/chat/completions",
    "model": "synthetic/chat-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -107,7 +105,6 @@
    "match_type": "exact",
    "priority": 100,
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -132,7 +129,8 @@
  },
  "sources": [
   {
-   "content_sha256": "f7a75a3d74ffcd5f4bef364478f59b81fba119c4f8fb53c49acdd261ee23bc8e",
+   "content_sha256": "5096bd6209a92cb484635938860fd57429f20fa42d23edc6919fe4f0c191610f",
+   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9jaGF0LXYxfG9wZW5yb3V0ZXJfbW9kZWxzX2FwaSIsInNuYXBzaG90Ijoic3ludGhldGljLW9mZmxpbmUtZXZpZGVuY2UifQ==",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/chat-v1",

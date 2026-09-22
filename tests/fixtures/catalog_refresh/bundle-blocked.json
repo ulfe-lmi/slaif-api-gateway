@@ -1,6 +1,6 @@
 {
  "baseline": {
-  "content_sha256": "9abb0311363e706e84ae27b8567ddc697041b7c7ec38d183f667ea42db7b22bc",
+  "content_sha256": "97c66adbe5886d8dadbae6dc2760212ab84c1a49edf341415d033f573f6a3666",
   "exported_at": "2026-09-21T10:00:00Z",
   "mode": "exported_file",
   "postgres_version": null,
@@ -27,7 +27,6 @@
    "max_output_tokens": 8192,
    "model": "synthetic/mixed-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -49,7 +48,6 @@
    "max_output_tokens": 8192,
    "model": "synthetic/partial-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -91,7 +89,6 @@
    "endpoint": "/v1/chat/completions",
    "model": "synthetic/mixed-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -115,7 +112,6 @@
    "endpoint": "/v1/chat/completions",
    "model": "synthetic/partial-v1",
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -158,7 +154,6 @@
    "match_type": "exact",
    "priority": 100,
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -182,7 +177,6 @@
    "match_type": "exact",
    "priority": 100,
    "provenance": {
-    "authoritative": true,
     "extraction": "deterministic",
     "extractor": "fixture-deterministic/1.0",
     "sources": [
@@ -210,7 +204,8 @@
  },
  "sources": [
   {
-   "content_sha256": "1d42952a3a5f96b496c0e4d883d102c87cf6f2a8c57a09a4e6a89fad688c6536",
+   "content_sha256": "d04adbfaa0b62ec1d27a1dec6e87d3fad8ab00ef6151bab987a28975f5ae5e6c",
+   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9taXhlZC12MXxvcGVucm91dGVyX21vZGVsc19hcGkiLCJzbmFwc2hvdCI6InN5bnRoZXRpYy1vZmZsaW5lLWV2aWRlbmNlIn0=",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/mixed-v1",
@@ -224,7 +219,8 @@
    "warnings": []
   },
   {
-   "content_sha256": "47d7bbd14096250d8b4d04256524b6131dab321acbb3855c1ab794626f0aa14d",
+   "content_sha256": "79c5d64f29fbb427f50b2e88f1a435cb2eb6eb88aefaa16f9aa9558659f1991b",
+   "evidence_b64": "eyJyZWZlcmVuY2UiOiJvcGVucm91dGVyfHN5bnRoZXRpYy9wYXJ0aWFsLXYxfG9wZW5yb3V0ZXJfbW9kZWxzX2FwaSIsInNuYXBzaG90Ijoic3ludGhldGljLW9mZmxpbmUtZXZpZGVuY2UifQ==",
    "extraction": "deterministic",
    "extractor": "fixture-deterministic/1.0",
    "model": "synthetic/partial-v1",

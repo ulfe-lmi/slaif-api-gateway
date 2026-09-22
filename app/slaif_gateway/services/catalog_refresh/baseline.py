@@ -3,8 +3,18 @@
 The export is an allowlisted metadata snapshot: provider configuration
 metadata, model routes, pricing rules, and FX rates with validity windows.
 It is deliberately not an ORM dump or a settings dump: secrets, credentials,
-users, sessions, request content, and unrelated data are never exported.
-Provider secret environment variable names may be retained (names only).
+users, sessions, request content, free-form notes, and unrelated data are
+never exported. Provider secret environment variable *names* may be retained
+(names only); provider/source URLs are sanitized (credentials and query
+tokens stripped).
+
+The unkeyed SHA-256 content digest over the canonical rows is an *integrity
+check* on the document bytes: it detects later modification, but it is NOT
+"self-authenticating", NOT authentication, and NOT proof that the baseline
+is current or that SQL was executed at any particular time. The
+``sql_checked`` flag records that SQL was executed *when this document was
+exported* (a historical capture fact); a review that consumes the document
+from a file must state that separately.
 """
 
 from __future__ import annotations
@@ -14,7 +24,7 @@ import json
 import re
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -27,19 +37,13 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineProviderRow,
     BaselineRouteRow,
     BaselineTarget,
+    validate_strict_capabilities,
 )
 from slaif_gateway.services.catalog_refresh.errors import (
     CatalogRefreshBlockedError,
 )
-from slaif_gateway.utils.redaction import redact_mapping, redact_text
 
 MAX_BASELINE_BYTES = 32 * 1024 * 1024
-_MAX_SHAPE_DEPTH = 4
-_MAX_SHAPE_ENTRIES = 32
-_MAX_SHAPE_STRING = 512
-_MAX_SHAPE_ITEMS = 32
-_REDACTED = "<redacted>"
-
 
 _PG_VERSION_PATTERN = re.compile(r"^\d+(\.\d+){0,2}")
 
@@ -125,41 +129,42 @@ def canonical_baseline_content(baseline: BaselineDocument) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def shape_free_metadata(value: Any, *, depth: int = 0) -> Any:
-    """Bounded, JSON-safe shape for free-form metadata; never raises."""
-    if depth > _MAX_SHAPE_DEPTH:
-        return _REDACTED
-    if value is None or isinstance(value, (bool, int)):
-        return value
-    if isinstance(value, float):
-        return _REDACTED  # floats are not allowed in baseline metadata
-    if isinstance(value, str):
-        return value[:_MAX_SHAPE_STRING] + ("...truncated" if len(value) > _MAX_SHAPE_STRING else "")
-    if isinstance(value, dict):
-        if len(value) > _MAX_SHAPE_ENTRIES:
-            return {str(key): _REDACTED for key in list(value)[:_MAX_SHAPE_ENTRIES]}
-        return {
-            str(key)[:64]: shape_free_metadata(item, depth=depth + 1)
-            for key, item in list(value.items())[:_MAX_SHAPE_ENTRIES]
-        }
-    if isinstance(value, (list, tuple)):
-        if len(value) > _MAX_SHAPE_ITEMS:
-            return [shape_free_metadata(item, depth=depth + 1) for item in value[:_MAX_SHAPE_ITEMS]]
-        return [shape_free_metadata(item, depth=depth + 1) for item in value]
-    return _REDACTED
+def _strict_capabilities(value: Any, *, row_id: str) -> dict[str, bool]:
+    """Validate route capabilities to a strict allowlisted shape.
+
+    A non-conforming value fails the export with a safe, explicit issue
+    (row identity only — never the offending value) instead of being
+    silently truncated.
+    """
+    try:
+        return validate_strict_capabilities(dict(value) if value else {}, field="capabilities")
+    except ValueError as exc:
+        raise CatalogRefreshBlockedError(
+            "baseline_capability_malformed",
+            f"route row {row_id} carries a non-conforming capabilities value: {exc}",
+        ) from exc
 
 
-def _redact_free_metadata(value: Any) -> dict[str, Any]:
-    shaped = shape_free_metadata(value)
-    if not isinstance(shaped, dict):
-        return {}
-    return redact_mapping(shaped)
+def _sanitize_export_url(value: str | None, *, field: str, row_id: str) -> str | None:
+    """Sanitize a provider/source URL for export.
 
-
-def _redact_notes(value: str | None) -> str | None:
+    Only http(s) URLs with a host are retained. Userinfo (credentials) and
+    query/fragment (tokens) are stripped; the environment-variable name of a
+    provider secret is handled separately and never derived from the URL.
+    """
     if value is None:
         return None
-    return redact_text(value)[:_MAX_SHAPE_STRING * 2] or None
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise CatalogRefreshBlockedError(
+            "baseline_url_malformed",
+            f"{field} on row {row_id} is not a safe http(s) URL",
+        )
+    netloc = parsed.hostname
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    sanitized = urlunparse((parsed.scheme, netloc, parsed.path or "", "", "", ""))
+    return sanitized
 
 
 def _target_parts_from_url(database_url: str) -> tuple[str, int, str, str]:
@@ -221,7 +226,7 @@ async def export_baseline(
                     "id",
                     (
                         "id, provider, display_name, kind, base_url, api_key_env_var, "
-                        "enabled, timeout_seconds, max_retries, notes, created_at, updated_at"
+                        "enabled, timeout_seconds, max_retries, created_at, updated_at"
                     ),
                     counts["provider_configs"],
                     page_size,
@@ -233,7 +238,7 @@ async def export_baseline(
                     (
                         "id, requested_model, match_type, endpoint, provider, upstream_model, "
                         "priority, enabled, visible_in_models, supports_streaming, capabilities, "
-                        "notes, created_at, updated_at"
+                        "created_at, updated_at"
                     ),
                     counts["model_routes"],
                     page_size,
@@ -245,8 +250,8 @@ async def export_baseline(
                     (
                         "id, provider, upstream_model, endpoint, currency, input_price_per_1m, "
                         "cached_input_price_per_1m, output_price_per_1m, reasoning_price_per_1m, "
-                        "request_price, pricing_metadata, valid_from, valid_until, enabled, "
-                        "source_url, notes, created_at, updated_at"
+                        "request_price, valid_from, valid_until, enabled, "
+                        "source_url, created_at, updated_at"
                     ),
                     counts["pricing_rules"],
                     page_size,
@@ -274,12 +279,11 @@ async def export_baseline(
             provider=row["provider"],
             display_name=row["display_name"],
             kind=row["kind"],
-            base_url=row["base_url"],
+            base_url=_sanitize_export_url(row["base_url"], field="base_url", row_id=str(row["id"])),
             api_key_env_var=row["api_key_env_var"],
             enabled=bool(row["enabled"]),
             timeout_seconds=int(row["timeout_seconds"]),
             max_retries=int(row["max_retries"]),
-            notes_redacted=_redact_notes(row["notes"]),
             created_at=_aware(row["created_at"]),
             updated_at=_aware(row["updated_at"]),
         )
@@ -297,8 +301,7 @@ async def export_baseline(
             enabled=bool(row["enabled"]),
             visible_in_models=bool(row["visible_in_models"]),
             supports_streaming=bool(row["supports_streaming"]),
-            capabilities=_redact_free_metadata(row["capabilities"]),
-            notes_redacted=_redact_notes(row["notes"]),
+            capabilities=_strict_capabilities(row["capabilities"], row_id=str(row["id"])),
             created_at=_aware(row["created_at"]),
             updated_at=_aware(row["updated_at"]),
         )
@@ -316,12 +319,10 @@ async def export_baseline(
             output_price_per_1m=None if row["output_price_per_1m"] is None else str(row["output_price_per_1m"]),
             reasoning_price_per_1m=None if row["reasoning_price_per_1m"] is None else str(row["reasoning_price_per_1m"]),
             request_price=None if row["request_price"] is None else str(row["request_price"]),
-            pricing_metadata=_redact_free_metadata(row["pricing_metadata"]),
             valid_from=_aware(row["valid_from"]),
             valid_until=None if row["valid_until"] is None else _aware(row["valid_until"]),
             enabled=bool(row["enabled"]),
-            source_url=row["source_url"],
-            notes_redacted=_redact_notes(row["notes"]),
+            source_url=_sanitize_export_url(row["source_url"], field="source_url", row_id=str(row["id"])),
             created_at=_aware(row["created_at"]),
             updated_at=_aware(row["updated_at"]),
         )
@@ -335,7 +336,7 @@ async def export_baseline(
             rate=str(row["rate"]),
             valid_from=_aware(row["valid_from"]),
             valid_until=None if row["valid_until"] is None else _aware(row["valid_until"]),
-            source=row["source"],
+            source=_sanitize_export_url(row["source"], field="source", row_id=str(row["id"])),
             created_at=_aware(row["created_at"]),
         )
         for row in fx

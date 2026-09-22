@@ -200,10 +200,16 @@ def test_research_status_must_be_not_run() -> None:
 
 def test_generated_artifacts_round_trip_through_existing_import_parsers() -> None:
     bundle = _load_fixture("bundle-first-install.json")
-    selected = selected_model_keys(bundle)
-    route_tsv = generate_route_tsv(bundle, selected)
-    pricing_tsv = generate_pricing_tsv(bundle, selected)
-    fx_json = generate_fx_json(bundle)
+    assert selected_model_keys(bundle) == {("openrouter", "synthetic/chat-v1")}
+    # The artifact generators serialize exactly the rows the caller permits
+    # (create rows); for a bootstrap that is every proposed row.
+    route_tsv = generate_route_tsv(bundle, list(bundle.routes))
+    pricing_tsv = generate_pricing_tsv(
+        bundle,
+        list(bundle.pricing),
+        {(r.provider, r.requested_model): r.upstream_model for r in bundle.routes},
+    )
+    fx_json = generate_fx_json([])
 
     route_lines = route_tsv.decode("utf-8").splitlines()
     assert route_lines[0].split("\t") == ROUTE_TSV_FIELDS
@@ -225,49 +231,107 @@ def test_generated_artifacts_round_trip_through_existing_import_parsers() -> Non
     assert fx_rows == []
 
 
-def test_generate_fx_json_serializes_rates_as_exact_strings() -> None:
+def test_generated_artifacts_carry_only_the_permitted_create_rows() -> None:
+    """Excluded/changed rows must not leak into the executable artifacts."""
     bundle = _load_fixture("bundle-refresh-ready.json")
+    # Only the genuinely new row is a permitted create; the unchanged and
+    # changed rows are no-ops/mutations and must stay out of the artifacts.
+    new_routes = [r for r in bundle.routes if r.requested_model == "synthetic/new-v1"]
+    new_pricing = [p for p in bundle.pricing if p.model == "synthetic/new-v1"]
+    upstream_by_key = {
+        (r.provider, r.requested_model): r.upstream_model for r in bundle.routes
+    }
+    route_tsv = generate_route_tsv(bundle, new_routes)
+    pricing_tsv = generate_pricing_tsv(bundle, new_pricing, upstream_by_key)
+    assert "synthetic/stable-v1" not in route_tsv.decode("utf-8")
+    assert "synthetic/updated-v1" not in route_tsv.decode("utf-8")
+    assert "synthetic/stable-v1" not in pricing_tsv.decode("utf-8")
+    assert "synthetic/updated-v1" not in pricing_tsv.decode("utf-8")
+    assert "synthetic/new-v1" in route_tsv.decode("utf-8")
+    assert "synthetic/new-v1" in pricing_tsv.decode("utf-8")
+
+
+def test_pricing_tsv_uses_upstream_model_for_aliased_routes() -> None:
+    """Public aliases need not equal upstream IDs: the executable pricing
+    row must carry the route's upstream model."""
+    bundle = _load_fixture("bundle-first-install.json")
     payload = copy.deepcopy(bundle.model_dump(mode="json"))
-    # Move one model to USD so an EUR->USD FX fact becomes required, then
-    # assert the generated artifact keeps the exact decimal string.
-    payload["run_id"] = "test-fx-exact-001"
-    for item in payload["pricing"]:
-        if item["model"] == "synthetic/updated-v1":
-            item["currency"] = "USD"
-            for dimension in item["dimensions"]:
-                dimension["currency"] = "USD"
-    payload["fx"] = [
-        {
-            "base_currency": "EUR",
-            "quote_currency": "USD",
-            "rate": "1.085",
-            "valid_from": "2026-09-21T00:00:00+00:00",
-            "valid_until": None,
-            "published_at": "2026-09-21T00:00:00+00:00",
-            "source": "https://www.ecb.europa.eu/stats/eurofxref.html",
-            "provenance": {
-                "sources": ["openrouter|synthetic/stable-v1|openrouter_models_api"],
-                "extractor": "fixture-deterministic/1.0",
-                "extraction": "deterministic",
-                "authoritative": True,
-            },
-            "warnings": [],
-        }
-    ]
-    fx_bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    fx_json = generate_fx_json(fx_bundle)
+    payload["run_id"] = "test-alias-001"
+    for route in payload["routes"]:
+        route["requested_model"] = "public/alias-v1"  # public alias
+        route["upstream_model"] = "synthetic/chat-v1"  # real upstream
+    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    upstream_by_key = {
+        (r.provider, r.requested_model): r.upstream_model for r in bundle.routes
+    }
+    tsv = generate_pricing_tsv(bundle, list(bundle.pricing), upstream_by_key).decode("utf-8")
+    rows = parse_pricing_import_tsv(tsv)
+    assert rows[0]["model"] == "synthetic/chat-v1"  # upstream ID, not the alias
+    assert "public/alias-v1" not in tsv
+
+
+def test_bundle_rejects_hostile_money_exponents() -> None:
+    # R2: huge exponent/precision values are rejected before any arithmetic.
+    bundle = _load_fixture("bundle-first-install.json")
+    for hostile in ("1E+100", "999999999.9999999999", "0.2500000001"):
+        payload = copy.deepcopy(bundle.model_dump(mode="json"))
+        payload["pricing"][0]["dimensions"][0]["value"] = hostile
+        with pytest.raises(CatalogRefreshBlockedError) as excinfo:
+            load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+        assert excinfo.value.code == "bundle_schema_invalid"
+
+
+def test_provenance_authoritative_field_is_rejected() -> None:
+    # R3: caller-declared authority labels are no longer part of the schema.
+    raw = (FIXTURES / "bundle-first-install.json").read_text()
+    payload = json.loads(raw)
+    payload["models"][0]["provenance"]["authoritative"] = True
+    with pytest.raises(CatalogRefreshBlockedError) as excinfo:
+        load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    assert excinfo.value.code == "bundle_schema_invalid"
+
+
+def test_generate_fx_json_serializes_rates_as_exact_strings() -> None:
+    """Canonical artifact direction is native -> EUR (the runtime direction)."""
+    from decimal import Decimal, ROUND_HALF_UP
+
+    from slaif_gateway.services.catalog_refresh.bundle import NormalizedFxRow
+
+    bundle = _load_fixture("bundle-first-install.json")
+    direct = NormalizedFxRow(
+        base_currency="USD",
+        quote_currency="EUR",
+        rate="0.925925926",
+        source="https://www.ecb.europa.eu/stats/eurofxref.html",
+        valid_from=bundle.generated_at,
+        valid_until=None,
+        published_at=None,
+        derived_reciprocal=False,
+    )
+    reciprocal_rate = str((Decimal(1) / Decimal("1.085")).quantize(
+        Decimal("0.000000001"), rounding=ROUND_HALF_UP
+    ))
+    derived = NormalizedFxRow(
+        base_currency="USD",
+        quote_currency="EUR",
+        rate=reciprocal_rate,
+        source="https://www.ecb.europa.eu/stats/eurofxref.html",
+        valid_from=bundle.generated_at,
+        valid_until=None,
+        published_at=None,
+        derived_reciprocal=True,
+        source_pair="EUR-USD",
+    )
+    fx_json = generate_fx_json([derived, direct])
     rows = parse_fx_import_json(fx_json.decode("utf-8"))
-    assert rows == [
-        {
-            "base_currency": "EUR",
-            "quote_currency": "USD",
-            "rate": "1.085",
-            "source": "https://www.ecb.europa.eu/stats/eurofxref.html",
-            "valid_from": "2026-09-21T00:00:00+00:00",
-            "valid_until": None,
-            "metadata": {"published_at": "2026-09-21T00:00:00+00:00"},
-            "notes": "",
-        }
-    ]
-    assert "1.085" in fx_json.decode("utf-8")
-    assert "1.085000000" not in fx_json.decode("utf-8")
+    # Both rows are native -> EUR; the reciprocal row keeps its derivation
+    # metadata instead of being silently relabeled.
+    assert {row["base_currency"] for row in rows} == {"USD"}
+    assert {row["quote_currency"] for row in rows} == {"EUR"}
+    by_rate = {row["rate"]: row for row in rows}
+    assert by_rate["0.925925926"]["metadata"]["derived_reciprocal"] is False
+    assert by_rate[reciprocal_rate]["metadata"]["derived_reciprocal"] is True
+    assert by_rate[reciprocal_rate]["metadata"]["source_pair"] == "EUR-USD"
+    text = fx_json.decode("utf-8")
+    assert reciprocal_rate in text
+    assert "1.085" not in text  # the original EUR->USD quotation is not the artifact rate
