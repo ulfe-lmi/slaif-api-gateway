@@ -68,6 +68,20 @@ live outside the run tree. It is a local integrity key: protect it, rotate
 it on trust-boundary changes, and never hand it to research or provider
 tooling.
 
+Operator notes for the sealed filesystem boundary:
+
+- The seal key file must be a regular file (no symlinks anywhere in its
+  path), mode exactly `0600`, owned by the operator running the gateway.
+- The run root and the directory containing the seal key must be
+  operator-owned and not writable by group or other; the gateway refuses
+  unsafe directories (exit 65) instead of fixing permissions.
+- Each review publishes exactly one new run directory atomically; an
+  existing run directory or file is never overwritten, and `verify`
+  never creates or repairs a key.
+- The boundary assumes Linux (atomic `renameat2` publication) and
+  protects against unprivileged local peers — not against an
+  administrator who controls the key or privileged code.
+
 ## What does not exist yet
 
 - **No refresh command.** Live source retrieval (provider APIs, ECB FX) and

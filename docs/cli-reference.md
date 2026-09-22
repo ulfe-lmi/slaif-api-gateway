@@ -137,6 +137,15 @@ error, 2 usage error. Verify: 0 valid, 30 invalid, 65 data error.
 Export-baseline: 0 written, 65 data error (never overwrites output, never
 bootstraps empty).
 
+Filesystem inputs and outputs are handled by a descriptor-anchored,
+symlink-free boundary: symlinked bundle/baseline/run/key paths, FIFOs and
+other special files, oversized or growing inputs, and run roots or key
+parents writable by group or other are refused with exit 65 and a safe
+error that does not echo input content. Runs are published atomically
+new-only and never overwritten; `export-baseline` writes only to a
+new output path. Full contract:
+[Catalog refresh (offline review)](catalog-refresh.md#filesystem-trust-contract).
+
 The three review baseline inputs are distinct execution paths with
 distinct SQL evidence: `--db-url` performs the live read-only export
 itself (SQL executed during this review), `--baseline-file` consumes a

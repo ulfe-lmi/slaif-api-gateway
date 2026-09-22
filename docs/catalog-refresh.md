@@ -537,10 +537,74 @@ digests from local knowledge — fails verification without the sealing
 authority. Publication is immutable: a run is built in a **private staging
 directory** and published with one atomic directory rename (new-only,
 refuses existing output), so a failure leaves nothing complete-looking at
-the final path; manifest paths are strict relative regular files with no
-symlink components (leaf, parent, or dangling), traversal, or
-size/depth escapes, and every read is bounded through an `O_NOFOLLOW`
-descriptor with an `fstat`-fixed size.
+the final path.
+
+### Filesystem trust contract
+
+All catalog-refresh inputs — bundle, baseline, seal key, run content,
+manifest, receipt, and export output — pass through one
+descriptor-anchored filesystem boundary:
+
+- **Anchored walks.** Path components are walked one hop at a time
+  through held directory descriptors with no-follow opens; nothing is
+  reopened by full path after a check. A symlink at any level — leaf,
+  intermediate parent, or ancestor — is refused, as are traversal
+  components (`..`, empty, dot), absolute names, and depth/alias
+  escapes.
+- **Lifecycle binding.** Review and verify keep the anchored handles for
+  the run root and the seal-key parent across the whole operation and
+  re-assert the name-to-inode binding at every publication gate. A
+  directory swapped mid-operation voids the run (exit 65) and nothing
+  is published under the swapped name.
+- **Mutation-namespace enforcement.** The run root and seal-key parent
+  must be operator-owned directories that are not writable by group or
+  other, checked by `fstat` on the held descriptor. Unsafe directories
+  are refused, never chmod'ed or repaired (exit 65).
+- **Bounds before allocation.** The bundle (8 MiB) and baseline
+  (32 MiB) bounds are enforced before any content is read or
+  allocated. Sealed runs are bounded per content file (32 MiB),
+  manifest (1 MiB), receipt (8 KiB), per run (128 MiB including
+  manifest/receipt overhead), file count (64) and depth (4), and the
+  manifest's declared set, count, and sizes are reconciled before any
+  content is read. Special files (FIFO, socket, device) fail promptly
+  at open, and sparse files over their declared size are refused before
+  reading.
+- **Strict JSON, safe errors.** Bundle, baseline, manifest, receipt,
+  and the first-install marker are parsed strictly: duplicate keys,
+  non-finite constants, malformed input, and excessive nesting are
+  refused. Parse and schema errors render as constant, bounded text and
+  never echo input bytes or private field values.
+- **Exact key contract.** The seal key must be a regular,
+  symlink-free file whose parent chain is symlink-free, owned by the
+  invoking user, with mode exactly `0600` and exactly 64 lowercase
+  ASCII hex bytes, validated on the *opened* descriptor; a key that
+  grows while read is refused. Verification never creates, repairs, or
+  re-signs anything and leaves a missing key missing. Key containment
+  outside the run tree is proven by `(dev, ino)` chain identity, not
+  lexical path comparison alone.
+- **Atomic NEW-ONLY publication.** A run is staged in a private
+  (0700) directory, completed and fsynced, sealed, then published with
+  one atomic `renameat2(RENAME_NOREPLACE)` (Linux kernel 3.13+, glibc
+  2.28+; fails closed when unavailable — never check-then-replace).
+  Pre-existing targets of any type, including concurrently created
+  ones, remain byte- and inode-identical and the conflict exits 65.
+  `export-baseline` enforces the same new-only guarantee on its output
+  file. Failure cleanup is identity-checked and refuses to remove a
+  replaced staging directory.
+- **Capture-once.** Each content file is read exactly once through the
+  held descriptor, and those same captured bytes drive the manifest and
+  receipt digests, canonical bundle identity, semantic validation, and
+  the report correspondence. First-install runs must byte-equal the
+  canonical empty marker, not merely carry the expected
+  `schema_version`.
+
+Platform and threat scope, stated honestly: the boundary assumes Linux
+with `renameat2`. It provides local integrity against unprivileged local
+peers; it is not protection from an administrator who controls the seal
+key, from root or same-uid code with full authority, or from hostile
+kernel behavior. Filesystem permissions do not make reviewed files
+immutable — later mutation is detected by verification, and any future
+apply must consume the authenticated snapshot rather than reread paths.
 
 ## Exit codes
 
@@ -549,13 +613,13 @@ descriptor with an `fstat`-fixed size.
 | `review` | 0 | READY |
 | `review` | 10 | READY_WITH_WARNINGS |
 | `review` | 20 | BLOCKED (safe blocked run published when possible) |
-| `review` | 65 | data error (unreadable/unparseable input, bad baseline, seal key problem) |
+| `review` | 65 | data error (unreadable/unparseable/oversized input, bad baseline, seal key problem, unsafe directory configuration, existing run output) |
 | `review` | 2 | usage error (contradictory options) |
 | `verify` | 0 | run verified |
 | `verify` | 30 | run failed verification |
-| `verify` | 65 | data error (missing key or run directory is a data/usage error; verify never creates keys) |
+| `verify` | 65 | data error (missing key or run directory; unsafe directory configuration; verify never creates keys) |
 | `export-baseline` | 0 | baseline written |
-| `export-baseline` | 65 | data error (never overwrites output; never bootstraps empty) |
+| `export-baseline` | 65 | data error (never overwrites output — new-only atomic write; never bootstraps empty) |
 
 ## Limits
 
@@ -566,6 +630,9 @@ descriptor with an `fstat`-fixed size.
   exists in this version.
 - The seal is a local integrity tool, not a substitute for GitHub/audit
   authority or protection against a key-holding administrator.
+- The sealed-run filesystem boundary assumes Linux (atomic
+  `renameat2` publication) and protects against unprivileged local
+  peers, not privileged or key-controlling code.
 - Baseline export reads four metadata tables; it is not a database backup
   (see [Backup and restore](backup-restore.md)).
 - Pricing/FX validity-window lookup and normal finalization behavior are

@@ -62,6 +62,7 @@ from slaif_gateway.schemas.catalog_refresh import (
 )
 from slaif_gateway.services.catalog_refresh.errors import (
     CatalogRefreshBlockedError,
+    safe_schema_error_text,
 )
 from slaif_gateway.utils.redaction import redact_text
 
@@ -86,14 +87,15 @@ def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in seen:
-            raise ValueError(f"duplicate JSON key {key!r}")
+            # Constant message: the (untrusted) key name is never echoed.
+            raise ValueError("duplicate JSON key")
         seen.add(key)
         result[key] = value
     return result
 
 
-def _reject_non_finite(token: str) -> Any:
-    raise ValueError(f"non-finite JSON value {token!r}")
+def _reject_non_finite(_token: str) -> Any:
+    raise ValueError("non-finite JSON value")
 
 
 def load_baseline(raw: bytes) -> BaselineDocument:
@@ -116,17 +118,15 @@ def load_baseline(raw: bytes) -> BaselineDocument:
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_non_finite,
         )
-    except (json.JSONDecodeError, ValueError) as exc:
+    except (json.JSONDecodeError, ValueError, RecursionError) as exc:
         raise CatalogRefreshBlockedError("baseline_invalid_json", str(exc)) from exc
     try:
         document = BaselineDocument.model_validate(payload)
     except ValidationError as exc:
-        errors = "; ".join(
-            f"{'.'.join(str(loc) for loc in error.get('loc', ()))}: {error.get('msg', 'invalid')}"
-            for error in exc.errors()[:8]
-        )
+        # Pydantic locations/messages may carry untrusted input;
+        # render a bounded, safe form (see safe_schema_error_text).
         raise CatalogRefreshBlockedError(
-            "baseline_schema_invalid", errors[:4000]
+            "baseline_schema_invalid", safe_schema_error_text(exc)
         ) from exc
     recomputed = hashlib.sha256(
         canonical_baseline_content(document)

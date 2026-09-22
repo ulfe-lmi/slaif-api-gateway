@@ -20,8 +20,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
-import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -31,10 +29,12 @@ import typer
 from slaif_gateway.cli.common import CliError, emit_json, run_async
 from slaif_gateway.schemas.catalog_refresh import BaselineDocument
 from slaif_gateway.services.catalog_refresh.baseline import (
+    MAX_BASELINE_BYTES,
     export_baseline,
     load_baseline,
 )
 from slaif_gateway.services.catalog_refresh.bundle import (
+    MAX_BUNDLE_BYTES,
     canonical_bundle_bytes,
     load_bundle,
 )
@@ -43,6 +43,18 @@ from slaif_gateway.services.catalog_refresh.errors import (
     CatalogRefreshError,
     CatalogRefreshSealError,
 )
+from slaif_gateway.services.catalog_refresh.filesystem import (
+    AnchoredDir,
+    PublicationConflictError,
+    cleanup_staged_directory,
+    load_seal_key_bytes,
+    mkdir_private_child,
+    open_anchored_handle,
+    publish_new_only_directory,
+    publish_new_only_file,
+    read_user_file,
+    write_staged_file,
+)
 from slaif_gateway.services.catalog_refresh.policy import policy_from_document
 from slaif_gateway.services.catalog_refresh.rendering import (
     build_manifest,
@@ -50,7 +62,7 @@ from slaif_gateway.services.catalog_refresh.rendering import (
     render_report,
 )
 from slaif_gateway.services.catalog_refresh.sealing import (
-    KEY_BYTES,
+    MANIFEST_NAME,
     ensure_seal_key,
     first_install_baseline_bytes,
     seal_run,
@@ -80,33 +92,6 @@ STAGE_LINE = (
 DEFAULT_SEAL_KEY = Path("~/.local/state/slaif/catalog-refresh/seal.key")
 
 
-def _atomic_write(path: Path, data: bytes, mode: int) -> None:
-    """Atomic write: temp file in same directory, fsync, rename, fsync dir."""
-    directory = path.parent
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=directory)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fchmod(handle.fileno(), mode)  # exact mode before the rename
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            # The temp file may already be gone (renamed or cleaned by a
-            # concurrent failure path); unlink ENOENT is expected here and
-            # must not mask the original exception being re-raised.
-            pass
-        raise
-    dir_fd = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
-
-
 def _baseline_document_bytes(baseline: BaselineDocument) -> bytes:
     """Canonical JSON bytes for an exported baseline document."""
     payload = baseline.model_dump(mode="json")
@@ -123,18 +108,16 @@ def _settings_database_url() -> str:
 
 
 def _read_existing_seal_key(path: Path) -> bytes:
-    """Read a runner-owned seal key; verify never creates keys."""
-    expanded = Path(path).expanduser()
-    if not expanded.is_file():
-        raise CliError(f"seal key file does not exist: {expanded} (verify never creates keys)")
+    """Read a runner-owned seal key; verify never creates keys.
+
+    The key is loaded through the shared anchored boundary: no-follow at
+    every component, regular file / 0600 / current-runner ownership / 64
+    lowercase hex bytes validated on the OPENED descriptor.
+    """
     try:
-        raw = expanded.read_bytes()
-        key = bytes.fromhex(raw.decode("ascii"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise CliError("seal key file must contain 64 ASCII hex characters") from exc
-    if len(key) != KEY_BYTES:
-        raise CliError("seal key has the wrong length")
-    return key
+        return load_seal_key_bytes(Path(path).expanduser())
+    except CatalogRefreshSealError as exc:
+        raise CliError(str(exc)) from exc
 
 
 def _minimal_blocked_html(*, run_id: str, code: str, detail: str, generated_at: str) -> bytes:
@@ -192,6 +175,9 @@ def _minimal_blocked_validation_json(*, run_id: str, code: str, detail: str, gen
 def _publish_blocked_run(
     *,
     run_root: Path,
+    seal_key_path: Path,
+    run_root_handle: AnchoredDir | None,
+    key_handle: AnchoredDir | None,
     run_name: str,
     code: str,
     detail: str,
@@ -200,30 +186,57 @@ def _publish_blocked_run(
 ) -> Path:
     """Publish a safe, unsealed BLOCKED run directory (new only, atomic).
 
-    The small run is assembled in a private staging directory and published
-    with one atomic directory rename; a failure leaves nothing at the final
-    path.
+    The small run is assembled in a private staging directory and
+    published with one atomic NEW-ONLY directory rename through the
+    HELD run-root handle; a failure leaves nothing at the final path.
+    The checked lifecycle bindings (run root, seal-key parent) must
+    still hold or the publication is refused.
     """
-    run_dir = run_root / run_name
-    run_root.mkdir(parents=True, exist_ok=True)
-    if run_dir.exists() or run_dir.is_symlink():
-        raise CliError(f"run directory already exists; refusing to overwrite: {run_dir}")
     files: dict[str, bytes] = {
         "REVIEW.html": _minimal_blocked_html(run_id=run_name, code=code, detail=detail, generated_at=generated_at),
         "validation.json": _minimal_blocked_validation_json(run_id=run_name, code=code, detail=detail, generated_at=generated_at),
     }
     if bundle_canonical is not None:
         files["catalog-refresh.json"] = bundle_canonical
-    staging = Path(tempfile.mkdtemp(prefix=f".staging-{run_name}-", dir=run_root))
+    owns_handle = False
+    if run_root_handle is None:
+        run_root_handle = open_anchored_handle(run_root, create_missing=True)
+        run_root_handle.assert_mutation_namespace("run root directory")
+        owns_handle = True
     try:
-        for name in sorted(files):
-            _atomic_write(staging / name, files[name], 0o644)
-        os.chmod(staging, 0o755)
-        os.replace(staging, run_dir)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
-    return run_dir
+        _assert_review_bindings(run_root, seal_key_path, run_root_handle, key_handle)
+    except CatalogRefreshSealError as exc:
+        raise CliError(f"checked path binding changed; refusing to publish: {exc}") from exc
+    try:
+        staging_name, staging_fd, staging_identity = mkdir_private_child(
+            run_root_handle.dir_fd, f".staging-{run_name}-"
+        )
+        created: list[str] = []
+        try:
+            try:
+                for name in sorted(files):
+                    write_staged_file(staging_fd, name, files[name], 0o644)
+                    created.append(name)
+                os.fchmod(staging_fd, 0o755)
+                try:
+                    publish_new_only_directory(
+                        run_root_handle.dir_fd, staging_name, run_name, staging_identity
+                    )
+                except PublicationConflictError as exc:
+                    raise CliError(
+                        f"run directory already exists; refusing to overwrite: {run_root / run_name}"
+                    ) from exc
+            finally:
+                os.close(staging_fd)
+        except BaseException:
+            cleanup_staged_directory(
+                run_root_handle.dir_fd, staging_name, staging_identity, created
+            )
+            raise
+    finally:
+        if owns_handle:
+            run_root_handle.close()
+    return run_root / run_name
 
 
 def _emit_review_summary(
@@ -326,6 +339,54 @@ def review_bundle(
         raise typer.Exit(EXIT_DATA_ERROR) from exc
 
 
+def _open_optional_anchored_handle(path: Path) -> AnchoredDir | None:
+    try:
+        return open_anchored_handle(path)
+    except CatalogRefreshSealError:
+        return None
+
+
+def _check_key_containment(
+    run_root: Path,
+    seal_key_path: Path,
+    run_root_handle: AnchoredDir | None,
+    key_handle: AnchoredDir | None,
+) -> None:
+    """180-g (G2): the seal key must stay outside the run tree. When BOTH
+    paths exist, containment is verified on the anchored (st_dev, st_ino)
+    chains of the held directory descriptors — a lexical check alone could
+    be raced. When either path does not exist yet, a static absolute-path
+    containment check applies (the run tree is only created, anchored, at
+    publication). The mutation namespaces (run root, key parent) must be
+    operator-owned and not peer-writable; unsafe supplied parents fail
+    closed (they are never chmod'ed). Nothing is created here."""
+    if run_root_handle is not None and key_handle is not None:
+        if run_root_handle.identity in key_handle.chain:
+            raise typer.BadParameter("--seal-key must be outside the run directory tree")
+    elif seal_key_path.is_relative_to(run_root):
+        raise typer.BadParameter("--seal-key must be outside the run directory tree")
+    if run_root_handle is not None:
+        run_root_handle.assert_mutation_namespace("run root directory")
+    if key_handle is not None:
+        key_handle.assert_mutation_namespace("seal key parent directory")
+
+
+def _assert_review_bindings(
+    run_root: Path,
+    seal_key_path: Path,
+    run_root_handle: AnchoredDir | None,
+    key_handle: AnchoredDir | None,
+) -> None:
+    """Lifecycle gate: the checked run-root and seal-key-parent bindings
+    must still hold (hop by hop, through the held descriptors). A
+    directory swapped in at ANY level — cross-phase rename included —
+    voids the review: no publication, no success announcement."""
+    if run_root_handle is not None:
+        run_root_handle.assert_name_binding(str(run_root))
+    if key_handle is not None:
+        key_handle.assert_name_binding(str(seal_key_path.parent))
+
+
 def _review_impl(
     *,
     bundle_path: Path,
@@ -337,18 +398,61 @@ def _review_impl(
     json_output: bool,
 ) -> int:
     run_root = run_root.expanduser().absolute()
-    seal_key_path = Path(seal_key).expanduser()
-    if seal_key_path.resolve().is_relative_to(run_root.resolve()):
-        raise typer.BadParameter("--seal-key must be outside the run directory tree")
+    seal_key_path = Path(seal_key).expanduser().absolute()
     if first_install and (baseline_file is not None or db_url is not None):
         raise typer.BadParameter("--first-install cannot be combined with --baseline-file or --db-url")
     if baseline_file is not None and db_url is not None:
         raise typer.BadParameter("use either --baseline-file or --db-url, not both")
 
-    # 1) Load the canonical bundle; unparseable input gets a minimal blocked run.
+    # 180-g (G2): both paths are opened (never created) with the anchored
+    # walk and the HELD handles are retained for the ENTIRE review
+    # lifecycle (containment, key load, publication, error-report paths);
+    # later gates re-assert the checked bindings before key load and
+    # before every publication.
+    run_root_handle = _open_optional_anchored_handle(run_root)
+    key_handle = _open_optional_anchored_handle(seal_key_path.parent)
     try:
-        raw = Path(bundle_path).read_bytes()
-    except OSError as exc:
+        _check_key_containment(run_root, seal_key_path, run_root_handle, key_handle)
+        return _review_pipeline(
+            bundle_path=bundle_path,
+            baseline_file=baseline_file,
+            first_install=first_install,
+            db_url=db_url,
+            run_root=run_root,
+            seal_key_path=seal_key_path,
+            json_output=json_output,
+            run_root_handle=run_root_handle,
+            key_handle=key_handle,
+        )
+    except typer.BadParameter:
+        raise
+    except CatalogRefreshSealError as exc:
+        raise CliError(f"refusing unsafe directory configuration: {exc}") from exc
+    finally:
+        if run_root_handle is not None:
+            run_root_handle.close()
+        if key_handle is not None:
+            key_handle.close()
+
+
+def _review_pipeline(
+    *,
+    bundle_path: Path,
+    baseline_file: Path | None,
+    first_install: bool,
+    db_url: str | None,
+    run_root: Path,
+    seal_key_path: Path,
+    json_output: bool,
+    run_root_handle: AnchoredDir | None,
+    key_handle: AnchoredDir | None,
+) -> int:
+    # 1) Load the canonical bundle through the anchored bounded reader;
+    #    the 8 MiB cap is enforced from the open descriptor BEFORE any
+    #    content is allocated. Unparseable input gets a minimal blocked run.
+    try:
+        raw = read_user_file(Path(bundle_path), MAX_BUNDLE_BYTES)
+    except CatalogRefreshSealError as exc:
         raise CliError(f"bundle file is not readable: {bundle_path}") from exc
     try:
         bundle = load_bundle(raw)
@@ -356,6 +460,9 @@ def _review_impl(
         run_name = f"blocked-invalid-{hashlib.sha256(raw).hexdigest()[:16]}"
         run_dir = _publish_blocked_run(
             run_root=run_root,
+            seal_key_path=seal_key_path,
+            run_root_handle=run_root_handle,
+            key_handle=key_handle,
             run_name=run_name,
             code=exc.code,
             detail=exc.detail,
@@ -397,6 +504,9 @@ def _review_impl(
         except CatalogRefreshBlockedError as exc:
             run_dir = _publish_blocked_run(
                 run_root=run_root,
+                seal_key_path=seal_key_path,
+                run_root_handle=run_root_handle,
+                key_handle=key_handle,
                 run_name=f"blocked-{exc.code}-{hashlib.sha256(canonical_bundle_bytes(bundle)).hexdigest()[:16]}",
                 code=exc.code,
                 detail=exc.detail,
@@ -421,8 +531,8 @@ def _review_impl(
         if baseline_file is None:
             raise CliError("refresh bundle requires an explicit exported baseline; pass --baseline-file")
         try:
-            baseline_raw = Path(baseline_file).read_bytes()
-        except OSError as exc:
+            baseline_raw = read_user_file(Path(baseline_file), MAX_BASELINE_BYTES)
+        except CatalogRefreshSealError as exc:
             raise CliError(f"baseline file is not readable: {baseline_file}") from exc
         try:
             baseline_doc = load_baseline(baseline_raw)
@@ -435,13 +545,21 @@ def _review_impl(
         declared = bundle.baseline
         if declared.content_sha256 is not None and declared.content_sha256 != baseline_doc.content_sha256:
             _blocked_identity(
-                run_root=run_root, bundle=bundle, code="baseline_identity_mismatch",
+                run_root=run_root,
+                seal_key_path=seal_key_path,
+                run_root_handle=run_root_handle,
+                key_handle=key_handle,
+                bundle=bundle, code="baseline_identity_mismatch",
                 detail="baseline content digest does not match the bundle's declared baseline identity",
                 json_output=json_output,
             )
         if declared.target_database is not None and declared.target_database != baseline_doc.target.database:
             _blocked_identity(
-                run_root=run_root, bundle=bundle, code="baseline_target_mismatch",
+                run_root=run_root,
+                seal_key_path=seal_key_path,
+                run_root_handle=run_root_handle,
+                key_handle=key_handle,
+                bundle=bundle, code="baseline_target_mismatch",
                 detail=f"baseline target {baseline_doc.target.database!r} does not match declared {declared.target_database!r}",
                 json_output=json_output,
             )
@@ -452,13 +570,35 @@ def _review_impl(
         report, artifacts = validate_against_baseline_document(bundle, baseline_doc, policy, sql_capture=sql_capture)
     except CatalogRefreshBlockedError as exc:
         _blocked_identity(
-            run_root=run_root, bundle=bundle, code=exc.code, detail=exc.detail, json_output=json_output,
+            run_root=run_root,
+            seal_key_path=seal_key_path,
+            run_root_handle=run_root_handle,
+            key_handle=key_handle,
+            bundle=bundle, code=exc.code, detail=exc.detail, json_output=json_output,
         )
 
-    # 5) Build the complete run in a private staging directory, then publish
-    #    it with one atomic directory rename. The run is sealed last, so a
-    #    failure at any point removes the staging tree and never leaves a
-    #    publicly complete-looking unsealed review at the final path.
+    # 5) Seal key: lifecycle gate (checked bindings must still hold) then
+    #    load through the HELD key-parent descriptor (descriptor lineage).
+    try:
+        _assert_review_bindings(run_root, seal_key_path, run_root_handle, key_handle)
+        key_bytes = ensure_seal_key(
+            seal_key_path,
+            key_parent_fd=key_handle.dir_fd if key_handle is not None else None,
+        )
+    except CatalogRefreshSealError as exc:
+        raise CliError(f"checked path binding changed or seal key cannot be safely loaded: {exc}") from exc
+
+    # 6) Build the complete run in a private staged directory, then publish
+    #    it with one atomic NEW-ONLY directory operation. The run is sealed
+    #    last, so a failure at any point removes the staging tree and never
+    #    leaves a publicly complete-looking unsealed review at the final
+    #    path. The run-root handle is held across the entire
+    #    create/write/seal/publish/cleanup lifecycle; sealing consumes the
+    #    SAME held staging descriptor (descriptor lineage, capture-once);
+    #    failure cleanup is identity-checked through the held parent, and
+    #    the mutation namespace is enforced to be operator-owned and not
+    #    peer-writable, so a replaced staging entry is never published or
+    #    removed.
     content: dict[str, bytes] = {
         "catalog-refresh.json": canonical_bundle_bytes(bundle),
         "catalog-baseline.json": (
@@ -470,24 +610,52 @@ def _review_impl(
         "validation.json": validation_json_bytes(report),
         "REVIEW.html": render_report(bundle, report.to_dict()),
     }
-    key_bytes = ensure_seal_key(seal_key_path)
+    owns_run_handle = False
+    if run_root_handle is None:
+        try:
+            run_root_handle = open_anchored_handle(run_root, create_missing=True)
+            run_root_handle.assert_mutation_namespace("run root directory")
+        except CatalogRefreshSealError as exc:
+            raise CliError(f"run root cannot be safely opened: {exc}") from exc
+        owns_run_handle = True
     run_dir = run_root / bundle.run_id
-    run_root.mkdir(parents=True, exist_ok=True)
-    if run_dir.exists() or run_dir.is_symlink():
-        raise CliError(f"run directory already exists; refusing to overwrite completed output: {run_dir}")
-    staging = Path(tempfile.mkdtemp(prefix=f".staging-{bundle.run_id}-", dir=run_root))
     try:
-        for name in sorted(content):
-            _atomic_write(staging / name, content[name], 0o644)
-        _atomic_write(staging / "manifest.json", build_manifest(content), 0o644)
-        seal_run(staging, key_bytes)  # receipt.json is the final file
-        os.chmod(staging, 0o755)  # standard run directory mode at publication
-        os.replace(staging, run_dir)  # atomic same-filesystem directory rename
-    except BaseException:
-        # Never leave a partial, unsealed run behind; the original error is
-        # re-raised to the caller after the staging tree is removed.
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
+        try:
+            _assert_review_bindings(run_root, seal_key_path, run_root_handle, key_handle)
+        except CatalogRefreshSealError as exc:
+            raise CliError(f"checked path binding changed; refusing to publish: {exc}") from exc
+        staging_name, staging_fd, staging_identity = mkdir_private_child(
+            run_root_handle.dir_fd, f".staging-{bundle.run_id}-"
+        )
+        created: list[str] = [*sorted(content), MANIFEST_NAME, "receipt.json"]
+        try:
+            try:
+                for name in sorted(content):
+                    write_staged_file(staging_fd, name, content[name], 0o644)
+                write_staged_file(staging_fd, MANIFEST_NAME, build_manifest(content), 0o644)
+                seal_run(staging_fd, key_bytes)  # receipt.json is the final file
+                os.fchmod(staging_fd, 0o755)  # standard run directory mode at publication
+                try:
+                    publish_new_only_directory(
+                        run_root_handle.dir_fd, staging_name, bundle.run_id, staging_identity
+                    )
+                except PublicationConflictError as exc:
+                    raise CliError(
+                        f"run directory already exists; refusing to overwrite completed output: {run_dir}"
+                    ) from exc
+            finally:
+                os.close(staging_fd)
+        except BaseException:
+            # Never leave a partial, unsealed run behind; the original
+            # error is re-raised to the caller after the identity-checked
+            # staging cleanup.
+            cleanup_staged_directory(
+                run_root_handle.dir_fd, staging_name, staging_identity, created
+            )
+            raise
+    finally:
+        if owns_run_handle:
+            run_root_handle.close()
 
     blockers = sum(1 for warning in report.warnings if warning.severity == "BLOCKER")
     _emit_review_summary(
@@ -511,6 +679,9 @@ def _review_impl(
 def _blocked_identity(
     *,
     run_root: Path,
+    seal_key_path: Path,
+    run_root_handle: AnchoredDir | None,
+    key_handle: AnchoredDir | None,
     bundle: Any,
     code: str,
     detail: str,
@@ -519,6 +690,9 @@ def _blocked_identity(
     canonical = canonical_bundle_bytes(bundle)
     run_dir = _publish_blocked_run(
         run_root=run_root,
+        seal_key_path=seal_key_path,
+        run_root_handle=run_root_handle,
+        key_handle=key_handle,
         run_name=f"blocked-{code}-{hashlib.sha256(canonical).hexdigest()[:16]}",
         code=code,
         detail=detail,
@@ -605,8 +779,6 @@ def export_baseline_command(
     try:
         url = db_url or _settings_database_url()
         out_path = Path(out).expanduser()
-        if out_path.exists():
-            raise CliError(f"refusing to overwrite existing output: {out_path}")
         doc = run_async(export_baseline(url, now=datetime.now(UTC)))
     except (CliError, CatalogRefreshBlockedError) as exc:
         message = getattr(exc, "detail", None) or str(exc)
@@ -616,7 +788,17 @@ def export_baseline_command(
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_DATA_ERROR) from exc
 
-    _atomic_write(out_path, _baseline_document_bytes(doc), 0o644)
+    # 180-g (G3): new-only output enforced atomically at the actual write
+    # (renameat2 RENAME_NOREPLACE); a pre-existing target of any type —
+    # including a directory created concurrently — is left untouched.
+    try:
+        publish_new_only_file(out_path.parent, out_path.name, _baseline_document_bytes(doc), 0o644)
+    except PublicationConflictError:
+        typer.secho(f"Error: refusing to overwrite existing output: {out_path}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR)
+    except CatalogRefreshSealError as exc:
+        typer.secho(f"Error: output cannot be safely published: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR) from exc
     summary: dict[str, Any] = {
         "target": f"{doc.target.server_host}:{doc.target.server_port}/{doc.target.database}",
         "postgres_version": doc.target.postgres_version,
