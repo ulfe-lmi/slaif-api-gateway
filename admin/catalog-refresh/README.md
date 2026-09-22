@@ -1,8 +1,9 @@
-# Admin: catalog refresh (offline review)
+# Admin: catalog refresh (collect, review, verify)
 
-Operator entry points for the working offline slice of the catalog refresh
-workflow. Live source retrieval is unavailable in this version and no
-refresh or apply command exists in this version. Full semantics live in
+Operator entry points for the working slice of the catalog refresh
+workflow: bounded live official-source collection, offline review,
+verification, and read-only export. No refresh or apply command exists in
+this version and Codex research remains NOT_RUN. Full semantics live in
 [`docs/catalog-refresh.md`](../../docs/catalog-refresh.md).
 
 ## Current entry points
@@ -10,9 +11,21 @@ refresh or apply command exists in this version. Full semantics live in
 There is exactly one supported way to run this workflow: the CLI.
 
 ```bash
-# 1) Read-only coherent baseline export: one REPEATABLE READ snapshot
-#    of the four allowlisted tables, retaining the recognized capability
-#    contracts and the allowlisted monetary metadata; never writes.
+# 0) Collect now: bounded official-source retrieval plus review in one
+#    invocation; publishes one sealed run directory (REVIEW.html).
+slaif-gateway catalog-refresh collect --bootstrap \
+  --run-root /var/lib/slaif/catalog-refresh/runs \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
+
+# 0') Refresh collection against the current baseline (live export)
+slaif-gateway catalog-refresh collect --refresh --db-url "$DATABASE_URL" \
+  --run-root /var/lib/slaif/catalog-refresh/runs \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
+
+# 1) (offline alternative) Read-only coherent baseline export: one
+#    REPEATABLE READ snapshot of the four allowlisted tables, retaining
+#    the recognized capability contracts and the allowlisted monetary
+#    metadata; never writes.
 slaif-gateway catalog-refresh export-baseline \
   --out /var/lib/slaif/catalog-refresh/baseline.json \
   --db-url "$DATABASE_URL"
@@ -30,7 +43,7 @@ slaif-gateway catalog-refresh verify \
   --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
 ```
 
-Exit codes: review 0/10/20/65/2, verify 0/30/65 (a missing or unsafe
+Exit codes: collect and review 0/10/20/65/2, verify 0/30/65 (a missing or unsafe
 run directory with a valid key is 30; a missing or unsafe seal key is
 65), export-baseline 0/65 (see the docs page for the table). The review's
 baseline input is part of the SQL evidence: `--db-url` is a live export
@@ -39,9 +52,27 @@ baseline input is part of the SQL evidence: `--db-url` is a live export
 file does not verify that execution), `--first-install` read no database,
 and `verify` replays the sealed bytes without executing SQL.
 
+Collection proposes the flat standard-v1 short-context core text prices
+and, only when the source publishes it as an explicit zero, the reasoning
+no-charge. Eligibility follows executable billing, not TSV capacity: models
+with positive separately billed reasoning charges, positive per-request
+fees, positive hosted-operation charges, published long-context standard
+prices (even $0), contextual override tiers, positive cache-write charges,
+unknown billing keys, or source sentinels on billable dimensions are
+excluded with the exact machine reason, and explicitly selecting one blocks
+the run. Refresh preserves local route authority: one flat baseline row
+keeps its public alias, match type, priority, enabled/visible/streaming
+state, and every approved denial; multiple aliases and wildcard routes that
+govern the upstream (fixed destination or passthrough pattern) or non-flat
+contracts are retained locally, never reduced or bypassed, and a baseline
+alias still mapped to a present upstream is never reported as disappeared.
+
 ## Preparing source evidence (offline replay)
 
-Bundle sources are replayed offline, never fetched. Only the registered
+The `collect` command is the live alternative: it fetches the registered
+official sources itself and records the measured outcomes in the bundle's
+collection identity, which `review` re-verifies. For a supplied bundle,
+bundle sources are replayed offline, never fetched. Only the registered
 (provider, source kind) pairs are parsed: `openrouter/openrouter_models_api`
 (official OpenRouter `/models` shape with per-token USD pricing),
 `openai/openai_models_api` (identity only), `openai/openai_pricing_docs`,

@@ -57,6 +57,11 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
 )
 from slaif_gateway.services.catalog_refresh import source_evidence as se
+from slaif_gateway.services.catalog_refresh import sources as _source_registry
+from slaif_gateway.services.catalog_refresh.collection import (
+    CHAT_ENDPOINT,
+    _baseline_route_flat_capable,
+)
 from slaif_gateway.services.catalog_refresh.bundle import (
     NormalizedFxRow,
     generate_fx_json,
@@ -731,6 +736,10 @@ def validate_bundle(
             baseline_pricing_by_key.setdefault((row.provider, row.upstream_model, row.endpoint), []).append(row)
         for row in baseline.fx:
             baseline_fx_by_pair.setdefault((row.base_currency, row.quote_currency), []).append(row)
+    baseline_model_keys: set[tuple[str, str]] = (
+        {identity[:2] for identity in baseline_routes_by_identity}
+        | {(p, m) for (p, m, _e) in baseline_pricing_by_key}
+    )
 
     # Explicitly selected models and, for an unscoped selection, the full
     # baseline scope must be considered even when the bundle carries no facts
@@ -803,6 +812,10 @@ def validate_bundle(
     source_urls: dict[str, str] = {}
     source_times: dict[str, str] = {}
     official_source_keys: set[str] = set()
+    # 181: models whose one snapshot carries same-context conflicting rows
+    # are blocked per model (the global dedupe finding alone would let a
+    # row matching one conflicting value still reach the import artifacts).
+    conflicting_model_ids: set[tuple[str, str]] = set()
     for source, assessment in zip(bundle.sources, source_assessments):
         key = f"{source.provider}|{source.model}|{source.source_kind}"
         assessment_by_key[key] = assessment
@@ -840,6 +853,7 @@ def validate_bundle(
                         duplicate_id,
                     )
                 else:
+                    conflicting_model_ids.add((source.provider, duplicate_id))
                     add(
                         SEVERITY_BLOCKER,
                         "source_observations_contradict",
@@ -872,6 +886,229 @@ def validate_bundle(
         assessment["parse_state"] = "ok" if parsed.ok else (parsed.error or "no_registered_parser")
         assessment["parsed_models"] = len(parsed.models)
         assessment["parsed_fx_quotes"] = len(parsed.fx_quotes)
+
+    # --- 181-b: every observed official row, keyed for eligibility ----
+    # The shared standard-v1 billing policy recomputes from these parsed
+    # rows (never from the proposal's own claims), so a supplied or
+    # tampered bundle cannot bypass eligibility by dropping dimensions.
+    official_rows: dict[str, dict[str, list[se.ParsedModel]]] = {}
+    page_ok_models: set[str] = set()
+    page_rows: dict[str, se.ParsedModel] = {}
+    for key, parsed in parse_results.items():
+        if not parsed.ok or key not in official_source_keys:
+            continue
+        source_kind = key.split("|", 2)[2]
+        for parsed_model in deduped_models.get(key, []):
+            if parsed_model.provider not in selection_providers:
+                continue
+            official_rows.setdefault(parsed_model.provider, {}).setdefault(
+                parsed_model.model, []
+            ).append(parsed_model)
+            if source_kind == "docs_page":
+                page_ok_models.add(parsed_model.model)
+                page_rows.setdefault(parsed_model.model, parsed_model)
+    evidence_ids_by_provider: dict[str, dict[str, se.ParsedModel]] = {
+        provider: {model_id: rows[-1] for model_id, rows in by_model.items()}
+        for provider, by_model in official_rows.items()
+    }
+
+    # --- 181-b (B1): shared billing eligibility, recomputed for EVERY
+    # bundle (live collection AND offline supplied-bundle replay). A
+    # proposed model whose official parsed observations are not billable
+    # under the flat standard-v1 contract is a blocker, with the exact
+    # policy reason; a positive published charge that the proposal drops
+    # or alters is a blocker, not an exclusion.
+    proposed_pricing_rows: dict[tuple[str, str], list[Any]] = {}
+    for item in bundle.pricing:
+        proposed_pricing_rows.setdefault((item.provider, item.model), []).append(item)
+    proposed_fact_keys = (
+        {(item.provider, item.model) for item in bundle.models}
+        | set(proposed_pricing_rows)
+    )
+    for provider, model in sorted(proposed_fact_keys):
+        if provider not in selection_providers:
+            continue
+        rows = official_rows.get(provider, {}).get(model)
+        if not rows:
+            continue  # no official parsed rows: the evidence gates own it
+        decision = se.standard_v1_billing_decision(provider, rows)
+        if not decision.eligible:
+            add(
+                SEVERITY_BLOCKER,
+                "proposed_row_billing_ineligible",
+                f"proposed model is not billable under the flat standard-v1 contract: "
+                f"{decision.reason_code} - {decision.detail}",
+                provider,
+                model,
+            )
+            continue
+        for dim, value_text, unit in decision.carried:
+            try:
+                observed_value = Decimal(value_text)
+            except InvalidOperation:
+                continue
+            pricing_rows = proposed_pricing_rows.get((provider, model), [])
+            if not pricing_rows:
+                continue
+            missing = True
+            mismatch = False
+            for pricing in pricing_rows:
+                match = next(
+                    (d for d in pricing.dimensions if d.name == dim), None
+                )
+                if match is None:
+                    missing = True
+                    break
+                try:
+                    proposed_value = (
+                        Decimal(match.value) if match.value is not None else None
+                    )
+                except InvalidOperation:
+                    proposed_value = None
+                if match.unit != unit or proposed_value is None or proposed_value != observed_value:
+                    missing = False
+                    mismatch = True
+                    break
+                missing = False
+            if missing:
+                add(
+                    SEVERITY_BLOCKER,
+                    "proposed_row_billing_dim_missing",
+                    f"official source publishes a positive {dim} charge but the proposal omits it; "
+                    "removing a billable dimension is not an exclusion",
+                    provider,
+                    model,
+                )
+            elif mismatch:
+                add(
+                    SEVERITY_BLOCKER,
+                    "proposed_row_billing_dim_mismatch",
+                    f"proposed {dim} charge does not equal the published {value_text} "
+                    f"(unit {unit})",
+                    provider,
+                    model,
+                )
+
+    # --- 181-b (B2): local route authority is never overridden ---------
+    # A baseline public route for an upstream that still exists must not be
+    # replaced by proposed route name(s) under the same upstream (no alias
+    # clobbering, no parallel upstream-named route), in live collection and
+    # supplied-bundle review alike.
+    if baseline is not None:
+        proposed_names_by_upstream: dict[tuple[str, str], set[str]] = {}
+        for route in bundle.routes:
+            if route.match_type == "exact" and route.endpoint == CHAT_ENDPOINT:
+                proposed_names_by_upstream.setdefault(
+                    (route.provider, route.upstream_model), set()
+                ).add(route.requested_model)
+        seen_replacements: set[tuple[str, str, str]] = set()
+        baseline_names_by_upstream: dict[tuple[str, str], set[str]] = {}
+        for row in baseline.routes:
+            if row.match_type == "exact" and row.endpoint == CHAT_ENDPOINT:
+                baseline_names_by_upstream.setdefault(
+                    (row.provider, row.upstream_model), set()
+                ).add(row.requested_model)
+        for row in baseline.routes:
+            if row.match_type != "exact" or row.endpoint != CHAT_ENDPOINT:
+                continue
+            proposed = proposed_names_by_upstream.get(
+                (row.provider, row.upstream_model)
+            )
+            if not proposed:
+                continue
+            # A baseline route whose public name IS the upstream identity is
+            # not a public alias: renaming its public name follows the
+            # established 180 create/mutation semantics, not alias
+            # preservation. A GENUINE alias (public name != upstream) must
+            # be preserved exactly, and a parallel upstream-named route for
+            # that upstream must never be proposed (no alias clobbering, no
+            # bypass route).
+            if row.requested_model == row.upstream_model:
+                continue
+            if row.requested_model not in proposed:
+                identity = (row.provider, row.requested_model, row.upstream_model)
+                if identity in seen_replacements:
+                    continue
+                seen_replacements.add(identity)
+                add(
+                    SEVERITY_BLOCKER,
+                    "alias_route_replaced",
+                    f"baseline public alias {row.requested_model!r} for upstream "
+                    f"{row.upstream_model!r} is replaced by proposed route name(s) "
+                    f"{', '.join(sorted(proposed))!s}; local route authority is preserved "
+                    "and no parallel route bypasses the alias",
+                    row.provider,
+                    row.requested_model,
+                )
+            elif (
+                row.upstream_model in proposed
+                and row.upstream_model
+                not in baseline_names_by_upstream.get(
+                    (row.provider, row.upstream_model), set()
+                )
+            ):
+                identity = (
+                    row.provider,
+                    f"parallel:{row.upstream_model}",
+                    row.upstream_model,
+                )
+                if identity in seen_replacements:
+                    continue
+                seen_replacements.add(identity)
+                add(
+                    SEVERITY_BLOCKER,
+                    "alias_route_replaced",
+                    f"proposed route {row.upstream_model!r} is a parallel upstream-named "
+                    f"route for an upstream already held by baseline alias "
+                    f"{row.requested_model!r}; no parallel route bypasses the alias",
+                    row.provider,
+                    row.requested_model,
+                )
+        # 181-c (C3): baseline WILDCARD routes retain local authority over the
+        # upstreams they GOVERN (the resolver's destination rule: a fixed
+        # upstream_model, or the passthrough public pattern matching the
+        # upstream identity - never public string similarity against an
+        # unrelated fixed destination). Any proposed chat route for a
+        # governed upstream is a re-inserted parallel route that bypasses
+        # that local authority: BLOCK it, in live collection and
+        # supplied-bundle review alike. A wildcard retained locally is not a
+        # source disappearance (the disposition loop records NOT_FETCHED).
+        proposed_chat_by_upstream: dict[tuple[str, str], list[Any]] = {}
+        for route in bundle.routes:
+            if route.endpoint == CHAT_ENDPOINT:
+                proposed_chat_by_upstream.setdefault(
+                    (route.provider, route.upstream_model), []
+                ).append(route)
+        seen_wildcard_bypass: set[tuple[str, str, str, str, str]] = set()
+        for row in baseline.routes:
+            if row.match_type not in ("prefix", "glob") or row.endpoint != CHAT_ENDPOINT:
+                continue
+            for (prov, upstream), prows in proposed_chat_by_upstream.items():
+                if prov != row.provider:
+                    continue
+                if not se.wildcard_route_governs_upstream(row, upstream):
+                    continue
+                for prows_item in prows:
+                    identity = (
+                        row.provider,
+                        row.requested_model,
+                        upstream,
+                        prows_item.requested_model,
+                        prows_item.match_type,
+                    )
+                    if identity in seen_wildcard_bypass:
+                        continue
+                    seen_wildcard_bypass.add(identity)
+                    add(
+                        SEVERITY_BLOCKER,
+                        "wildcard_route_authority_bypassed",
+                        f"proposed {prows_item.match_type} route {prows_item.requested_model!r} "
+                        f"for upstream {upstream!r} is parallel to baseline {row.match_type} "
+                        f"route {row.requested_model!r} that retains local authority over that "
+                        "upstream; no parallel route bypasses the wildcard",
+                        row.provider,
+                        upstream,
+                    )
 
     # --- 180-d: FX facts must bind to parsed authoritative quotes BEFORE any
     # currency normalization. A candidate rate merely labelled verified
@@ -1120,6 +1357,38 @@ def validate_bundle(
         routes = routes_by_key.get((provider, model), [])
         pricing_facts_list = pricing_by_key.get((provider, model), [])
         model_sources = sources_by_key.get((provider, model), [])
+        # 181-b (B2): pairing by the route's UPSTREAM identity. A preserved
+        # public alias is local routing state: the route row keeps both
+        # names, and the model/pricing facts of the upstream it forwards to
+        # pair through the route's upstream_model (the established 180-f
+        # pairing authority). A local name never misses a pairing merely
+        # because its fact sits under the upstream identity, and a fact
+        # under an upstream identity is served by the retained alias route.
+        if facts is None and routes:
+            for upstream in sorted({r.upstream_model for r in routes}):
+                if upstream == model:
+                    continue
+                candidate = models_by_key.get((provider, upstream))
+                if candidate is not None:
+                    facts = candidate
+                    break
+        if not pricing_facts_list and routes:
+            for upstream in sorted({r.upstream_model for r in routes}):
+                if upstream == model:
+                    continue
+                candidate = pricing_by_key.get((provider, upstream), [])
+                if candidate:
+                    pricing_facts_list = candidate
+                    break
+        if not routes and (facts is not None or pricing_facts_list):
+            routes = [
+                r
+                for r in bundle.routes
+                if r.provider == provider
+                and r.upstream_model == model
+                and r.match_type == "exact"
+                and r.endpoint == CHAT_ENDPOINT
+            ]
         truncated_required = any(source.truncated for source in model_sources if source.required)
         in_baseline = any(
             identity[:2] == (provider, model) for identity in baseline_routes_by_identity
@@ -1160,9 +1429,107 @@ def validate_bundle(
                         dispositions.append(Disposition(provider, model, DISPOSITION_NOT_FETCHED, "baseline model not re-fetched (source missing or truncated); not treated as disappeared"))
                         bump(provider, "not_fetched")
                 else:
-                    dispositions.append(Disposition(provider, model, DISPOSITION_DISAPPEARED, "in baseline but absent from complete sources; retain-local, no delete semantics in this version"))
-                    bump(provider, "disappeared")
-                    add(SEVERITY_REVIEW, "model_disappeared", "model present in baseline but absent from complete source retrieval; retained locally", provider, model)
+                    # 181-b (B2): a baseline name carried ONLY by wildcard
+                    # (prefix/glob) route rows is a local routing pattern,
+                    # not a source model: it was never part of the source
+                    # catalog, so it cannot "disappear" from it. The local
+                    # row is retained with an explicit deterministic
+                    # disposition (no delete semantics in this version).
+                    if (
+                        not any(
+                            identity[:2] == (provider, model)
+                            and identity[2] == "exact"
+                            for identity in baseline_routes_by_identity
+                        )
+                        and not any(
+                            p2 == provider and m2 == model
+                            for (p2, m2, _endpoint2) in baseline_pricing_by_key
+                        )
+                        and any(
+                            row.provider == provider
+                            and row.requested_model == model
+                            and row.match_type != "exact"
+                            and row.endpoint == CHAT_ENDPOINT
+                            for row in (baseline.routes if baseline is not None else ())
+                        )
+                    ):
+                        dispositions.append(
+                            Disposition(
+                                provider,
+                                model,
+                                DISPOSITION_NOT_FETCHED,
+                                "local wildcard route retained (routing pattern is local "
+                                "state, not a source model); no delete semantics in this version",
+                            )
+                        )
+                        bump(provider, "not_fetched")
+                        continue
+                    # 181: a collection inventory entry with a baseline-
+                    # retention reason documents WHY this observed baseline
+                    # model was not proposed (its stored contract cannot be
+                    # proposed flat). That is a documented retain-local, not
+                    # an absence from the source set; the full inventory
+                    # verification still re-checks the claim against the
+                    # baseline and blocks on any unsupported entry.
+                    _collection = bundle.collection
+                    _entry = next(
+                        (
+                            e
+                            for e in (_collection.inventory if _collection is not None else ())
+                            if e.provider == provider and e.model == model
+                        ),
+                        None,
+                    )
+                    if _entry is None:
+                        # 181-b (B2): a baseline model may be a PUBLIC ALIAS
+                        # whose retention entry is keyed by the upstream
+                        # identity; resolve through the baseline route rows
+                        # (the alias remaining mapped to a present upstream
+                        # is retention, never disappearance).
+                        _inventory = (
+                            _collection.inventory if _collection is not None else ()
+                        )
+                        for _row in (baseline.routes if baseline is not None else ()):
+                            if (
+                                _row.provider != provider
+                                or _row.requested_model != model
+                                or _row.endpoint != CHAT_ENDPOINT
+                            ):
+                                continue
+                            _entry = next(
+                                (
+                                    e
+                                    for e in _inventory
+                                    if e.provider == provider
+                                    and e.model == _row.upstream_model
+                                ),
+                                None,
+                            )
+                            if _entry is not None:
+                                break
+                    if (
+                        _entry is not None
+                        and _entry.reason_code
+                        in (
+                            "baseline_contract_not_flat",
+                            "baseline_currency_mismatch",
+                            "baseline_multiple_routes",
+                        )
+                        and (provider, model) in baseline_model_keys
+                    ):
+                        dispositions.append(
+                            Disposition(
+                                provider,
+                                model,
+                                DISPOSITION_NOT_FETCHED,
+                                f"retained locally per collection inventory ({_entry.reason_code}); observed in sources, not proposed",
+                            )
+                        )
+                        bump(provider, "not_fetched")
+                    else:
+                        dispositions.append(Disposition(provider, model, DISPOSITION_DISAPPEARED, "in baseline but absent from complete sources; retain-local, no delete semantics in this version"))
+                        bump(provider, "disappeared")
+                        add(SEVERITY_REVIEW, "model_disappeared", "model present in baseline but absent from complete source retrieval; retained locally", provider, model)
             else:
                 # explicitly selected but nothing proposed
                 if explicitly_selected:
@@ -1378,16 +1745,19 @@ def validate_bundle(
                 provider,
                 model,
             )
+        snapshot_conflict = (provider, upstream) in conflicting_model_ids
         if (
             any(finding.severity == SEVERITY_BLOCKER for finding in evidence_findings)
             or missing_fx
             or model_missing
             or deprecated_conflict
+            or snapshot_conflict
         ):
             blocked_codes = sorted(
                 {finding.code for finding in evidence_findings if finding.severity == SEVERITY_BLOCKER}
                 | ({"fx_evidence_unbound"} if missing_fx else set())
                 | ({"source_evidence_model_missing"} if model_missing else set())
+                | ({"source_observations_contradict"} if snapshot_conflict else set())
             )
             dispositions.append(
                 Disposition(provider, model, DISPOSITION_BLOCKED, "source evidence: " + ", ".join(blocked_codes))
@@ -1757,19 +2127,287 @@ def validate_bundle(
     # local state), explicitly excluded by a subset, unsupported (text
     # capability not observed), or an unexplained omission under an
     # all-eligible selection - which blocks. No silent row disappearance.
-    baseline_model_keys: set[tuple[str, str]] = {
-        identity[:2] for identity in baseline_routes_by_identity
-    } | {(p, m) for (p, m, _e) in baseline_pricing_by_key}
-    evidence_ids_by_provider: dict[str, dict[str, se.ParsedModel]] = {}
-    for key, parsed in parse_results.items():
-        if not parsed.ok or key not in official_source_keys:
-            continue
-        for parsed_model in deduped_models.get(key, []):
-            if parsed_model.provider in selection_providers:
-                evidence_ids_by_provider.setdefault(parsed_model.provider, {})[parsed_model.model] = parsed_model
+    # --- 181: collection identity gates (live collection evidence) ---------
+    # A bundle carrying a CollectionIdentity claims this invocation actually
+    # fetched its sources. Those claims are re-checked against the bundle's
+    # own source records and the parsed official evidence: a
+    # caller-supplied success label never backs a source, never covers a
+    # failed transport/parse, and never reconciles an observed model the
+    # parsed bytes do not support. Supplied bundles (no collection identity)
+    # keep the 180 offline-replay semantics exactly.
+    collection = bundle.collection
+    collection_inventory_verified: dict[tuple[str, str], str] = {}
+    collection_report: dict[str, Any] = {}
+    if collection is not None:
+        retrieval_by_url: dict[str, Any] = {}
+        failed_retrieval_urls: set[str] = set()
+        for record in collection.retrievals:
+            if record.outcome == "ok":
+                retrieval_by_url[record.requested_url] = record
+            else:
+                failed_retrieval_urls.add(record.requested_url)
+        for source in bundle.sources:
+            record = retrieval_by_url.get(source.url)
+            if record is None or record.content_sha256 != source.content_sha256:
+                add(
+                    SEVERITY_BLOCKER,
+                    "collection_source_unbacked",
+                    f"source {source.provider}|{source.model}|{source.source_kind} has no successful "
+                    "retrieval record with a matching content digest in the collection identity",
+                    source.provider,
+                    source.model,
+                )
+        _catalog_url_by_provider = {
+            "openrouter": _source_registry.OPENROUTER_MODELS_URL,
+            "openai": _source_registry.OPENAI_PRICING_MD_URL,
+        }
+        for provider in collection.providers:
+            catalog_url = _catalog_url_by_provider.get(provider)
+            if catalog_url is not None and catalog_url not in retrieval_by_url:
+                state = "failed" if catalog_url in failed_retrieval_urls else "absent"
+                add(
+                    SEVERITY_BLOCKER,
+                    "collection_retrieval_failed",
+                    f"provider catalog retrieval for {provider} is {state}; a source outage is a "
+                    "retrieval failure, not model disappearance, and an empty bootstrap is never READY",
+                    provider,
+                    None,
+                )
+        # 181-b (B1): a live collection that fetched its sources but
+        # produced NO usable proposal is not a ready bootstrap: every
+        # observed model was excluded, and publishing an empty proposal as
+        # READY would let an all-ineligible catalog masquerade as a
+        # successful collection. (A refresh against an existing baseline
+        # may legitimately propose nothing while retaining every baseline
+        # model; that no-op is accounted per model above.)
+        if (
+            baseline is None
+            and not bundle.routes
+            and not bundle.pricing
+            and not bundle.models
+        ):
+            add(
+                SEVERITY_BLOCKER,
+                "collection_empty_bootstrap",
+                "collection fetched official sources but proposed no model, route, or "
+                "pricing; an empty usable bootstrap is never READY",
+                None,
+                None,
+            )
+        # Evidence rows per provider: the shared official_rows built above
+        # (all kept rows, for claim verification).
+        evidence_rows = official_rows
+        baseline_model_keys_all = set(baseline_model_keys)
+        # 181-b (B2): upstream-keyed baseline indexes for retention claim
+        # verification (the collector keys retention entries by upstream
+        # identity; public aliases resolve through these rows).
+        baseline_chat_rows_by_upstream: dict[tuple[str, str], list[Any]] = {}
+        baseline_wildcard_route_rows: list[Any] = []
+        baseline_pricing_rows_by_upstream: dict[tuple[str, str], list[Any]] = {}
+        if baseline is not None:
+            for row in baseline.routes:
+                if row.endpoint != CHAT_ENDPOINT:
+                    continue
+                if row.match_type == "exact":
+                    baseline_chat_rows_by_upstream.setdefault(
+                        (row.provider, row.upstream_model), []
+                    ).append(row)
+                else:
+                    baseline_wildcard_route_rows.append(row)
+            for row in baseline.pricing:
+                if row.endpoint == CHAT_ENDPOINT:
+                    baseline_pricing_rows_by_upstream.setdefault(
+                        (row.provider, row.upstream_model), []
+                    ).append(row)
+        unverified_inventory: list[str] = []
+        for entry in collection.inventory:
+            provider, model_id = entry.provider, entry.model
+            rows = evidence_rows.get(provider, {}).get(model_id, [])
+            em = rows[-1] if rows else None
+            verified = False
+            if entry.disposition == "retained_local":
+                verified = (provider, model_id) in baseline_model_keys_all
+            elif entry.disposition == "deprecated":
+                verified = em is not None and em.deprecated is True
+            elif entry.disposition == "unsupported":
+                verified = em is not None and em.text_modality is not True
+            elif entry.disposition == "excluded_subset":
+                if entry.reason_code == "explicit_selection_excluded":
+                    verified = (
+                        bool(bundle.selection.model_include)
+                        and model_id not in set(bundle.selection.model_include)
+                    )
+                elif entry.reason_code == "service_variant":
+                    verified = model_id.endswith(":batch")
+                elif entry.reason_code in se.BILLING_EXCLUSION_REASONS:
+                    # 181-b (B1): billing-exclusion claims are recomputed
+                    # with the SAME shared policy over the parsed rows.
+                    decision = (
+                        se.standard_v1_billing_decision(provider, rows) if rows else None
+                    )
+                    verified = (
+                        decision is not None
+                        and not decision.eligible
+                        and decision.reason_code == entry.reason_code
+                    )
+                elif entry.reason_code == "price_below_quantum":
+                    decision = (
+                        se.standard_v1_billing_decision(provider, rows) if rows else None
+                    )
+                    verified = decision is not None and decision.eligible and any(
+                        Decimal(value).quantize(
+                            Decimal("0.000000001"), rounding=ROUND_HALF_UP
+                        )
+                        == 0
+                        for _dim, value, _unit in decision.carried
+                    )
+                elif entry.reason_code == "baseline_contract_not_flat":
+                    # 181-b (B2) / 181-c (C3): upstream-keyed - exactly one
+                    # non-flat exact row, or a prefix/glob baseline route
+                    # that GOVERNS the upstream under the resolver's actual
+                    # destination semantics (fixed upstream_model equality,
+                    # or passthrough pattern == upstream identity) - never
+                    # public-pattern string similarity.
+                    exact_here = baseline_chat_rows_by_upstream.get(
+                        (provider, model_id), []
+                    )
+                    if len(exact_here) == 1:
+                        verified = not _baseline_route_flat_capable(exact_here[0])
+                    else:
+                        verified = any(
+                            row.provider == provider
+                            and se.wildcard_route_governs_upstream(row, model_id)
+                            for row in baseline_wildcard_route_rows
+                        )
+                elif entry.reason_code == "baseline_multiple_routes":
+                    verified = len(
+                        baseline_chat_rows_by_upstream.get((provider, model_id), [])
+                    ) >= 2
+                elif entry.reason_code == "baseline_currency_mismatch":
+                    currencies = {
+                        row.currency
+                        for row in baseline_pricing_rows_by_upstream.get(
+                            (provider, model_id), []
+                        )
+                    }
+                    verified = bool(currencies) and currencies != {"USD"}
+                else:
+                    verified = False
+            elif entry.disposition == "incomplete":
+                if em is None:
+                    verified = False
+                elif entry.reason_code == "negative_router_sentinel":
+                    verified = bool({"input", "output"} & set(em.non_representable_prices))
+                elif entry.reason_code == "missing_limits":
+                    verified = em.context_length is None or em.max_output_tokens is None
+                elif entry.reason_code == "missing_core_prices":
+                    verified = not {"input", "output"} <= set(em.prices)
+                elif entry.reason_code == "no_standard_short_prices":
+                    verified = not any(
+                        row.billing_tier in (None, "standard")
+                        and row.context_band in (None, "short")
+                        and {"input", "output"} <= set(row.prices)
+                        for row in rows
+                    )
+                elif entry.reason_code == "index_only_no_standard_prices":
+                    # 181-b (B3): the ID is listed by the official models
+                    # index (identity-only observation) and carries no
+                    # standard short-context pricing rows.
+                    verified = any(row.identity_only for row in rows) and not any(
+                        row.billing_tier in (None, "standard")
+                        and row.context_band in (None, "short")
+                        and {"input", "output"} <= set(row.prices)
+                        for row in rows
+                    )
+                elif entry.reason_code in (
+                    "page_unavailable",
+                    "page_parse_failed",
+                    "page_model_mismatch",
+                ):
+                    verified = model_id not in page_ok_models
+                elif entry.reason_code == "page_no_chat":
+                    page = page_rows.get(model_id)
+                    verified = page is not None and page.chat_supported is not True
+                elif entry.reason_code == "page_no_text":
+                    page = page_rows.get(model_id)
+                    verified = page is not None and page.text_modality is not True
+                elif entry.reason_code == "page_price_conflict":
+                    page = page_rows.get(model_id)
+                    verified = False
+                    if page is not None:
+                        for row in rows:
+                            if row.billing_tier in (None, "standard") and row.context_band in (None, "short"):
+                                for dim in ("input", "output", "cached_input"):
+                                    page_value = page.prices.get(dim)
+                                    row_value = row.prices.get(dim)
+                                    if (
+                                        page_value is not None
+                                        and row_value is not None
+                                        and page_value != row_value
+                                    ):
+                                        verified = True
+                                        break
+                            if verified:
+                                break
+                else:
+                    verified = False
+            else:  # unresolved: reconciled only when the model was not observed
+                verified = em is None
+            if verified:
+                collection_inventory_verified[(provider, model_id)] = entry.disposition
+            else:
+                unverified_inventory.append(f"{provider}/{model_id} ({entry.reason_code})")
+        if unverified_inventory:
+            add(
+                SEVERITY_BLOCKER,
+                "collection_inventory_unsupported",
+                f"{len(unverified_inventory)} collection inventory entr(ies) are not supported by the "
+                "parsed official evidence or the baseline: "
+                + ", ".join(sorted(unverified_inventory)[:8])
+                + ("" if len(unverified_inventory) <= 8 else f" (+{len(unverified_inventory) - 8} more)"),
+                None,
+                None,
+            )
+        collection_report = {
+            "tool": collection.tool,
+            "code_revision": collection.code_revision,
+            "profile": collection.profile,
+            "providers": list(collection.providers),
+            "model_include": list(collection.model_include),
+            "started_at": collection.started_at.isoformat(),
+            "finished_at": collection.finished_at.isoformat(),
+            "retrievals_total": len(collection.retrievals),
+            "retrievals_ok": sum(1 for r in collection.retrievals if r.outcome == "ok"),
+            "retrievals_failed": sum(1 for r in collection.retrievals if r.outcome == "failed"),
+            "failed_retrievals": sorted(failed_retrieval_urls),
+            "deduplicated_fetches": collection.deduplicated_fetches,
+            "inventory_entries": len(collection.inventory),
+            "inventory_by_reason": {
+                reason: sum(1 for e in collection.inventory if e.reason_code == reason)
+                for reason in sorted({e.reason_code for e in collection.inventory})
+            },
+            "inventory_unverified": len(unverified_inventory),
+            "source_model_counts": {
+                provider: count
+                for provider, count in sorted(collection.source_model_counts.items())
+            },
+        }
+
     selected_by_provider: dict[str, set[str]] = {}
     for provider, model in selected:
         selected_by_provider.setdefault(provider, set()).add(model)
+    # 181-b (B2): an evidence ID proposed under a public alias is covered
+    # by that route's upstream identity (the alias IS the local identity).
+    proposed_upstreams_by_provider: dict[str, set[str]] = {}
+    for route in bundle.routes:
+        if route.match_type == "exact" and route.endpoint == CHAT_ENDPOINT:
+            proposed_upstreams_by_provider.setdefault(route.provider, set()).add(
+                route.upstream_model
+            )
+
+    def _covered_by_proposal(provider: str, model_id: str) -> bool:
+        return model_id in proposed_upstreams_by_provider.get(provider, set())
+
     explicit_subset = bool(bundle.selection.model_include)
     inventory: dict[str, dict[str, Any]] = {}
     unexplained_omissions: list[str] = []
@@ -1778,7 +2416,9 @@ def validate_bundle(
         sel = selected_by_provider.get(provider, set())
         prov_counts = {
             "evidence_models": len(ids),
-            "selected_models": sum(1 for mid in ids if mid in sel),
+            "selected_models": sum(
+                1 for mid in ids if mid in sel or _covered_by_proposal(provider, mid)
+            ),
             "retained_local_models": 0,
             "explicitly_excluded_models": 0,
             "unsupported_excluded_models": 0,
@@ -1787,11 +2427,21 @@ def validate_bundle(
         retained_ids: list[str] = []
         excluded_ids: list[str] = []
         for mid in sorted(ids):
-            if mid in sel:
+            if mid in sel or _covered_by_proposal(provider, mid):
                 continue
             if (provider, mid) in baseline_model_keys:
                 prov_counts["retained_local_models"] += 1
                 retained_ids.append(mid)
+            elif (provider, mid) in collection_inventory_verified:
+                # 181: an evidence-verified collection inventory entry
+                # reconciles the observed model (its claim was re-checked
+                # against the parsed bytes above, never trusted raw).
+                disposition = collection_inventory_verified[(provider, mid)]
+                if disposition == "excluded_subset":
+                    prov_counts["explicitly_excluded_models"] += 1
+                else:
+                    prov_counts["unsupported_excluded_models"] += 1
+                excluded_ids.append(mid)
             elif explicit_subset:
                 prov_counts["explicitly_excluded_models"] += 1
                 excluded_ids.append(mid)
@@ -1818,10 +2468,16 @@ def validate_bundle(
             None,
             None,
         )
+    live_collection = bundle.collection is not None
     source_evidence_report: dict[str, Any] = {
-        "scope": "offline_replay",
+        "scope": "live_collection" if live_collection else "offline_replay",
         "note": (
-            "supplied/cached snapshot bytes were parsed offline with registered "
+            "live collection performed by this invocation: sources were fetched "
+            "with bounded official retrieval and parsed with registered "
+            "deterministic parsers; retrieval outcomes are recorded in the "
+            "collection identity"
+            if live_collection
+            else "supplied/cached snapshot bytes were parsed offline with registered "
             "deterministic parsers; this proves extraction consistency against "
             "the supplied bytes, not a live retrieval that never occurred"
         ),
@@ -1835,6 +2491,8 @@ def validate_bundle(
             for provider, values in sorted(inventory.items())
         },
     }
+    if live_collection:
+        source_evidence_report["collection"] = collection_report
 
     # sources gate
     if any(a["classification"] == SOURCE_BLOCKED for a in source_assessments):

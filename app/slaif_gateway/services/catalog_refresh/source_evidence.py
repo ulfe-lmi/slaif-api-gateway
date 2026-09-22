@@ -35,7 +35,9 @@ from __future__ import annotations
 
 import json
 import re
+from fnmatch import fnmatchcase
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -43,7 +45,7 @@ from typing import Any, Mapping
 
 # Bounded provider-catalog pure helpers (reused, not duplicated).
 from slaif_gateway.services.provider_catalog_proposal import (
-    _convert_openrouter_price,
+    _decimal_to_string,
     _doc_price_cell,
     _extract_tabular_blocks,
     _parse_openai_models_docs,
@@ -101,6 +103,35 @@ class ParsedModel:
     locators: Mapping[str, str] = field(default_factory=dict)
     parser: str = ""
     identity_only: bool = False
+    # Objective 181: contextual billing/endpoint facts. ``billing_tier``
+    # ("standard"/"batch"/"flex"/"fast") and ``context_band`` ("short"/
+    # "long") are None when the source does not distinguish them (OpenRouter
+    # and the legacy single-table OpenAI format). ``prices`` carries the
+    # short-band representable dims of the row's tier, ``prices_long`` the
+    # long-band dims, and ``extra_pricing`` observed dims outside the
+    # standard-v1 proposal contract (exact canonical values).
+    # ``non_representable_prices`` records recognized non-representable
+    # values (dim -> safe reason code): the row keeps its identity and the
+    # value is never converted to zero or a guessed related-model price.
+    billing_tier: str | None = None
+    context_band: str | None = None
+    prices_long: Mapping[str, Decimal] = field(default_factory=dict)
+    extra_pricing: Mapping[str, str] = field(default_factory=dict)
+    non_representable_prices: Mapping[str, str] = field(default_factory=dict)
+    chat_supported: bool | None = None
+    # 181: the OpenRouter "overrides" key publishes contextual (long-context
+    # min_prompt_tokens / time-of-day) price tiers as a stringified list.
+    # Contextual tiers are not representable by the standard-v1 flat
+    # proposal contract; the observed block count is recorded so they are
+    # accounted for, never silently ignored and never proposed.
+    pricing_overrides: int | None = None
+    # 181-b: the OpenRouter "request" key publishes a per-REQUEST charge
+    # (USD per request, NOT per-1M). None = not published; a source -1
+    # sentinel on this key is recorded on non_representable_prices.
+    request_price: Decimal | None = None
+    # 181-b: published pricing keys outside the recognized billable/observed
+    # set, recorded (never silently dropped) and fail-closed at eligibility.
+    unknown_pricing_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -219,11 +250,42 @@ def _json_loads_bounded(evidence: bytes, *, kind: str) -> Any:
         raise SnapshotFormatError(f"{kind}:malformed_json") from None
 
 
-# Bounded raw decimal cell: official per-token price cells are short
-# decimal strings. Digits and exponents are bounded before the reused
-# conversion helper so hostile exponents cannot trigger huge allocations
-# or uncaught Decimal errors during normalization.
-_BOUNDED_PRICE_CELL = re.compile(r"^[+-]?(?:\d{1,18}(?:\.\d{1,15})?|\.\d{1,15})(?:[eE][+-]?\d{1,3})?$")
+# Price cell syntax: plain or exponent-form decimals (both shapes appear
+# in published payloads and in supplied fixture evidence). The exponent is
+# bounded to three digits so hostile exponents cannot escape the Decimal
+# context; the real bounds are value-level and spelling-independent,
+# enforced on the parsed Decimal so legitimate cells spelled with many
+# fractional places (e.g. 16 significant digits in 22 places) pass while
+# hostiles (too many significant digits, huge magnitude, negatives other
+# than the documented -1 sentinel, non-finite values) stay fail-closed.
+# The per-1M magnitude cap keeps every converted value inside the
+# Numeric(18,9) import contract enforced downstream.
+_OPENROUTER_PRICE_SYNTAX = re.compile(r"^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d{1,3})?$")
+_OPENROUTER_PER_1M_MAGNITUDE_CAP = Decimal("1000000000")
+# The import contract is Numeric(18,9): a nonzero per-1M value below the
+# 9-decimal quantum would quantize to zero, which would turn a real price
+# into a free one. Exact zero remains a legitimate (review-flagged) price.
+_OPENROUTER_PRICE_QUANTUM = Decimal("0.000000001")
+
+
+def _openrouter_price_decimal(cell: str) -> Decimal:
+    """Exact per-token -> per-1M conversion with value-level bounds."""
+    if not _OPENROUTER_PRICE_SYNTAX.fullmatch(cell):
+        raise ValueError("syntax")
+    try:
+        value = Decimal(cell)
+        per_1m = value * Decimal("1000000")
+    except InvalidOperation:
+        raise ValueError("bound") from None
+    if (
+        not value.is_finite()
+        or value < 0
+        or len(value.as_tuple().digits) > 18
+        or per_1m >= _OPENROUTER_PER_1M_MAGNITUDE_CAP
+        or (0 < per_1m < _OPENROUTER_PRICE_QUANTUM)
+    ):
+        raise ValueError("bound")
+    return per_1m
 
 
 def _openrouter_validated_rows(payload: Any, *, kind: str) -> list[Mapping[str, object]]:
@@ -249,6 +311,58 @@ def _openrouter_validated_rows(payload: Any, *, kind: str) -> list[Mapping[str, 
         if not isinstance(raw_id, str) or not raw_id or raw_id != raw_id.strip() or len(raw_id) > 200:
             raise SnapshotFormatError(f"{kind}:invalid_model_id")
     return list(data)
+
+
+# 181-b: the complete set of recognized OpenRouter top-level pricing keys.
+# Anything else published is an unknown billing dimension (recorded and
+# fail-closed at eligibility), never silently accepted as harmless.
+_OPENROUTER_PRICING_KEYS = frozenset(
+    {
+        "prompt",
+        "input_cache_read",
+        "completion",
+        "internal_reasoning",
+        "input_cache_write",
+        "input_cache_write_1h",
+        "web_search",
+        "request",
+        "overrides",
+    }
+)
+
+_OPENROUTER_OVERRIDE_BLOCK = re.compile(r"\{[^{}]*\}")
+# Key set grounded in the live 2026-09-22 /models payload (observed blocks
+# also carry 1-hour cache-write, audio and audio-cache price dims). Values
+# are never parsed into facts; only the block count is recorded, so the
+# allowlist gates shape recognition only. Unknown keys stay fail-closed.
+_OPENROUTER_OVERRIDE_KEYS = frozenset(
+    {
+        "min_prompt_tokens",
+        "utc_days",
+        "utc_start",
+        "utc_end",
+        "prompt",
+        "completion",
+        "input_cache_read",
+        "input_cache_write",
+        "input_cache_write_1h",
+        "internal_reasoning",
+        "audio",
+        "input_audio_cache",
+    }
+)
+_OPENROUTER_OVERRIDE_PRICE_KEYS = frozenset(
+    {
+        "prompt",
+        "completion",
+        "input_cache_read",
+        "input_cache_write",
+        "input_cache_write_1h",
+        "internal_reasoning",
+        "audio",
+        "input_audio_cache",
+    }
+)
 
 
 def _safe_int(value: Any) -> int | None:
@@ -281,8 +395,8 @@ def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
 
     The raw structure is validated with original row indices preserved
     (a malformed row or invalid id is a format error, never a silent
-    skip), then ``_convert_openrouter_price`` is reused for exact
-    per-token -> per-million USD conversion of bounded decimal cells.
+    skip), then bounded decimal cells are converted to per-million USD
+    with exact Decimal arithmetic and value-level bounds.
     Pricing cells are per-token USD strings in the official shape; they
     are normalized to per-million USD with exact Decimal arithmetic (the
     SLAIF import-contract unit). A payload without ``data[]`` is
@@ -331,6 +445,8 @@ def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
 
         pricing = row.get("pricing") if isinstance(row.get("pricing"), Mapping) else {}
         prices: dict[str, Decimal] = {}
+        extra_pricing: dict[str, str] = {}
+        non_representable: dict[str, str] = {}
         dim_keys = {
             "input": "prompt",
             "cached_input": "input_cache_read",
@@ -340,15 +456,135 @@ def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
         for dim, key in dim_keys.items():
             if key in pricing:
                 raw_cell = pricing.get(key)
-                if not isinstance(raw_cell, str) or not _BOUNDED_PRICE_CELL.fullmatch(raw_cell.strip()):
+                if not isinstance(raw_cell, str) or not _OPENROUTER_PRICE_SYNTAX.fullmatch(raw_cell.strip()):
                     raise SnapshotFormatError("openrouter_models_api:invalid_price")
+                cell = raw_cell.strip()
+                # 181: OpenRouter's documented -1 sentinel marks dynamic or
+                # non-representable pricing. The row keeps its identity and
+                # carries an explicit incomplete reason; the value is never
+                # converted to zero or a guessed price, and the sentinel
+                # does not poison complete supported siblings in the same
+                # snapshot. Any other malformed value stays fail-closed.
+                if cell == "-1":
+                    non_representable[dim] = "negative_router_sentinel"
+                    locators[f"pricing:{dim}:non_representable"] = f"{prefix}.pricing.{key}"
+                    continue
                 try:
-                    per_1m = _convert_openrouter_price(raw_cell.strip(), allow_zero=True)
-                except (ValueError, InvalidOperation, OverflowError):
+                    prices[dim] = _openrouter_price_decimal(cell)
+                except ValueError:
                     raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
-                if per_1m is not None:
-                    prices[dim] = Decimal(per_1m)
-                    locators[f"pricing:{dim}"] = f"{prefix}.pricing.{key}"
+                locators[f"pricing:{dim}"] = f"{prefix}.pricing.{key}"
+        # 181: observed billing dims outside the standard-v1 proposal
+        # contract are recorded with their exact values and units and
+        # explained in the report, never silently dropped. cache writes are
+        # published per-token (converted to per-1m like the other dims);
+        # web_search is published per call and kept as-is.
+        for extra_dim, key in (
+            ("cache_write", "input_cache_write"),
+            ("cache_write_1h", "input_cache_write_1h"),
+            ("web_search", "web_search"),
+        ):
+            if key in pricing:
+                raw_cell = pricing.get(key)
+                if not isinstance(raw_cell, str) or not _OPENROUTER_PRICE_SYNTAX.fullmatch(raw_cell.strip()):
+                    raise SnapshotFormatError("openrouter_models_api:invalid_price")
+                cell = raw_cell.strip()
+                if cell == "-1":
+                    non_representable[extra_dim] = "negative_router_sentinel"
+                    locators[f"pricing:{extra_dim}:non_representable"] = f"{prefix}.pricing.{key}"
+                    continue
+                if extra_dim == "web_search":
+                    # Per-call price: keep the published value as-is with
+                    # value-level bounds (no per-1M conversion).
+                    try:
+                        amount = Decimal(cell)
+                    except InvalidOperation:
+                        raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
+                    if (
+                        not amount.is_finite()
+                        or amount < 0
+                        or len(amount.as_tuple().digits) > 18
+                        or amount >= _OPENROUTER_PER_1M_MAGNITUDE_CAP
+                    ):
+                        raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
+                    extra_pricing[extra_dim] = _decimal_to_string(amount)
+                else:
+                    try:
+                        converted = _openrouter_price_decimal(cell)
+                    except ValueError:
+                        raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
+                    extra_pricing[extra_dim] = _decimal_to_string(converted)
+                locators[f"pricing:{extra_dim}"] = f"{prefix}.pricing.{key}"
+        # 181-b: the "request" key publishes a per-REQUEST charge (USD per
+        # request). It is strictly parsed with the same value-level bounds
+        # as the per-call dims (no per-1M conversion); a -1 sentinel is a
+        # non-representable billable value (fail-closed), never zero.
+        request_price: Decimal | None = None
+        if "request" in pricing:
+            raw_cell = pricing.get("request")
+            if not isinstance(raw_cell, str) or not _OPENROUTER_PRICE_SYNTAX.fullmatch(raw_cell.strip()):
+                raise SnapshotFormatError("openrouter_models_api:invalid_price")
+            cell = raw_cell.strip()
+            if cell == "-1":
+                non_representable["request"] = "negative_router_sentinel"
+                locators["pricing:request:non_representable"] = f"{prefix}.pricing.request"
+            else:
+                try:
+                    amount = Decimal(cell)
+                except InvalidOperation:
+                    raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
+                if (
+                    not amount.is_finite()
+                    or amount < 0
+                    or len(amount.as_tuple().digits) > 18
+                    or amount >= _OPENROUTER_PER_1M_MAGNITUDE_CAP
+                ):
+                    raise SnapshotFormatError("openrouter_models_api:invalid_price") from None
+                request_price = amount
+                locators["pricing:request"] = f"{prefix}.pricing.request"
+        # 181-b: published pricing keys outside the recognized set are
+        # recorded on the row (never silently dropped) and fail closed at
+        # eligibility; they are NOT a snapshot format error, so the row's
+        # identity and the other dims remain observable and explainable.
+        unknown_pricing_keys = tuple(sorted(set(pricing) - _OPENROUTER_PRICING_KEYS))
+        # 181: the "overrides" key publishes contextual (long-context /
+        # time-of-day) price tiers as a stringified list. The current
+        # published shape is a string; any other shape is a format error
+        # (fail-closed on format drift). The block count is recorded so
+        # contextual billing is accounted for, never silently ignored and
+        # never proposed (it cannot be represented flatly).
+        pricing_overrides: int | None = None
+        if "overrides" in pricing:
+            raw_overrides = pricing.get("overrides")
+            if isinstance(raw_overrides, list):
+                # current published shape: a JSON array of override objects
+                if (
+                    not raw_overrides
+                    or len(raw_overrides) > 16
+                    or any(not isinstance(item, Mapping) for item in raw_overrides)
+                    or any(
+                        not (set(item) <= _OPENROUTER_OVERRIDE_KEYS)
+                        or not any(key in item for key in _OPENROUTER_OVERRIDE_PRICE_KEYS)
+                        for item in raw_overrides
+                    )
+                ):
+                    raise SnapshotFormatError("openrouter_models_api:malformed_overrides")
+                pricing_overrides = len(raw_overrides)
+            elif isinstance(raw_overrides, str):
+                # observed alternate shape: the same array as a stringified
+                # list; bounded, and the block count is derived from the
+                # bracket structure (never evaluated).
+                if not (
+                    len(raw_overrides) <= 4096
+                    and raw_overrides.startswith("[")
+                    and raw_overrides.endswith("]")
+                ):
+                    raise SnapshotFormatError("openrouter_models_api:malformed_overrides")
+                pricing_overrides = len(_OPENROUTER_OVERRIDE_BLOCK.findall(raw_overrides))
+            else:
+                raise SnapshotFormatError("openrouter_models_api:malformed_overrides")
+            if pricing_overrides is not None:
+                locators["pricing:overrides"] = f"{prefix}.pricing.overrides"
 
         models.append(
             ParsedModel(
@@ -362,6 +598,11 @@ def parse_openrouter_models_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
                 deprecated=deprecated,
                 locators=locators,
                 parser="openrouter_models_api/v1",
+                extra_pricing=extra_pricing,
+                non_representable_prices=non_representable,
+                pricing_overrides=pricing_overrides,
+                request_price=request_price,
+                unknown_pricing_keys=unknown_pricing_keys,
             )
         )
     if len(models) > MAX_MODELS_PER_SNAPSHOT:
@@ -408,16 +649,231 @@ def parse_openai_models_api_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]
     return tuple(models)
 
 
+# --- 181: current official OpenAI pricing Markdown (tiered sections) --------
+#
+# The current official pricing page is Markdown with one table per billing
+# tier ("### Standard pricing data", "### Batch pricing data", "### Flex
+# pricing data", "### Fast pricing data"). Each table row is one model with
+# Short-context and Long-context columns for input, cached input, cache
+# writes and output. Tiers and context bands are BILLING CONTEXT, not
+# alternative facts for the same price: a Standard short-context price and a
+# Batch short-context price are different prices of the same model and must
+# never be flattened, averaged, or let one override the other. Only the
+# Standard tier short-context dims are representable by the standard-v1
+# flat proposal contract; every other observed price keeps its exact
+# tier/band context (qualified observation fields) or an explicit
+# observed-not-proposed record.
+
+_OPENAI_TIER_NAMES = ("standard", "batch", "flex", "fast")
+_OPENAI_PRICE_HEADER_MAP = {
+    "short context input": ("short", "input"),
+    "short context cached input": ("short", "cached_input"),
+    "short context cache writes": ("short", "cache_write"),
+    "short context output": ("short", "output"),
+    "long context input": ("long", "input"),
+    "long context cached input": ("long", "cached_input"),
+    "long context cache writes": ("long", "cache_write"),
+    "long context output": ("long", "output"),
+}
+_OPENAI_TIER_HEADING = re.compile(
+    r"^###\s+(" + "|".join(name.capitalize() for name in _OPENAI_TIER_NAMES) + r")\s+pricing\s+data\s*$",
+    re.IGNORECASE,
+)
+# Anchor-less-per-line detection of the v2 format within a whole document
+# (^/$ are line-anchored for this marker only).
+_OPENAI_V2_FORMAT_MARKER = re.compile(
+    r"^###\s+(?:Standard|Batch|Flex|Fast)\s+pricing\s+data\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_OPENAI_MODEL_CELL_ANNOTATION = re.compile(r"^(?P<id>.+?)\s*\((?P<note>[^()]+)\)$")
+# Context labels that may annotate a model cell in the current official
+# pricing tables. They are BILLING/STATUS CONTEXT, not identity, and are
+# preserved verbatim in the locator. Unknown labels are a format error
+# (fail-closed on format drift), never a guess.
+_OPENAI_CONTEXT_NOTE = re.compile(
+    # The context-length label is published without a closing angle bracket
+    # ("<272K context length") in the current official tables; match it exactly.
+    r"^(?:<[0-9]+[KkMm]\s+context\s+length|data\s+sharing|legacy)$", re.IGNORECASE
+)
+_OPENAI_PRICE_VALUE = re.compile(r"^\$\s*(?P<amount>[0-9]+(?:\.[0-9]+)?)$")
+
+
+# Syntactic model-identity validation for the v2 pricing tables:
+# lowercase alphanumerics plus ".", "_" and "-", bounded, no leading or
+# trailing separator. Deliberately NOT the legacy family allowlist
+# (``_safe_openai_model_id``): that allowlist predates current published
+# identities (it rejects the official "davinci-002"/"babbage-002" rows)
+# and a name family is not an identity rule. Whether a model supports
+# ordinary Chat is established by its official model-page endpoint
+# contract, never by its name.
+_OPENAI_V2_MODEL_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,199}$")
+
+
+def _openai_v2_model_cell(cell: str) -> tuple[str, str | None]:
+    """Canonical model id from a v2 pricing-table model cell.
+
+    Current rows may carry a context-length annotation
+    ("gpt-5.5 (<272K context length)"); the annotation is context, not
+    identity, and is returned for the locator. Unknown cell shapes are a
+    format error, never a guess.
+    """
+    text = cell.strip()
+    match = _OPENAI_MODEL_CELL_ANNOTATION.fullmatch(text)
+    if match is not None:
+        note = match.group("note").strip()
+        if not _OPENAI_CONTEXT_NOTE.fullmatch(note):
+            raise SnapshotFormatError("openai_pricing_docs:unrecognized_model_annotation")
+        candidate = match.group("id").strip()
+    else:
+        candidate = text
+    if not _OPENAI_V2_MODEL_ID.fullmatch(candidate):
+        raise SnapshotFormatError("openai_pricing_docs:invalid_model_id")
+    return candidate, (match.group("note").strip() if match is not None else None)
+
+
+def _openai_v2_price_cell(cell: str) -> Decimal | None:
+    """Per-1m USD cell ("$10.00") or an explicit missing marker ("-")."""
+    text = cell.strip()
+    if text in ("-", ""):
+        return None
+    match = _OPENAI_PRICE_VALUE.fullmatch(text)
+    if match is None:
+        raise SnapshotFormatError("openai_pricing_docs:unrecognized_price_cell")
+    return Decimal(match.group("amount"))
+
+
+def _parse_openai_pricing_md_v2(text: str) -> tuple[ParsedModel, ...]:
+    """Parse the current tiered Markdown pricing page (official shape)."""
+    lines = text.splitlines()
+    tier_rows: dict[str, dict[str, dict[str, Any]]] = {tier: {} for tier in _OPENAI_TIER_NAMES}
+    table_count = 0
+    total_data_rows = 0
+    current_tier: str | None = None
+    in_tier_table = False
+    current_columns: list[tuple[str, str]] | None = None  # (band, dim) per cell
+    row_in_table = 0
+    for line in lines:
+        stripped = line.strip()
+        heading = _OPENAI_TIER_HEADING.match(stripped)
+        if heading is not None:
+            in_tier_table = True
+            current_tier = heading.group(1).lower()
+            current_columns = None
+            row_in_table = 0
+            continue
+        if in_tier_table and not stripped.startswith("|"):
+            # any non-table line ends the current tier table
+            if stripped.startswith("#") or (stripped and not stripped.startswith(">")):
+                in_tier_table = False
+                current_columns = None
+            continue
+        if not in_tier_table or current_tier is None:
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if _is_separator_row(cells):
+            continue
+        if cells and cells[0].lower() == "model":
+            table_count += 1
+            if len(cells) < 2:
+                raise SnapshotFormatError("openai_pricing_docs:empty_tier_table")
+            columns: list[tuple[str, str]] = []
+            for column in cells[1:]:
+                key = column.lower()
+                if key not in _OPENAI_PRICE_HEADER_MAP:
+                    raise SnapshotFormatError("openai_pricing_docs:unrecognized_header")
+                columns.append(_OPENAI_PRICE_HEADER_MAP[key])
+            current_columns = columns
+            continue
+        if current_columns is None or len(cells) != len(current_columns) + 1:
+            raise SnapshotFormatError("openai_pricing_docs:malformed_table_row")
+        model_id, note = _openai_v2_model_cell(cells[0])
+        row_in_table += 1
+        total_data_rows += 1
+        if total_data_rows > MAX_TABLE_ROWS:
+            raise SnapshotFormatError("openai_pricing_docs:too_many_rows")
+        row = tier_rows[current_tier].setdefault(
+            model_id,
+            {"prices": {}, "prices_long": {}, "extra": {}, "locators": {}, "note": None},
+        )
+        if row["note"] is None:
+            row["note"] = note
+        for cell, (band, dim) in zip(cells[1:], current_columns):
+            value = _openai_v2_price_cell(cell)
+            if value is None:
+                continue
+            locator = f"tier[{current_tier}].row[{row_in_table}].{dim}_{band}"
+            if band == "short":
+                if dim == "cache_write":
+                    row["extra"]["cache_write"] = _decimal_to_string(value)
+                else:
+                    row["prices"][dim] = value
+                row["locators"][f"pricing:{dim}"] = locator
+            else:
+                if dim == "cache_write":
+                    row["extra"]["cache_write_long"] = _decimal_to_string(value)
+                    row["locators"]["pricing:cache_write_long"] = locator
+                else:
+                    row["prices_long"][dim] = value
+                    row["locators"][f"pricing_long:{dim}"] = locator
+        if model_id in tier_rows[current_tier] and (
+            len(tier_rows[current_tier][model_id]["prices"])
+            + len(tier_rows[current_tier][model_id]["prices_long"])
+            + len(tier_rows[current_tier][model_id]["extra"])
+            == 0
+        ):
+            raise SnapshotFormatError("openai_pricing_docs:empty_model_row")
+    models: list[ParsedModel] = []
+    for tier in _OPENAI_TIER_NAMES:
+        for model_id in sorted(tier_rows[tier]):
+            row = tier_rows[tier][model_id]
+            if not (row["prices"] or row["prices_long"] or row["extra"]):
+                continue
+            locators = dict(row["locators"])
+            if row["note"] is not None:
+                locators["model:context_annotation"] = f"tier[{tier}].row: {row['note']!r}"
+            models.append(
+                ParsedModel(
+                    provider="openai",
+                    model=model_id,
+                    prices=dict(row["prices"]),
+                    prices_long=dict(row["prices_long"]),
+                    extra_pricing=dict(row["extra"]),
+                    price_currency="USD"
+                    if (row["prices"] or row["prices_long"])
+                    else None,
+                    billing_tier=tier,
+                    context_band="short",
+                    locators=locators,
+                    parser="openai_pricing_docs/v2",
+                )
+            )
+    if len(models) > MAX_MODELS_PER_SNAPSHOT * len(_OPENAI_TIER_NAMES):
+        raise SnapshotFormatError("openai_pricing_docs:too_many_models")
+    return tuple(models)
+
+
 def parse_openai_pricing_docs_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]:
     """Parse cached OpenAI pricing-docs tables (official docs shape).
 
-    Reuses ``_parse_openai_pricing_docs`` for record extraction and
-    ``_extract_tabular_blocks`` + ``_doc_price_cell`` +
-    ``_safe_openai_model_id`` for deterministic row/field locators. Values
-    are per-1m USD as published; unknown cells are left missing, never
-    invented.
+    Two official formats are recognized deterministically:
+
+    - v2 (current): Markdown with per-tier "### <Tier> pricing data"
+      tables carrying Short/Long context columns. Every observed price
+      keeps its tier and context band; only Standard short-context dims
+      are emitted on the flat ``prices`` map that standard-v1 proposals
+      bind to, long-band and cache-write prices are emitted on their own
+      contextual fields, and non-Standard tiers are recorded as observed
+      billing context, never flattened into Standard.
+    - v1 (legacy): the previous single-table HTML shape, parsed by the
+      reused ``_parse_openai_pricing_docs`` path (unchanged behavior).
+
+    Values are per-1m USD as published; unknown cells are left missing,
+    never invented; unrecognized headers or price cells are format
+    errors (fail-closed), never guessed.
     """
     text = _decode_bounded(evidence, kind="openai_pricing_docs", max_bytes=MAX_SNAPSHOT_BYTES)
+    if _OPENAI_V2_FORMAT_MARKER.search(text):
+        return _parse_openai_pricing_md_v2(text)
     tables = _extract_tabular_blocks(text)
     total_rows = sum(max(0, len(table) - 1) for table in tables)
     if total_rows > MAX_TABLE_ROWS:
@@ -506,9 +962,79 @@ def _locate_openai_pricing_row(
     return "unresolved"
 
 
+_OPENAI_INDEX_BULLET = re.compile(
+    r"^- \[(?P<text>[^\]]+)\]\((?P<path>[^()\s]+)\)(?::\s*(?P<desc>.*?))?\s*$"
+)
+_OPENAI_INDEX_MODEL_PAGE = re.compile(r"^/api/docs/models/(?P<id>[^/]+)\.md$")
+_OPENAI_INDEX_INLINE_MODEL_ID = re.compile(r"Model ID:\s*`(?P<id>[^`]+)`")
+
+
+def _openai_index_ids(text: str) -> tuple[tuple[str, str], ...] | None:
+    """Bounded identity extraction from the current linked-index format.
+
+    The current official models index lists models as Markdown bullets
+    whose link is the model page (``/api/docs/models/<id>.md``); the ID is
+    the page path, NEVER the display name (display names include aliases
+    that differ from API IDs). One documented exception links elsewhere
+    (specialized models) and declares ``Model ID: `<id>``` inline in its
+    description: exactly one such ID is accepted, zero or more than one
+    deterministically skip the bullet (no guessing). Duplicates across
+    sections deduplicate to the first occurrence. Returns None when the
+    document is not in the linked-index format (legacy block handling).
+    """
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    is_index_format = False
+    for index, line in enumerate(text.splitlines()):
+        match = _OPENAI_INDEX_BULLET.match(line.strip())
+        if match is None:
+            continue
+        model_id: str | None = None
+        page = _OPENAI_INDEX_MODEL_PAGE.fullmatch(match.group("path"))
+        if page is not None:
+            model_id = page.group("id")
+        else:
+            inline = _OPENAI_INDEX_INLINE_MODEL_ID.findall(match.group("desc") or "")
+            if len(inline) == 1:
+                model_id = inline[0]
+        if model_id is None:
+            continue
+        if not _OPENAI_V2_MODEL_ID.fullmatch(model_id):
+            raise SnapshotFormatError("openai_models_docs:invalid_model_id")
+        is_index_format = True
+        if model_id not in seen:
+            seen.add(model_id)
+            found.append((model_id, f"line[{index}]"))
+    if not is_index_format:
+        return None
+    return tuple(found)
+
+
 def parse_openai_models_docs_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]:
-    """Parse cached OpenAI model docs blocks: limits/identity, no prices."""
+    """Parse the official OpenAI models index (current linked-index format
+    or the legacy block format): identity/limits, no prices.
+
+    - current linked index (2026-09): ``- [Display](/api/docs/models/<id>.md)``
+      bullets; identity-only rows (the per-model pages and the pricing
+      document carry limits and prices), duplicates across the Featured
+      and catalog sections deduplicated explicitly;
+    - legacy block format (180/181-a fixtures): unchanged behavior.
+    """
     text = _decode_bounded(evidence, kind="openai_models_docs", max_bytes=MAX_SNAPSHOT_BYTES)
+    index_ids = _openai_index_ids(text)
+    if index_ids is not None:
+        if len(index_ids) > MAX_MODELS_PER_SNAPSHOT:
+            raise SnapshotFormatError("openai_models_docs:too_many_models")
+        return tuple(
+            ParsedModel(
+                provider="openai",
+                model=model_id,
+                identity_only=True,
+                locators={"model:identity": locator},
+                parser="openai_models_docs/v2",
+            )
+            for model_id, locator in index_ids
+        )
     records = _parse_openai_models_docs(text=text, source_url="offline-replay")
     if len(records) > MAX_MODELS_PER_SNAPSHOT:
         raise SnapshotFormatError("openai_models_docs:too_many_models")
@@ -533,6 +1059,167 @@ def parse_openai_models_docs_snapshot(evidence: bytes) -> tuple[ParsedModel, ...
 
 
 _DOCTYPE_PATTERN = re.compile(r"<!DOCTYPE", re.IGNORECASE)
+
+
+_OPENAI_DOC_MODEL_ID = re.compile(r"^Model ID:\s*`([^`]+)`\s*$")
+_OPENAI_DOC_MODALITIES = re.compile(r"^-[ \t]*Input modalities:\s*(.+)$")
+_OPENAI_DOC_OUTPUT_MODALITIES = re.compile(r"^-[ \t]*Output modalities:\s*(.+)$")
+_OPENAI_DOC_CONTEXT = re.compile(r"^-[ \t]*([0-9][0-9,]*)\s*context window$")
+_OPENAI_DOC_MAX_OUTPUT = re.compile(r"^-[ \t]*([0-9][0-9,]*)\s*max output tokens$")
+_OPENAI_DOC_PRICE_ROW = re.compile(
+    r"^\|\s*(?P<metric>Input|Cached input|Output|Cache writes)\s*\|\s*\$\s*"
+    r"(?P<amount>[0-9]+(?:\.[0-9]+)?)\s*\|\s*1M tokens\s*\|\s*$",
+    re.IGNORECASE,
+)
+_OPENAI_DOC_ENDPOINT_ROW = re.compile(
+    r"^\|\s*(?P<endpoint>[^|]+?)\s*\|\s*`(?P<route>[^`]+)`\s*\|\s*(?P<support>Supported|Not supported)\s*\|\s*$"
+)
+
+
+def parse_openai_model_doc_snapshot(evidence: bytes) -> tuple[ParsedModel, ...]:
+    """Parse ONE official OpenAI model doc page (Markdown, per model).
+
+    The page is the model's official API contract: it declares the exact
+    ``Model ID`` (identity binding), input/output modalities, context
+    window, max output tokens, the endpoint support table (Chat
+    Completions supported or not — the ordinary-Chat contract evidence,
+    never inferred from the name or from text modality alone), and the
+    per-model text-token prices (a second, model-scoped source for the
+    Standard short-context prices). A page without a declared Model ID
+    is malformed; an unexpected endpoint/support cell shape is a format
+    error (fail-closed). No prices are invented for missing cells.
+    """
+    text = _decode_bounded(evidence, kind="openai_model_doc", max_bytes=MAX_SNAPSHOT_BYTES)
+    lines = text.splitlines()
+    model_id: str | None = None
+    model_id_line: int | None = None
+    input_modalities: tuple[str, ...] | None = None
+    output_modalities: tuple[str, ...] | None = None
+    context_length: int | None = None
+    max_output_tokens: int | None = None
+    locators: dict[str, str] = {}
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if model_id is None:
+            match = _OPENAI_DOC_MODEL_ID.match(stripped)
+            if match is not None:
+                candidate = match.group(1).strip()
+                if not _OPENAI_V2_MODEL_ID.fullmatch(candidate):
+                    raise SnapshotFormatError("openai_model_doc:invalid_model_id")
+                model_id = candidate
+                model_id_line = index
+                locators["model:identity"] = f"line[{index}]"
+                continue
+        modalities = _OPENAI_DOC_MODALITIES.match(stripped)
+        if modalities is not None:
+            if input_modalities is not None:
+                raise SnapshotFormatError("openai_model_doc:ambiguous_details")
+            input_modalities = tuple(
+                item.strip().lower() for item in modalities.group(1).split(",") if item.strip()
+            )
+            locators["model:capability:text"] = f"line[{index}]"
+            continue
+        output = _OPENAI_DOC_OUTPUT_MODALITIES.match(stripped)
+        if output is not None:
+            if output_modalities is not None:
+                raise SnapshotFormatError("openai_model_doc:ambiguous_details")
+            output_modalities = tuple(
+                item.strip().lower() for item in output.group(1).split(",") if item.strip()
+            )
+            continue
+        context = _OPENAI_DOC_CONTEXT.match(stripped)
+        if context is not None:
+            value = int(context.group(1).replace(",", ""))
+            if context_length is not None and context_length != value:
+                raise SnapshotFormatError("openai_model_doc:ambiguous_details")
+            context_length = value
+            locators["model:context_length"] = f"line[{index}]"
+            continue
+        max_output = _OPENAI_DOC_MAX_OUTPUT.match(stripped)
+        if max_output is not None:
+            value = int(max_output.group(1).replace(",", ""))
+            if max_output_tokens is not None and max_output_tokens != value:
+                raise SnapshotFormatError("openai_model_doc:ambiguous_details")
+            max_output_tokens = value
+            locators["model:max_output_tokens"] = f"line[{index}]"
+            continue
+    if model_id is None or model_id_line is None:
+        raise SnapshotFormatError("openai_model_doc:missing_model_id")
+    text_modality: bool | None = None
+    if input_modalities is not None and output_modalities is not None:
+        text_modality = "text" in input_modalities and "text" in output_modalities
+    chat_supported: bool | None = None
+    prices: dict[str, Decimal] = {}
+    extra_pricing: dict[str, str] = {}
+    in_endpoints_table = False
+    in_text_tokens_table = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            heading = stripped.lstrip("#").strip().lower()
+            in_endpoints_table = heading == "endpoints"
+            in_text_tokens_table = heading in ("text tokens", "text-token pricing")
+            continue
+        if not in_endpoints_table and not in_text_tokens_table:
+            continue
+        if not stripped.startswith("|"):
+            if stripped:
+                in_endpoints_table = False
+                in_text_tokens_table = False
+            continue
+        if in_endpoints_table:
+            match = _OPENAI_DOC_ENDPOINT_ROW.match(stripped)
+            if match is None:
+                if stripped.lower().startswith("| endpoint") or _is_separator_row(
+                    [cell.strip() for cell in stripped.strip("|").split("|")]
+                ):
+                    continue
+                raise SnapshotFormatError("openai_model_doc:malformed_endpoint_row")
+            if match.group("route").strip() == "v1/chat/completions":
+                if chat_supported is not None:
+                    raise SnapshotFormatError("openai_model_doc:ambiguous_endpoint_support")
+                chat_supported = match.group("support").lower() == "supported"
+                locators["endpoint:chat_completions"] = f"line[{index}]"
+        elif in_text_tokens_table:
+            match = _OPENAI_DOC_PRICE_ROW.match(stripped)
+            if match is None:
+                if stripped.lower().startswith("| metric") or _is_separator_row(
+                    [cell.strip() for cell in stripped.strip("|").split("|")]
+                ):
+                    continue
+                raise SnapshotFormatError("openai_model_doc:malformed_price_row")
+            metric = match.group("metric").strip().lower()
+            value = Decimal(match.group("amount"))
+            if metric == "cache writes":
+                # Observed extra billing dimension: recorded exactly like
+                # the pricing document's cache-write column, never
+                # proposed by standard-v1, never conflated with input.
+                dim = "cache_write"
+                if dim in extra_pricing and extra_pricing[dim] != _decimal_to_string(value):
+                    raise SnapshotFormatError("openai_model_doc:conflicting_price_row")
+                extra_pricing[dim] = _decimal_to_string(value)
+                locators[f"pricing:{dim}"] = f"line[{index}]"
+                continue
+            dim = "cached_input" if metric == "cached input" else metric
+            if dim in prices and prices[dim] != value:
+                raise SnapshotFormatError("openai_model_doc:conflicting_price_row")
+            prices[dim] = value
+            locators[f"pricing:{dim}"] = f"line[{index}]"
+    return (
+        ParsedModel(
+            provider="openai",
+            model=model_id,
+            context_length=context_length,
+            max_output_tokens=max_output_tokens,
+            prices=prices,
+            extra_pricing=extra_pricing,
+            price_currency="USD" if (prices or extra_pricing) else None,
+            text_modality=text_modality,
+            chat_supported=chat_supported,
+            locators=locators,
+            parser="openai_model_doc/v1",
+        ),
+    )
 
 
 def parse_ecb_reference_xml_snapshot(evidence: bytes) -> tuple[ParsedFxQuote, ...]:
@@ -617,6 +1304,10 @@ PARSER_IDS: dict[tuple[str, str], str] = {
     ("openai", "openai_models_api"): "openai_models_api/v1",
     ("openai", "openai_pricing_docs"): "openai_pricing_docs/v1",
     ("openai", "openai_models_docs"): "openai_models_docs/v1",
+    # 181: one official per-model doc page (endpoint contract + limits +
+    # model-scoped text prices). "docs_page" is a generic approved kind;
+    # the (openai, docs_page) pair is the only registered docs_page parser.
+    ("openai", "docs_page"): "openai_model_doc/v1",
     ("ecb", "ecb_reference_xml"): "ecb_reference_xml/v1",
 }
 
@@ -643,6 +1334,9 @@ def parse_snapshot(
         if (provider, source_kind) == ("openai", "openai_models_docs"):
             models = parse_openai_models_docs_snapshot(evidence)
             return SnapshotParse(provider, source_kind, True, None, models, (), parser_id)
+        if (provider, source_kind) == ("openai", "docs_page"):
+            models = parse_openai_model_doc_snapshot(evidence)
+            return SnapshotParse(provider, source_kind, True, None, models, (), parser_id)
         if (provider, source_kind) == ("ecb", "ecb_reference_xml"):
             quotes = parse_ecb_reference_xml_snapshot(evidence)
             return SnapshotParse(provider, source_kind, True, None, (), quotes, parser_id)
@@ -654,8 +1348,25 @@ def parse_snapshot(
 # --- observation derivation ----------------------------------------------------
 
 def _parsed_model_signature(model: ParsedModel) -> tuple:
+    """Full observed row identity, including 181 billing context.
+
+    Two rows for one model ID with different tier/band context (e.g. the
+    Standard and Batch tables of the official OpenAI pricing document)
+    are distinct observed rows, not a self-contradiction: the signature
+    therefore covers every observed field. Rows with the same context but
+    different values still conflict and block.
+    """
     return (
+        model.billing_tier,
+        model.context_band,
         tuple(sorted((dim, str(value)) for dim, value in model.prices.items())),
+        tuple(sorted((dim, str(value)) for dim, value in model.prices_long.items())),
+        tuple(sorted((dim, value) for dim, value in model.extra_pricing.items())),
+        tuple(sorted((dim, value) for dim, value in model.non_representable_prices.items())),
+        model.pricing_overrides,
+        model.request_price,
+        model.unknown_pricing_keys,
+        model.chat_supported,
         model.context_length,
         model.max_output_tokens,
         model.text_modality,
@@ -666,11 +1377,20 @@ def _parsed_model_signature(model: ParsedModel) -> tuple:
 def dedupe_parsed_models(parsed: SnapshotParse) -> tuple[list[ParsedModel], dict[str, tuple[str, int]]]:
     """Deduplicate rows of one parsed snapshot with explicit dispositions.
 
-    Identical duplicate rows (same observed values) are deduplicated and
-    reported as ``("identical", count)``; rows for the same model id with
-    conflicting values are dropped from observations and reported as
-    ``("conflict", count)`` - a single snapshot contradicting itself must
-    block, not skip. Returns ``(kept_models, {model_id: (kind, count)})``.
+    Rows for one model ID are grouped by their FULL observed signature
+    (181: including tier/band context, so one model legitimately appears
+    once per billing table, e.g. Standard and Batch):
+
+    - identical rows (same signature) deduplicate to one, reported as
+      ``("identical", count)``;
+    - distinct signatures are kept as distinct observed rows. Rows that
+      share the same billing context but differ in values are a
+      self-contradiction of one snapshot: they are reported as
+      ``("conflict", count)`` and still surface as blocking
+      ``source_observations_contradict`` findings through the
+      observation-level contradiction check, never silently skipped.
+
+    Returns ``(kept_models, {model_id: (kind, count)})``.
     """
     by_id: dict[str, list[ParsedModel]] = {}
     for model in parsed.models:
@@ -682,13 +1402,321 @@ def dedupe_parsed_models(parsed: SnapshotParse) -> tuple[list[ParsedModel], dict
         if len(rows) == 1:
             kept.append(rows[0])
             continue
-        if len({_parsed_model_signature(m) for m in rows}) == 1:
+        by_signature: dict[tuple, list[ParsedModel]] = {}
+        for row in rows:
+            by_signature.setdefault(_parsed_model_signature(row), []).append(row)
+        if len(by_signature) == 1:
             kept.append(rows[0])
             duplicates[model_id] = ("identical", len(rows))
-        else:
-            duplicates[model_id] = ("conflict", len(rows))
-    kept.sort(key=lambda m: m.model)
+            continue
+        # Distinct billing contexts are distinct observed rows (kept).
+        for signature_rows in by_signature.values():
+            kept.append(signature_rows[0])
+            if len(signature_rows) > 1:
+                # cannot happen: same signature rows dedup above; guard
+                # keeps the accounting exact.
+                duplicates[model_id] = ("identical", len(signature_rows))
+        # Same-context contradictions: rows that agree on every context
+        # dimension but disagree on values share no signature; detect them
+        # by comparing context-only projections.
+        def context_of(m: ParsedModel) -> tuple:
+            return (
+                m.billing_tier,
+                m.context_band,
+                tuple(sorted(m.extra_pricing)),
+                tuple(sorted(m.non_representable_prices)),
+                m.pricing_overrides,
+                m.chat_supported,
+                m.context_length,
+                m.max_output_tokens,
+                m.text_modality,
+                m.deprecated,
+            )
+        by_context: dict[tuple, list[ParsedModel]] = {}
+        for row in rows:
+            by_context.setdefault(context_of(row), []).append(row)
+        conflict_rows = [
+            rows_for_context
+            for rows_for_context in by_context.values()
+            if len({ _parsed_model_signature(m) for m in rows_for_context }) > 1
+        ]
+        if conflict_rows:
+            count = sum(len(rows_for_context) for rows_for_context in conflict_rows)
+            duplicates[model_id] = ("conflict", count)
+    kept.sort(key=lambda m: (m.model, m.billing_tier or "", m.context_band or ""))
     return kept, duplicates
+
+
+# Observed-but-not-proposed billing dims carry their published unit;
+# everything else observed on a price row is per-1M tokens.
+EXTRA_DIM_UNITS: dict[str, str] = {
+    "cache_write": "per_1m_tokens",
+    "cache_write_long": "per_1m_tokens",
+    "web_search": "per_request",
+}
+
+
+# --- 181-b/181-c: shared standard-v1 flat billing eligibility -----------------
+#
+# One deterministic policy decides, from ALL authoritative observations of a
+# model (every billing tier, every context band, every published pricing key),
+# whether the standard-v1 flat proposal may carry it. The SAME function runs
+# in the collector (exclusion with a machine reason before proposal) and in
+# the validator (recomputation over the parsed official evidence, so a
+# supplied/tampered bundle cannot bypass eligibility by dropping dimensions).
+#
+# 181-c: eligibility follows EXECUTABLE billing, not TSV capacity. A value
+# fitting a pricing column is not proof the gateway can safely bill that
+# shape. The flat standard-v1 profile bills ordinary Chat: the core text dims
+# (input / cached_input / output, per-1M) plus, only when the source
+# publishes it as an explicit zero, the reasoning no-charge. Excluded
+# (fail-closed, exact machine reason): positive separately billed reasoning
+# charges (ordinary Chat admission reserves at the output price; no qualified
+# reasoning billing contract is authorized), positive per-request fees
+# (ordinary Chat admission and finalization do not bill an additive
+# per-request fee; that column serves native-module contracts), positive
+# hosted-operation charges (hosted operations are denied in the profile and
+# no reviewed per-model executable contract proves the charge cannot be
+# incurred), published long-context standard prices, contextual override
+# tiers, positive cache-write charges, unknown billing keys, and source
+# sentinels on billable dims.
+#
+# Documented zero semantics (tested): a published zero per-request fee is a
+# no-charge - ordinary Chat bills no per-request fee at all, so carrying
+# nothing changes no local billing. A published zero web-search charge is a
+# no-charge - the standard chat contract has no web-search billing dimension
+# and a zero publishes no provider-side cost. A published zero REASONING price
+# is carried, because a MISSING reasoning price makes finalization bill
+# reasoning tokens at the output price (reasoning_price_fallback_to_output),
+# which would change actual local billing; a zero must not be silently
+# treated as missing there.
+
+REASON_LONG_CONTEXT_PRICES = "long_context_prices_unrepresentable"
+REASON_CONTEXTUAL_OVERRIDES = "contextual_overrides_unrepresentable"
+REASON_CACHE_WRITE_CHARGES = "cache_write_charges_unrepresentable"
+REASON_UNKNOWN_BILLING_DIMENSION = "unknown_billing_dimension"
+REASON_BILLING_SENTINEL = "negative_router_sentinel"
+# 181-c: executable-billing exclusions (a value fitting a TSV column is not
+# proof the gateway can safely bill that shape under standard-v1).
+REASON_REASONING_CHARGES = "reasoning_charges_unrepresentable"
+REASON_REQUEST_CHARGES = "request_charges_unrepresentable"
+REASON_HOSTED_CHARGES = "hosted_operation_charges_unrepresentable"
+
+#: inventory reason codes that the billing decision itself verifies
+BILLING_EXCLUSION_REASONS = frozenset(
+    {
+        REASON_LONG_CONTEXT_PRICES,
+        REASON_CONTEXTUAL_OVERRIDES,
+        REASON_CACHE_WRITE_CHARGES,
+        REASON_UNKNOWN_BILLING_DIMENSION,
+        REASON_BILLING_SENTINEL,
+        REASON_REASONING_CHARGES,
+        REASON_REQUEST_CHARGES,
+        REASON_HOSTED_CHARGES,
+    }
+)
+
+
+@dataclass(frozen=True)
+class BillingDecision:
+    """One model's standard-v1 flat billing eligibility (pure, deterministic).
+
+    ``carried`` is (dimension, exact decimal string, unit) for every charge
+    the flat proposal MUST carry exactly; under the 181-c executable-billing
+    policy that is only an explicit ZERO reasoning price (carrying it keeps
+    finalization at 0 - dropping it would bill reasoning tokens at the output
+    price). Positive reasoning / per-request / hosted-operation charges
+    exclude the model instead (exact machine reason).
+    """
+
+    eligible: bool
+    reason_code: str | None = None
+    detail: str | None = None
+    carried: tuple[tuple[str, str, str], ...] = ()
+
+
+def wildcard_route_governs_upstream(row: object, upstream_model: str) -> bool:
+    """181-c (C3): does one baseline prefix/glob chat route GOVERN an upstream?
+
+    Mirrors the resolver's destination rule (``upstream_model or
+    requested``): an explicit ``upstream_model`` is a FIXED destination - the
+    row governs exactly that upstream, whatever the public pattern is; an
+    empty ``upstream_model`` passes the public name through, so the row
+    governs the upstreams whose identity matches the public pattern. String
+    similarity between a public pattern and an unrelated upstream is NOT
+    coverage (that relation would not follow actual routing semantics).
+    """
+    match_type = getattr(row, "match_type", None)
+    if match_type not in ("prefix", "glob"):
+        return False
+    pattern = getattr(row, "requested_model", "") or ""
+    fixed = getattr(row, "upstream_model", "") or ""
+    if fixed:
+        return fixed == upstream_model
+    if not pattern:
+        return True  # empty pattern + passthrough: the resolver matches everything
+    if match_type == "prefix":
+        return upstream_model.startswith(pattern)
+    return fnmatchcase(upstream_model, pattern)
+
+
+def _billing_positive(value: str) -> bool:
+    try:
+        decimal = Decimal(value)
+    except InvalidOperation:
+        return False
+    return decimal.is_finite() and decimal > 0
+
+
+def _router_billing_decision(rows: Sequence[ParsedModel]) -> BillingDecision:
+    unknown = sorted({key for row in rows for key in row.unknown_pricing_keys})
+    if unknown:
+        return BillingDecision(
+            False,
+            REASON_UNKNOWN_BILLING_DIMENSION,
+            "unknown billing dimension(s) in official pricing: " + ",".join(unknown[:4]),
+        )
+    for row in rows:
+        if row.pricing_overrides:
+            return BillingDecision(
+                False,
+                REASON_CONTEXTUAL_OVERRIDES,
+                f"{row.pricing_overrides} contextual override block(s) publish prices the flat standard contract cannot represent",
+            )
+        for extra in ("cache_write", "cache_write_1h"):
+            value = row.extra_pricing.get(extra)
+            if value is not None and _billing_positive(value):
+                return BillingDecision(
+                    False,
+                    REASON_CACHE_WRITE_CHARGES,
+                    f"published {extra.replace('_', ' ')} charge {value} per 1M tokens is not billable in the flat standard-v1 contract",
+                )
+        for dim in (
+            "input",
+            "output",
+            "cached_input",
+            "reasoning",
+            "request",
+            "cache_write",
+            "cache_write_1h",
+            "web_search",
+        ):
+            if dim in row.non_representable_prices:
+                return BillingDecision(
+                    False,
+                    REASON_BILLING_SENTINEL,
+                    f"source -1 sentinel on billable {dim} pricing; the charge cannot be verified, fail-closed",
+                )
+    # 181-c (C1/C2): positive ancillary charges are not billable in ordinary
+    # standard-v1 Chat and EXCLUDE the row with the exact machine reason; an
+    # explicit zero reasoning price is carried (see the zero semantics in the
+    # module header). Zero request/web_search are documented no-charges.
+    carried: dict[str, tuple[Decimal, str]] = {}
+    for row in rows:
+        reasoning = row.prices.get("reasoning")
+        if reasoning is not None and reasoning > 0:
+            return BillingDecision(
+                False,
+                REASON_REASONING_CHARGES,
+                f"published reasoning charge {reasoning} per 1M tokens is billed separately from "
+                "output while ordinary Chat admission reserves at the output price; no qualified "
+                "reasoning billing contract is authorized for standard-v1",
+            )
+        request = row.request_price
+        if request is not None and request > 0:
+            return BillingDecision(
+                False,
+                REASON_REQUEST_CHARGES,
+                f"published per-request fee {request} is not billed by ordinary Chat admission or "
+                "finalization (that column serves native-module contracts); no qualified "
+                "per-request billing contract is authorized for standard-v1",
+            )
+        web_search = row.extra_pricing.get("web_search")
+        if web_search is not None and _billing_positive(web_search):
+            return BillingDecision(
+                False,
+                REASON_HOSTED_CHARGES,
+                f"published hosted-operation charge web_search {web_search} per call; hosted "
+                "operations are denied in the standard-v1 profile and no reviewed per-model "
+                "executable contract proves this charge cannot be incurred",
+            )
+        if reasoning is not None and reasoning == 0:
+            # A published zero is an explicit no-charge, never a missing fact:
+            # carrying it keeps finalization at 0 (a missing price would fall
+            # back to the output price and change actual local billing). Only
+            # a zero can reach this line - a positive charge excludes the row
+            # above - so repeat observations can only agree.
+            carried["reasoning"] = (Decimal("0"), "per_1m_tokens")
+    return BillingDecision(
+        True,
+        None,
+        None,
+        tuple((dim, str(value), unit) for dim, (value, unit) in sorted(carried.items())),
+    )
+
+
+def _openai_billing_decision(rows: Sequence[ParsedModel]) -> BillingDecision:
+    # Non-standard tiers (batch/flex/fast) are distinct service variants of
+    # the same model, not context bands of the standard contract: the
+    # standard-v1 flat proposal bills the standard tier only, mirroring the
+    # OpenRouter :batch service-variant handling. A model with ONLY
+    # non-standard rows is handled by no_standard_short_prices, not here.
+    for row in rows:
+        if row.billing_tier not in (None, "standard"):
+            continue
+        if row.prices_long:
+            dims = ",".join(sorted(row.prices_long)[:4])
+            return BillingDecision(
+                False,
+                REASON_LONG_CONTEXT_PRICES,
+                f"standard tier publishes long-context prices ({dims}); the flat standard proposal bills the short band only",
+            )
+        for extra in ("cache_write", "cache_write_long"):
+            value = row.extra_pricing.get(extra)
+            if value is not None and _billing_positive(value):
+                return BillingDecision(
+                    False,
+                    REASON_CACHE_WRITE_CHARGES,
+                    f"published {extra.replace('_', ' ')} charge {value} per 1M tokens is not billable in the flat standard-v1 contract",
+                )
+    return BillingDecision(True)
+
+
+def standard_v1_billing_decision(
+    provider: str, rows: Sequence[ParsedModel]
+) -> BillingDecision:
+    """Deterministic standard-v1 flat billing eligibility for one model.
+
+    Considers EVERY observed row of the model (all billing tiers, all
+    context bands, every published pricing key). Missing, negative
+    sentinel, malformed, non-finite, conflicting and ambiguous billable
+    values are fail-closed exclusions with an exact machine reason; a
+    legitimate zero stays a documented no-charge; the accepted
+    out-of-scope dimensions carry their tested-policy evidence.
+    """
+    if provider == "openrouter":
+        return _router_billing_decision(rows)
+    if provider == "openai":
+        return _openai_billing_decision(rows)
+    return BillingDecision(False, REASON_UNKNOWN_BILLING_DIMENSION, f"unsupported provider {provider!r}")
+
+
+def _pricing_field_name(model: ParsedModel, dim: str, *, band: str | None = None, extra: bool = False) -> str:
+    """181: observation field name with full billing context.
+
+    Bare ``pricing:<dim>`` names are reserved for the proposal-representable
+    context: sources without tier/band distinctions (OpenRouter, legacy
+    single-table OpenAI) and the Standard tier short band. Every other
+    observed price (other tiers, long band, extra dims) keeps its exact
+    context in a qualified field, so it is fully accounted for in the
+    report without ever binding to, or contradicting, a proposed
+    standard short-context price.
+    """
+    effective_band = band if band is not None else (model.context_band or "short")
+    if not extra and model.billing_tier in (None, "standard") and effective_band == "short":
+        return f"pricing:{dim}"
+    tier = model.billing_tier or "plain"
+    return f"pricing:{dim}:{tier}:{effective_band}"
 
 
 def derive_observations(source_key: str, parsed: SnapshotParse) -> tuple[Observation, ...]:
@@ -698,6 +1726,13 @@ def derive_observations(source_key: str, parsed: SnapshotParse) -> tuple[Observa
     values. Independence accounting (duplicate URLs / aliases to identical
     bytes / repeated references are one observation, not two) happens in
     :func:`independent_digests` via the per-source content digests.
+
+    181: prices carry their exact tier/band context (see
+    :func:`_pricing_field_name`); extra observed dims and the model-page
+    endpoint contract derive their own observations. Non-representable
+    values (e.g. the OpenRouter -1 sentinel) derive no price observation
+    at all — there is no value to bind — and are accounted for by the
+    collection inventory instead.
     """
     if not parsed.ok:
         return ()
@@ -709,10 +1744,67 @@ def derive_observations(source_key: str, parsed: SnapshotParse) -> tuple[Observa
                     source_key=source_key,
                     provider=model.provider,
                     model=model.model,
-                    field=f"pricing:{dim}",
+                    field=_pricing_field_name(model, dim),
                     locator=model.locators.get(f"pricing:{dim}", "unresolved"),
                     value=str(model.prices[dim]),
                     unit="per_1m_tokens",
+                    currency=model.price_currency,
+                    parser=model.parser,
+                )
+            )
+        for dim in sorted(model.prices_long):
+            observations.append(
+                Observation(
+                    source_key=source_key,
+                    provider=model.provider,
+                    model=model.model,
+                    field=_pricing_field_name(model, dim, band="long"),
+                    locator=model.locators.get(f"pricing_long:{dim}", "unresolved"),
+                    value=str(model.prices_long[dim]),
+                    unit="per_1m_tokens",
+                    currency=model.price_currency,
+                    parser=model.parser,
+                )
+            )
+        for dim in sorted(model.extra_pricing):
+            band = "long" if dim.endswith("_long") else "short"
+            observations.append(
+                Observation(
+                    source_key=source_key,
+                    provider=model.provider,
+                    model=model.model,
+                    field=_pricing_field_name(model, dim, band=band, extra=True),
+                    locator=model.locators.get(f"pricing:{dim}", "unresolved"),
+                    value=model.extra_pricing[dim],
+                    unit=EXTRA_DIM_UNITS.get(dim, "per_1m_tokens"),
+                    currency=model.price_currency,
+                    parser=model.parser,
+                )
+            )
+        if model.request_price is not None:
+            # The published per-request charge is source truth: its
+            # observation is published under the standard short-context
+            # field name (the only context OpenRouter rows carry) so the
+            # report shows exactly what the official source published.
+            # 181-c: it is NOT carried into a proposal - ordinary Chat does
+            # not bill an additive per-request fee, so a row with a positive
+            # fee is excluded instead.
+            effective_band = model.context_band or "short"
+            request_field = (
+                "pricing:request"
+                if model.billing_tier in (None, "standard")
+                and effective_band == "short"
+                else f"pricing:request:{model.billing_tier or 'plain'}:{effective_band}"
+            )
+            observations.append(
+                Observation(
+                    source_key=source_key,
+                    provider=model.provider,
+                    model=model.model,
+                    field=request_field,
+                    locator=model.locators.get("pricing:request", "unresolved"),
+                    value=str(model.request_price),
+                    unit="per_request",
                     currency=model.price_currency,
                     parser=model.parser,
                 )
@@ -768,6 +1860,34 @@ def derive_observations(source_key: str, parsed: SnapshotParse) -> tuple[Observa
                     field="model:deprecated",
                     locator=model.locators.get("model:deprecated", "unresolved"),
                     value="true" if model.deprecated else "false",
+                    unit="none",
+                    currency=None,
+                    parser=model.parser,
+                )
+            )
+        if model.chat_supported is not None:
+            observations.append(
+                Observation(
+                    source_key=source_key,
+                    provider=model.provider,
+                    model=model.model,
+                    field="model:chat_supported",
+                    locator=model.locators.get("endpoint:chat_completions", "unresolved"),
+                    value="true" if model.chat_supported else "false",
+                    unit="none",
+                    currency=None,
+                    parser=model.parser,
+                )
+            )
+        if model.pricing_overrides is not None:
+            observations.append(
+                Observation(
+                    source_key=source_key,
+                    provider=model.provider,
+                    model=model.model,
+                    field="model:pricing_overrides",
+                    locator=model.locators.get("pricing:overrides", "unresolved"),
+                    value=str(model.pricing_overrides),
                     unit="none",
                     currency=None,
                     parser=model.parser,

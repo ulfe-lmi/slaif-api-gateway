@@ -172,6 +172,85 @@ def _ready_case() -> tuple[object, dict]:
     return bundle, report
 
 
+def _collection_case() -> tuple[object, dict]:
+    """A 181 live-collected bundle (same refresh as the ready case plus a
+    recorded collection identity whose ok retrieval records match the
+    sources' URLs and digests): exercises the live-collection scope line,
+    the scope-card Collection row, and the #collection-details section."""
+    from datetime import UTC, datetime
+
+    payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
+    payload["run_id"] = "browser-collection-001"
+    payload["selection"]["model_include"] = ["synthetic/stable-v1"]
+    payload["models"] = [m for m in payload["models"] if m["model"] == "synthetic/stable-v1"]
+    payload["routes"] = [r for r in payload["routes"] if r["requested_model"] == "synthetic/stable-v1"]
+    payload["pricing"] = [p for p in payload["pricing"] if p["model"] == "synthetic/stable-v1"]
+    payload["sources"] = [
+        s for s in payload["sources"]
+        if s["model"] == "synthetic/stable-v1" or s["provider"] == "ecb"
+    ]
+    by_url: dict[str, dict] = {}
+    for source in payload["sources"]:
+        by_url.setdefault(source["url"], source)
+    or_source = by_url["https://openrouter.ai/api/v1/models"]
+    ecb_source = by_url[
+        "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-usd.en.html"
+    ]
+    started = datetime(2026, 9, 21, 11, 59, 0, tzinfo=UTC)
+    finished = datetime(2026, 9, 21, 12, 0, 30, tzinfo=UTC)
+    payload["collection"] = {
+        "tool": "slaif-gateway/0.1.0",
+        "code_revision": "slaif-api-gateway==0.1.0",
+        "profile": "standard-v1",
+        "providers": ["openrouter"],
+        "model_include": ["synthetic/stable-v1"],
+        "started_at": started.isoformat(),
+        "finished_at": finished.isoformat(),
+        "retrievals": [
+            {
+                "requested_url": or_source["url"],
+                "final_url": None,
+                "retrieved_at": started.isoformat(),
+                "outcome": "ok",
+                "status": 200,
+                "failure_code": None,
+                "content_type": "application/json",
+                "content_bytes": 1024,
+                "content_sha256": or_source["content_sha256"],
+                "attempts": 1,
+                "redirects": 0,
+                "published_at": None,
+            },
+            {
+                "requested_url": ecb_source["url"],
+                "final_url": None,
+                "retrieved_at": started.isoformat(),
+                "outcome": "ok",
+                "status": 200,
+                "failure_code": None,
+                "content_type": "text/html",
+                "content_bytes": 512,
+                "content_sha256": ecb_source["content_sha256"],
+                "attempts": 1,
+                "redirects": 0,
+                "published_at": None,
+            },
+        ],
+        "inventory": [],
+        "deduplicated_fetches": False,
+    }
+    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    report, _ = validate_bundle(
+        bundle,
+        _unit_baseline(),
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+    )
+    assert report.state == OVERALL_READY, report.state_reason
+    assert report.to_dict()["source_evidence"]["scope"] == "live_collection"
+    return bundle, report
+
+
 def _warnings_case() -> tuple[object, dict]:
     """Aged-source READY_WITH_WARNINGS (mirrors the unit-suite case)."""
     from datetime import UTC, datetime
@@ -567,6 +646,7 @@ def case_html(tmp_path_factory) -> dict[str, Path]:
     )
     for case, builder in (
         ("ready", _ready_case),
+        ("collection", _collection_case),
         ("warnings", _warnings_case),
         ("large-unchanged", _large_unchanged_case),
         ("two-provider", _two_provider_case),
@@ -588,6 +668,17 @@ CASE_EXPECTATIONS = {
     "first-install": {"has_sources": False, "pdf": False, "visible": ()},
     "blocked": {"has_sources": True, "pdf": False, "visible": ()},
     "ready": {"has_sources": True, "pdf": False, "visible": ()},
+    "collection": {
+        "has_sources": True,
+        "pdf": False,
+        "visible": (
+            "Collection details",
+            "recorded collection identity",
+            "live-collection scope",
+            "Measured retrieval records",
+            "NOT_RUN",
+        ),
+    },
     "warnings": {"has_sources": True, "pdf": False, "visible": ()},
     "large-unchanged": {"has_sources": True, "pdf": False, "visible": ()},
     "two-provider": {"has_sources": True, "pdf": False, "visible": ()},
@@ -606,6 +697,7 @@ def test_browser_layout_all_cases(playwright, case_html) -> None:
     for case in (
         "first-install",
         "ready",
+        "collection",
         "warnings",
         "blocked",
         "large-unchanged",
