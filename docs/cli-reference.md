@@ -133,15 +133,18 @@ slaif-gateway catalog-refresh export-baseline --out /path/to/baseline.json --db-
 ```
 
 Review exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED, 65 data
-error, 2 usage error. Verify: 0 valid, 30 invalid, 65 data error.
+error, 2 usage error. Verify: 0 valid, 30 invalid (including a missing,
+non-directory, or symlinked run directory with an otherwise valid key),
+65 data error (missing or unsafe seal key; verify never creates keys).
 Export-baseline: 0 written, 65 data error (never overwrites output, never
 bootstraps empty).
 
 Filesystem inputs and outputs are handled by a descriptor-anchored,
-symlink-free boundary: symlinked bundle/baseline/run/key paths, FIFOs and
-other special files, oversized or growing inputs, and run roots or key
-parents writable by group or other are refused with exit 65 and a safe
-error that does not echo input content. Runs are published atomically
+symlink-free boundary: symlinked bundle/baseline/key paths, FIFOs and
+other special files, oversized or growing inputs, and — for `review` — run
+roots or key parents writable by group or other are refused with exit 65
+and a safe error that does not echo input content; a symlinked run
+directory makes `verify` invalid (exit 30). Runs are published atomically
 new-only and never overwritten; `export-baseline` writes only to a
 new output path. Full contract:
 [Catalog refresh (offline review)](catalog-refresh.md#filesystem-trust-contract).

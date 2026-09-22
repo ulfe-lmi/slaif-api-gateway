@@ -92,7 +92,9 @@ def _assert_no_external_or_executable_resources(html_text: str) -> None:
     assert "@import" not in style_block.group(1)
     assert "url(" not in style_block.group(1)
     for href in re.findall(r"href='([^']+)'", html_text):
-        assert href.startswith(("http://", "https://")), f"unsafe href {href!r}"
+        # External links must be http(s); the only other allowed form is a
+        # same-document fragment anchor (native internal link, no fetch).
+        assert href.startswith(("http://", "https://", "#")), f"unsafe href {href!r}"
 
 
 def test_first_screen_contains_required_decision_facts() -> None:

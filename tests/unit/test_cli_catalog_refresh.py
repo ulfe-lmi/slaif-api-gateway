@@ -388,9 +388,10 @@ FIRST_INSTALL_SQL_NOTE = (
     "exists; no SQL was executed during this review."
 )
 DOCUMENT_SQL_NOTE = (
-    "Baseline consumed from a supplied document: SQL was executed historically "
-    "at that document's export time (declared capture metadata, not re-attested "
-    "by this review); no SQL was executed during this review."
+    "Baseline consumed from a supplied document: the document DECLARES a "
+    "historical SQL export at its export time; consuming the file does not "
+    "verify that historical SQL execution occurred, and this review does not "
+    "attest it; no SQL was executed during this review."
 )
 LIVE_EXPORT_SQL_NOTE = (
     "SQL was executed during this review: this review command performed the "

@@ -1,0 +1,161 @@
+{
+ "content_sha256": "f9c6be8310a1c682807d524135da12277e4bd490e86aff1af808634b5a07c1a0",
+ "counts": {
+  "fx_rates": 1,
+  "pricing_rules": 2,
+  "providers": 2,
+  "routes": 2
+ },
+ "exported_at": "2026-09-21T10:00:00Z",
+ "fx": [
+  {
+   "base_currency": "EUR",
+   "created_at": "2026-09-21T00:00:00Z",
+   "id": "44444444-0000-4000-8000-000000000001",
+   "quote_currency": "USD",
+   "rate": "1.08",
+   "source": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-usd.en.html",
+   "source_label": null,
+   "valid_from": "2026-09-21T00:00:00Z",
+   "valid_until": null
+  }
+ ],
+ "pricing": [
+  {
+   "audio_output_price_per_1m": null,
+   "cache_write_input_multiplier": null,
+   "cache_write_input_price_per_1m": null,
+   "cached_input_price_per_1m": null,
+   "created_at": "2026-09-01T00:00:00Z",
+   "currency": "EUR",
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "external_tool_price_per_call": null,
+   "external_tool_source": null,
+   "id": "33333333-0000-4000-8000-000000000001",
+   "input_price_per_1m": "0.5",
+   "long_context_input_multiplier": null,
+   "long_context_output_multiplier": null,
+   "long_context_threshold_tokens": null,
+   "output_price_per_1m": "2",
+   "pricing_metadata_unrepresented": false,
+   "provider": "openrouter",
+   "reasoning_price_per_1m": null,
+   "request_price": null,
+   "source_url": "https://openrouter.ai/models",
+   "updated_at": "2026-09-01T00:00:00Z",
+   "upstream_model": "synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "valid_until": null
+  },
+  {
+   "audio_output_price_per_1m": null,
+   "cache_write_input_multiplier": null,
+   "cache_write_input_price_per_1m": null,
+   "cached_input_price_per_1m": null,
+   "created_at": "2026-09-01T00:00:00Z",
+   "currency": "EUR",
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "external_tool_price_per_call": null,
+   "external_tool_source": null,
+   "id": "33333333-0000-4000-8000-000000000002",
+   "input_price_per_1m": "0.3",
+   "long_context_input_multiplier": null,
+   "long_context_output_multiplier": null,
+   "long_context_threshold_tokens": null,
+   "output_price_per_1m": "1.2",
+   "pricing_metadata_unrepresented": false,
+   "provider": "openrouter",
+   "reasoning_price_per_1m": null,
+   "request_price": null,
+   "source_url": "https://openrouter.ai/models",
+   "updated_at": "2026-09-01T00:00:00Z",
+   "upstream_model": "synthetic/standard-researcher-model-0002",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "valid_until": null
+  }
+ ],
+ "providers": [
+  {
+   "api_key_env_var": "OPENROUTER_API_KEY",
+   "base_url": "https://openrouter.ai/api/v1",
+   "created_at": "2026-09-01T00:00:00Z",
+   "display_name": "OpenRouter (synthetic)",
+   "enabled": true,
+   "id": "11111111-1111-4111-8111-111111111111",
+   "kind": "openai_compatible",
+   "max_retries": 2,
+   "provider": "openrouter",
+   "timeout_seconds": 300,
+   "updated_at": "2026-09-01T00:00:00Z"
+  },
+  {
+   "api_key_env_var": "OPENAI_API_KEY",
+   "base_url": "https://api.openai.com/v1",
+   "created_at": "2026-09-01T00:00:00Z",
+   "display_name": "OpenAI (synthetic)",
+   "enabled": true,
+   "id": "11111111-1111-4111-8111-111111111112",
+   "kind": "openai_compatible",
+   "max_retries": 2,
+   "provider": "openai",
+   "timeout_seconds": 300,
+   "updated_at": "2026-09-01T00:00:00Z"
+  }
+ ],
+ "routes": [
+  {
+   "capabilities": {
+    "chat_completions": {
+     "chat_streaming": true,
+     "chat_text": true
+    }
+   },
+   "capabilities_fingerprint": "c1304b09dba8fadbe6c19fd0f230456fc5fd48a25ae944df60db5e035ff89f21",
+   "capabilities_unrepresented": false,
+   "created_at": "2026-09-01T00:00:00Z",
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "id": "22222222-0000-4000-8000-000000000001",
+   "match_type": "exact",
+   "priority": 100,
+   "provider": "openrouter",
+   "requested_model": "synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001",
+   "supports_streaming": true,
+   "updated_at": "2026-09-01T00:00:00Z",
+   "upstream_model": "synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001",
+   "visible_in_models": true
+  },
+  {
+   "capabilities": {
+    "chat_completions": {
+     "chat_streaming": true,
+     "chat_text": true
+    }
+   },
+   "capabilities_fingerprint": "c1304b09dba8fadbe6c19fd0f230456fc5fd48a25ae944df60db5e035ff89f21",
+   "capabilities_unrepresented": false,
+   "created_at": "2026-09-01T00:00:00Z",
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "id": "22222222-0000-4000-8000-000000000002",
+   "match_type": "exact",
+   "priority": 100,
+   "provider": "openrouter",
+   "requested_model": "synthetic/standard-researcher-model-0002",
+   "supports_streaming": true,
+   "updated_at": "2026-09-01T00:00:00Z",
+   "upstream_model": "synthetic/standard-researcher-model-0002",
+   "visible_in_models": true
+  }
+ ],
+ "schema_version": "1",
+ "sql_checked": true,
+ "target": {
+  "database": "slaif-synthetic-baseline",
+  "postgres_version": "16.4",
+  "server_host": "127.0.0.1",
+  "server_port": 5433
+ }
+}

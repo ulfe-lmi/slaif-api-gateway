@@ -1,0 +1,377 @@
+{
+ "baseline": {
+  "content_sha256": "f9c6be8310a1c682807d524135da12277e4bd490e86aff1af808634b5a07c1a0",
+  "exported_at": "2026-09-21T10:00:00Z",
+  "mode": "exported_file",
+  "row_counts": {
+   "fx_rates": 1,
+   "pricing_rules": 2,
+   "providers": 2,
+   "routes": 2
+  },
+  "sql_checked": true,
+  "target_database": "slaif-synthetic-baseline"
+ },
+ "fx": [
+  {
+   "base_currency": "EUR",
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "ecb|EUR-USD|ecb_reference_xml"
+    ]
+   },
+   "published_at": "2026-09-21T00:00:00Z",
+   "quote_currency": "USD",
+   "rate": "1.08",
+   "source": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-usd.en.html",
+   "valid_from": "2026-09-21T00:00:00Z",
+   "valid_until": null,
+   "warnings": []
+  }
+ ],
+ "generated_at": "2026-09-21T12:00:00Z",
+ "models": [
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "context_length": 128000,
+   "deprecated": false,
+   "display_name": "Long Router 0001 </script><img src=x onerror=alert(1)>",
+   "max_output_tokens": 8192,
+   "model": "synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001",
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "supports_streaming": true,
+   "warnings": []
+  },
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "context_length": 128000,
+   "deprecated": false,
+   "display_name": "Standard Router 0002",
+   "max_output_tokens": 8192,
+   "model": "synthetic/standard-researcher-model-0002",
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/standard-researcher-model-0002|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "supports_streaming": true,
+   "warnings": []
+  },
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "deprecated": false,
+   "display_name": "Long OpenAI 0003 <b onclick=xss()>text</b>",
+   "model": "gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003",
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openai|gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003|openai_pricing_docs",
+     "openai|gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003|openai_models_api"
+    ]
+   },
+   "provider": "openai",
+   "supports_streaming": true,
+   "warnings": []
+  }
+ ],
+ "notes": "Two-provider synthetic layout case with long identifiers (180-h).",
+ "policy": {
+  "fx_change_review": "0.03",
+  "fx_stale_blocked_days": 7,
+  "fx_stale_review_days": 3,
+  "price_change_review": "0.25",
+  "source_stale_blocked_hours": 72,
+  "source_stale_review_hours": 24,
+  "version": 1
+ },
+ "pricing": [
+  {
+   "currency": "EUR",
+   "dimensions": [
+    {
+     "currency": "EUR",
+     "name": "input",
+     "unit": "per_1m_tokens",
+     "value": "0.5"
+    },
+    {
+     "currency": "EUR",
+     "name": "output",
+     "unit": "per_1m_tokens",
+     "value": "2"
+    }
+   ],
+   "endpoint": "/v1/chat/completions",
+   "model": "synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001",
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "warnings": []
+  },
+  {
+   "currency": "EUR",
+   "dimensions": [
+    {
+     "currency": "EUR",
+     "name": "input",
+     "unit": "per_1m_tokens",
+     "value": "0.3"
+    },
+    {
+     "currency": "EUR",
+     "name": "output",
+     "unit": "per_1m_tokens",
+     "value": "1.2"
+    }
+   ],
+   "endpoint": "/v1/chat/completions",
+   "model": "synthetic/standard-researcher-model-0002",
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/standard-researcher-model-0002|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "warnings": []
+  },
+  {
+   "currency": "EUR",
+   "dimensions": [
+    {
+     "currency": "EUR",
+     "name": "input",
+     "unit": "per_1m_tokens",
+     "value": "1"
+    },
+    {
+     "currency": "EUR",
+     "name": "output",
+     "unit": "per_1m_tokens",
+     "value": "4"
+    }
+   ],
+   "endpoint": "/v1/chat/completions",
+   "model": "gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003",
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openai|gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003|openai_pricing_docs",
+     "openai|gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003|openai_models_api"
+    ]
+   },
+   "provider": "openai",
+   "valid_from": "2026-09-01T00:00:00Z",
+   "warnings": []
+  }
+ ],
+ "profile": {
+  "capability_allowlist": [],
+  "endpoint": "/v1/chat/completions",
+  "local_models_visible": true,
+  "name": "standard-v1",
+  "supports_streaming": true
+ },
+ "research": {
+  "codex_version": "N/A",
+  "extractor_version": "fixture/1.0",
+  "prompt_version": "N/A",
+  "status": "NOT_RUN",
+  "tool_version": "fixture/1.0"
+ },
+ "revision": {
+  "policy_version": 1,
+  "renderer_version": "180.5",
+  "schema_version": "1",
+  "slaif_revision": "fixture-revision-180"
+ },
+ "routes": [
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "match_type": "exact",
+   "priority": 100,
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "requested_model": "synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001",
+   "supports_streaming": true,
+   "upstream_model": "synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001",
+   "visible_in_models": true,
+   "warnings": []
+  },
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "match_type": "exact",
+   "priority": 100,
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openrouter|synthetic/standard-researcher-model-0002|openrouter_models_api"
+    ]
+   },
+   "provider": "openrouter",
+   "requested_model": "synthetic/standard-researcher-model-0002",
+   "supports_streaming": true,
+   "upstream_model": "synthetic/standard-researcher-model-0002",
+   "visible_in_models": true,
+   "warnings": []
+  },
+  {
+   "capabilities": {
+    "streaming": true,
+    "text": true
+   },
+   "enabled": true,
+   "endpoint": "/v1/chat/completions",
+   "match_type": "exact",
+   "priority": 100,
+   "provenance": {
+    "extraction": "deterministic",
+    "extractor": "fixture-deterministic/1.0",
+    "sources": [
+     "openai|gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003|openai_pricing_docs",
+     "openai|gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003|openai_models_api"
+    ]
+   },
+   "provider": "openai",
+   "requested_model": "gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003",
+   "supports_streaming": true,
+   "upstream_model": "gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003",
+   "visible_in_models": true,
+   "warnings": []
+  }
+ ],
+ "run_id": "fixture-two-provider-001",
+ "schema_version": "1",
+ "selection": {
+  "model_include": [],
+  "providers": [
+   "openrouter",
+   "openai"
+  ]
+ },
+ "sources": [
+  {
+   "content_sha256": "124ac627dfaa353d019b250fd7a42d0680ff4c3db468e6bc1111fee7a57f6917",
+   "evidence_b64": "eyJkYXRhIjogW3siYXJjaGl0ZWN0dXJlIjogeyJpbnB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il0sICJvdXRwdXRfbW9kYWxpdGllcyI6IFsidGV4dCJdfSwgImNvbnRleHRfbGVuZ3RoIjogMTI4MDAwLCAiZGVwcmVjYXRpb24iOiB7ImlzX2RlcHJlY2F0ZWQiOiBmYWxzZX0sICJpZCI6ICJzeW50aGV0aWMvbG9uZy1jb250ZXh0LXJlc2VhcmNoZXItbW9kZWwtd2l0aC1hLXZlcnktdmVyYm9zZS1hbmQtZGVsaWJlcmF0ZWx5LWxvbmctaWRlbnRpZmllci1mb3Itd3JhcC10ZXN0cy0wMDAxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiMC4wMDAwMDIxNiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjUuNEUtOCIsICJwcm9tcHQiOiAiNS40RS03In0sICJ0b3BfcHJvdmlkZXIiOiB7Im1heF9jb21wbGV0aW9uX3Rva2VucyI6IDgxOTJ9fSwgeyJhcmNoaXRlY3R1cmUiOiB7ImlucHV0X21vZGFsaXRpZXMiOiBbInRleHQiXSwgIm91dHB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il19LCAiY29udGV4dF9sZW5ndGgiOiAxMjgwMDAsICJkZXByZWNhdGlvbiI6IHsiaXNfZGVwcmVjYXRlZCI6IGZhbHNlfSwgImlkIjogInN5bnRoZXRpYy9zdGFuZGFyZC1yZXNlYXJjaGVyLW1vZGVsLTAwMDIiLCAicHJpY2luZyI6IHsiY29tcGxldGlvbiI6ICIwLjAwMDAwMTI5NiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjMuMjRFLTgiLCAicHJvbXB0IjogIjMuMjRFLTcifSwgInRvcF9wcm92aWRlciI6IHsibWF4X2NvbXBsZXRpb25fdG9rZW5zIjogODE5Mn19XX0K",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "synthetic/long-context-researcher-model-with-a-very-verbose-and-deliberately-long-identifier-for-wrap-tests-0001",
+   "provider": "openrouter",
+   "published_at": null,
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "openrouter_models_api",
+   "truncated": false,
+   "url": "https://openrouter.ai/api/v1/models",
+   "warnings": []
+  },
+  {
+   "content_sha256": "124ac627dfaa353d019b250fd7a42d0680ff4c3db468e6bc1111fee7a57f6917",
+   "evidence_b64": "eyJkYXRhIjogW3siYXJjaGl0ZWN0dXJlIjogeyJpbnB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il0sICJvdXRwdXRfbW9kYWxpdGllcyI6IFsidGV4dCJdfSwgImNvbnRleHRfbGVuZ3RoIjogMTI4MDAwLCAiZGVwcmVjYXRpb24iOiB7ImlzX2RlcHJlY2F0ZWQiOiBmYWxzZX0sICJpZCI6ICJzeW50aGV0aWMvbG9uZy1jb250ZXh0LXJlc2VhcmNoZXItbW9kZWwtd2l0aC1hLXZlcnktdmVyYm9zZS1hbmQtZGVsaWJlcmF0ZWx5LWxvbmctaWRlbnRpZmllci1mb3Itd3JhcC10ZXN0cy0wMDAxIiwgInByaWNpbmciOiB7ImNvbXBsZXRpb24iOiAiMC4wMDAwMDIxNiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjUuNEUtOCIsICJwcm9tcHQiOiAiNS40RS03In0sICJ0b3BfcHJvdmlkZXIiOiB7Im1heF9jb21wbGV0aW9uX3Rva2VucyI6IDgxOTJ9fSwgeyJhcmNoaXRlY3R1cmUiOiB7ImlucHV0X21vZGFsaXRpZXMiOiBbInRleHQiXSwgIm91dHB1dF9tb2RhbGl0aWVzIjogWyJ0ZXh0Il19LCAiY29udGV4dF9sZW5ndGgiOiAxMjgwMDAsICJkZXByZWNhdGlvbiI6IHsiaXNfZGVwcmVjYXRlZCI6IGZhbHNlfSwgImlkIjogInN5bnRoZXRpYy9zdGFuZGFyZC1yZXNlYXJjaGVyLW1vZGVsLTAwMDIiLCAicHJpY2luZyI6IHsiY29tcGxldGlvbiI6ICIwLjAwMDAwMTI5NiIsICJpbnB1dF9jYWNoZV9yZWFkIjogIjMuMjRFLTgiLCAicHJvbXB0IjogIjMuMjRFLTcifSwgInRvcF9wcm92aWRlciI6IHsibWF4X2NvbXBsZXRpb25fdG9rZW5zIjogODE5Mn19XX0K",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "synthetic/standard-researcher-model-0002",
+   "provider": "openrouter",
+   "published_at": null,
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "openrouter_models_api",
+   "truncated": false,
+   "url": "https://openrouter.ai/api/v1/models",
+   "warnings": []
+  },
+  {
+   "content_sha256": "c2251f975e3e08941b80c7ff73ea45e58e0a730c620659c4b7df921093e7f108",
+   "evidence_b64": "IyBQcmljaW5nCgp8IE1vZGVsIHwgTW9kYWxpdHkgfCBJbnB1dCB8IENhY2hlZCBpbnB1dCB8IE91dHB1dCB8CnwtLS18LS0tfC0tLXwtLS18LS0tfAp8IGdwdC01LjItc3ludGhldGljLXJlc2VhcmNoZXItdmVyeS1sb25nLW1vZGVsLWlkZW50aWZpZXItZm9yLWxheW91dC12ZXJpZmljYXRpb24tMDAwMyB8IHRleHQgfCAkMS4wOCB8IC0gfCAkNC4zMiB8Cg==",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003",
+   "provider": "openai",
+   "published_at": "2026-09-20T00:00:00Z",
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "openai_pricing_docs",
+   "truncated": false,
+   "url": "https://openai.com/api/pricing/",
+   "warnings": []
+  },
+  {
+   "content_sha256": "a291a4a845749454ea6482215f01cf9d94f7fad172cb90f442bec5b9f95f13d7",
+   "evidence_b64": "eyJkYXRhIjogW3siaWQiOiAiZ3B0LTUuMi1zeW50aGV0aWMtcmVzZWFyY2hlci12ZXJ5LWxvbmctbW9kZWwtaWRlbnRpZmllci1mb3ItbGF5b3V0LXZlcmlmaWNhdGlvbi0wMDAzIn1dfQ==",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "gpt-5.2-synthetic-researcher-very-long-model-identifier-for-layout-verification-0003",
+   "provider": "openai",
+   "published_at": null,
+   "required": false,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "openai_models_api",
+   "truncated": false,
+   "url": "https://api.openai.com/v1/models",
+   "warnings": []
+  },
+  {
+   "content_sha256": "5570b90dbf7fc69971877640bb645af43cfacd92966752c37cf7a4ee631f85a3",
+   "evidence_b64": "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiPz4KPGdlc21lczpFbnZlbG9wZSB4bWxuczpnZXNtZXM9Imh0dHA6Ly93d3cuZ2VzbWVzLm9yZy94bWwvMjAwMi0wOC0wMSIgeG1sbnM9Imh0dHA6Ly93d3cuZWNiLmludC92b2NhYnVsYXJ5LzIwMDItMDgtMDEvZXVyb2Z4cmVmIj4KICA8Z2VzbWVzOnN1YmplY3Q+UmVmZXJlbmNlIHJhdGVzPC9nZXNtZXM6c3ViamVjdD4KICA8Z2VzbWVzOlNlbmRlcj4KICAgIDxnZXNtZXM6TmFtZT5FQ0I8L2dlc21lczpOYW1lPgogIDwvZ2VzbWVzOlNlbmRlcj4KICA8Q3ViZT4KICAgIDxDdWJlIHRpbWU9IjIwMjYtMDktMjEiPgogICAgICA8Q3ViZSBjdXJyZW5jeT0iVVNEIiByYXRlPSIxLjA4Ii8+CiAgICA8L0N1YmU+CiAgPC9DdWJlPgo8L2dlc21lczpFbnZlbG9wZT4K",
+   "extraction": "deterministic",
+   "extractor": "fixture-deterministic/1.0",
+   "model": "EUR-USD",
+   "provider": "ecb",
+   "published_at": "2026-09-21T00:00:00Z",
+   "required": true,
+   "retrieved_at": "2026-09-21T11:00:00Z",
+   "source_kind": "ecb_reference_xml",
+   "truncated": false,
+   "url": "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-usd.en.html",
+   "warnings": []
+  }
+ ]
+}

@@ -59,7 +59,7 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 
 SCHEMA_VERSION = "1"
-RENDERER_VERSION = "180.4"
+RENDERER_VERSION = "180.5"
 POLICY_VERSION = 1
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")

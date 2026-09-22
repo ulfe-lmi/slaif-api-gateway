@@ -324,7 +324,16 @@ streaming-intent and text-disabled route findings, numeric FX quote
 comparison with (date, direction) context and bounded reciprocal
 tolerance, and the exact documented age/movement thresholds (inclusive
 24-hour source freshness, calendar-day FX publication age, and exact
-25%/3% movement boundaries compared before display rounding)).
+25%/3% movement boundaries compared before display rounding);
+`180.5` changes presentation only — the first-screen decision dashboard
+(state/reason banner with blocker/REVIEW chips, the scope-and-baseline
+card, the grouped deterministic gate checklist, per-provider source-snapshot
+versus baseline-comparison tables, the FX card, the create-only execution
+plan, aggregated top findings, recomputed counts and the compact run
+identity), the changes-first detail section, expandable inline evidence
+with full digests, long-value wrapping and the documented print behaviour —
+plus the corrected SQL-capture wording. No state, gate, count, monetary or
+capability semantics changed.)
 
 ## Baselines
 
@@ -380,19 +389,22 @@ mutations. It exports metadata, not ORM dumps or settings:
   "self-authenticating": it covers the canonical target identity plus rows
   (never the export timestamp), and `load`/`review` recompute and reject
   mismatches. It detects later modification; it is not authentication and
-  not proof that the baseline is current. `sql_checked` records that SQL was
-  executed **when the document was exported** (a historical capture fact);
-  a review that consumes the document from a file states that separately. A
-  stale or tampered baseline file is a data error, not a valid baseline.
+  not proof that the baseline is current. `sql_checked` records that the
+  document **declares** SQL was executed when it was exported (a historical
+  capture fact carried by the document; consuming the file does not verify
+  that execution occurred, and the review does not attest it); a review that
+  consumes the document from a file states that separately. A stale or
+  tampered baseline file is a data error, not a valid baseline.
 
 Connection failure never becomes an empty bootstrap.
 
 **SQL evidence is a property of the execution path, never of a label.**
 The report states the actual capture path of this execution:
 `first_install` (an explicit first install read no database and no baseline
-document exists), `document` (a supplied baseline document carries declared
-capture metadata from its own export time — SQL ran historically, not
-during this review), or `live_export` (this review command performed the
+document exists), `document` (a supplied baseline document
+DECLARES a historical SQL export at its own export time; consuming the file
+does not verify that the historical execution occurred, and the review does
+not attest it; no SQL ran during this review), or `live_export` (this review command performed the
 read-only export, so SQL ran during the review). The capture must agree
 with the bundle's declared baseline mode; a supplied boolean or mode label
 cannot claim live SQL. `verify` is an offline seal replay: it recomputes
@@ -477,37 +489,100 @@ network fetches, print-friendly, and safe on an ordinary laptop width. All
 data is escaped; evidence links are allowlisted; a restrictive CSP is added
 as defense-in-depth.
 
-The first screen prioritizes the decision: overall state and why; blocker
-and REVIEW finding counts; selected scope (providers, model filter) and
-baseline (mode, target, and the capture path of this execution
-with its truthful SQL-evidence note); a compact per-provider
-change/completeness summary; the **create-only execution plan** (visually
-blocked when any plan is excluded/blocked); FX current/proposed/delta/date;
-aggregated important findings, including a compact source-evidence line
-(how many proposed facts are bound to parsed observations, review-only
-facts, and the evidence inventory); the full gate checklist (sources,
-schema, pricing completeness, pairing, unsupported rows, unusual changes,
-completeness, and the routes/pricing/FX execution-plan gates); and the
-recomputed counts. A compact run identity line stays visible; expanded
-technical identifiers (revisions, artifact digests) live in a details
-section. The main content is **what changed**: price tables with old/new
-values, units, currencies, and signed percentages; route tables with current
-→ proposed values and the reason (no apply operation exists in this
-version); FX tables with current/proposed/delta/source/publication date,
-including derived-reciprocal markers. Everything else — new/changed/
-disappeared models, excluded rows and reason counts, collapsed unchanged
-rows, field provenance with derived (never declared) source classification,
-the expanded source-evidence section (per-source parse status with the
-registry parser and content digest prefix, the exact parsed observations
-that bound each proposed fact — observed value, unit, currency, exact
-locator, URL/digest/parser/time, normalized value and transformation —
-with declared backing sources and distinct-URL independence counts, FX
-facts bound to verified reference quotes with quote locator/URL/digest/
-parser/date, and the reconciled evidence inventory with per-provider
-selection dispositions and bounded ID lists), every warning, full validator outputs, and the exact proposed
-import rows — is inside the same file, on demand. The detailed evidence files
-(`validation.json`, TSV/JSON artifacts, manifest, receipt) exist for
-machines and audit; a human decision never requires opening them.
+The renderer is a pure function of (bundle, report): identical inputs
+reproduce identical bytes. The layout is a compact decision dashboard,
+then changes-first detail, then expandable inline evidence.
+
+**First screen (decision dashboard).** The first 1440x900 viewport shows,
+without expanding details or scrolling through evidence prose:
+
+- the state banner: overall state (READY / READY_WITH_WARNINGS / BLOCKED)
+  with its concise reason, plus chips counting BLOCKERS, REVIEW findings
+  and all findings;
+- a two-column card grid:
+  - *Decision — scope &amp; baseline*: why this state, blocker/REVIEW
+    finding counts with their codes, the selected scope (providers plus
+    model filter with selected/considered/out-of-scope counts — a compact
+    selection, not a list of every model), the baseline mode/target with
+    its honest capture note (explicit first install, supplied document, or
+    live export) and the exact SQL-evidence note, the live-research status
+    (unavailable in this version; only supplied offline evidence is
+    assessed), and a compact source-evidence line (how many proposed
+    facts are bound to parsed observations, review-only facts, inventory);
+  - *Gate checklist — deterministic*: the deterministic gates grouped
+    into five display groups (source evidence; schema and pricing
+    completeness; pairing and supported capabilities; changes and
+    reconciliation; import-plan validation). Each group shows its worst
+    state; every individual gate keeps its own state chip, name, and
+    detail, and any ungrouped gate is listed individually — nothing is
+    hidden;
+  - *Per-provider summary*: two sub-tables that clearly separate the
+    populations — "Source snapshots (offline replay of supplied
+    documents)" (models in snapshot, selected, retained local, excluded,
+    unexplained — with an honest "no source snapshots parsed" line when no
+    source parsed) and "Baseline comparison (this run)" (new, changed,
+    unchanged, excluded, blocked, disappeared, deprecated, not fetched),
+    plus a footnote stating that the two tables are not additive and that
+    no count is invented for a source that did not parse;
+  - *FX (current vs proposed, native → EUR)*: per pair, current rate,
+    proposed rate, signed delta, state, publication date and source, with
+    derived-reciprocal markers — or a concise, truthful "not required"
+    line when no conversion is needed;
+- the **Execution plan (create-only)** card, with a conspicuous banner
+  when any plan is blocked (existing-row updates/supersessions are not
+  apply operations in this version);
+- **Important findings (aggregated)**: the top finding groups ranked by
+  severity with counts and concise human labels (exact codes retained) and
+  a link to the full list — ranked counts plus a link, not pages of codes,
+  when findings are numerous;
+- the **Counts (recomputed)** line as compact chips, and a compact run
+  identity line (run ID, generated time, SLAIF revision, schema/renderer
+  revision, policy version, profile/endpoint) linking to the expanded
+  identity section.
+
+Cards collapse to one column below 900 px. Long run IDs, model filters,
+URLs and digests wrap (`word-break`) instead of forcing the page wider:
+there is no page-wide horizontal overflow at 1440, 1280, or a 375 px
+viewport; natural vertical scrolling on narrow screens is expected.
+
+**Changes first.** Directly after the dashboard, the "What changed"
+section leads the detail: price changes with old/new values, units,
+currencies and signed percentages — with a note that displayed
+percentages are rounded to 0.001 % while the gate decision uses the exact
+stored ratio (a strictly above-threshold movement can display at the
+threshold); route/model attribute changes with current → proposed values
+and the reason (create-only: no apply operation exists in this version);
+and an explicit "Unchanged: N model(s)" line pointing to the collapsed
+unchanged section. Disappearance is displayed as an observation, not a
+delete operation, and no decision is downgraded by presentation logic.
+
+**Evidence on demand, all inside the same file.** Expandable native
+`<details>` sections hold: all warnings and findings (open by default,
+per-item detail); the full validator outputs; import-gate details
+(schema-valid versus execution-plan-valid, per kind); the source inventory
+and reconciliation with FULL 64-hex digests (never truncated); the source
+evidence — per-source parse status with the registry parser, the exact
+parsed observations that bound each proposed fact (observed value, unit,
+currency, exact locator, URL, full digest, parser, retrieval time,
+normalized value and transformation, declared backing sources,
+distinct-URL independence), FX facts bound to verified reference quotes,
+and the reconciled evidence inventory with per-provider selection
+dispositions and bounded ID lists; baseline identity (historical capture
+versus current checks, with the SQL capture-path note); the expanded run
+identity (revisions, artifact digests); bundle notes; and the unchanged
+rows. Bounded example lists are labelled with their totals, and nothing is
+silently dropped to make the page small.
+
+**Print.** The print CSS keeps state borders and textual labels
+(colour is not relied on; severities are additionally underlined), wraps
+long values instead of clipping them, keeps table rows from splitting
+across page breaks, prints opened (expanded) sections in full, and prints
+closed sections as their summary line only. The report footer documents
+this behaviour, and the browser test captures an actual PDF to verify it.
+
+The detailed evidence files (`validation.json`, TSV/JSON artifacts,
+manifest, receipt) exist for machines and audit; a human decision never
+requires opening them.
 
 ## Sealing and reproducibility
 
@@ -551,20 +626,30 @@ descriptor-anchored filesystem boundary:
   intermediate parent, or ancestor — is refused, as are traversal
   components (`..`, empty, dot), absolute names, and depth/alias
   escapes.
-- **Lifecycle binding.** Review and verify keep the anchored handles for
-  the run root and the seal-key parent across the whole operation and
-  re-assert the name-to-inode binding at every publication gate. A
-  directory swapped mid-operation voids the run (exit 65) and nothing
-  is published under the swapped name.
+- **Lifecycle binding.** Review keeps the anchored handles for the run
+  root and the seal-key parent across the whole operation and re-asserts
+  the name-to-inode binding at every publication gate; a directory swapped
+  mid-operation voids the run (exit 65) and nothing is published under the
+  swapped name. Verify is read-only: it anchors the run directory once
+  through the same no-follow walk (the held descriptor serves every read)
+  and loads the existing key separately; it retains no key-parent
+  lifecycle, publishes nothing, and never creates, repairs, or re-signs
+  anything.
 - **Mutation-namespace enforcement.** The run root and seal-key parent
   must be operator-owned directories that are not writable by group or
   other, checked by `fstat` on the held descriptor. Unsafe directories
-  are refused, never chmod'ed or repaired (exit 65).
+  are refused, never chmod'ed or repaired (exit 65). The identity check
+  and the later name mutation (rename/rmdir) are separate operations on
+  held descriptors: no single syscall atomically compares a source inode
+  against a name. The race closure therefore combines descriptor anchoring
+  with these enforced mutation parents, not an atomic check-and-mutate.
 - **Bounds before allocation.** The bundle (8 MiB) and baseline
   (32 MiB) bounds are enforced before any content is read or
   allocated. Sealed runs are bounded per content file (32 MiB),
-  manifest (1 MiB), receipt (8 KiB), per run (128 MiB including
-  manifest/receipt overhead), file count (64) and depth (4), and the
+  manifest and receipt (1 MiB read cap each), per run (128 MiB including
+  manifest/receipt overhead — the 8 KiB receipt constant is a
+  signing-overhead reservation in that aggregate budget, not the
+  verifier's read cap), file count (64) and depth (4), and the
   manifest's declared set, count, and sizes are reconciled before any
   content is read. Special files (FIFO, socket, device) fail promptly
   at open, and sparse files over their declared size are refused before
@@ -596,7 +681,13 @@ descriptor-anchored filesystem boundary:
   receipt digests, canonical bundle identity, semantic validation, and
   the report correspondence. First-install runs must byte-equal the
   canonical empty marker, not merely carry the expected
-  `schema_version`.
+  `schema_version`. The bounded reader re-proves identity and size on the
+  opened descriptor after the read and refuses short reads and growing
+  files (EOF probe); a same-size in-place mutation that races the read is
+  NOT detectable at the byte level. The accepted guarantee is the single
+  captured byte snapshot and the authenticated correspondence between it,
+  the manifest and the receipt, within the platform and threat scope
+  below.
 
 Platform and threat scope, stated honestly: the boundary assumes Linux
 with `renameat2`. It provides local integrity against unprivileged local
@@ -616,8 +707,8 @@ apply must consume the authenticated snapshot rather than reread paths.
 | `review` | 65 | data error (unreadable/unparseable/oversized input, bad baseline, seal key problem, unsafe directory configuration, existing run output) |
 | `review` | 2 | usage error (contradictory options) |
 | `verify` | 0 | run verified |
-| `verify` | 30 | run failed verification |
-| `verify` | 65 | data error (missing key or run directory; unsafe directory configuration; verify never creates keys) |
+| `verify` | 30 | run failed verification — including a missing, non-directory, or symlinked run directory with an otherwise valid key, or any seal/digest/correspondence mismatch |
+| `verify` | 65 | data error (missing or unsafe seal key or its parent directory; verify never creates keys) |
 | `export-baseline` | 0 | baseline written |
 | `export-baseline` | 65 | data error (never overwrites output — new-only atomic write; never bootstraps empty) |
 

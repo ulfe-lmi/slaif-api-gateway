@@ -30,12 +30,14 @@ slaif-gateway catalog-refresh verify \
   --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
 ```
 
-Exit codes: review 0/10/20/65/2, verify 0/30/65, export-baseline 0/65
-(see the docs page for the table). The review's baseline input is part of
-the SQL evidence: `--db-url` is a live export (SQL ran during this
-review), `--baseline-file` is a supplied document (SQL ran historically at
-its export time), `--first-install` read no database, and `verify`
-replays the sealed bytes without executing SQL.
+Exit codes: review 0/10/20/65/2, verify 0/30/65 (a missing or unsafe
+run directory with a valid key is 30; a missing or unsafe seal key is
+65), export-baseline 0/65 (see the docs page for the table). The review's
+baseline input is part of the SQL evidence: `--db-url` is a live export
+(SQL ran during this review), `--baseline-file` is a supplied document
+(it DECLARES a historical SQL export at its export time; consuming the
+file does not verify that execution), `--first-install` read no database,
+and `verify` replays the sealed bytes without executing SQL.
 
 ## Preparing source evidence (offline replay)
 
@@ -99,13 +101,17 @@ the contract.
 
 ## Eventual wrapper contract (planned for a later slice)
 
-When the live-research and audited-apply slices land, the intended admin
-surface will be a thin wrapper around the same primitives documented here:
+When the live-research and audited-apply slices land, the intended
+operator surface will be a thin wrapper around the same primitives
+documented here:
 
 1. trigger a deterministic live retrieval + research pass;
 2. produce one typed bundle with full provenance;
 3. run the same offline `review` against a fresh `export-baseline`;
-4. surface the single `REVIEW.html` in the admin dashboard;
+4. print the local report path so the operator opens the single
+   `REVIEW.html` in an ordinary browser (the accepted one-command,
+   one-static-report architecture — the wrapper must NOT require a new
+   management dashboard surface);
 5. require an explicit, separately audited apply step that re-validates the
    baseline identity before superseding rows.
 
