@@ -141,8 +141,9 @@ bootstraps empty).
 
 Filesystem inputs and outputs are handled by a descriptor-anchored,
 symlink-free boundary: symlinked bundle/baseline/key paths, FIFOs and
-other special files, oversized or growing inputs, and — for `review` — run
-roots or key parents writable by group or other are refused with exit 65
+other special files, oversized or growing inputs, and — for the writing commands — run
+roots or key parents (`review`) and the output parent (`export-baseline`)
+writable by group or other are refused with exit 65
 and a safe error that does not echo input content; a symlinked run
 directory makes `verify` invalid (exit 30). Runs are published atomically
 new-only and never overwritten; `export-baseline` writes only to a

@@ -5,20 +5,28 @@ reads, no environment access, stable ordering. Every data value is escaped;
 only schema-validated http/https URLs may become links. No external
 resources, no JavaScript, no event attributes, no user-controlled markup.
 
-Layout contract (180-h): the first screen at 1440x900 is a compact decision
-dashboard — state and reason, blocker/review counts, scope and baseline,
-the grouped deterministic gate checklist, per-provider reconciliation
-(source snapshots vs baseline comparison, clearly separated), FX current
-vs proposed, the create-only execution plan, the top aggregated findings
-with ranked counts and a link to the full list, and a compact run
-identity — with every piece of detailed evidence available in expandable
-sections of the same self-contained file. Long identifiers, URLs and
-digests wrap without truncating their accessible value. Printing keeps
-state borders and textual labels (colour is not relied on), wraps rather
-than clips long values, and prints opened (expanded) sections in full.
-Source trust labels are derived (OFFICIAL / REVIEW / BLOCKED from
-provider/method/host/evidence rules), never caller-declared
-"authoritative" labels (180-b, R3).
+Layout contract (180-i): the first screen at 1440x900 is a concise
+decision overview, not a compressed audit — the state banner with a plain
+language reason and blocker/review chips, a compact scope/baseline card
+(plain baseline meaning, profile, source-evidence line, compact run
+identity), a compact grouped deterministic checklist (worst state per
+group; full per-gate detail in the labelled #gates-full section of the
+same file), a full-width per-provider change summary (source-snapshot and
+baseline-comparison populations kept in distinct columns, no invented
+zeros), a concise FX line (per pair, or one truthful N/A line), a concise
+create-only import-plan line, and the leading ranked findings line — with
+"What changed" as the next visible section. Main reading text is at least
+14 px (15 px for decision information); state, headings and the
+decision-information lines are clearly larger, and short words/provider
+names do not break mid-word at desktop widths. Every piece of detailed
+evidence (prices, routes, FX, provenance, validation, raw proposed rows,
+unchanged catalogs) remains in native expandable sections of the same
+self-contained file. Long identifiers, URLs and digests wrap without
+truncating their accessible value. Printing keeps state borders and
+textual labels (colour is not relied on), wraps rather than clips long
+values, and prints opened (expanded) sections in full. Source trust labels
+are derived (OFFICIAL / REVIEW / BLOCKED from provider/method/host/evidence
+rules), never caller-declared "authoritative" labels (180-b, R3).
 """
 
 from __future__ import annotations
@@ -116,57 +124,67 @@ _FINDING_LABELS = {
     "fx_baseline_ambiguous": "ambiguous FX baseline rows",
     "fx_row_invalid": "invalid FX row",
     "fx_provenance_invalid_reference": "FX source reference invalid",
+    "gate:import.routes": "route import plan blocked",
+    "gate:import.pricing": "pricing import plan blocked",
+    "gate:import.fx": "FX import plan blocked",
+    "gate:completeness": "required data incomplete",
+    "gate:pricing.complete": "pricing completeness failed",
 }
 
 _CSS = """
 :root { color-scheme: light; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 10px 16px; color: #1a202c; background: #ffffff; line-height: 1.35; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 12px 16px; color: #1a202c; background: #ffffff; line-height: 1.4; font-size: 15px; }
 main { max-width: 1160px; margin: 0 auto; }
-h1 { font-size: 1.15rem; margin: 0 0 1px; }
-h2 { font-size: 0.95rem; margin: 0 0 3px; }
-h3 { font-size: 0.82rem; margin: 4px 0 2px; }
-p.sub { color: #4a5568; margin: 0 0 5px; font-size: 0.78rem; }
-.banner-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin: 4px 0; }
-.state { font-size: 0.95rem; font-weight: 600; padding: 5px 10px; border-radius: 6px; border: 1px solid; margin: 0; flex: 1 1 340px; }
+h1 { font-size: 24px; margin: 0 0 2px; line-height: 1.25; }
+h2 { font-size: 17px; margin: 0 0 4px; line-height: 1.3; }
+h3 { font-size: 15px; margin: 5px 0 2px; }
+p { margin: 4px 0; }
+p.sub { color: #4a5568; margin: 0 0 6px; font-size: 14px; }
+.banner-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin: 6px 0; }
+.state { font-size: 18px; font-weight: 600; padding: 6px 12px; border-radius: 6px; border: 1px solid; margin: 0; flex: 1 1 360px; line-height: 1.35; }
 .state-ready { background: #f0fff4; border-color: #2f855a; color: #22543d; }
 .state-review { background: #fffaf0; border-color: #b7791f; color: #744210; }
 .state-blocked { background: #fff5f5; border-color: #c53030; color: #742a2a; }
 .chips { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px 6px; justify-content: center; align-items: center; }
-.chip { display: inline-block; border: 1px solid #cbd5e0; border-radius: 999px; padding: 0 8px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; background: #f7fafc; }
+.chip { display: inline-block; border: 1px solid #cbd5e0; border-radius: 999px; padding: 1px 9px; font-size: 14px; font-weight: 600; white-space: nowrap; background: #f7fafc; }
 .chip-blocker { border-color: #c53030; color: #742a2a; background: #fff5f5; }
 .chip-review { border-color: #b7791f; color: #744210; background: #fffaf0; }
 .chip-verified { border-color: #2f855a; color: #22543d; background: #f0fff4; }
 .chip-na { border-color: #cbd5e0; color: #718096; background: #ffffff; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 6px 0; }
-.card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 5px 10px 6px; min-width: 0; }
-.card h2 { border-bottom: 1px solid #edf2f7; padding-bottom: 2px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 0; }
+.card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; min-width: 0; }
+.card h2 { border-bottom: 1px solid #edf2f7; padding-bottom: 3px; }
 .card + .card { margin-top: 10px; }
 .grid-2 .card + .card { margin-top: 0; }
-dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0 10px; margin: 2px 0 0; font-size: 0.78rem; }
+dl.kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 10px; margin: 3px 0 0; font-size: 15px; }
 dl.kv dt { font-weight: 600; color: #2d3748; }
 dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .gate-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
-.gate-group-label { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #718096; margin: 5px 0 1px; }
-.gate-grid { display: grid; grid-template-columns: 1fr; gap: 0; font-size: 0.78rem; }
-.gate-line { margin: 1px 0; overflow-wrap: anywhere; }
-.gate-line .muted { font-size: 0.78rem; }
-table { border-collapse: collapse; width: 100%; margin: 3px 0 6px; font-size: 0.78rem; }
-th, td { border: 1px solid #cbd5e0; padding: 2px 5px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
-th { background: #f7fafc; }
+.gate-group-label { font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #718096; margin: 6px 0 2px; }
+.gate-grid { display: grid; grid-template-columns: 1fr; gap: 0; font-size: 14px; }
+.gate-line { margin: 2px 0; overflow-wrap: anywhere; }
+.gate-line .muted { font-size: 14px; }
+.line { font-size: 15px; margin: 4px 0; }
+.annot { color: #4a5568; font-size: 12.5px; margin: 3px 0; overflow-wrap: anywhere; }
+.checkline { font-size: 15px; margin: 3px 0; overflow-wrap: anywhere; }
+.checkline .group { font-weight: 600; }
+table { border-collapse: collapse; width: 100%; margin: 4px 0 8px; font-size: 14px; }
+th, td { border: 1px solid #cbd5e0; padding: 3px 6px; text-align: left; vertical-align: top; }
+th { background: #f7fafc; overflow-wrap: normal; }
+td { overflow-wrap: anywhere; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.wrap { word-break: break-all; }
-.plan-blocked { background: #fff5f5; border: 1px solid #c53030; color: #742a2a; border-radius: 6px; padding: 5px 9px; font-weight: 600; margin: 4px 0; font-size: 0.8rem; }
-.plan-ok { background: #f0fff4; border: 1px solid #2f855a; color: #22543d; border-radius: 6px; padding: 5px 9px; margin: 4px 0; font-size: 0.8rem; }
-ul.plan-list { margin: 3px 0 0; padding-left: 18px; font-size: 0.8rem; }
-.findings-link { font-size: 0.78rem; margin: 2px 0 0; }
-.runline { color: #4a5568; font-size: 0.78rem; margin: 4px 0 0; overflow-wrap: anywhere; }
-.runline code { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 0 4px; }
-.countsline { font-size: 0.78rem; color: #2d3748; margin: 4px 0 3px; }
-.pp-footnote { font-size: 0.74rem; }
-.kvchip { display: inline-block; border: 1px solid #e2e8f0; background: #f7fafc; border-radius: 4px; padding: 0 6px; margin: 1px 2px 1px 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
-details { margin: 7px 0; border: 1px solid #e2e8f0; border-radius: 6px; padding: 5px 9px; }
-summary { cursor: pointer; font-weight: 600; font-size: 0.86rem; }
-code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
+.wrap { overflow-wrap: anywhere; }
+.table-scroll { overflow-x: auto; margin: 4px 0 8px; }
+.table-scroll table { margin: 0; }
+.plan-blocked { background: #fff5f5; border: 1px solid #c53030; color: #742a2a; border-radius: 6px; padding: 6px 10px; font-weight: 600; margin: 4px 0; font-size: 15px; }
+.plan-ok { background: #f0fff4; border: 1px solid #2f855a; color: #22543d; border-radius: 6px; padding: 6px 10px; margin: 4px 0; font-size: 15px; }
+ul.plan-list { margin: 4px 0 0; padding-left: 18px; font-size: 15px; }
+.findings-link { font-size: 14px; margin: 3px 0 0; }
+.kvchip { display: inline-block; border: 1px solid #e2e8f0; background: #f7fafc; border-radius: 4px; padding: 0 5px; margin: 1px 1px 1px 0; white-space: nowrap; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.countsline { font-size: 14px; color: #2d3748; margin: 4px 0 4px; }
+details { margin: 8px 0; border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 10px; }
+summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13.5px; }
 pre { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
 .muted { color: #718096; }
 .ev-verified { color: #22543d; font-weight: 600; }
@@ -177,19 +195,21 @@ pre { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 6px; paddin
 .sev-REVIEW { color: #744210; font-weight: 600; }
 .sev-INFO { color: #2d3748; }
 a { color: #2b6cb0; overflow-wrap: anywhere; }
-.src-card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 6px 10px; margin: 6px 0; }
-.src-card h3 { margin: 2px 0 4px; }
-footer { margin-top: 20px; color: #718096; font-size: 0.78rem; border-top: 1px solid #e2e8f0; padding-top: 8px; overflow-wrap: anywhere; }
+.src-card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.src-card h3 { margin: 3px 0 4px; }
+footer { margin-top: 20px; color: #718096; font-size: 12.5px; border-top: 1px solid #e2e8f0; padding-top: 8px; overflow-wrap: anywhere; }
 @media (max-width: 900px) {
   .grid-2 { display: block; }
-  .grid-2 .card { margin-bottom: 8px; }
+  .grid-2 .card { margin-bottom: 10px; }
   .grid-2 .card + .card { margin-top: 0; }
   .gate-columns { display: block; }
   .gate-grid { display: block; }
 }
 @media print {
-  body { padding: 0; font-size: 10.5px; }
+  body { padding: 0; font-size: 11px; line-height: 1.3; }
   main { max-width: none; }
+  .table-scroll { overflow: visible; }
+  .table-scroll table { width: auto; }
   .grid-2 { display: block; }
   .grid-2 .card { margin: 6px 0 10px; }
   .card, details, .src-card { border-color: #000; }
@@ -197,12 +217,12 @@ footer { margin-top: 20px; color: #718096; font-size: 0.78rem; border-top: 1px s
   .sev-BLOCKER, .ev-blocked { text-decoration: underline; }
   .sev-REVIEW, .ev-review { text-decoration: underline dotted; }
   .muted { color: #222222; }
-  table { font-size: 9.5px; margin: 4px 0 8px; }
+  table { font-size: 10px; margin: 4px 0 8px; }
   th, td { padding: 2px 4px; }
   tr { page-break-inside: avoid; }
   h1, h2, h3 { page-break-after: avoid; }
   a { color: #000000; }
-  pre { font-size: 9px; }
+  pre { font-size: 9.5px; }
 }
 """
 
@@ -433,156 +453,267 @@ def _render_gate_checklist(gates: list[dict[str, Any]]) -> list[str]:
     return parts
 
 
+def _plain_reason_html(report: dict[str, Any], blockers: list[dict[str, Any]]) -> str:
+    """Concise plain-language banner reason (already-safe HTML).
+
+    BLOCKED states lead with the human labels of the first blocking codes
+    (exact codes stay in the findings); other states reuse the exact
+    state_reason.
+    """
+    if report["state"] != "BLOCKED":
+        return esc(report["state_reason"])
+    codes = sorted({w["code"] for w in blockers})
+    labels = "; ".join(_finding_label(c) for c in codes[:3])
+    text = f"{len(blockers)} blocking issue(s): {labels}"
+    if len(codes) > 3:
+        text += f" (+{len(codes) - 3} more codes in the findings)"
+    return text
+
+
 def _render_scope_card(bundle: RefreshBundle, report: dict[str, Any]) -> str:
     counts = report.get("counts", {})
-    warnings = report.get("warnings", [])
-    blockers = [warning for warning in warnings if warning["severity"] == "BLOCKER"]
-    reviews = [warning for warning in warnings if warning["severity"] == "REVIEW"]
     baseline = report.get("baseline", {})
     sql_checks = report.get("sql_checks", {})
-    blocker_codes = sorted({warning["code"] for warning in blockers})
-    review_codes = sorted({warning["code"] for warning in reviews})
     model_filter = ", ".join(esc(m) for m in bundle.selection.model_include) or "all models of selected providers"
-    providers = ", ".join(esc(p) for p in bundle.selection.providers)
+    providers = ", ".join(esc(p) for p in bundle.selection.providers) or "—"
+    profile = bundle.profile
+    profile_text = f"{esc(profile.name)} — {esc(profile.endpoint)}"
+    if profile.supports_streaming:
+        profile_text += " (streaming)"
+    if profile.local_models_visible:
+        profile_text += " (local models visible)"
+    if baseline.get("mode") == "first_install":
+        baseline_text = "First install — explicitly empty; no database was read"
+    elif sql_checks.get("sql_executed_during_review"):
+        baseline_text = "Live export performed by this review (SQL ran during the review)"
+    elif baseline.get("exported_at"):
+        baseline_text = (
+            f"Supplied export of {esc(baseline.get('exported_at'))} — "
+            "not checked against a live database"
+        )
+    else:
+        baseline_text = "Supplied export — not checked against a live database"
+    revision = bundle.revision
     return (
         "<section class='card' id='scope-baseline'>"
-        "<h2>Decision — scope &amp; baseline</h2>"
+        "<h2>Scope &amp; baseline</h2>"
         "<dl class='kv'>"
-        f"<dt>Why this state</dt><dd>{esc(report['state_reason'])}</dd>"
-        f"<dt>Blockers</dt><dd>{len(blockers)} finding(s)"
-        + (f" — codes: {esc(', '.join(blocker_codes))}" if blocker_codes else "")
-        + "</dd>"
-        f"<dt>Review findings</dt><dd>{len(reviews)} finding(s)"
-        + (f" — codes: {esc(', '.join(review_codes))}" if review_codes else "")
-        + "</dd>"
-        f"<dt>Selected scope</dt><dd>providers: {providers}; models: <span class='wrap'>{model_filter}</span>"
-        f" (selected {esc(counts.get('selected', 0))}, considered {esc(counts.get('considered', 0))},"
-        f" out-of-scope facts {esc(counts.get('out_of_scope_facts', 0))})</dd>"
-        f"<dt>Baseline</dt><dd>{esc(baseline.get('mode'))}"
-        + (f" — exported {esc(baseline.get('exported_at'))}" if baseline.get("exported_at") else " — FIRST INSTALL (explicitly empty, no database read)")
-        + (f" — target {esc(baseline.get('target'))}" if baseline.get("target") else "")
-        + "</dd>"
-        f"<dt>Baseline SQL evidence</dt><dd>{esc(sql_checks.get('note', ''))}</dd>"
-        f"<dt>Live research</dt><dd>{esc(report.get('research', {}).get('status'))} — live source retrieval is unavailable in this version; only supplied offline evidence is assessed</dd>"
+        f"<dt>Scope</dt><dd>providers: {providers} · models: <span class='wrap'>{model_filter}</span>"
+        f" ({esc(counts.get('considered', 0))} considered, {esc(counts.get('selected', 0))} selected)</dd>"
+        f"<dt>Profile</dt><dd>{profile_text}</dd>"
+        f"<dt>Baseline</dt><dd>{baseline_text}</dd>"
         f"<dt>Source evidence</dt><dd>{_source_evidence_line(report)}</dd>"
         "</dl>"
+        f"<p class='annot' id='run-identity-compact'>Run <code class='wrap'>{esc(report.get('run_id'))}</code> · generated at "
+        f"{esc(report.get('generated_at'))} · revision {esc(revision.slaif_revision)} (schema {esc(revision.schema_version)}, "
+        f"renderer {esc(revision.renderer_version)}, policy v{esc(report.get('policy_version'))}) · "
+        "<a href='#run-identity'>full identity</a></p>"
         "</section>"
     )
 
 
-def _render_per_provider_card(per_provider: dict[str, dict[str, int]], inventory: dict[str, dict[str, Any]]) -> str:
-    parts: list[str] = ["<h2>Per-provider summary</h2>"]
-    if inventory:
-        parts.append("<h3>Source snapshots (offline replay of supplied documents)</h3>")
+def _render_checks_compact(gates: list[dict[str, Any]]) -> list[str]:
+    """Compact grouped checklist: worst state per group, no per-gate detail.
+
+    The full per-gate technical rendering lives in the #gates-full
+    expandable section of the same artifact (no gate is ever hidden).
+    """
+    by_name = {gate["name"]: gate for gate in gates}
+    parts: list[str] = []
+    for label, names in _GATE_GROUPS:
+        members = [by_name[name] for name in names if name in by_name]
+        if not members:
+            continue
+        worst_rank = max(_EVIDENCE_RANK.get(m["evidence"], 0) for m in members)
+        worst_state = next(state for state, rank in _EVIDENCE_RANK.items() if rank == worst_rank)
+        ok = sum(1 for m in members if m["evidence"] in ("VERIFIED", "N/A"))
         parts.append(
-            "<table><thead><tr><th>Provider</th><th>models in snapshot</th><th>selected</th>"
-            "<th>retained local</th><th>excluded</th><th>unexplained</th></tr></thead><tbody>"
+            "<div class='checkline'>"
+            f"<span class='group'>{esc(label)}</span> "
+            f"<span class='chip {_EVIDENCE_CHIP[worst_state]}'>{esc(worst_state)}</span> "
+            f"<span class='annot'>{ok}/{len(members)} ok</span>"
+            "</div>"
         )
-        for provider in sorted(inventory):
-            values = inventory[provider]
-            parts.append(
-                f"<tr><td>{esc(provider)}</td>"
-                f"<td class='num'>{esc(values.get('evidence_models', 0))}</td>"
-                f"<td class='num'>{esc(values.get('selected_models', 0))}</td>"
-                f"<td class='num'>{esc(values.get('retained_local_models', 0))}</td>"
-                f"<td class='num'>{esc(values.get('explicitly_excluded_models', 0) + values.get('unsupported_excluded_models', 0))}</td>"
-                f"<td class='num'>{esc(values.get('unexplained_omissions', 0))}</td></tr>"
-            )
-        parts.append("</tbody></table>")
-    else:
-        parts.append("<p class='muted'>No source snapshots parsed for this run; only the baseline comparison below applies.</p>")
-    if per_provider:
-        parts.append("<h3>Baseline comparison (this run)</h3>")
+    grouped_names = {name for _, names in _GATE_GROUPS for name in names}
+    leftovers = [gate for gate in gates if gate["name"] not in grouped_names]
+    if leftovers:
+        worst_rank = max(_EVIDENCE_RANK.get(g["evidence"], 0) for g in leftovers)
+        worst_state = next(state for state, rank in _EVIDENCE_RANK.items() if rank == worst_rank)
+        bits = ", ".join(f"{esc(g['name'])} {esc(g['evidence'])}" for g in leftovers)
         parts.append(
-            "<table><thead><tr><th>Provider</th><th>new</th><th>changed</th><th>unchanged</th><th>excluded</th>"
-            "<th>blocked</th><th>disappeared</th><th>deprecated</th><th>not fetched</th></tr></thead><tbody>"
+            "<div class='checkline'>"
+            f"<span class='group'>Other gates</span> "
+            f"<span class='chip {_EVIDENCE_CHIP[worst_state]}'>{esc(worst_state)}</span> "
+            f"<span class='annot'>{bits}</span>"
+            "</div>"
         )
-        for provider in sorted(per_provider):
-            values = per_provider[provider]
-            parts.append(
-                f"<tr><td>{esc(provider)}</td>"
-                + "".join(f"<td class='num'>{esc(values.get(key, 0))}</td>" for key in _BASE_KEYS)
-                + "</tr>"
-            )
-        parts.append("</tbody></table>")
     parts.append(
-        "<p class='muted pp-footnote'>Different populations, not additive: source snapshots = supplied "
-        "documents replayed offline; baseline comparison = rows in effect at review time. No count is "
-        "invented for a source that did not parse.</p>"
+        "<p class='annot'><a href='#gates-full'>Full per-gate checklist with technical detail →</a></p>"
     )
-    return "<section class='card' id='per-provider'>" + "".join(parts) + "</section>"
+    return parts
 
 
-def _render_fx_card(report: dict[str, Any]) -> str:
+def _render_providers_summary(
+    per_provider: dict[str, dict[str, int]],
+    inventory: dict[str, dict[str, Any]],
+    counts: dict[str, Any],
+    providers: list[str],
+) -> str:
+    """Full-width readable change summary.
+
+    Baseline-comparison and source-snapshot populations stay in distinct
+    columns (never additive); no count is invented for a source that did
+    not parse.
+    """
+    has_inventory = bool(inventory)
+    header = (
+        "<th>Provider</th><th class='num'>New</th><th class='num'>Changed</th>"
+        "<th class='num'>Mutations</th><th class='num'>Unchanged</th><th class='num'>Excluded</th>"
+        "<th class='num'>Blocked</th><th class='num'>Disappeared</th><th class='num'>Deprecated</th>"
+        "<th class='num'>Not fetched</th>"
+    )
+    if has_inventory:
+        header += "<th class='num'>In snapshot</th><th class='num'>Selected in snapshot</th>"
+    rows: list[str] = []
+    known = sorted(set(per_provider) | set(inventory) | set(providers))
+    for provider in known:
+        values = per_provider.get(provider, {})
+        snap = inventory.get(provider, {})
+        row = f"<tr><td>{esc(provider)}</td>"
+        for key in ("new", "changed", "mutations", "unchanged", "excluded", "blocked", "disappeared", "deprecated", "not_fetched"):
+            row += f"<td class='num'>{esc(values.get(key, 0))}</td>"
+        if has_inventory:
+            row += f"<td class='num'>{esc(snap.get('evidence_models', 0))}</td>"
+            row += f"<td class='num'>{esc(snap.get('selected_models', 0))}</td>"
+        rows.append(row + "</tr>")
+    if rows:
+        table = (
+            "<div class='table-scroll'><table><thead><tr>" + header + "</tr></thead><tbody>"
+            + "".join(rows)
+            + "</tbody></table></div>"
+        )
+    else:
+        table = "<p class='annot'>No proposed rows in this run.</p>"
+    if has_inventory:
+        honest = ""
+    else:
+        honest = (
+            "<p class='annot'>No source snapshots parsed in this run — the source-inventory columns are "
+            "not shown and no count is invented.</p>"
+        )
+    provider_list = ", ".join(esc(p) for p in known) or "—"
+    parts: list[str] = [
+        "<section class='card' id='per-provider'>",
+        "<h2>Providers &amp; changes</h2>",
+        f"<p class='line'><strong>Summary:</strong> {esc(counts.get('considered', 0))} considered · "
+        f"{esc(counts.get('selected', 0))} selected · {esc(counts.get('ready', 0))} ready "
+        "(all deterministic gates passed) — providers: "
+        f"{provider_list}</p>",
+        table,
+        honest,
+        "<p class='annot'>Populations are not additive: the change columns compare the proposed bundle "
+        "against the local baseline in effect at review time, while the snapshot columns replay the "
+        "supplied source documents offline. 'Mutations' are existing-row updates excluded from the "
+        "executable artifact (no apply operation exists in this version).</p>",
+        "<p class='countsline'><strong>Counts (recomputed):</strong> "
+        + " ".join(
+            f"<span class='kvchip'>{esc(key.replace('_', ' '))} {esc(counts.get(key, 0))}</span>"
+            for key in _COUNT_KEYS
+        )
+        + "</p>",
+        "</section>",
+    ]
+    return "".join(parts)
+
+
+def _render_fx_line(report: dict[str, Any]) -> str:
     comparisons = report.get("fx_comparisons", [])
-    parts: list[str] = ["<h2>FX (current vs proposed, native → EUR)</h2>"]
     if comparisons:
-        parts.append("<table><thead><tr><th>Pair</th><th>Current rate</th><th>Proposed rate</th><th>Δ</th><th>State</th><th>Publication</th><th>Source</th></tr></thead><tbody>")
+        parts: list[str] = ["<div id='fx-line'>"]
         for row in comparisons:
             current = _fmt_decimal(row.get("current_rate"))
             if row.get("current_derived"):
-                current += " <span class='muted'>(derived reciprocal)</span>"
+                current += " <span class='annot'>(derived reciprocal)</span>"
             proposed = _fmt_decimal(row.get("proposed_rate"))
             if row.get("derived"):
-                proposed += f" <span class='muted'>(reciprocal of supplied {esc(row.get('source_pair'))})</span>"
+                proposed += f" <span class='annot'>(reciprocal of supplied {esc(row.get('source_pair'))})</span>"
             parts.append(
-                f"<tr><td>{esc(row.get('pair'))}</td>"
-                f"<td class='num'>{current}</td>"
-                f"<td class='num'>{proposed}</td>"
-                f"<td class='num'>{_signed_percent(row.get('delta_pct'))}</td>"
-                f"<td>{esc(row.get('state'))}</td>"
-                f"<td>{_cell(row.get('published_at'))}</td>"
-                f"<td>{_link(row.get('source') or '')}</td></tr>"
+                "<p class='line'><strong>FX (native → EUR):</strong> "
+                f"{esc(row.get('pair'))}: current {current} → proposed {proposed} "
+                f"({_signed_percent(row.get('delta_pct'))}) · {esc(row.get('state'))} · published "
+                f"{_cell(row.get('published_at'))} · source {_link(row.get('source') or '')}</p>"
             )
-        parts.append("</tbody></table>")
-        parts.append("<p class='muted'>Current rates are the baseline (local runtime) rows; proposed rates come from the bundle. A 'derived reciprocal' is the reviewed inversion of the supplied quote, not an independent observation.</p>")
+        parts.append(
+            "<p class='annot'>Current rates are the local baseline (runtime) rows; proposed rates come "
+            "from the bundle. A 'derived reciprocal' is the reviewed inversion of the supplied quote, "
+            "not an independent observation.</p>"
+        )
+        parts.append("</div>")
+        return "".join(parts)
+    fx_gate = next((g for g in report.get("gates", []) if g["name"] == "import.fx"), None)
+    if fx_gate is not None and fx_gate.get("detail"):
+        note = esc(fx_gate["detail"]) + (" (not an error)." if fx_gate["evidence"] == "N/A" else "")
     else:
-        fx_gate = next((g for g in report.get("gates", []) if g["name"] == "import.fx"), None)
-        if fx_gate is not None:
-            parts.append(
-                f"<p class='muted'>{esc(fx_gate['detail'])}"
-                + (" (not an error)." if fx_gate["evidence"] == "N/A" else "")
-                + "</p>"
-            )
-        else:
-            parts.append("<p class='muted'>FX not required (all selected prices are EUR; shown as N/A, not an error).</p>")
-    return "<section class='card' id='fx'>" + "".join(parts) + "</section>"
+        note = "not required — all selected prices are EUR (not an error)."
+    return f"<p class='line' id='fx-line'>FX: {note}</p>"
 
 
-def _render_findings_card(warnings: list[dict[str, Any]]) -> str:
-    parts: list[str] = ["<h2>Important findings (aggregated)</h2>"]
+def _plan_totals(report: dict[str, Any]) -> tuple[int, int, int]:
+    gates = report.get("import_gates", [])
+    ready = sum(g.get("plan_ready_rows", 0) for g in gates)
+    blocked_rows = sum(g.get("excluded_mutations", 0) + g.get("plan_blocked_rows", 0) for g in gates)
+    total = sum(g.get("total_rows", 0) for g in gates)
+    return ready, blocked_rows, total
+
+
+def _render_plan_line(report: dict[str, Any]) -> str:
+    ready, blocked_rows, total = _plan_totals(report)
+    if blocked_rows:
+        return (
+            "<p class='line' id='plan-line'><strong class='ev-blocked'>Import plan BLOCKED</strong> — "
+            f"{esc(ready)} create row(s) executable; {esc(blocked_rows)} existing-row update(s) have no "
+            "apply operation in this version. <a href='#plan-details'>plan detail →</a></p>"
+        )
+    if total == 0:
+        return (
+            "<p class='line' id='plan-line'>Import plan: nothing to create (NO CHANGES). "
+            "<a href='#plan-details'>plan detail →</a></p>"
+        )
+    return (
+        "<p class='line' id='plan-line'>Import plan: create-only — "
+        f"{esc(ready)} executable create row(s); existing-row updates/supersessions are not apply "
+        "operations in this version. <a href='#plan-details'>plan detail →</a></p>"
+    )
+
+
+def _render_findings_line(warnings: list[dict[str, Any]]) -> str:
     if not warnings:
-        parts.append("<p class='muted'>No blockers and no review findings.</p>")
-        return "<section class='card' id='findings-top'>" + "".join(parts) + "</section>"
-    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+        return "<div class='line' id='findings-line'>No blockers, no review findings.</div>"
+    grouped: dict[tuple[str, str], int] = {}
     for warning in warnings:
         key = (warning["severity"], warning["code"])
-        entry = grouped.setdefault(key, {"count": 0, "details": []})
-        entry["count"] += 1
-        if len(entry["details"]) < 3:
-            entry["details"].append(f"{warning.get('provider') or ''}/{warning.get('model') or ''}: {warning['detail']}".strip(": "))
-    ordered = sorted(grouped.items(), key=lambda item: (item[0][0] != "BLOCKER", item[0][1], item[1]["count"] * -1))
-    shown = ordered[:3]
-    parts.append("<table><thead><tr><th>Severity</th><th>Code</th><th>Count</th><th>First example in group</th></tr></thead><tbody>")
-    for (severity, code), entry in shown:
-        parts.append(
-            f"<tr><td class='sev-{esc(severity)}'>{esc(severity)}</td>"
-            f"<td>{_finding_label(code)}</td>"
-            f"<td class='num'>{esc(entry['count'])}</td>"
-            f"<td>{esc(entry['details'][0]) if entry['details'] else '—'}</td></tr>"
+        grouped[key] = grouped.get(key, 0) + 1
+    ordered = sorted(
+        grouped.items(), key=lambda item: (item[0][0] != "BLOCKER", item[0][1], item[1] * -1)
+    )
+    lines: list[str] = ["<div id='findings-line'>"]
+    for (severity, code), count in ordered[:3]:
+        lines.append(
+            f"<p class='line'><span class='sev-{esc(severity)}'>{esc(severity)}</span> × {esc(count)} — "
+            f"{_finding_label(code)}</p>"
         )
-    parts.append("</tbody></table>")
-    if len(ordered) > 3:
-        parts.append(
-            f"<p class='findings-link'>Showing the top {len(shown)} of {len(ordered)} finding groups, ranked by severity — "
-            f"<a href='#all-findings'>all {len(warnings)} findings with per-item detail</a>.</p>"
-        )
-    else:
-        parts.append(f"<p class='findings-link'><a href='#all-findings'>All {len(warnings)} findings with per-item detail</a>.</p>")
-    return "<section class='card' id='findings-top'>" + "".join(parts) + "</section>"
+    lines.append(
+        f"<p class='findings-link'><a href='#all-findings'>all {len(warnings)} findings with per-item detail →</a></p>"
+    )
+    lines.append("</div>")
+    return "".join(lines)
 
 
 def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[str]:
+    """Concise decision overview: banner, scope/baseline, compact checklist,
+    full-width provider change summary, FX/plan/findings lines. The detailed
+    plan, gate and findings evidence lives in labelled expandable sections
+    of the same artifact (#plan-details, #gates-full, #all-findings)."""
     state = report["state"]
     counts = report.get("counts", {})
     warnings = report.get("warnings", [])
@@ -590,10 +721,11 @@ def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[
     reviews = [warning for warning in warnings if warning["severity"] == "REVIEW"]
     per_provider = report.get("per_provider", {})
     inventory = (report.get("source_evidence", {}) or {}).get("inventory", {}) or {}
+    providers = list(dict.fromkeys(bundle.selection.providers))
 
     parts: list[str] = [
         "<div class='banner-row'>",
-        f"<p class='state {_STATE_CLASS[state]}'><strong>{esc(state)}</strong> — {esc(report['state_reason'])}</p>",
+        f"<p class='state {_STATE_CLASS[state]}'><strong>{esc(state)}</strong> — {_plain_reason_html(report, blockers)}</p>",
         "<div class='chips'>",
         f"<span class='chip {'chip-blocker' if blockers else ''}'>BLOCKERS {len(blockers)}</span>",
         f"<span class='chip {'chip-review' if reviews else ''}'>REVIEW findings {len(reviews)}</span>",
@@ -602,59 +734,23 @@ def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[
         "</div>",
         "<div class='grid-2'>",
         _render_scope_card(bundle, report),
-        "<section class='card' id='checks'><h2>Gate checklist — deterministic</h2>"
-        + "".join(_render_gate_checklist(report.get("gates", [])))
+        "<section class='card' id='checks'><h2>Deterministic checks</h2>"
+        + "".join(_render_checks_compact(report.get("gates", [])))
         + "</section>",
-        _render_per_provider_card(per_provider, inventory),
-        _render_fx_card(report),
         "</div>",
+        _render_providers_summary(per_provider, inventory, counts, providers),
+        _render_fx_line(report),
+        _render_plan_line(report),
+        _render_findings_line(warnings),
     ]
-
-    # Compact run identity and recomputed counts close the dashboard, so the
-    # decision facts (state, scope/baseline, checklist, reconciliation, FX,
-    # identity) share one viewport at 1440x900.
-    parts.append(
-        f"<p class='runline' id='run-identity-compact'>Run <code class='wrap'>{esc(report.get('run_id'))}</code> · generated at "
-        f"{esc(report.get('generated_at'))} (run time) · revision {esc(bundle.revision.slaif_revision)} "
-        f"(schema {esc(bundle.revision.schema_version)}, renderer {esc(bundle.revision.renderer_version)}, "
-        f"policy v{esc(report.get('policy_version'))}) · profile {esc(bundle.profile.name)} {esc(bundle.profile.endpoint)} · "
-        "<a href='#run-identity'>full identity</a></p>"
-    )
-    parts.append(
-        "<p class='countsline'><strong>Counts (recomputed):</strong> "
-        + " ".join(f"<span class='kvchip'>{esc(key.replace('_', ' '))} {esc(counts.get(key, 0))}</span>" for key in _COUNT_KEYS)
-        + "</p>"
-    )
-    parts.append(_render_findings_card(warnings))
-
-    # Create-only execution plan (visually impossible to mistake for READY when blocked).
-    plan_lines, plan_blocked = _plan_lines(report)
-    if plan_lines:
-        parts.append("<section class='card' id='plan'><h2>Execution plan (create-only)</h2>")
-        if plan_blocked or state == "BLOCKED":
-            parts.append(
-                "<p class='plan-blocked'>At least one execution plan is BLOCKED: existing-row updates/supersessions "
-                "are not apply operations in this version. Only create rows enter the executable artifacts.</p>"
-            )
-        elif state == "READY":
-            parts.append("<p class='plan-ok'>All executable plans are create-only and pass their import gates.</p>")
-        else:
-            parts.append(
-                "<p class='plan-ok'>All executable plans are create-only and pass their import gates; the "
-                "READY_WITH_WARNINGS state comes from the review findings listed above, not from the plan.</p>"
-            )
-        parts.append("<ul class='plan-list'>" + "".join(plan_lines) + "</ul>")
-        parts.append("</section>")
     return parts
-
-
 def _render_changes(bundle: RefreshBundle, report: dict[str, Any], source_index: dict[str, dict[str, Any]]) -> list[str]:
-    parts: list[str] = ["<h2>What changed</h2>"]
+    parts: list[str] = ["<section id='changes'>", "<h2>What changed</h2>"]
     comparisons = report.get("price_comparisons", [])
     changed_comparisons = [row for row in comparisons if row["state"] not in ("UNCHANGED",)]
     if changed_comparisons:
         parts.append("<h3>Price changes (old → new, with unit and currency; source timestamps are never counted as price changes)</h3>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Dimension</th><th>Old</th><th>Old currency</th><th>New</th><th>New currency</th><th>Δ (signed)</th><th>State</th></tr></thead><tbody>")
+        parts.append("<div class='table-scroll'><table><thead><tr><th>Provider</th><th>Model</th><th>Dimension</th><th>Old</th><th>Old currency</th><th>New</th><th>New currency</th><th>Δ (signed)</th><th>State</th></tr></thead><tbody>")
         for row in changed_comparisons:
             parts.append(
                 f"<tr><td>{esc(row['provider'])}</td><td class='wrap'>{esc(row['model'])}</td><td>{esc(row['dimension'])}</td>"
@@ -663,7 +759,7 @@ def _render_changes(bundle: RefreshBundle, report: dict[str, Any], source_index:
                 f"<td class='num'>{_signed_percent(row['percent_change'])}</td>"
                 f"<td>{esc(row['state'])}</td></tr>"
             )
-        parts.append("</tbody></table>")
+        parts.append("</tbody></table></div>")
         parts.append(
             "<p class='muted'>Displayed percentages are rounded to 0.001 %; the gate decision uses the exact "
             "stored ratio, so a strictly above-threshold movement can display at the threshold value.</p>"
@@ -675,7 +771,7 @@ def _render_changes(bundle: RefreshBundle, report: dict[str, Any], source_index:
     changed_models = [d for d in dispositions if d["disposition"] == "CHANGED"]
     if changed_models:
         parts.append("<h3>Route / model attribute changes (current → proposed, with reason)</h3>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Changed fields (current → proposed)</th><th>Proposed route</th><th>Reason</th></tr></thead><tbody>")
+        parts.append("<div class='table-scroll'><table><thead><tr><th>Provider</th><th>Model</th><th>Changed fields (current → proposed)</th><th>Proposed route</th><th>Reason</th></tr></thead><tbody>")
         for d in changed_models:
             route = next((r for r in bundle.routes if r.provider == d["provider"] and r.requested_model == d["model"]), None)
             proposed = (
@@ -690,7 +786,7 @@ def _render_changes(bundle: RefreshBundle, report: dict[str, Any], source_index:
             parts.append(
                 f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td><td>{proposed}</td><td>{esc(reason)}</td></tr>"
             )
-        parts.append("</tbody></table>")
+        parts.append("</tbody></table></div>")
     else:
         parts.append("<p class='muted'>No route or model attribute changes.</p>")
 
@@ -705,6 +801,7 @@ def _render_changes(bundle: RefreshBundle, report: dict[str, Any], source_index:
             "<p><strong>Unchanged: 0 model(s)</strong> — no unchanged section exists; "
             "disappearance above is an observation, not a delete.</p>"
         )
+    parts.append("</section>")
     return parts
 
 
@@ -825,16 +922,48 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     warnings = report.get("warnings", [])
     if warnings:
         parts.append(f"<details id='all-findings' open><summary>All warnings and findings ({len(warnings)})</summary>")
-        parts.append("<table><thead><tr><th>Severity</th><th>Code</th><th>Provider</th><th>Model</th><th>Detail</th></tr></thead><tbody>")
+        parts.append("<div class='table-scroll'><table><thead><tr><th>Severity</th><th>Code</th><th>Provider</th><th>Model</th><th>Detail</th></tr></thead><tbody>")
         for warning in warnings:
             parts.append(
                 f"<tr><td class='sev-{esc(warning['severity'])}'>{esc(warning['severity'])}</td>"
                 f"<td class='wrap'>{esc(warning['code'])}</td><td>{_cell(warning['provider'])}</td>"
                 f"<td class='wrap'>{_cell(warning['model'])}</td><td>{esc(warning['detail'])}</td></tr>"
             )
-        parts.append("</tbody></table></details>")
+        parts.append("</tbody></table></div></details>")
     else:
         parts.append("<details id='all-findings'><summary>All warnings and findings (0)</summary><p class='muted'>None.</p></details>")
+
+    # Import-plan detail (the first-screen plan line links here; open
+    # whenever a plan is blocked so the blocked state is never hidden).
+    plan_lines, plan_blocked = _plan_lines(report)
+    _ready, plan_totals_blocked, plan_totals_total = _plan_totals(report)
+    plan_open = plan_blocked or report["state"] == "BLOCKED"
+    plan_open_attr = " open" if plan_open else ""
+    parts.append(f"<details id='plan-details'{plan_open_attr}><summary>Import plan detail (create-only)</summary>")
+    if plan_totals_blocked:
+        parts.append(
+            "<p class='plan-blocked'>At least one execution plan is BLOCKED: existing-row updates/supersessions "
+            "are not apply operations in this version. Only create rows enter the executable artifacts.</p>"
+        )
+    elif report["state"] == "READY_WITH_WARNINGS":
+        parts.append(
+            "<p class='plan-ok'>All executable plans are create-only and pass their import gates; the "
+            "review state comes from the findings listed above, not from the plan.</p>"
+        )
+    else:
+        parts.append("<p class='plan-ok'>All executable plans are create-only and pass their import gates.</p>")
+    if plan_lines:
+        parts.append("<ul class='plan-list'>" + "".join(plan_lines) + "</ul>")
+    else:
+        parts.append("<p class='muted'>No import gates were evaluated (no proposed rows).</p>")
+    parts.append("</details>")
+
+    # Full per-gate checklist (the first-screen compact checklist links here;
+    # open on BLOCKED so the blocking gate detail is visible without hunting).
+    gates_full_open = " open" if report["state"] == "BLOCKED" else ""
+    parts.append(f"<details id='gates-full'{gates_full_open}><summary>Full per-gate checklist (technical detail)</summary>")
+    parts.extend(_render_gate_checklist(report.get("gates", [])))
+    parts.append("</details>")
 
     parts.append("<details id='validator-outputs'><summary>Full validator outputs (validation.json)</summary>")
     parts.append(f"<pre>{esc(json.dumps({k: v for k, v in report.items() if k not in ('gates',)}, sort_keys=True, indent=1, default=str))}</pre></details>")
@@ -990,7 +1119,7 @@ def _render_source_evidence_details(report: dict[str, Any]) -> list[str]:
     backed = evidence.get("backed_facts", []) or []
     parts.append(f"<h3>Proposed facts bound to parsed observations ({len(backed)})</h3>")
     if backed:
-        parts.append("<table><thead><tr><th>Provider/Model</th><th>Field</th><th>Proposed</th><th>Normalized (EUR)</th><th>Declared backing sources</th><th>Independent sources (distinct URLs)</th><th>State</th></tr></thead><tbody>")
+        parts.append("<div class='table-scroll'><table><thead><tr><th>Provider/Model</th><th>Field</th><th>Proposed</th><th>Normalized (EUR)</th><th>Declared backing sources</th><th>Independent sources (distinct URLs)</th><th>State</th></tr></thead><tbody>")
         for item in backed:
             parts.append(
                 f"<tr><td>{esc(item.get('provider'))}/<span class='wrap'>{esc(item.get('model'))}</span> (upstream <span class='wrap'>{esc(item.get('upstream_model', item.get('model')))}</span>)</td>"
@@ -1001,7 +1130,7 @@ def _render_source_evidence_details(report: dict[str, Any]) -> list[str]:
                 f"<td class='num'>{esc(item.get('independent_sources', 0))}</td>"
                 "<td><span class='ev-verified'>BOUND (deterministic parser)</span></td></tr>"
             )
-        parts.append("</tbody></table>")
+        parts.append("</tbody></table></div>")
         for item in backed:
             observations = item.get("observations", []) or []
             if not observations:

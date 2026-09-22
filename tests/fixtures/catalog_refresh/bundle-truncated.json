@@ -43,7 +43,7 @@
   },
   "revision": {
     "policy_version": 1,
-    "renderer_version": "180.5",
+    "renderer_version": "180.6",
     "schema_version": "1",
     "slaif_revision": "fixture-revision-180"
   },

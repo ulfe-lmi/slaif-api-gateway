@@ -105,27 +105,40 @@ def test_first_screen_contains_required_decision_facts() -> None:
     assert html_text.startswith("<!DOCTYPE html>")
     assert "<h1>SLAIF catalog refresh review</h1>" in html_text
     assert "fixture-first-install-001" in html_text
-    # State and why, with blocker/review counts, on the first screen.
+    # State with the plain-language reason and blocker/review counts.
     assert "<strong>READY</strong>" in html_text
-    assert "Why this state" in html_text
-    assert "Blockers" in html_text
-    assert "Review findings" in html_text
-    assert "Selected scope" in html_text
-    assert "Baseline" in html_text
-    assert "NOT_RUN" in html_text
-    # Compact scope/baseline/plan/FX/gates/counts all above the details.
-    assert "Per-provider summary" in html_text
-    assert "Execution plan (create-only)" in html_text
-    assert "FX (current vs proposed, native → EUR)" in html_text
-    assert "Gate checklist" in html_text
-    assert "Counts (recomputed)" in html_text
-    assert "What changed" in html_text
+    assert "BLOCKERS 0" in html_text
+    # Compact scope/baseline card: plain baseline meaning, profile,
+    # source evidence, and the compact run identity.
+    assert "Scope &amp; baseline" in html_text
+    assert "First install — explicitly empty; no database was read" in html_text
+    assert "run-identity-compact" in html_text
     assert "Run identity (expanded)" in html_text
+    assert "NOT_RUN" in html_text
+    # Compact grouped checklist preserving every gate group; the full
+    # per-gate technical detail is available in the same artifact.
+    assert "Deterministic checks" in html_text
+    for group in (
+        "Source evidence",
+        "Schema &amp; pricing completeness",
+        "Pairing &amp; supported capabilities",
+        "Changes &amp; reconciliation",
+        "Import plan validation",
+    ):
+        assert group in html_text
+    assert "gates-full" in html_text
+    # Full-width provider change summary with the recomputed counts.
+    assert "Providers &amp; changes" in html_text
+    assert "Counts (recomputed)" in html_text
+    # FX line (N/A — all selected prices are EUR), plan line, findings
+    # line, and the changes section as the next visible section.
+    assert "FX:" in html_text
+    assert "Import plan" in html_text
+    assert "No blockers, no review findings" in html_text
+    assert "What changed" in html_text
     # Product language: no internal objective numbers anywhere in the report.
-    import re as _re
-
-    assert not _re.search(r"objective\s+\d+", html_text, flags=_re.IGNORECASE)
-    assert "live source retrieval is unavailable in this version" in html_text
+    assert not re.search(r"objective\s+\d+", html_text, flags=re.IGNORECASE)
+    assert "live source retrieval and apply are unavailable in this version" in html_text
     _assert_no_external_or_executable_resources(html_text)
 
 
@@ -135,9 +148,18 @@ def test_first_screen_blocks_are_visually_blocked() -> None:
     html_text = render_report(bundle, report.to_dict()).decode("utf-8")
     assert "<strong>BLOCKED</strong>" in html_text
     assert "state-blocked" in html_text
-    assert "At least one execution plan is BLOCKED" in html_text
+    # The banner leads with the human labels of the blocking codes.
+    assert "blocking issue(s)" in html_text
     assert "currency_inconsistency" in html_text
     assert "missing_required_dimension" in html_text
+    # This fixture has no executable plan rows (every proposed row is
+    # blocked by data gates before plan generation): the plan line/detail
+    # state the truthful NO CHANGES rather than claiming the plan is
+    # blocked, and the blocked-state evidence sections are open.
+    assert "nothing to create (NO CHANGES)" in html_text
+    assert "At least one execution plan is BLOCKED" not in html_text
+    assert "<details id='plan-details' open>" in html_text
+    assert "<details id='gates-full' open>" in html_text
 
 
 def test_source_strings_are_escaped_and_event_attributes_cannot_inject() -> None:

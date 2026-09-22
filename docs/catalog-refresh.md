@@ -333,7 +333,23 @@ plan, aggregated top findings, recomputed counts and the compact run
 identity), the changes-first detail section, expandable inline evidence
 with full digests, long-value wrapping and the documented print behaviour —
 plus the corrected SQL-capture wording. No state, gate, count, monetary or
-capability semantics changed.)
+capability semantics changed;
+`180.6` changes presentation and test evidence only — the first screen
+becomes a concise decision overview (plain-language state reason instead
+of a code list, compact scope/baseline card with plain baseline meaning
+and profile, compact grouped checklist preserving the worst state per
+group with the full per-gate detail in a labelled expandable section of
+the same file, full-width per-provider change summary keeping the
+source-snapshot and baseline-comparison populations in distinct columns
+with no invented zeros, a per-pair FX line or one truthful N/A line, a
+concise create-only import-plan line, the leading ranked findings line,
+and "What changed" as the next visible section), main reading text at
+least 14 px (decision information 15 px), no mid-word breaks of short
+words at desktop widths, wide tables scrolling inside their own wrapper
+on narrow viewports, and browser tests that measure the real document
+width, fonts and visible expanded text while writing only to pytest-owned
+temporary output — plus the corrected mutation-namespace wording. No
+state, gate, count, monetary or capability semantics changed.)
 
 ## Baselines
 
@@ -490,60 +506,73 @@ data is escaped; evidence links are allowlisted; a restrictive CSP is added
 as defense-in-depth.
 
 The renderer is a pure function of (bundle, report): identical inputs
-reproduce identical bytes. The layout is a compact decision dashboard,
+reproduce identical bytes. The layout is a concise decision overview,
 then changes-first detail, then expandable inline evidence.
 
-**First screen (decision dashboard).** The first 1440x900 viewport shows,
+**First screen (decision overview).** The first 1440x900 viewport shows,
 without expanding details or scrolling through evidence prose:
 
 - the state banner: overall state (READY / READY_WITH_WARNINGS / BLOCKED)
-  with its concise reason, plus chips counting BLOCKERS, REVIEW findings
-  and all findings;
+  with a concise plain-language reason — for BLOCKED, the human labels of
+  the first blocking codes plus a pointer to the remaining codes in the
+  findings (the exact code list is never the primary reason) — plus chips
+  counting BLOCKERS, REVIEW findings and all findings;
 - a two-column card grid:
-  - *Decision — scope &amp; baseline*: why this state, blocker/REVIEW
-    finding counts with their codes, the selected scope (providers plus
-    model filter with selected/considered/out-of-scope counts — a compact
-    selection, not a list of every model), the baseline mode/target with
-    its honest capture note (explicit first install, supplied document, or
-    live export) and the exact SQL-evidence note, the live-research status
-    (unavailable in this version; only supplied offline evidence is
-    assessed), and a compact source-evidence line (how many proposed
-    facts are bound to parsed observations, review-only facts, inventory);
-  - *Gate checklist — deterministic*: the deterministic gates grouped
-    into five display groups (source evidence; schema and pricing
-    completeness; pairing and supported capabilities; changes and
-    reconciliation; import-plan validation). Each group shows its worst
-    state; every individual gate keeps its own state chip, name, and
-    detail, and any ungrouped gate is listed individually — nothing is
-    hidden;
-  - *Per-provider summary*: two sub-tables that clearly separate the
-    populations — "Source snapshots (offline replay of supplied
-    documents)" (models in snapshot, selected, retained local, excluded,
-    unexplained — with an honest "no source snapshots parsed" line when no
-    source parsed) and "Baseline comparison (this run)" (new, changed,
-    unchanged, excluded, blocked, disappeared, deprecated, not fetched),
-    plus a footnote stating that the two tables are not additive and that
-    no count is invented for a source that did not parse;
-  - *FX (current vs proposed, native → EUR)*: per pair, current rate,
-    proposed rate, signed delta, state, publication date and source, with
-    derived-reciprocal markers — or a concise, truthful "not required"
-    line when no conversion is needed;
-- the **Execution plan (create-only)** card, with a conspicuous banner
-  when any plan is blocked (existing-row updates/supersessions are not
-  apply operations in this version);
-- **Important findings (aggregated)**: the top finding groups ranked by
-  severity with counts and concise human labels (exact codes retained) and
-  a link to the full list — ranked counts plus a link, not pages of codes,
-  when findings are numerous;
-- the **Counts (recomputed)** line as compact chips, and a compact run
-  identity line (run ID, generated time, SLAIF revision, schema/renderer
-  revision, policy version, profile/endpoint) linking to the expanded
-  identity section.
+  - *Scope &amp; baseline*: the selected providers plus model filter with
+    considered/selected counts (a compact selection, not a list of every
+    model), the selected profile/endpoint, the baseline in plain language
+    ("First install — explicitly empty; no database was read", "Live
+    export performed by this review (SQL ran during the review)", or
+    "Supplied export of &lt;date&gt; — not checked against a live
+    database"), a compact source-evidence line (how many proposed facts
+    are bound to parsed snapshot observations, snapshot inventory), and a
+    compact run-identity annotation (run ID, generated time,
+    SLAIF/schema/renderer/policy revisions) linking to the expanded
+    identity section;
+  - *Deterministic checks*: the deterministic gates grouped into five
+    display groups (source evidence; schema and pricing completeness;
+    pairing and supported capabilities; changes and reconciliation;
+    import-plan validation). Each group shows its worst-state chip and
+    how many members are not a concern; the full per-gate technical
+    rendering (every gate's state chip, name, and detail, any ungrouped
+    gate listed individually — nothing hidden) is in the labelled
+    "Full per-gate checklist" expandable section of the same artifact,
+    open whenever the run is BLOCKED;
+- **Providers &amp; changes**: a summary line (considered / selected /
+  ready and the provider list) and a readable full-width table — the
+  per-provider baseline comparison (new, changed, mutations, unchanged,
+  excluded, blocked, disappeared, deprecated, not fetched) plus, when
+  sources parsed, the distinct source-snapshot columns (in snapshot,
+  selected in snapshot) — with a footnote stating the populations are not
+  additive, an honest "no source snapshots parsed" line when no source
+  parsed (no count is invented), and the recomputed counts as compact
+  chips;
+- the **FX line**: per pair, current (local baseline) → proposed (bundle)
+  rates, signed delta, state, publication date and source, with
+  derived-reciprocal markers and the direct/derived distinction — or one
+  concise, truthful "not required" line when no conversion is needed;
+- the **import-plan line**: create-only with the executable row count, or
+  a conspicuous BLOCKED line when existing-row updates have no apply
+  operation in this version, linking to the "Import plan detail"
+  expandable section (open whenever a plan is blocked);
+- the leading **findings line**: the top finding groups ranked by severity
+  with concise human labels (exact codes retained) and a link to the full
+  per-item list — ranked aggregates plus a link, not pages of codes, when
+  findings are numerous.
 
-Cards collapse to one column below 900 px. Long run IDs, model filters,
-URLs and digests wrap (`word-break`) instead of forcing the page wider:
-there is no page-wide horizontal overflow at 1440, 1280, or a 375 px
-viewport; natural vertical scrolling on narrow screens is expected.
+Directly after the overview, the "What changed" heading and the first
+relevant change (the price-change table or the explicit no-change lines)
+are visible in the normal desktop case.
+
+Main reading text is at least 14 px at default zoom (15 px for decision
+information; state and headings clearly larger), and short words and
+provider names do not break mid-word at desktop widths. Long run IDs,
+model filters, URLs and digests wrap; wide tables scroll horizontally
+inside their own wrapper on narrow screens instead of forcing the page
+wider. There is no page-wide horizontal overflow at 1440, 1280, or a
+375 px viewport, collapsed or with every detail expanded; cards collapse
+to one column below 900 px and natural vertical scrolling on narrow
+screens is expected.
 
 **Changes first.** Directly after the dashboard, the "What changed"
 section leads the detail: price changes with old/new values, units,
@@ -578,7 +607,12 @@ silently dropped to make the page small.
 long values instead of clipping them, keeps table rows from splitting
 across page breaks, prints opened (expanded) sections in full, and prints
 closed sections as their summary line only. The report footer documents
-this behaviour, and the browser test captures an actual PDF to verify it.
+this behaviour. The browser test measures the real document geometry,
+fonts and visible expanded text, and captures actual print PDFs of the
+price-change and FX-required cases — but writes everything only under
+pytest-owned temporary output; the committed screenshots and print PDFs
+under `tests/fixtures/catalog_refresh/` are deliberately copied,
+inspected outputs of exactly that run (never rewritten by routine tests).
 
 The detailed evidence files (`validation.json`, TSV/JSON artifacts,
 manifest, receipt) exist for machines and audit; a human decision never
@@ -635,15 +669,17 @@ descriptor-anchored filesystem boundary:
   and loads the existing key separately; it retains no key-parent
   lifecycle, publishes nothing, and never creates, repairs, or re-signs
   anything.
-- **Mutation-namespace enforcement.** For `review` — the only catalog
-  refresh command that mutates — the run root and seal-key parent must
-  be operator-owned directories that are not writable by group or other,
-  checked by `fstat` on the held descriptor; unsafe directories are
-  refused, never chmod'ed or repaired (exit 65). Read-only `verify` does
-  not enforce writability on the run directory or the key parent (a
-  group/other-writable run directory or key parent still verifies with
-  exit 0); its safety rests on the no-follow anchoring, the single
-  captured read, and key-held authentication instead. The identity check
+- **Mutation-namespace enforcement.** Every writing catalog-refresh
+  command enforces the namespace on the directory it writes into:
+  `review` requires the run root and the seal-key parent to be
+  operator-owned directories that are not writable by group or other,
+  and `export-baseline` requires the same of the output parent; each
+  check is an `fstat` on the held descriptor, and unsafe directories are
+  refused, never chmod'ed or repaired (exit 65). Read-only `verify`
+  enforces no writability at all — a group/other-writable run directory
+  or key parent still verifies with exit 0 — and its safety rests on the
+  no-follow anchoring, the single captured read, and key-held
+  authentication instead. The identity check
   and the later name mutation (rename/rmdir) are separate operations on
   held descriptors: no single syscall atomically compares a source inode
   against a name. The race closure therefore combines descriptor anchoring

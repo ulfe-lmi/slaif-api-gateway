@@ -1,18 +1,28 @@
 """Browser file-URL layout tests for the catalog-refresh REVIEW.html.
 
-Standalone on purpose: no gateway server, PostgreSQL, Redis, TEST_DATABASE_URL,
-or provider dependency. Real pipeline documents (CLI-published sealed runs for
-first-install and blocked; in-process validate+render for the rest — the same
-pure functions the CLI uses) are opened as ``file://`` URLs in a
-JavaScript-disabled Chromium context with full request recording.
+Standalone on purpose: no gateway server, PostgreSQL, Redis,
+TEST_DATABASE_URL, or provider dependency. Real pipeline documents
+(CLI-published sealed runs for first-install and blocked; in-process
+validate+render for the rest — the same pure functions the CLI uses) are
+opened as ``file://`` URLs in a JavaScript-disabled Chromium context with
+full request recording.
 
-Geometry is measured with bounding boxes (not substring presence): the first
-1440x900 viewport must contain the decision dashboard for every canonical
-case, and no page-wide horizontal overflow is allowed at 1440, 1280, or 375
-px, collapsed or fully expanded. All document content sits inside ``main``,
-so the page's right edge is the maximum right edge of ``main`` plus its wide
-leaves (tables, nowrap chips/spans, code, pre) — that container set is what
-is scanned, JS-free.
+180-i: generated HTML, screenshots, PDFs and metrics are written ONLY
+under pytest-owned temporary output (tmp_path / tmp_path_factory); tracked
+repository files are never written by this suite, and the run must leave
+the worktree unchanged. The committed browser-screenshots/ and
+report-layout/ artifacts are deliberately copied, inspected outputs of
+exactly this renderer (a separate explicit implementation step).
+
+Geometry is measured on the real document, not only on selected container
+boxes: ``documentElement.scrollWidth`` (collapsed AND fully expanded, at
+1440, 1280 and 375) plus the first 1440x900 reading surface — state,
+concise scope/identity, grouped checklist, provider change summary, FX,
+plan line, findings line, and the "What changed" heading with its first
+content element must share one viewport. Main reading font sizes and
+single-line short labels are asserted. Visible (rendered) text — not
+hidden DOM markup — is asserted for the expanded evidence (full 64-hex
+digests, price-change values, the FX quote identity).
 
 Run:  python -m pytest tests/browser -m playwright
 """
@@ -22,6 +32,8 @@ from __future__ import annotations
 import json
 import re
 import sys
+from decimal import Decimal
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -30,23 +42,28 @@ pytestmark = pytest.mark.playwright
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURES = REPO / "tests" / "fixtures" / "catalog_refresh"
-SCREENSHOTS = FIXTURES / "browser-screenshots"
-PRINT_DIR = FIXTURES / "report-layout" / "print"
 
 # Reuse the unit-suite pipeline builders (the same code the CLI drives).
 # Qualified import (repo root on sys.path via ``python -m pytest``) avoids a
 # basename collision with this file's own pytest module name. The plain
-# path entry below is needed for that module's internal bare imports.
+# path entry below is needed for those modules' internal bare imports.
 sys.path.insert(0, str(REPO / "tests" / "unit"))
 
 from tests.unit.test_catalog_refresh_report import (  # noqa: E402
     _big_unchanged_case as _report_big_unchanged_case,
     _baseline as _unit_baseline,
-    _report_for as _unit_report_for,
 )
 from tests.unit.test_catalog_refresh_source_evidence import (  # noqa: E402
     DEFAULT_PRICES as _default_prices,
+    ecb_source_dict as _ecb_source_dict,
     set_openrouter_evidence as _set_openrouter_evidence,
+)
+from tests.unit.test_catalog_refresh_policy import (  # noqa: E402
+    GENERATED_AT as _generated_at,
+    _bundle_payload as _policy_bundle_payload,
+    _fx_facts_dict as _policy_fx_facts_dict,
+    _mini_usd_baseline as _mini_usd_baseline,
+    _usd_pricing as _usd_pricing,
 )
 
 from slaif_gateway.services.catalog_refresh.baseline import (  # noqa: E402
@@ -60,26 +77,52 @@ from slaif_gateway.services.catalog_refresh.rendering import (  # noqa: E402
     render_report,
 )
 from slaif_gateway.services.catalog_refresh.validation import (  # noqa: E402
+    OVERALL_BLOCKED,
+    OVERALL_READY,
+    OVERALL_READY_WITH_WARNINGS,
     sql_capture_for_mode,
     validate_bundle,
 )
 
 playwright_sync = pytest.importorskip("playwright.sync_api")
 
-DASHBOARD_SELECTORS = (
+# The 1440x900 decision surface: every selector below must be visible in
+# the first viewport (top >= 0, bottom <= 900) in the normal desktop case.
+FIRST_SCREEN_SELECTORS = (
     ".state",
     "#scope-baseline",
     "#checks",
     "#per-provider",
-    "#fx",
-    "#run-identity-compact",
+    "#fx-line",
+    "#plan-line",
+    "#findings-line",
+    "#changes > h2",
+    "#changes > :nth-child(2)",
 )
 
-# Elements that can widen the page. All document content sits inside <main>
-# (max-width 1160px) and every text leaf wraps (overflow-wrap / word-break),
-# except: tables (min-content can exceed their container), nowrap chips and
-# numeric cells, and pre blocks (wrapped, but scanned for safety).
-OVERFLOW_SCAN_SELECTORS = "main, table, pre, .chip, .kvchip, td.num"
+# Main reading text floors (px at default zoom).
+FONT_FLOOR = (
+    ("body", 15.0),
+    ("h1", 20.0),
+    ("h2", 16.0),
+    ("dl.kv", 14.0),
+    ("table", 13.5),
+    (".chip", 13.5),
+    (".state", 17.0),
+)
+
+# Short column headers that must stay on a single line at 1440 (a wrapped
+# short word is exactly the 180-h defect this round removes at desktop).
+SINGLE_LINE_HEADERS = (
+    "New",
+    "Changed",
+    "Mutations",
+    "Unchanged",
+    "Excluded",
+    "Blocked",
+    "Disappeared",
+    "Deprecated",
+)
 
 _CLI_EXPECTED_EXIT = {"first-install": 0, "blocked": 20}
 
@@ -102,6 +145,7 @@ def _two_provider_case() -> tuple[object, dict]:
         policy_from_document(bundle.policy),
         sql_capture=sql_capture_for_mode(bundle.baseline.mode),
     )
+    assert report.state == OVERALL_READY
     return bundle, report
 
 
@@ -118,12 +162,19 @@ def _ready_case() -> tuple[object, dict]:
         if s["model"] == "synthetic/stable-v1" or s["provider"] == "ecb"
     ]
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    return bundle, _unit_report_for(bundle, _unit_baseline())
+    report, _ = validate_bundle(
+        bundle,
+        _unit_baseline(),
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+    )
+    assert report.state == OVERALL_READY
+    return bundle, report
 
 
 def _warnings_case() -> tuple[object, dict]:
     """Aged-source READY_WITH_WARNINGS (mirrors the unit-suite case)."""
-    from datetime import UTC, datetime, timedelta
+    from datetime import UTC, datetime
 
     payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
     payload["run_id"] = "browser-warnings-001"
@@ -143,7 +194,14 @@ def _warnings_case() -> tuple[object, dict]:
     for source in payload["sources"]:
         source["retrieved_at"] = retrieved
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    return bundle, _unit_report_for(bundle, _unit_baseline())
+    report, _ = validate_bundle(
+        bundle,
+        _unit_baseline(),
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+    )
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    return bundle, report
 
 
 def _large_unchanged_case() -> tuple[object, dict]:
@@ -154,6 +212,69 @@ def _large_unchanged_case() -> tuple[object, dict]:
         policy_from_document(bundle.policy),
         sql_capture=sql_capture_for_mode(bundle.baseline.mode),
     )
+    assert report.state == OVERALL_READY
+    return bundle, report
+
+
+def _price_change_case() -> tuple[object, dict]:
+    """The full canonical refresh bundle through the unchanged validator:
+    a real price change (updated-v1 input 1 -> 1.2, +20 %), one NEW and
+    one unchanged model, and the existing-row update makes the create-only
+    import plans BLOCKED."""
+    payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
+    payload["run_id"] = "browser-price-change-001"
+    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    report, _ = validate_bundle(
+        bundle,
+        _unit_baseline(),
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+    )
+    assert report.state == OVERALL_BLOCKED
+    changed = [
+        c for c in report.price_comparisons
+        if c.state not in ("UNCHANGED", "NEW") and c.model == "synthetic/updated-v1"
+    ]
+    assert changed, "expected a real changed price comparison"
+    return bundle, report
+
+
+def _fx_required_case() -> tuple[object, dict]:
+    """USD-priced bundle with one FX fact bound to a supplied ECB quote
+    (current validator/source contracts, unchanged policy helpers); the
+    mini baseline carries the same USD->EUR pair, so the display exercises
+    a genuine FX comparison, not the all-EUR N/A line."""
+    payload = _policy_bundle_payload()
+    payload["run_id"] = "browser-fx-required-001"
+    _usd_pricing(payload)  # fixture snapshot carries exactly these USD values
+    published = _generated_at - timedelta(hours=1)
+    xml_rate = str((Decimal(1) / Decimal("1.08")).quantize(Decimal("0.000000001")))
+    payload["fx"] = [_policy_fx_facts_dict("1.08", pair="USD-EUR", published_hours_ago=1)]
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
+    payload["sources"].append(
+        _ecb_source_dict(
+            pair_model="USD-EUR",
+            date_s=published.date().isoformat(),
+            rate=xml_rate,
+            retrieved_at=published.isoformat().replace("+00:00", "Z"),
+            published_at=published.isoformat().replace("+00:00", "Z"),
+        )
+    )
+    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    baseline = _mini_usd_baseline(
+        fx=[{"base": "USD", "quote": "EUR", "rate": "1.08",
+             "valid_from": "2026-09-20T00:00:00+00:00"}]
+    )
+    report, _ = validate_bundle(
+        bundle,
+        baseline,
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+    )
+    assert report.state == OVERALL_READY
+    assert len(report.fx_comparisons) == 1
+    comparison = report.fx_comparisons[0]
+    assert comparison["state"] == "UNCHANGED"
     return bundle, report
 
 
@@ -229,22 +350,24 @@ def _open_all_details(page) -> int:
     return opened
 
 
-def _max_right_edge(page) -> float:
-    """JS-free right-edge scan of the elements that can widen the page."""
-    max_right = 0.0
-    for element in page.locator(OVERFLOW_SCAN_SELECTORS).all():
-        box = element.bounding_box()
-        if box is not None:
-            max_right = max(max_right, box["x"] + box["width"])
-    return max_right
+def _document_scroll_width(page) -> int:
+    """The real document width (what the user can scroll), not a box set."""
+    return page.evaluate("document.documentElement.scrollWidth")
+
+
+def _computed_font_px(page, selector: str) -> float:
+    return page.evaluate(
+        "(sel) => parseFloat(getComputedStyle(document.querySelector(sel)).fontSize)",
+        selector,
+    )
 
 
 def _check_case(
     playwright,
     case: str,
     html_path: Path,
-    has_sources: bool,
-    take_screenshot: bool,
+    expected: dict,
+    out_dir: Path,
     metrics: dict,
 ) -> None:
     requests: list[str] = []
@@ -272,9 +395,12 @@ def _check_case(
 
         case_metrics: dict = {"case": case, "requests": len(requests)}
 
-        # 1440x900: the decision dashboard is inside the first viewport.
-        boxes = {}
-        for selector in DASHBOARD_SELECTORS:
+        # 1) The whole decision surface fits the first 1440x900 viewport:
+        #    state, scope/identity, checklist, provider summary, FX, plan,
+        #    findings, and the "What changed" heading with its first
+        #    content element — together.
+        boxes: dict[str, dict] = {}
+        for selector in FIRST_SCREEN_SELECTORS:
             locator = page.locator(selector)
             assert locator.count() == 1, (
                 f"{selector}: expected exactly one element, got {locator.count()}"
@@ -291,80 +417,121 @@ def _check_case(
             k: {"top": round(v["y"], 1), "bottom": round(v["y"] + v["height"], 1)}
             for k, v in boxes.items()
         }
-        case_metrics["state_visible_text"] = page.locator(".state").inner_text()[:160]
+        case_metrics["state_visible_text"] = page.locator(".state").inner_text()[:200]
 
-        # No page-wide horizontal overflow at 1440 (collapsed).
-        max_right = _max_right_edge(page)
-        assert max_right <= 1440, f"page-wide horizontal overflow at 1440: {max_right:.1f}"
-        case_metrics["max_element_right_1440"] = round(max_right, 1)
+        # 2) Real document width: no page-wide horizontal overflow.
+        scroll_width = _document_scroll_width(page)
+        assert scroll_width <= 1440, (
+            f"page-wide horizontal overflow at 1440 (collapsed): {scroll_width}"
+        )
+        case_metrics["document_scroll_width_1440"] = scroll_width
 
-        # Screenshot: first 1440x900 viewport of the current renderer.
-        if take_screenshot:
-            SCREENSHOTS.mkdir(parents=True, exist_ok=True)
-            shot = SCREENSHOTS / f"{case}.png"
-            page.screenshot(
-                path=str(shot), clip={"x": 0, "y": 0, "width": 1440, "height": 900}
+        # 3) Main reading font sizes (tiny text is a geometry fail).
+        fonts: dict[str, float] = {}
+        for selector, floor in FONT_FLOOR:
+            size = _computed_font_px(page, selector)
+            fonts[selector] = size
+            assert size >= floor, f"{selector}: font {size}px below the {floor}px floor"
+        case_metrics["computed_font_px_1440"] = fonts
+
+        # 4) Short column headers and provider names stay on one line at
+        #    desktop (mid-word breaks of short words are the 180-h defect).
+        header_line_height = page.evaluate(
+            "parseFloat(getComputedStyle("
+            "document.querySelector('#per-provider thead th')).lineHeight)"
+        )
+        for label in SINGLE_LINE_HEADERS:
+            cell = page.locator("#per-provider thead th").filter(
+                has_text=re.compile(rf"^{label}$")
             )
-            case_metrics["screenshot"] = str(shot.relative_to(REPO))
+            assert cell.count() == 1, f"header cell {label!r} not found exactly once"
+            box = cell.first.bounding_box()
+            assert box is not None, f"header cell {label!r} not visible"
+            assert box["height"] <= header_line_height * 1.6 + 1, (
+                f"short header {label!r} wrapped to multiple lines at 1440 "
+                f"(height={box['height']:.1f})"
+            )
+        provider_cells = page.locator("#per-provider tbody tr:first-child td:first-child")
+        for cell in provider_cells.all():
+            box = cell.bounding_box()
+            assert box is not None
+            assert box["height"] <= header_line_height * 1.6 + 1, (
+                f"provider name {cell.inner_text()!r} wrapped at 1440 "
+                f"(height={box['height']:.1f})"
+            )
+        case_metrics["short_labels_single_line_1440"] = True
 
-        # 1280x800 and 375px: fresh loads at each viewport (the way a user
-        # sees those widths) — no page-wide horizontal overflow. Fresh pages
-        # avoid stale geometry from the 1440 pass: closed <details> content
-        # can report 1440-era boxes after a same-page resize in headless
-        # Chromium, which a real narrow-viewport user never sees.
+        # 5) Screenshot of the first 1440x900 viewport (tmp output only).
+        shot = out_dir / f"{case}-1440.png"
+        page.screenshot(path=str(shot), clip={"x": 0, "y": 0, "width": 1440, "height": 900})
+        case_metrics["screenshot"] = str(shot)
+
+        # 6) 1280x800 and 375x812: fresh loads at each viewport (the way a
+        #    user sees those widths), collapsed AND fully expanded. Fresh
+        #    pages avoid stale geometry from a same-page resize in
+        #    headless Chromium, which a real narrow-viewport user never
+        #    sees.
         for width, height in ((1280, 800), (375, 812)):
             narrow = context.new_page()
             narrow_requests: list[str] = []
-            narrow.on("request", lambda req, _r=narrow_requests: _r.append(req.url))
+            narrow.on(
+                "request",
+                lambda req, _r=narrow_requests: _r.append(f"{req.resource_type}:{req.url}"),
+            )
             try:
                 narrow.set_viewport_size({"width": width, "height": height})
                 narrow.goto(html_path.as_uri())
-                assert narrow_requests == [html_path.as_uri()], (
+                assert narrow_requests == ["document:" + html_path.as_uri()], (
                     f"extra requests at {width}px: {narrow_requests}"
                 )
-                max_right = _max_right_edge(narrow)
-                assert max_right <= width, (
-                    f"page-wide horizontal overflow at {width}px (collapsed): {max_right:.1f}"
+                collapsed = _document_scroll_width(narrow)
+                assert collapsed <= width, (
+                    f"page-wide horizontal overflow at {width}px (collapsed): {collapsed}"
                 )
-                case_metrics[f"max_element_right_{width}"] = round(max_right, 1)
+                case_metrics[f"document_scroll_width_{width}"] = collapsed
+                _open_all_details(narrow)
+                expanded = _document_scroll_width(narrow)
+                assert expanded <= width, (
+                    f"page-wide horizontal overflow at {width}px (expanded): {expanded}"
+                )
+                case_metrics[f"document_scroll_width_{width}_expanded"] = expanded
                 if width == 375:
                     # 375 must stay usable with the evidence expanded too.
-                    _open_all_details(narrow)
-                    max_right_exp = _max_right_edge(narrow)
-                    assert max_right_exp <= 375, (
-                        f"page-wide horizontal overflow at 375px (expanded): {max_right_exp:.1f}"
+                    assert narrow.locator(".state").bounding_box() is not None, (
+                        "375px: state banner not visible with evidence expanded"
                     )
-                    case_metrics["max_element_right_375_expanded"] = round(max_right_exp, 1)
             finally:
                 narrow.close()
 
-        # Fully expanded: still no overflow; full digests reachable inline.
+        # 7) Fully expanded at 1440: the VISIBLE rendered text must carry
+        #    the deep evidence (hidden DOM markup is not proof that a user
+        #    can see it).
         opened = _open_all_details(page)
         case_metrics["details_opened"] = opened
-        max_right_expanded = _max_right_edge(page)
-        assert max_right_expanded <= 1440, (
-            f"page-wide horizontal overflow at 1440 (expanded): {max_right_expanded:.1f}"
-        )
-        case_metrics["max_element_right_1440_expanded"] = round(max_right_expanded, 1)
-        expanded_text = page.content()
-        if has_sources:
-            full_digests = set(re.findall(r"\b[0-9a-f]{64}\b", expanded_text))
+        visible_text = page.locator("body").inner_text()
+        if expected["has_sources"]:
+            full_digests = set(re.findall(r"\b[0-9a-f]{64}\b", visible_text))
             assert full_digests, "no full 64-hex digest visible in the expanded report"
             case_metrics["full_digests_visible"] = len(full_digests)
-        findings_summary = page.locator("#all-findings > summary").inner_text()
-        case_metrics["findings_summary_visible_text"] = findings_summary
+        for needle in expected["visible"]:
+            assert needle in visible_text, (
+                f"expected visible value {needle!r} missing from the expanded report"
+            )
+        case_metrics["findings_summary_visible_text"] = (
+            page.locator("#all-findings > summary").inner_text()
+        )
 
-        metrics[case] = case_metrics
-
-        if case == "ready":
-            # Actual browser print evidence of the expanded document.
-            PRINT_DIR.mkdir(parents=True, exist_ok=True)
-            pdf_path = PRINT_DIR / "ready-expanded-print.pdf"
+        # 8) Actual print evidence of the expanded document (price/FX
+        #    cases): a real PDF with expanded price/FX/source evidence.
+        if expected["pdf"]:
+            pdf_path = out_dir / f"{case}-expanded-print.pdf"
             pdf_bytes = page.pdf(path=str(pdf_path), print_background=True)
             assert pdf_bytes[:4] == b"%PDF", "PDF does not start with %PDF"
             assert len(pdf_bytes) > 0
-            case_metrics["print_pdf"] = str(pdf_path.relative_to(REPO))
+            case_metrics["print_pdf"] = str(pdf_path)
             case_metrics["print_pdf_bytes"] = len(pdf_bytes)
+
+        metrics[case] = case_metrics
     finally:
         browser.close()
 
@@ -389,6 +556,7 @@ def playwright():
 def case_html(tmp_path_factory) -> dict[str, Path]:
     tmp = tmp_path_factory.mktemp("catalog-report")
     out: dict[str, Path] = {}
+    out["_out"] = tmp
     out["first-install"] = _cli_run_report(
         tmp / "first-install", "first-install", ["--first-install"]
     )
@@ -402,6 +570,8 @@ def case_html(tmp_path_factory) -> dict[str, Path]:
         ("warnings", _warnings_case),
         ("large-unchanged", _large_unchanged_case),
         ("two-provider", _two_provider_case),
+        ("price-change", _price_change_case),
+        ("fx-required", _fx_required_case),
     ):
         bundle, report = builder()
         html = tmp / case / "REVIEW.html"
@@ -411,23 +581,28 @@ def case_html(tmp_path_factory) -> dict[str, Path]:
     return out
 
 
+CASE_EXPECTATIONS = {
+    # has_sources: full digests must be visible once the evidence is open;
+    # pdf: capture an actual expanded print artifact; visible: case-specific
+    # values that must be in the rendered (not hidden) text.
+    "first-install": {"has_sources": False, "pdf": False, "visible": ()},
+    "blocked": {"has_sources": True, "pdf": False, "visible": ()},
+    "ready": {"has_sources": True, "pdf": False, "visible": ()},
+    "warnings": {"has_sources": True, "pdf": False, "visible": ()},
+    "large-unchanged": {"has_sources": True, "pdf": False, "visible": ()},
+    "two-provider": {"has_sources": True, "pdf": False, "visible": ()},
+    "price-change": {
+        "has_sources": True,
+        "pdf": True,
+        "visible": ("1.2", "+20.000 %"),
+    },
+    "fx-required": {"has_sources": True, "pdf": True, "visible": ("1.08", "eurofxref")},
+}
+
+
 def test_browser_layout_all_cases(playwright, case_html) -> None:
     metrics: dict = {}
-    has_sources = {
-        "first-install": False,
-        "ready": True,
-        "warnings": True,
-        "blocked": True,
-        "large-unchanged": True,
-        "two-provider": True,
-    }
-    canonical_screenshots = {
-        "first-install",
-        "ready",
-        "warnings",
-        "blocked",
-        "large-unchanged",
-    }
+    out_dir: Path = case_html["_out"]
     for case in (
         "first-install",
         "ready",
@@ -435,15 +610,15 @@ def test_browser_layout_all_cases(playwright, case_html) -> None:
         "blocked",
         "large-unchanged",
         "two-provider",
+        "price-change",
+        "fx-required",
     ):
-        _check_case(
-            playwright,
-            case,
-            case_html[case],
-            has_sources[case],
-            case in canonical_screenshots,
-            metrics,
-        )
-    print("\nbrowser layout metrics (per case: viewport boxes, right edges, "
-          "requests, details opened, digests, print PDF):")
+        _check_case(playwright, case, case_html[case], CASE_EXPECTATIONS[case], out_dir, metrics)
+    metrics_path = out_dir / "metrics-final.json"
+    metrics_path.write_text(
+        json.dumps(metrics, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print("\nbrowser layout metrics (per case: viewport boxes, document widths, "
+          "fonts, requests, details opened, visible digests, print PDFs):")
+    print(f"metrics written to {metrics_path}")
     print(json.dumps(metrics, indent=1, sort_keys=True))
