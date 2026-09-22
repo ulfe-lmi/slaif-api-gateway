@@ -667,6 +667,85 @@ def test_fx_two_distinct_ecb_snapshots_contradict_block() -> None:
     assert "source_observations_contradict" in _codes(report)
 
 
+def test_fx_cited_second_source_with_identical_quote_is_ready() -> None:
+    """180-f F3 strategic reproducer: the fixture ECB source (model
+    EUR-USD) plus a duplicate record with model USD-EUR carrying identical
+    bytes/date/rate. Citing the original source is READY; citing ONLY the
+    duplicate must be READY as well - the supporting quote is selected
+    from the fact's own declared sources, never from the first global
+    rate match."""
+    payload = _first_install_payload()
+    ecb = next(s for s in payload["sources"] if s["provider"] == "ecb")
+    payload["sources"].append({**ecb, "model": "USD-EUR"})
+    payload["fx"][0]["provenance"]["sources"] = ["ecb|USD-EUR|ecb_reference_xml"]
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "READY", _codes(report)
+    assert "source_evidence_reference_mismatch" not in _codes(report)
+    assert "source_observations_contradict" not in _codes(report)
+    (fx_backed,) = report.source_evidence["fx_backed"]
+    assert fx_backed["backed_by"] == "ecb|USD-EUR|ecb_reference_xml"
+    assert fx_backed["quote_date"] == "2026-09-21"
+
+
+def test_fx_cited_later_matching_quote_not_shadowed_by_earlier_uncited() -> None:
+    """180-f F3: two official ECB snapshots with the same rate on
+    different publication dates. The fact cites only the later snapshot;
+    the earlier uncited snapshot must not be selected and must not fail
+    the date check in its place."""
+    payload = _usd_pricing_payload(
+        fx=[fx_fact_dict("1.08", "EUR-USD", "2026-09-21T00:00:00Z")],
+        sources=[
+            ecb_source_dict(pair_model="EUR-USD", date_s="2026-09-20", rate="1.08"),
+            ecb_source_dict(pair_model="USD-EUR", date_s="2026-09-21", rate="1.08"),
+        ],
+    )
+    payload["fx"][0]["provenance"]["sources"] = ["ecb|USD-EUR|ecb_reference_xml"]
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "READY", _codes(report)
+    (fx_backed,) = report.source_evidence["fx_backed"]
+    assert fx_backed["backed_by"] == "ecb|USD-EUR|ecb_reference_xml"
+    assert fx_backed["quote_date"] == "2026-09-21"
+
+
+def test_fx_rate_match_at_undeclared_source_is_not_backing() -> None:
+    """180-f F3 negative: a matching 1.08 quote exists globally (record
+    modelled USD-EUR), but the fact cites the ecb|EUR-USD record, whose
+    snapshot carries no EUR/USD quote (GBP cube only). A rate match at an
+    undeclared source is not backing: the fact blocks with a reference
+    mismatch, not a value match, and stays unbound."""
+    gbp_xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01" '
+        'xmlns="http://www.ecb.int/vocabulary/2002-08-01/eurofxref">\n'
+        "  <gesmes:subject>Reference rates</gesmes:subject>\n"
+        "  <gesmes:Sender>\n"
+        "    <gesmes:Name>ECB</gesmes:Name>\n"
+        "  </gesmes:Sender>\n"
+        "  <Cube>\n"
+        '    <Cube time="2026-09-21">\n'
+        '      <Cube currency="GBP" rate="0.85"/>\n'
+        "    </Cube>\n"
+        "  </Cube>\n"
+        "</gesmes:Envelope>\n"
+    ).encode("utf-8")
+    cited = ecb_source_dict(date_s="2026-09-21", rate="0.85")
+    cited["model"] = "EUR-USD"
+    cited["content_sha256"] = hashlib.sha256(gbp_xml).hexdigest()
+    cited["evidence_b64"] = base64.b64encode(gbp_xml).decode("ascii")
+    payload = _usd_pricing_payload(
+        fx=[fx_fact_dict("1.08", "EUR-USD", "2026-09-21T00:00:00Z")],
+        sources=[
+            cited,
+            ecb_source_dict(pair_model="USD-EUR", date_s="2026-09-21", rate="1.08"),
+        ],
+    )
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED"
+    assert "source_evidence_reference_mismatch" in _codes(report)
+    assert "source_evidence_value_mismatch" not in _codes(report)
+    assert report.source_evidence["fx_backed"] == []
+
+
 def test_fx_semantic_source_cannot_bind_fact() -> None:
     """180-d D2 reproducer 2: with the ECB source removed and the FX fact
     pointed at a semantic docs_page quote whose bytes carry no numeric
@@ -1009,13 +1088,14 @@ def test_absent_deprecation_observation_is_not_a_conflict_when_text_is_observed(
     assert "source_evidence_value_mismatch" not in _codes(report)
 
 
-def test_audio_only_source_blocks_effective_default_text_contract() -> None:
-    """E3 effective contract: an audio-only source with BOTH the model and
-    the route facts declaring text=false still cannot yield an executable
-    text route. Flat declarations cannot narrow the runtime contract the
-    import path would actually create (the default chat_completions block
-    enables chat_text), so the effective text claim must bind to the
-    observed audio-only fact."""
+def test_audio_only_source_blocks_text_disabled_route() -> None:
+    """180-f (F2) x E3: an audio-only source with BOTH the model and the route
+    facts declaring text=false still cannot yield an executable text route.
+    Since the proposal now emits the declared intent verbatim (no default
+    grants), the effective text claim matches the observed audio-only fact,
+    so there is no invented value mismatch; instead the text-disabled route
+    is blocked explicitly as not a usable standard text candidate - no text
+    bootstrap is claimed."""
     payload = _first_install_payload()
     for item in payload["models"]:
         item["capabilities"] = {"streaming": True, "text": False}
@@ -1033,11 +1113,8 @@ def test_audio_only_source_blocks_effective_default_text_contract() -> None:
             source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
     _bundle, report, _artifacts = _validate_payload(payload)
     assert report.state == "BLOCKED"
-    assert "source_evidence_value_mismatch" in _codes(report)
-    finding = next(
-        w for w in report.warnings if w.code == "source_evidence_value_mismatch"
-    )
-    assert "model:capability:text" in finding.detail
+    assert "text_disabled_route" in _codes(report)
+    assert "source_evidence_value_mismatch" not in _codes(report)
     dispositions = {(d.provider, d.model): d for d in report.dispositions}
     assert dispositions[("openrouter", "synthetic/chat-v1")].disposition == "BLOCKED"
 

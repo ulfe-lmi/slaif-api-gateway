@@ -164,16 +164,35 @@ operator-input mirror of a model ID in a second provider is not provider
 evidence.
 
 **Effective proposal eligibility.** Eligibility for a capability is
-decided from the contract the import path would actually create, not from
-the flat declared keys alone. Proposals declare flat standard capability
-keys only; the runtime import path adds the default `chat_completions`
-capability block whenever no nested block is declared, and that default
-block enables `chat_text`. A flat `text` omission or `false` therefore
-cannot narrow the executable runtime surface: the effective text claim is
-the model-level claim or the actual runtime contract of any proposed
-route, computed with the importer's defaults, and it binds to the
-provider's observed facts like any other field — an audio-only
-observation cannot yield an executable ordinary text route.
+decided from the single derived contract the emitted import path would
+actually store, not from the flat declared keys alone. One deterministic
+mapping takes the proposal's flat standard capability keys to the actual
+runtime `chat_completions` shape, and the same derived intent drives the
+emitted import bytes, the evidence requirements, the before/after
+comparison, and the rendered rows — nothing else grants or compares
+capability meaning. For a **new** standard route the derived block is the
+documented standard scope (text plus the declared streaming intent) plus
+any other standard key the proposal explicitly declares; the create never
+turns on permissions the proposal did not request, and undeclared runtime
+defaults stay runtime-denied. For an **existing** row the reviewed
+baseline block is the base and only the explicitly declared intent is
+overlaid: omitted approved fields — including explicit denials — are
+preserved, so a partial proposal is an honest no-op and an explicitly
+requested capability change is shown as a change (create-only behavior
+preserved). An explicit `text: false` therefore narrows the executable
+surface and binds to the provider's observed facts like any other field:
+an audio-only observation agrees with the declared denial (no invented
+mismatch) yet still cannot yield an executable ordinary text route, and a
+route that would be created without text is blocked as not a usable
+standard text candidate rather than silently enabled
+(`text_disabled_route`). A proposal that declares a streaming capability
+contradicting its own `supports_streaming` column is rejected explicitly
+(`streaming_intent_conflict`), never resolved by a silent precedence.
+Generated route and pricing rows carry the recognized runtime metadata
+shape only — no stray flat storage keys, and no proposal-internal state
+(dimension blobs, source timestamps) in row metadata — so rows created
+from a confirmed import survive the next baseline export and refresh as an
+honest unchanged/no-op result.
 Provider-observed deprecation is surfaced conservatively even when the
 proposal boolean defaults false: the affected proposal is blocked with a
 retain-local disposition (the local row is retained; no auto-delete or
@@ -216,9 +235,24 @@ snapshot on an official ECB host):
   unapproved sources carry quotes);
 - the fact's rate is a finite positive decimal (`fx_rate_not_finite_positive`);
 - the quote equals the fact's rate — or its exact Decimal reciprocal for
-  EUR-to-native quotations — within 1e-8 (`source_evidence_value_mismatch`);
-- the quote's source is declared in the fact's own provenance
-  (`source_evidence_reference_mismatch`);
+  EUR-to-native quotations — within 1e-8, compared **in the fact pair's
+  direction** (a reciprocal quote is normalized to the proposed pair's
+  direction; the fact is never inverted back)
+  (`source_evidence_value_mismatch`);
+- the official quotes are compared **as exact Decimal values in the fact
+  pair's direction, grouped by publication date and direction**:
+  equivalent spellings of the same quote (`1.08` vs `1.080`) never
+  fabricate a conflict, genuinely different same-context quotes block
+  (`source_observations_contradict`), and same-date quotes supplied in the
+  reciprocal direction must agree within the bounded 1e-8 reciprocal
+  tolerance in the proposed pair's direction — never by an unstable
+  invert-back equality;
+- the supporting quote is selected **from the fact's own declared,
+  approved, parsed sources**: a rate match at an undeclared source is not
+  backing, and an earlier uncited match never shadows a correctly cited
+  later quote (`source_evidence_reference_mismatch`) - while the
+  same-context contradiction check above still covers ALL authoritative
+  evidence for the pair;
 - the fact carries a publication date equal to the quote's date
   (`fx_evidence_date_mismatch`).
 
@@ -279,10 +313,18 @@ per-ID selection reconciliation with an unexplained-omission block,
 and the actual rendered observations in the one report; `180.3` adds
 baseline metadata preservation — nested capability projection with opaque
 unrepresented fingerprints, allowlisted monetary metadata mirroring the
-runtime contracts, and value-based `Numeric(18,9)` spelling rules —
-effective proposal eligibility computed from the importer's actual runtime
-defaults, the consistent-snapshot proof under a committing writer, and the
-truthful capture-path SQL evidence).
+runtime contracts, and value-based `Numeric(18,9)` spelling rules, the
+consistent-snapshot proof under a committing writer, and the truthful
+capture-path SQL evidence; `180.4` closes the proposal round-trip and
+comparison gaps — the single derived capability contract (conservative
+create scope for new rows; declared-intent-only overlay over the reviewed
+baseline for existing rows, preserving omitted approved fields including
+explicit denials), metadata-free generated pricing rows, explicit
+streaming-intent and text-disabled route findings, numeric FX quote
+comparison with (date, direction) context and bounded reciprocal
+tolerance, and the exact documented age/movement thresholds (inclusive
+24-hour source freshness, calendar-day FX publication age, and exact
+25%/3% movement boundaries compared before display rounding)).
 
 ## Baselines
 
@@ -385,11 +427,11 @@ its own clock):
 
 | Rule | Boundary (exact) |
 |---|---|
-| Price movement review | relative change > 25% (exact 25% is not a review) |
+| Price movement review | exact relative change > 25% (exact 25% is not a review; the ratio is compared before any display rounding) |
 | Zero transition | any zero ↔ non-zero crossing is REVIEW, never a percentage (no division by zero) |
-| FX movement review | normalized-pair relative change > 3% (exact 3% is not a review) |
-| Source retrieval age | age < 24 h fresh; 24 h ≤ age ≤ 72 h REVIEW; age > 72 h BLOCKED |
-| FX publication age | age < 3 calendar days fresh; 3 ≤ age ≤ 7 days REVIEW; age > 7 days BLOCKED |
+| FX movement review | exact normalized-pair relative change > 3% (exact 3% is not a review; compared before display rounding) |
+| Source retrieval age | age ≤ 24 h fresh; 24 h < age ≤ 72 h REVIEW; age > 72 h BLOCKED |
+| FX publication age | calendar age ≤ 3 days fresh; 3 < age ≤ 7 days REVIEW; calendar age > 7 days BLOCKED (UTC date basis: whole days between the publication date and the reference date; the time-of-day never changes the state) |
 | Future/inconsistent timestamps | BLOCKED |
 
 FX direction: the canonical import-ready pair is **native currency → EUR**,

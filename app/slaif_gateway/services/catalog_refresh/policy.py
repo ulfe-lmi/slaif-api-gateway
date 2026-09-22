@@ -18,31 +18,41 @@ class RefreshPolicy:
     fx_change_review: Decimal
     source_stale_review: timedelta
     source_stale_blocked: timedelta
-    fx_stale_review: timedelta
-    fx_stale_blocked: timedelta
+    fx_stale_review_days: int
+    fx_stale_blocked_days: int
 
     def source_age_state(self, age: timedelta) -> str:
-        """Source freshness with exact boundaries (defaults: 24h / 72h).
+        """Source freshness with exact documented boundaries.
 
-        - ``fresh``   when age < review threshold
-        - ``review``  when review threshold <= age <= blocked threshold
-        - ``blocked`` when age > blocked threshold
+        - ``fresh``   when age <= review threshold (default 24h, inclusive)
+        - ``review``  when review threshold < age <= blocked threshold
+        - ``blocked`` when age > blocked threshold (default 72h)
 
         The reference time for offline review is the bundle's
         ``generated_at`` (a deterministic, replayable clock); a future live
         apply re-checks freshness against its own current clock.
         """
-        if age < self.source_stale_review:
+        if age <= self.source_stale_review:
             return "fresh"
         if age <= self.source_stale_blocked:
             return "review"
         return "blocked"
 
-    def fx_age_state(self, age: timedelta) -> str:
-        """FX publication-age state with the same boundary shape (defaults: 3d / 7d)."""
-        if age < self.fx_stale_review:
+    def fx_age_state(self, calendar_age_days: int) -> str:
+        """FX publication-age state on a CALENDAR-DAY basis (defaults 3d / 7d).
+
+        ``calendar_age_days`` is the whole-day difference between the UTC
+        publication date and the UTC review reference date
+        (``review_date - publication_date``); the time-of-day never changes
+        the state.
+
+        - ``fresh``   when calendar age <= review days (default 3, inclusive)
+        - ``review``  when review days < calendar age <= blocked days
+        - ``blocked`` when calendar age > blocked days (default 7)
+        """
+        if calendar_age_days <= self.fx_stale_review_days:
             return "fresh"
-        if age <= self.fx_stale_blocked:
+        if calendar_age_days <= self.fx_stale_blocked_days:
             return "review"
         return "blocked"
 
@@ -55,8 +65,8 @@ def policy_from_document(document: PolicyDocument) -> RefreshPolicy:
         fx_change_review=Decimal(document.fx_change_review),
         source_stale_review=timedelta(hours=document.source_stale_review_hours),
         source_stale_blocked=timedelta(hours=document.source_stale_blocked_hours),
-        fx_stale_review=timedelta(days=document.fx_stale_review_days),
-        fx_stale_blocked=timedelta(days=document.fx_stale_blocked_days),
+        fx_stale_review_days=document.fx_stale_review_days,
+        fx_stale_blocked_days=document.fx_stale_blocked_days,
     )
 
 

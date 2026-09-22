@@ -49,11 +49,12 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineDocument,
     RefreshBundle,
     RouteFacts,
+    derive_standard_create_capabilities,
+    overlay_route_capabilities,
 )
 from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_CAPABILITY_TEXT,
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
-    ensure_default_chat_completion_capabilities,
 )
 from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh.bundle import (
@@ -416,33 +417,21 @@ _BASELINE_METADATA_FIELDS: tuple[str, ...] = (
 )
 
 
-def _baseline_flat_capabilities(old_route: Any) -> dict[str, bool]:
-    """Project the baseline route's nested chat_completions block to flat keys."""
-    block = (getattr(old_route, "capabilities", None) or {}).get("chat_completions")
-    if not isinstance(block, Mapping):
-        return {}
-    return {key: value for key, value in block.items() if isinstance(value, bool)}
-
-
 def _effective_chat_text_capability(route: RouteFacts) -> bool:
-    """chat_text of the contract the import path would actually create.
+    """chat_text of the contract the emitted import path would actually store.
 
-    Proposals declare flat standard capability keys only. The import path
-    (ModelRouteService.create_model_route -> _ensure_default_capabilities
-    -> ensure_default_chat_completion_capabilities) adds the default
-    chat_completions block whenever the declared map carries no nested
-    block, and that default block enables chat_text. A flat text omission
-    or false therefore cannot narrow the executable runtime surface; the
-    effective contract is computed exactly as the runtime does.
+    180-f (F2): proposals emit the conservative create contract (the
+    documented standard text/streaming scope plus explicitly declared
+    standard keys), and the import path stores a declared nested block
+    verbatim. An explicit text denial therefore narrows the executable
+    surface; a text omission stays inside the documented standard scope
+    (chat_text enabled for a standard text route). Computed with the same
+    single mapping used for the emitted import bytes and the
+    before/after comparison.
     """
-    effective = ensure_default_chat_completion_capabilities(
-        dict(route.capabilities),
-        supports_streaming=route.supports_streaming,
-        endpoint=route.endpoint,
+    block = derive_standard_create_capabilities(
+        route.capabilities, supports_streaming=route.supports_streaming
     )
-    block = effective.get(CHAT_COMPLETIONS_CAPABILITIES_KEY)
-    if not isinstance(block, Mapping):
-        return False
     return bool(block.get(CHAT_CAPABILITY_TEXT, False))
 
 
@@ -934,45 +923,94 @@ def validate_bundle(
                 None,
             )
             continue
-        rates = {str(quote.rate) for _key, quote in official_quotes}
-        if len(rates) > 1:
+        # 180-f (F3): compare exact Decimal values in the FACT PAIR's
+        # direction, grouped by (publication date, direction) context.
+        # Equivalent spellings (1.08 == 1.080) must not fabricate a
+        # financial conflict; genuine same-context disagreements still
+        # block. Cross-direction quotes on the same date must agree within
+        # the bounded reciprocal tolerance, never by unstable invert-back
+        # equality.
+        direct_by_date: dict[Any, set[Decimal]] = {}
+        reciprocal_by_date: dict[Any, set[Decimal]] = {}
+        for _key, quote in official_quotes:
+            if (quote.base_currency, quote.quote_currency) == pair:
+                direct_by_date.setdefault(quote.published_date, set()).add(quote.rate)
+            else:
+                reciprocal_by_date.setdefault(quote.published_date, set()).add(_reciprocal(quote.rate))
+        fx_conflicts: list[str] = []
+        for pub_date in sorted(set(direct_by_date) | set(reciprocal_by_date)):
+            direct_values = direct_by_date.get(pub_date, set())
+            reciprocal_values = reciprocal_by_date.get(pub_date, set())
+            if len(direct_values) > 1:
+                fx_conflicts.extend(str(value) for value in sorted(direct_values))
+            if len(reciprocal_values) > 1 and max(reciprocal_values) - min(reciprocal_values) > 2 * se.FX_BINDING_TOLERANCE:
+                fx_conflicts.extend(str(value) for value in sorted(reciprocal_values))
+            for value in direct_values:
+                if reciprocal_values and not any(
+                    abs(value - reciprocal_value) <= se.FX_BINDING_TOLERANCE
+                    for reciprocal_value in reciprocal_values
+                ):
+                    fx_conflicts.append(str(value))
+        if fx_conflicts:
             add(
                 SEVERITY_BLOCKER,
                 "source_observations_contradict",
-                f"distinct FX snapshots disagree on {pair[0]}-{pair[1]}: {', '.join(sorted(rates)[:4])}",
+                f"distinct FX snapshots disagree on {pair[0]}-{pair[1]}: {', '.join(sorted(set(fx_conflicts))[:4])}",
+                None,
+                None,
+            )
+            continue
+        # 180-f (F3): the supporting quote is selected from the fact's OWN
+        # declared, approved, parsed sources - a rate match at an undeclared
+        # source is not backing, and an earlier uncited match must never
+        # shadow a later correctly cited quote. The independent
+        # same-context contradiction check above still covers ALL
+        # authoritative evidence for the pair.
+        declared_quotes = [
+            (source_key, quote)
+            for source_key, quote in official_quotes
+            if source_key in facts.provenance.sources
+        ]
+        if not declared_quotes:
+            add(
+                SEVERITY_BLOCKER,
+                "source_evidence_reference_mismatch",
+                f"FX fact {pair[0]} to {pair[1]} is not declared to be supported by any verified quote source for this pair",
                 None,
                 None,
             )
             continue
         matched: tuple[str, se.ParsedFxQuote, bool] | None = None
-        for source_key, quote in official_quotes:
+        value_matched: tuple[str, se.ParsedFxQuote, bool] | None = None
+        for source_key, quote in declared_quotes:
             same_direction = (quote.base_currency, quote.quote_currency) == pair
-            if same_direction:
-                agrees = abs(quote.rate - fact_rate) <= se.FX_BINDING_TOLERANCE
-            else:
-                agrees = abs(quote.rate - _reciprocal(fact_rate)) <= se.FX_BINDING_TOLERANCE
-            if agrees:
-                matched = (source_key, quote, same_direction)
+            # Reciprocal quotes are validated in the proposed pair's
+            # direction (quote normalized to the fact's direction), with
+            # the explicit bounded tolerance - no invert-back of the fact
+            # rate.
+            quote_in_pair_direction = quote.rate if same_direction else _reciprocal(quote.rate)
+            if abs(quote_in_pair_direction - fact_rate) > se.FX_BINDING_TOLERANCE:
+                continue
+            candidate = (source_key, quote, same_direction)
+            if (
+                matched is None
+                and facts.published_at is not None
+                and quote.published_date == facts.published_at.date()
+            ):
+                matched = candidate
                 break
-        if matched is None:
+            if value_matched is None:
+                value_matched = candidate
+        if matched is None and value_matched is None:
             add(
                 SEVERITY_BLOCKER,
                 "source_evidence_value_mismatch",
-                f"FX rate {facts.rate} does not match any verified {pair[0]}/{pair[1]} reference quote or its reciprocal",
+                f"FX rate {facts.rate} does not match any verified {pair[0]}/{pair[1]} reference quote or its reciprocal declared by this fact",
                 None,
                 None,
             )
             continue
-        source_key, quote, same_direction = matched
-        if source_key not in facts.provenance.sources:
-            add(
-                SEVERITY_BLOCKER,
-                "source_evidence_reference_mismatch",
-                f"FX fact {pair[0]} to {pair[1]} is not declared to be supported by the verified quote source {source_key}",
-                None,
-                None,
-            )
-            continue
+        source_key, quote, same_direction = matched if matched is not None else value_matched
         if facts.published_at is None:
             add(
                 SEVERITY_BLOCKER,
@@ -982,7 +1020,7 @@ def validate_bundle(
                 None,
             )
             continue
-        if facts.published_at.date() != quote.published_date:
+        if matched is None:
             add(
                 SEVERITY_BLOCKER,
                 "fx_evidence_date_mismatch",
@@ -1019,15 +1057,29 @@ def validate_bundle(
         else:
             continue
         existing = fx_to_eur.get(currency_to_register)
-        if existing is not None and existing != rate_to_register:
-            add(
-                SEVERITY_BLOCKER,
-                "source_observations_contradict",
-                f"verified FX quotes give conflicting {currency_to_register} to EUR rates: {existing} vs {rate_to_register}",
-                None,
-                None,
+        if existing is not None:
+            # 180-f (F3): same-direction quotes must be exactly equal; quotes
+            # reaching the same currency from opposite directions are rounded
+            # reciprocals of each other and must agree within the bounded
+            # reciprocal tolerance (an invert-back equality would be unstable).
+            existing_derived = bool(
+                fx_rate_provenance.get(currency_to_register, {}).get("derived_reciprocal")
             )
-            continue
+            this_derived = quote.base_currency == "EUR"
+            agreement = (
+                existing == rate_to_register
+                if existing_derived == this_derived
+                else abs(existing - rate_to_register) <= se.FX_BINDING_TOLERANCE
+            )
+            if not agreement:
+                add(
+                    SEVERITY_BLOCKER,
+                    "source_observations_contradict",
+                    f"verified FX quotes give conflicting {currency_to_register} to EUR rates: {existing} vs {rate_to_register}",
+                    None,
+                    None,
+                )
+                continue
         fx_to_eur[currency_to_register] = rate_to_register
         fx_rate_provenance[currency_to_register] = {
             "pair": f"{quote.base_currency}-{quote.quote_currency}",
@@ -1410,8 +1462,42 @@ def validate_bundle(
         # route identity comparisons
         route_changed = False
         route_unrepresented = False
+        streaming_conflict = False
+        text_disabled_create = False
         for route, old_route in zip(routes, old_route_rows):
+            # 180-f (F2): a proposal declaring the streaming capability
+            # with a different supports_streaming column is
+            # self-contradictory; reject explicitly instead of a silent
+            # precedence accident.
+            flat_streaming = (route.capabilities or {}).get("streaming")
+            if isinstance(flat_streaming, bool) and flat_streaming is not route.supports_streaming:
+                streaming_conflict = True
+                add(
+                    SEVERITY_BLOCKER,
+                    "streaming_intent_conflict",
+                    f"route declares streaming capability {flat_streaming} but supports_streaming={route.supports_streaming}; contradictory streaming intent is rejected explicitly",
+                    provider,
+                    model,
+                )
             if old_route is None:
+                # 180-f (F2): new rows get the conservative create
+                # contract (same single mapping as the emitted import
+                # bytes). A text-disabled route is not a usable standard
+                # text candidate; block the create with a clear reason
+                # rather than silently enabling text or claiming a text
+                # bootstrap.
+                create_block = derive_standard_create_capabilities(
+                    route.capabilities, supports_streaming=route.supports_streaming
+                )
+                if not create_block.get(CHAT_CAPABILITY_TEXT, False):
+                    text_disabled_create = True
+                    add(
+                        SEVERITY_BLOCKER,
+                        "text_disabled_route",
+                        "route declares text disabled; not a usable standard text candidate; no text bootstrap is claimed",
+                        provider,
+                        model,
+                    )
                 continue
             for attr in ("upstream_model", "priority", "enabled", "visible_in_models", "supports_streaming", "match_type"):
                 new_value = getattr(route, attr)
@@ -1423,20 +1509,22 @@ def validate_bundle(
                     changed_fields.append(f"route.{attr}")
             if getattr(old_route, "capabilities_unrepresented", False):
                 route_unrepresented = True
-            # 180-e (E1): the baseline holds the nested runtime projection;
-            # compare the proposal's declared flat capabilities against the
-            # matching chat_completions entries only. A union comparison is
-            # wrong: the baseline carries the full runtime default block
-            # while the proposal declares just the fields it asserts.
-            old_flat = _baseline_flat_capabilities(old_route)
-            for key in sorted(route.capabilities or {}):
-                new_value = (route.capabilities or {}).get(key)
-                if not isinstance(new_value, bool):
-                    continue
-                baseline_key = f"chat_{key}"
-                if bool(new_value) != bool(old_flat.get(baseline_key, False)):
-                    route_changed = True
-                    changed_fields.append(f"route.capabilities.{key}")
+            # 180-f (F2): partial-intent preservation. The reviewed
+            # baseline block is the base; ONLY the explicitly declared
+            # intent is overlaid. Omitted approved fields - including
+            # explicit denials - are preserved, so a partial proposal
+            # never rewrites stored capability metadata it did not
+            # request; an explicitly requested capability change is
+            # shown as a change (create-only behavior preserved).
+            old_capabilities = getattr(old_route, "capabilities", None) or {}
+            old_block = old_capabilities.get(CHAT_COMPLETIONS_CAPABILITIES_KEY)
+            old_block = dict(old_block) if isinstance(old_block, Mapping) else {}
+            effective_block = overlay_route_capabilities(old_block, route.capabilities)
+            if effective_block != old_block:
+                route_changed = True
+                for field in sorted(set(effective_block) | set(old_block)):
+                    if effective_block.get(field) != old_block.get(field):
+                        changed_fields.append(f"route.capabilities.{field}")
         if route_unrepresented:
             add(
                 SEVERITY_BLOCKER,
@@ -1483,7 +1571,11 @@ def validate_bundle(
                     add(SEVERITY_REVIEW, "price_zero_transition", f"{dimension.name} crossed zero (old={old_entry}, new={new_value})", provider, model)
                 elif old_entry != 0:
                     percent = _pct(old_entry, new_value)
-                    if abs(Decimal(percent)) > policy.price_change_review:
+                    # 180-f (F4): the threshold decision compares the exact
+                    # ratio BEFORE display quantization (cross-multiplied,
+                    # so rounding can never move an above-threshold value
+                    # back onto the threshold); _pct is display-only.
+                    if abs(new_value - old_entry) > policy.price_change_review * abs(old_entry):
                         comparison_state = "CHANGED_REVIEW"
                         add(SEVERITY_REVIEW, "price_moved_review", f"{dimension.name} moved {percent} (policy {policy.price_change_review})", provider, model)
                     else:
@@ -1526,9 +1618,9 @@ def validate_bundle(
         route_new = all(old is None for old in old_route_rows)
         pricing_no_baseline = not old_rows
 
-        if dimension_blocked or currency_conflict or pricing_ambiguous or route_unrepresented or baseline_metadata_unrepresented:
+        if dimension_blocked or currency_conflict or pricing_ambiguous or route_unrepresented or baseline_metadata_unrepresented or streaming_conflict or text_disabled_create:
             disposition = DISPOSITION_BLOCKED
-            disposition_detail = "blocked: " + "; ".join(sorted(set(changed_fields + ["required pricing dimension(s) missing" if dimension_blocked else ""] + ["currency inconsistency" if currency_conflict else ""] + ["ambiguous baseline rows" if pricing_ambiguous else ""] + ["unrepresentable baseline capabilities" if route_unrepresented else ""] + ["unrepresentable baseline metadata" if baseline_metadata_unrepresented else ""])))
+            disposition_detail = "blocked: " + "; ".join(sorted(set(changed_fields + ["required pricing dimension(s) missing" if dimension_blocked else ""] + ["currency inconsistency" if currency_conflict else ""] + ["ambiguous baseline rows" if pricing_ambiguous else ""] + ["unrepresentable baseline capabilities" if route_unrepresented else ""] + ["unrepresentable baseline metadata" if baseline_metadata_unrepresented else ""] + ["streaming intent conflict" if streaming_conflict else ""] + ["text disabled route" if text_disabled_create else ""])))
         elif route_changed or price_changed:
             disposition = DISPOSITION_CHANGED
             disposition_detail = "; ".join(sorted(set(changed_fields)))
@@ -2107,7 +2199,10 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
         if age < timedelta(0):
             fx_add(SEVERITY_BLOCKER, "fx_future_publication", "FX publication date is in the future")
             continue
-        state = policy.fx_age_state(age)
+        # 180-f (F4): calendar-day basis (UTC publication date vs UTC
+        # review reference date); the time-of-day never changes the state.
+        calendar_age_days = (_utc(now).date() - _utc(facts.published_at).date()).days
+        state = policy.fx_age_state(calendar_age_days)
         if state == "review":
             fx_add(SEVERITY_REVIEW, "fx_stale_review", f"FX publication age {age} exceeds review threshold")
         elif state == "blocked":
@@ -2146,7 +2241,9 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
         state = "NEW"
         if current_rate is not None and current_rate > 0:
             delta_pct = str(((normalized_rate - current_rate) / current_rate).quantize(Decimal("0.000000001")))
-            if abs(Decimal(delta_pct)) > policy.fx_change_review:
+            # 180-f (F4): exact pre-rounding comparison (cross-multiplied);
+            # the quantized delta_pct is display formatting only.
+            if abs(normalized_rate - current_rate) > policy.fx_change_review * current_rate:
                 fx_add(SEVERITY_REVIEW, "fx_moved_review", f"{currency}→EUR moved {delta_pct} (policy {policy.fx_change_review})")
                 state = "CHANGED_REVIEW"
             elif normalized_rate != current_rate:

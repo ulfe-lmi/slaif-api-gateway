@@ -1,78 +1,78 @@
 {
- "baseline": {
-  "content_sha256": "417f543bbda5a6b7993bb2b69be864a86362c38d87f5dc0c2546772cde462e32",
-  "exported_at": "2026-09-21T10:00:00Z",
-  "mode": "exported_file",
-  "postgres_version": null,
-  "row_counts": {
-   "fx_rates": 1,
-   "pricing_rules": 5,
-   "providers": 1,
-   "routes": 5
+  "baseline": {
+    "content_sha256": "417f543bbda5a6b7993bb2b69be864a86362c38d87f5dc0c2546772cde462e32",
+    "exported_at": "2026-09-21T10:00:00Z",
+    "mode": "exported_file",
+    "postgres_version": null,
+    "row_counts": {
+      "fx_rates": 1,
+      "pricing_rules": 5,
+      "providers": 1,
+      "routes": 5
+    },
+    "sql_checked": true,
+    "target_database": "slaif-synthetic-baseline"
   },
-  "sql_checked": true,
-  "target_database": "slaif-synthetic-baseline"
- },
- "fx": [],
- "generated_at": "2026-09-21T12:00:00Z",
- "models": [],
- "notes": "Synthetic truncation fixture: explicitly selected baseline model whose required source was truncated; must not be reported as disappeared.",
- "policy": {
-  "fx_change_review": "0.03",
-  "fx_stale_blocked_days": 7,
-  "fx_stale_review_days": 3,
-  "price_change_review": "0.25",
-  "source_stale_blocked_hours": 72,
-  "source_stale_review_hours": 24,
-  "version": 1
- },
- "pricing": [],
- "profile": {
-  "capability_allowlist": [],
-  "endpoint": "/v1/chat/completions",
-  "local_models_visible": true,
-  "name": "standard-v1",
-  "supports_streaming": true
- },
- "research": {
-  "codex_version": "N/A",
-  "extractor_version": "fixture/1.0",
-  "prompt_version": "N/A",
-  "status": "NOT_RUN",
-  "tool_version": "fixture/1.0"
- },
- "revision": {
-  "policy_version": 1,
-  "renderer_version": "180.3",
+  "fx": [],
+  "generated_at": "2026-09-21T12:00:00Z",
+  "models": [],
+  "notes": "Synthetic truncation fixture: explicitly selected baseline model whose required source was truncated; must not be reported as disappeared.",
+  "policy": {
+    "fx_change_review": "0.03",
+    "fx_stale_blocked_days": 7,
+    "fx_stale_review_days": 3,
+    "price_change_review": "0.25",
+    "source_stale_blocked_hours": 72,
+    "source_stale_review_hours": 24,
+    "version": 1
+  },
+  "pricing": [],
+  "profile": {
+    "capability_allowlist": [],
+    "endpoint": "/v1/chat/completions",
+    "local_models_visible": true,
+    "name": "standard-v1",
+    "supports_streaming": true
+  },
+  "research": {
+    "codex_version": "N/A",
+    "extractor_version": "fixture/1.0",
+    "prompt_version": "N/A",
+    "status": "NOT_RUN",
+    "tool_version": "fixture/1.0"
+  },
+  "revision": {
+    "policy_version": 1,
+    "renderer_version": "180.4",
+    "schema_version": "1",
+    "slaif_revision": "fixture-revision-180"
+  },
+  "routes": [],
+  "run_id": "fixture-truncated-001",
   "schema_version": "1",
-  "slaif_revision": "fixture-revision-180"
- },
- "routes": [],
- "run_id": "fixture-truncated-001",
- "schema_version": "1",
- "selection": {
-  "model_include": [
-   "synthetic/gone-v1"
-  ],
-  "providers": [
-   "openrouter"
+  "selection": {
+    "model_include": [
+      "synthetic/gone-v1"
+    ],
+    "providers": [
+      "openrouter"
+    ]
+  },
+  "sources": [
+    {
+      "content_sha256": "8f21a80706e32bf2be3046f48a47bb185c1e5a0ac8e74b06bae747018c1c2830",
+      "evidence_b64": null,
+      "extraction": "deterministic",
+      "extractor": "fixture-deterministic/1.0",
+      "model": "synthetic/gone-v1",
+      "provider": "openrouter",
+      "published_at": null,
+      "required": true,
+      "retrieved_at": "2026-09-21T11:00:00Z",
+      "source_kind": "openrouter_models_api",
+      "truncated": true,
+      "url": "https://openrouter.ai/api/v1/models",
+      "warnings": []
+    }
   ]
- },
- "sources": [
-  {
-   "content_sha256": "8f21a80706e32bf2be3046f48a47bb185c1e5a0ac8e74b06bae747018c1c2830",
-   "evidence_b64": null,
-   "extraction": "deterministic",
-   "extractor": "fixture-deterministic/1.0",
-   "model": "synthetic/gone-v1",
-   "provider": "openrouter",
-   "published_at": null,
-   "required": true,
-   "retrieved_at": "2026-09-21T11:00:00Z",
-   "source_kind": "openrouter_models_api",
-   "truncated": true,
-   "url": "https://openrouter.ai/api/v1/models",
-   "warnings": []
-  }
- ]
 }

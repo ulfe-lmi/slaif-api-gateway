@@ -26,6 +26,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     RefreshBundle,
     RouteFacts,
     SourceRecord,
+    derived_route_capabilities,
 )
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 
@@ -116,13 +117,6 @@ def canonical_bundle_bytes(bundle: RefreshBundle) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _source_retrieved_at(bundle: RefreshBundle, source_key: str) -> str:
-    for source in bundle.sources:
-        if f"{source.provider}|{source.model}|{source.source_kind}" == source_key:
-            return source.retrieved_at.astimezone(_utc()).isoformat()
-    return bundle.generated_at.astimezone(_utc()).isoformat()
-
-
 def _utc():
     from datetime import UTC
 
@@ -151,7 +145,17 @@ def generate_route_tsv(bundle: RefreshBundle, routes: Sequence[RouteFacts]) -> b
                 "enabled": str(route.enabled).lower(),
                 "visible_in_models": str(route.visible_in_models).lower(),
                 "supports_streaming": str(route.supports_streaming).lower(),
-                "capabilities": json.dumps(route.capabilities, sort_keys=True, separators=(",", ":")),
+                # 180-f (F2): emit the ACTUAL runtime capability shape (the
+                # single deterministic derived contract), not stray flat
+                # storage keys, so created rows survive export -> refresh
+                # without an unrepresented-capability blocker.
+                "capabilities": json.dumps(
+                    derived_route_capabilities(
+                        route.capabilities, supports_streaming=route.supports_streaming
+                    ),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
                 "notes": "",
             }
         )
@@ -181,7 +185,6 @@ def generate_pricing_tsv(
 
     for pricing in sorted(rows, key=lambda p: (p.provider, p.model, p.currency)):
         upstream = upstream_by_key.get((pricing.provider, pricing.model), pricing.model)
-        first_source = pricing.provenance.sources[0]
         writer.writerow(
             {
                 "provider": pricing.provider,
@@ -195,12 +198,16 @@ def generate_pricing_tsv(
                 "request_price": _dim(pricing, "request"),
                 "valid_from": pricing.valid_from.astimezone(_utc()).isoformat(),
                 "source_url": _first_provenance_url(bundle, pricing),
-                "source_retrieved_at": _source_retrieved_at(bundle, first_source),
-                "pricing_metadata": json.dumps(
-                    {"dimensions": {d.name: {"value": d.value, "unit": d.unit} for d in pricing.dimensions}},
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
+                # 180-f (F2): generated rows must carry only metadata the
+                # runtime pricing_metadata contract can represent. The
+                # proposal's dimension data already lives in the typed
+                # price columns and source provenance lives in the sealed
+                # bundle's source records; injecting either into row
+                # metadata would make the imported row unrepresentable on
+                # the next baseline export and block the very round trip
+                # this artifact is meant to feed.
+                "source_retrieved_at": "",
+                "pricing_metadata": "",
                 "notes": "",
             }
         )

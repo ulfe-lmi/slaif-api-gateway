@@ -34,6 +34,7 @@ from typer.testing import CliRunner
 
 from slaif_gateway.cli.catalog_refresh import _baseline_document_bytes
 from slaif_gateway.cli.main import app
+from slaif_gateway.config import get_settings
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.schemas.catalog_refresh import BaselineDocument
@@ -67,6 +68,7 @@ API_KEY_ENV_VAR = "OPENROUTER_API_KEY"
 VALID_FROM = datetime(2026, 9, 1, tzinfo=UTC)
 GENERATED_AT = "2026-09-22T12:00:00+00:00"
 RETRIEVED_AT = "2026-09-22T11:00:00+00:00"
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "catalog_refresh"
 
 MODELS = ("synthetic/stable-v1", "synthetic/updated-v1", "synthetic/new-v1")
 # Allowlisted monetary metadata per model (180-e E2): the runtime contract
@@ -271,6 +273,78 @@ async def _seed_catalog(database_url: str) -> None:
         await engine.dispose()
 
 
+async def _seed_provider_only(database_url: str) -> None:
+    """Seed only the provider identity row (180-f F2 round-trip proof).
+
+    Idempotent: converges the task-owned provider row so the test can be
+    re-run against the same task-owned database. The file's autouse cleanup
+    removes the provider row and every synthetic route/pricing row again.
+    """
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM provider_configs WHERE provider = :provider"),
+                {"provider": PROVIDER},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO provider_configs (id, provider, display_name, kind, base_url,"
+                    " api_key_env_var, enabled, timeout_seconds, max_retries, notes,"
+                    " created_at, updated_at) VALUES"
+                    " (:id, :provider, 'Synthetic OpenRouter (integration)', 'openai_compatible',"
+                    " :base_url, :env_var, true, 300, 2, :notes, now(), now())"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "provider": PROVIDER,
+                    "base_url": BASE_URL,
+                    "env_var": API_KEY_ENV_VAR,
+                    "notes": f"upstream credential {PROVIDER_SECRET} managed by env var {API_KEY_ENV_VAR}; {PRIVATE_CANARY}",
+                },
+            )
+    finally:
+        await engine.dispose()
+
+
+async def _fetch_route_capabilities(database_url: str, model: str) -> dict:
+    """The ACTUAL stored capabilities JSON of one task-owned route row."""
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    text(
+                        "SELECT capabilities FROM model_routes"
+                        " WHERE provider = :provider AND requested_model = :model"
+                    ),
+                    {"provider": PROVIDER, "model": model},
+                )
+            ).mappings().all()
+    finally:
+        await engine.dispose()
+    assert len(rows) == 1, f"expected exactly one route row for {model}, got {len(rows)}"
+    value = rows[0]["capabilities"]
+    return json.loads(value) if isinstance(value, str) else dict(value)
+
+
+async def _count_task_rows(database_url: str, table: str, column: str, model: str) -> int:
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.connect() as connection:
+            return (
+                await connection.execute(
+                    text(
+                        f"SELECT COUNT(*) FROM {table}"
+                        f" WHERE provider = :provider AND {column} = :model"
+                    ),
+                    {"provider": PROVIDER, "model": model},
+                )
+            ).scalar_one()
+    finally:
+        await engine.dispose()
+
+
 async def _seed_pad_routes(database_url: str, count: int) -> list[str]:
     """Seed many routes for a second (unselected) provider to force pagination."""
     models = [f"synthetic/pad-{index:04d}" for index in range(count)]
@@ -335,21 +409,22 @@ async def _delete_all_synthetic_rows(database_url: str) -> None:
     engine = create_async_engine(database_url, future=True)
     try:
         async with engine.begin() as connection:
+            # 180-f (F2): the round-trip proof imports synthetic/chat-v1 in
+            # addition to MODELS; every synthetic row of a task-owned
+            # provider must be cleaned up by this file's autouse hook.
             await connection.execute(
                 text(
                     "DELETE FROM model_routes WHERE (provider = 'openrouter'"
-                    " AND requested_model = ANY(:models))"
+                    " AND requested_model LIKE 'synthetic/%')"
                     " OR (provider = 'openai' AND requested_model LIKE 'synthetic/%')"
                 ),
-                {"models": list(MODELS)},
             )
             await connection.execute(
                 text(
                     "DELETE FROM pricing_rules WHERE (provider = 'openrouter'"
-                    " AND upstream_model = ANY(:models))"
+                    " AND upstream_model LIKE 'synthetic/%')"
                     " OR (provider = 'openai' AND upstream_model LIKE 'synthetic/%')"
                 ),
-                {"models": list(MODELS)},
             )
             await connection.execute(
                 text(
@@ -513,7 +588,7 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
         "revision": {
             "schema_version": "1",
             "slaif_revision": "obj180-integration-revision",
-            "renderer_version": "180.3",
+            "renderer_version": "180.4",
             "policy_version": 1,
         },
         "research": {
@@ -1283,15 +1358,16 @@ def test_e3_audio_only_reproducer_blocks_cli_review(migrated_postgres_url: str, 
     assert disp["synthetic/stable-v1"] == "BLOCKED"
 
 
-def test_e3_effective_default_contract_blocks_audio_only_even_without_text_claim(
+def test_e3_text_disabled_declaration_on_existing_route_is_visible_change(
     migrated_postgres_url: str, tmp_path: Path
 ) -> None:
-    """E3 effective contract: an audio-only source with BOTH the model and
-    the route facts declaring text=false still cannot yield an executable
-    text route. Flat declarations cannot narrow the runtime contract the
-    import path would actually create (the default chat_completions block
-    enables chat_text), so the effective text claim binds to the observed
-    audio-only fact and blocks."""
+    """180-f (F2) x E3: an audio-only source with BOTH the model and the
+    route facts declaring text=false matches the observed fact, so no
+    invented value mismatch appears; but on an EXISTING row the explicit
+    text denial is a VISIBLE capability change. The refresh shows
+    route.capabilities.chat_text as a CHANGED (excluded update) field and
+    the create-only import gate blocks the run because no apply operation
+    exists - no silent no-op, no silent default expansion."""
     asyncio.run(_seed_catalog(migrated_postgres_url))
     doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
     baseline_path = tmp_path / "baseline.json"
@@ -1310,10 +1386,12 @@ def test_e3_effective_default_contract_blocks_audio_only_even_without_text_claim
 
     bundle = _replay_bundle_with_snapshot_mutation(doc, mutate)
     for item in bundle["models"]:
-        item["capabilities"] = {"streaming": True, "text": False}
+        if item["model"] == "synthetic/stable-v1":
+            item["capabilities"] = {"streaming": True, "text": False}
     for item in bundle["routes"]:
-        item["capabilities"] = {"streaming": True, "text": False}
-    bundle["run_id"] = "obj180e-e3-effective-default"
+        if item["requested_model"] == "synthetic/stable-v1":
+            item["capabilities"] = {"streaming": True, "text": False}
+    bundle["run_id"] = "obj180f-e3-text-disabled"
     bundle_path = tmp_path / "bundle.json"
     bundle_path.write_text(json.dumps(bundle, sort_keys=True, indent=1) + "\n", encoding="utf-8")
     result = runner.invoke(
@@ -1325,14 +1403,170 @@ def test_e3_effective_default_contract_blocks_audio_only_even_without_text_claim
     )
     assert result.exit_code == 20, result.output
     validation = json.loads(
-        (tmp_path / "runs" / "obj180e-e3-effective-default" / "validation.json").read_text(encoding="utf-8")
+        (tmp_path / "runs" / "obj180f-e3-text-disabled" / "validation.json").read_text(encoding="utf-8")
     )
     codes = {w["code"] for w in validation["warnings"]}
-    assert "source_evidence_value_mismatch" in codes
-    detail = next(w["detail"] for w in validation["warnings"] if w["code"] == "source_evidence_value_mismatch")
-    assert "model:capability:text" in detail
-    disp = {d["model"]: d["disposition"] for d in validation["dispositions"]}
-    assert disp["synthetic/stable-v1"] == "BLOCKED"
+    # The declared text=false claim matches the observed audio-only fact:
+    # no fabricated value mismatch.
+    assert "source_evidence_value_mismatch" not in codes
+    # The create-only artifact excludes the update; the gate says so.
+    assert "gate:import.routes" in codes
+    disp = {d["model"]: d for d in validation["dispositions"]}
+    entry = disp["synthetic/stable-v1"]
+    assert entry["disposition"] == "CHANGED"
+    assert "route.capabilities.chat_text" in entry["detail"]
+
+
+# --- 180-f F2: create -> import -> export -> refresh round trip -------------
+
+def test_f2_generated_routes_survive_create_export_refresh(
+    migrated_postgres_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """180-f (F2): the complete local round trip in a fresh task-owned
+    database. Generate the valid first-install fixture (READY), dry-run and
+    explicitly confirm the deterministic route/pricing imports with an audit
+    reason, assert the ACTUAL persisted capabilities (the conservative
+    create contract - no permission widening), export the real rows, and
+    review the same synthetic source facts again: an honest UNCHANGED no-op
+    with header-only artifacts, no unrepresented-capability blocker and no
+    duplicate rows. This uses ONLY existing import commands with synthetic
+    data in a task-owned test database."""
+    import csv as csv_module
+
+    asyncio.run(_seed_provider_only(migrated_postgres_url))
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_bytes((FIXTURES / "bundle-first-install.json").read_bytes())
+    seal_key = tmp_path / "seal.key"
+    run_root = tmp_path / "runs"
+
+    # 1) first-install review of the committed fixture: READY.
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path), "--first-install",
+         "--run-root", str(run_root), "--seal-key", str(seal_key)],
+    )
+    assert result.exit_code == 0, result.output
+    run_dir = run_root / "fixture-first-install-001"
+    routes_tsv = run_dir / "routes-proposal.tsv"
+    pricing_tsv = run_dir / "pricing-proposal.tsv"
+    with routes_tsv.open(encoding="utf-8") as fh:
+        emitted = next(csv_module.DictReader(fh, delimiter="\t"))
+    # The emitted capabilities are the nested runtime shape - the single
+    # derived contract - with no stray flat storage keys.
+    assert json.loads(emitted["capabilities"]) == {
+        "chat_completions": {"chat_streaming": True, "chat_text": True}
+    }
+
+    # The import commands resolve the task-owned database from
+    # DATABASE_URL; get_settings is lru_cached, so refresh it after the
+    # env switch (the established cli_env fixture pattern in this suite).
+    monkeypatch.setenv("DATABASE_URL", migrated_postgres_url)
+    get_settings.cache_clear()
+
+    # 2) dry-run both imports.
+    result = runner.invoke(
+        app, ["routes", "import", "--file", str(routes_tsv), "--dry-run", "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["valid_count"] == 1 and payload["invalid_count"] == 0
+    result = runner.invoke(
+        app, ["pricing", "import", "--file", str(pricing_tsv), "--dry-run", "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["validated_count"] == 1 and payload["invalid_count"] == 0
+
+    # 3) explicitly confirmed imports with audit reasons.
+    result = runner.invoke(
+        app,
+        ["routes", "import", "--file", str(routes_tsv), "--execute",
+         "--confirm-import", "--reason",
+         "180-f F2 round-trip proof: confirmed create of synthetic/chat-v1",
+         "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["created_count"] == 1
+    result = runner.invoke(
+        app,
+        ["pricing", "import", "--file", str(pricing_tsv), "--execute",
+         "--confirm-import", "--reason",
+         "180-f F2 round-trip proof: confirmed pricing for synthetic/chat-v1",
+         "--json"],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["created_count"] == 1
+
+    # 4) the ACTUAL persisted capabilities: exactly the conservative create
+    # contract - the importer must not have widened permissions.
+    stored = asyncio.run(_fetch_route_capabilities(migrated_postgres_url, "synthetic/chat-v1"))
+    assert stored == {"chat_completions": {"chat_streaming": True, "chat_text": True}}
+
+    # 5) export the real rows.
+    baseline_path = tmp_path / "baseline.json"
+    result = runner.invoke(
+        app, ["catalog-refresh", "export-baseline", "--db-url", migrated_postgres_url,
+              "--out", str(baseline_path)],
+    )
+    assert result.exit_code == 0, result.output
+    baseline_doc = BaselineDocument.model_validate_json(baseline_path.read_bytes())
+
+    # 6) review the same synthetic source facts against the exported rows.
+    bundle = json.loads(bundle_path.read_bytes())
+    bundle["run_id"] = "fixture-refresh-002"
+    bundle["baseline"] = {
+        "mode": "exported_file",
+        "exported_at": baseline_doc.exported_at.isoformat(),
+        "target_database": baseline_doc.target.database,
+        "postgres_version": baseline_doc.target.postgres_version,
+        "sql_checked": baseline_doc.sql_checked,
+        "row_counts": {
+            "providers": baseline_doc.counts.providers,
+            "routes": baseline_doc.counts.routes,
+            "pricing_rules": baseline_doc.counts.pricing_rules,
+            "fx_rates": baseline_doc.counts.fx_rates,
+        },
+        "content_sha256": baseline_doc.content_sha256,
+    }
+    bundle_path2 = tmp_path / "bundle-refresh.json"
+    bundle_path2.write_text(json.dumps(bundle, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path2),
+         "--baseline-file", str(baseline_path),
+         "--run-root", str(run_root), "--seal-key", str(seal_key)],
+    )
+    # On a fresh CI database this is READY (exit 0). Against a shared
+    # session database carrying other files' openrouter rows, the
+    # model_disappeared REVIEW findings for those rows make it
+    # READY_WITH_WARNINGS (exit 10). Neither may be BLOCKED: the round
+    # trip itself must produce no blockers.
+    assert result.exit_code in (0, 10), result.output
+    validation = json.loads(
+        (run_root / "fixture-refresh-002" / "validation.json").read_text(encoding="utf-8")
+    )
+    assert not any(w["severity"] == "BLOCKER" for w in validation["warnings"])
+    codes = {w["code"] for w in validation["warnings"]}
+    assert "baseline_unrepresented_capabilities" not in codes
+    assert "baseline_unrepresented_metadata" not in codes
+    assert "source_observations_contradict" not in codes
+    disp = {d["model"]: d for d in validation["dispositions"]}
+    assert disp["synthetic/chat-v1"]["disposition"] == "UNCHANGED"
+    assert validation["counts"]["changed"] == 0
+    # Zero executable rows: header-only route/pricing artifacts.
+    for name in ("routes-proposal.tsv", "pricing-proposal.tsv"):
+        with (run_root / "fixture-refresh-002" / name).open(encoding="utf-8") as fh:
+            row_lines = [line for line in fh.read().splitlines() if line.strip()]
+        assert len(row_lines) == 1, f"{name} must be header-only, got {len(row_lines)} line(s)"
+    # No duplicate rows: still exactly one route and one pricing row.
+    assert asyncio.run(_count_task_rows(migrated_postgres_url, "model_routes", "requested_model", "synthetic/chat-v1")) == 1
+    assert asyncio.run(_count_task_rows(migrated_postgres_url, "pricing_rules", "upstream_model", "synthetic/chat-v1")) == 1
+
+
+
+
 
 
 # --- 180-e E5: live db_snapshot review + verify replay -----------------------

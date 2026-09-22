@@ -31,7 +31,19 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from slaif_gateway.services.audio_route_capabilities import KNOWN_AUDIO_ENDPOINT_CAPABILITIES
-from slaif_gateway.services.chat_completion_route_capabilities import KNOWN_CHAT_COMPLETION_CAPABILITIES
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    CHAT_CAPABILITY_CACHED_INPUT_USAGE,
+    CHAT_CAPABILITY_FUNCTION_TOOLS,
+    CHAT_CAPABILITY_JSON_MODE,
+    CHAT_CAPABILITY_LEGACY_FUNCTIONS,
+    CHAT_CAPABILITY_LOGPROBS,
+    CHAT_CAPABILITY_REASONING_USAGE,
+    CHAT_CAPABILITY_STREAMING,
+    CHAT_CAPABILITY_STRUCTURED_OUTPUTS,
+    CHAT_CAPABILITY_TEXT,
+    CHAT_COMPLETIONS_CAPABILITIES_KEY,
+    KNOWN_CHAT_COMPLETION_CAPABILITIES,
+)
 from slaif_gateway.services.embeddings_route_capabilities import KNOWN_EMBEDDINGS_CAPABILITIES
 from slaif_gateway.services.external_tool_policy_contract import (
     DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
@@ -47,7 +59,7 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 
 SCHEMA_VERSION = "1"
-RENDERER_VERSION = "180.3"
+RENDERER_VERSION = "180.4"
 POLICY_VERSION = 1
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -648,6 +660,87 @@ _CAPABILITY_BOOL_BLOCKS: dict[str, frozenset[str]] = {
 _CAPABILITY_TOP_KEYS: frozenset[str] = frozenset(_CAPABILITY_BOOL_BLOCKS) | frozenset(
     {CODEX_LIMITS_KEY, CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY, "external_tools"}
 )
+
+# 180-f (F2): the single deterministic mapping between proposal intent and
+# the runtime chat_completions capability shape. EVERY consumer (emitted
+# import bytes, evidence requirements, before/after comparison, rendered
+# rows) uses this mapping; nothing else grants or compares capability
+# meaning.
+FLAT_CAPABILITY_TO_CHAT_FIELD: dict[str, str] = {
+    "text": CHAT_CAPABILITY_TEXT,
+    "streaming": CHAT_CAPABILITY_STREAMING,
+    "function_tools": CHAT_CAPABILITY_FUNCTION_TOOLS,
+    "legacy_functions": CHAT_CAPABILITY_LEGACY_FUNCTIONS,
+    "structured_outputs": CHAT_CAPABILITY_STRUCTURED_OUTPUTS,
+    "json_mode": CHAT_CAPABILITY_JSON_MODE,
+    "logprobs": CHAT_CAPABILITY_LOGPROBS,
+    "reasoning_usage": CHAT_CAPABILITY_REASONING_USAGE,
+    "cached_input_usage": CHAT_CAPABILITY_CACHED_INPUT_USAGE,
+}
+
+
+def declared_capability_overlay(flat: Mapping[str, bool] | None) -> dict[str, bool]:
+    """Explicitly declared standard keys, mapped onto chat_completions fields.
+
+    Only keys actually present in the proposal intent are returned; omitted
+    keys are NOT defaulted, so an overlay can never silently rewrite an
+    approved stored field (including an explicit denial).
+    """
+    overlay: dict[str, bool] = {}
+    for key, value in (flat or {}).items():
+        if key in FLAT_CAPABILITY_TO_CHAT_FIELD and isinstance(value, bool):
+            overlay[FLAT_CAPABILITY_TO_CHAT_FIELD[key]] = value
+    return overlay
+
+
+def derive_standard_create_capabilities(
+    flat: Mapping[str, bool] | None, *, supports_streaming: bool
+) -> dict[str, bool]:
+    """Capability block for a NEW standard Chat Completions route.
+
+    The documented standard scope is text plus the route's declared streaming
+    intent, plus any other standard key the proposal EXPLICITLY declares.
+    Nothing else is granted: undeclared function tools, structured outputs,
+    logprobs or any other runtime default stay absent (runtime-denied) - the
+    create never turns on permissions the proposal did not request.
+    """
+    declared = declared_capability_overlay(flat)
+    block: dict[str, bool] = {
+        CHAT_CAPABILITY_TEXT: declared.get(CHAT_CAPABILITY_TEXT, True),
+        CHAT_CAPABILITY_STREAMING: declared.get(CHAT_CAPABILITY_STREAMING, supports_streaming),
+    }
+    for key, value in declared.items():
+        if key not in block:
+            block[key] = value
+    return dict(sorted(block.items()))
+
+
+def overlay_route_capabilities(
+    stored_block: Mapping[str, bool] | None, flat: Mapping[str, bool] | None
+) -> dict[str, bool]:
+    """Effective block for an EXISTING row: the reviewed baseline block as the
+    base, with ONLY the explicitly declared intent overlaid. Omitted approved
+    fields - including explicit denials - are preserved verbatim."""
+    effective = dict(stored_block) if isinstance(stored_block, Mapping) else {}
+    effective.update(declared_capability_overlay(flat))
+    return effective
+
+
+def derived_route_capabilities(
+    flat: Mapping[str, bool] | None, *, supports_streaming: bool
+) -> dict[str, Any]:
+    """Canonical capabilities map emitted for a NEW standard route row.
+
+    Standard refresh proposals are Chat Completions routes only, so the map
+    carries exactly the recognized nested runtime block (the conservative
+    create contract) and no stray flat storage keys; the import path stores
+    a declared nested block verbatim.
+    """
+    return {
+        CHAT_COMPLETIONS_CAPABILITIES_KEY: derive_standard_create_capabilities(
+            flat, supports_streaming=supports_streaming
+        )
+    }
 
 
 def validate_route_capability_projection(raw: Any) -> None:

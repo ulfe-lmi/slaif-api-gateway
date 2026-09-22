@@ -310,8 +310,8 @@ def test_policy_document_defaults_and_version() -> None:
     assert policy.fx_change_review == Decimal("0.03")
     assert policy.source_stale_review == timedelta(hours=24)
     assert policy.source_stale_blocked == timedelta(hours=72)
-    assert policy.fx_stale_review == timedelta(days=3)
-    assert policy.fx_stale_blocked == timedelta(days=7)
+    assert policy.fx_stale_review_days == 3
+    assert policy.fx_stale_blocked_days == 7
 
 
 def test_policy_document_rejects_unsupported_version() -> None:
@@ -496,10 +496,13 @@ def _source_age_report(hours: float):
     return validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
 
 
-def test_source_age_boundaries_are_strict() -> None:
+def test_source_age_boundaries_are_exact() -> None:
+    # 180-f (F4): <= 24h fresh (inclusive), > 24h through 72h review,
+    # > 72h blocked.
     assert _source_age_report(23).state == OVERALL_READY
-    assert _source_age_report(24).state == OVERALL_READY_WITH_WARNINGS  # age == 24h -> review
-    assert "source_stale_review" in _codes(_source_age_report(25))
+    assert "source_stale_review" not in _codes(_source_age_report(24))  # age == 24h -> fresh
+    assert _source_age_report(24).state == OVERALL_READY
+    assert "source_stale_review" in _codes(_source_age_report(24 + 1 / 60))
     assert "source_stale_blocked" not in _codes(_source_age_report(72))  # age == 72h -> review
     assert "source_stale_blocked" in _codes(_source_age_report(72 + 1 / 60))
     assert _source_age_report(72 + 1 / 60).state == OVERALL_BLOCKED
@@ -532,7 +535,13 @@ def _bound_ecb_source(pair_model: str = "EUR-USD", *, rate: str = "1.08",
     )
 
 
-def _fx_report(rate: str, published_hours_ago: float | None, *, pair: str = "USD-EUR"):
+def _fx_report(
+    rate: str,
+    published_hours_ago: float | None,
+    *,
+    pair: str = "USD-EUR",
+    second_ecb_rate: str | None = None,
+):
     """USD-priced bundle with one FX fact bound to a supplied ECB reference
     quote; the mini baseline controls the pair. ``published_hours_ago`` must
     be a number: an ECB-backed fact without a publication date blocks, while
@@ -564,6 +573,28 @@ def _fx_report(rate: str, published_hours_ago: float | None, *, pair: str = "USD
             published_at=published.isoformat().replace("+00:00", "Z"),
         )
     )
+    if second_ecb_rate is not None:
+        # 180-f (F3): a second supplied snapshot of the same official
+        # URL/date with its own (correctly regenerated) digest. Source
+        # identities are (provider|model|source_kind), so the second
+        # retrieval of the same pair quote carries the pair's ALIAS model
+        # part (the same currency pair, the other name); quote matching
+        # uses the parsed quote currencies, not the label, and the two
+        # snapshots remain two observations of one official quote.
+        first_base, first_quote = pair.split("-")
+        alias_model = f"{first_quote}-{first_base}"
+        second_xml_rate = second_ecb_rate if pair == "EUR-USD" else str(
+            (Decimal(1) / Decimal(second_ecb_rate)).quantize(Decimal("0.000000001"))
+        )
+        payload["sources"].append(
+            _evidence_tests.ecb_source_dict(
+                pair_model=alias_model,
+                date_s=published.date().isoformat(),
+                rate=second_xml_rate,
+                retrieved_at=(GENERATED_AT - timedelta(hours=2)).isoformat().replace("+00:00", "Z"),
+                published_at=published.isoformat().replace("+00:00", "Z"),
+            )
+        )
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     baseline = _mini_usd_baseline(fx=fx)
     report, artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
@@ -587,6 +618,42 @@ def test_fx_move_above_3_percent_is_review() -> None:
     comparison = next(c for c in report.fx_comparisons if c["pair"] == "USD→EUR")
     assert comparison["state"] == "CHANGED_REVIEW"
     assert report.state == OVERALL_BLOCKED
+
+
+def test_fx_equivalent_spellings_do_not_contradict() -> None:
+    """180-f (F3): two supplied official snapshots of the same quote,
+    one spelling the rate 1.08 and the other 1.080, agree as exact
+    Decimals (with pair/date/direction context) and must not fabricate a
+    source_observations_contradict; the FX fact stays backed."""
+    report, _ = _fx_report("1.08", 1, second_ecb_rate="1.080")
+    assert "source_observations_contradict" not in _codes(report)
+    assert "fx_evidence_unbound" not in _codes(report)
+    comparison = next(c for c in report.fx_comparisons if c["pair"] == "USD\u2192EUR")
+    assert comparison["state"] != "NEW"  # the fact bound and compared
+
+
+def test_fx_genuinely_different_quotes_still_contradict() -> None:
+    """180-f (F3): numerically different same-date, same-direction quotes
+    (1.08 vs 1.09) are a genuine conflict and still block."""
+    report, _ = _fx_report("1.08", 1, second_ecb_rate="1.09")
+    assert "source_observations_contradict" in _codes(report)
+    assert report.state == OVERALL_BLOCKED
+
+
+def test_fx_reciprocal_quotes_agree_in_proposed_pair_direction() -> None:
+    """180-f (F3): two same-date official snapshots must agree in the
+    PROPOSED pair's direction - exact Decimal equality for quotes in the
+    pair's own direction, bounded reciprocal tolerance for quotes supplied
+    in the opposite direction (no unstable invert-back of the fact rate)."""
+    # Official ECB quotes are EUR-based (EUR->USD). For a USD->EUR fact
+    # pair they arrive in the reciprocal direction: both must normalize to
+    # the proposed pair's direction and agree within tolerance.
+    report, _ = _fx_report("1.08", 1, pair="USD-EUR", second_ecb_rate="1.08")
+    assert "source_observations_contradict" not in _codes(report)
+    # For a EUR->USD fact pair the official quotes are in the pair's own
+    # direction and must be exactly equal.
+    report, _ = _fx_report("1.08", 1, pair="EUR-USD", second_ecb_rate="1.08")
+    assert "source_observations_contradict" not in _codes(report)
 
 
 def test_fx_eur_to_native_is_reciprocated_deterministically() -> None:
@@ -673,11 +740,17 @@ def test_fx_ambiguous_active_rows_block() -> None:
 
 
 def test_fx_publication_age_boundaries_are_calendar_days() -> None:
-    assert "fx_stale_review" not in _codes(_fx_report("1", 3 * 24 - 1)[0])
-    assert "fx_stale_review" in _codes(_fx_report("1", 3 * 24)[0])  # == 3 days -> review
-    assert "fx_stale_blocked" not in _codes(_fx_report("1", 7 * 24)[0])  # == 7 days -> review
-    assert "fx_stale_blocked" in _codes(_fx_report("1", 7 * 24 + 1)[0])
-    assert _fx_report("1", 7 * 24 + 1)[0].state == OVERALL_BLOCKED
+    # 180-f (F4): calendar-day basis on the UTC dates (GENERATED_AT is
+    # 12:00 UTC): <= 3 days fresh (inclusive), > 3 through 7 review,
+    # > 7 days blocked; the time-of-day never changes the state.
+    assert "fx_stale_review" not in _codes(_fx_report("1", 3 * 24)[0])  # == 3 calendar days -> fresh
+    # 73h ago is still only 3 calendar days old: date, not time-of-day.
+    assert "fx_stale_review" not in _codes(_fx_report("1", 3 * 24 + 1)[0])
+    assert "fx_stale_review" in _codes(_fx_report("1", 4 * 24)[0])
+    assert "fx_stale_blocked" not in _codes(_fx_report("1", 7 * 24)[0])  # == 7 calendar days -> review
+    assert "fx_stale_blocked" not in _codes(_fx_report("1", 7 * 24 + 1)[0])  # still 7 calendar days
+    assert "fx_stale_blocked" in _codes(_fx_report("1", 8 * 24)[0])
+    assert _fx_report("1", 8 * 24)[0].state == OVERALL_BLOCKED
 
 
 def test_fx_missing_publication_date_blocks() -> None:
@@ -975,16 +1048,69 @@ def test_fabricated_host_urls_are_review_not_ready() -> None:
 # --- 180-e: baseline projection semantics (E1/E2) ----------------------------
 
 def test_declared_capability_flip_is_a_changed_field() -> None:
-    """The proposal declares only the fields it asserts; a flipped declared
-    capability against the baseline's nested projection is a real change,
-    named per key (union comparison is not used)."""
-    bundle = _bundle(**{"routes.0.capabilities": {"text": True, "streaming": False}})
+    """180-f (F2): an explicitly requested capability change is a visible
+    change, named per chat_completions field (overlay semantics: only the
+    declared key is rewritten, the rest of the stored block is preserved)."""
+    bundle = _bundle(**{"routes.0.capabilities": {"text": True, "json_mode": False}})
     report = _review(bundle)
     assert report.state == OVERALL_BLOCKED
     dispositions = {(d.provider, d.model): d for d in report.dispositions}
     disp = dispositions[("openrouter", "synthetic/stable-v1")]
     assert disp.disposition == "CHANGED"
-    assert "route.capabilities.streaming" in disp.detail
+    assert "route.capabilities.chat_json_mode" in disp.detail
+    assert "route.capabilities.chat_text" not in disp.detail  # text was not changed
+
+
+def test_contradictory_streaming_intent_is_rejected_explicitly() -> None:
+    """180-f (F2): a proposal declaring streaming capability=false while its
+    supports_streaming column is true is self-contradictory; it is rejected
+    explicitly (fail-closed), never resolved by a silent precedence."""
+    bundle = _bundle(**{"routes.0.capabilities": {"text": True, "streaming": False}})
+    report = _review(bundle)
+    assert report.state == OVERALL_BLOCKED
+    assert "streaming_intent_conflict" in _codes(report)
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    disp = dispositions[("openrouter", "synthetic/stable-v1")]
+    assert disp.disposition == "BLOCKED"
+
+
+def test_existing_denial_plus_partial_proposal_is_honest_no_op() -> None:
+    """180-f (F2) partial-intent preservation - exact strategic reproducer:
+    the stored block is the FULL actual runtime default chat_completions
+    block with ONLY chat_function_tools set to false, and the proposal
+    declares ONLY text:true / streaming:true. The refresh must be an honest
+    no-op: no re-enable of the denial, no rewrite of any other approved
+    field. A valid 2-field stored block carrying an explicit denial is also
+    legitimate runtime metadata and is preserved the same way."""
+    from slaif_gateway.services.chat_completion_route_capabilities import (
+        default_chat_completion_capabilities,
+    )
+
+    bundle = _bundle()  # declares only text:true / streaming:true
+    baseline = _mini_baseline()
+
+    def review_with_row0_caps(raw_block: dict) -> None:
+        row = baseline.routes[0].model_copy(
+            update=_baseline_route_caps({"chat_completions": dict(sorted(raw_block.items()))})
+        )
+        patched = baseline.model_copy(update={"routes": (row,) + baseline.routes[1:]})
+        report, _ = validate_bundle(bundle, patched, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
+        dispositions = {(d.provider, d.model): d for d in report.dispositions}
+        disp = dispositions[("openrouter", "synthetic/stable-v1")]
+        assert disp.disposition == "UNCHANGED"
+        assert "chat_function_tools" not in disp.detail
+        assert report.counts["changed"] == 0
+
+    # Scenario 1: the FULL actual runtime default block, only
+    # chat_function_tools flipped to false.
+    full_block = default_chat_completion_capabilities(supports_streaming=True)
+    full_block["chat_function_tools"] = False
+    review_with_row0_caps(full_block)
+
+    # Scenario 2: a valid 2-field stored block plus an explicit denial.
+    review_with_row0_caps(
+        {"chat_streaming": True, "chat_text": True, "chat_function_tools": False}
+    )
 
 
 def test_subset_capability_claim_matching_baseline_is_not_changed() -> None:
