@@ -28,7 +28,10 @@ from slaif_gateway.services.catalog_refresh.baseline import load_baseline
 from slaif_gateway.services.catalog_refresh.bundle import load_bundle
 from slaif_gateway.services.catalog_refresh.policy import policy_from_document
 from slaif_gateway.services.catalog_refresh.rendering import render_report
-from slaif_gateway.services.catalog_refresh.validation import validate_bundle
+from slaif_gateway.services.catalog_refresh.validation import (
+    sql_capture_for_mode,
+    validate_bundle,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "catalog_refresh"
 runner = CliRunner()
@@ -160,7 +163,7 @@ def _first_install_payload() -> dict:
 
 def _validate_payload(payload: dict, baseline: "object | None" = None):
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report, artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))
+    report, artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     return bundle, report, artifacts
 
 
@@ -909,13 +912,186 @@ def test_unsupported_capability_claim_cannot_use_provider_catalog() -> None:
     assert "source_evidence_value_mismatch" in _codes(report)
 
 
+def _set_openrouter_snapshot_deprecated(payload: dict, deprecated: bool | None) -> None:
+    """Re-emit the openrouter evidence with the deprecation fact set (or absent)."""
+    data = json.loads(openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.25", "1.0")}))
+    if deprecated is None:
+        data["data"][0].pop("deprecation", None)
+        data["data"][0].pop("architecture", None)
+    else:
+        data["data"][0]["deprecation"] = {"is_deprecated": deprecated}
+    snapshot = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
+            source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
+
+
+def test_observed_deprecation_true_with_non_deprecated_proposal_blocks() -> None:
+    """180-e E3 reproducer 1: the snapshot reports is_deprecated=true while
+    the proposal carries deprecated=false. Omitting the proposal field is a
+    bypass: the observed official fact blocks the affected proposal instead
+    (retain-local, no auto-delete or auto-disable)."""
+    payload = _first_install_payload()
+    _set_openrouter_snapshot_deprecated(payload, True)
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED"
+    assert "source_evidence_value_mismatch" in _codes(report)
+    finding = next(
+        w for w in report.warnings if w.code == "source_evidence_value_mismatch"
+    )
+    assert "deprecated" in finding.detail
+    assert "retain the local row" in finding.detail
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    assert dispositions[("openrouter", "synthetic/chat-v1")].disposition == "BLOCKED"
+
+
+def test_route_text_claim_cannot_bypass_observed_audio_only_modalities() -> None:
+    """180-e E3 reproducer 2: the source is audio-only (observed text=false)
+    and only the ROUTE claims text (the model facts do not). Effective text
+    eligibility is facts OR any route, so the claim must bind to the
+    observed 'false' and block — not stay READY."""
+    payload = _first_install_payload()
+    for item in payload["models"]:
+        item["capabilities"] = {"streaming": True}
+    # the route still claims text
+    for item in payload["routes"]:
+        item["capabilities"] = {"streaming": True, "text": True}
+    data = json.loads(openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.25", "1.0")}))
+    data["data"][0]["architecture"] = {
+        "input_modalities": ["audio"],
+        "output_modalities": ["audio"],
+    }
+    snapshot = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
+            source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED"
+    assert "source_evidence_value_mismatch" in _codes(report)
+    finding = next(
+        w for w in report.warnings if w.code == "source_evidence_value_mismatch"
+    )
+    assert "model:capability:text" in finding.detail
+
+
+def test_text_claim_still_binds_when_source_observations_text() -> None:
+    """Positive control: the same route-level text claim binds when the
+    snapshot's modalities observe text (the fixture snapshot does)."""
+    payload = _first_install_payload()
+    for item in payload["models"]:
+        item["capabilities"] = {"streaming": True}
+    for item in payload["routes"]:
+        item["capabilities"] = {"streaming": True, "text": True}
+    set_openrouter_evidence(payload, {"synthetic/chat-v1": ("0.25", "1.0")})
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "READY", _codes(report)
+    fields = {item["field"] for item in report.source_evidence["backed_facts"]}
+    assert "model:capability:text" in fields
+
+
+def test_absent_deprecation_observation_is_not_a_conflict_when_text_is_observed() -> None:
+    """A snapshot without deprecation facts emits no deprecation
+    observation; a proposal that does not claim deprecation is not in
+    conflict on that field while the observed text modality still backs the
+    text claim."""
+    payload = _first_install_payload()
+    data = json.loads(openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.25", "1.0")}))
+    data["data"][0].pop("deprecation", None)  # architecture (text) retained
+    snapshot = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
+            source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "READY", _codes(report)
+    assert "source_evidence_value_mismatch" not in _codes(report)
+
+
+def test_audio_only_source_blocks_effective_default_text_contract() -> None:
+    """E3 effective contract: an audio-only source with BOTH the model and
+    the route facts declaring text=false still cannot yield an executable
+    text route. Flat declarations cannot narrow the runtime contract the
+    import path would actually create (the default chat_completions block
+    enables chat_text), so the effective text claim must bind to the
+    observed audio-only fact."""
+    payload = _first_install_payload()
+    for item in payload["models"]:
+        item["capabilities"] = {"streaming": True, "text": False}
+    for item in payload["routes"]:
+        item["capabilities"] = {"streaming": True, "text": False}
+    data = json.loads(openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.25", "1.0")}))
+    data["data"][0]["architecture"] = {
+        "input_modalities": ["audio"],
+        "output_modalities": ["audio"],
+    }
+    snapshot = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
+    for source in payload["sources"]:
+        if source["provider"] == "openrouter":
+            source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
+            source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED"
+    assert "source_evidence_value_mismatch" in _codes(report)
+    finding = next(
+        w for w in report.warnings if w.code == "source_evidence_value_mismatch"
+    )
+    assert "model:capability:text" in finding.detail
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    assert dispositions[("openrouter", "synthetic/chat-v1")].disposition == "BLOCKED"
+
+
+def test_proposed_deprecation_true_with_official_observation_is_deprecated_retained() -> None:
+    """When the proposal carries the observed deprecation, the model is
+    handled as DEPRECATED (retain-local, no delete), not as a value
+    mismatch."""
+    payload = _first_install_payload()
+    for item in payload["models"]:
+        item["deprecated"] = True
+    _set_openrouter_snapshot_deprecated(payload, True)
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "READY_WITH_WARNINGS"
+    assert "model_deprecated" in _codes(report)
+    assert "source_evidence_value_mismatch" not in _codes(report)
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    assert dispositions[("openrouter", "synthetic/chat-v1")].disposition == "DEPRECATED"
+
+
+def test_non_official_deprecation_claim_cannot_drive_the_blocker() -> None:
+    """An off-host (non-official) snapshot claiming deprecation is not an
+    official observation: it cannot produce the deprecation value-mismatch
+    blocker. The run still blocks on source approval, for the right reason."""
+    payload = _first_install_payload()
+    data = json.loads(openrouter_snapshot_bytes({"synthetic/chat-v1": ("0.25", "1.0")}))
+    data["data"][0]["deprecation"] = {"is_deprecated": True}
+    snapshot = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
+    # only the OPENROUTER source moves off-host; the ECB FX reference stays
+    # intact so the failure isolates the deprecation-claim path
+    for source in payload["sources"]:
+        if source["provider"] != "openrouter":
+            continue
+        source["url"] = "https://example.invalid/fabricated-pricing"
+        source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
+        source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
+    _bundle, report, _artifacts = _validate_payload(payload)
+    assert report.state == "BLOCKED"
+    assert "source_provenance_review" in _codes(report)
+    # the deprecation claim came from a non-official observation: it must not
+    # surface as a value-mismatch blocker (the model still blocks because
+    # its required facts cannot bind to official evidence)
+    assert "source_evidence_value_mismatch" not in _codes(report)
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    assert dispositions[("openrouter", "synthetic/chat-v1")].disposition == "BLOCKED"
+
+
 def test_dropped_baseline_candidate_is_disappeared_not_silently_dropped() -> None:
     from tests.unit.test_catalog_refresh_policy import _baseline, _bundle  # noqa: F401
 
     # (kept in the policy file; mirrored here only for the count identity)
     bundle = load_bundle((FIXTURES / "bundle-truncated.json").read_bytes())
     baseline = load_baseline((FIXTURES / "baseline-synthetic.json").read_bytes())
-    report, _artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))
+    report, _artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     dispositions = {(d.provider, d.model): d.disposition for d in report.dispositions}
     assert dispositions[("openrouter", "synthetic/gone-v1")] == "BLOCKED"
     # every selected model is accounted for
@@ -930,7 +1106,7 @@ def test_dropped_baseline_candidate_is_disappeared_not_silently_dropped() -> Non
 
 def test_valid_bootstrap_create_only_stays_ready() -> None:
     bundle = load_bundle((FIXTURES / "bundle-first-install.json").read_bytes())
-    report, artifacts = validate_bundle(bundle, None, policy_from_document(bundle.policy))
+    report, artifacts = validate_bundle(bundle, None, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     assert report.state == "READY"
     assert report.counts["new"] == 1
     assert report.artifacts["route_rows"] == 1
@@ -942,7 +1118,7 @@ def test_true_no_change_refresh_stays_ready() -> None:
     from tests.unit.test_catalog_refresh_policy import _bundle, _mini_baseline
 
     bundle = _bundle()
-    report, _artifacts = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))
+    report, _artifacts = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     assert report.state == "READY"
     assert report.counts["unchanged"] == 2
     assert report.counts["new"] == 1
@@ -967,6 +1143,17 @@ def test_public_alias_binds_through_upstream_identity() -> None:
         "synthetic/alias-v1" if name == "synthetic/stable-v1" else name
         for name in payload["selection"]["model_include"]
     ]
+    # No baseline supplied: this is an explicit first-install create-only
+    # run, so the bundle declares first_install (no baseline document).
+    payload["baseline"] = {
+        "mode": "first_install",
+        "exported_at": None,
+        "target_database": None,
+        "postgres_version": None,
+        "sql_checked": False,
+        "row_counts": {},
+        "content_sha256": None,
+    }
     _bundle, report, _artifacts = _validate_payload(payload)
     assert report.state == "READY", _codes(report)
     # No baseline supplied: create-only run, so every selected model is new.
@@ -1499,7 +1686,7 @@ def test_parsing_and_validation_perform_no_network_io() -> None:
         raise AssertionError("network I/O attempted during offline review")
 
     bundle = load_bundle((FIXTURES / "bundle-first-install.json").read_bytes())
-    report, _artifacts = validate_bundle(bundle, None, policy_from_document(bundle.policy))
+    report, _artifacts = validate_bundle(bundle, None, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     assert report.state == "READY"
     html = render_report(bundle, report.to_dict())
     assert b"<script" not in html.lower()

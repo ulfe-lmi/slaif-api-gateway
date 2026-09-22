@@ -163,6 +163,24 @@ can verify a fact; operator input and semantic provenance never do, and an
 operator-input mirror of a model ID in a second provider is not provider
 evidence.
 
+**Effective proposal eligibility.** Eligibility for a capability is
+decided from the contract the import path would actually create, not from
+the flat declared keys alone. Proposals declare flat standard capability
+keys only; the runtime import path adds the default `chat_completions`
+capability block whenever no nested block is declared, and that default
+block enables `chat_text`. A flat `text` omission or `false` therefore
+cannot narrow the executable runtime surface: the effective text claim is
+the model-level claim or the actual runtime contract of any proposed
+route, computed with the importer's defaults, and it binds to the
+provider's observed facts like any other field — an audio-only
+observation cannot yield an executable ordinary text route.
+Provider-observed deprecation is surfaced conservatively even when the
+proposal boolean defaults false: the affected proposal is blocked with a
+retain-local disposition (the local row is retained; no auto-delete or
+auto-disable). Absent source information is never invented into false
+evidence: a snapshot without a deprecation or modality fact emits no
+observation for that field.
+
 **Canonical comparison.** Money compares in EUR after exact Decimal
 conversion with import-contract quantization: `1 == 1.0` (equal decimal
 spellings agree), a recognized unit/currency conversion is explicit, and a
@@ -257,8 +275,14 @@ network I/O.
 sections; `180.2` closes the remaining source-evidence bypasses: per-field
 declared-source and upstream-model binding, authoritative FX quote binding
 with no semantic escape, strict per-snapshot parsing with real locators,
-per-ID selection reconciliation with an unexplained-omission block, and
-the actual rendered observations in the one report).
+per-ID selection reconciliation with an unexplained-omission block,
+and the actual rendered observations in the one report; `180.3` adds
+baseline metadata preservation — nested capability projection with opaque
+unrepresented fingerprints, allowlisted monetary metadata mirroring the
+runtime contracts, and value-based `Numeric(18,9)` spelling rules —
+effective proposal eligibility computed from the importer's actual runtime
+defaults, the consistent-snapshot proof under a committing writer, and the
+truthful capture-path SQL evidence).
 
 ## Baselines
 
@@ -273,16 +297,43 @@ A read-only export covers exactly four allowlisted tables —
 `provider_configs`, `model_routes`, `pricing_rules`, and `fx_rates` —
 including validity windows, inside one `REPEATABLE READ` read-only
 transaction with keyset pagination and a count cross-check that refuses
-silent truncation. It exports metadata, not ORM dumps or settings:
+silent truncation. The whole document is one coherent snapshot: the count
+reads and the paginated rows cannot come from different versions, and a
+writer that commits while the export is paging must not mix into it
+(proven by a test-only barrier at the exporter's real query/page seam —
+with a committed writer mid-export the document stays exactly the
+pre-commit state, the next export sees exactly the post-commit state, and
+the same exporter forced to READ COMMITTED trips the cross-check as a
+negative control). The export performs no writes: no audit entries or row
+mutations. It exports metadata, not ORM dumps or settings:
 
 - provider **secret environment variable names may be retained (names only)**;
   values, connection strings, keys, token digests, users, sessions, request
   content, and unrelated data are never exported;
 - free-form notes and unrelated metadata are **not exported at all**: the
-  export is a field-specific allowlist (route/pricing/FX financial facts,
-  validity windows, capability booleans). There is no redaction regex and no
-  shape-bounded free text — ordinary private content in database notes or
-  metadata cannot survive into the document;
+  export is a field-specific allowlist. Capability booleans keep their
+  recognized nested runtime structure (the `chat_completions` contract
+  block and the other recognized endpoint-family blocks) verbatim; a key or
+  value outside the recognized contract is never silently discarded — it
+  flags the row `unrepresented` and carries only a safe opaque
+  deterministic fingerprint (an identity, not anonymized content), and the
+  affected changes are blocked;
+- pricing rows retain the **allowlisted monetary metadata the runtime
+  consumes**: audio output pricing, Codex long-context together with
+  **exactly one** cache-write field (price or multiplier, mirroring the
+  runtime contract), and the selected hosted fee with its pinned source.
+  Unsupported monetary metadata flags the row `unrepresented` instead of
+  enabling a misleading safe-update/no-change claim; historical or
+  unselected rows remain preserved;
+- money is bounded to the database `Numeric(18,9)` contract **by value, not
+  by spelling**: exact decimal strings only (floats rejected), trailing-zero
+  spellings of an in-range value are accepted and preserved verbatim
+  (`1.0000000000` is value-equal to `1`), and hostile exponents fail with
+  code-only errors before any arithmetic;
+- FX sources are either a safely sanitized URL (no credentials, query, or
+  fragment) or a bounded safe label (`manual`, `ecb`, ...); a legacy local
+  label is honest metadata, never authoritative current FX retrieval
+  evidence;
 - the `content_sha256` field is an **integrity check**, not
   "self-authenticating": it covers the canonical target identity plus rows
   (never the export timestamp), and `load`/`review` recompute and reject
@@ -292,10 +343,20 @@ silent truncation. It exports metadata, not ORM dumps or settings:
   a review that consumes the document from a file states that separately. A
   stale or tampered baseline file is a data error, not a valid baseline.
 
-Connection failure never becomes an empty bootstrap. The report always shows
-baseline mode, baseline age, target identity (without credentials), whether
-SQL was executed at the historical document export, and whether SQL was
-executed during the current review.
+Connection failure never becomes an empty bootstrap.
+
+**SQL evidence is a property of the execution path, never of a label.**
+The report states the actual capture path of this execution:
+`first_install` (an explicit first install read no database and no baseline
+document exists), `document` (a supplied baseline document carries declared
+capture metadata from its own export time — SQL ran historically, not
+during this review), or `live_export` (this review command performed the
+read-only export, so SQL ran during the review). The capture must agree
+with the bundle's declared baseline mode; a supplied boolean or mode label
+cannot claim live SQL. `verify` is an offline seal replay: it recomputes
+from the sealed bytes, executes no SQL, and says so. The report always
+shows baseline mode, baseline age, target identity (without credentials),
+and this capture-path note.
 
 ## Deterministic readiness
 
@@ -376,7 +437,8 @@ as defense-in-depth.
 
 The first screen prioritizes the decision: overall state and why; blocker
 and REVIEW finding counts; selected scope (providers, model filter) and
-baseline (mode, target, SQL-evidence note); a compact per-provider
+baseline (mode, target, and the capture path of this execution
+with its truthful SQL-evidence note); a compact per-provider
 change/completeness summary; the **create-only execution plan** (visually
 blocked when any plan is excluded/blocked); FX current/proposed/delta/date;
 aggregated important findings, including a compact source-evidence line

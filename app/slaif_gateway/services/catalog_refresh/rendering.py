@@ -483,11 +483,19 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     def group(kind: str) -> list[dict[str, Any]]:
         return [d for d in dispositions if d["disposition"] == kind]
 
+    metadata_by_key = {
+        (row["provider"], row["model"]): row["fields"] for row in report.get("baseline_metadata", [])
+    }
+
     def model_detail_rows(rows: list[dict[str, Any]], show_provenance: bool) -> list[str]:
         out: list[str] = []
         for d in rows:
             facts = models_by_key.get((d["provider"], d["model"]))
             out.append(f"<h3>{esc(d['provider'])}/{esc(d['model'])} — {esc(d['detail'])}</h3>")
+            preserved = metadata_by_key.get((d["provider"], d["model"]))
+            if preserved:
+                pairs = ", ".join(f"{esc(key)}={esc(value)}" for key, value in sorted(preserved.items()))
+                out.append(f"<p class='muted'>Preserved baseline monetary metadata (active baseline row): {pairs}</p>")
             if facts is not None:
                 out.append("<table><thead><tr><th>Field</th><th>Proposed</th>" + ("<th>Provenance (derived classification)</th>" if show_provenance else "") + "</tr></thead><tbody>")
                 rows_out = [
@@ -637,6 +645,7 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     parts.append("<dl class='identity'>")
     for label, value in (
         ("Mode", baseline.get("mode")),
+        ("Capture path (this execution)", sql_checks.get("capture")),
         ("Exported at (historical capture)", baseline.get("exported_at")),
         ("Baseline document digest verified", "yes" if baseline.get("mode") not in (None, "first_install") else "n/a (first install)"),
         ("SQL checked at document export (historical)", "yes" if baseline.get("sql_checked") else "no"),

@@ -10,7 +10,9 @@ refresh or apply command exists in this version. Full semantics live in
 There is exactly one supported way to run this workflow: the CLI.
 
 ```bash
-# 1) Read-only consistent baseline export from the target database
+# 1) Read-only coherent baseline export: one REPEATABLE READ snapshot
+#    of the four allowlisted tables, retaining the recognized capability
+#    contracts and the allowlisted monetary metadata; never writes.
 slaif-gateway catalog-refresh export-baseline \
   --out /var/lib/slaif/catalog-refresh/baseline.json \
   --db-url "$DATABASE_URL"
@@ -29,7 +31,11 @@ slaif-gateway catalog-refresh verify \
 ```
 
 Exit codes: review 0/10/20/65/2, verify 0/30/65, export-baseline 0/65
-(see the docs page for the table).
+(see the docs page for the table). The review's baseline input is part of
+the SQL evidence: `--db-url` is a live export (SQL ran during this
+review), `--baseline-file` is a supplied document (SQL ran historically at
+its export time), `--first-install` read no database, and `verify`
+replays the sealed bytes without executing SQL.
 
 ## Preparing source evidence (offline replay)
 

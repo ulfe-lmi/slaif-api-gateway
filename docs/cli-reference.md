@@ -137,6 +137,17 @@ error, 2 usage error. Verify: 0 valid, 30 invalid, 65 data error.
 Export-baseline: 0 written, 65 data error (never overwrites output, never
 bootstraps empty).
 
+The three review baseline inputs are distinct execution paths with
+distinct SQL evidence: `--db-url` performs the live read-only export
+itself (SQL executed during this review), `--baseline-file` consumes a
+supplied document (SQL was executed historically at that document's export
+time, not during this review), and `--first-install` is the explicit empty
+baseline (no database read). A label or boolean in the bundle cannot claim
+a capture path. `export-baseline` writes one coherent `REPEATABLE READ`
+snapshot of the four allowlisted tables, retaining the recognized nested
+capability contracts and the allowlisted monetary metadata; it never
+writes to the database.
+
 ### Offline source input contract
 
 The bundle's `sources` entries are replayed offline, never fetched. Only

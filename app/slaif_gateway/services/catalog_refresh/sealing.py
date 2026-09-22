@@ -48,7 +48,11 @@ from slaif_gateway.services.catalog_refresh.errors import (
 )
 from slaif_gateway.services.catalog_refresh.policy import policy_from_document
 from slaif_gateway.services.catalog_refresh.rendering import render_report
-from slaif_gateway.services.catalog_refresh.validation import validate_bundle, validation_json_bytes
+from slaif_gateway.services.catalog_refresh.validation import (
+    sql_capture_for_mode,
+    validate_bundle,
+    validation_json_bytes,
+)
 
 KEY_BYTES = 32
 # Aligned with the baseline export bound (MAX_BASELINE_BYTES): a sealed run
@@ -453,10 +457,16 @@ def verify_run(run_dir: Path, key: bytes) -> VerifyResult:
             expected_bundle_digest = bundle.baseline.content_sha256
             if expected_bundle_digest is not None and expected_bundle_digest != baseline.content_sha256:
                 return VerifyResult(False, {"baseline_identity": "bundle baseline identity differs from baseline document"})
+        # The replay recomputes with the ORIGINAL run's capture (the sealed
+        # baseline bytes are what that run captured); this verification itself
+        # executes no SQL and says so in its own checks below.
         policy = policy_from_document(bundle.policy)
-        report, artifacts = validate_bundle(bundle, baseline, policy)
+        report, artifacts = validate_bundle(
+            bundle, baseline, policy, sql_capture=sql_capture_for_mode(bundle.baseline.mode)
+        )
     except (CatalogRefreshBlockedError, ValueError) as exc:
         return VerifyResult(False, {"recompute": str(exc)[:200]})
+    checks["sql_evidence"] = "replayed from sealed bytes (no SQL executed during verification)"
 
     for name, data in artifacts.items():
         if content.get(name) != data:

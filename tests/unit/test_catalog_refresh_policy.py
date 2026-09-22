@@ -35,7 +35,9 @@ from slaif_gateway.schemas.catalog_refresh import (
 )
 from slaif_gateway.services.catalog_refresh.baseline import (
     canonical_baseline_content,
+    capabilities_fingerprint,
     load_baseline,
+    project_route_capabilities,
 )
 from slaif_gateway.services.catalog_refresh.bundle import load_bundle
 from slaif_gateway.services.catalog_refresh.policy import (
@@ -46,6 +48,7 @@ from slaif_gateway.services.catalog_refresh.validation import (
     OVERALL_BLOCKED,
     OVERALL_READY,
     OVERALL_READY_WITH_WARNINGS,
+    sql_capture_for_mode,
     validate_bundle,
 )
 
@@ -163,6 +166,16 @@ def _fx_facts_dict(
     }
 
 
+def _baseline_route_caps(raw: dict) -> dict:
+    """Baseline route capability fields from a raw runtime capabilities map."""
+    canonical, unrepresented = project_route_capabilities(raw)
+    return {
+        "capabilities": canonical,
+        "capabilities_unrepresented": unrepresented,
+        "capabilities_fingerprint": capabilities_fingerprint(raw),
+    }
+
+
 def _mini_baseline(
     *,
     pricing: dict[str, dict] | None = None,
@@ -245,7 +258,7 @@ def _mini_baseline(
                 enabled=True,
                 visible_in_models=True,
                 supports_streaming=True,
-                capabilities={"text": True, "streaming": True},
+                **_baseline_route_caps({"chat_completions": {"chat_streaming": True, "chat_text": True}}),
                 created_at="2026-09-01T00:00:00+00:00",
                 updated_at="2026-09-01T00:00:00+00:00",
             )
@@ -282,7 +295,10 @@ def _mini_baseline(
 
 def _review(bundle: RefreshBundle, baseline: BaselineDocument | None = None):
     return validate_bundle(
-        bundle, baseline if baseline is not None else _baseline(), policy_from_document(bundle.policy)
+        bundle,
+        baseline if baseline is not None else _baseline(),
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
     )[0]
 
 
@@ -336,7 +352,7 @@ def _price_move_report(input_value: str):
             "synthetic/updated-v1": {"input": "1", "output": "4"},
         }
     )
-    return validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
+    return validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
 
 
 def test_price_move_exactly_25_percent_is_not_review() -> None:
@@ -371,7 +387,7 @@ def test_price_zero_transitions_are_review_without_percent_division() -> None:
     )
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     baseline = _mini_baseline()  # stable baseline input 0.5
-    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     codes = _codes(report)
     assert "price_zero_transition" in codes
     assert "price_moved_review" not in codes  # no division by zero
@@ -401,7 +417,7 @@ def test_expired_baseline_rows_are_not_fallback() -> None:
         canonical_baseline_content(expired.model_copy(update={"content_sha256": "0" * 64}))
     ).hexdigest()
     expired = expired.model_copy(update={"content_sha256": digest})
-    report = validate_bundle(bundle, expired, policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, expired, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     states = {
         (c.model, c.dimension): c.state for c in report.price_comparisons
     }
@@ -426,7 +442,7 @@ def test_future_baseline_rows_are_not_active() -> None:
         canonical_baseline_content(future.model_copy(update={"content_sha256": "0" * 64}))
     ).hexdigest()
     future = future.model_copy(update={"content_sha256": digest})
-    report = validate_bundle(bundle, future, policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, future, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert all(c.old is None for c in report.price_comparisons)
     assert report.counts["unchanged"] == 0
     assert report.state == OVERALL_BLOCKED
@@ -463,7 +479,7 @@ def test_ambiguous_overlapping_active_baseline_rows_block() -> None:
         canonical_baseline_content(ambiguous.model_copy(update={"content_sha256": "0" * 64}))
     ).hexdigest()
     ambiguous = ambiguous.model_copy(update={"content_sha256": digest})
-    report = validate_bundle(bundle, ambiguous, policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, ambiguous, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert "baseline_ambiguous_rows" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -477,7 +493,7 @@ def _source_age_report(hours: float):
         source["retrieved_at"] = retrieved
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     baseline = _mini_baseline()  # mirrors the proposal: no mutations at all
-    return validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
+    return validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
 
 
 def test_source_age_boundaries_are_strict() -> None:
@@ -494,7 +510,7 @@ def test_future_source_timestamp_blocks() -> None:
     for source in payload["sources"]:
         source["retrieved_at"] = (GENERATED_AT + timedelta(hours=1)).isoformat()
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert "future_source_timestamp" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -550,7 +566,7 @@ def _fx_report(rate: str, published_hours_ago: float | None, *, pair: str = "USD
     )
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
     baseline = _mini_usd_baseline(fx=fx)
-    report, artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))
+    report, artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     return report, artifacts
 
 
@@ -625,7 +641,7 @@ def test_fx_direct_and_reciprocal_must_agree() -> None:
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
     payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert "fx_contradictory_rates" not in _codes(report)
     assert "source_observations_contradict" not in _codes(report)
     comparison = next(c for c in report.fx_comparisons if c["pair"] == "USD\u2192EUR")
@@ -651,7 +667,7 @@ def test_fx_ambiguous_active_rows_block() -> None:
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
     payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert "source_evidence_value_mismatch" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -682,7 +698,7 @@ def test_fx_missing_publication_date_blocks() -> None:
     baseline = _mini_usd_baseline(
         fx=[{"base": "USD", "quote": "EUR", "rate": "0.925925926", "valid_from": "2026-09-20T00:00:00+00:00"}]
     )
-    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert "fx_evidence_date_mismatch" in _codes(report)
     assert report.state == OVERALL_BLOCKED
     assert report.source_evidence["fx_backed"] == []
@@ -701,7 +717,7 @@ def test_fx_future_publication_blocks() -> None:
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
     payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert "fx_future_publication" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -722,14 +738,14 @@ def test_fx_provenance_may_not_borrow_a_model_source() -> None:
     payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
     payload["sources"].append(_bound_ecb_source())
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_usd_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert "fx_provenance_invalid_reference" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
 
 def test_all_eur_selected_pricing_marks_fx_na_not_missing() -> None:
     bundle = _bundle()
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     fx_gate = next(gate for gate in report.gates if gate.name == "import.fx")
     assert fx_gate.evidence == "N/A"
     assert "EUR" in fx_gate.detail
@@ -760,7 +776,7 @@ def test_missing_required_pair_blocks_when_non_eur_pricing_selected() -> None:
         },
         currencies={"synthetic/updated-v1": "USD"},
     )
-    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert "fx_missing_required_pair" in _codes(report)
     assert report.state == OVERALL_BLOCKED
 
@@ -769,7 +785,7 @@ def test_missing_required_pair_blocks_when_non_eur_pricing_selected() -> None:
 
 def test_true_no_change_refresh_is_ready() -> None:
     bundle = _bundle()
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert report.state == OVERALL_READY
     assert report.counts["unchanged"] == 2
     assert report.counts["new"] == 1
@@ -785,7 +801,7 @@ def test_changed_row_alone_blocks_the_run() -> None:
             "synthetic/updated-v1": {"input": "1.1", "output": "4"},
         }
     )
-    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert report.counts["changed"] == 1
     assert report.state == OVERALL_BLOCKED
     pricing_gate = next(g for g in report.import_gates if g.kind == "pricing")
@@ -794,7 +810,7 @@ def test_changed_row_alone_blocks_the_run() -> None:
 
 def test_new_row_is_create_ready_not_changed() -> None:
     bundle = _bundle()
-    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     dispositions = {d.model: d.disposition for d in report.dispositions}
     assert dispositions["synthetic/new-v1"] == "NEW"
     assert dispositions["synthetic/stable-v1"] == "UNCHANGED"
@@ -850,7 +866,7 @@ def test_public_alias_pairs_by_upstream_model() -> None:
         if item["model"] == "synthetic/stable-v1":
             item["model"] = "synthetic/alias-v1"
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report, artifacts = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy))
+    report, artifacts = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     codes = _codes(report)
     assert not ({"missing_pricing", "missing_route", "route_upstream_contradiction"} & codes)
     assert report.state == OVERALL_READY
@@ -947,7 +963,7 @@ def test_fabricated_host_urls_are_review_not_ready() -> None:
     for item in payload["sources"]:
         item["url"] = "https://example.invalid/fabricated-pricing"
     bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
-    report = validate_bundle(bundle, None, policy_from_document(bundle.policy))[0]
+    report = validate_bundle(bundle, None, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert report.state == OVERALL_BLOCKED
     assert "source_provenance_review" in _codes(report)
     assert "source_evidence_unapproved" in _codes(report)
@@ -955,3 +971,163 @@ def test_fabricated_host_urls_are_review_not_ready() -> None:
     for assessment in report.sources:
         assert assessment["classification"] == "REVIEW"
         assert assessment["evidence_state"] == "verified"
+
+# --- 180-e: baseline projection semantics (E1/E2) ----------------------------
+
+def test_declared_capability_flip_is_a_changed_field() -> None:
+    """The proposal declares only the fields it asserts; a flipped declared
+    capability against the baseline's nested projection is a real change,
+    named per key (union comparison is not used)."""
+    bundle = _bundle(**{"routes.0.capabilities": {"text": True, "streaming": False}})
+    report = _review(bundle)
+    assert report.state == OVERALL_BLOCKED
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    disp = dispositions[("openrouter", "synthetic/stable-v1")]
+    assert disp.disposition == "CHANGED"
+    assert "route.capabilities.streaming" in disp.detail
+
+
+def test_subset_capability_claim_matching_baseline_is_not_changed() -> None:
+    """Declaring fewer capabilities than the baseline block holds is not a
+    change for the undeclared keys (the baseline carries runtime defaults)."""
+    bundle = _bundle(**{"routes.0.capabilities": {"text": True}})
+    report = _review(bundle)
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    disp = dispositions[("openrouter", "synthetic/stable-v1")]
+    assert disp.disposition == "UNCHANGED"
+
+
+def test_unrepresented_baseline_capabilities_block_the_row() -> None:
+    baseline = _mini_baseline()
+    old_row = baseline.routes[0]
+    replaced = old_row.model_copy(
+        update={"capabilities": {}, "capabilities_unrepresented": True}
+    )
+    routes = tuple(replaced if index == 0 else row for index, row in enumerate(baseline.routes))
+    baseline = baseline.model_copy(update={"routes": routes})
+    report = _review(_bundle(), baseline)
+    assert report.state == OVERALL_BLOCKED
+    assert "baseline_unrepresented_capabilities" in _codes(report)
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    assert dispositions[("openrouter", "synthetic/stable-v1")].disposition == "BLOCKED"
+
+
+def test_unrepresented_baseline_metadata_blocks_the_row() -> None:
+    baseline = _mini_baseline()
+    old_row = baseline.pricing[0]
+    replaced = old_row.model_copy(update={"pricing_metadata_unrepresented": True})
+    pricing = tuple(replaced if index == 0 else row for index, row in enumerate(baseline.pricing))
+    baseline = baseline.model_copy(update={"pricing": pricing})
+    report = _review(_bundle(), baseline)
+    assert report.state == OVERALL_BLOCKED
+    assert "baseline_unrepresented_metadata" in _codes(report)
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    assert dispositions[("openrouter", "synthetic/stable-v1")].disposition == "BLOCKED"
+
+
+def test_preserved_baseline_metadata_is_recorded_in_the_report() -> None:
+    baseline = _mini_baseline()
+    old_row = baseline.pricing[0]
+    replaced = old_row.model_copy(
+        update={
+            "audio_output_price_per_1m": "15",
+            "long_context_threshold_tokens": 272000,
+            "long_context_input_multiplier": "2.00",
+            "long_context_output_multiplier": "3.00",
+            "cache_write_input_price_per_1m": "7.50",
+            "external_tool_price_per_call": "0.01",
+            "external_tool_source": "openai_published_per_call",
+        }
+    )
+    pricing = tuple(replaced if index == 0 else row for index, row in enumerate(baseline.pricing))
+    baseline = baseline.model_copy(update={"pricing": pricing})
+    report = _review(_bundle(), baseline)
+    entry = next(row for row in report.baseline_metadata if row["model"] == "synthetic/stable-v1")
+    assert entry["provider"] == "openrouter"
+    assert entry["upstream_model"] == "synthetic/stable-v1"
+    assert entry["fields"]["audio_output_price_per_1m"] == "15"
+    assert entry["fields"]["long_context_threshold_tokens"] == 272000
+    assert entry["fields"]["cache_write_input_price_per_1m"] == "7.50"
+    assert entry["fields"]["external_tool_source"] == "openai_published_per_call"
+    # untouched models carry no metadata record
+    assert {row["model"] for row in report.baseline_metadata} == {"synthetic/stable-v1"}
+
+
+def test_fx_baseline_inverse_only_compares_new_with_review() -> None:
+    """E2: a baseline holding only the inverse EUR->USD pair is NOT the
+    current USD->EUR rate. The proposed rate compares as NEW with an explicit
+    REVIEW finding, never as a silently reciprocated change."""
+    report, _ = _fx_report("1.03", 1)
+    comparison = next(c for c in report.fx_comparisons if c["pair"] == "USD→EUR")
+    # direct-pair control first: the direct baseline row is compared
+    assert comparison["current_rate"] == "1"
+    assert "current_derived" not in comparison
+
+    payload = _bundle_payload()
+    payload["run_id"] = "test-fx-inverse-baseline-002"
+    _usd_pricing(payload)
+    published = GENERATED_AT - timedelta(hours=1)
+    xml_rate = str((Decimal(1) / Decimal("1.03")).quantize(Decimal("0.000000001")))
+    payload["fx"] = [_fx_facts_dict("1.03", pair="USD-EUR", published_hours_ago=1)]
+    payload["sources"] = [s for s in payload["sources"] if s["provider"] != "ecb"]
+    payload["sources"].append(
+        _evidence_tests.ecb_source_dict(
+            pair_model="USD-EUR",
+            date_s=published.date().isoformat(),
+            rate=xml_rate,
+            retrieved_at=(GENERATED_AT - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
+            published_at=published.isoformat().replace("+00:00", "Z"),
+        )
+    )
+    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    baseline = _mini_usd_baseline(
+        fx=[{"base": "EUR", "quote": "USD", "rate": "1.08", "valid_from": "2026-09-20T00:00:00+00:00"}]
+    )
+    report, _artifacts = validate_bundle(
+        bundle, baseline, policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+    )
+    comparison = next(c for c in report.fx_comparisons if c["pair"] == "USD→EUR")
+    assert comparison["state"] == "NEW"
+    assert comparison["current_rate"] is None
+    assert "current_derived" not in comparison
+    assert "fx_baseline_inverse_only" in _codes(report)
+    finding = next(w for w in report.warnings if w.code == "fx_baseline_inverse_only")
+    assert finding.severity == "REVIEW"
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+
+
+def test_disabled_baseline_rows_are_not_selected() -> None:
+    """Runtime parity: disabled baseline rows are excluded from the active
+    selection (no fallback, no invented before-value)."""
+    baseline = _mini_baseline()
+    old_pricing = baseline.pricing[0]
+    extra_disabled = old_pricing.model_copy(
+        update={
+            "id": "33333333-0000-4000-8000-999999999999",
+            "input_price_per_1m": "99",
+            "output_price_per_1m": "99",
+            "enabled": False,
+        }
+    )
+    pricing = tuple(row for row in baseline.pricing if row.upstream_model != "synthetic/stable-v1")
+    pricing = pricing + (old_pricing, extra_disabled)
+    baseline = baseline.model_copy(update={"pricing": pricing})
+    report = _review(_bundle(), baseline)
+    dispositions = {(d.provider, d.model): d for d in report.dispositions}
+    # the enabled row is the before-value: no change, no ambiguity
+    assert dispositions[("openrouter", "synthetic/stable-v1")].disposition == "UNCHANGED"
+    assert "baseline_ambiguous_rows" not in _codes(report)
+
+    # only a disabled row: the runtime lookup finds no active pricing, but
+    # the baseline row still exists, so the proposal is a mutation against an
+    # existing identity (conservative: never executed as a create-only row).
+    pricing_only_disabled = tuple(
+        row for row in baseline.pricing
+        if not (row.upstream_model == "synthetic/stable-v1" and row.enabled)
+    )
+    baseline2 = baseline.model_copy(update={"pricing": pricing_only_disabled})
+    report2 = _review(_bundle(), baseline2)
+    dispositions2 = {(d.provider, d.model): d for d in report2.dispositions}
+    assert report2.state == OVERALL_BLOCKED
+    assert dispositions2[("openrouter", "synthetic/stable-v1")].disposition == "CHANGED"

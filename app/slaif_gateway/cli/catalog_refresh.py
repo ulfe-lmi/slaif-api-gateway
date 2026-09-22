@@ -57,6 +57,9 @@ from slaif_gateway.services.catalog_refresh.sealing import (
     verify_run,
 )
 from slaif_gateway.services.catalog_refresh.validation import (
+    SQL_CAPTURE_DOCUMENT,
+    SQL_CAPTURE_FIRST_INSTALL,
+    SQL_CAPTURE_LIVE_EXPORT,
     validate_against_baseline_document,
     validation_json_bytes,
 )
@@ -373,17 +376,24 @@ def _review_impl(
         return EXIT_DATA_ERROR
 
     # 2) Resolve the baseline according to the bundle's declared mode.
+    # 180-e (E5): the SQL capture is the ACTUAL path this review command took,
+    # recorded as it is taken. It is checked for consistency with the bundle's
+    # declared mode inside validate_bundle; a label cannot claim SQL evidence
+    # this path did not produce.
+    sql_capture: str
     mode = bundle.baseline.mode
     if mode == "first_install":
         if baseline_file is not None or db_url is not None:
             raise typer.BadParameter("bundle baseline mode is first_install; do not supply a baseline source")
         baseline_doc: BaselineDocument | None = None
+        sql_capture = SQL_CAPTURE_FIRST_INSTALL
     elif mode == "db_snapshot":
         if baseline_file is not None:
             raise typer.BadParameter("bundle baseline mode is db_snapshot; use --db-url (or DATABASE_URL), not --baseline-file")
         url = db_url or _settings_database_url()
         try:
             baseline_doc = run_async(export_baseline(url, now=datetime.now(UTC)))
+            sql_capture = SQL_CAPTURE_LIVE_EXPORT
         except CatalogRefreshBlockedError as exc:
             run_dir = _publish_blocked_run(
                 run_root=run_root,
@@ -416,6 +426,7 @@ def _review_impl(
             raise CliError(f"baseline file is not readable: {baseline_file}") from exc
         try:
             baseline_doc = load_baseline(baseline_raw)
+            sql_capture = SQL_CAPTURE_DOCUMENT
         except CatalogRefreshBlockedError as exc:
             raise CliError(f"baseline file invalid: {exc.code}") from exc
 
@@ -438,7 +449,7 @@ def _review_impl(
     # 4) Deterministic recomputation.
     policy = policy_from_document(bundle.policy)
     try:
-        report, artifacts = validate_against_baseline_document(bundle, baseline_doc, policy)
+        report, artifacts = validate_against_baseline_document(bundle, baseline_doc, policy, sql_capture=sql_capture)
     except CatalogRefreshBlockedError as exc:
         _blocked_identity(
             run_root=run_root, bundle=bundle, code=exc.code, detail=exc.detail, json_output=json_output,

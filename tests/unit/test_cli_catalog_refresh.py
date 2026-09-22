@@ -379,3 +379,146 @@ def test_review_failure_leaves_no_partial_run_at_final_path(tmp_path: Path, monk
     assert not (run_root / "fixture-first-install-001").exists()
     leftovers = sorted(p.name for p in run_root.iterdir()) if run_root.exists() else []
     assert leftovers == [], f"staging leftovers: {leftovers}"
+
+
+# --- 180-e E5: truthful SQL evidence (capture paths) -------------------------
+
+FIRST_INSTALL_SQL_NOTE = (
+    "Explicit first install: no database was read and no baseline document "
+    "exists; no SQL was executed during this review."
+)
+DOCUMENT_SQL_NOTE = (
+    "Baseline consumed from a supplied document: SQL was executed historically "
+    "at that document's export time (declared capture metadata, not re-attested "
+    "by this review); no SQL was executed during this review."
+)
+LIVE_EXPORT_SQL_NOTE = (
+    "SQL was executed during this review: this review command performed the "
+    "live read-only baseline export."
+)
+
+
+def _run_validation_json(tmp_path: Path, run_id: str) -> dict:
+    return json.loads((tmp_path / "runs" / run_id / "validation.json").read_text(encoding="utf-8"))
+
+
+def test_sql_capture_first_install_run(tmp_path: Path) -> None:
+    result = _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path)
+    assert result.exit_code == 0, result.output
+    validation = _run_validation_json(tmp_path, "fixture-first-install-001")
+    sql_checks = validation["sql_checks"]
+    assert sql_checks["capture"] == "first_install"
+    assert sql_checks["sql_executed_during_review"] is False
+    assert sql_checks["checked"] is False
+    assert sql_checks["note"] == FIRST_INSTALL_SQL_NOTE
+    html = (tmp_path / "runs" / "fixture-first-install-001" / "REVIEW.html").read_text(encoding="utf-8")
+    assert "Capture path (this execution)" in html
+    assert "first_install" in html
+    # the first-install report must never claim a live export
+    assert "live read-only baseline export" not in html
+
+
+def test_sql_capture_document_run(tmp_path: Path) -> None:
+    result = _review(
+        [str(FIXTURES / "bundle-refresh-ready.json"),
+         "--baseline-file", str(FIXTURES / "baseline-synthetic.json")],
+        tmp_path,
+    )
+    assert result.exit_code == 20, result.output  # changed row: BLOCKED, but sealed
+    validation = _run_validation_json(tmp_path, "fixture-refresh-ready-001")
+    sql_checks = validation["sql_checks"]
+    assert sql_checks["capture"] == "document"
+    assert sql_checks["sql_executed_during_review"] is False
+    assert sql_checks["checked"] is True
+    assert sql_checks["note"] == DOCUMENT_SQL_NOTE
+    html = (tmp_path / "runs" / "fixture-refresh-ready-001" / "REVIEW.html").read_text(encoding="utf-8")
+    assert "Capture path (this execution)" in html
+    assert "live read-only baseline export" not in html
+
+
+def test_falsified_sql_capture_claims_are_blocked(tmp_path: Path) -> None:
+    """A caller cannot claim live SQL for a document path, cannot pass an
+    unknown capture, and cannot skip the baseline on a refresh mode."""
+    import pytest
+
+    from slaif_gateway.schemas.catalog_refresh import BaselineDocument
+    from slaif_gateway.services.catalog_refresh.baseline import load_baseline
+    from slaif_gateway.services.catalog_refresh.bundle import load_bundle
+    from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
+    from slaif_gateway.services.catalog_refresh.policy import policy_from_document
+    from slaif_gateway.services.catalog_refresh.validation import (
+        sql_capture_for_mode,
+        validate_against_baseline_document,
+    )
+
+    bundle = load_bundle((FIXTURES / "bundle-refresh-ready.json").read_bytes())
+    baseline: BaselineDocument = load_baseline(
+        (FIXTURES / "baseline-synthetic.json").read_bytes()
+    )
+    policy = policy_from_document(bundle.policy)
+    assert sql_capture_for_mode(bundle.baseline.mode) == "document"
+
+    # (a) claiming a live export for a supplied document
+    with pytest.raises(CatalogRefreshBlockedError) as excinfo:
+        validate_against_baseline_document(bundle, baseline, policy, sql_capture="live_export")
+    assert excinfo.value.code == "sql_capture_mismatch"
+    # (b) an unknown capture
+    with pytest.raises(CatalogRefreshBlockedError) as excinfo:
+        validate_against_baseline_document(bundle, baseline, policy, sql_capture="live-export")
+    assert excinfo.value.code == "sql_capture_invalid"
+    # (c) a refresh mode without any baseline document
+    with pytest.raises(CatalogRefreshBlockedError) as excinfo:
+        validate_against_baseline_document(bundle, None, policy, sql_capture="document")
+    assert excinfo.value.code == "baseline_mode_mismatch"
+    # (d) the consistent path works
+    report, _artifacts = validate_against_baseline_document(
+        bundle, baseline, policy, sql_capture="document"
+    )
+    assert report.sql_checks["capture"] == "document"
+
+
+def test_verify_replay_records_no_sql_executed(tmp_path: Path) -> None:
+    result = _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path)
+    assert result.exit_code == 0, result.output
+    verify = runner.invoke(
+        app,
+        ["catalog-refresh", "verify",
+         "--run-dir", str(tmp_path / "runs" / "fixture-first-install-001"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert verify.exit_code == 0, verify.output
+    assert "valid: yes" in verify.stdout
+    assert "sql_evidence: replayed from sealed bytes (no SQL executed during verification)" in verify.stdout
+
+
+def test_db_snapshot_outage_publishes_minimal_blocked_run(tmp_path: Path) -> None:
+    """E5: a db_snapshot bundle whose live export fails publishes a minimal
+    BLOCKED run (exit 20) — it must never fall back to an empty first
+    install or claim live SQL it did not perform."""
+    payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
+    payload["run_id"] = "test-cli-db-outage-001"
+    payload["baseline"]["mode"] = "db_snapshot"
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(payload, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path),
+         "--db-url", "postgresql+asyncpg://ubuntu@127.0.0.1:59999/unreachable",
+         "--run-root", str(tmp_path / "runs"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert result.exit_code == 20, result.output
+    assert result.stdout.splitlines()[0] == "state: BLOCKED"
+    run_dirs = sorted(p.name for p in (tmp_path / "runs").iterdir())
+    assert len(run_dirs) == 1
+    assert run_dirs[0].startswith("blocked-baseline_export_failed-")
+    validation = json.loads(
+        (tmp_path / "runs" / run_dirs[0] / "validation.json").read_text(encoding="utf-8")
+    )
+    assert validation["state"] == "BLOCKED"
+    assert validation["code"] == "baseline_export_failed"
+    # the minimal run is a real blocked review, not an empty bootstrap
+    assert "first_install" not in json.dumps(validation)
+    assert "receipt.json" not in (tmp_path / "runs" / run_dirs[0]).joinpath("nope").name
+    assert not (tmp_path / "runs" / run_dirs[0] / "receipt.json").exists()

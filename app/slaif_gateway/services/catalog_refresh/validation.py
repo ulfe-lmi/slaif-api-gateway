@@ -39,6 +39,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlparse
 
@@ -48,6 +49,11 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineDocument,
     RefreshBundle,
     RouteFacts,
+)
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    CHAT_CAPABILITY_TEXT,
+    CHAT_COMPLETIONS_CAPABILITIES_KEY,
+    ensure_default_chat_completion_capabilities,
 )
 from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh.bundle import (
@@ -154,6 +160,46 @@ _FX_DOCS_HOSTS: frozenset[str] = frozenset({"www.ecb.europa.eu", "data-api.ecb.e
 # OpenRouter reference may never be borrowed to satisfy an FX fact).
 _FX_SOURCE_KINDS: frozenset[str] = frozenset({"operator_input", "docs_page", "ecb_reference_xml"})
 
+# 180-e (E5): SQL evidence is a property of the actual execution path that
+# produced or supplied the baseline, never of a caller-supplied mode label.
+# The four capture paths are: explicit first install (no database read), a
+# supplied baseline document (SQL was executed historically at that document's
+# export time), a live read-only export performed by this review command, and
+# the offline seal replay (recomputes from sealed bytes, executes no SQL).
+SQL_CAPTURE_FIRST_INSTALL = "first_install"
+SQL_CAPTURE_DOCUMENT = "document"
+SQL_CAPTURE_LIVE_EXPORT = "live_export"
+_SQL_CAPTURES: frozenset[str] = frozenset(
+    {SQL_CAPTURE_FIRST_INSTALL, SQL_CAPTURE_DOCUMENT, SQL_CAPTURE_LIVE_EXPORT}
+)
+
+_SQL_CAPTURE_NOTES: dict[str, str] = {
+    SQL_CAPTURE_FIRST_INSTALL: (
+        "Explicit first install: no database was read and no baseline document "
+        "exists; no SQL was executed during this review."
+    ),
+    SQL_CAPTURE_DOCUMENT: (
+        "Baseline consumed from a supplied document: SQL was executed historically "
+        "at that document's export time (declared capture metadata, not re-attested "
+        "by this review); no SQL was executed during this review."
+    ),
+    SQL_CAPTURE_LIVE_EXPORT: (
+        "SQL was executed during this review: this review command performed the "
+        "live read-only baseline export."
+    ),
+}
+
+
+def sql_capture_for_mode(mode: str) -> str:
+    """The only capture a bundle with this declared baseline mode may carry."""
+    if mode == "first_install":
+        return SQL_CAPTURE_FIRST_INSTALL
+    if mode == "db_snapshot":
+        return SQL_CAPTURE_LIVE_EXPORT
+    if mode == "exported_file":
+        return SQL_CAPTURE_DOCUMENT
+    raise CatalogRefreshBlockedError("sql_capture_invalid", f"unknown baseline mode {mode!r}")
+
 EVIDENCE_MAX_BYTES = 4 * 1024 * 1024
 _RECIPROCAL_QUANTUM = Decimal("0.000000001")
 _FX_CONSISTENCY_TOLERANCE = Decimal("0.00000001")
@@ -228,6 +274,7 @@ class ValidationReport:
     research: dict[str, Any]
     artifacts: dict[str, Any]
     sql_checks: dict[str, Any] = field(default_factory=dict)
+    baseline_metadata: list[dict[str, Any]] = field(default_factory=list)
     sources: list[dict[str, Any]] = field(default_factory=list)
     fx_comparisons: list[dict[str, Any]] = field(default_factory=list)
     source_evidence: dict[str, Any] = field(default_factory=dict)
@@ -305,6 +352,18 @@ class ValidationReport:
             "research": dict(sorted(self.research.items())),
             "artifacts": dict(sorted(self.artifacts.items())),
             "sql_checks": dict(sorted(self.sql_checks.items())),
+            "baseline_metadata": [
+                {
+                    "provider": row["provider"],
+                    "model": row["model"],
+                    "upstream_model": row.get("upstream_model"),
+                    "fields": dict(sorted(row["fields"].items())),
+                }
+                for row in sorted(
+                    self.baseline_metadata,
+                    key=lambda r: (r["provider"], r["model"], r.get("upstream_model") or ""),
+                )
+            ],
             "sources": [
                 dict(sorted(item.items())) for item in sorted(
                     self.sources, key=lambda s: (s["provider"], s["model"], s["source_kind"])
@@ -337,6 +396,54 @@ def _pct(old: Decimal, new: Decimal) -> str:
 def _reciprocal(rate: Decimal) -> Decimal:
     """Deterministic reciprocal with explicit 9-decimal precision."""
     return (Decimal(1) / rate).quantize(_RECIPROCAL_QUANTUM, rounding=ROUND_HALF_UP)
+
+
+# 180-e (E1): proposal-side flat capability keys map onto the baseline's
+# nested chat_completions block with a "chat_" prefix (standard v1 profile).
+_PROPOSAL_CAPABILITY_TO_BASELINE: dict[str, str] = {key: f"chat_{key}" for key in CAPABILITY_KEYS}
+
+# 180-e (E2): the allowlisted monetary metadata fields preserved from the
+# baseline for review display (never silently dropped from the record).
+_BASELINE_METADATA_FIELDS: tuple[str, ...] = (
+    "audio_output_price_per_1m",
+    "cache_write_input_price_per_1m",
+    "cache_write_input_multiplier",
+    "long_context_threshold_tokens",
+    "long_context_input_multiplier",
+    "long_context_output_multiplier",
+    "external_tool_price_per_call",
+    "external_tool_source",
+)
+
+
+def _baseline_flat_capabilities(old_route: Any) -> dict[str, bool]:
+    """Project the baseline route's nested chat_completions block to flat keys."""
+    block = (getattr(old_route, "capabilities", None) or {}).get("chat_completions")
+    if not isinstance(block, Mapping):
+        return {}
+    return {key: value for key, value in block.items() if isinstance(value, bool)}
+
+
+def _effective_chat_text_capability(route: RouteFacts) -> bool:
+    """chat_text of the contract the import path would actually create.
+
+    Proposals declare flat standard capability keys only. The import path
+    (ModelRouteService.create_model_route -> _ensure_default_capabilities
+    -> ensure_default_chat_completion_capabilities) adds the default
+    chat_completions block whenever the declared map carries no nested
+    block, and that default block enables chat_text. A flat text omission
+    or false therefore cannot narrow the executable runtime surface; the
+    effective contract is computed exactly as the runtime does.
+    """
+    effective = ensure_default_chat_completion_capabilities(
+        dict(route.capabilities),
+        supports_streaming=route.supports_streaming,
+        endpoint=route.endpoint,
+    )
+    block = effective.get(CHAT_COMPLETIONS_CAPABILITIES_KEY)
+    if not isinstance(block, Mapping):
+        return False
+    return bool(block.get(CHAT_CAPABILITY_TEXT, False))
 
 
 def _select_active_pricing(rows, now: datetime) -> tuple[Any, bool]:
@@ -585,8 +692,35 @@ def validate_bundle(
     bundle: RefreshBundle,
     baseline: BaselineDocument | None,
     policy: RefreshPolicy,
+    *,
+    sql_capture: str,
 ) -> tuple[ValidationReport, dict[str, bytes]]:
-    """Recompute the full review result. Pure and deterministic."""
+    """Recompute the full review result. Pure and deterministic.
+
+    ``sql_capture`` names the actual execution path that produced or supplied
+    the baseline for this review (180-e). It is never inferred from the
+    bundle's mode label alone: a capture inconsistent with the declared mode
+    blocks the run instead of letting a label claim SQL evidence the path did
+    not produce.
+    """
+    if sql_capture not in _SQL_CAPTURES:
+        raise CatalogRefreshBlockedError(
+            "sql_capture_invalid",
+            f"sql_capture must be one of {sorted(_SQL_CAPTURES)}, got {sql_capture!r}",
+        )
+    expected_capture = sql_capture_for_mode(bundle.baseline.mode)
+    if sql_capture != expected_capture:
+        raise CatalogRefreshBlockedError(
+            "sql_capture_mismatch",
+            f"this review path captured SQL evidence as {sql_capture!r} but the bundle "
+            f"declares baseline mode {bundle.baseline.mode!r} (capture {expected_capture!r}); "
+            "a mode label cannot claim SQL evidence its path did not produce",
+        )
+    if (baseline is None) != (bundle.baseline.mode == "first_install"):
+        raise CatalogRefreshBlockedError(
+            "baseline_mode_mismatch",
+            "a first_install review reads no database and a refresh review requires a baseline document",
+        )
     warnings: list[Warning] = []
     now = _utc(bundle.generated_at)
     selected = selected_model_keys(bundle)
@@ -906,6 +1040,7 @@ def validate_bundle(
     # --- per-selected-model dispositions ----------------------------------
     dispositions: list[Disposition] = []
     price_comparisons: list[PriceComparison] = []
+    baseline_metadata_rows: list[dict[str, Any]] = []
     per_provider: dict[str, dict[str, int]] = {}
     unsupported_excluded: list[str] = []
     missing_required_dimensions: list[str] = []
@@ -1062,20 +1197,33 @@ def validate_bundle(
         # OFFICIAL-classified observations (approved publisher/kind/parser/
         # host, digest-verified bytes, successful deterministic parse) can
         # verify a fact; operator/semantic provenance never does.
+        # 180-e (E3): effective text eligibility is what the imported route
+        # would actually be able to execute: the model-level claim OR the
+        # ACTUAL runtime contract of any proposed route, computed with the
+        # importer's defaults. Proposals carry flat standard keys only; the
+        # import path adds the default chat_completions block (which enables
+        # chat_text) whenever no nested block is declared, so a flat text
+        # omission/false cannot narrow the executable surface.
+        effective_text = bool(facts.capabilities.get("text")) if facts is not None else False
+        if not effective_text:
+            effective_text = any(_effective_chat_text_capability(route) for route in routes)
+        fact_sources = frozenset(facts.provenance.sources) if facts is not None else frozenset()
         declared: dict[str, frozenset[str]] = {
             f"pricing:{dimension.name}": frozenset(pricing_facts.provenance.sources)
             for dimension in pricing_facts.dimensions
         }
         if facts is not None:
-            fact_sources = frozenset(facts.provenance.sources)
             if facts.context_length is not None:
                 declared["model:context_length"] = fact_sources
             if facts.max_output_tokens is not None:
                 declared["model:max_output_tokens"] = fact_sources
             if facts.deprecated:
                 declared["model:deprecated"] = fact_sources
-            if facts.capabilities.get("text"):
-                declared["model:capability:text"] = fact_sources
+        if effective_text:
+            text_sources = set(fact_sources)
+            for route in routes:
+                text_sources.update(route.provenance.sources)
+            declared["model:capability:text"] = frozenset(text_sources)
         proposed: dict[str, Any] = {}
         for dimension in pricing_facts.dimensions:
             proposed[f"pricing:{dimension.name}"] = {
@@ -1090,8 +1238,8 @@ def validate_bundle(
                 proposed["model:max_output_tokens"] = facts.max_output_tokens
             if facts.deprecated:
                 proposed["model:deprecated"] = True
-            if facts.capabilities.get("text"):
-                proposed["model:capability:text"] = True
+        if effective_text:
+            proposed["model:capability:text"] = True
         evidence_findings, backed_facts, _unresolved_fields, missing_fx = se.reconcile_model_facts(
             provider=provider,
             binding_model=upstream,
@@ -1105,6 +1253,31 @@ def validate_bundle(
             source_times=source_times,
             fx_info=fx_rate_provenance,
         )
+        # 180-e (E3): an observed official deprecation fact can never be
+        # bypassed by omitting the proposal field. If an official snapshot
+        # reports the binding model as deprecated, the proposal must carry it
+        # (handled above as DEPRECATED); otherwise the affected proposal is
+        # blocked. No auto-delete and no auto-disable: the local row is
+        # retained and a human decides.
+        deprecated_conflict = False
+        deprecated_observations = se.observations_for(
+            all_observations,
+            field_name="model:deprecated",
+            model_names=frozenset({upstream}),
+            provider=provider,
+        )
+        if any(
+            observation.source_key in official_source_keys and observation.value == "true"
+            for observation in deprecated_observations
+        ) and not (facts is not None and facts.deprecated):
+            deprecated_conflict = True
+            add(
+                SEVERITY_BLOCKER,
+                "source_evidence_value_mismatch",
+                "source reports the binding model as deprecated but the proposal is not; the affected proposal is blocked (retain the local row; no auto-delete or auto-disable)",
+                provider,
+                model,
+            )
         for finding in evidence_findings:
             add(finding.severity, finding.code, finding.detail, finding.provider, finding.model)
         for backed_field in sorted(backed_facts):
@@ -1152,7 +1325,12 @@ def validate_bundle(
                 provider,
                 model,
             )
-        if any(finding.severity == SEVERITY_BLOCKER for finding in evidence_findings) or missing_fx or model_missing:
+        if (
+            any(finding.severity == SEVERITY_BLOCKER for finding in evidence_findings)
+            or missing_fx
+            or model_missing
+            or deprecated_conflict
+        ):
             blocked_codes = sorted(
                 {finding.code for finding in evidence_findings if finding.severity == SEVERITY_BLOCKER}
                 | ({"fx_evidence_unbound"} if missing_fx else set())
@@ -1169,6 +1347,19 @@ def validate_bundle(
         old_pricing, pricing_ambiguous = _select_active_pricing(old_rows, now)
         if pricing_ambiguous:
             add(SEVERITY_BLOCKER, "baseline_ambiguous_rows", "overlapping active baseline pricing rows with different values; no before-value is invented", provider, model)
+        # 180-e (E2): monetary metadata outside the allowlist flags the row
+        # instead of being silently dropped from the before/after record.
+        baseline_metadata_unrepresented = bool(
+            old_pricing is not None and getattr(old_pricing, "pricing_metadata_unrepresented", False)
+        )
+        if baseline_metadata_unrepresented:
+            add(
+                SEVERITY_BLOCKER,
+                "baseline_unrepresented_metadata",
+                "baseline pricing metadata carries values outside the current allowlist; the row is blocked rather than claimed safe-update or no-change",
+                provider,
+                model,
+            )
         old_route_rows = [
             baseline_routes_by_identity.get((provider, model, route.match_type, route.endpoint), [None])[0]
             for route in routes
@@ -1190,6 +1381,21 @@ def validate_bundle(
                 )
                 if value is not None
             }
+        if old_pricing is not None:
+            preserved_metadata = {
+                name: getattr(old_pricing, name)
+                for name in _BASELINE_METADATA_FIELDS
+                if getattr(old_pricing, name, None) is not None
+            }
+            if preserved_metadata:
+                baseline_metadata_rows.append(
+                    {
+                        "provider": provider,
+                        "model": model,
+                        "upstream_model": upstream,
+                        "fields": dict(sorted(preserved_metadata.items())),
+                    }
+                )
         currency_conflict = old_pricing is not None and old_currency != pricing_facts.currency
         if currency_conflict:
             add(
@@ -1203,6 +1409,7 @@ def validate_bundle(
         changed_fields: list[str] = []
         # route identity comparisons
         route_changed = False
+        route_unrepresented = False
         for route, old_route in zip(routes, old_route_rows):
             if old_route is None:
                 continue
@@ -1214,9 +1421,30 @@ def validate_bundle(
                 if new_value != old_value:
                     route_changed = True
                     changed_fields.append(f"route.{attr}")
-            if (route.capabilities or {}) != (old_route.capabilities or {}):
-                route_changed = True
-                changed_fields.append("route.capabilities")
+            if getattr(old_route, "capabilities_unrepresented", False):
+                route_unrepresented = True
+            # 180-e (E1): the baseline holds the nested runtime projection;
+            # compare the proposal's declared flat capabilities against the
+            # matching chat_completions entries only. A union comparison is
+            # wrong: the baseline carries the full runtime default block
+            # while the proposal declares just the fields it asserts.
+            old_flat = _baseline_flat_capabilities(old_route)
+            for key in sorted(route.capabilities or {}):
+                new_value = (route.capabilities or {}).get(key)
+                if not isinstance(new_value, bool):
+                    continue
+                baseline_key = f"chat_{key}"
+                if bool(new_value) != bool(old_flat.get(baseline_key, False)):
+                    route_changed = True
+                    changed_fields.append(f"route.capabilities.{key}")
+        if route_unrepresented:
+            add(
+                SEVERITY_BLOCKER,
+                "baseline_unrepresented_capabilities",
+                "baseline route capabilities are not fully representable by the current allowlist; the row is blocked rather than claimed unchanged",
+                provider,
+                model,
+            )
 
         price_changed = False
         dimension_states: dict[str, str] = {}
@@ -1298,9 +1526,9 @@ def validate_bundle(
         route_new = all(old is None for old in old_route_rows)
         pricing_no_baseline = not old_rows
 
-        if dimension_blocked or currency_conflict or pricing_ambiguous:
+        if dimension_blocked or currency_conflict or pricing_ambiguous or route_unrepresented or baseline_metadata_unrepresented:
             disposition = DISPOSITION_BLOCKED
-            disposition_detail = "blocked: " + "; ".join(sorted(set(changed_fields + ["required pricing dimension(s) missing" if dimension_blocked else ""] + ["currency inconsistency" if currency_conflict else ""] + ["ambiguous baseline rows" if pricing_ambiguous else ""])))
+            disposition_detail = "blocked: " + "; ".join(sorted(set(changed_fields + ["required pricing dimension(s) missing" if dimension_blocked else ""] + ["currency inconsistency" if currency_conflict else ""] + ["ambiguous baseline rows" if pricing_ambiguous else ""] + ["unrepresentable baseline capabilities" if route_unrepresented else ""] + ["unrepresentable baseline metadata" if baseline_metadata_unrepresented else ""])))
         elif route_changed or price_changed:
             disposition = DISPOSITION_CHANGED
             disposition_detail = "; ".join(sorted(set(changed_fields)))
@@ -1632,13 +1860,11 @@ def validate_bundle(
         },
         sql_checks={
             "checked": bool(baseline is not None and baseline.sql_checked),
-            "sql_executed_during_review": bundle.baseline.mode == "db_snapshot",
-            "note": (
-                "SQL was executed during this review (live read-only db_snapshot export)"
-                if bundle.baseline.mode == "db_snapshot"
-                else "baseline consumed from a document; SQL was executed historically at that document's export time, not during this review"
-            ),
+            "capture": sql_capture,
+            "sql_executed_during_review": sql_capture == SQL_CAPTURE_LIVE_EXPORT,
+            "note": _SQL_CAPTURE_NOTES[sql_capture],
         },
+        baseline_metadata=baseline_metadata_rows,
         sources=source_assessments,
         fx_comparisons=fx_comparisons,
         source_evidence=source_evidence_report,
@@ -1902,13 +2128,18 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
         base_direct, base_direct_ambiguous = _select_active_fx(base_rows, now)
         inverse_rows = baseline_fx_by_pair_ref(baseline, ("EUR", currency))
         inverse, inverse_ambiguous = _select_active_fx(inverse_rows, now)
-        current_rate = None
-        current_derived = False
-        if base_direct is not None:
-            current_rate = Decimal(base_direct.rate)
-        elif inverse is not None:
-            current_rate = _reciprocal(Decimal(inverse.rate))
-            current_derived = True
+        # 180-e (E2): the runtime looks up native -> EUR directly; only a
+        # direct active baseline row is the current rate. An inverse-only
+        # baseline is reported as such (REVIEW), never silently reciprocated
+        # into a before/after comparison.
+        current_rate = Decimal(base_direct.rate) if base_direct is not None else None
+        if current_rate is None and inverse is not None:
+            fx_add(
+                SEVERITY_REVIEW,
+                "fx_baseline_inverse_only",
+                f"baseline holds only the inverse EUR\u2192{currency} pair; the runtime looks up "
+                f"{currency}\u2192EUR directly, so the proposed rate compares as NEW, not as a change",
+            )
         if base_direct_ambiguous or inverse_ambiguous:
             fx_add(SEVERITY_BLOCKER, "fx_baseline_ambiguous", f"ambiguous active baseline FX rows around {currency}/EUR")
         delta_pct = None
@@ -1925,7 +2156,6 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
         comparison = {
             "pair": f"{currency}→EUR",
             "current_rate": None if current_rate is None else str(current_rate),
-            "current_derived": current_derived,
             "proposed_rate": str(normalized_rate),
             "derived": derived,
             "source_pair": source_pair,
@@ -2011,14 +2241,13 @@ def validate_against_baseline_document(
     bundle: RefreshBundle,
     baseline: BaselineDocument | None,
     policy: RefreshPolicy,
+    *,
+    sql_capture: str,
 ) -> tuple[ValidationReport, dict[str, bytes]]:
-    """Public entry: mode-consistent validation (first install must have no baseline)."""
-    if bundle.baseline.mode == "first_install" and baseline is not None:
-        raise CatalogRefreshBlockedError(
-            "baseline_mode_mismatch", "first_install bundle cannot use a non-empty baseline"
-        )
-    if bundle.baseline.mode != "first_install" and baseline is None:
-        raise CatalogRefreshBlockedError(
-            "baseline_required", "refresh requires a valid baseline (db snapshot or exported file)"
-        )
-    return validate_bundle(bundle, baseline, policy)
+    """Public entry: mode-consistent validation (first install must have no baseline).
+
+    ``sql_capture`` must name the actual path that produced or supplied the
+    baseline for this review; consistency with the declared mode is enforced
+    inside :func:`validate_bundle` (180-e).
+    """
+    return validate_bundle(bundle, baseline, policy, sql_capture=sql_capture)

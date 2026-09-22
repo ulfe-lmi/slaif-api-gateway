@@ -8,6 +8,18 @@ never exported. Provider secret environment variable *names* may be retained
 (names only); provider/source URLs are sanitized (credentials and query
 tokens stripped).
 
+Route capabilities are projected to the recognized runtime contract
+(endpoint-family boolean blocks, the typed Codex limits/compaction
+contracts, and the typed external-tools policy) with bounded allowlists,
+preserving nested structure and effective meaning; anything unrepresentable
+is flagged on the row with a fingerprint of the raw map as a safe opaque
+comparison identity, never silently discarded as unchanged. Pricing
+metadata is projected to the typed allowlisted monetary fields the runtime
+consumes (audio output pricing, Codex cache-write/long-context accounting,
+selected hosted fee); unrepresentable monetary metadata flags the row. FX
+source values are either sanitized URLs or safe normalized legacy labels;
+free-form text is not carried.
+
 The unkeyed SHA-256 content digest over the canonical rows is an *integrity
 check* on the document bytes: it detects later modification, but it is NOT
 "self-authenticating", NOT authentication, and NOT proof that the baseline
@@ -19,10 +31,12 @@ from a file must state that separately.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import json
 import re
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -30,6 +44,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from slaif_gateway.schemas.catalog_refresh import (
+    CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
+    CODEX_LIMITS_KEY,
     BaselineCounts,
     BaselineDocument,
     BaselineFxRow,
@@ -37,13 +53,20 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineProviderRow,
     BaselineRouteRow,
     BaselineTarget,
-    validate_strict_capabilities,
+    _CAPABILITY_BOOL_BLOCKS,
+    parse_decimal_text,
+    parse_codex_compaction_compatible_route_ids,
+    parse_codex_route_limits,
+    parse_route_external_tool_policy,
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
 )
 from slaif_gateway.services.catalog_refresh.errors import (
     CatalogRefreshBlockedError,
 )
+from slaif_gateway.utils.redaction import redact_text
 
 MAX_BASELINE_BYTES = 32 * 1024 * 1024
+_FX_LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 _PG_VERSION_PATTERN = re.compile(r"^\d+(\.\d+){0,2}")
 
@@ -129,20 +152,232 @@ def canonical_baseline_content(baseline: BaselineDocument) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _strict_capabilities(value: Any, *, row_id: str) -> dict[str, bool]:
-    """Validate route capabilities to a strict allowlisted shape.
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
-    A non-conforming value fails the export with a safe, explicit issue
-    (row identity only — never the offending value) instead of being
-    silently truncated.
+
+def project_route_capabilities(raw: Any) -> tuple[dict[str, Any], bool]:
+    """Project a runtime capabilities map to the canonical baseline shape.
+
+    Returns (canonical, unrepresented). Recognized endpoint-family blocks are
+    projected strictly with bounded allowlists (known fields, exact types,
+    contract-parsed Codex limits/compaction IDs/external tools); anything
+    unrepresentable is dropped from the public document and flagged instead
+    of being silently claimed unchanged.
     """
+    canonical: dict[str, Any] = {}
+    unrepresented = False
+    if raw is None:
+        return canonical, False
+    if not isinstance(raw, Mapping):
+        return canonical, True
+    for key, value in raw.items():
+        if key in _CAPABILITY_BOOL_BLOCKS and isinstance(value, Mapping):
+            block: dict[str, bool] = {}
+            for inner_key, inner in value.items():
+                if (
+                    isinstance(inner_key, str)
+                    and inner_key in _CAPABILITY_BOOL_BLOCKS[key]
+                    and isinstance(inner, bool)
+                ):
+                    block[inner_key] = inner
+            if len(block) != len(value):
+                unrepresented = True
+            else:
+                canonical[key] = dict(sorted(block.items()))
+        elif key == CODEX_LIMITS_KEY:
+            try:
+                parse_codex_route_limits({CODEX_LIMITS_KEY: value})
+            except Exception:  # noqa: BLE001 - contract parser raises typed errors
+                unrepresented = True
+            else:
+                canonical[key] = {k: value[k] for k in sorted(value)}
+        elif key == CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY:
+            try:
+                ids = parse_codex_compaction_compatible_route_ids(
+                    {CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY: value}
+                )
+            except Exception:  # noqa: BLE001
+                unrepresented = True
+            else:
+                canonical[key] = sorted(str(route_id) for route_id in ids)
+        elif key == "external_tools":
+            result = parse_route_external_tool_policy(
+                value, ceilings=DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+            )
+            if result.valid and result.policy is not None:
+                canonical["external_tools"] = result.policy.to_metadata()
+            else:
+                unrepresented = True
+        else:
+            unrepresented = True
+    return canonical, unrepresented
+
+
+def capabilities_fingerprint(raw: Any) -> str:
+    """Safe opaque comparison identity of a raw capabilities map."""
+    return hashlib.sha256(_canonical_json_bytes(raw if raw is not None else {})).hexdigest()
+
+
+def classify_fx_source(value: str | None) -> tuple[str | None, str | None]:
+    """Classify an FX source value into (sanitized_url, safe_label).
+
+    Actual http(s) URLs are sanitized (credentials/query/fragment stripped).
+    Safe legacy labels (bounded lowercase alnum/._-, not secret-looking) are
+    normalized and retained as typed labels. Anything else is free-form text
+    and is not carried into the public document.
+    """
+    if value is None:
+        return None, None
+    text = value.strip()
+    if not text:
+        return None, None
+    parsed = urlparse(text)
+    if parsed.scheme in ("http", "https") and parsed.hostname:
+        return _sanitize_export_url(text, field="fx.source", row_id="<fx>"), None
+    label = text.lower()
+    if not _FX_LABEL_PATTERN.fullmatch(label):
+        return None, None
+    if label.startswith(
+        ("sk-", "sk_", "sk-or-", "bearer ", "authorization ", "password", "secret", "api_key", "apikey")
+    ):
+        return None, None
+    if redact_text(label) != label:
+        return None, None
+    return None, label
+
+
+_METADATA_AUDIO_KEY = "audio_output_price_per_1m"
+_METADATA_CODEX_KEY = "codex_accounting"
+_METADATA_EXTERNAL_TOOL_KEY = "external_tool_pricing"
+_EXTERNAL_TOOL_PRICE_KEY = "openai_web_search_call_price_native"
+_EXTERNAL_TOOL_SOURCE = "openai_published_per_call"
+_CODEX_LONG_FIELDS = (
+    "long_context_threshold_tokens",
+    "long_context_input_multiplier",
+    "long_context_output_multiplier",
+)
+_CODEX_CACHE_FIELDS = ("cache_write_input_price_per_1m", "cache_write_input_multiplier")
+_METADATA_ALLOWLIST = frozenset(
+    {_METADATA_AUDIO_KEY, _METADATA_CODEX_KEY, _METADATA_EXTERNAL_TOOL_KEY}
+)
+
+
+def _project_codex_accounting(raw: Any) -> dict[str, Any] | None:
+    """Strict typed projection of the runtime codex_accounting contract."""
+    if not isinstance(raw, Mapping):
+        return None
+    fields = {str(key) for key in raw}
+    cache_fields = fields.intersection(_CODEX_CACHE_FIELDS)
+    expected = set(_CODEX_LONG_FIELDS) | cache_fields
+    # Mirror the runtime contract exactly: EXACTLY ONE cache-write field
+    # (price or multiplier) plus the full long-context set, nothing else.
+    # A long-context-only mapping is not a valid runtime row.
+    if len(cache_fields) != 1 or fields != expected:
+        return None
+    threshold = raw.get("long_context_threshold_tokens")
+    if isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0:
+        return None
+    projected: dict[str, Any] = {"long_context_threshold_tokens": threshold}
+    for name in ("long_context_input_multiplier", "long_context_output_multiplier"):
+        value = raw.get(name)
+        if not isinstance(value, str):
+            return None
+        try:
+            normalized = parse_decimal_text(value, field=f"pricing.{name}", non_negative=True)
+        except ValueError:
+            return None
+        if Decimal(normalized) <= 0:
+            return None
+        projected[name] = normalized
+    for name in _CODEX_CACHE_FIELDS:
+        if name not in raw:
+            continue
+        value = raw[name]
+        if not isinstance(value, str):
+            return None
+        try:
+            projected[name] = parse_decimal_text(value, field=f"pricing.{name}", non_negative=True)
+        except ValueError:
+            return None
+    return projected
+
+
+def _project_external_tool(raw: Any) -> dict[str, Any] | None:
+    """Strict typed projection of the selected hosted-fee contract."""
+    if not isinstance(raw, Mapping) or set(raw) != {_EXTERNAL_TOOL_PRICE_KEY, "source"}:
+        return None
+    if raw.get("source") != _EXTERNAL_TOOL_SOURCE:
+        return None
+    price = raw.get(_EXTERNAL_TOOL_PRICE_KEY)
+    if isinstance(price, bool) or isinstance(price, float) or not isinstance(price, (str, int)):
+        return None
     try:
-        return validate_strict_capabilities(dict(value) if value else {}, field="capabilities")
-    except ValueError as exc:
-        raise CatalogRefreshBlockedError(
-            "baseline_capability_malformed",
-            f"route row {row_id} carries a non-conforming capabilities value: {exc}",
-        ) from exc
+        normalized = parse_decimal_text(
+            str(price) if isinstance(price, int) else price,
+            field="pricing.external_tool_price_per_call",
+            non_negative=True,
+        )
+    except ValueError:
+        return None
+    return {"external_tool_price_per_call": normalized, "external_tool_source": _EXTERNAL_TOOL_SOURCE}
+
+
+def project_pricing_metadata(metadata: Any) -> dict[str, Any]:
+    """Project pricing_metadata to the typed allowlisted monetary fields.
+
+    Returns the BaselinePricingRow monetary metadata fields plus
+    "unrepresented": True when the metadata carries keys or values outside
+    the recognized monetary contract. Free-form values are never carried
+    into the public document.
+    """
+    result: dict[str, Any] = {
+        "audio_output_price_per_1m": None,
+        "cache_write_input_price_per_1m": None,
+        "cache_write_input_multiplier": None,
+        "long_context_threshold_tokens": None,
+        "long_context_input_multiplier": None,
+        "long_context_output_multiplier": None,
+        "external_tool_price_per_call": None,
+        "external_tool_source": None,
+        "unrepresented": False,
+    }
+    if metadata is None:
+        return result
+    if not isinstance(metadata, Mapping):
+        result["unrepresented"] = True
+        return result
+    for key in metadata:
+        if key not in _METADATA_ALLOWLIST:
+            result["unrepresented"] = True
+    value = metadata.get(_METADATA_AUDIO_KEY)
+    if value is not None:
+        if isinstance(value, bool) or isinstance(value, float) or not isinstance(value, (str, int)):
+            result["unrepresented"] = True
+        else:
+            try:
+                result["audio_output_price_per_1m"] = parse_decimal_text(
+                    str(value) if isinstance(value, int) else value,
+                    field="pricing.audio_output_price_per_1m",
+                    non_negative=True,
+                )
+            except ValueError:
+                result["unrepresented"] = True
+    codex = metadata.get(_METADATA_CODEX_KEY)
+    if codex is not None:
+        projected = _project_codex_accounting(codex)
+        if projected is None:
+            result["unrepresented"] = True
+        else:
+            result.update(projected)
+    tool = metadata.get(_METADATA_EXTERNAL_TOOL_KEY)
+    if tool is not None:
+        projected = _project_external_tool(tool)
+        if projected is None:
+            result["unrepresented"] = True
+        else:
+            result.update(projected)
+    return result
 
 
 def _sanitize_export_url(value: str | None, *, field: str, row_id: str) -> str | None:
@@ -165,6 +400,17 @@ def _sanitize_export_url(value: str | None, *, field: str, row_id: str) -> str |
         netloc = f"{netloc}:{parsed.port}"
     sanitized = urlunparse((parsed.scheme, netloc, parsed.path or "", "", "", ""))
     return sanitized
+
+
+def _classify_fx_source_export(value: str | None, *, row_id: str) -> tuple[str | None, str | None]:
+    fx_source, fx_label = classify_fx_source(value)
+    if fx_source is None and fx_label is None and value is not None and value.strip():
+        # Free-form text is not carried; the row identity is named, never the value.
+        raise CatalogRefreshBlockedError(
+            "baseline_fx_source_unsafe",
+            f"fx row {row_id} carries a source value that is neither a safe URL nor a safe label; it is not exported",
+        )
+    return fx_source, fx_label
 
 
 def _target_parts_from_url(database_url: str) -> tuple[str, int, str, str]:
@@ -250,7 +496,7 @@ async def export_baseline(
                     (
                         "id, provider, upstream_model, endpoint, currency, input_price_per_1m, "
                         "cached_input_price_per_1m, output_price_per_1m, reasoning_price_per_1m, "
-                        "request_price, valid_from, valid_until, enabled, "
+                        "request_price, pricing_metadata, valid_from, valid_until, enabled, "
                         "source_url, created_at, updated_at"
                     ),
                     counts["pricing_rules"],
@@ -301,7 +547,9 @@ async def export_baseline(
             enabled=bool(row["enabled"]),
             visible_in_models=bool(row["visible_in_models"]),
             supports_streaming=bool(row["supports_streaming"]),
-            capabilities=_strict_capabilities(row["capabilities"], row_id=str(row["id"])),
+            capabilities=project_route_capabilities(row["capabilities"])[0],
+            capabilities_unrepresented=project_route_capabilities(row["capabilities"])[1],
+            capabilities_fingerprint=capabilities_fingerprint(row["capabilities"]),
             created_at=_aware(row["created_at"]),
             updated_at=_aware(row["updated_at"]),
         )
@@ -325,6 +573,14 @@ async def export_baseline(
             source_url=_sanitize_export_url(row["source_url"], field="source_url", row_id=str(row["id"])),
             created_at=_aware(row["created_at"]),
             updated_at=_aware(row["updated_at"]),
+            **{
+                key: value
+                for key, value in project_pricing_metadata(row["pricing_metadata"]).items()
+                if key != "unrepresented"
+            },
+            pricing_metadata_unrepresented=bool(
+                project_pricing_metadata(row["pricing_metadata"])["unrepresented"]
+            ),
         )
         for row in pricing
     )
@@ -336,7 +592,8 @@ async def export_baseline(
             rate=str(row["rate"]),
             valid_from=_aware(row["valid_from"]),
             valid_until=None if row["valid_until"] is None else _aware(row["valid_until"]),
-            source=_sanitize_export_url(row["source"], field="source", row_id=str(row["id"])),
+            source=_classify_fx_source_export(row["source"], row_id=str(row["id"]))[0],
+            source_label=_classify_fx_source_export(row["source"], row_id=str(row["id"]))[1],
             created_at=_aware(row["created_at"]),
         )
         for row in fx

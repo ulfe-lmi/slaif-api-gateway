@@ -1,6 +1,6 @@
 {
  "baseline": {
-  "content_sha256": "97c66adbe5886d8dadbae6dc2760212ab84c1a49edf341415d033f573f6a3666",
+  "content_sha256": "417f543bbda5a6b7993bb2b69be864a86362c38d87f5dc0c2546772cde462e32",
   "exported_at": "2026-09-21T10:00:00Z",
   "mode": "exported_file",
   "postgres_version": null,
@@ -157,7 +157,7 @@
  },
  "revision": {
   "policy_version": 1,
-  "renderer_version": "180.2",
+  "renderer_version": "180.3",
   "schema_version": "1",
   "slaif_revision": "fixture-revision-180"
  },

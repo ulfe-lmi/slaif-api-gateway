@@ -1,5 +1,5 @@
 {
- "content_sha256": "97c66adbe5886d8dadbae6dc2760212ab84c1a49edf341415d033f573f6a3666",
+ "content_sha256": "417f543bbda5a6b7993bb2b69be864a86362c38d87f5dc0c2546772cde462e32",
  "counts": {
   "fx_rates": 1,
   "pricing_rules": 5,
@@ -129,9 +129,13 @@
  "routes": [
   {
    "capabilities": {
-    "streaming": true,
-    "text": true
+    "chat_completions": {
+     "chat_streaming": true,
+     "chat_text": true
+    }
    },
+   "capabilities_fingerprint": "c1304b09dba8fadbe6c19fd0f230456fc5fd48a25ae944df60db5e035ff89f21",
+   "capabilities_unrepresented": false,
    "created_at": "2026-09-01T00:00:00Z",
    "enabled": true,
    "endpoint": "/v1/chat/completions",
@@ -147,9 +151,13 @@
   },
   {
    "capabilities": {
-    "streaming": true,
-    "text": true
+    "chat_completions": {
+     "chat_streaming": true,
+     "chat_text": true
+    }
    },
+   "capabilities_fingerprint": "c1304b09dba8fadbe6c19fd0f230456fc5fd48a25ae944df60db5e035ff89f21",
+   "capabilities_unrepresented": false,
    "created_at": "2026-09-01T00:00:00Z",
    "enabled": true,
    "endpoint": "/v1/chat/completions",
@@ -165,9 +173,13 @@
   },
   {
    "capabilities": {
-    "streaming": true,
-    "text": true
+    "chat_completions": {
+     "chat_streaming": true,
+     "chat_text": true
+    }
    },
+   "capabilities_fingerprint": "c1304b09dba8fadbe6c19fd0f230456fc5fd48a25ae944df60db5e035ff89f21",
+   "capabilities_unrepresented": false,
    "created_at": "2026-09-01T00:00:00Z",
    "enabled": true,
    "endpoint": "/v1/chat/completions",
@@ -183,9 +195,13 @@
   },
   {
    "capabilities": {
-    "streaming": true,
-    "text": true
+    "chat_completions": {
+     "chat_streaming": true,
+     "chat_text": true
+    }
    },
+   "capabilities_fingerprint": "c1304b09dba8fadbe6c19fd0f230456fc5fd48a25ae944df60db5e035ff89f21",
+   "capabilities_unrepresented": false,
    "created_at": "2026-09-01T00:00:00Z",
    "enabled": true,
    "endpoint": "/v1/chat/completions",
@@ -201,9 +217,13 @@
   },
   {
    "capabilities": {
-    "streaming": true,
-    "text": true
+    "chat_completions": {
+     "chat_streaming": true,
+     "chat_text": true
+    }
    },
+   "capabilities_fingerprint": "c1304b09dba8fadbe6c19fd0f230456fc5fd48a25ae944df60db5e035ff89f21",
+   "capabilities_unrepresented": false,
    "created_at": "2026-09-01T00:00:00Z",
    "enabled": true,
    "endpoint": "/v1/chat/completions",

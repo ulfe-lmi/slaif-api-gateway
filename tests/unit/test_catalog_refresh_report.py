@@ -19,7 +19,12 @@ from slaif_gateway.schemas.catalog_refresh import (
 )
 import test_catalog_refresh_source_evidence as _evidence_tests
 
-from slaif_gateway.services.catalog_refresh.baseline import canonical_baseline_content, load_baseline
+from slaif_gateway.services.catalog_refresh.baseline import (
+    canonical_baseline_content,
+    capabilities_fingerprint,
+    load_baseline,
+    project_route_capabilities,
+)
 from slaif_gateway.services.catalog_refresh.bundle import load_bundle
 from slaif_gateway.services.catalog_refresh.policy import policy_from_document
 from slaif_gateway.services.catalog_refresh.rendering import (
@@ -31,6 +36,7 @@ from slaif_gateway.services.catalog_refresh.validation import (
     OVERALL_BLOCKED,
     OVERALL_READY,
     OVERALL_READY_WITH_WARNINGS,
+    sql_capture_for_mode,
     validate_bundle,
     validation_json_bytes,
 )
@@ -48,7 +54,7 @@ def _baseline():
 
 
 def _report_for(bundle, baseline):
-    report, _ = validate_bundle(bundle, baseline, policy_from_document(bundle.policy))
+    report, _ = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     return report
 
 
@@ -243,6 +249,16 @@ def test_minimal_blocked_html_is_safe_and_states_unsealed() -> None:
     _assert_no_external_or_executable_resources(html_text)
 
 
+def _baseline_route_caps(raw: dict) -> dict:
+    """Baseline route capability fields from a raw runtime capabilities map."""
+    canonical, unrepresented = project_route_capabilities(raw)
+    return {
+        "capabilities": canonical,
+        "capabilities_unrepresented": unrepresented,
+        "capabilities_fingerprint": capabilities_fingerprint(raw),
+    }
+
+
 def _big_unchanged_case(model_count: int) -> tuple[object, object]:
     """Build an N-model unscoped baseline + identical bundle deterministically."""
     providers = (BaselineProviderRow(
@@ -256,7 +272,7 @@ def _big_unchanged_case(model_count: int) -> tuple[object, object]:
         match_type="exact", endpoint="/v1/chat/completions", provider="openrouter",
         upstream_model=f"big/model-{i:02d}", priority=100, enabled=True,
         visible_in_models=True, supports_streaming=True,
-        capabilities={"text": True, "streaming": True},
+        **_baseline_route_caps({"chat_completions": {"chat_streaming": True, "chat_text": True}}),
         created_at="2026-09-01T00:00:00+00:00", updated_at="2026-09-01T00:00:00+00:00",
     ) for i in range(model_count))
     pricing = tuple(BaselinePricingRow(

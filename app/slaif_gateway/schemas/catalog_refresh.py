@@ -21,6 +21,7 @@ BLOCKED/REVIEW at validation time — never silently accepted.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import re
@@ -29,8 +30,24 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from slaif_gateway.services.audio_route_capabilities import KNOWN_AUDIO_ENDPOINT_CAPABILITIES
+from slaif_gateway.services.chat_completion_route_capabilities import KNOWN_CHAT_COMPLETION_CAPABILITIES
+from slaif_gateway.services.embeddings_route_capabilities import KNOWN_EMBEDDINGS_CAPABILITIES
+from slaif_gateway.services.external_tool_policy_contract import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+    parse_route_external_tool_policy,
+)
+from slaif_gateway.services.realtime_route_capabilities import KNOWN_REALTIME_CAPABILITIES
+from slaif_gateway.services.responses_route_capabilities import (
+    CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY,
+    CODEX_LIMITS_KEY,
+    KNOWN_RESPONSES_CAPABILITIES,
+    parse_codex_compaction_compatible_route_ids,
+    parse_codex_route_limits,
+)
+
 SCHEMA_VERSION = "1"
-RENDERER_VERSION = "180.2"
+RENDERER_VERSION = "180.3"
 POLICY_VERSION = 1
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
@@ -76,17 +93,27 @@ MATCH_TYPES: frozenset[str] = frozenset({"exact", "prefix", "glob"})
 
 # The import/database monetary contract is PostgreSQL Numeric(18,9): at most
 # 18 significant digits with 9 after the decimal point. Hostile huge
-# exponent/precision values (e.g. Decimal("1E+100")) are rejected before any
-# expensive formatting or arithmetic and never accepted into a bundle.
-_MONEY_MAX = Decimal("999999999.999999999")
-_MONEY_MAX_EXPONENT = -9
+# exponent/precision values (e.g. "1E+1000000") are bounded from the decimal's
+# own digit/exponent tuple BEFORE any comparison or arithmetic, so magnitude
+# checks can never overflow, and such values are never accepted into a bundle.
+_MONEY_MAX_INTEGER_DIGITS = 9
+_MONEY_MAX_FRACTION_DIGITS = 9
+_FX_LABEL_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
 def parse_decimal_text(raw: Any, *, field: str, non_negative: bool = False) -> str:
     """Accept only exact decimal strings bounded to the Numeric(18,9) contract.
 
-    Rejects floats, NaN/Infinity, values beyond the 9-integer/9-fractional
-    digit bound, and values requiring more than 9 decimal places.
+    Rejects floats, booleans, NaN/Infinity, values beyond the 9-integer/
+    9-fractional digit bound, and values requiring more than 9 decimal places.
+    The bound is a property of the value, not of its spelling: trailing zeros
+    in the coefficient are stripped with pure tuple arithmetic (hostile
+    exponents included) BEFORE any comparison or arithmetic, so numerically
+    equivalent spellings such as "1.0000000000" or "0.0000000010" are
+    accepted and preserved verbatim, while out-of-range values fail with a
+    safe ValueError. The stripped input text is returned unchanged (never
+    re-normalized through ``Decimal.__str__``, which would spell tiny values
+    in scientific notation).
     """
     if isinstance(raw, bool) or not isinstance(raw, str):
         raise ValueError(f"{field} must be an exact decimal string (floats are rejected)")
@@ -97,14 +124,42 @@ def parse_decimal_text(raw: Any, *, field: str, non_negative: bool = False) -> s
         raise ValueError(f"{field} is not a finite decimal: {field}") from exc
     if not value.is_finite():
         raise ValueError(f"{field} must be finite")
-    if abs(value) > _MONEY_MAX:
+    _sign, digits, exponent = value.as_tuple()
+    # The Numeric(18,9) bound is a property of the value, not its spelling:
+    # strip trailing zeros from the coefficient (pure tuple arithmetic, no
+    # intermediate value construction) so numerically equivalent spellings
+    # ("1.0000000000", "0.0000000010") are judged by their value, and hostile
+    # exponents still fail safely before any arithmetic.
+    trailing = 0
+    for digit in reversed(digits):
+        if digit == 0:
+            trailing += 1
+        else:
+            break
+    if trailing:
+        significant = digits[: len(digits) - trailing]
+        bound_exponent = exponent + trailing
+    else:
+        significant = digits
+        bound_exponent = exponent
+    if not significant:
+        # the value is exactly zero in any spelling
+        integer_digits = 0
+        fraction_digits = 0
+    else:
+        integer_digits = (
+            len(significant) + bound_exponent
+            if bound_exponent >= 0
+            else max(0, len(significant) + bound_exponent)
+        )
+        fraction_digits = max(0, -bound_exponent)
+    if integer_digits > _MONEY_MAX_INTEGER_DIGITS:
         raise ValueError(f"{field} exceeds the database Numeric(18,9) magnitude bound")
-    _sign, _digits, exponent = value.as_tuple()
-    if exponent < _MONEY_MAX_EXPONENT:
+    if fraction_digits > _MONEY_MAX_FRACTION_DIGITS:
         raise ValueError(f"{field} exceeds 9 decimal places (database Numeric(18,9))")
     if non_negative and value < 0:
         raise ValueError(f"{field} must be non-negative")
-    return str(value)
+    return text
 
 
 def validate_safe_url(raw: str, *, field: str) -> str:
@@ -573,25 +628,69 @@ class BaselineProviderRow(CatalogRefreshModel):
     updated_at: datetime
 
 
-def validate_strict_capabilities(raw: dict[str, Any], *, field: str) -> dict[str, bool]:
-    """Strict shape for route capabilities retained in a baseline export.
+# --- Baseline route capability projection (180-e) ---------------------------
+# Runtime model_routes.capabilities is a nested map of endpoint-family blocks
+# (chat_completions/audio_endpoints/embeddings/realtime/responses boolean
+# blocks, the typed codex_limits integer contract, the bounded Codex
+# compaction route-ID allowlist, and the typed external_tools policy). The
+# baseline export projects exactly the recognized runtime contract with
+# bounded allowlists, preserving nested structure and effective meaning.
+# Unrecognized keys/values are never carried into the public document; the
+# row is flagged unrepresented (with a fingerprint of the raw map as a safe
+# comparison identity) instead of being silently claimed unchanged.
+_CAPABILITY_BOOL_BLOCKS: dict[str, frozenset[str]] = {
+    "chat_completions": KNOWN_CHAT_COMPLETION_CAPABILITIES,
+    "audio_endpoints": KNOWN_AUDIO_ENDPOINT_CAPABILITIES,
+    "embeddings": KNOWN_EMBEDDINGS_CAPABILITIES,
+    "realtime": KNOWN_REALTIME_CAPABILITIES,
+    "responses": KNOWN_RESPONSES_CAPABILITIES,
+}
+_CAPABILITY_TOP_KEYS: frozenset[str] = frozenset(_CAPABILITY_BOOL_BLOCKS) | frozenset(
+    {CODEX_LIMITS_KEY, CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY, "external_tools"}
+)
 
-    Capabilities are the one semantically necessary free-form map kept in the
-    default export. They are validated (boolean values, bounded keys) and a
-    non-conforming value fails with a safe, explicit issue instead of being
-    silently truncated.
+
+def validate_route_capability_projection(raw: Any) -> None:
+    """Strict canonical shape for a projected baseline capabilities map.
+
+    Raises ValueError (naming the block, never the offending value or key) on
+    any deviation, so a baseline file can never smuggle free-form data into
+    the public document.
     """
-    if len(raw) > 32:
-        raise ValueError(f"{field} may contain at most 32 keys")
-    result: dict[str, bool] = {}
-    for key, value in raw.items():
-        key_text = str(key)
-        if len(key_text) > 64:
-            raise ValueError(f"{field} keys are bounded to 64 characters")
-        if not isinstance(value, bool):
-            raise ValueError(f"{field}.{key_text} must be a boolean")
-        result[key_text] = value
-    return result
+    if not isinstance(raw, Mapping):
+        raise ValueError("baseline capabilities must be an object")
+    for key in raw:
+        if not isinstance(key, str) or key not in _CAPABILITY_TOP_KEYS:
+            raise ValueError("baseline capabilities carry an unknown block")
+    for key in _CAPABILITY_BOOL_BLOCKS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if not isinstance(value, Mapping):
+            raise ValueError(f"capability block {key} must be an object")
+        for inner_key, inner in value.items():
+            if not isinstance(inner_key, str) or inner_key not in _CAPABILITY_BOOL_BLOCKS[key]:
+                raise ValueError(f"capability block {key} carries an unknown field")
+            if not isinstance(inner, bool):
+                raise ValueError(f"capability block {key} carries a non-boolean value")
+    if CODEX_LIMITS_KEY in raw:
+        try:
+            parse_codex_route_limits({CODEX_LIMITS_KEY: raw[CODEX_LIMITS_KEY]})
+        except Exception as exc:  # noqa: BLE001 - contract parser raises typed errors
+            raise ValueError("capability block codex_limits is malformed") from exc
+    if CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY in raw:
+        try:
+            parse_codex_compaction_compatible_route_ids(
+                {CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY: raw[CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY]}
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError("capability block codex_compaction_compatible_route_ids is malformed") from exc
+    if "external_tools" in raw:
+        result = parse_route_external_tool_policy(
+            raw["external_tools"], ceilings=DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+        )
+        if not result.valid or result.policy is None:
+            raise ValueError("capability block external_tools is malformed")
 
 
 class BaselineRouteRow(CatalogRefreshModel):
@@ -605,14 +704,42 @@ class BaselineRouteRow(CatalogRefreshModel):
     enabled: bool
     visible_in_models: bool
     supports_streaming: bool
-    capabilities: dict[str, bool] = Field(default_factory=dict)
+    # Projected nested runtime capability contract (180-e): recognized
+    # endpoint-family blocks only, canonical shape, no free-form values.
+    capabilities: dict[str, Any] = Field(default_factory=dict)
+    # True when the raw map carried values outside the recognized contract;
+    # the raw values are NOT carried into the document, and affected changes
+    # are blocked by validation instead of being claimed unchanged.
+    capabilities_unrepresented: bool = False
+    # sha256 of the canonical JSON of the raw capabilities map: a safe opaque
+    # comparison identity (an identity, not anonymization of guessable
+    # secrets).
+    capabilities_fingerprint: str = Field(min_length=64, max_length=64)
     created_at: datetime
     updated_at: datetime
 
     @model_validator(mode="after")
     def _check(self) -> BaselineRouteRow:
-        validate_strict_capabilities(self.capabilities, field="capabilities")
+        validate_route_capability_projection(self.capabilities)
+        if not _HEX64_PATTERN.fullmatch(self.capabilities_fingerprint):
+            raise ValueError("capabilities_fingerprint must be 64 lowercase hex characters")
         return self
+
+
+_PRICING_MONEY_FIELDS: tuple[str, ...] = (
+    "input_price_per_1m",
+    "cached_input_price_per_1m",
+    "output_price_per_1m",
+    "reasoning_price_per_1m",
+    "request_price",
+    "audio_output_price_per_1m",
+    "cache_write_input_price_per_1m",
+)
+_PRICING_MULTIPLIER_FIELDS: tuple[str, ...] = (
+    "cache_write_input_multiplier",
+    "long_context_input_multiplier",
+    "long_context_output_multiplier",
+)
 
 
 class BaselinePricingRow(CatalogRefreshModel):
@@ -632,6 +759,65 @@ class BaselinePricingRow(CatalogRefreshModel):
     source_url: str | None = None
     created_at: datetime
     updated_at: datetime
+    # 180-e: typed allowlisted monetary metadata retained from the runtime
+    # pricing_metadata (audio output pricing, Codex cache-write/long-context
+    # accounting, selected hosted fee). Free-form metadata is never carried;
+    # unrepresentable monetary metadata flags the row instead.
+    audio_output_price_per_1m: str | None = None
+    cache_write_input_price_per_1m: str | None = None
+    cache_write_input_multiplier: str | None = None
+    long_context_threshold_tokens: int | None = None
+    long_context_input_multiplier: str | None = None
+    long_context_output_multiplier: str | None = None
+    external_tool_price_per_call: str | None = None
+    external_tool_source: Literal["openai_published_per_call"] | None = None
+    pricing_metadata_unrepresented: bool = False
+
+    @model_validator(mode="after")
+    def _check(self) -> BaselinePricingRow:
+        validate_currency(self.currency, field="currency")
+        for name in _PRICING_MONEY_FIELDS:
+            value = getattr(self, name)
+            if value is not None:
+                parse_decimal_text(value, field=f"pricing.{name}", non_negative=True)
+        for name in _PRICING_MULTIPLIER_FIELDS:
+            value = getattr(self, name)
+            if value is not None:
+                parse_decimal_text(value, field=f"pricing.{name}", non_negative=True)
+                if Decimal(value) <= 0:
+                    raise ValueError(f"pricing.{name} must be positive")
+        if self.long_context_threshold_tokens is not None and (
+            isinstance(self.long_context_threshold_tokens, bool)
+            or self.long_context_threshold_tokens <= 0
+        ):
+            raise ValueError("pricing.long_context_threshold_tokens must be a positive integer")
+        codex_fields = (
+            self.long_context_threshold_tokens,
+            self.long_context_input_multiplier,
+            self.long_context_output_multiplier,
+        )
+        cache_fields = (self.cache_write_input_price_per_1m, self.cache_write_input_multiplier)
+        # Mirror the runtime codex accounting contract exactly: the
+        # long-context fields are all-or-none and, whenever that set is
+        # present, EXACTLY ONE cache-write field (price or multiplier) must
+        # be present; a cache field without the set, or the set without a
+        # cache field, is not a valid runtime row.
+        if any(value is not None for value in codex_fields):
+            if any(value is None for value in codex_fields):
+                raise ValueError("codex accounting metadata must carry the full long-context field set")
+            if sum(1 for value in cache_fields if value is not None) != 1:
+                raise ValueError("codex accounting metadata requires exactly one cache-write field")
+        elif any(value is not None for value in cache_fields):
+            raise ValueError("codex accounting metadata requires the full long-context field set")
+        if (self.external_tool_price_per_call is None) != (self.external_tool_source is None):
+            raise ValueError("external tool pricing price and source must be set together")
+        if self.external_tool_price_per_call is not None:
+            parse_decimal_text(
+                self.external_tool_price_per_call,
+                field="pricing.external_tool_price_per_call",
+                non_negative=True,
+            )
+        return self
 
 
 class BaselineFxRow(CatalogRefreshModel):
@@ -642,7 +828,26 @@ class BaselineFxRow(CatalogRefreshModel):
     valid_from: datetime
     valid_until: datetime | None = None
     source: str | None = None
+    # Legacy FX sources are not always URLs: safe normalized labels (e.g.
+    # "manual", "ecb") are retained as typed labels. A row carries at most
+    # one of source/source_label.
+    source_label: str | None = Field(default=None, max_length=64)
     created_at: datetime
+
+    @model_validator(mode="after")
+    def _check(self) -> BaselineFxRow:
+        validate_currency(self.base_currency, field="base_currency")
+        validate_currency(self.quote_currency, field="quote_currency")
+        parse_decimal_text(self.rate, field="fx.rate")
+        if Decimal(self.rate) <= 0:
+            raise ValueError("fx.rate must be positive")
+        if self.source is not None:
+            validate_safe_url(self.source, field="fx.source")
+        if self.source is not None and self.source_label is not None:
+            raise ValueError("fx row carries both a source URL and a source label")
+        if self.source_label is not None and not _FX_LABEL_PATTERN.fullmatch(self.source_label):
+            raise ValueError("fx.source_label must be a safe normalized label")
+        return self
 
 
 class BaselineCounts(CatalogRefreshModel):

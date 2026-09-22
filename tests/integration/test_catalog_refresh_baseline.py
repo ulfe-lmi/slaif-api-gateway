@@ -39,11 +39,16 @@ from slaif_gateway.schemas.catalog_refresh import BaselineDocument
 from slaif_gateway.schemas.pricing import FxConversionResult
 from slaif_gateway.services.catalog_refresh.baseline import (
     canonical_baseline_content,
+    capabilities_fingerprint,
     export_baseline,
 )
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 
 from slaif_gateway.services.catalog_refresh.validation import _reciprocal
+from slaif_gateway.schemas.catalog_refresh import CAPABILITY_KEYS
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    ensure_default_chat_completion_capabilities,
+)
 
 from tests.unit.test_catalog_refresh_source_evidence import (
     ECB_URL,
@@ -63,6 +68,27 @@ GENERATED_AT = "2026-09-22T12:00:00+00:00"
 RETRIEVED_AT = "2026-09-22T11:00:00+00:00"
 
 MODELS = ("synthetic/stable-v1", "synthetic/updated-v1", "synthetic/new-v1")
+# Allowlisted monetary metadata per model (180-e E2): the runtime contract
+# fields the baseline must preserve verbatim.
+METADATA_BY_MODEL: dict[str, dict] = {
+    "synthetic/stable-v1": {
+        # a valid RUNTIME codex row: the contract requires EXACTLY ONE
+        # cache-write field alongside the full long-context set
+        "codex_accounting": {
+            "long_context_threshold_tokens": 272000,
+            "long_context_input_multiplier": "2.00",
+            "long_context_output_multiplier": "3.00",
+            "cache_write_input_price_per_1m": "7.50",
+        }
+    },
+    "synthetic/updated-v1": {
+        "external_tool_pricing": {
+            "openai_web_search_call_price_native": "0.01",
+            "source": "openai_published_per_call",
+        }
+    },
+    "synthetic/new-v1": {"audio_output_price_per_1m": "15"},
+}
 PRICES: dict[str, dict[str, str]] = {
     "synthetic/stable-v1": {"input": "0.5", "output": "2"},
     "synthetic/updated-v1": {"input": "1", "output": "4"},
@@ -101,6 +127,7 @@ async def _seed_catalog(database_url: str) -> None:
                     "DELETE FROM pricing_rules WHERE provider = :provider"
                     " AND upstream_model = ANY(:models)"
                     " AND source_url = :source_url"
+                    " OR (provider = 'openai' AND upstream_model = 'synthetic/canary-v1')"
                 ),
                 {
                     "provider": PROVIDER,
@@ -113,6 +140,7 @@ async def _seed_catalog(database_url: str) -> None:
                     "DELETE FROM model_routes WHERE (provider = :provider"
                     " AND requested_model = ANY(:models))"
                     " OR (provider = 'openai' AND requested_model LIKE 'synthetic/pad-%')"
+                    " OR (provider = 'openai' AND requested_model = 'synthetic/unknown-cap-v1')"
                 ),
                 {"provider": PROVIDER, "models": list(MODELS)},
             )
@@ -153,7 +181,11 @@ async def _seed_catalog(database_url: str) -> None:
                         "id": str(uuid.uuid4()),
                         "model": model,
                         "provider": PROVIDER,
-                        "capabilities": json.dumps({"text": True, "streaming": True}),
+                        # the real runtime nested projection (180-e E1): the
+                        # full chat_completions contract block, not a flat map
+                        "capabilities": json.dumps(
+                            ensure_default_chat_completion_capabilities({}, supports_streaming=True)
+                        ),
                         "notes": f"api_key={ROUTE_SECRET}; {PRIVATE_CANARY}",
                     },
                 )
@@ -171,14 +203,9 @@ async def _seed_catalog(database_url: str) -> None:
                         "model": model,
                         "input_price": prices["input"],
                         "output_price": prices["output"],
-                        "metadata": json.dumps(
-                            {
-                                "api_key": METADATA_SECRET,
-                                "confidence": 0.97,
-                                "region": "eu-central",
-                                "transcript": PRIVATE_CANARY,
-                            }
-                        ),
+                        # 180-e E2: the allowlisted monetary metadata the
+                        # runtime consumes must survive the export verbatim
+                        "metadata": json.dumps(METADATA_BY_MODEL[model]),
                         "valid_from": VALID_FROM,
                         "source_url": f"{BASE_URL}/models",
                     },
@@ -191,6 +218,52 @@ async def _seed_catalog(database_url: str) -> None:
                 ),
                 {"id": str(uuid.uuid4()), "valid_from": VALID_FROM},
             )
+            # A fourth, unselected (openai) pricing row whose metadata is all
+            # free-form canary content: the export must flag the row
+            # unrepresentable and drop every canary.
+            await connection.execute(
+                text(
+                    "INSERT INTO pricing_rules (id, provider, upstream_model, endpoint, currency,"
+                    " input_price_per_1m, output_price_per_1m, pricing_metadata, valid_from,"
+                    " enabled, source_url, created_at, updated_at) VALUES"
+                    " (:id, 'openai', 'synthetic/canary-v1', '/v1/chat/completions', 'EUR', '0.1',"
+                    " '0.4', :metadata, :valid_from, true, :source_url, now(), now())"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "metadata": json.dumps(
+                        {
+                            "api_key": METADATA_SECRET,
+                            "confidence": 0.97,
+                            "region": "eu-central",
+                            "transcript": PRIVATE_CANARY,
+                        }
+                    ),
+                    "valid_from": VALID_FROM,
+                    "source_url": f"{BASE_URL}/models",
+                },
+            )
+            # An unselected (openai) route whose capabilities carry a key
+            # outside the recognized contract: exported as unrepresented with
+            # an opaque fingerprint, never with the raw value.
+            await connection.execute(
+                text(
+                    "INSERT INTO model_routes (id, requested_model, match_type, endpoint, provider,"
+                    " upstream_model, priority, enabled, visible_in_models, supports_streaming,"
+                    " capabilities, created_at, updated_at) VALUES"
+                    " (:id, 'synthetic/unknown-cap-v1', 'exact', '/v1/chat/completions', 'openai',"
+                    " 'synthetic/unknown-cap-v1', 100, true, true, true, :capabilities, now(), now())"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "capabilities": json.dumps(
+                        {
+                            "chat_completions": {"chat_text": True},
+                            "mystery_block": {"free_form_canary": PRIVATE_CANARY},
+                        }
+                    ),
+                },
+            )
     finally:
         await engine.dispose()
 
@@ -201,20 +274,27 @@ async def _seed_pad_routes(database_url: str, count: int) -> list[str]:
     engine = create_async_engine(database_url, future=True)
     try:
         async with engine.begin() as connection:
-            for model in models:
+            for start in range(0, len(models), 500):
+                batch = models[start : start + 500]
+                params: dict[str, object] = {}
+                value_clauses = []
+                for offset, model in enumerate(batch):
+                    params[f"id_{offset}"] = str(uuid.uuid4())
+                    params[f"model_{offset}"] = model
+                    params[f"capabilities_{offset}"] = json.dumps({"text": True})
+                    value_clauses.append(
+                        f"(:id_{offset}, :model_{offset}, 'exact', '/v1/chat/completions',"
+                        f" 'openai', :model_{offset}, 100, true, true, true,"
+                        f" :capabilities_{offset}, now(), now())"
+                    )
                 await connection.execute(
                     text(
-                        "INSERT INTO model_routes (id, requested_model, match_type, endpoint, provider,"
-                        " upstream_model, priority, enabled, visible_in_models, supports_streaming,"
-                        " capabilities, created_at, updated_at) VALUES"
-                        " (:id, :model, 'exact', '/v1/chat/completions', 'openai', :model, 100,"
-                        " true, true, true, :capabilities, now(), now())"
+                        "INSERT INTO model_routes (id, requested_model, match_type, endpoint,"
+                        " provider, upstream_model, priority, enabled, visible_in_models,"
+                        " supports_streaming, capabilities, created_at, updated_at) VALUES "
+                        + ", ".join(value_clauses)
                     ),
-                    {
-                        "id": str(uuid.uuid4()),
-                        "model": model,
-                        "capabilities": json.dumps({"text": True}),
-                    },
+                    params,
                 )
     finally:
         await engine.dispose()
@@ -241,6 +321,20 @@ async def _counts(database_url: str) -> dict[str, int]:
         await engine.dispose()
 
 
+def _flat_standard_capabilities(nested: dict | None) -> dict:
+    """The flat standard-v1 capability keys a proposal may declare, taken
+    from the baseline's nested chat_completions projection."""
+    block = (nested or {}).get("chat_completions") or {}
+    flat: dict[str, bool] = {}
+    for key, value in block.items():
+        if not isinstance(value, bool) or not key.startswith("chat_"):
+            continue
+        standard = key.removeprefix("chat_")
+        if standard in CAPABILITY_KEYS:
+            flat[standard] = value
+    return flat
+
+
 def _build_replay_bundle(doc: BaselineDocument) -> dict:
     """Build a full-refresh bundle that mirrors every openrouter baseline row."""
     now_iso = GENERATED_AT
@@ -263,7 +357,7 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
                 "model": model,
                 "display_name": f"Synthetic {model} (integration)",
                 "supports_streaming": route.supports_streaming,
-                "capabilities": dict(route.capabilities or {}),
+                "capabilities": _flat_standard_capabilities(route.capabilities),
                 "deprecated": False,
                 "provenance": dict(provenance, sources=[f"{PROVIDER}|{model}|openrouter_models_api"]),
                 "warnings": [],
@@ -280,7 +374,7 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
                 "enabled": route.enabled,
                 "visible_in_models": route.visible_in_models,
                 "supports_streaming": route.supports_streaming,
-                "capabilities": dict(route.capabilities or {}),
+                "capabilities": _flat_standard_capabilities(route.capabilities),
                 "provenance": dict(provenance, sources=[f"{PROVIDER}|{model}|openrouter_models_api"]),
                 "warnings": [],
             }
@@ -366,7 +460,7 @@ def _build_replay_bundle(doc: BaselineDocument) -> dict:
         "revision": {
             "schema_version": "1",
             "slaif_revision": "obj180-integration-revision",
-            "renderer_version": "180.2",
+            "renderer_version": "180.3",
             "policy_version": 1,
         },
         "research": {
@@ -829,3 +923,637 @@ def test_fx_normalization_matches_runtime_pricing_lookup(migrated_postgres_url: 
     # (c) Deterministic reciprocal: 9dp ROUND_HALF_UP, double-inversion stable.
     assert _reciprocal(Decimal("1.08")) == Decimal("0.925925926")
     assert _reciprocal(_reciprocal(Decimal("1.08"))) == Decimal("1.080000000")
+
+
+# --- 180-e E1: nested capability projection against a real database ----------
+
+def test_export_preserves_nested_capabilities_and_flags_unknown_keys(migrated_postgres_url: str) -> None:
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+    document_text = json.dumps(doc.model_dump(mode="json"), sort_keys=True)
+    expected_block = ensure_default_chat_completion_capabilities({}, supports_streaming=True)
+
+    for row in doc.routes:
+        if row.provider == PROVIDER and row.requested_model in MODELS:
+            # the real runtime nested projection is preserved verbatim
+            assert row.capabilities == expected_block
+            assert row.capabilities_unrepresented is False
+            assert row.capabilities_fingerprint == capabilities_fingerprint(expected_block)
+
+    unknown = next(r for r in doc.routes if r.requested_model == "synthetic/unknown-cap-v1")
+    assert unknown.capabilities_unrepresented is True
+    # the recognized sibling block still projects; the unknown block is dropped
+    assert unknown.capabilities == {"chat_completions": {"chat_text": True}}
+    assert len(unknown.capabilities_fingerprint) == 64
+    assert "mystery_block" not in document_text
+    assert PRIVATE_CANARY not in document_text
+
+    canary = next(p for p in doc.pricing if p.upstream_model == "synthetic/canary-v1")
+    assert canary.pricing_metadata_unrepresented is True
+    assert METADATA_SECRET not in document_text
+    assert FLOAT_METADATA not in document_text
+
+
+def test_export_preserves_allowlisted_monetary_metadata(migrated_postgres_url: str) -> None:
+    """E2: the typed monetary metadata the runtime consumes survives the
+    export verbatim (audio output price, codex long-context/cache fields,
+    selected hosted fee)."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+    by_model = {row.upstream_model: row for row in doc.pricing}
+
+    stable = by_model["synthetic/stable-v1"]
+    assert stable.pricing_metadata_unrepresented is False
+    assert stable.long_context_threshold_tokens == 272000
+    assert stable.long_context_input_multiplier == "2.00"
+    assert stable.long_context_output_multiplier == "3.00"
+    assert stable.cache_write_input_price_per_1m == "7.50"
+    assert stable.audio_output_price_per_1m is None
+
+    updated = by_model["synthetic/updated-v1"]
+    assert updated.external_tool_price_per_call == "0.01"
+    assert updated.external_tool_source == "openai_published_per_call"
+
+    new = by_model["synthetic/new-v1"]
+    assert new.audio_output_price_per_1m == "15"
+
+
+def test_export_metadata_only_difference_changes_the_digest(migrated_postgres_url: str) -> None:
+    """E2: a change in an allowlisted monetary metadata field is a change in
+    the baseline content (the digest is over the rows, not just prices)."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    doc_a = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+
+    def set_multiplier(value: str) -> None:
+        async def _update() -> None:
+            engine = create_async_engine(migrated_postgres_url, future=True)
+            try:
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text(
+                            "UPDATE pricing_rules SET pricing_metadata = :metadata"
+                            " WHERE provider = :provider AND upstream_model = :model"
+                        ),
+                        {
+                            "metadata": json.dumps(
+                                {"codex_accounting": {"long_context_threshold_tokens": 272000,
+                                                      "long_context_input_multiplier": value,
+                                                      "long_context_output_multiplier": "3.00",
+                                                      "cache_write_input_price_per_1m": "7.50"}}
+                            ),
+                            "provider": PROVIDER,
+                            "model": "synthetic/stable-v1",
+                        },
+                    )
+            finally:
+                await engine.dispose()
+
+        asyncio.run(_update())
+
+    try:
+        set_multiplier("2.10")
+        doc_b = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+        assert doc_b.content_sha256 != doc_a.content_sha256
+        stable_b = next(r for r in doc_b.pricing if r.upstream_model == "synthetic/stable-v1")
+        assert stable_b.long_context_input_multiplier == "2.10"
+    finally:
+        set_multiplier("2.00")
+
+
+def test_export_fx_label_source_and_free_form_block(migrated_postgres_url: str) -> None:
+    """E1: legacy FX sources keep their safe typed label (manual/ecb); a
+    free-form source value blocks the export (row identity named, value not)."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+
+    def add_fx(label: str, quote: str, rate: str) -> uuid.UUID:
+        row_id = uuid.uuid4()
+
+        async def _insert() -> None:
+            engine = create_async_engine(migrated_postgres_url, future=True)
+            try:
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text(
+                            "INSERT INTO fx_rates (id, base_currency, quote_currency, rate, valid_from,"
+                            " source, created_at) VALUES (:id, :quote, 'EUR', :rate, :valid_from, :source, now())"
+                        ),
+                        {"id": row_id, "quote": quote, "rate": rate,
+                         "valid_from": VALID_FROM, "source": label},
+                    )
+            finally:
+                await engine.dispose()
+
+        asyncio.run(_insert())
+        return row_id
+
+    def drop(row_id: uuid.UUID) -> None:
+        async def _delete() -> None:
+            engine = create_async_engine(migrated_postgres_url, future=True)
+            try:
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text("DELETE FROM fx_rates WHERE id = :id"), {"id": row_id}
+                    )
+            finally:
+                await engine.dispose()
+
+        asyncio.run(_delete())
+
+    label_id = add_fx("manual", "GBP", "0.85")
+    try:
+        doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+        row = next(r for r in doc.fx if r.base_currency == "GBP" and r.quote_currency == "EUR")
+        assert row.source is None
+        assert row.source_label == "manual"
+    finally:
+        drop(label_id)
+
+    # free-form: the whole export blocks, naming the row id, never the value
+    bad_id = add_fx("see internal memo page 3", "CHF", "1.05")
+    try:
+        with pytest.raises(CatalogRefreshBlockedError) as excinfo:
+            asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+        assert excinfo.value.code == "baseline_fx_source_unsafe"
+        assert "see internal memo" not in excinfo.value.detail
+        assert str(bad_id) in excinfo.value.detail
+    finally:
+        drop(bad_id)
+
+
+# --- 180-e E2: unrepresented metadata blocks the review ----------------------
+
+def test_unrepresented_baseline_metadata_blocks_cli_review(migrated_postgres_url: str, tmp_path: Path) -> None:
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+    baseline_path = tmp_path / "baseline.json"
+    runner.invoke(
+        app, ["catalog-refresh", "export-baseline", "--db-url", migrated_postgres_url,
+              "--out", str(baseline_path)]
+    )
+    # flip the selected model's metadata to the unrepresentable flag and
+    # re-attest the content digest of the tampered payload (the loader must
+    # still accept the document bytes)
+    payload = json.loads(baseline_path.read_text(encoding="utf-8"))
+    for row in payload["pricing"]:
+        if row["upstream_model"] == "synthetic/stable-v1" and row["provider"] == PROVIDER:
+            row["pricing_metadata_unrepresented"] = True
+    tampered = BaselineDocument.model_validate({**payload, "content_sha256": "0" * 64})
+    new_digest = hashlib.sha256(canonical_baseline_content(tampered)).hexdigest()
+    payload["content_sha256"] = new_digest
+    baseline_path.write_text(json.dumps(payload, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+
+    # the bundle is built against exactly this (tampered) document, so its
+    # declared baseline identity carries the tampered content digest
+    bundle = _build_replay_bundle(doc)
+    bundle["baseline"]["content_sha256"] = new_digest
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(bundle, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path),
+         "--baseline-file", str(baseline_path),
+         "--run-root", str(tmp_path / "runs"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert result.exit_code == 20, result.output
+    run_dir = tmp_path / "runs" / "obj180-replay-001"
+    validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+    codes = {w["code"] for w in validation["warnings"]}
+    assert "baseline_unrepresented_metadata" in codes
+    assert validation["state"] == "BLOCKED"
+
+
+# --- 180-e E3: observed source facts cannot be bypassed via the CLI ----------
+
+def _replay_bundle_with_snapshot_mutation(doc: BaselineDocument, mutate) -> dict:
+    bundle = _build_replay_bundle(doc)
+    # rebuild the shared openrouter snapshot with the mutation, re-binding
+    # the evidence bytes to every openrouter source record
+    model_prices = {
+        p.upstream_model: (p.input_price_per_1m, p.output_price_per_1m)
+        for p in doc.pricing
+        if p.provider == PROVIDER and p.upstream_model in MODELS
+    }
+    data = json.loads(openrouter_snapshot_bytes(model_prices))
+    mutate(data)
+    snapshot = (json.dumps(data, sort_keys=True) + "\n").encode("utf-8")
+    for source in bundle["sources"]:
+        if source["provider"] == PROVIDER:
+            source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
+            source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
+    return bundle
+
+
+def test_e3_deprecation_reproducer_blocks_cli_review(migrated_postgres_url: str, tmp_path: Path) -> None:
+    """Reproducer 1: snapshot deprecation.is_deprecated=true while the
+    proposal carries deprecated=false -> BLOCKED (retain-local)."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+    baseline_path = tmp_path / "baseline.json"
+    runner.invoke(
+        app, ["catalog-refresh", "export-baseline", "--db-url", migrated_postgres_url,
+              "--out", str(baseline_path)]
+    )
+
+    def mutate(data: dict) -> None:
+        for row in data["data"]:
+            if row["id"] == "synthetic/stable-v1":
+                row["deprecation"] = {"is_deprecated": True}
+
+    bundle = _replay_bundle_with_snapshot_mutation(doc, mutate)
+    bundle["run_id"] = "obj180e-e3-deprecation"
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(bundle, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path),
+         "--baseline-file", str(baseline_path),
+         "--run-root", str(tmp_path / "runs"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert result.exit_code == 20, result.output
+    validation = json.loads(
+        (tmp_path / "runs" / "obj180e-e3-deprecation" / "validation.json").read_text(encoding="utf-8")
+    )
+    codes = {w["code"] for w in validation["warnings"]}
+    assert "source_evidence_value_mismatch" in codes
+    detail = next(w["detail"] for w in validation["warnings"] if w["code"] == "source_evidence_value_mismatch")
+    assert "deprecated" in detail
+    assert "retain the local row" in detail
+    disp = {d["model"]: d["disposition"] for d in validation["dispositions"]}
+    assert disp["synthetic/stable-v1"] == "BLOCKED"
+
+
+def test_e3_audio_only_reproducer_blocks_cli_review(migrated_postgres_url: str, tmp_path: Path) -> None:
+    """Reproducer 2: audio-only modalities (observed text=false) while the
+    route claims text -> BLOCKED; effective eligibility cannot bypass the
+    observed fact."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+    baseline_path = tmp_path / "baseline.json"
+    runner.invoke(
+        app, ["catalog-refresh", "export-baseline", "--db-url", migrated_postgres_url,
+              "--out", str(baseline_path)]
+    )
+
+    def mutate(data: dict) -> None:
+        for row in data["data"]:
+            if row["id"] == "synthetic/stable-v1":
+                row["architecture"] = {
+                    "input_modalities": ["audio"],
+                    "output_modalities": ["audio"],
+                }
+
+    bundle = _replay_bundle_with_snapshot_mutation(doc, mutate)
+    bundle["run_id"] = "obj180e-e3-audio-only"
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(bundle, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path),
+         "--baseline-file", str(baseline_path),
+         "--run-root", str(tmp_path / "runs"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert result.exit_code == 20, result.output
+    validation = json.loads(
+        (tmp_path / "runs" / "obj180e-e3-audio-only" / "validation.json").read_text(encoding="utf-8")
+    )
+    codes = {w["code"] for w in validation["warnings"]}
+    assert "source_evidence_value_mismatch" in codes
+    detail = next(w["detail"] for w in validation["warnings"] if w["code"] == "source_evidence_value_mismatch")
+    assert "model:capability:text" in detail
+    disp = {d["model"]: d["disposition"] for d in validation["dispositions"]}
+    assert disp["synthetic/stable-v1"] == "BLOCKED"
+
+
+def test_e3_effective_default_contract_blocks_audio_only_even_without_text_claim(
+    migrated_postgres_url: str, tmp_path: Path
+) -> None:
+    """E3 effective contract: an audio-only source with BOTH the model and
+    the route facts declaring text=false still cannot yield an executable
+    text route. Flat declarations cannot narrow the runtime contract the
+    import path would actually create (the default chat_completions block
+    enables chat_text), so the effective text claim binds to the observed
+    audio-only fact and blocks."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+    baseline_path = tmp_path / "baseline.json"
+    runner.invoke(
+        app, ["catalog-refresh", "export-baseline", "--db-url", migrated_postgres_url,
+              "--out", str(baseline_path)]
+    )
+
+    def mutate(data: dict) -> None:
+        for row in data["data"]:
+            if row["id"] == "synthetic/stable-v1":
+                row["architecture"] = {
+                    "input_modalities": ["audio"],
+                    "output_modalities": ["audio"],
+                }
+
+    bundle = _replay_bundle_with_snapshot_mutation(doc, mutate)
+    for item in bundle["models"]:
+        item["capabilities"] = {"streaming": True, "text": False}
+    for item in bundle["routes"]:
+        item["capabilities"] = {"streaming": True, "text": False}
+    bundle["run_id"] = "obj180e-e3-effective-default"
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(bundle, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path),
+         "--baseline-file", str(baseline_path),
+         "--run-root", str(tmp_path / "runs"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert result.exit_code == 20, result.output
+    validation = json.loads(
+        (tmp_path / "runs" / "obj180e-e3-effective-default" / "validation.json").read_text(encoding="utf-8")
+    )
+    codes = {w["code"] for w in validation["warnings"]}
+    assert "source_evidence_value_mismatch" in codes
+    detail = next(w["detail"] for w in validation["warnings"] if w["code"] == "source_evidence_value_mismatch")
+    assert "model:capability:text" in detail
+    disp = {d["model"]: d["disposition"] for d in validation["dispositions"]}
+    assert disp["synthetic/stable-v1"] == "BLOCKED"
+
+
+# --- 180-e E5: live db_snapshot review + verify replay -----------------------
+
+def test_live_db_snapshot_run_records_live_capture_and_verify_replay(migrated_postgres_url: str, tmp_path: Path) -> None:
+    """A db_snapshot review performs the live read-only export itself: the
+    published record claims live SQL, and the offline verify replay states
+    explicitly that it executed none."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    doc = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+    bundle = _build_replay_bundle(doc)
+    bundle["run_id"] = "obj180e-live-001"
+    bundle["baseline"]["mode"] = "db_snapshot"
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(bundle, sort_keys=True, indent=1) + "\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["catalog-refresh", "review", str(bundle_path),
+         "--db-url", migrated_postgres_url,
+         "--run-root", str(tmp_path / "runs"),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0] == "state: READY"
+    run_dir = tmp_path / "runs" / "obj180e-live-001"
+    validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+    sql_checks = validation["sql_checks"]
+    assert sql_checks["capture"] == "live_export"
+    assert sql_checks["sql_executed_during_review"] is True
+    assert "live read-only baseline export" in sql_checks["note"]
+    html = (run_dir / "REVIEW.html").read_text(encoding="utf-8")
+    assert "Capture path (this execution)" in html
+
+    verify = runner.invoke(
+        app,
+        ["catalog-refresh", "verify", "--run-dir", str(run_dir),
+         "--seal-key", str(tmp_path / "seal.key")],
+    )
+    assert verify.exit_code == 0, verify.output
+    assert "valid: yes" in verify.stdout
+    assert "state: READY" in verify.stdout
+    assert "sql_evidence: replayed from sealed bytes (no SQL executed during verification)" in verify.stdout
+
+
+# --- 180-e E4: real REPEATABLE READ proof under a committing writer ---------
+
+# Explicit test-only barrier at the exporter's real query/page seam (the
+# mandated 180-e design): the wrapper pauses the export at its FIRST
+# _page_rows call, which occurs after SET TRANSACTION, the version probe,
+# and all four COUNT reads, i.e. after the REPEATABLE READ snapshot is fully
+# established. The independent writer commits in the meantime, and the test
+# awaits the commit completion before releasing the real reads. No product
+# code is changed for the seam; no pg_stat_activity polling, no advisory
+# locks, no padding beyond one page-size of headroom.
+_BARRIER_PAD_COUNT = 3000
+
+
+def _barrier_cleanup(database_url: str) -> None:
+    async def cleanup() -> None:
+        engine = create_async_engine(database_url, future=True)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "DELETE FROM model_routes WHERE provider = 'openai'"
+                        " AND requested_model = 'synthetic/barrier-v1'"
+                    )
+                )
+                await connection.execute(
+                    text(
+                        "DELETE FROM pricing_rules WHERE provider = 'openai'"
+                        " AND upstream_model = 'synthetic/barrier-v1'"
+                    )
+                )
+                await connection.execute(
+                    text("DELETE FROM fx_rates WHERE source = 'obj180e-barrier-fx'")
+                )
+                await connection.execute(
+                    text(
+                        "DELETE FROM pricing_rules WHERE provider = 'openai'"
+                        " AND upstream_model = 'synthetic/canary-v1'"
+                    )
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(cleanup())
+
+
+def _install_export_seam():
+    """Test-only barrier at the exporter's real query/page boundary.
+
+    Wraps ``baseline._page_rows`` and delegates every call to the original
+    implementation. The first page call happens after the transaction, the
+    version probe, and the four count reads, so at that seam the REPEATABLE
+    READ snapshot is fully established. The wrapper pauses there until the
+    test has committed the independent writer, then releases the real read.
+    """
+    import slaif_gateway.services.catalog_refresh.baseline as baseline_module
+
+    original = baseline_module._page_rows
+    fired = asyncio.Event()
+    release = asyncio.Event()
+    state = {"fired": False}
+
+    async def seam(connection, table, id_column, columns, expected_count, page_size):
+        if not state["fired"]:
+            state["fired"] = True
+            fired.set()
+            await release.wait()
+        return await original(connection, table, id_column, columns, expected_count, page_size)
+
+    baseline_module._page_rows = seam
+
+    def restore() -> None:
+        baseline_module._page_rows = original
+
+    return fired, release, restore
+
+
+def _install_isolation_override(isolation: str):
+    """Test-only engine injection so the SAME exporter runs another
+    isolation level (the negative control). Product isolation is untouched
+    and the exporter's query sequence is never reimplemented here."""
+    import slaif_gateway.services.catalog_refresh.baseline as baseline_module
+
+    original = baseline_module.create_async_engine
+
+    def overriding(url, **kwargs):
+        kwargs["isolation_level"] = isolation
+        return original(url, **kwargs)
+
+    baseline_module.create_async_engine = overriding
+
+    def restore() -> None:
+        baseline_module.create_async_engine = original
+
+    return restore
+
+
+async def _commit_barrier_writer(database_url: str) -> None:
+    """Independent writer: cross-table writes committed in one transaction.
+
+    The context-manager exit awaits the commit, so when this function
+    returns the writes are durable on the server side.
+    """
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO model_routes (id, requested_model, match_type, endpoint,"
+                    " provider, upstream_model, priority, enabled, visible_in_models,"
+                    " supports_streaming, capabilities, created_at, updated_at) VALUES"
+                    " (:id, 'synthetic/barrier-v1', 'exact', '/v1/chat/completions',"
+                    " 'openai', 'synthetic/barrier-v1', 100, true, true, true,"
+                    " :capabilities, now(), now())"
+                ),
+                {"id": str(uuid.uuid4()), "capabilities": json.dumps({"text": True})},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO pricing_rules (id, provider, upstream_model, endpoint,"
+                    " currency, input_price_per_1m, output_price_per_1m, valid_from,"
+                    " enabled, source_url, created_at, updated_at) VALUES"
+                    " (:id, 'openai', 'synthetic/barrier-v1', '/v1/chat/completions',"
+                    " 'EUR', '0.1', '0.4', :valid_from, true,'https://synthetic.example.invalid/barrier', now(), now())"
+                ),
+                {"id": str(uuid.uuid4()), "valid_from": VALID_FROM},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO fx_rates (id, base_currency, quote_currency, rate,"
+                    " valid_from, source, created_at) VALUES"
+                    " (:id, 'JPY', 'EUR', '0.0067', :valid_from, 'obj180e-barrier-fx', now())"
+                ),
+                {"id": str(uuid.uuid4()), "valid_from": VALID_FROM},
+            )
+            await connection.execute(
+                text(
+                    "UPDATE pricing_rules SET output_price_per_1m = '0.99'"
+                    " WHERE provider = 'openai' AND upstream_model = 'synthetic/canary-v1'"
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
+def test_export_snapshot_is_coherent_when_writer_commits_mid_export(migrated_postgres_url: str) -> None:
+    """E4 positive proof: at the exporter's real page seam the independent
+    writer commits BETWEEN the snapshot-establishing count reads and the
+    first page read. REPEATABLE READ yields one coherent OLD snapshot -
+    counts and pages agree per table, the writer's committed rows and the
+    updated canary value are absent, and the export wrote nothing - while
+    the next export sees the coherent NEW state."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    asyncio.run(_seed_pad_routes(migrated_postgres_url, _BARRIER_PAD_COUNT))
+    before = asyncio.run(_counts(migrated_postgres_url))
+    fired, release, restore_seam = _install_export_seam()
+    try:
+        async def scenario() -> BaselineDocument:
+            export_task = asyncio.create_task(
+                export_baseline(migrated_postgres_url, now=datetime.now(UTC))
+            )
+            # the export reached its first real page read: SET TRANSACTION,
+            # the version probe, and all four COUNT reads are done, so the
+            # REPEATABLE READ snapshot is fully established
+            await asyncio.wait_for(fired.wait(), timeout=60)
+            # commit the independent writer and AWAIT commit completion
+            # before releasing the real reads
+            writer_task = asyncio.create_task(_commit_barrier_writer(migrated_postgres_url))
+            await asyncio.wait_for(writer_task, timeout=30)
+            release.set()
+            return await asyncio.wait_for(export_task, timeout=60)
+
+        doc = asyncio.run(scenario())
+        # coherent OLD state: the writer's committed writes are absent
+        assert doc.counts.providers == before["provider_configs"]
+        assert doc.counts.routes == before["model_routes"]
+        assert doc.counts.pricing_rules == before["pricing_rules"]
+        assert doc.counts.fx_rates == before["fx_rates"]
+        # the export's own cross-check (counts == pages) holds per table
+        assert len(doc.routes) == doc.counts.routes
+        assert len(doc.pricing) == doc.counts.pricing_rules
+        assert len(doc.fx) == doc.counts.fx_rates
+        assert not any(r.requested_model == "synthetic/barrier-v1" for r in doc.routes)
+        assert not any(p.upstream_model == "synthetic/barrier-v1" for p in doc.pricing)
+        canary = next(p for p in doc.pricing if p.upstream_model == "synthetic/canary-v1")
+        # the writer's UPDATE is unseen (compare values: the column's
+        # NUMERIC(18,9) scale padding is not a semantic difference)
+        assert Decimal(canary.output_price_per_1m) == Decimal("0.4")
+        # the export itself wrote nothing: no audit entries were created
+        after = asyncio.run(_counts(migrated_postgres_url))
+        assert after["audit_log"] == before["audit_log"]
+        # the next export sees the coherent NEW state
+        doc2 = asyncio.run(export_baseline(migrated_postgres_url, now=datetime.now(UTC)))
+        assert doc2.counts.routes == before["model_routes"] + 1
+        assert doc2.counts.pricing_rules == before["pricing_rules"] + 1
+        assert doc2.counts.fx_rates == before["fx_rates"] + 1
+        assert any(r.requested_model == "synthetic/barrier-v1" for r in doc2.routes)
+        assert any(p.upstream_model == "synthetic/barrier-v1" for p in doc2.pricing)
+        canary2 = next(p for p in doc2.pricing if p.upstream_model == "synthetic/canary-v1")
+        assert Decimal(canary2.output_price_per_1m) == Decimal("0.99")
+    finally:
+        restore_seam()
+        _barrier_cleanup(migrated_postgres_url)
+
+
+def test_export_snapshot_negative_control_read_committed_mismatches(migrated_postgres_url: str) -> None:
+    """E4 negative control: the SAME exporter, forced to READ COMMITTED by
+    a test-only engine/isolation injection (no product change, no
+    reimplementation of its query sequence), with the independent writer
+    committed at the same seam. READ COMMITTED takes a fresh snapshot per
+    statement, so the model_routes pages see the committed row while the
+    pre-commit COUNT does not, and the exporter's count/page cross-check
+    must refuse. This proves the seam-based test exposes a
+    non-repeatable implementation."""
+    asyncio.run(_seed_catalog(migrated_postgres_url))
+    asyncio.run(_seed_pad_routes(migrated_postgres_url, _BARRIER_PAD_COUNT))
+    fired, release, restore_seam = _install_export_seam()
+    restore_isolation = _install_isolation_override("READ COMMITTED")
+    try:
+        async def scenario() -> None:
+            export_task = asyncio.create_task(
+                export_baseline(migrated_postgres_url, now=datetime.now(UTC))
+            )
+            await asyncio.wait_for(fired.wait(), timeout=60)
+            writer_task = asyncio.create_task(_commit_barrier_writer(migrated_postgres_url))
+            await asyncio.wait_for(writer_task, timeout=30)
+            release.set()
+            with pytest.raises(CatalogRefreshBlockedError) as excinfo:
+                await asyncio.wait_for(export_task, timeout=60)
+            assert excinfo.value.code == "baseline_consistency_mismatch"
+
+        asyncio.run(scenario())
+    finally:
+        restore_isolation()
+        restore_seam()
+        _barrier_cleanup(migrated_postgres_url)
