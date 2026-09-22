@@ -635,10 +635,15 @@ descriptor-anchored filesystem boundary:
   and loads the existing key separately; it retains no key-parent
   lifecycle, publishes nothing, and never creates, repairs, or re-signs
   anything.
-- **Mutation-namespace enforcement.** The run root and seal-key parent
-  must be operator-owned directories that are not writable by group or
-  other, checked by `fstat` on the held descriptor. Unsafe directories
-  are refused, never chmod'ed or repaired (exit 65). The identity check
+- **Mutation-namespace enforcement.** For `review` — the only catalog
+  refresh command that mutates — the run root and seal-key parent must
+  be operator-owned directories that are not writable by group or other,
+  checked by `fstat` on the held descriptor; unsafe directories are
+  refused, never chmod'ed or repaired (exit 65). Read-only `verify` does
+  not enforce writability on the run directory or the key parent (a
+  group/other-writable run directory or key parent still verifies with
+  exit 0); its safety rests on the no-follow anchoring, the single
+  captured read, and key-held authentication instead. The identity check
   and the later name mutation (rename/rmdir) are separate operations on
   held descriptors: no single syscall atomically compares a source inode
   against a name. The race closure therefore combines descriptor anchoring
@@ -708,7 +713,7 @@ apply must consume the authenticated snapshot rather than reread paths.
 | `review` | 2 | usage error (contradictory options) |
 | `verify` | 0 | run verified |
 | `verify` | 30 | run failed verification — including a missing, non-directory, or symlinked run directory with an otherwise valid key, or any seal/digest/correspondence mismatch |
-| `verify` | 65 | data error (missing or unsafe seal key or its parent directory; verify never creates keys) |
+| `verify` | 65 | data error (missing or unsafe seal key: a key path or parent refused by the no-follow walk, a non-regular file, a mode other than exactly 0600, foreign ownership, or wrong length/content; verify never creates keys. A key stored in a group/other-writable parent is still accepted — verify performs no mutation) |
 | `export-baseline` | 0 | baseline written |
 | `export-baseline` | 65 | data error (never overwrites output — new-only atomic write; never bootstraps empty) |
 
