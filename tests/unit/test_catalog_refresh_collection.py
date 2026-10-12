@@ -430,6 +430,7 @@ def _no_live_io_guard(monkeypatch):
         src.fetch_sources,
         src.guard_public_destination,
         coll.collect_bundle,
+        src.new_client,
     ):
         kwdefaults = dict(getattr(fn, "__kwdefaults__", None) or {})
         if "resolve" in kwdefaults:
@@ -2491,3 +2492,80 @@ def test_cli_collect_blocked_exit_20_collect_stage(tmp_path, monkeypatch) -> Non
     validation = json.loads((run_dirs[0] / "validation.json").read_text())
     assert validation["state"] == "BLOCKED"
     assert "collection_retrieval_failed" in validation["state_reason"]
+
+
+# --- 181-f (F1): one whole-invocation context across the real collector -----
+
+
+def test_second_fetch_phase_cannot_reset_context_budgets() -> None:
+    # Phase 1 (openai + openrouter = 3 specs) consumes all 3 attempts of
+    # the shared context; the model-page phase must NOT reset the budget:
+    # it fails closed before any later HTTP activity.
+    world = World()
+    context = src.new_acquisition_context(
+        deadline_seconds=120,
+        max_attempts=3,
+        max_bytes=src.MAX_COLLECTION_BYTES,
+    )
+    with pytest.raises(src.SourceFetchError) as exc:
+        _collect(world, providers=("openai", "openrouter"), acquisition=context)
+    assert exc.value.code == "collection_budget_exhausted"
+
+
+def test_byte_budget_exhaustion_across_phases_blocks_run() -> None:
+    world = World()
+    # 4 KiB covers the two small phase-1 docs but not the page cap.
+    context = src.new_acquisition_context(
+        deadline_seconds=120,
+        max_attempts=src.MAX_COLLECTION_REQUESTS,
+        max_bytes=4 * 1024,
+    )
+    with pytest.raises(src.SourceFetchError) as exc:
+        _collect(world, providers=("openai", "openrouter"), acquisition=context)
+    assert exc.value.code == "collection_budget_exhausted"
+
+
+def test_expired_context_blocks_before_any_fetch() -> None:
+    world = World()
+    context = src.new_acquisition_context(deadline_seconds=0)
+    with pytest.raises(src.SourceFetchError) as exc:
+        _collect(world, providers=("openrouter",), acquisition=context)
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    # the collection-level failure aborts the run: no bundle is produced
+
+
+def test_cli_collect_deadline_exhaustion_publishes_blocked_run(tmp_path, monkeypatch) -> None:
+    # The CLI's default context path: an exhausted deadline surfaces as a
+    # BLOCKED run (safe code + detail), exit 20, at the collect stage.
+    real_new_context = coll.new_acquisition_context
+
+    def exhausted(**kw):
+        return real_new_context(deadline_seconds=0)
+
+    monkeypatch.setattr(coll, "new_acquisition_context", exhausted)
+    world = World()
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openrouter",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
+        "--json",
+    )
+    assert result.exit_code == 20, result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "BLOCKED"
+    assert "acquisition_deadline_exceeded" in summary["reason"]
+    run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
+    assert len(run_dirs) == 1
+    validation = json.loads((run_dirs[0] / "validation.json").read_text())
+    assert validation["state"] == "BLOCKED"
+    assert "acquisition_deadline_exceeded" in validation["state_reason"]

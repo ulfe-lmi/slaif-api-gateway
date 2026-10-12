@@ -68,8 +68,10 @@ from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh import sources
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 from slaif_gateway.services.catalog_refresh.sources import (
+    AcquisitionContext,
     RetrievalResult,
     fetch_sources,
+    new_acquisition_context,
 )
 
 EXTRACTOR_ID = "slaif-collector/181.1"
@@ -283,6 +285,7 @@ def collect_bundle(
     now: datetime | None = None,
     fetch: Callable[..., list[RetrievalResult]] = fetch_sources,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
+    acquisition: AcquisitionContext | None = None,
 ) -> RefreshBundle:
     """Run the full collection and return the canonical bundle.
 
@@ -291,6 +294,12 @@ def collect_bundle(
     (budget caps, unknown providers); retrieval and parse failures ARE
     represented (retrieval records / source evidence) and surface as
     deterministic validation blockers instead.
+
+    181-f (F1): the whole invocation runs under ONE collection-owned
+    :class:`AcquisitionContext` (finite attempt/byte budgets, finite
+    monotonic deadline, cross-phase URL outcome cache), created here
+    before acquisition starts unless the caller supplies one
+    programmatically. Caller-supplied JSON never owns the context.
     """
     if baseline_mode not in ("first_install", "db_snapshot", "exported_file"):
         raise CatalogRefreshBlockedError(
@@ -311,12 +320,21 @@ def collect_bundle(
         )
     model_include = tuple(sorted(set(model_include)))
 
+    # 181-f (F1): ONE context for the whole invocation - every fetch
+    # phase, redirect, and retry below shares these allowances and the
+    # cross-phase outcome cache; no phase can reset them.
+    context = (
+        acquisition
+        if acquisition is not None
+        else new_acquisition_context()
+    )
+
     started_at = now or datetime.now(UTC)
     retrievals: list[RetrievalResult] = []
 
     # --- phase 1: whole-catalog snapshots (+ OpenAI model-docs index) ------
     phase1_specs = tuple(sources.plan_catalog_specs(providers))
-    phase1 = fetch(phase1_specs, client=client, resolve=resolve)
+    phase1 = fetch(phase1_specs, client=client, context=context, resolve=resolve)
     retrievals.extend(phase1)
 
     openrouter_rows: list[se.ParsedModel] = []
@@ -538,7 +556,7 @@ def collect_bundle(
             )
         if candidates:
             page_specs = tuple(sources.model_page_spec("openai", m) for m in candidates)
-            page_results = fetch(page_specs, client=client, resolve=resolve)
+            page_results = fetch(page_specs, client=client, context=context, resolve=resolve)
             retrievals.extend(page_results)
 
         pages: dict[str, se.ParsedModel | None] = {}
@@ -702,7 +720,7 @@ def collect_bundle(
     ecb_sources: list[SourceRecord] = []
     if needed_currencies:
         ecb_spec = sources.ecb_spec()
-        ecb_result = fetch((ecb_spec,), client=client, resolve=resolve)[0]
+        ecb_result = fetch((ecb_spec,), client=client, context=context, resolve=resolve)[0]
         retrievals.append(ecb_result)
         if ecb_result.ok and ecb_result.content is not None:
             parsed_ecb = se.parse_snapshot("ecb", "ecb_reference_xml", ecb_result.content)

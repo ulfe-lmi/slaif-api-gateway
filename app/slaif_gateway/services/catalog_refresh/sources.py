@@ -1,18 +1,33 @@
-"""Objective 181 (C2): trusted, bounded acquisition of authoritative sources.
+"""Objective 181 (C2, hardened in 181-f): trusted, bounded acquisition of
+authoritative sources.
 
 This module owns the ONLY live network path of the catalog refresh
 subsystem. It is deliberately narrow:
 
 - a fixed registry of official provider/publisher source families with
-  exact host allowlists (no arbitrary URLs from model/source text);
+  exact host AND exact path families (no arbitrary URLs, paths, queries,
+  fragments, or ports from model/source text);
 - HTTPS only, no credentials in URLs, default port only;
 - a DNS guard that refuses loopback/private/link-local/reserved
-  destinations (checked before every request, including redirects);
+  destinations AND mixed public/non-public answer sets (checked before
+  every request, including redirects), plus connection-time vetting in
+  the transport binding (``source_transport``) so the actual TCP
+  connection always lands on the vetted public numeric destination with
+  the original hostname, SNI, and verified certificate policy;
 - manual, bounded, re-validated redirects;
+- ONE collection-owned :class:`AcquisitionContext` per invocation that
+  carries a finite attempt budget, a finite body-byte budget, a finite
+  monotonic acquisition deadline, and the cross-phase URL outcome cache
+  (181-f F1: no second fetch phase can reset any allowance; failed,
+  interrupted, and overflow reads consume the byte budget and are never
+  refunded);
 - bounded concurrency, request count, per-body bytes (enforced on the
-  actual decoded stream, not Content-Length) and total collection bytes;
-- finite 429/Retry-After handling and at most one retry on 5xx/transport
-  failure;
+  actual wire stream, not Content-Length) and total collection bytes;
+- identity-only transfer encoding (``Accept-Encoding: identity``; any
+  other Content-Encoding is refused BEFORE any decoding/expansion, and
+  bodies are read with ``iter_raw`` so no decoder is ever constructed);
+- finite 429/Retry-After handling (the wait itself consumes the deadline)
+  and at most two retries on 5xx/transport failure;
 - full provenance (requested/final URL, retrieval UTC time, status,
   content type, bytes, SHA-256) and safe code-only failures (never raw
   response bodies or secret-bearing exception text).
@@ -25,13 +40,13 @@ executed, interpreted as HTML authority, or treated as configuration.
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import re
 import socket
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Callable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 
 import httpx
 
@@ -45,12 +60,20 @@ OPENAI_MODELS_MD_URL = "https://developers.openai.com/api/docs/models.md"
 OPENAI_MODEL_PAGE_URL = "https://developers.openai.com/api/docs/models/{slug}.md"
 ECB_DAILY_XML_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
 
-# Exact host families per publisher (suffix-free exact hosts). Redirects
-# may only land on the same family's approved hosts and are re-validated
-# hop by hop.
+# Exact host families per publisher (suffix-free exact hosts).
 OPENROUTER_HOSTS: frozenset[str] = frozenset({"openrouter.ai"})
 OPENAI_HOSTS: frozenset[str] = frozenset({"openai.com", "developers.openai.com"})
 ECB_HOSTS: frozenset[str] = frozenset({"www.ecb.europa.eu", "data-api.ecb.europa.eu"})
+
+# Exact path families per (provider, source_kind). A registry URL is the
+# exact family member: no query, no fragment, no credentials, no
+# non-default port, no same-host path expansion (181-f F2).
+OPENROUTER_MODELS_PATH = "/api/v1/models"
+OPENAI_PRICING_MD_PATH = "/api/docs/pricing.md"
+OPENAI_MODELS_MD_PATH = "/api/docs/models.md"
+OPENAI_MODEL_DOC_PREFIX = "/api/docs/models/"
+OPENAI_MODEL_DOC_SUFFIX = ".md"
+ECB_DAILY_XML_PATH = "/stats/eurofxref/eurofxref-daily.xml"
 
 _PROVIDER_HOSTS: dict[str, frozenset[str]] = {
     "openrouter": OPENROUTER_HOSTS,
@@ -58,8 +81,9 @@ _PROVIDER_HOSTS: dict[str, frozenset[str]] = {
     "ecb": ECB_HOSTS,
 }
 
-# Per-body byte caps (decoded). Content-Length alone is not protection:
-# the stream is counted chunk by chunk and aborted past the cap.
+# Per-body byte caps (wire bytes; identity transfer, see below).
+# Content-Length alone is not protection: the stream is counted chunk by
+# chunk and aborted past the cap.
 MAX_BODY_BYTES = {
     ("openrouter", "openrouter_models_api"): 4 * 1024 * 1024,
     ("openai", "openai_pricing_docs"): 512 * 1024,
@@ -68,9 +92,15 @@ MAX_BODY_BYTES = {
     ("ecb", "ecb_reference_xml"): 1 * 1024 * 1024,
 }
 
-# Collection-wide budgets.
+# Collection-wide budgets (181-f F1: one context per invocation).
 MAX_COLLECTION_REQUESTS = 128
 MAX_COLLECTION_BYTES = 32 * 1024 * 1024
+# Finite explicit global monotonic acquisition deadline: DNS, connect,
+# TLS, read, retry sleeps, and gaps between fetch phases all consume it.
+# 120 s is generous for the five official sources (measured: well under
+# 10 s total) while still bounding slow-drip/slow-DNS failures to a
+# finite wall time.
+ACQUISITION_DEADLINE_SECONDS = 120.0
 MAX_CONCURRENCY = 4
 MAX_REDIRECTS = 3
 MAX_ATTEMPTS = 3  # initial + at most two retries (5xx/transport, or 429)
@@ -122,6 +152,106 @@ class RetrievalResult:
         return hashlib.sha256(self.content).hexdigest()
 
 
+@dataclass
+class AcquisitionContext:
+    """One collection-owned finite budget for a whole collection run.
+
+    181-f (F1): created ONCE before acquisition starts (by
+    ``collect_bundle`` unless the caller supplies one programmatically)
+    and passed through every fetch phase, redirect, and retry. A second
+    ``fetch_sources`` call with the same context never resets any
+    allowance.
+
+    - ``deadline``: absolute ``time.monotonic()`` instant; DNS, connect,
+      TLS, read, retry sleep, and inter-phase gaps all consume it. Every
+      new network action is refused once it has passed.
+    - ``attempts_remaining``: one unit per REAL HTTP request sent
+      (initial request, each redirect hop, each 429 wait, each 5xx or
+      transport retry).
+    - ``bytes_remaining``: body bytes consumed from the wire on 2xx
+      responses - successful reads, interrupted/failed reads, and
+      overflow chunks alike. Failures never refund.
+    - ``cache``: one URL's success OR failure is cached across phases
+      within the invocation; cached results are reused without new
+      retrieval-time claims, duplicate network, or budget expenditure.
+
+    Caller-supplied JSON never owns this context; only the collection
+    (or a programmatic test/smoke caller) constructs it.
+    """
+
+    deadline: float
+    attempts_remaining: int
+    bytes_remaining: int
+    cache: dict[str, RetrievalResult] = field(default_factory=dict)
+
+    def check_deadline(self) -> None:
+        if time.monotonic() >= self.deadline:
+            raise SourceFetchError("acquisition_deadline_exceeded")
+
+    def remaining_seconds(self) -> float:
+        return self.deadline - time.monotonic()
+
+    def reserve_attempt(self) -> None:
+        """Reserve ONE real HTTP request; refuse past the deadline or
+        when no attempt budget remains (collection-level failure)."""
+        self.check_deadline()
+        if self.attempts_remaining <= 0:
+            raise SourceFetchError("collection_budget_exhausted")
+        self.attempts_remaining -= 1
+
+    def charge_body_bytes(self, n: int) -> None:
+        """Charge consumed wire body bytes (no refunds)."""
+        self.check_deadline()
+        if n > self.bytes_remaining:
+            raise SourceFetchError("collection_budget_exhausted")
+        self.bytes_remaining -= n
+
+    def cache_lookup(self, spec: SourceSpec) -> RetrievalResult | None:
+        """Reuse a cached success OR failure for this URL, revalidating
+        the planned spec's registry identity first."""
+        cached = self.cache.get(spec.url)
+        if cached is None:
+            return None
+        planned = (
+            spec.provider,
+            spec.source_kind,
+            spec.model,
+            spec.max_bytes,
+            spec.required,
+        )
+        stored = (
+            cached.spec.provider,
+            cached.spec.source_kind,
+            cached.spec.model,
+            cached.spec.max_bytes,
+            cached.spec.required,
+        )
+        if planned != stored:
+            raise SourceFetchError("duplicate_url_planned")
+        # Defense in depth: the cached URL must still be registry-valid.
+        validate_source_url(
+            spec.url, provider=spec.provider, source_kind=spec.source_kind
+        )
+        return cached
+
+    def cache_store(self, spec: SourceSpec, result: RetrievalResult) -> None:
+        self.cache[spec.url] = result
+
+
+def new_acquisition_context(
+    *,
+    deadline_seconds: float = ACQUISITION_DEADLINE_SECONDS,
+    max_attempts: int = MAX_COLLECTION_REQUESTS,
+    max_bytes: int = MAX_COLLECTION_BYTES,
+) -> AcquisitionContext:
+    """Create the one collection-owned budget for this invocation."""
+    return AcquisitionContext(
+        deadline=time.monotonic() + deadline_seconds,
+        attempts_remaining=max_attempts,
+        bytes_remaining=max_bytes,
+    )
+
+
 def source_family_hosts(provider: str) -> frozenset[str]:
     try:
         return _PROVIDER_HOSTS[provider]
@@ -129,57 +259,113 @@ def source_family_hosts(provider: str) -> frozenset[str]:
         raise SourceFetchError("unknown_provider") from exc
 
 
-def validate_source_url(url: str, *, provider: str) -> None:
-    """Fail-closed URL validation against the source family's host set."""
-    hosts = source_family_hosts(provider)
+def _validate_path_family(
+    path: str, *, provider: str, source_kind: str | None
+) -> None:
+    """Exact path-family check (181-f F2).
+
+    Only the registered path families are accepted; everything else
+    (arbitrary same-host paths, traversal segments, encoded ambiguity)
+    fails closed. Query and fragment are rejected by the caller before
+    this runs.
+    """
+    if provider == "openrouter":
+        if path != OPENROUTER_MODELS_PATH:
+            raise SourceFetchError("url_path_not_approved")
+        if source_kind not in (None, "openrouter_models_api"):
+            raise SourceFetchError("url_path_kind_mismatch")
+    elif provider == "openai":
+        if path == OPENAI_PRICING_MD_PATH:
+            if source_kind not in (None, "openai_pricing_docs"):
+                raise SourceFetchError("url_path_kind_mismatch")
+        elif path == OPENAI_MODELS_MD_PATH:
+            if source_kind not in (None, "openai_models_docs"):
+                raise SourceFetchError("url_path_kind_mismatch")
+        elif (
+            path.startswith(OPENAI_MODEL_DOC_PREFIX)
+            and path.endswith(OPENAI_MODEL_DOC_SUFFIX)
+            and len(path) > len(OPENAI_MODEL_DOC_PREFIX) + len(OPENAI_MODEL_DOC_SUFFIX)
+        ):
+            if source_kind not in (None, "docs_page"):
+                raise SourceFetchError("url_path_kind_mismatch")
+            # The single path segment is the URL-quoted model ID: a
+            # legitimate registry page URL never contains a raw "/" in
+            # the segment (model IDs with slashes are stored as %2F), so
+            # a raw separator is path drift, not a slug - reject it
+            # before any decoding. Decode once, then apply the slug rule
+            # to the decoded value; double-encodings and foreign
+            # characters fail the pattern.
+            segment = path[
+                len(OPENAI_MODEL_DOC_PREFIX) : -len(OPENAI_MODEL_DOC_SUFFIX)
+            ]
+            if "/" in segment:
+                raise SourceFetchError("url_path_not_approved")
+            slug = unquote(segment)
+            if not _SLUG_PATTERN.fullmatch(slug):
+                raise SourceFetchError("model_page_slug_invalid")
+        else:
+            raise SourceFetchError("url_path_not_approved")
+    elif provider == "ecb":
+        if path != ECB_DAILY_XML_PATH:
+            raise SourceFetchError("url_path_not_approved")
+        if source_kind not in (None, "ecb_reference_xml"):
+            raise SourceFetchError("url_path_kind_mismatch")
+    else:
+        raise SourceFetchError("unknown_provider")
+
+
+def validate_source_url(
+    url: str,
+    *,
+    provider: str,
+    source_kind: str | None = None,
+) -> None:
+    """Fail-closed URL validation against the source family.
+
+    Applied before the first request AND on every redirect hop and every
+    cache reuse: HTTPS only, no credentials, exact approved host,
+    default port only, no query, no fragment, and the exact registered
+    path family for the provider (and source kind, when given).
+    """
     parsed = urlparse(url)
     if parsed.scheme != "https":
         raise SourceFetchError("url_not_https")
     if parsed.username is not None or parsed.password is not None:
         raise SourceFetchError("url_credentials")
     host = (parsed.hostname or "").lower()
-    if not host or host not in hosts:
+    if not host or host not in source_family_hosts(provider):
         raise SourceFetchError("url_host_not_approved")
     if parsed.port is not None and parsed.port != 443:
         raise SourceFetchError("url_nondefault_port")
     if not parsed.path:
         raise SourceFetchError("url_missing_path")
-
-
-def _is_public_ip(text: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(text)
-    except ValueError:
-        return False
-    return not (
-        ip.is_loopback
-        or ip.is_private
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-    )
+    if parsed.query:
+        raise SourceFetchError("url_query_forbidden")
+    if parsed.fragment:
+        raise SourceFetchError("url_fragment_forbidden")
+    _validate_path_family(parsed.path, provider=provider, source_kind=source_kind)
 
 
 def guard_public_destination(
     host: str,
     *,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
-) -> None:
-    """Refuse destinations that resolve only to non-public addresses.
+) -> tuple[str, ...]:
+    """Preflight destination vetting: refuse non-public or MIXED answers.
 
-    Checked before every request and every redirect hop. Test transports
-    may inject a resolver; a resolver failure is itself a safe failure.
+    Runs before every request and every redirect hop and returns the
+    vetted public numeric destinations (provenance). It is an early safe
+    failure, not the binding: the ACTUAL connection is vetted again at
+    connect time inside ``source_transport.VettedNetworkBackend`` (a
+    preflight lookup followed by an independent client resolution is not
+    a fix - the connect-time answer set is the one that is bound).
+    Resolver failure is itself a safe failure.
     """
-    try:
-        results = resolve(host, None, proto=socket.IPPROTO_TCP)
-    except OSError:
-        raise SourceFetchError("dns_resolution_failed") from None
-    if not results:
-        raise SourceFetchError("dns_resolution_failed")
-    public = any(_is_public_ip(item[4][0]) for item in results)
-    if not public:
-        raise SourceFetchError("destination_not_public")
+    from slaif_gateway.services.catalog_refresh.source_transport import (
+        vet_public_destination,
+    )
+
+    return vet_public_destination(host, resolve=resolve)
 
 
 def plan_catalog_specs(providers: tuple[str, ...]) -> list[SourceSpec]:
@@ -225,6 +411,10 @@ def plan_catalog_specs(providers: tuple[str, ...]) -> list[SourceSpec]:
     return specs
 
 
+def _quote_slug(slug: str) -> str:
+    return quote(slug, safe="")
+
+
 def model_page_spec(provider: str, model_id: str) -> SourceSpec:
     """Phase-2 spec: one official per-model doc page.
 
@@ -240,16 +430,10 @@ def model_page_spec(provider: str, model_id: str) -> SourceSpec:
         provider="openai",
         source_kind="docs_page",
         model=model_id,
-        url=OPENAI_MODEL_PAGE_URL.format(slug=httpx.QueryParams({"s": model_id}).keys() and _quote_slug(model_id)),
+        url=OPENAI_MODEL_PAGE_URL.format(slug=_quote_slug(model_id)),
         max_bytes=MAX_BODY_BYTES[("openai", "docs_page")],
         required=False,
     )
-
-
-def _quote_slug(slug: str) -> str:
-    from urllib.parse import quote
-
-    return quote(slug, safe="")
 
 
 def ecb_spec() -> SourceSpec:
@@ -262,15 +446,58 @@ def ecb_spec() -> SourceSpec:
     )
 
 
-def _read_bounded(response: httpx.Response, cap: int) -> bytes:
-    """Decode the response stream chunk by chunk; abort past the cap."""
+def _read_bounded(
+    response: httpx.Response,
+    cap: int,
+    *,
+    context: AcquisitionContext,
+) -> bytes:
+    """Read the identity-encoded wire body chunk by chunk; abort past cap.
+
+    The content-encoding header has already been checked to be absent or
+    ``identity`` (anything else fails before this is reached), so
+    The production live-stream path iterates the RAW stream (wire
+    bytes; NO decoder is ever constructed and no compressed bytes are
+    ever expanded), checking the acquisition deadline on EVERY raw read
+    so a slow-drip body cannot outlive the deadline between reads.
+    Pre-buffered responses (``httpx.Response(content=...)`` bodies, as
+    produced by test mock transports - the production stream path never
+    pre-buffers) are served from the exact buffered wire bytes in the
+    same accounting. EVERY byte received from the wire is charged to
+    the collection byte budget at the moment it is consumed (live
+    path: per raw read; buffered path: per bounded buffer slice),
+    BEFORE the per-spec cap check - so failed, interrupted, and
+    overflow reads consume budget and are never refunded.
+    ``Content-Length`` is never consulted.
+    """
     chunks: list[bytes] = []
     total = 0
-    for chunk in response.iter_bytes(chunk_size=_CHUNK_SIZE):
-        total += len(chunk)
+
+    def charge_and_check(n: int) -> None:
+        nonlocal total
+        context.charge_body_bytes(n)
+        total += n
         if total > cap:
             raise SourceFetchError("body_too_large")
-        chunks.append(chunk)
+
+    buffered = getattr(response, "_content", None)
+    if buffered is not None:
+        # Pre-buffered response (httpx buffers Response(content=...)
+        # bodies at construction; the production live-stream path never
+        # takes this branch). The buffer holds exactly the wire bytes;
+        # serve it in bounded slices with the same accounting.
+        for i in range(0, len(buffered), _CHUNK_SIZE):
+            chunk = buffered[i : i + _CHUNK_SIZE]
+            charge_and_check(len(chunk))
+            chunks.append(chunk)
+    else:
+        # Live network stream: every raw wire read is charged as it is
+        # consumed, and the deadline is checked before every raw read.
+        for raw in response.stream:
+            context.check_deadline()
+            if raw:
+                charge_and_check(len(raw))
+                chunks.append(raw)
     return b"".join(chunks)
 
 
@@ -297,17 +524,51 @@ def _failed(
     )
 
 
+def _collection_level(exc: SourceFetchError) -> bool:
+    """Exhaustion of the shared budget/deadline aborts the WHOLE
+    collection (no later spec can make progress); everything else is a
+    per-spec safe outcome."""
+    return exc.code in (
+        "collection_budget_exhausted",
+        "acquisition_deadline_exceeded",
+    )
+
+
+def _source_cause(exc: BaseException) -> SourceFetchError | None:
+    """Find a SourceFetchError in the exception cause chain (the
+    transport binding raises it from inside the HTTP client stack)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, SourceFetchError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def fetch_source(
     client: httpx.Client,
     spec: SourceSpec,
     *,
+    context: AcquisitionContext,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
 ) -> RetrievalResult:
-    """Fetch one spec with bounded redirects, retries, and byte caps.
+    """Fetch one spec with bounded redirects, retries, caps, and budget.
 
-    Every outcome is a safe code-only result: transport errors, host
-    rejections, status codes, oversized bodies and unexpected encodings
-    never leak raw response bytes or exception text.
+    Every outcome is a safe code-only result: transport errors, host/path
+    rejections, destination vetting failures, status codes, oversized
+    bodies, and unexpected encodings never leak raw response bytes or
+    exception text.
+
+    Attempt accounting (181-f F1): one REAL HTTP request sent is one
+    attempt - the initial request, each redirect hop, each 429 wait, and
+    each 5xx/transport retry. Every attempt is reserved from the shared
+    context BEFORE it starts; the deadline is checked at every decision
+    point (before each attempt, during the body read, around the 429
+    wait), so an expired deadline stops all later network activity.
+    Collection-level exhaustion (attempts, bytes, deadline) raises out
+    of this function to BLOCK the whole run; per-spec failures return.
     """
     current_url = spec.url
     redirects = 0
@@ -315,11 +576,17 @@ def fetch_source(
     last_status: int | None = None
     while True:
         attempts += 1
-        # The full allowlist check applies to EVERY attempted URL, including
-        # each redirect target: a 3xx to another host (relative or absolute)
-        # is re-validated before the next request, never blindly followed.
+        # Reserve BEFORE the request: deadline + one attempt from the
+        # one shared, whole-invocation budget.
+        context.reserve_attempt()
+        # The full allowlist check applies to EVERY attempted URL,
+        # including each redirect target: a 3xx to another host, path
+        # family, or query is re-validated before the next request,
+        # never blindly followed.
         try:
-            validate_source_url(current_url, provider=spec.provider)
+            validate_source_url(
+                current_url, provider=spec.provider, source_kind=spec.source_kind
+            )
         except SourceFetchError as exc:
             return _failed(
                 spec,
@@ -381,9 +648,15 @@ def fetch_source(
                         and 0 <= finite <= MAX_RETRY_AFTER_SECONDS
                         and attempts < MAX_ATTEMPTS
                     ):
-                        import time
-
-                        time.sleep(min(finite, MAX_RETRY_AFTER_SECONDS))
+                        # The wait consumes the shared deadline: never
+                        # sleep past it, and a deadline that expires
+                        # during/after the wait stops the next attempt.
+                        wait = min(
+                            finite, MAX_RETRY_AFTER_SECONDS, context.remaining_seconds()
+                        )
+                        if wait > 0:
+                            time.sleep(wait)
+                        context.check_deadline()
                         continue
                     return _failed(
                         spec, current_url=current_url, last_status=last_status,
@@ -397,10 +670,13 @@ def fetch_source(
                         attempts=attempts, redirects=redirects, code="http_5xx",
                     )
                 if 200 <= response.status_code < 300:
+                    # F3: identity-only transfer. Any non-identity
+                    # Content-Encoding is refused BEFORE any decoding or
+                    # expansion (the body stream is never read).
                     encoding = (
                         response.headers.get("content-encoding") or "identity"
                     ).lower()
-                    if encoding not in {"identity", "gzip", "deflate"}:
+                    if encoding != "identity":
                         return _failed(
                             spec, current_url=current_url, last_status=last_status,
                             attempts=attempts, redirects=redirects,
@@ -414,8 +690,12 @@ def fetch_source(
                             code="header_too_large",
                         )
                     try:
-                        body = _read_bounded(response, spec.max_bytes)
+                        body = _read_bounded(
+                            response, spec.max_bytes, context=context
+                        )
                     except SourceFetchError as exc:
+                        if _collection_level(exc):
+                            raise
                         return _failed(
                             spec, current_url=current_url, last_status=last_status,
                             attempts=attempts, redirects=redirects, code=exc.code,
@@ -440,12 +720,27 @@ def fetch_source(
                     attempts=attempts, redirects=redirects,
                     code=f"http_{response.status_code}",
                 )
-        except (httpx.HTTPError, OSError):
+        except SourceFetchError as exc:
+            # Connect-time destination vetting / budget failures raised
+            # from inside the transport binding.
+            if _collection_level(exc):
+                raise
             if attempts < MAX_ATTEMPTS:
                 continue
             return _failed(
                 spec, current_url=current_url, last_status=last_status,
-                attempts=attempts, redirects=redirects, code="transport_error",
+                attempts=attempts, redirects=redirects, code=exc.code,
+            )
+        except (httpx.HTTPError, OSError) as exc:
+            cause = _source_cause(exc)
+            if cause is not None and _collection_level(cause):
+                raise cause
+            code = cause.code if cause is not None else "transport_error"
+            if attempts < MAX_ATTEMPTS:
+                continue
+            return _failed(
+                spec, current_url=current_url, last_status=last_status,
+                attempts=attempts, redirects=redirects, code=code,
             )
 
 
@@ -453,45 +748,77 @@ def fetch_sources(
     specs: tuple[SourceSpec, ...],
     *,
     client: httpx.Client,
+    context: AcquisitionContext,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
-    seen_urls: set[str] | None = None,
 ) -> list[RetrievalResult]:
-    """Fetch all specs with collection-wide budgets and URL deduplication.
+    """Fetch all specs under ONE shared acquisition context.
 
-    ``seen_urls`` deduplicates shared snapshots across phases: a URL
-    already fetched in this invocation is never fetched twice (the 444
-    model payload is one retrieval, never one per model). Duplicate specs
-    share the first retrieval's result bytes.
+    The context (created before acquisition starts, 181-f F1) carries
+    the finite attempt/byte budgets, the monotonic deadline, and the
+    cross-phase URL outcome cache. Calling this function a second time
+    with the SAME context continues the SAME invocation: no allowance is
+    reset and no cached URL is fetched twice (its success OR failure is
+    reused after revalidating the planned spec's registry identity).
+
+    Before each uncached spec, the remaining budgets must cover its full
+    per-body cap and at least one attempt; otherwise the collection
+    fails closed (``collection_budget_exhausted``) - partial progress
+    never silently continues past an un-coverable spec.
     """
-    budget_requests = [MAX_COLLECTION_REQUESTS]
-    budget_bytes = [MAX_COLLECTION_BYTES]
-    seen = seen_urls if seen_urls is not None else set()
-    cache: dict[str, RetrievalResult] = {}
     results: dict[str, RetrievalResult] = {}
     for spec in specs:
-        if spec.url in cache:
-            results[spec.url] = cache[spec.url]
+        context.check_deadline()
+        cached = context.cache_lookup(spec)
+        if cached is not None:
+            results[spec.url] = cached
             continue
-        if spec.url in seen:
-            # Planned but already fetched earlier in this invocation.
-            raise SourceFetchError("duplicate_url_planned")
-        if budget_requests[0] <= 0 or budget_bytes[0] < spec.max_bytes:
+        if context.attempts_remaining < 1:
             raise SourceFetchError("collection_budget_exhausted")
-        result = fetch_source(client, spec, resolve=resolve)
-        cache[spec.url] = result
+        if context.bytes_remaining < spec.max_bytes:
+            raise SourceFetchError("collection_budget_exhausted")
+        result = fetch_source(
+            client, spec, context=context, resolve=resolve
+        )
+        context.cache_store(spec, result)
         results[spec.url] = result
-        seen.add(spec.url)
-        budget_requests[0] -= 1
-        if result.ok and result.content is not None:
-            budget_bytes[0] -= len(result.content)
     return [results[spec.url] for spec in specs]
 
 
-def new_client() -> httpx.Client:
-    """Production client: bounded timeouts, no implicit redirects."""
+def new_client(
+    *,
+    resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
+) -> httpx.Client:
+    """Production client: vetted-connection transport, identity transfer,
+    bounded timeouts, no implicit redirects, no environment proxies.
+
+    The transport binds every real TCP connection to the vetted public
+    numeric destination (original hostname, SNI, and verified
+    certificate policy intact) and disables environment proxies and
+    other implicit network configuration (``trust_env=False``).
+    """
+    from slaif_gateway.services.catalog_refresh.source_transport import (
+        VettedHTTPTransport,
+    )
+
     return httpx.Client(
-        headers={"User-Agent": USER_AGENT, "Accept": "*/*"},
-        timeout=httpx.Timeout(connect=CONNECT_TIMEOUT, read=READ_TIMEOUT, write=CONNECT_TIMEOUT, pool=CONNECT_TIMEOUT),
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "*/*",
+            "Accept-Encoding": "identity",
+        },
+        timeout=httpx.Timeout(
+            connect=CONNECT_TIMEOUT,
+            read=READ_TIMEOUT,
+            write=CONNECT_TIMEOUT,
+            pool=CONNECT_TIMEOUT,
+        ),
         follow_redirects=False,
-        limits=httpx.Limits(max_connections=MAX_CONCURRENCY, max_keepalive_connections=MAX_CONCURRENCY),
+        trust_env=False,
+        transport=VettedHTTPTransport(
+            resolve=resolve,
+            limits=httpx.Limits(
+                max_connections=MAX_CONCURRENCY,
+                max_keepalive_connections=MAX_CONCURRENCY,
+            ),
+        ),
     )

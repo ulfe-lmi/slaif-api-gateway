@@ -106,33 +106,95 @@ blocked run is published, e.g. an unreadable or invalid `--baseline-file`),
 Collection fetches only these registered endpoints, over HTTPS, on the
 approved host families:
 
-| Provider | Source kind | URL | Body cap |
+| Provider | Source kind | URL (exact path family) | Body cap |
 |---|---|---|---|
 | `openrouter` | `openrouter_models_api` | `https://openrouter.ai/api/v1/models` | 4 MiB |
 | `openai` | `openai_pricing_docs` | `https://developers.openai.com/api/docs/pricing.md` | 512 KiB |
 | `openai` | `openai_models_docs` | `https://developers.openai.com/api/docs/models.md` | 512 KiB |
-| `openai` | `docs_page` | `https://developers.openai.com/api/docs/models/<slug>.md` (slug = URL-quoted model ID) | 256 KiB |
+| `openai` | `docs_page` | `https://developers.openai.com/api/docs/models/<slug>.md` (slug = URL-quoted model ID, no raw separators in the segment) | 256 KiB |
 | `ecb` | `ecb_reference_xml` | `https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml` (only when a proposed non-EUR price needs FX) | 1 MiB |
 
-Retrieval guarantees (enforced before the first byte is read):
+Retrieval guarantees (enforced before the first byte is read, and re-applied
+to **every attempted URL, including each redirect target and every cache
+reuse**):
 
-- HTTPS only, no credentials in the URL, no non-default ports, and the
-  full host-family allowlist is re-applied to **every attempted URL,
-  including each redirect target** — a 3xx to any other host is refused,
-  never followed;
+- HTTPS only, no credentials in the URL, no non-default ports, **no query,
+  no fragment**, and the exact registered path family for the provider and
+  source kind — a 3xx to any other host, path, or query is refused, never
+  followed;
 - a public-destination DNS guard runs before every request and every
-  redirect hop (private, loopback, link-local, reserved, or unspecified
-  destinations and resolver failures are safe code-only failures);
+  redirect hop: private, loopback, link-local, reserved, or unspecified
+  destinations are refused, and a **mixed** answer set (any public address
+  together with any non-public one) is refused as a whole, never filtered
+  down to its public subset; resolver failures are safe code-only failures;
 - manual redirects are bounded to 3, with relative locations resolved
   RFC 3986-style against the current URL and re-validated;
-- a 429 with a finite `Retry-After` of at most 30 s is retried once; an
-  oversized or non-finite `Retry-After` is never waited on; 5xx and
-  transport errors retry up to 3 total attempts;
-- bodies are read in bounded chunks against the per-kind byte cap above
-  (a mid-stream overflow fails with `body_too_large`);
-- the encoding allowlist is `identity`, `gzip`, `deflate`;
-- the whole invocation is budgeted (128 requests, 32 MiB total) and each
-  URL is fetched at most once per invocation.
+- a 429 with a finite `Retry-After` of at most 30 s is retried (the wait
+  itself consumes the acquisition deadline); an oversized or non-finite
+  `Retry-After` is never waited on; 5xx and transport errors retry up to 3
+  total attempts;
+- bodies are read as bounded wire chunks against the per-kind byte cap
+  above (a mid-stream overflow fails with `body_too_large`);
+  `Content-Length` is never trusted;
+- the transfer encoding is **identity only**: the client sends
+  `Accept-Encoding: identity`, any other `Content-Encoding` is refused
+  BEFORE any decoding or expansion, and bodies are read as raw wire bytes
+  with no decoder ever constructed (so a compressed body can never expand
+  before refusal);
+- the whole invocation runs under ONE collection-owned acquisition
+  context (see below): a finite attempt budget, a finite body-byte budget,
+  a finite monotonic deadline, and a cross-phase URL outcome cache.
+
+#### Transport and budget guarantees (181-f)
+
+**One whole-invocation budget.** `collect_bundle` creates one
+`AcquisitionContext` before acquisition starts and passes it through the
+catalog phase, the model-doc phase, the ECB phase, and every redirect and
+retry. No later fetch phase can reset any allowance. One *attempt* is one
+real HTTP request sent (initial request, each redirect hop, each 429 wait,
+each 5xx/transport retry). One *byte* unit is every body byte received
+from the wire on a 2xx response — successful reads, interrupted/failed
+reads, and overflow reads alike; failures never refund. The defaults are
+128 attempts and 32 MiB of body bytes per invocation, plus the per-source
+caps above. When a remaining budget can no longer cover the next spec, the
+run fails closed (`collection_budget_exhausted`) instead of continuing
+partially.
+
+**A finite acquisition deadline.** The context carries a 120-second global
+monotonic deadline. DNS resolution, connect, TLS, body reads, retry
+sleeps, and gaps between fetch phases all consume it: every new network
+action is refused once it has passed, and an expired deadline aborts the
+run with `acquisition_deadline_exceeded` before any later HTTP activity.
+Honest limit: a single in-flight operation (one DNS lookup, one connect,
+one read between deadline checks) may complete slightly past the deadline
+before the next action is refused; it is additionally bounded by the
+per-operation connect/read timeouts (10 s / 30 s), so wall time stays
+finite.
+
+**Cross-phase URL outcome cache.** One URL's success OR failure is cached
+across phases within the invocation: the captured bytes (or safe failure)
+are reused without new retrieval-time claims, duplicate network, or budget
+expenditure. Each cached reuse revalidates the planned spec's registry
+identity (provider, source kind, model, cap, required flag) and the URL
+family before accepting the cached result; an identity mismatch fails
+closed (`duplicate_url_planned`). Caller-supplied JSON never owns the
+context.
+
+**Vetted connection binding.** The production client's only TCP connection
+path is a vetted network backend: on every new connection it resolves the
+approved hostname, vets the COMPLETE answer set (every returned address
+must be globally public), and connects only to those vetted numeric
+addresses. TLS then starts on that bound socket with the ORIGINAL hostname
+as SNI and the standard verified certificate context — chain and hostname
+verification are exactly the library defaults (no TLS bypass, no custom
+trust store). A preflight DNS check alone would not be a fix (the
+client could resolve independently and bind elsewhere); the connect-time
+answer set is the one that is bound, so rebinding between lookups cannot
+bypass the decision. Connection reuse reuses sockets a vetted connect
+created; retries and redirect hops open new connections that pass through
+the same vetting. Environment proxies and other implicit network
+configuration are disabled (`trust_env=False` on client and transport);
+Unix-domain sockets are forbidden by the backend.
 
 Every retrieval outcome — success or failure — is recorded in the bundle's
 **collection identity**: requested and final URL, retrieval UTC time (fetch
