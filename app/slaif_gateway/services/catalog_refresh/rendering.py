@@ -1502,15 +1502,23 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
         (
             "<p class='sub'>"
             + (
-                "One-page review artifact of a live-collected catalog: the sources below were "
-                "fetched through bounded official retrieval by the collector invocation recorded in "
-                "the collection identity; apply is not implemented. "
-                if bundle.collection is not None
-                else "One-page offline review artifact. This version reviews supplied snapshots; live "
-                "collection and apply are not implemented. "
+                # 181-i (I1): the subtitle follows the RUNNER-SELECTED scope
+                # of this invocation (never mere collection-field presence).
+                "One-page review artifact of a live-collected catalog: this "
+                "invocation fetched the sources below through bounded official "
+                "retrieval (identity below); apply is not implemented. "
+                if (report.get("source_evidence") or {}).get("scope") == "live_collection"
+                else "One-page review of a supplied, previously collected "
+                "catalog: the collection identity is historical provenance; "
+                "this invocation parsed supplied bytes offline (no live "
+                "retrieval). Apply is not implemented. "
+                if (report.get("source_evidence") or {}).get("scope") == "supplied_collection"
+                else "One-page offline review artifact: this invocation parsed "
+                "supplied snapshot bytes offline (no live retrieval). Apply is "
+                "not implemented. "
             )
-            + "Everything needed for the decision is inside this file; detailed evidence is in the expandable sections below. "
-            "No external resources, no JavaScript, no network on open.</p>"
+            + "Everything needed for the decision is in this file; no external resources, no "
+            "JavaScript, no network on open.</p>"
         ),
         "</header>",
     ]
