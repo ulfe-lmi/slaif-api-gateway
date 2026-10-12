@@ -129,22 +129,23 @@ reuse**):
   shared address space, documentation ranges, and NAT64 ranges are
   refused), and a **mixed** answer set (any global-unicast address together
   with any other one) is refused as a whole, never filtered down to its
-  global subset; resolver failures are safe code-only failures; the guard
-  is bounded by the acquisition deadline (see below), and the ACTUAL
-  connect re-runs the same vetting on its own answer set;
+  global subset; resolver failures are safe code-only failures; the lookup
+  is ordinary and in-process (trusted host/resolver, 181-h R1) and is
+  followed by a cooperative checkpoint, and the ACTUAL connect re-runs the
+  same vetting on its own answer set;
 - manual redirects are bounded to 3, with relative locations resolved
   RFC 3986-style against the current URL and re-validated;
-- a 429 with a finite `Retry-After` of at most 30 s is retried (the wait
-  itself consumes the acquisition deadline); an oversized or non-finite
-  `Retry-After` is never waited on; 5xx and transport errors retry up to 3
-  total attempts;
-- bodies are read as bounded wire chunks against the per-kind byte cap
-  above (a mid-stream overflow fails with `body_too_large`, or — when it
-  crosses the whole-invocation byte budget first — the crossing chunk is
-  debited in full and the invocation is terminally exhausted); requested
-  read sizes are limited by the remaining budget where practical, so a
-  crossing read can overrun the budget only by that bounded read size;
-  `Content-Length` is never trusted;
+- a 429 with a finite `Retry-After` of at most 30 s is retried (the
+  wait is bounded by the remaining collection target and checkpointed
+  after the wait); an oversized or non-finite `Retry-After` is never
+  waited on; 5xx and transport errors retry up to 3 total attempts;
+- bodies are read as bounded returned chunks against the per-kind
+  byte cap above (a mid-stream overflow fails with `body_too_large`, or —
+  when it crosses the whole-invocation byte budget first — the crossing
+  chunk is debited in full and the invocation is terminally exhausted); a
+  crossing chunk is bounded by the delivered chunk, never by an exact
+  network/TLS/header byte quota (181-h R2); `Content-Length` is never
+  trusted;
 - the transfer encoding is **identity only**: the client sends
   `Accept-Encoding: identity`, any other `Content-Encoding` is refused
   BEFORE any decoding or expansion, and bodies are read as raw wire bytes
@@ -152,18 +153,23 @@ reuse**):
   before refusal);
 - the whole invocation runs under ONE collection-owned acquisition
   context (see below): a finite attempt budget, a finite body-byte budget,
-  a finite monotonic deadline, and a cross-phase URL outcome cache.
+  a cooperative whole-invocation collection target (181-h R1), and a
+  cross-phase URL outcome cache.
 
 #### Transport and budget guarantees (181-f)
 
 **One whole-invocation budget.** `collect_bundle` creates one
 `AcquisitionContext` before acquisition starts and passes it through the
 catalog phase, the model-doc phase, the ECB phase, and every redirect and
-retry. No later fetch phase can reset any allowance. One *attempt* is one
-real HTTP request sent (initial request, each redirect hop, each 429 wait,
-each 5xx/transport retry). One *byte* unit is every body byte received
-from the wire on a 2xx response — successful reads, interrupted/failed
-reads, and overflow reads alike; failures never refund. The defaults are
+retry. No later fetch phase can reset any allowance. The attempt
+budget reserves one unit per attempted iteration (conservatively, before
+pre-validation); the recorded *attempts* metadata counts only requests
+actually sent (initial request, each redirect hop, each 429 wait, each
+5xx/transport retry) — rejected preflight/redirect validation is never
+counted as a sent request. One *byte* unit is every RETURNED application
+body chunk on a 2xx response — successful reads, interrupted/failed reads,
+and overflow reads alike; failures never refund; a chunk returned after
+the collection target has passed is still debited (181-h R2). The defaults are
 128 attempts and 32 MiB of body bytes per invocation, plus the per-source
 caps above. When a remaining budget can no longer cover the next spec, the
 run fails closed (`collection_budget_exhausted`) instead of continuing
@@ -174,40 +180,51 @@ consumed chunk exceeds the remaining byte budget, the FULL chunk is
 debited — the honest deficit is kept in the context (the remaining count
 goes negative, never refunded) — and the invocation is marked TERMINALLY
 exhausted: no later attempt, read, or fetch phase may use any leftover
-credit, and the failure aborts the whole run. A deadline failure does not
-hide already-consumed bytes: every prior charge remains recorded.
+credit, and the failure aborts the whole run. A target (deadline)
+failure does not hide already-consumed bytes: every RETURNED chunk —
+including one that arrives after the target has passed — is debited
+BEFORE the failure propagates (181-h R2), and every prior charge remains
+recorded.
 
-**A finite acquisition deadline, enforced at the actual operations.** The
-context carries a 120-second global monotonic deadline, and the deadline
-reaches the ACTUAL backend operations, not just the guard: `collect_bundle`
-binds the context to the client's vetted transport backend, so the default
-(production) resolver, every candidate-IP connect, the TLS handshake, and
-every stream read/partial-write re-check the deadline and clamp their
-socket timeout to the REMAINING whole-invocation time. The default
-blocking resolver (`socket.getaddrinfo`) cannot be cancelled in-process;
-it therefore runs in a short-lived OWNED child process (`sys.executable -I`
-with an EMPTY environment — it inherits no secrets, site configuration, or
-provider/DB/seal authority and executes only stdlib `json`/`socket`/
-`sys`/`time`); the parent waits with the remaining deadline seconds, and
-on expiry the child is SIGKILLed (uncatchable) and reaped — bounded
-lifetime, reaped on success/failure/timeout, no detached lookup, no daemon
-thread, no process-global timer. The deadline is re-checked after every
-resolver call, before EVERY candidate-IP connect (an expired attempt stops
-before the next IP), after the connect (the expired socket is closed
-before the failure propagates), before AND after the TLS handshake (the
-upgraded socket is closed the same way), and INSIDE the partial-send loop
-before every socket write (httpcore's own loop resets the same timeout on
-each partial send; clamping once would let repeated partial sends overrun
-the total deadline). No later action starts after expiry; one
-already-started operation may finish slightly past expiry, bounded by its
-own deadline-clamped timeout. Real (default-resolver) DNS is bounded even
-WITHOUT a context (capped at 120 s), so no execution context silently
-falls back to unbounded DNS. Honest platform limits: spawning the
-resolver child adds a small bounded overhead per resolution; the reap
-wait after SIGKILL has a 5-second extreme safety net; an INJECTED resolver
-(unit-test seam only — production never injects one) is called in-process
-and cannot be killed mid-call, so the deadline is enforced around it and
-between it and the next action.
+**A cooperative 120-second collection target, standard per-operation
+timeouts, and an operator watchdog (181-h R1, human-approved).** The
+context carries a 120-second whole-invocation collection target. The
+HTTP client uses ordinary per-operation timeouts (connect/write/pool
+10 s, read 30 s — the read timeout bounds inactivity, not total elapsed
+time). The target itself is enforced COOPERATIVELY at application
+checkpoints — before each new request (headers may already have consumed
+it), after every returned body chunk, at phase boundaries, and around
+the 429 retry wait — so that once a checkpoint observes expiry, no NEW
+application activity starts. This is an approved relaxation of the 181-g
+in-library enforcement: it is NOT a hard total elapsed bound and there
+is no mid-library cancellation. A blocking in-process DNS lookup (the
+ordinary system resolver on the trusted host), a library operation, or a
+continuous slow stream can exceed the target. The custom DNS child
+process, kill/reap lifecycle, and deadline-wrapped stream of 181-g are
+removed with their machinery-specific claims; the trusted host, its
+administrator, and the OS resolver are the security boundary. The
+documented elapsed-time cutoff for the read-only collect command is the
+standard operator watchdog (below).
+
+**Operator watchdog (read-only collect only).** The supported
+administrator workflow runs the collect command under the standard OS
+job watchdog: `timeout --kill-after=5 300 slaif-gateway catalog-refresh
+collect ...` — 300 s plus a 5-second KILL grace by default; the operator
+may choose any explicit positive finite duration. The watchdog covers the
+READ-ONLY collect command only — never review, verify, export-baseline,
+or any apply/imports/database mutation. A timed-out run exits non-success
+(124 on the TERM timeout; 137 after the KILL grace for a TERM-ignoring
+process); an interrupted run is NEVER a fresh READY and never overwrites
+an older run: the collect writes nothing during the fetch phase,
+publication is one atomic rename of a private staging directory at
+finalization only, so cancellation may produce no final report at all,
+and an incomplete or unsealed run cannot later be applied. No fake sealed
+BLOCKED report is invented after a SIGKILL and no automatic retry occurs.
+The documented qualification drove a stalled mock collect in an owned
+subprocess under the installed watchdog (short injected durations, no
+private service); the utility is the standard `timeout` from GNU or
+uutils coreutils on Linux — no platform matrix or kernel-hard guarantee
+is claimed.
 
 **Cross-phase URL outcome cache.** One URL's success OR failure is cached
 across phases within the invocation: the captured bytes (or safe failure)

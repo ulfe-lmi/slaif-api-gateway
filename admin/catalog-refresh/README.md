@@ -13,7 +13,12 @@ There is exactly one supported way to run this workflow: the CLI.
 ```bash
 # 0) Collect now: bounded official-source retrieval plus review in one
 #    invocation; publishes one sealed run directory (REVIEW.html).
-slaif-gateway catalog-refresh collect --bootstrap \
+#    The supported administrator workflow prefixes the read-only collect
+#    with the standard OS watchdog: 300 s default plus a 5-second KILL
+#    grace (any explicit positive finite duration may be chosen). The
+#    watchdog is never used around review, verify, export-baseline, or
+#    any apply:
+timeout --kill-after=5 300 slaif-gateway catalog-refresh collect --bootstrap \
   --run-root /var/lib/slaif/catalog-refresh/runs \
   --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
 
@@ -45,7 +50,15 @@ slaif-gateway catalog-refresh verify \
 
 Exit codes: collect and review 0/10/20/65/2, verify 0/30/65 (a missing or unsafe
 run directory with a valid key is 30; a missing or unsafe seal key is
-65), export-baseline 0/65 (see the docs page for the table). The review's
+65), export-baseline 0/65 (see the docs page for the table). A
+watchdog-timed-out collect exits non-success (124 on the TERM timeout,
+137 after the KILL grace for a TERM-ignoring process) and publishes no
+run — the finalization-only atomic publication leaves no partial
+artifact, never overwrites an earlier run, and an incomplete/unsealed
+run cannot be applied. Direct raw collect without the watchdog may
+exceed the cooperative 120-second collection target during blocked DNS
+or a continuous slow stream (documented; no hard total bound is
+claimed). The review's
 baseline input is part of the SQL evidence: `--db-url` is a live export
 (SQL ran during this review), `--baseline-file` is a supplied document
 (it DECLARES a historical SQL export at its export time; consuming the

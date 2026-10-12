@@ -16,18 +16,23 @@ subsystem. It is deliberately narrow:
   the original hostname, SNI, and verified certificate policy;
 - manual, bounded, re-validated redirects;
 - ONE collection-owned :class:`AcquisitionContext` per invocation that
-  carries a finite attempt budget, a finite body-byte budget, a finite
-  monotonic acquisition deadline, and the cross-phase URL outcome cache
-  (181-f F1: no second fetch phase can reset any allowance; failed,
-  interrupted, and overflow reads consume the byte budget and are never
-  refunded);
-- bounded concurrency, request count, per-body bytes (enforced on the
-  actual wire stream, not Content-Length) and total collection bytes;
+  carries a finite attempt budget, a finite body-byte budget, a
+  cooperative whole-invocation 120-second collection target (181-h R1,
+  human-approved: application checkpoints, not an in-library hard
+  bound), and the cross-phase URL outcome cache (181-f F1: no second
+  fetch phase can reset any allowance; failed, interrupted, and
+  overflow reads consume the byte budget and are never refunded;
+  every RETURNED chunk is debited before any deadline/overflow failure,
+  including chunks that arrive after the target has passed - 181-h R2);
+- bounded concurrency, request count, per-body bytes (enforced on
+  the returned application body stream, not Content-Length) and total
+  collection bytes;
 - identity-only transfer encoding (``Accept-Encoding: identity``; any
   other Content-Encoding is refused BEFORE any decoding/expansion, and
   bodies are read with ``iter_raw`` so no decoder is ever constructed);
-- finite 429/Retry-After handling (the wait itself consumes the deadline)
-  and at most two retries on 5xx/transport failure;
+- finite 429/Retry-After handling (the wait is bounded by the
+  remaining collection target and checkpointed after the wait) and at
+  most two retries on 5xx/transport failure;
 - full provenance (requested/final URL, retrieval UTC time, status,
   content type, bytes, SHA-256) and safe code-only failures (never raw
   response bodies or secret-bearing exception text).
@@ -81,7 +86,7 @@ _PROVIDER_HOSTS: dict[str, frozenset[str]] = {
     "ecb": ECB_HOSTS,
 }
 
-# Per-body byte caps (wire bytes; identity transfer, see below).
+# Per-body byte caps (returned application body bytes; identity transfer, see below).
 # Content-Length alone is not protection: the stream is counted chunk by
 # chunk and aborted past the cap.
 MAX_BODY_BYTES = {
@@ -95,11 +100,14 @@ MAX_BODY_BYTES = {
 # Collection-wide budgets (181-f F1: one context per invocation).
 MAX_COLLECTION_REQUESTS = 128
 MAX_COLLECTION_BYTES = 32 * 1024 * 1024
-# Finite explicit global monotonic acquisition deadline: DNS, connect,
-# TLS, read, retry sleeps, and gaps between fetch phases all consume it.
-# 120 s is generous for the five official sources (measured: well under
-# 10 s total) while still bounding slow-drip/slow-DNS failures to a
-# finite wall time.
+# Cooperative whole-invocation collection target (181-h R1,
+# human-approved): application checkpoints between attempts, after every
+# returned body chunk, at phase boundaries, and around the 429 retry
+# wait stop BEFORE new application activity once this instant has
+# passed. It is NOT a hard total elapsed bound: blocking DNS/library
+# operations and a continuous slow stream can exceed it, and the
+# documented operator watchdog (``timeout --kill-after=5 300``) is the
+# elapsed-time cutoff for the read-only collect command.
 ACQUISITION_DEADLINE_SECONDS = 120.0
 MAX_CONCURRENCY = 4
 MAX_REDIRECTS = 3
@@ -173,15 +181,23 @@ class AcquisitionContext:
     ``fetch_sources`` call with the same context never resets any
     allowance.
 
-    - ``deadline``: absolute ``time.monotonic()`` instant; DNS, connect,
-      TLS, read, retry sleep, and inter-phase gaps all consume it. Every
-      new network action is refused once it has passed.
-    - ``attempts_remaining``: one unit per REAL HTTP request sent
-      (initial request, each redirect hop, each 429 wait, each 5xx or
-      transport retry).
-    - ``bytes_remaining``: body bytes consumed from the wire on 2xx
+    - ``deadline``: absolute ``time.monotonic()`` instant - the
+      cooperative whole-invocation collection target (181-h R1):
+      application checkpoints (before each new request, after every
+      returned body chunk, at phase boundaries, and around the 429
+      wait) refuse to start new activity once it has passed. It is not
+      enforced inside library operations; a blocking DNS lookup or a
+      continuous slow stream can exceed it (documented).
+    - ``attempts_remaining``: the budget RESERVES one unit per attempted
+      fetch iteration (conservatively, before pre-validation); the
+      ``RetrievalResult.attempts`` metadata records only requests
+      ACTUALLY sent, so rejected preflight/redirect validation is never
+      counted as a sent request.
+    - ``bytes_remaining``: RETURNED application body chunks on 2xx
       responses - successful reads, interrupted/failed reads, and
-      overflow chunks alike. Failures never refund.
+      overflow chunks alike. Every returned chunk is debited BEFORE any
+      deadline/overflow failure (181-h R2: a chunk that arrives after
+      the target has passed is still counted). Failures never refund.
     - ``cache``: one URL's success OR failure is cached across phases
       within the invocation; cached results are reused without new
       retrieval-time claims, duplicate network, or budget expenditure.
@@ -218,17 +234,18 @@ class AcquisitionContext:
         self.attempts_remaining -= 1
 
     def charge_body_bytes(self, n: int) -> None:
-        """Charge consumed wire body bytes (no refunds).
+        """Charge consumed body bytes (no refunds).
 
-        An overflow chunk (``n`` greater than the remaining budget) is
-        DEBITED in full - the deficit is recorded honestly in
-        ``bytes_remaining`` - and the invocation is marked terminally
-        exhausted BEFORE the failure propagates, so later attempts,
-        reads, and fetch phases cannot use leftover credit. A deadline
-        failure does not hide already consumed bytes: charging stops at
-        the expiry check and every prior charge remains recorded.
+        Every RETURNED chunk is debited BEFORE any deadline/overflow
+        failure (181-h R2): a chunk that arrives after the collection
+        target has passed is still counted - the consumed bytes never
+        vanish - and the deadline check follows the debit. An overflow
+        chunk (``n`` greater than the remaining budget) is debited in
+        full (the honest deficit is kept in ``bytes_remaining``) and
+        the invocation is marked terminally exhausted BEFORE the
+        failure propagates, so later attempts, reads, and fetch phases
+        cannot use leftover credit.
         """
-        self.check_deadline()
         if self.exhausted:
             raise SourceFetchError("collection_budget_exhausted")
         if n > self.bytes_remaining:
@@ -238,6 +255,7 @@ class AcquisitionContext:
         self.bytes_remaining -= n
         if self.bytes_remaining < 0:
             self.exhausted = True
+        self.check_deadline()  # AFTER the debit: consumed bytes never vanish
 
     def cache_lookup(self, spec: SourceSpec) -> RetrievalResult | None:
         """Reuse a cached success OR failure for this URL, revalidating
@@ -433,10 +451,9 @@ def guard_public_destination(
     host: str,
     *,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
-    remaining: float | None = None,
 ) -> tuple[str, ...]:
     """Preflight destination vetting: refuse non-global-unicast or
-    MIXED answers, bounded by the collection deadline (181-g G1).
+    MIXED answers.
 
     Runs before every request and every redirect hop and returns the
     vetted global-unicast numeric destinations (provenance). It is an
@@ -444,19 +461,17 @@ def guard_public_destination(
     vetted again at connect time inside
     ``source_transport.VettedNetworkBackend`` (a preflight lookup
     followed by an independent client resolution is not a fix - the
-    connect-time answer set is the one that is bound). With
-    ``remaining`` (the context's remaining whole-invocation seconds)
-    the DEFAULT resolver is bounded by the owned killed/reaped child
-    and the deadline is re-checked around any resolver; the caller
-    must re-check the deadline before the next action.
+    connect-time answer set is the one that is bound). The lookup is
+    ordinary and in-process (trusted host/resolver, 181-h R1); the
+    caller re-checks the collection target before the next action, so
+    a slow lookup that consumes the remaining target stops all later
+    network activity.
     """
     from slaif_gateway.services.catalog_refresh.source_transport import (
-        resolve_vetted_public_destination,
+        vet_public_destination,
     )
 
-    return resolve_vetted_public_destination(
-        host, resolve=resolve, remaining=remaining
-    )
+    return vet_public_destination(host, resolve=resolve)
 
 
 def plan_catalog_specs(providers: tuple[str, ...]) -> list[SourceSpec]:
@@ -546,23 +561,34 @@ def _read_bounded(
     *,
     context: AcquisitionContext,
 ) -> bytes:
-    """Read the identity-encoded wire body chunk by chunk; abort past cap.
+    """Read the identity-encoded body chunk by chunk; abort past cap.
 
-    The content-encoding header has already been checked to be absent or
-    ``identity`` (anything else fails before this is reached), so
-    The production live-stream path iterates the RAW stream (wire
-    bytes; NO decoder is ever constructed and no compressed bytes are
-    ever expanded), checking the acquisition deadline on EVERY raw read
-    so a slow-drip body cannot outlive the deadline between reads.
+    The content-encoding header has already been checked to be absent
+    or ``identity`` (anything else fails before this is reached), so
+    the production live-stream path iterates the stream as returned
+    (NO decoder is ever constructed and no compressed bytes are ever
+    expanded). The collection target is checked COOPERATIVELY
+    (181-h R1): once BEFORE the first body pull (the headers may
+    already have consumed the target) and after every processed
+    chunk, so the read stops before the next chunk is requested once
+    a checkpoint observes expiry. A continuous slow stream between
+    checkpoints can exceed the target - the per-operation read
+    timeout bounds inactivity, not total elapsed time (documented
+    R1 limit; no mid-stream cancellation is claimed).
+
     Pre-buffered responses (``httpx.Response(content=...)`` bodies, as
     produced by test mock transports - the production stream path never
-    pre-buffers) are served from the exact buffered wire bytes in the
-    same accounting. EVERY byte received from the wire is charged to
-    the collection byte budget at the moment it is consumed (live
-    path: per raw read; buffered path: per bounded buffer slice),
-    BEFORE the per-spec cap check - so failed, interrupted, and
-    overflow reads consume budget and are never refunded.
-    ``Content-Length`` is never consulted.
+    pre-buffers) are served from the exact buffered body bytes in the
+    same accounting. EVERY RETURNED application body chunk is charged
+    to the collection byte budget at the moment it is consumed (live
+    path: per returned chunk; buffered path: per bounded buffer
+    slice), BEFORE the per-spec cap check - so failed, interrupted,
+    and overflow reads consume budget and are never refunded. A
+    returned chunk arriving after the collection target has passed is
+    still debited FIRST, and only then does the target failure
+    propagate (181-h R2: the consumed bytes never vanish). The counts
+    are application body chunks, not exact network/TLS/header byte
+    quotas. ``Content-Length`` is never consulted.
     """
     chunks: list[bytes] = []
     total = 0
@@ -578,12 +604,13 @@ def _read_bounded(
     if buffered is not None:
         # Pre-buffered response (httpx buffers Response(content=...)
         # bodies at construction; the production live-stream path never
-        # takes this branch). The buffer holds exactly the wire bytes;
+        # takes this branch). The buffer holds exactly the body bytes;
         # serve it in bounded slices with the same accounting. Slice
         # sizes are limited by the REMAINING collection byte budget
         # where practical (G2): a crossing read can then exceed the
         # budget only by at most that bounded slice, and the charge
         # layer debits it and terminates the invocation.
+        context.check_deadline()  # headers may have consumed the target
         i = 0
         while i < len(buffered):
             n = min(_CHUNK_SIZE, len(buffered) - i)
@@ -594,13 +621,19 @@ def _read_bounded(
             chunks.append(chunk)
             i += n
     else:
-        # Live network stream: every raw wire read is charged as it is
-        # consumed, and the deadline is checked before every raw read.
+        # Live network stream: stop before the FIRST body pull if the
+        # headers already consumed the collection target (181-h R1).
+        context.check_deadline()
+        # Every RETURNED chunk is then charged as it is consumed - the
+        # debit happens BEFORE any deadline/overflow failure (181-h
+        # R2), and the cooperative checkpoint after processing stops
+        # the read BEFORE the next chunk is requested once the target
+        # has passed.
         for raw in response.stream:
-            context.check_deadline()
             if raw:
                 charge_and_check(len(raw))
                 chunks.append(raw)
+            context.check_deadline()
     return b"".join(chunks)
 
 
@@ -672,26 +705,35 @@ def fetch_source(
     bodies, and unexpected encodings never leak raw response bytes or
     exception text.
 
-    Attempt accounting (181-f F1): one REAL HTTP request sent is one
-    attempt - the initial request, each redirect hop, each 429 wait, and
-    each 5xx/transport retry. Every attempt is reserved from the shared
-    context BEFORE it starts; the deadline is checked at every decision
-    point (before each attempt, during the body read, around the 429
-    wait), so an expired deadline stops all later network activity.
-    Collection-level exhaustion (attempts, bytes, deadline) raises out
-    of this function to BLOCK the whole run; per-spec failures return.
+    Attempt accounting (181-f F1, metadata clarified in 181-h H2): one
+    REAL HTTP request sent is one recorded attempt - the initial
+    request, each redirect hop, each 429 wait, and each 5xx/transport
+    retry; rejected preflight/redirect validation is NOT counted as a
+    sent request (the shared budget still conservatively reserves one
+    unit per attempted iteration before pre-validation). The
+    collection target is checkpointed at every decision point (before
+    each new request, during the body read, around the 429 wait), so
+    an expired target stops all later network activity (181-h R1).
+    Collection-level exhaustion (attempts, bytes, target) raises out of
+    this function to BLOCK the whole run; per-spec failures return.
     """
     current_url = spec.url
     # G4: the last VALIDATED SAFE URL - rejected redirect targets never
     # leave this loop variable (never persisted in provenance).
     last_safe_url = spec.url
     redirects = 0
-    attempts = 0
+    # Requests ACTUALLY sent (initial request, each redirect hop, each
+    # 429 wait, each 5xx/transport retry): the recorded ``attempts``
+    # metadata. The shared budget additionally RESERVES one unit per
+    # attempted iteration before pre-validation (conservative);
+    # rejected preflight/redirect validation never counts as a sent
+    # request (181-h H2).
+    sent = 0
     last_status: int | None = None
     while True:
-        attempts += 1
         # Reserve BEFORE the request: deadline + one attempt from the
-        # one shared, whole-invocation budget.
+        # one shared, whole-invocation budget (conservative, pre-
+        # validation).
         context.reserve_attempt()
         # The full allowlist check applies to EVERY attempted URL,
         # including each redirect target: a 3xx to another host, path
@@ -707,16 +749,14 @@ def fetch_source(
                 current_url=current_url,
                 last_safe_url=last_safe_url,
                 last_status=last_status,
-                attempts=attempts,
+                attempts=sent,
                 redirects=redirects,
                 code=exc.code,
             )
         last_safe_url = current_url
         try:
             guard_public_destination(
-                urlparse(current_url).hostname or "",
-                resolve=resolve,
-                remaining=context.remaining_seconds(),
+                urlparse(current_url).hostname or "", resolve=resolve
             )
         except SourceFetchError as exc:
             # Collection-level exhaustion (deadline/budget) aborts the
@@ -728,28 +768,23 @@ def fetch_source(
                 current_url=current_url,
                 last_safe_url=last_safe_url,
                 last_status=last_status,
-                attempts=attempts,
+                attempts=sent,
                 redirects=redirects,
                 code=exc.code,
             )
-        # G1: stop BEFORE the HTTP request after expired DNS (the
-        # blocking resolver may have consumed the remaining time).
+        # Cooperative checkpoint (181-h R1): stop BEFORE the HTTP
+        # request after a slow (blocking, in-process) DNS lookup that
+        # consumed the remaining collection target.
         context.check_deadline()
-        # G1: per-request timeouts clamped to the remaining whole-
-        # invocation time (no refreshed per-request deadline).
-        rem = context.remaining_seconds()
-        request_timeout = httpx.Timeout(
-            connect=min(CONNECT_TIMEOUT, rem),
-            read=min(READ_TIMEOUT, rem),
-            write=min(CONNECT_TIMEOUT, rem),
-            pool=min(CONNECT_TIMEOUT, rem),
-        )
+        # Ordinary per-operation timeouts (connect/write/pool 10 s,
+        # read 30 s) are owned by the client; there is no clamped
+        # per-request deadline (181-h R1).
+        sent += 1
         try:
             with client.stream(
                 "GET",
                 current_url,
                 follow_redirects=False,
-                timeout=request_timeout,
             ) as response:
                 last_status = response.status_code
                 if 300 <= response.status_code < 400:
@@ -759,7 +794,7 @@ def fetch_source(
                             spec, current_url=current_url,
                             last_safe_url=last_safe_url,
                             last_status=last_status,
-                            attempts=attempts, redirects=redirects,
+                            attempts=sent, redirects=redirects,
                             code="redirect_missing_location",
                         )
                     if redirects >= MAX_REDIRECTS:
@@ -767,7 +802,7 @@ def fetch_source(
                             spec, current_url=current_url,
                             last_safe_url=last_safe_url,
                             last_status=last_status,
-                            attempts=attempts, redirects=redirects,
+                            attempts=sent, redirects=redirects,
                             code="redirect_unbounded",
                         )
                     # Relative locations resolve against the current URL
@@ -788,7 +823,7 @@ def fetch_source(
                     if (
                         finite is not None
                         and 0 <= finite <= MAX_RETRY_AFTER_SECONDS
-                        and attempts < MAX_ATTEMPTS
+                        and sent < MAX_ATTEMPTS
                     ):
                         # The wait consumes the shared deadline: never
                         # sleep past it, and a deadline that expires
@@ -804,16 +839,16 @@ def fetch_source(
                         spec, current_url=current_url,
                         last_safe_url=last_safe_url,
                         last_status=last_status,
-                        attempts=attempts, redirects=redirects, code="rate_limited",
+                        attempts=sent, redirects=redirects, code="rate_limited",
                     )
                 if 500 <= response.status_code < 600:
-                    if attempts < MAX_ATTEMPTS:
+                    if sent < MAX_ATTEMPTS:
                         continue
                     return _failed(
                         spec, current_url=current_url,
                         last_safe_url=last_safe_url,
                         last_status=last_status,
-                        attempts=attempts, redirects=redirects, code="http_5xx",
+                        attempts=sent, redirects=redirects, code="http_5xx",
                     )
                 if 200 <= response.status_code < 300:
                     # F3: identity-only transfer. Any non-identity
@@ -827,7 +862,7 @@ def fetch_source(
                             spec, current_url=current_url,
                             last_safe_url=last_safe_url,
                             last_status=last_status,
-                            attempts=attempts, redirects=redirects,
+                            attempts=sent, redirects=redirects,
                             code="unexpected_encoding",
                         )
                     content_type = response.headers.get("content-type")
@@ -836,7 +871,7 @@ def fetch_source(
                             spec, current_url=current_url,
                             last_safe_url=last_safe_url,
                             last_status=last_status,
-                            attempts=attempts, redirects=redirects,
+                            attempts=sent, redirects=redirects,
                             code="header_too_large",
                         )
                     try:
@@ -850,7 +885,7 @@ def fetch_source(
                             spec, current_url=current_url,
                             last_safe_url=last_safe_url,
                             last_status=last_status,
-                            attempts=attempts, redirects=redirects, code=exc.code,
+                            attempts=sent, redirects=redirects, code=exc.code,
                         )
                     return RetrievalResult(
                         spec=spec,
@@ -864,14 +899,14 @@ def fetch_source(
                             content_type[:256] if content_type else None
                         ),
                         content=body,
-                        attempts=attempts,
+                        attempts=sent,
                         redirects=redirects,
                     )
                 return _failed(
                     spec, current_url=current_url,
                     last_safe_url=last_safe_url,
                     last_status=last_status,
-                    attempts=attempts, redirects=redirects,
+                    attempts=sent, redirects=redirects,
                     code=f"http_{response.status_code}",
                 )
         except SourceFetchError as exc:
@@ -879,26 +914,26 @@ def fetch_source(
             # from inside the transport binding.
             if _collection_level(exc):
                 raise
-            if attempts < MAX_ATTEMPTS:
+            if sent < MAX_ATTEMPTS:
                 continue
             return _failed(
                 spec, current_url=current_url,
                 last_safe_url=last_safe_url,
                 last_status=last_status,
-                attempts=attempts, redirects=redirects, code=exc.code,
+                attempts=sent, redirects=redirects, code=exc.code,
             )
         except (httpx.HTTPError, OSError) as exc:
             cause = _source_cause(exc)
             if cause is not None and _collection_level(cause):
                 raise cause
             code = cause.code if cause is not None else "transport_error"
-            if attempts < MAX_ATTEMPTS:
+            if sent < MAX_ATTEMPTS:
                 continue
             return _failed(
                 spec, current_url=current_url,
                 last_safe_url=last_safe_url,
                 last_status=last_status,
-                attempts=attempts, redirects=redirects, code=code,
+                attempts=sent, redirects=redirects, code=code,
             )
 
 
@@ -947,7 +982,6 @@ def fetch_sources(
 def new_client(
     *,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
-    acquisition: AcquisitionContext | None = None,
 ) -> httpx.Client:
     """Production client: vetted-connection transport, identity transfer,
     bounded timeouts, no implicit redirects, no environment proxies.
@@ -956,11 +990,11 @@ def new_client(
     global-unicast numeric destination (original hostname, SNI, and
     verified certificate policy intact) and disables environment
     proxies and other implicit network configuration
-    (``trust_env=False``). ``acquisition`` (the collection-owned
-    context, when known at construction time) is handed to the
-    transport backend so every real operation is deadline-bounded;
-    ``collect_bundle`` additionally binds the context to a caller-
-    supplied client through :func:`bind_acquisition_to_client`.
+    (``trust_env=False``). Timeouts are the ordinary httpx per-
+    operation values (connect/write/pool 10 s, read 30 s); the
+    whole-invocation cooperation (target checkpoints, operator
+    watchdog) lives in ``sources`` and the documented collect workflow
+    (181-h R1).
     """
     from slaif_gateway.services.catalog_refresh.source_transport import (
         VettedHTTPTransport,
@@ -982,32 +1016,9 @@ def new_client(
         trust_env=False,
         transport=VettedHTTPTransport(
             resolve=resolve,
-            deadline=acquisition,
             limits=httpx.Limits(
                 max_connections=MAX_CONCURRENCY,
                 max_keepalive_connections=MAX_CONCURRENCY,
             ),
         ),
     )
-
-
-def bind_acquisition_to_client(
-    client: httpx.Client, context: AcquisitionContext
-) -> None:
-    """Bind the collection-owned context to a client's vetted transport
-    backend (181-g G1, budget/client lifecycle).
-
-    The deadline must reach the ACTUAL backend/stream operations even
-    when the client was constructed before the context existed (the
-    CLI path constructs the client, then the collection creates the
-    context). Clients without a vetted backend (unit-test mock
-    transports) are left untouched: their injected resolvers are
-    documented test seams, and the deadline is still enforced around
-    every resolver call and at every decision point.
-    """
-    transport = getattr(client, "_transport", None)
-    pool = getattr(transport, "_pool", None)
-    backend = getattr(pool, "_network_backend", None)
-    bind = getattr(backend, "bind_deadline", None)
-    if callable(bind):
-        bind(context)

@@ -144,7 +144,15 @@ slaif-gateway catalog-refresh export-baseline --out /path/to/baseline.json --db-
 Collect exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED (a blocked
 run is always published, including semantically blocked collects, with the
 `live collection` stage wording), 65 data error where no blocked run is
-published (e.g. an unreadable or invalid `--baseline-file`), 2 usage error. Review exit codes: 0 READY, 10
+published (e.g. an unreadable or invalid `--baseline-file`), 2 usage error.
+Under the documented watchdog prefix a timed-out collect exits non-success
+(124 on the TERM timeout, 137 after the KILL grace for a TERM-ignoring
+process) and publishes no run: the collect writes nothing during the fetch
+phase, publication is one atomic rename at finalization only, so an
+interrupted run never reports a fresh READY and never overwrites an older
+review. Direct raw collect without the watchdog may exceed the 120-second
+cooperative collection target during blocked DNS or a continuous slow
+stream (documented limit; no hard total bound is claimed). Review exit codes: 0 READY, 10
 READY_WITH_WARNINGS, 20 BLOCKED, 65 data error, 2 usage error. Verify: 0 valid, 30 invalid (including a missing,
 non-directory, or symlinked run directory with an otherwise valid key),
 65 data error (missing or unsafe seal key; verify never creates keys).

@@ -2574,48 +2574,6 @@ def test_cli_collect_deadline_exhaustion_publishes_blocked_run(tmp_path, monkeyp
 # --- 181-g: G1-G6 regressions (strategic negative probes) -------------------
 
 
-def test_collect_bundle_binds_context_to_client_transport() -> None:
-    # G1: the collection-owned deadline context must reach the ACTUAL
-    # transport backend (connect/stream operations), including when the
-    # client was constructed before the context existed (the CLI path).
-    from slaif_gateway.services.catalog_refresh.source_transport import (
-        VettedHTTPTransport,
-        VettedNetworkBackend,
-    )
-
-    context = src.new_acquisition_context()
-    client = httpx.Client(transport=VettedHTTPTransport(resolve=_resolve_public))
-
-    class _BindingSentinel(Exception):
-        pass
-
-    def fetch_probe(specs, **kw):
-        raise _BindingSentinel()
-
-    try:
-        with pytest.raises(_BindingSentinel):
-            coll.collect_bundle(
-                providers=("openrouter",),
-                model_include=(),
-                baseline_mode="first_install",
-                baseline=None,
-                client=client,
-                resolve=_resolve_public,
-                fetch=fetch_probe,
-                acquisition=context,
-            )
-    finally:
-        client.close()
-    backend = client._transport._pool._network_backend
-    assert isinstance(backend, VettedNetworkBackend)
-    assert backend._deadline is context, "the context is bound to the actual backend"
-
-    # A mock-transport client has no vetted backend: the bind is a
-    # documented no-op, and the full collection still succeeds.
-    world = World()
-    _collect(world, providers=("openrouter",), acquisition=src.new_acquisition_context())
-
-
 def test_cli_collect_rejected_redirect_secrets_absent_from_sealed_output(
     tmp_path, monkeypatch
 ) -> None:

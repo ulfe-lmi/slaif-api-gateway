@@ -22,7 +22,6 @@ import hashlib
 import gzip
 import socket
 import ssl
-import subprocess
 import time
 
 import httpx
@@ -44,8 +43,9 @@ from slaif_gateway.services.catalog_refresh.sources import (
     plan_catalog_specs,
     validate_source_url,
 )
+from httpcore._backends.sync import SyncStream
+
 from slaif_gateway.services.catalog_refresh.source_transport import (
-    DeadlineStream,
     VettedNetworkBackend,
 )
 
@@ -773,16 +773,16 @@ def test_cache_identity_mismatch_fails_closed() -> None:
 
 
 def test_deadline_stops_slow_dns_before_later_network() -> None:
-    # Slow-DNS negative (181-g G1 seam level): each resolver call sleeps
-    # 0.35 s; the deadline is 0.6 s. Attempt 1 resolves at ~0.35 s and its
-    # single 503 HTTP request is charged; the 5xx retry's preflight
-    # resolves at ~0.70 s, AFTER the deadline - and NO second HTTP
-    # request starts after expiry (the deadline is re-checked between
-    # the resolver and the next action). Collection-level exhaustion
-    # propagates. (The injected in-process resolver cannot be cancelled
-    # MID-sleep - a documented test-seam limit; the real, interruptible
-    # default-resolver path is proven by
-    # test_real_blocking_dns_is_killed_and_reaped_at_the_deadline.)
+    # Slow-DNS negative (injected-seam level, 181-h R1): each resolver
+    # call sleeps 0.35 s; the collection target is 0.6 s. Attempt 1
+    # resolves at ~0.35 s and its single 503 HTTP request is charged;
+    # the 5xx retry's preflight resolves at ~0.70 s, AFTER the target -
+    # and NO second HTTP request starts after expiry (the cooperative
+    # checkpoint runs between the resolver and the next action).
+    # Collection-level exhaustion propagates. The in-process resolver is
+    # ordinary and cannot be cancelled MID-sleep (documented R1 limit);
+    # the elapsed-time cutoff for the operator workflow is the standard
+    # watchdog (H3).
     calls = {"dns": 0, "http": 0}
 
     def slow_public(host, port, proto=None):
@@ -808,9 +808,10 @@ def test_deadline_stops_slow_dns_before_later_network() -> None:
 
 
 def test_deadline_stops_slow_drip_mid_body() -> None:
-    # Slow-drip negative: 1 KiB chunks every 0.2 s, deadline 0.6 s. The
-    # read stops at the deadline (bounded wall time) and the consumed
-    # chunks are charged.
+    # Slow-drip negative: 1 KiB chunks every 0.2 s, collection target
+    # 0.6 s. The read stops at the target (bounded wall time) and every
+    # RETURNED chunk is charged, including the one that arrives after
+    # expiry (181-h R2).
     def drip():
         for _ in range(64):
             yield b"d" * 1024
@@ -829,8 +830,8 @@ def test_deadline_stops_slow_drip_mid_body() -> None:
     assert exc.value.code == "acquisition_deadline_exceeded"
     assert wall < 2.0, f"wall time unbounded: {wall}"
     charged = src.MAX_COLLECTION_BYTES - context.bytes_remaining
-    # only the 1 KiB raw reads actually delivered before expiry are
-    # charged (a few of them, never the whole drip)
+    # the delivered 1 KiB chunks are charged, including at most one
+    # late-returned chunk (a few of them, never the whole drip)
     assert 2 * 1024 <= charged <= 5 * 1024, f"charged={charged}"
 
 
@@ -947,7 +948,7 @@ def test_mixed_dns_answer_set_refused_before_any_connection() -> None:
         monkey.undo()
     assert result.ok is False
     assert result.failure_code == "destination_mixed_or_not_public"
-    assert result.attempts == 1, "preflight refusal: no retry loop, no connection"
+    assert result.attempts == 0, "preflight refusal: no request sent, no retry loop, no connection"
     assert calls == [], "the mixed answer set never reaches a connection"
 
 
@@ -1134,7 +1135,7 @@ def test_failed_retrieval_never_records_body_content() -> None:
 
 
 class _FakeSock:
-    """Minimal socket double for the stream/backend seam deadline tests."""
+    """Minimal socket double for the backend connect seam tests."""
 
     def __init__(self, recv_side=None, send_side=None):
         self.recv_calls: list[int] = []
@@ -1164,57 +1165,7 @@ class _FakeSock:
         return len(data)
 
 
-# --- G1: one enforceable deadline through the ACTUAL operations -------------
-
-
-def test_real_blocking_dns_is_killed_and_reaped_at_the_deadline(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # G1 (181-g, the required real-blocking DNS negative): the DEFAULT
-    # resolver path runs the genuinely blocking lookup in the owned
-    # child (the child really sleeps 0.12 s BEFORE getaddrinfo, so a
-    # pre-check-only fix cannot pass). A 0.02 s collection deadline must
-    # SIGKILL + REAP the child, raise the safe code, start NO HTTP
-    # request, and open NO TCP connection.
-    monkeypatch.setattr(st, "_RESOLVER_BLOCK_SECONDS", 0.12)
-    spawns: list[subprocess.Popen] = []
-    real_spawn = st._spawn_resolver
-
-    def spy_spawn(*args, **kwargs):
-        proc = real_spawn(*args, **kwargs)
-        spawns.append(proc)
-        return proc
-
-    monkeypatch.setattr(st, "_spawn_resolver", spy_spawn)
-    connects: list = []
-
-    def refusing(address, timeout=None, source_address=None, **kwargs):
-        connects.append(address)
-        raise AssertionError("no TCP connection may start after expired DNS")
-
-    monkeypatch.setattr(socket, "create_connection", refusing)
-    hits = {"http": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        hits["http"] += 1
-        return httpx.Response(200, content=b"[]")
-
-    ctx = _ctx(deadline_seconds=0.02)
-    started = time.monotonic()
-    with pytest.raises(SourceFetchError) as exc:
-        # NO resolve kwarg: the default resolver (production path).
-        fetch_source(_client(handler), _spec(), context=ctx)
-    wall = time.monotonic() - started
-    assert exc.value.code == "acquisition_deadline_exceeded"
-    assert len(spawns) == 1, "exactly one owned resolver child"
-    proc = spawns[0]
-    assert proc.poll() is not None, "the child must be REAPED (no zombie/detached lookup)"
-    assert proc.returncode == -9, "SIGKILL (uncatchable) on deadline expiry"
-    assert hits["http"] == 0, "no HTTP request starts after expired DNS"
-    assert connects == [], "no TCP connection after expired DNS"
-    assert wall < 0.02 + 0.25, (
-        f"wall time not bounded by deadline + stated cleanup tolerance: {wall}"
-    )
+# --- 181-h R1: cooperative target at application checkpoints ----------------
 
 
 def test_expired_dns_preflight_stops_before_http() -> None:
@@ -1240,133 +1191,6 @@ def test_expired_dns_preflight_stops_before_http() -> None:
     assert exc.value.code == "acquisition_deadline_exceeded"
     assert calls["http"] == 0, "no HTTP request starts after expired DNS"
     assert wall < 0.05 + 0.25, f"wall time unbounded: {wall}"
-
-
-def test_expired_connect_closes_socket_and_stops_before_next_candidate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # G1: the first candidate's connect consumes the whole deadline. The
-    # expired socket is CLOSED (no resource leak) and the failure raises
-    # BEFORE the second candidate IP is ever connected.
-    ctx = _ctx(deadline_seconds=0.005)
-    backend = VettedNetworkBackend(
-        resolve=_resolve(PUBLIC, "93.184.216.35"), deadline=ctx
-    )
-    calls: list = []
-    sock = _FakeSock()
-
-    def fake_connect(address, timeout=None, source_address=None, **kwargs):
-        calls.append(address)
-        time.sleep(0.006)
-        if address[0] == PUBLIC:
-            return sock
-        raise AssertionError("second candidate must never be connected after expiry")
-
-    monkeypatch.setattr(socket, "create_connection", fake_connect)
-    with pytest.raises(SourceFetchError) as exc:
-        backend.connect_tcp("openrouter.ai", 443)
-    assert exc.value.code == "acquisition_deadline_exceeded"
-    assert [c[0] for c in calls] == [PUBLIC]
-    assert sock.closed, "the expired connect's socket is closed, not leaked"
-
-
-def test_failed_connect_retry_stops_before_next_candidate_when_expired(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # G1: an expired FIRST attempt that also fails (OSError) must stop
-    # the candidate loop BEFORE the next IP is touched.
-    ctx = _ctx(deadline_seconds=0.005)
-    backend = VettedNetworkBackend(
-        resolve=_resolve(PUBLIC, "93.184.216.35"), deadline=ctx
-    )
-    calls: list = []
-
-    def fake_connect(address, timeout=None, source_address=None, **kwargs):
-        calls.append(address)
-        time.sleep(0.006)
-        if address[0] == PUBLIC:
-            raise ConnectionRefusedError("test boundary")
-        raise AssertionError("second candidate must never be connected after expiry")
-
-    monkeypatch.setattr(socket, "create_connection", fake_connect)
-    with pytest.raises(SourceFetchError) as exc:
-        backend.connect_tcp("openrouter.ai", 443)
-    assert exc.value.code == "acquisition_deadline_exceeded"
-    assert [c[0] for c in calls] == [PUBLIC]
-
-
-def test_partial_send_loop_enforces_deadline_inside_the_loop() -> None:
-    # G1 (seam): httpcore's own write loop resets the same timeout on
-    # every partial send; the wrapper must re-check the deadline and
-    # re-clamp the timeout INSIDE the partial-send loop, so repeated
-    # partial sends cannot overrun the total deadline.
-    ctx = _ctx(deadline_seconds=0.002)
-    backend = VettedNetworkBackend(deadline=ctx)
-
-    def slow_send(data: bytes) -> int:
-        time.sleep(0.003)
-        return 1
-
-    sock = _FakeSock(send_side=slow_send)
-    stream = DeadlineStream(backend, sock)
-    with pytest.raises(SourceFetchError) as exc:
-        stream.write(b"abcd", timeout=1.0)
-    assert exc.value.code == "acquisition_deadline_exceeded"
-    assert sock.send_calls == 1, "no second send starts after expiry"
-
-
-def test_start_tls_refused_when_expired() -> None:
-    # G1: no TLS handshake may START on an expired deadline.
-    ctx = _ctx(deadline_seconds=0)
-    backend = VettedNetworkBackend(deadline=ctx)
-    stream = DeadlineStream(backend, _FakeSock())
-    wrapped: list = []
-
-    class SpyCtx:
-        def wrap_socket(self, sock, server_hostname=None):
-            wrapped.append(server_hostname)
-            raise AssertionError("handshake must not start on an expired deadline")
-
-    with pytest.raises(SourceFetchError) as exc:
-        stream.start_tls(SpyCtx(), server_hostname="openrouter.ai", timeout=1.0)
-    assert exc.value.code == "acquisition_deadline_exceeded"
-    assert wrapped == [], "wrap_socket never called"
-
-
-def test_start_tls_handshake_consuming_deadline_closes_upgraded_socket() -> None:
-    # G1: the handshake itself may consume the remaining time; the
-    # upgraded socket must be closed before the failure propagates (no
-    # detached resource), and no later operation may use it.
-    ctx = _ctx(deadline_seconds=0.005)
-    backend = VettedNetworkBackend(deadline=ctx)
-    upgraded = _FakeSock()
-
-    class SpyCtx:
-        def wrap_socket(self, sock, server_hostname=None):
-            time.sleep(0.006)
-            return upgraded
-
-    stream = DeadlineStream(backend, _FakeSock())
-    with pytest.raises(SourceFetchError) as exc:
-        stream.start_tls(SpyCtx(), server_hostname="openrouter.ai", timeout=1.0)
-    assert exc.value.code == "acquisition_deadline_exceeded"
-    assert upgraded.closed, "the upgraded socket is closed, not leaked"
-
-
-def test_stream_read_clamped_to_remaining_budget_and_refused_when_exhausted() -> None:
-    # G1/G2: the requested read size is clamped to the remaining body
-    # budget where practical, and an exhausted context refuses further
-    # reads at the stream seam.
-    ctx = _ctx(max_bytes=10)
-    backend = VettedNetworkBackend(deadline=ctx)
-    sock = _FakeSock()
-    stream = DeadlineStream(backend, sock)
-    stream.read(100, timeout=1.0)
-    assert sock.recv_calls == [10], "requested read size clamped to remaining budget"
-    ctx.exhausted = True
-    with pytest.raises(SourceFetchError) as exc:
-        stream.read(100, timeout=1.0)
-    assert exc.value.code == "collection_budget_exhausted"
 
 
 # --- G2: overflow debited in full, exhaustion terminal ----------------------
@@ -1465,9 +1289,10 @@ def test_charge_and_reserve_refuse_after_terminal_exhaustion() -> None:
 
 
 def test_deadline_failure_does_not_hide_consumed_bytes() -> None:
-    # G2: 200 bytes are consumed, then the stream stalls past the 0.1 s
-    # deadline. The deadline failure aborts the run, but the consumed
-    # bytes remain charged (56 of 256 remain, not 256).
+    # G2/R2: 200 bytes are returned, then the stream stalls past the
+    # 0.1 s target and 10 MORE bytes are returned after expiry. The
+    # deadline failure aborts the run, but the LATE-RETURNED bytes are
+    # debited first (210 of 256 charged, 46 remain - not the old 56).
     ctx = _ctx(max_bytes=256, deadline_seconds=0.1)
 
     def stalling(request: httpx.Request) -> httpx.Response:
@@ -1482,7 +1307,110 @@ def test_deadline_failure_does_not_hide_consumed_bytes() -> None:
     with pytest.raises(SourceFetchError) as exc:
         fetch_sources((spec_a,), client=_client(stalling), context=ctx, resolve=_ok())
     assert exc.value.code == "acquisition_deadline_exceeded"
-    assert ctx.bytes_remaining == 56, "consumed bytes are not hidden by the deadline failure"
+    assert ctx.bytes_remaining == 46, "the late-returned 10 bytes are debited before the deadline failure (210 charged)"
+
+
+# --- 181-h R2: returned chunks debited BEFORE deadline/overflow failure ------
+
+
+def test_late_returned_chunk_after_expiry_is_debited_not_omitted() -> None:
+    # 181-h R2 (exact G negative): 256 budget; 200 bytes are returned,
+    # the context expires, then 100 MORE bytes are returned. The actual
+    # 300 processed bytes are ALL charged (remaining -44, terminally
+    # exhausted); the safe code may be deadline or budget, but the late
+    # 100 bytes must not be omitted (the old 56-credit retention is
+    # gone).
+    ctx = _ctx(max_bytes=256)
+
+    def late(request: httpx.Request) -> httpx.Response:
+        def gen():
+            yield b"x" * 200
+            ctx.deadline = time.monotonic() - 1.0
+            yield b"y" * 100
+
+        return httpx.Response(200, content=IteratorByteStream(gen()))
+
+    spec_a = _spec(max_bytes=256)
+    with pytest.raises(SourceFetchError) as exc:
+        fetch_sources((spec_a,), client=_client(late), context=ctx, resolve=_ok())
+    assert exc.value.code in (
+        "acquisition_deadline_exceeded",
+        "collection_budget_exhausted",
+    )
+    assert ctx.bytes_remaining == -44, "all 300 returned bytes debited (256-300)"
+    assert ctx.exhausted is True, "the crossing debit is terminal"
+
+
+def test_expired_context_charges_returned_bytes_before_deadline_failure() -> None:
+    # 181-h R2 (charge seam): already-consumed bytes passed to the
+    # charge layer CANNOT vanish just because the collection target has
+    # passed: the debit happens first, then the deadline failure.
+    ctx = _ctx(max_bytes=256, deadline_seconds=0)
+    with pytest.raises(SourceFetchError) as exc:
+        ctx.charge_body_bytes(100)
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert ctx.bytes_remaining == 156, "the returned 100 bytes are debited, not hidden"
+
+
+def test_cross_phase_exhaustion_blocks_later_request_before_it_starts() -> None:
+    # 181-h R2 (cross-phase reuse): terminal exhaustion from a failed
+    # crossing read blocks the LATER spec before any new request is
+    # sent (no post-exhaustion request, no leftover credit).
+    ctx = _ctx(max_bytes=256)
+    hits = {"n": 0}
+
+    def failing(request: httpx.Request) -> httpx.Response:
+        hits["n"] += 1
+
+        def gen():
+            yield b"x" * 200
+            yield b"y" * 100  # crosses 256: debited in full, terminal
+
+        return httpx.Response(200, content=IteratorByteStream(gen()))
+
+    with pytest.raises(SourceFetchError) as exc:
+        fetch_sources((_spec(max_bytes=256),), client=_client(failing), context=ctx, resolve=_ok())
+    assert exc.value.code == "collection_budget_exhausted"
+    assert ctx.exhausted is True
+
+    def later(request: httpx.Request) -> httpx.Response:
+        hits["n"] += 1
+        return httpx.Response(200, content=b"z" * 10)
+
+    with pytest.raises(SourceFetchError) as exc2:
+        fetch_sources((_page_spec("gpt-5.2"),), client=_client(later), context=ctx, resolve=_ok())
+    assert exc2.value.code == "collection_budget_exhausted"
+    assert hits["n"] == 1, "no post-exhaustion request reaches the handler"
+
+
+# --- 181-h H1: custom DNS worker / deadline-stream machinery absent ----------
+
+
+def test_custom_dns_worker_and_deadline_stream_machinery_is_absent() -> None:
+    # 181-h AP-H1: the removed 181-g machinery (custom DNS child process,
+    # kill/reap lifecycle, deadline-wrapped stream, context binding) must
+    # be ABSENT, while the small numeric connect-time vetting adapter and
+    # the standard transport surface remain.
+    import inspect
+
+    for name in (
+        "_spawn_resolver",
+        "_resolve_default_bounded",
+        "_RESOLVER_SCRIPT",
+        "DeadlineStream",
+        "DNS_REAP_TIMEOUT_SECONDS",
+        "ACQUISITION_DNS_CAP_SECONDS",
+        "resolve_vetted_public_destination",
+    ):
+        assert not hasattr(st, name), f"removed machinery still present: {name}"
+    for cls in (st.VettedHTTPTransport, st.VettedNetworkBackend):
+        params = inspect.signature(cls.__init__).parameters
+        assert "deadline" not in params, f"{cls.__name__} still takes a deadline binding"
+    assert not hasattr(src, "bind_acquisition_to_client"), "binding seam must be absent"
+    # the retained, standard surface
+    assert hasattr(st, "vet_public_destination")
+    assert hasattr(st, "VettedNetworkBackend")
+    assert hasattr(st, "VettedHTTPTransport")
 
 
 # --- G3: global-unicast classification at the actual socket decision -------
@@ -1566,7 +1494,7 @@ def test_global_unicast_destination_connects_numerically(
     stream = backend.connect_tcp("openrouter.ai", 443, timeout=1.0)
     try:
         assert calls == [(ip, 443)], "connects only to the vetted numeric destination"
-        assert isinstance(stream, DeadlineStream)
+        assert isinstance(stream, SyncStream)
     finally:
         stream.close()
     assert sock.closed

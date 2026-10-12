@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
+import time
+from hashlib import sha256
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 import test_catalog_refresh_source_evidence as _evidence_tests
@@ -523,3 +529,185 @@ def test_db_snapshot_outage_publishes_minimal_blocked_run(tmp_path: Path) -> Non
     assert "first_install" not in json.dumps(validation)
     assert "receipt.json" not in (tmp_path / "runs" / run_dirs[0]).joinpath("nope").name
     assert not (tmp_path / "runs" / run_dirs[0] / "receipt.json").exists()
+
+# --- 181-h H3: standard operator watchdog over the read-only collect --------
+
+TESTS_UNIT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+_WATCHDOG_DRIVER_TEMPLATE = """
+import signal
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, {app_root!r})
+sys.path.insert(0, {tests_unit!r})
+
+import pytest
+
+import test_catalog_refresh_collection as tc
+
+if {ignore_term!r}:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+world = tc.World()
+original = world.handler
+
+
+def stalled(request):
+    # Owned marker: proves the REAL collect reached the intended
+    # acquisition stall (not a timeout during startup).
+    Path(sys.argv[3]).write_text("stall reached", encoding="utf-8")
+    time.sleep(300.0)
+    return original(request)
+
+
+world.handler = stalled
+
+monkey = pytest.MonkeyPatch()
+tc._cli_collect(
+    monkey,
+    world,
+    "catalog-refresh",
+    "collect",
+    "--bootstrap",
+    "--providers",
+    "openrouter",
+    "--run-root",
+    sys.argv[1],
+    "--seal-key",
+    sys.argv[2],
+)
+"""
+
+
+def _run_watchdog_case(tmp_path: Path, *, ignore_term: bool) -> tuple[int, float]:
+    """Drive the REAL collect (mocked HTTP/DNS, stalled first request)
+    under the standard OS watchdog with short injected test durations."""
+    timeout_bin = shutil.which("timeout")
+    assert timeout_bin is not None, "the standard OS timeout utility is required"
+    driver = tmp_path / "watchdog_driver.py"
+    driver.write_text(
+        _WATCHDOG_DRIVER_TEMPLATE.format(
+            app_root=str(REPO_ROOT / "app"),
+            tests_unit=str(TESTS_UNIT_DIR),
+            ignore_term=ignore_term,
+        ),
+        encoding="utf-8",
+    )
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    marker = tmp_path / "stall-reached"
+    started = time.monotonic()
+    proc = subprocess.run(
+        [
+            timeout_bin,
+            "--kill-after=1",
+            "2",
+            sys.executable,
+            str(driver),
+            str(run_root),
+            str(key),
+            str(marker),
+        ],
+        capture_output=True,
+        timeout=30,
+    )
+    wall = time.monotonic() - started
+    return proc.returncode, wall, marker
+
+
+def test_watchdog_terminates_stalled_collect_before_any_publication(
+    tmp_path: Path,
+) -> None:
+    # 181-h H3 (watchdog proof): the documented watchdog prefix (standard
+    # OS ``timeout --kill-after=1 2``) around the REAL collect command -
+    # mocked HTTP/DNS through the existing World fixture, first request
+    # stalled - returns bounded and NON-SUCCESS (124/137), publishes NO
+    # new run (the collect writes nothing during the fetch phase;
+    # publication is one atomic rename at finalization only), and leaves
+    # an EARLIER published run in the same run root byte-identical.
+    # No private service, short injected duration only.
+    import test_catalog_refresh_collection as tc
+
+    world = tc.World()
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+
+    # Pre-publish a normal READY run in the SAME run root (in-process).
+    mp = pytest.MonkeyPatch()
+    try:
+        base = tc._cli_collect(
+            mp,
+            world,
+            "catalog-refresh",
+            "collect",
+            "--bootstrap",
+            "--providers",
+            "openrouter",
+            "--run-root",
+            str(run_root),
+            "--seal-key",
+            str(key),
+            "--json",
+        )
+    finally:
+        mp.undo()
+    assert base.exit_code == 0, base.output
+    before_dirs = sorted(p.name for p in run_root.iterdir())
+    assert len(before_dirs) == 1
+    before_bytes = {
+        p.relative_to(run_root).as_posix(): sha256(p.read_bytes()).hexdigest()
+        for p in sorted(run_root.rglob("*"))
+        if p.is_file()
+    }
+
+    rc, wall, marker = _run_watchdog_case(tmp_path, ignore_term=False)
+    assert rc in (124, 137), (
+        f"watchdog status must be non-success 124/137, got {rc}"
+    )
+    assert wall < 10.0, f"watchdog return unbounded: {wall}"
+    assert marker.is_file(), (
+        "the collect must have reached the intended acquisition stall "
+        "(owned marker written by the mocked stalled handler)"
+    )
+
+    after_dirs = sorted(p.name for p in run_root.iterdir())
+    assert after_dirs == before_dirs, (
+        "interrupted collect must not publish a new run"
+    )
+    after_bytes = {
+        p.relative_to(run_root).as_posix(): sha256(p.read_bytes()).hexdigest()
+        for p in sorted(run_root.rglob("*"))
+        if p.is_file()
+    }
+    assert after_bytes == before_bytes, (
+        "the earlier published run must be byte-identical"
+    )
+
+
+def test_watchdog_kill_after_terminates_term_ignoring_collect(
+    tmp_path: Path,
+) -> None:
+    # 181-h H3 (TERM-ignoring owned negative): a collect that ignores
+    # SIGTERM must be KILLed after the 1-second KILL grace and still
+    # exit non-success (137), publishing nothing: no fresh READY, no
+    # staged or partial artifact, no overwrite of an older review.
+    rc, wall, marker = _run_watchdog_case(tmp_path, ignore_term=True)
+    assert rc == 137, (
+        f"TERM-ignoring collect must be KILLed after the grace: {rc}"
+    )
+    assert wall < 10.0, f"watchdog return unbounded: {wall}"
+    assert marker.is_file(), (
+        "the collect must have reached the intended acquisition stall "
+        "(owned marker written by the mocked stalled handler)"
+    )
+    run_root = tmp_path / "runs"
+    leftovers = (
+        sorted(p.name for p in run_root.iterdir()) if run_root.exists() else []
+    )
+    assert leftovers == [], (
+        "an interrupted collect publishes nothing: "
+        f"leftovers={leftovers}"
+    )
