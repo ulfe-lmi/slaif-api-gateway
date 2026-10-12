@@ -75,6 +75,8 @@ from slaif_gateway.services.catalog_refresh.sealing import (
     verify_run,
 )
 from slaif_gateway.services.catalog_refresh.validation import (
+    ACQUISITION_LIVE,
+    ACQUISITION_OFFLINE,
     SQL_CAPTURE_DOCUMENT,
     SQL_CAPTURE_FIRST_INSTALL,
     SQL_CAPTURE_LIVE_EXPORT,
@@ -82,7 +84,7 @@ from slaif_gateway.services.catalog_refresh.validation import (
     validation_json_bytes,
 )
 
-app = typer.Typer(help="Bounded catalog refresh: collect, review, verify, export-baseline (no refresh or apply command exists in this version)")
+app = typer.Typer(help="Bounded catalog refresh: collect, review, verify, export-baseline (apply and the Codex researcher are not implemented in this version)")
 
 EXIT_READY = 0
 EXIT_READY_WITH_WARNINGS = 10
@@ -91,13 +93,27 @@ EXIT_VERIFY_INVALID = 30
 EXIT_DATA_ERROR = 65
 
 STAGE_LINE = (
-    "offline review: review/export/verify only; no refresh or apply command exists "
-    "in this version"
+    "offline review: this invocation reviewed supplied bytes and performed no "
+    "live retrieval; export/verify available; apply and the Codex researcher are "
+    "not implemented in this version"
 )
 STAGE_LINE_COLLECT = (
     "live collection: bounded official-source retrieval performed by this command, "
-    "then review of the collected bundle; no refresh or apply command exists in this "
-    "version"
+    "then review of the collected bundle; apply and the Codex researcher are not "
+    "implemented in this version"
+)
+# 181-i (I1): failed collects must be labeled by the path actually REACHED.
+# A label can never claim a retrieval that was not performed.
+STAGE_LINE_COLLECT_NOT_STARTED = (
+    "collection not started: baseline resolution failed before any retrieval; "
+    "no live collection was performed by this command; apply and the Codex "
+    "researcher are not implemented in this version"
+)
+STAGE_LINE_COLLECT_INCOMPLETE = (
+    "collection attempted and failed before completion: bounded official-source "
+    "retrieval was attempted, but no complete collection was produced and no "
+    "sealed collected review exists; apply and the Codex researcher are not "
+    "implemented in this version"
 )
 
 DEFAULT_SEAL_KEY = Path("~/.local/state/slaif/catalog-refresh/seal.key")
@@ -137,7 +153,7 @@ def _read_existing_seal_key(path: Path) -> bytes:
         raise CliError(str(exc)) from exc
 
 
-def _minimal_blocked_html(*, run_id: str, code: str, detail: str, generated_at: str) -> bytes:
+def _minimal_blocked_html(*, run_id: str, code: str, detail: str, generated_at: str, stage: str = STAGE_LINE) -> bytes:
     css = (
         "body{font-family:system-ui,-apple-system,sans-serif;margin:24px;color:#1a202c;"
         "line-height:1.45}.state{font-weight:600;padding:10px 14px;border:1px solid #c53030;"
@@ -169,7 +185,7 @@ def _minimal_blocked_html(*, run_id: str, code: str, detail: str, generated_at: 
         f"<dt>Generated at</dt><dd>{esc(generated_at)}</dd>",
         "</dl>",
         "<p class='muted'>This minimal blocked run is not sealed: sealing requires the complete canonical input set, which was unavailable for this run.</p>",
-        "<footer>Offline scope: review/export/verify only — live source retrieval is unavailable in this version and no refresh or apply command exists in this version.</footer>",
+        f"<footer>Scope: {esc(stage)}.</footer>",
         "</main>",
         "</body>",
         "</html>",
@@ -198,6 +214,7 @@ def _publish_blocked_run(
     run_name: str,
     code: str,
     detail: str,
+    stage: str = STAGE_LINE,
     generated_at: str,
     bundle_canonical: bytes | None,
 ) -> Path:
@@ -210,7 +227,7 @@ def _publish_blocked_run(
     still hold or the publication is refused.
     """
     files: dict[str, bytes] = {
-        "REVIEW.html": _minimal_blocked_html(run_id=run_name, code=code, detail=detail, generated_at=generated_at),
+        "REVIEW.html": _minimal_blocked_html(run_id=run_name, code=code, detail=detail, generated_at=generated_at, stage=stage),
         "validation.json": _minimal_blocked_validation_json(run_id=run_name, code=code, detail=detail, generated_at=generated_at),
     }
     if bundle_canonical is not None:
@@ -583,6 +600,7 @@ def _finalize_review_pipeline(
     run_root_handle: AnchoredDir | None,
     key_handle: AnchoredDir | None,
     stage: str = STAGE_LINE,
+    acquisition: str = ACQUISITION_OFFLINE,
 ) -> int:
     """Shared tail of review and collect.
 
@@ -639,10 +657,18 @@ def _finalize_review_pipeline(
                 stage=stage,
             )
 
-    # 2) Deterministic recomputation.
+    # 2) Deterministic recomputation. 181-i (I1): the acquisition scope is
+    # the RUNNER-SELECTED path of THIS invocation (review = offline;
+    # collect = live), never inferred from the bundle's collection field.
     policy = policy_from_document(bundle.policy)
     try:
-        report, artifacts = validate_against_baseline_document(bundle, baseline_doc, policy, sql_capture=sql_capture)
+        report, artifacts = validate_against_baseline_document(
+            bundle,
+            baseline_doc,
+            policy,
+            sql_capture=sql_capture,
+            acquisition=acquisition,
+        )
     except CatalogRefreshBlockedError as exc:
         _blocked_identity(
             run_root=run_root,
@@ -924,6 +950,7 @@ def _collect_impl(
                     run_name=f"blocked-{exc.code}-{digest}",
                     code=exc.code,
                     detail=exc.detail,
+                    stage=STAGE_LINE_COLLECT_NOT_STARTED,
                     generated_at=datetime.now(UTC).isoformat(),
                     bundle_canonical=None,
                 )
@@ -937,7 +964,7 @@ def _collect_impl(
                     warnings=0,
                     blockers=1,
                     json_output=json_output,
-                    stage=STAGE_LINE_COLLECT,
+                    stage=STAGE_LINE_COLLECT_NOT_STARTED,
                 )
                 return EXIT_BLOCKED
             sql_capture = SQL_CAPTURE_LIVE_EXPORT
@@ -968,6 +995,7 @@ def _collect_impl(
                 run_name=f"blocked-{code}-{digest}",
                 code=code,
                 detail=detail,
+                stage=STAGE_LINE_COLLECT_INCOMPLETE,
                 generated_at=now.isoformat(),
                 bundle_canonical=None,
             )
@@ -981,7 +1009,7 @@ def _collect_impl(
                 warnings=0,
                 blockers=1,
                 json_output=json_output,
-                stage=STAGE_LINE_COLLECT,
+                stage=STAGE_LINE_COLLECT_INCOMPLETE,
             )
             # 181-b (B4): the run was published as state BLOCKED; a
             # semantically blocked collect exits 20 (65 is reserved for
@@ -1002,6 +1030,9 @@ def _collect_impl(
             run_root_handle=run_root_handle,
             key_handle=key_handle,
             stage=STAGE_LINE_COLLECT,
+            # 181-i (I1): only the collect path selects the acquired (live)
+            # context — this invocation executed the collection path.
+            acquisition=ACQUISITION_LIVE,
         )
     finally:
         if run_root_handle is not None:
@@ -1031,6 +1062,7 @@ def _blocked_identity(
         run_name=f"blocked-{code}-{hashlib.sha256(canonical).hexdigest()[:16]}",
         code=code,
         detail=detail,
+        stage=stage,
         generated_at=bundle.generated_at.isoformat(),
         bundle_canonical=canonical,
     )
@@ -1069,6 +1101,12 @@ def verify_run_command(
 ) -> None:
     """Verify a sealed run directory against the runner-owned key.
 
+    181-i (I2): after authenticating the run, the original RUNNER-SELECTED
+    execution context bound in the authenticated validation.json is
+    replayed (never re-measured); the original generator identity and the
+    current verifier's measured identity are reported separately. Sealed
+    runs predating the execution-context contract are refused explicitly.
+
     Exit codes: 0 valid, 30 invalid, 65 data error.
     """
     try:
@@ -1082,7 +1120,9 @@ def verify_run_command(
         raise typer.Exit(EXIT_DATA_ERROR) from exc
 
     if json_output:
-        emit_json({"valid": result.valid, "state": result.state, "checks": result.checks, "run_dir": str(Path(run_dir).expanduser())})
+        payload = result.to_dict()
+        payload["run_dir"] = str(Path(run_dir).expanduser())
+        emit_json(payload)
         raise typer.Exit(EXIT_VERIFY_INVALID if not result.valid else 0)
     typer.echo(f"run_dir: {Path(run_dir).expanduser()}")
     typer.echo(f"valid: {'yes' if result.valid else 'no'}")
@@ -1090,6 +1130,16 @@ def verify_run_command(
         typer.echo(f"state: {result.state}")
     for name, value in sorted(result.checks.items()):
         typer.echo(f"{name}: {value}")
+    if result.original_generator is not None:
+        typer.echo(
+            f"original generator: tool {result.original_generator['tool']} · code_revision "
+            f"{result.original_generator['code_revision']} (authenticated in the sealed validation.json)"
+        )
+    if result.current_generator is not None:
+        typer.echo(
+            f"current generator: tool {result.current_generator['tool']} · code_revision "
+            f"{result.current_generator['code_revision']} (measured at verification time)"
+        )
     raise typer.Exit(EXIT_VERIFY_INVALID if not result.valid else 0)
 
 

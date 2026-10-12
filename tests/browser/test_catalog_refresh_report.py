@@ -77,6 +77,8 @@ from slaif_gateway.services.catalog_refresh.rendering import (  # noqa: E402
     render_report,
 )
 from slaif_gateway.services.catalog_refresh.validation import (  # noqa: E402
+    ACQUISITION_LIVE,
+    ACQUISITION_OFFLINE,
     OVERALL_BLOCKED,
     OVERALL_READY,
     OVERALL_READY_WITH_WARNINGS,
@@ -172,82 +174,50 @@ def _ready_case() -> tuple[object, dict]:
     return bundle, report
 
 
-def _collection_case() -> tuple[object, dict]:
-    """A 181 live-collected bundle (same refresh as the ready case plus a
-    recorded collection identity whose ok retrieval records match the
-    sources' URLs and digests): exercises the live-collection scope line,
-    the scope-card Collection row, and the #collection-details section."""
-    from datetime import UTC, datetime
+def _collection_bundle() -> object:
+    """The ACTUAL mocked-collect output (real collector identity with
+    measured code revision, real retrieval records, and inventory) —
+    181-i browser coverage uses the genuine collect pipeline, not
+    hand-built collection metadata. The scope is a RUNNER-SELECTED
+    context of the reviewing invocation, never a property of these
+    bytes."""
+    import test_catalog_refresh_collection as _collect_tests
 
-    payload = json.loads((FIXTURES / "bundle-refresh-ready.json").read_text())
-    payload["run_id"] = "browser-collection-001"
-    payload["selection"]["model_include"] = ["synthetic/stable-v1"]
-    payload["models"] = [m for m in payload["models"] if m["model"] == "synthetic/stable-v1"]
-    payload["routes"] = [r for r in payload["routes"] if r["requested_model"] == "synthetic/stable-v1"]
-    payload["pricing"] = [p for p in payload["pricing"] if p["model"] == "synthetic/stable-v1"]
-    payload["sources"] = [
-        s for s in payload["sources"]
-        if s["model"] == "synthetic/stable-v1" or s["provider"] == "ecb"
-    ]
-    by_url: dict[str, dict] = {}
-    for source in payload["sources"]:
-        by_url.setdefault(source["url"], source)
-    or_source = by_url["https://openrouter.ai/api/v1/models"]
-    ecb_source = by_url[
-        "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/eurofxref-graph-usd.en.html"
-    ]
-    started = datetime(2026, 9, 21, 11, 59, 0, tzinfo=UTC)
-    finished = datetime(2026, 9, 21, 12, 0, 30, tzinfo=UTC)
-    payload["collection"] = {
-        "tool": "slaif-gateway/0.1.0",
-        "code_revision": "slaif-api-gateway==0.1.0",
-        "profile": "standard-v1",
-        "providers": ["openrouter"],
-        "model_include": ["synthetic/stable-v1"],
-        "started_at": started.isoformat(),
-        "finished_at": finished.isoformat(),
-        "retrievals": [
-            {
-                "requested_url": or_source["url"],
-                "final_url": None,
-                "retrieved_at": started.isoformat(),
-                "outcome": "ok",
-                "status": 200,
-                "failure_code": None,
-                "content_type": "application/json",
-                "content_bytes": 1024,
-                "content_sha256": or_source["content_sha256"],
-                "attempts": 1,
-                "redirects": 0,
-                "published_at": None,
-            },
-            {
-                "requested_url": ecb_source["url"],
-                "final_url": None,
-                "retrieved_at": started.isoformat(),
-                "outcome": "ok",
-                "status": 200,
-                "failure_code": None,
-                "content_type": "text/html",
-                "content_bytes": 512,
-                "content_sha256": ecb_source["content_sha256"],
-                "attempts": 1,
-                "redirects": 0,
-                "published_at": None,
-            },
-        ],
-        "inventory": [],
-        "deduplicated_fetches": False,
-    }
-    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    return _collect_tests._collect(_collect_tests.World(), providers=("openai", "openrouter"))
+
+
+def _collection_case() -> tuple[object, dict]:
+    """The intact collected bundle reviewed under the RUNNER-SELECTED
+    LIVE context (the collect invocation itself): live_collection scope,
+    the scope-card Collection row, and the #collection-details section."""
+    bundle = _collection_bundle()
     report, _ = validate_bundle(
         bundle,
-        _unit_baseline(),
+        None,
         policy_from_document(bundle.policy),
         sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+        acquisition=ACQUISITION_LIVE,
     )
     assert report.state == OVERALL_READY, report.state_reason
     assert report.to_dict()["source_evidence"]["scope"] == "live_collection"
+    return bundle, report
+
+
+def _supplied_collection_case() -> tuple[object, dict]:
+    """The SAME intact bundle reviewed under the runner-selected OFFLINE
+    context (a supplied review): supplied_collection scope — the recorded
+    collection identity is historical provenance, preserved and labeled,
+    and this invocation performed no live retrieval (181-i I1)."""
+    bundle = _collection_bundle()
+    report, _ = validate_bundle(
+        bundle,
+        None,
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+        acquisition=ACQUISITION_OFFLINE,
+    )
+    assert report.state == OVERALL_READY, report.state_reason
+    assert report.to_dict()["source_evidence"]["scope"] == "supplied_collection"
     return bundle, report
 
 
@@ -647,6 +617,7 @@ def case_html(tmp_path_factory) -> dict[str, Path]:
     for case, builder in (
         ("ready", _ready_case),
         ("collection", _collection_case),
+        ("supplied-collection", _supplied_collection_case),
         ("warnings", _warnings_case),
         ("large-unchanged", _large_unchanged_case),
         ("two-provider", _two_provider_case),
@@ -679,6 +650,16 @@ CASE_EXPECTATIONS = {
             "NOT_RUN",
         ),
     },
+    "supplied-collection": {
+        "has_sources": True,
+        "pdf": False,
+        "visible": (
+            "Collection details",
+            "historical provenance",
+            "supplied-collection scope",
+            "reviewed offline",
+        ),
+    },
     "warnings": {"has_sources": True, "pdf": False, "visible": ()},
     "large-unchanged": {"has_sources": True, "pdf": False, "visible": ()},
     "two-provider": {"has_sources": True, "pdf": False, "visible": ()},
@@ -698,6 +679,7 @@ def test_browser_layout_all_cases(playwright, case_html) -> None:
         "first-install",
         "ready",
         "collection",
+        "supplied-collection",
         "warnings",
         "blocked",
         "large-unchanged",

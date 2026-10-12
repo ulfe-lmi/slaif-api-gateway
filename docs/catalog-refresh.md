@@ -95,11 +95,14 @@ Exactly one of `--bootstrap` / `--refresh` is required; `--refresh` requires
 `standard-v1` (the only profile in this version), `--providers` is a
 non-empty subset of `openai,openrouter`, and `--models` is an optional
 explicit selection (a single model is a valid selection). Exit codes:
-0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED — including semantically
-blocked collect runs, which always publish a blocked run with the
-`live collection` stage wording — 65 data error (input problems where no
-blocked run is published, e.g. an unreadable or invalid `--baseline-file`),
-2 usage error.
+0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED — a blocked collect run is
+always published, labeled by the path actually reached (`collection not
+started` before any retrieval, `collection attempted and failed before
+completion` for a failed retrieval attempt, the `live collection` wording
+only after a completed collection; see [Stage wording and execution
+identity](#stage-wording-and-execution-identity)) — 65 data error (input
+problems where no blocked run is published, e.g. an unreadable or invalid
+`--baseline-file`), 2 usage error.
 
 ### The bounded official source registry
 
@@ -352,11 +355,79 @@ A bundle that carries a collection identity is **re-verified, not trusted**:
   upstream is never replaced by proposed route names, and no parallel
   upstream-named route bypasses it.
 
-The report scope states which one it is: `live_collection` (the recorded
-collection identity was re-verified in this review) or `offline_replay`
-(supplied bundle bytes, no live retrieval claimed). `review` of a
-previously collected bundle re-verifies the recorded identity offline; it
-does not fetch again and does not claim a new retrieval.
+The report scope is decided by the RUNNER-SELECTED context of THIS
+invocation, never by the collection field's presence alone, and has three
+truthful values: `live_collection` (this invocation performed the bounded
+collection; the retrieval claims are its own measurement),
+`supplied_collection` (the supplied bundle carries a recorded collection
+identity — historical provenance of a prior collection, re-verified
+offline), and `offline_replay` (no collection identity at all: supplied or
+cached snapshot bytes parsed offline). `review` of a previously collected
+bundle is therefore `supplied_collection`: it re-verifies the recorded
+identity offline, does not fetch again, and does not claim a new
+retrieval — the retrieval claims remain the supplied record's, not this
+invocation's, and the review proves extraction consistency against the
+supplied bytes, not provider authenticity or current data.
+
+### Stage wording and execution identity
+
+Every `collect`/`review` invocation is labeled by the path it ACTUALLY
+reached, and the CLI summary `stage` line and the published report footer
+agree (the minimal blocked report's footer carries the same stage). A
+label can never claim a retrieval that was not performed:
+
+- `live collection` — this command performed the bounded official-source
+  retrieval and then reviewed the collected bundle (including semantically
+  blocked collects and post-collection baseline identity mismatches);
+- `collection not started` — baseline resolution failed before any
+  retrieval; no live collection was performed by this command (pre-
+  acquisition `collect` failures, e.g. a failed live baseline export);
+- `collection attempted and failed before completion` — bounded retrieval
+  was attempted but no complete collection was produced and no sealed
+  collected review exists;
+- `offline review` — `review` of supplied bytes: no live retrieval was
+  performed by this invocation.
+
+The stage and the report scope come from the RUNNER-SELECTED context of
+this invocation. Each sealed run's `validation.json` additionally carries
+a runner-owned `execution_context` inside the HMAC-protected content:
+
+- `acquisition` — the runner-selected mode of the generating invocation
+  (`live_collection` or `offline_supplied`), never inferred from the
+  bundle's collection field;
+- `generator` — the measured code identity of the generating invocation
+  (`tool` plus `code_revision`), measured by the running code, never
+  copied from the untrusted bundle declaration;
+- `generator_versions` — the ACTUAL generating schema/renderer/policy/
+  extractor versions, bound to the running code's own constants (the
+  bundle's supplied `revision`/`research` declarations stay labeled as
+  supplied historical text and are never rendered as this run's generator
+  versions).
+
+`verify` checks content digests, then the HMAC, then the context shape
+and version, and only then replays the validation with the ORIGINAL
+authenticated context (the sealed acquisition mode and generator; the
+current verifier's identity is reported separately as `current generator`
+and the sealed one as `original generator`, authenticated in the sealed
+`validation.json`). Verification executes no HTTP, DNS, or SQL. A sealed
+run whose context is missing (sealed before the runner-owned execution
+context existed) or whose shape or version is unsupported is refused
+explicitly (exit 30) — no historical
+renderer fleet, no re-derivation, no re-sealing.
+
+The generator `code_revision` is a bounded MEASURED content identity: a
+deterministic SHA-256 over the content of a fixed set of fifteen owned
+catalog-refresh files (including the helper that measures them), formatted
+`catalog-ccid/v1:sha256:<64 hex>` — or the explicit `unavailable` marker
+when measurement fails (missing, non-regular, or unreadable file, or bound
+exceeded: 32 files, 512 KiB per file, 8 MiB total). It is not a
+whole-environment digest, not loaded-bytecode attestation, not a security
+boundary, and not a reproducibility promise: relocation or timestamp
+changes do not change it; changed bytes DO change it, even under an
+unchanged package version. It uses no Git inspection, no environment or
+config traversal, no subprocess, and no recursive scan. The package
+version is recorded separately in the tool metadata, so two installations
+with the same version and different bytes remain distinguishable.
 
 ### Proposal scope and FX derivation
 
@@ -1205,7 +1276,7 @@ apply must consume the authenticated snapshot rather than reread paths.
 |---|---|---|
 | `collect` | 0 | READY |
 | `collect` | 10 | READY_WITH_WARNINGS |
-| `collect` | 20 | BLOCKED — a blocked run is always published, with the `live collection` stage wording (retrieval failure, semantic blockers, baseline identity mismatch) |
+| `collect` | 20 | BLOCKED — a blocked run is always published, labeled by the path reached: `collection not started` (baseline failure before any retrieval), `collection attempted and failed before completion` (retrieval failure), or the `live collection` wording (semantic blockers and baseline identity mismatch, after a completed collection) |
 | `collect` | 65 | data error where no blocked run is published (unreadable/invalid `--baseline-file`, unsafe directory configuration, seal key problem) |
 | `collect` | 2 | usage error (contradictory options) |
 | `review` | 0 | READY |

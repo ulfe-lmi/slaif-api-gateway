@@ -14,6 +14,8 @@ from typer.testing import CliRunner
 
 from slaif_gateway.cli.main import app
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshSealError
+from slaif_gateway.services.catalog_refresh import filesystem as fs
+from slaif_gateway.services.catalog_refresh import sealing
 from slaif_gateway.services.catalog_refresh.sealing import (
     CONTENT_FILES,
     ensure_seal_key,
@@ -395,3 +397,158 @@ def test_review_failure_leaves_no_partial_run(tmp_path: Path, monkeypatch) -> No
     assert not (run_root / "fixture-first-install-001").exists()
     leftovers = [p.name for p in run_root.iterdir()] if run_root.exists() else []
     assert leftovers == [], f"staging leftovers: {leftovers}"
+
+
+# --- 181-i (I2): authenticated execution context in the sealed run ------------
+
+
+def _recompute_manifest(run_dir: Path) -> bytes:
+    """Recompute the manifest digests the way a determined local actor with
+    knowledge of the layout would (no HMAC involved)."""
+    files = {name: hashlib.sha256((run_dir / name).read_bytes()).hexdigest() for name in CONTENT_FILES}
+    manifest = {"schema_version": "1", "files": [
+        {"path": name, "sha256": files[name], "bytes": (run_dir / name).stat().st_size}
+        for name in sorted(files)
+    ]}
+    return (json.dumps(manifest, sort_keys=True, indent=1) + "\n").encode("utf-8")
+
+
+def _reseal_with_key(run_dir: Path, seal_key: Path) -> None:
+    """Recompute manifest + re-sign the run with the runner key (a local
+    actor who holds the key CAN re-seal; verify must still refuse
+    unsupported or legacy contexts)."""
+    (run_dir / "manifest.json").write_bytes(_recompute_manifest(run_dir))
+    run_fd, _chain = fs._open_anchored(run_dir)
+    try:
+        sealing.seal_run(run_fd, _raw_key(seal_key))
+    finally:
+        os.close(run_fd)
+
+
+def test_new_sealed_run_binds_authenticated_execution_context(sealed_run: tuple[Path, Path]) -> None:
+    run_dir, seal_key = sealed_run
+    document = json.loads((run_dir / "validation.json").read_bytes())
+    context = document["execution_context"]
+    # the review runner is offline; the generator is the measured running code
+    from slaif_gateway.services.catalog_refresh import execution_identity
+
+    expected_tool, expected_revision = execution_identity.tool_identity()
+    assert context["acquisition"] == "offline_supplied"
+    assert context["generator"] == {
+        "tool": expected_tool,
+        "code_revision": expected_revision,
+    }
+    assert context["generator_versions"] == {
+        "schema_version": "1",
+        "renderer_version": "181.1",
+        "policy_version": 1,
+        "extractor_version": "slaif-collector/181.1",
+    }
+
+    result = verify_run(run_dir, _raw_key(seal_key))
+    assert result.valid
+    assert (
+        result.checks["acquisition"]
+        == "replayed original mode \'offline_supplied\' (no HTTP/DNS/SQL executed during verification)"
+    )
+    # original (authenticated) vs current (measured now) identities: same
+    # code here, but reported as distinct facts
+    assert result.original_generator == {
+        "tool": expected_tool,
+        "code_revision": expected_revision,
+    }
+    assert result.current_generator is not None
+    assert result.current_generator["tool"] == expected_tool
+    assert "context" not in result.checks  # no refusal for a supported run
+
+
+def test_context_flip_tamper_fails_hmac_authentication(sealed_run: tuple[Path, Path]) -> None:
+    """Flipping the authenticated acquisition mode and re-signing digests
+    WITHOUT the key must fail HMAC: the context is runner-bound, not
+    locally re-derivable."""
+    run_dir, seal_key = sealed_run
+    victim = run_dir / "validation.json"
+    original = victim.read_bytes()
+    document = json.loads(original)
+    document["execution_context"]["acquisition"] = (
+        "live_collection"
+        if document["execution_context"]["acquisition"] == "offline_supplied"
+        else "offline_supplied"
+    )
+    victim.write_bytes((json.dumps(document, sort_keys=True, indent=1) + "\n").encode("utf-8"))
+    (run_dir / "manifest.json").write_bytes(_recompute_manifest(run_dir))
+    # refresh the receipt digests as a tamperer with local knowledge would
+    receipt = json.loads((run_dir / "receipt.json").read_bytes())
+    files = {name: hashlib.sha256((run_dir / name).read_bytes()).hexdigest() for name in CONTENT_FILES}
+    manifest_bytes = (run_dir / "manifest.json").read_bytes()
+    receipt["files"] = dict(sorted(files.items()))
+    receipt["manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    (run_dir / "receipt.json").write_bytes(
+        (json.dumps(receipt, sort_keys=True, indent=1) + "\n").encode("utf-8")
+    )
+    result = verify_run(run_dir, _raw_key(seal_key))
+    assert not result.valid
+    assert result.checks.get("digests") == "ok"
+    assert result.checks.get("hmac") == "authentication failed"
+    # restore
+    victim.write_bytes(original)
+    (run_dir / "manifest.json").write_bytes(_recompute_manifest(run_dir))
+    _reseal_with_key(run_dir, seal_key)
+    assert verify_run(run_dir, _raw_key(seal_key)).valid
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda ctx: ctx["generator_versions"].__setitem__("renderer_version", "999.9"),
+    lambda ctx: ctx.__setitem__("schema_version", "2"),
+    lambda ctx: ctx["generator_versions"].__setitem__("extractor_version", "slaif-collector/999.9"),
+    lambda ctx: ctx.__setitem__("bogus_field", "x"),
+])
+def test_resealed_unsupported_context_is_refused(
+    sealed_run: tuple[Path, Path], mutate
+) -> None:
+    """A FORGED context with an unsupported version/shape - even fully
+    re-signed with the runner key - is refused explicitly (no historical
+    renderer fleet, no re-derivation)."""
+    run_dir, seal_key = sealed_run
+    victim = run_dir / "validation.json"
+    original = victim.read_bytes()
+    document = json.loads(original)
+    mutate(document["execution_context"])
+    victim.write_bytes((json.dumps(document, sort_keys=True, indent=1) + "\n").encode("utf-8"))
+    _reseal_with_key(run_dir, seal_key)
+    result = verify_run(run_dir, _raw_key(seal_key))
+    assert not result.valid
+    assert result.checks.get("digests") == "ok"
+    assert result.checks.get("hmac") == "ok"  # authentication passed...
+    assert result.checks.get("context") == "unsupported context shape or version"
+    victim.write_bytes(original)
+    _reseal_with_key(run_dir, seal_key)
+    assert verify_run(run_dir, _raw_key(seal_key)).valid
+
+
+def test_resealed_legacy_validation_without_context_is_refused(
+    sealed_run: tuple[Path, Path]
+) -> None:
+    """A pre-181-i sealed run (validation.json WITHOUT the execution
+    context) is refused explicitly and never re-sealed or rewritten:
+    verify reports the missing legacy context and the current verifier
+    identity, and the sealed bytes are left for the operator."""
+    run_dir, seal_key = sealed_run
+    victim = run_dir / "validation.json"
+    original = victim.read_bytes()
+    document = json.loads(original)
+    del document["execution_context"]
+    victim.write_bytes((json.dumps(document, sort_keys=True, indent=1) + "\n").encode("utf-8"))
+    _reseal_with_key(run_dir, seal_key)
+    result = verify_run(run_dir, _raw_key(seal_key))
+    assert not result.valid
+    assert result.checks.get("digests") == "ok"
+    assert result.checks.get("hmac") == "ok"
+    assert result.checks.get("context") == "missing (unsupported legacy validation context)"
+    # the current verifier identity is still reported, the original is not
+    assert result.original_generator is None
+    assert result.current_generator is not None
+    assert result.current_generator["tool"].startswith("slaif-gateway/")
+    victim.write_bytes(original)
+    _reseal_with_key(run_dir, seal_key)
+    assert verify_run(run_dir, _raw_key(seal_key)).valid

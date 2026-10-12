@@ -35,12 +35,12 @@ import socket
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, ROUND_HALF_UP
-from importlib.metadata import version as _package_version
 from typing import Callable, Mapping
 
 import httpx
 
 from slaif_gateway.schemas.catalog_refresh import (
+    EXTRACTOR_ID,  # noqa: F401  re-exported: single source of truth is the schema
     FLAT_CAPABILITY_TO_CHAT_FIELD,
     POLICY_VERSION,
     RENDERER_VERSION,
@@ -64,6 +64,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     SourceRecord,
     SourceRetrievalRecord,
 )
+from slaif_gateway.services.catalog_refresh import execution_identity as _execution_identity
 from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh import sources
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
@@ -74,7 +75,8 @@ from slaif_gateway.services.catalog_refresh.sources import (
     new_acquisition_context,
 )
 
-EXTRACTOR_ID = "slaif-collector/181.1"
+# EXTRACTOR_ID is re-exported from the schema (181-i I2/I3: generator
+# version/identity constants live with the version contract).
 MONEY_QUANTUM = Decimal("0.000000001")
 MAX_OPENAI_MODEL_PAGES = 64
 EUR = "EUR"
@@ -103,11 +105,10 @@ REASON_EXPLICIT_SELECTION_EXCLUDED = "explicit_selection_excluded"
 REASON_PRICE_BELOW_QUANTUM = "price_below_quantum"
 
 
-def package_version() -> str:
-    try:
-        return _package_version("slaif-api-gateway")
-    except Exception:  # noqa: BLE001 - uninstalled dev checkouts
-        return "0.0.0+local"
+# 181-i (I3): the package version and the measured code identity live in
+# the dedicated identity helper; the collection module keeps
+# ``package_version`` importable for compatibility.
+package_version = _execution_identity.package_version
 
 
 def _money_string(value: Decimal) -> str | None:
@@ -859,6 +860,7 @@ def collect_bundle(
         )
 
     version = package_version()
+    collection_tool, collection_code_revision = _execution_identity.tool_identity()
     return RefreshBundle(
         schema_version=SCHEMA_VERSION,
         run_id=run_id,
@@ -875,8 +877,11 @@ def collect_bundle(
             tool_version=version,
         ),
         collection=CollectionIdentity(
-            tool=f"slaif-gateway/{version}",
-            code_revision=f"slaif-api-gateway=={version}",
+            tool=collection_tool,
+            # 181-i (I3): the measured fixed file-set content identity of
+            # the collecting code (or the explicit unavailable marker);
+            # the package version stays in the tool metadata.
+            code_revision=collection_code_revision,
             profile="standard-v1",
             providers=providers,
             model_include=model_include,

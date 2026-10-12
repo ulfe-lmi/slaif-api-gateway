@@ -15,6 +15,18 @@ bounded reads with EOF proof and post-read identity re-check, O_NONBLOCK
 leaves, and atomic NEW-ONLY publication. A parent or ancestor replaced by
 a symlink after verification cannot redirect a later operation.
 
+Execution context (181-i I2): the authenticated validation.json binds
+the RUNNER-SELECTED execution context of the GENERATING invocation
+(runner output, never a bundle declaration). Verify authenticates the
+bytes first, then validates the context shape/version, and replays the
+ORIGINAL context in its semantic recomputation; it never re-measures or
+re-derives the original mode or generator. Sealed runs whose
+authenticated validation.json predates the execution-context contract
+(lacking the field, or carrying an unsupported shape/version) are
+REFUSED explicitly - they are never re-sealed, re-measured or rewritten.
+The current verifier's own measured identity is reported separately and
+is never substituted for the original.
+
 Capture-once: each run content file is read exactly once per
 seal/verification pass; the SAME captured bytes feed the manifest/receipt
 digests, the canonical bundle identity, the run identity, semantic
@@ -49,6 +61,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from slaif_gateway.schemas.catalog_refresh import ExecutionContext
+from slaif_gateway.services.catalog_refresh import execution_identity
 from slaif_gateway.services.catalog_refresh import filesystem as fs
 from slaif_gateway.services.catalog_refresh.bundle import (
     MAX_BUNDLE_BYTES,
@@ -103,9 +117,24 @@ class VerifyResult:
     valid: bool
     checks: dict[str, str]
     state: str | None = None
+    # 181-i (I2): the ORIGINAL generator identity authenticated in the
+    # sealed validation.json (only known after HMAC), and the CURRENT
+    # verifier's measured identity. They are distinct facts; neither is
+    # substituted for the other.
+    original_generator: dict[str, str] | None = None
+    current_generator: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {"valid": self.valid, "checks": dict(sorted(self.checks.items())), "state": self.state}
+        payload: dict[str, Any] = {
+            "valid": self.valid,
+            "checks": dict(sorted(self.checks.items())),
+            "state": self.state,
+        }
+        if self.original_generator is not None:
+            payload["original_generator"] = dict(sorted(self.original_generator.items()))
+        if self.current_generator is not None:
+            payload["current_generator"] = dict(sorted(self.current_generator.items()))
+        return payload
 
 
 def _parse_manifest(raw: bytes) -> list[dict[str, Any]]:
@@ -358,6 +387,31 @@ def _verify_run_fd(run_fd: int, key: bytes) -> VerifyResult:
         return VerifyResult(False, checks)
     checks["hmac"] = "ok"
 
+    # 2b) 181-i (I2): the authenticated validation.json binds the
+    # RUNNER-SELECTED execution context of the GENERATING invocation.
+    # The bytes are authenticated first (digests + HMAC above); only
+    # then is the context parsed and shape-checked. Verify replays the
+    # ORIGINAL context below; it never re-measures or re-derives it, and
+    # pre-context (legacy) sealed runs are refused explicitly.
+    try:
+        validation_document = fs.strict_json_bytes(content["validation.json"], "validation.json")
+    except (CatalogRefreshSealError, ValueError, TypeError):
+        return VerifyResult(False, {**checks, "context": "unsupported context shape or version"})
+    if not isinstance(validation_document, dict) or not isinstance(
+        validation_document.get("execution_context"), dict
+    ):
+        current_tool, current_revision = execution_identity.tool_identity()
+        return VerifyResult(
+            False,
+            {**checks, "context": "missing (unsupported legacy validation context)"},
+            None,
+            current_generator={"tool": current_tool, "code_revision": current_revision},
+        )
+    try:
+        execution_context = ExecutionContext.model_validate(validation_document["execution_context"])
+    except (ValueError, TypeError):
+        return VerifyResult(False, {**checks, "context": "unsupported context shape or version"})
+
     # 3) semantic/renderer correspondence: recompute validation + report
     try:
         baseline = None
@@ -373,12 +427,25 @@ def _verify_run_fd(run_fd: int, key: bytes) -> VerifyResult:
         # sealed baseline bytes are what that run captured); this
         # verification itself executes no SQL and says so in its checks.
         policy = policy_from_document(bundle.policy)
+        # 181-i (I2): replay with the ORIGINAL authenticated context.
+        # The current code's hash need not equal the original generator
+        # identity when replay is supported: the original context, not a
+        # re-measurement, drives the byte-stable recomputation.
         report, artifacts = validate_bundle(
-            bundle, baseline, policy, sql_capture=sql_capture_for_mode(bundle.baseline.mode)
+            bundle,
+            baseline,
+            policy,
+            sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+            acquisition=execution_context.acquisition,
+            generator=execution_context.generator,
         )
     except (CatalogRefreshBlockedError, CatalogRefreshSealError, ValueError) as exc:
         return VerifyResult(False, {"recompute": str(exc)[:200]})
     checks["sql_evidence"] = "replayed from sealed bytes (no SQL executed during verification)"
+    checks["acquisition"] = (
+        f"replayed original mode '{execution_context.acquisition}' "
+        "(no HTTP/DNS/SQL executed during verification)"
+    )
 
     for name, data in artifacts.items():
         if content.get(name) != data:
@@ -404,7 +471,17 @@ def _verify_run_fd(run_fd: int, key: bytes) -> VerifyResult:
             checks["first_install"] = "first-install baseline must be the exact canonical empty marker document"
             return VerifyResult(False, checks, state)
     checks["correspondence"] = "ok"
-    return VerifyResult(True, checks, state)
+    current_tool, current_revision = execution_identity.tool_identity()
+    return VerifyResult(
+        True,
+        checks,
+        state,
+        original_generator={
+            "tool": execution_context.generator.tool,
+            "code_revision": execution_context.generator.code_revision,
+        },
+        current_generator={"tool": current_tool, "code_revision": current_revision},
+    )
 
 
 def content_hashes(content: dict[str, bytes]) -> dict[str, str]:

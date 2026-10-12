@@ -61,6 +61,11 @@ from slaif_gateway.services.responses_route_capabilities import (
 SCHEMA_VERSION = "1"
 RENDERER_VERSION = "181.1"
 POLICY_VERSION = 1
+# 181-i (I2/I3): the registered deterministic extractor/parser identity of
+# the generating code. Like the contract versions above, this is a
+# RUNNER-OWNED generator version/identity constant of this code; the
+# collector re-exports it (collection.EXTRACTOR_ID) for compatibility.
+EXTRACTOR_ID = "slaif-collector/181.1"
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _HEX64_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -326,15 +331,20 @@ class CollectionInventoryEntry(CatalogRefreshModel):
 
 
 class CollectionIdentity(CatalogRefreshModel):
-    """Objective 181: measured identity of the collecting invocation.
+    """Objective 181: measured identity of a collecting invocation.
 
-    Present only when this bundle was built by the collect command from
-    actual retrievals in this invocation. A supplied bundle reviewed
-    offline carries no collection identity: offline review of a supplied
-    bundle must not claim live retrieval occurred in that invocation.
-    ResearchIdentity remains NOT_RUN for Codex in this objective; this
-    identity records the deterministic collector and its real retrieval
-    outcomes, never a researcher's SUCCESS label.
+    Built by the collect command from actual retrievals. A bundle may
+    also CARRY one as historical provenance: a supplied bundle reviewed
+    offline keeps its recorded collection identity (dates, retrievals,
+    inventory, digests) as SUPPLIED prior provenance — it is never
+    upgraded into a live retrieval of the reviewing invocation, which
+    is decided by the runner-selected execution context (181-i), not by
+    this field's presence. ``code_revision`` is the measured fixed
+    file-set content identity of the collecting code (181-i I3); the
+    package version lives in the tool metadata. ResearchIdentity
+    remains NOT_RUN for Codex in this objective; this identity records
+    the deterministic collector and its real retrieval outcomes, never
+    a researcher's SUCCESS label.
     """
 
     tool: str = Field(min_length=1, max_length=128)
@@ -382,6 +392,65 @@ class CollectionIdentity(CatalogRefreshModel):
             if count < 0:
                 raise ValueError("source model counts must be non-negative")
         return self
+
+
+EXECUTION_CONTEXT_VERSION = "1"
+
+
+class ExecutionGeneratorIdentity(CatalogRefreshModel):
+    """181-i (I2): identity of the code that generated a sealed run.
+
+    Runner output bound in the authenticated ``validation.json`` — never
+    copied from the untrusted bundle declaration. ``code_revision`` is
+    the measured fixed file-set content identity (181-i I3) or the
+    explicit unavailable marker; the package version lives in ``tool``.
+    """
+
+    tool: str = Field(min_length=1, max_length=128)
+    code_revision: str = Field(min_length=1, max_length=128)
+
+
+class ExecutionGeneratorVersions(CatalogRefreshModel):
+    """181-i (I2/I3): the ACTUAL versions of the generating code.
+
+    Runner-owned: measured from the running code's own constants and
+    bound in the authenticated ``validation.json``. These are NOT the
+    bundle's supplied ``revision``/``research`` declarations, which stay
+    labeled as supplied historical text and are never rendered as this
+    run's generator versions. Replay supports exactly these values: a
+    sealed context carrying any other schema/renderer/policy/extractor
+    version is refused explicitly as an unsupported replay version (no
+    historical renderer fleet, no re-derivation, no re-sealing).
+    """
+
+    schema_version: Literal[SCHEMA_VERSION]
+    renderer_version: Literal[RENDERER_VERSION]
+    policy_version: Literal[POLICY_VERSION]
+    extractor_version: Literal[EXTRACTOR_ID]
+
+
+class ExecutionContext(CatalogRefreshModel):
+    """181-i (I1/I2): runner-owned execution context of the invocation
+    that generated a sealed run.
+
+    Bound in the authenticated ``validation.json`` (a fixed content file
+    of the run's HMAC). ``acquisition`` is the RUNNER-SELECTED mode of
+    that invocation: ``live_collection`` means this invocation executed
+    the collection path (the bundle's collection identity is this
+    invocation's own measurement); ``offline_supplied`` means the
+    invocation only reviewed supplied bytes and performed no live
+    retrieval (any collection identity in the bundle is historical
+    provenance). ``generator`` is the measured code identity of the
+    generating invocation and ``generator_versions`` its actual
+    schema/renderer/policy/extractor versions. Verify replays the
+    ORIGINAL authenticated context; the current verifier identity is
+    reported separately and is never substituted for the original.
+    """
+
+    schema_version: Literal[EXECUTION_CONTEXT_VERSION]
+    acquisition: Literal["live_collection", "offline_supplied"]
+    generator: ExecutionGeneratorIdentity
+    generator_versions: ExecutionGeneratorVersions
 
 
 class ProfileContract(CatalogRefreshModel):
@@ -720,10 +789,15 @@ class RefreshBundle(CatalogRefreshModel):
     generated_at: datetime
     revision: RevisionIdentity
     research: ResearchIdentity
-    # Objective 181: present only for bundles built by the collect command
-    # from actual retrievals in this invocation. Optional (schema version
-    # deliberately remains "1" so sealed 180-era bundles still replay and
-    # verify unchanged); supplied bundles carry no collection identity.
+    # Objective 181: present for bundles built by the collect command from
+    # actual retrievals; a supplied bundle may carry one as historical
+    # provenance (181-i: the runner-selected execution context, not this
+    # field's presence, decides whether retrieval happened in the
+    # reviewing invocation). Optional (schema version deliberately remains
+    # "1" so pre-181 bundle bytes still parse and can be reviewed offline;
+    # 181-i verify, however, explicitly REFUSES sealed runs whose
+    # authenticated validation.json predates the execution-context
+    # contract - old sealed runs are not re-sealed or rewritten).
     collection: CollectionIdentity | None = None
     policy: PolicyDocument
     profile: ProfileContract

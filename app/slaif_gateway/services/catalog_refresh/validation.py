@@ -44,9 +44,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 from slaif_gateway.schemas.catalog_refresh import (
+    EXECUTION_CONTEXT_VERSION,
     CAPABILITY_KEYS,
     FX_PAIR_PATTERN,
     BaselineDocument,
+    ExecutionGeneratorIdentity,
+    ExecutionContext,
     RefreshBundle,
     RouteFacts,
     derive_standard_create_capabilities,
@@ -69,6 +72,7 @@ from slaif_gateway.services.catalog_refresh.bundle import (
     generate_route_tsv,
     selected_model_keys,
 )
+from slaif_gateway.services.catalog_refresh import execution_identity
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 from slaif_gateway.services.catalog_refresh.policy import RefreshPolicy
 from slaif_gateway.services.fx_import import (
@@ -197,6 +201,17 @@ _SQL_CAPTURE_NOTES: dict[str, str] = {
 }
 
 
+# 181-i (I1): the acquisition scope is the RUNNER-SELECTED execution path
+# of the reviewing invocation (runner-owned, like sql_capture) - never
+# inferred from the bundle's collection declaration alone. A supplied
+# review and pure validation default to offline even when the bundle
+# carries an intact or fabricated collection/tool/capture field; only the
+# collect path selects the acquired (live) mode.
+ACQUISITION_LIVE = "live_collection"
+ACQUISITION_OFFLINE = "offline_supplied"
+_ACQUISITIONS: frozenset[str] = frozenset({ACQUISITION_LIVE, ACQUISITION_OFFLINE})
+
+
 def sql_capture_for_mode(mode: str) -> str:
     """The only capture a bundle with this declared baseline mode may carry."""
     if mode == "first_install":
@@ -285,6 +300,7 @@ class ValidationReport:
     sources: list[dict[str, Any]] = field(default_factory=list)
     fx_comparisons: list[dict[str, Any]] = field(default_factory=list)
     source_evidence: dict[str, Any] = field(default_factory=dict)
+    execution_context: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         order = {name: index for index, name in enumerate(_GATE_ORDER)}
@@ -382,6 +398,7 @@ class ValidationReport:
                     self.fx_comparisons, key=lambda f: str(f.get("pair", ""))
                 )
             ],
+            "execution_context": dict(sorted(self.execution_context.items())),
         }
 
 
@@ -689,6 +706,8 @@ def validate_bundle(
     policy: RefreshPolicy,
     *,
     sql_capture: str,
+    acquisition: str = ACQUISITION_OFFLINE,
+    generator: ExecutionGeneratorIdentity | None = None,
 ) -> tuple[ValidationReport, dict[str, bytes]]:
     """Recompute the full review result. Pure and deterministic.
 
@@ -697,12 +716,64 @@ def validate_bundle(
     bundle's mode label alone: a capture inconsistent with the declared mode
     blocks the run instead of letting a label claim SQL evidence the path did
     not produce.
+
+    ``acquisition`` is the RUNNER-SELECTED execution context of this
+    invocation (181-i I1): ``ACQUISITION_LIVE`` only when this invocation
+    executed the collection path, ``ACQUISITION_OFFLINE`` (the default) when
+    it reviewed supplied bytes. It is never inferred from the bundle's
+    collection field alone: a supplied or fabricated collection identity
+    cannot promote this invocation to live. A live context without a
+    collection identity blocks the run (a label cannot claim retrieval the
+    path did not record).
+
+    ``generator`` is the runner-owned identity of the generating invocation
+    (181-i I2). When omitted it is derived honestly: for a live context from
+    the bundle's own collection identity (the runner's measurement);
+    otherwise from the running code's measured fixed file-set identity.
+    Verify passes the ORIGINAL authenticated generator from the sealed
+    validation.json, never a re-measurement.
     """
     if sql_capture not in _SQL_CAPTURES:
         raise CatalogRefreshBlockedError(
             "sql_capture_invalid",
             f"sql_capture must be one of {sorted(_SQL_CAPTURES)}, got {sql_capture!r}",
         )
+    if acquisition not in _ACQUISITIONS:
+        raise CatalogRefreshBlockedError(
+            "acquisition_invalid",
+            f"acquisition must be one of {sorted(_ACQUISITIONS)}, got {acquisition!r}",
+        )
+    _has_collection = bundle.collection is not None
+    if acquisition == ACQUISITION_LIVE and not _has_collection:
+        raise CatalogRefreshBlockedError(
+            "acquisition_context_mismatch",
+            "this invocation selected the live-collection context but the bundle "
+            "carries no collection identity; a label cannot claim retrieval the "
+            "path did not record",
+        )
+    if generator is None:
+        # Only the live context may take the runner's own measurement from
+        # the bundle's collection identity. A supplied (even intact) bundle
+        # is untrusted historical provenance under the offline context: the
+        # generating invocation of THIS review must be measured from the
+        # running code, never adopted from bundle bytes.
+        if acquisition == ACQUISITION_LIVE and _has_collection:
+            generator = ExecutionGeneratorIdentity(
+                tool=bundle.collection.tool,
+                code_revision=bundle.collection.code_revision,
+            )
+        else:
+            _tool, _revision = execution_identity.tool_identity()
+            generator = ExecutionGeneratorIdentity(tool=_tool, code_revision=_revision)
+    execution_context = ExecutionContext(
+        schema_version=EXECUTION_CONTEXT_VERSION,
+        acquisition=acquisition,
+        generator=generator,
+        # 181-i (I2/I3): the ACTUAL versions of the generating code,
+        # runner-owned from this code's constants — never from the
+        # supplied, historical bundle revision/research declarations.
+        generator_versions=execution_identity.generator_versions(),
+    ).model_dump()
     expected_capture = sql_capture_for_mode(bundle.baseline.mode)
     if sql_capture != expected_capture:
         raise CatalogRefreshBlockedError(
@@ -2475,19 +2546,41 @@ def validate_bundle(
             None,
             None,
         )
-    live_collection = bundle.collection is not None
-    source_evidence_report: dict[str, Any] = {
-        "scope": "live_collection" if live_collection else "offline_replay",
-        "note": (
+    # 181-i (I1): the scope is decided by the RUNNER-SELECTED context, never
+    # by the collection field's presence alone. Three truthful scopes:
+    # live_collection (this invocation acquired), supplied_collection
+    # (historical provenance in a supplied bundle; this invocation is
+    # offline), offline_replay (no collection identity at all).
+    live_collection = acquisition == ACQUISITION_LIVE
+    supplied_collection = (not live_collection) and _has_collection
+    if live_collection:
+        scope = "live_collection"
+        scope_note = (
             "live collection performed by this invocation: sources were fetched "
             "with bounded official retrieval and parsed with registered "
             "deterministic parsers; retrieval outcomes are recorded in the "
             "collection identity"
-            if live_collection
-            else "supplied/cached snapshot bytes were parsed offline with registered "
+        )
+    elif supplied_collection:
+        scope = "supplied_collection"
+        scope_note = (
+            "supplied bundle carries a recorded collection identity (historical "
+            "provenance of a prior collection): parsed offline in this "
+            "invocation; this review performed no live retrieval, and the "
+            "retrieval claims are the supplied record's, not this "
+            "invocation's; this proves extraction consistency against the "
+            "supplied bytes, not provider authenticity or current data"
+        )
+    else:
+        scope = "offline_replay"
+        scope_note = (
+            "supplied/cached snapshot bytes were parsed offline with registered "
             "deterministic parsers; this proves extraction consistency against "
             "the supplied bytes, not a live retrieval that never occurred"
-        ),
+        )
+    source_evidence_report: dict[str, Any] = {
+        "scope": scope,
+        "note": scope_note,
         "backed_facts": sorted(
             evidence_backed_facts,
             key=lambda item: (item["provider"], item["model"], item["field"]),
@@ -2498,7 +2591,10 @@ def validate_bundle(
             for provider, values in sorted(inventory.items())
         },
     }
-    if live_collection:
+    if _has_collection:
+        # Live scope: this invocation's measured retrieval outcomes.
+        # Supplied scope: historical provenance, preserved (dates,
+        # retrievals, inventory, digests) and labeled as such.
         source_evidence_report["collection"] = collection_report
 
     # sources gate
@@ -2626,6 +2722,7 @@ def validate_bundle(
         sources=source_assessments,
         fx_comparisons=fx_comparisons,
         source_evidence=source_evidence_report,
+        execution_context=execution_context,
     )
     artifacts = {"routes-proposal.tsv": route_tsv, "pricing-proposal.tsv": pricing_tsv, "fx-proposal.json": fx_json}
     return report, artifacts
@@ -3006,11 +3103,22 @@ def validate_against_baseline_document(
     policy: RefreshPolicy,
     *,
     sql_capture: str,
+    acquisition: str = ACQUISITION_OFFLINE,
+    generator: ExecutionGeneratorIdentity | None = None,
 ) -> tuple[ValidationReport, dict[str, bytes]]:
     """Public entry: mode-consistent validation (first install must have no baseline).
 
     ``sql_capture`` must name the actual path that produced or supplied the
     baseline for this review; consistency with the declared mode is enforced
-    inside :func:`validate_bundle` (180-e).
+    inside :func:`validate_bundle` (180-e). ``acquisition`` is the
+    runner-selected execution context of this invocation (181-i I1); it
+    defaults to offline - only the collect path selects the live mode.
     """
-    return validate_bundle(bundle, baseline, policy, sql_capture=sql_capture)
+    return validate_bundle(
+        bundle,
+        baseline,
+        policy,
+        sql_capture=sql_capture,
+        acquisition=acquisition,
+        generator=generator,
+    )

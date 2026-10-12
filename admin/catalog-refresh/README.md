@@ -49,8 +49,16 @@ slaif-gateway catalog-refresh verify \
 ```
 
 Exit codes: collect and review 0/10/20/65/2, verify 0/30/65 (a missing or unsafe
-run directory with a valid key is 30; a missing or unsafe seal key is
-65), export-baseline 0/65 (see the docs page for the table). A
+run directory with a valid key is 30 — including sealed runs whose
+authenticated execution context is missing (sealed before the execution
+context existed) or has an unsupported shape or version; a
+missing or unsafe seal key is 65), export-baseline 0/65 (see the docs
+page for the table). A blocked collect run is always published and
+labeled by the path actually reached: `collection not started` (baseline
+failure before any retrieval), `collection attempted and failed before
+completion` (failed retrieval attempt), or the `live collection` wording
+(after a completed collection); `review` is always labeled `offline
+review`. A
 watchdog-timed-out collect exits non-success (124 on the TERM timeout,
 137 after the KILL grace for a TERM-ignoring process) and publishes no
 run — the finalization-only atomic publication leaves no partial

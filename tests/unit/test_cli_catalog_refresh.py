@@ -531,6 +531,216 @@ def test_db_snapshot_outage_publishes_minimal_blocked_run(tmp_path: Path) -> Non
     assert "receipt.json" not in (tmp_path / "runs" / run_dirs[0]).joinpath("nope").name
     assert not (tmp_path / "runs" / run_dirs[0] / "receipt.json").exists()
 
+
+def test_collect_preacquisition_baseline_failure_labels_path_and_publishes(
+    tmp_path: Path,
+) -> None:
+    """181-i (I1): a collect whose baseline resolution fails BEFORE any
+    acquisition must be labeled by the path actually reached. The JSON
+    stage says the collection never started (no retrieval performed), the
+    published minimal REVIEW.html footer agrees, acquisition seams are
+    never touched, and the run is a single unsealed BLOCKED run (exit 20)."""
+    import socket
+
+    import slaif_gateway.cli.catalog_refresh as cli_mod
+    import slaif_gateway.services.catalog_refresh.sources as sources_mod
+    from slaif_gateway.services.catalog_refresh.errors import (
+        CatalogRefreshBlockedError,
+    )
+
+    events: list[str] = []
+
+    async def baseline_fail(*args: object, **kwargs: object) -> object:
+        events.append("baseline failure before collection")
+        raise CatalogRefreshBlockedError(
+            "baseline_export_failed", "synthetic pre-acquisition failure"
+        )
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        events.append("prohibited acquisition seam")
+        raise AssertionError("acquisition was not supposed to be reached")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(cli_mod, "export_baseline", baseline_fail)
+    monkeypatch.setattr(sources_mod, "new_client", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    try:
+        result = runner.invoke(
+            app,
+            ["catalog-refresh", "collect", "--refresh",
+             "--db-url", "postgresql+asyncpg://synthetic@127.0.0.1:1/proof",
+             "--providers", "openrouter",
+             "--run-root", str(tmp_path / "runs"),
+             "--seal-key", str(tmp_path / "seal.key"),
+             "--json"],
+        )
+    finally:
+        monkeypatch.undo()
+    assert result.exit_code == 20, result.output
+    summary = json.loads(result.stdout)
+    assert events == ["baseline failure before collection"], events
+    assert summary["state"] == "BLOCKED"
+    assert summary["reason"].startswith("baseline_export_failed")
+    # JSON stage: accurate not-started label, never a live-collection claim.
+    assert summary["stage"].startswith("collection not started")
+    assert "retrieval performed by this command" not in summary["stage"]
+    assert summary["stage"] == cli_mod.STAGE_LINE_COLLECT_NOT_STARTED
+    assert summary["stage"] != cli_mod.STAGE_LINE_COLLECT
+    # Exactly one BLOCKED run, named for the reached failure.
+    run_dirs = sorted(p.name for p in (tmp_path / "runs").iterdir())
+    assert len(run_dirs) == 1
+    assert run_dirs[0].startswith("blocked-baseline_export_failed-")
+    run_dir = tmp_path / "runs" / run_dirs[0]
+    assert not (run_dir / "receipt.json").exists()
+    # JSON + HTML agreement: the published minimal report footer carries
+    # the SAME reached-path stage (not the generic review scope).
+    html = (run_dir / "REVIEW.html").read_text(encoding="utf-8")
+    assert "not sealed" in html
+    assert f"Scope: {summary['stage']}." in html
+    assert "offline review: this invocation reviewed supplied bytes" not in html
+    assert "retrieval performed by this command" not in html
+
+
+def test_collect_failed_attempt_labels_attempted_and_publishes(tmp_path: Path) -> None:
+    """181-i (I1): a collect whose retrieval ATTEMPT fails is labeled
+    attempted-and-incomplete (not live, not not-started); the JSON stage
+    and the published minimal footer agree, and the acquisition seam WAS
+    reached (unlike the pre-acquisition case)."""
+    import socket
+    import types
+
+    import slaif_gateway.cli.catalog_refresh as cli_mod
+    from slaif_gateway.services.catalog_refresh.sources import SourceFetchError
+
+    events: list[str] = []
+
+    def fake_collect_bundle(**kwargs: object) -> object:
+        events.append("collection attempt reached")
+        raise SourceFetchError("collection_fetch_failed")
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        events.append("prohibited physical seam")
+        raise AssertionError("no physical network in this test")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(cli_mod.catalog_collection, "collect_bundle", fake_collect_bundle)
+    monkeypatch.setattr(
+        cli_mod.catalog_sources,
+        "new_client",
+        lambda: types.SimpleNamespace(close=lambda: None),
+    )
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    try:
+        result = runner.invoke(
+            app,
+            ["catalog-refresh", "collect", "--bootstrap",
+             "--providers", "openrouter",
+             "--run-root", str(tmp_path / "runs"),
+             "--seal-key", str(tmp_path / "seal.key"),
+             "--json"],
+        )
+    finally:
+        monkeypatch.undo()
+    assert result.exit_code == 20, result.output
+    summary = json.loads(result.stdout)
+    assert events == ["collection attempt reached"], events
+    assert summary["reason"].startswith("collection failed: collection_fetch_failed")
+    assert summary["stage"] == cli_mod.STAGE_LINE_COLLECT_INCOMPLETE
+    assert summary["stage"] != cli_mod.STAGE_LINE_COLLECT
+    assert "retrieval performed by this command" not in summary["stage"]
+    run_dirs = sorted(p.name for p in (tmp_path / "runs").iterdir())
+    assert len(run_dirs) == 1
+    assert run_dirs[0].startswith("blocked-collection_fetch_failed-")
+    run_dir = tmp_path / "runs" / run_dirs[0]
+    assert not (run_dir / "catalog-refresh.json").exists()
+    html = (run_dir / "REVIEW.html").read_text(encoding="utf-8")
+    assert "not sealed" in html
+    assert f"Scope: {summary['stage']}." in html
+    assert "offline review: this invocation reviewed supplied bytes" not in html
+
+
+def test_collect_postcollection_block_keeps_live_stage_and_publishes(
+    tmp_path: Path,
+) -> None:
+    """181-i (I1): a COMPLETED collect that then blocks in the shared
+    review tail (baseline identity mismatch) keeps the live-collection
+    stage: the retrieval really was performed by this command, and the
+    published blocked report footer must agree with the JSON stage."""
+    import hashlib
+    import types
+
+    import slaif_gateway.cli.catalog_refresh as cli_mod
+    from slaif_gateway.schemas.catalog_refresh import BaselineDocument
+    from slaif_gateway.services.catalog_refresh.baseline import (
+        canonical_baseline_content,
+    )
+    from slaif_gateway.services.catalog_refresh.bundle import load_bundle
+
+    # A VALID baseline document whose canonical digest differs from the
+    # fixture bundle's declared baseline identity.
+    doc_payload = json.loads(
+        (FIXTURES / "baseline-synthetic.json").read_text(encoding="utf-8")
+    )
+    doc_payload["fx"][0]["rate"] = "1.09"
+    doc = BaselineDocument.model_validate(doc_payload)
+    doc_payload["content_sha256"] = hashlib.sha256(
+        canonical_baseline_content(doc)
+    ).hexdigest()
+    doc = BaselineDocument.model_validate(doc_payload)
+    baseline_path = tmp_path / "baseline-different.json"
+    baseline_path.write_text(
+        json.dumps(doc.model_dump(mode="json"), sort_keys=True, indent=1) + "\n",
+        encoding="utf-8",
+    )
+
+    fixture_bundle = load_bundle(
+        (FIXTURES / "bundle-refresh-ready.json").read_bytes()
+    )
+    seen: dict[str, bool] = {}
+
+    def fake_collect_bundle(**kwargs: object) -> object:
+        seen["reached"] = True
+        return fixture_bundle
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(cli_mod.catalog_collection, "collect_bundle", fake_collect_bundle)
+    monkeypatch.setattr(
+        cli_mod.catalog_sources,
+        "new_client",
+        lambda: types.SimpleNamespace(close=lambda: None),
+    )
+    try:
+        result = runner.invoke(
+            app,
+            ["catalog-refresh", "collect", "--refresh",
+             "--baseline-file", str(baseline_path),
+             "--providers", "openrouter",
+             "--run-root", str(tmp_path / "runs"),
+             "--seal-key", str(tmp_path / "seal.key"),
+             "--json"],
+        )
+    finally:
+        monkeypatch.undo()
+    assert result.exit_code == 20, result.output
+    assert seen.get("reached") is True
+    summary = json.loads(result.stdout)
+    assert summary["reason"].startswith("baseline_identity_mismatch")
+    assert summary["stage"] == cli_mod.STAGE_LINE_COLLECT
+    run_dirs = sorted(p.name for p in (tmp_path / "runs").iterdir())
+    assert len(run_dirs) == 1
+    assert run_dirs[0].startswith("blocked-baseline_identity_mismatch-")
+    run_dir = tmp_path / "runs" / run_dirs[0]
+    # the collected canonical bytes ARE published with the blocked run
+    assert (run_dir / "catalog-refresh.json").is_file()
+    assert not (run_dir / "receipt.json").exists()
+    html = (run_dir / "REVIEW.html").read_text(encoding="utf-8")
+    assert f"Scope: {summary['stage']}." in html
+    assert "live collection" in html
+    assert "offline review: this invocation reviewed supplied bytes" not in html
+
+
 # --- 181-h H3: standard operator watchdog over the read-only collect --------
 
 TESTS_UNIT_DIR = Path(__file__).resolve().parent
@@ -738,3 +948,125 @@ def test_watchdog_kill_after_terminates_term_ignoring_collect(
         "an interrupted collect publishes nothing: "
         f"leftovers={leftovers}"
     )
+
+
+# --- 181-i (I1/I2/I3): runner-selected context through the real CLI -----------
+
+
+def test_cli_review_of_intact_collected_bundle_is_offline_with_measured_generator(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Mirror of the strategic probe: an INTACT mocked-collected bundle is
+    reviewed through the actual CLI with every network escape refused.
+    The reviewing invocation is OFFLINE: the scope is supplied_collection
+    (the recorded identity is historical provenance, preserved), the
+    generating generator is MEASURED from the running code (never the
+    bundle's declared identity), and verify replays the authenticated
+    context, reporting original vs current generator identity."""
+    import socket as _socket
+
+    import test_catalog_refresh_collection as _collect_tests
+
+    def _refuse_dns(*args, **kwargs):
+        raise AssertionError("CLI review reached a default DNS resolver (live network escape)")
+
+    def _refuse_connect(*args, **kwargs):
+        raise AssertionError("CLI review attempted a real socket connection (live network escape)")
+
+    def _refuse_new_client(*args, **kwargs):
+        raise AssertionError("CLI review constructed a live source client")
+
+    monkeypatch.setattr(_socket, "getaddrinfo", _refuse_dns)
+    monkeypatch.setattr(_socket.socket, "connect", _refuse_connect)
+    monkeypatch.setattr(_socket.socket, "connect_ex", _refuse_connect)
+    from slaif_gateway.services.catalog_refresh import sources as _sources
+
+    monkeypatch.setattr(_sources, "new_client", _refuse_new_client)
+
+    # 1) actual (mocked-transport) collection, then the canonical bundle bytes
+    collected = _collect_tests._collect(_collect_tests.World(), providers=("openrouter",))
+    assert collected.collection is not None
+    from slaif_gateway.services.catalog_refresh.bundle import canonical_bundle_bytes
+
+    bundle_path = tmp_path / "collected.json"
+    bundle_path.write_bytes(canonical_bundle_bytes(collected))
+
+    # 2) real CLI review (offline by the runner's path selection)
+    result = runner.invoke(
+        app,
+        [
+            "catalog-refresh", "review",
+            str(bundle_path),
+            "--first-install",
+            "--run-root", str(tmp_path / "runs"),
+            "--seal-key", str(tmp_path / "seal.key"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[0] == "state: READY"
+    assert any(line.startswith("stage: offline review:") for line in result.stdout.splitlines())
+    assert "performed no live retrieval" in result.stdout
+
+    run_dir = tmp_path / "runs" / collected.run_id
+    validation = json.loads((run_dir / "validation.json").read_bytes())
+    evidence = validation["source_evidence"]
+    assert evidence["scope"] == "supplied_collection"
+    # provenance preserved (dates/retrievals/inventory/digests), never erased
+    assert evidence["collection"]["tool"] == collected.collection.tool
+    assert evidence["collection"]["code_revision"] == collected.collection.code_revision
+    assert evidence["collection"]["retrievals_total"] == len(collected.collection.retrievals)
+    assert evidence["collection"]["started_at"] == collected.collection.started_at.isoformat()
+
+    # the generating generator is the MEASURED running code, not the
+    # bundle's declared (historical) collection identity
+    from slaif_gateway.services.catalog_refresh import execution_identity as _ei
+
+    expected_tool, expected_revision = _ei.tool_identity()
+    context = validation["execution_context"]
+    assert context["acquisition"] == "offline_supplied"
+    assert context["generator"] == {"tool": expected_tool, "code_revision": expected_revision}
+    assert context["generator"]["tool"] != collected.collection.tool or (
+        expected_tool == collected.collection.tool
+    )
+    assert context["generator_versions"] == _ei.generator_versions()
+
+    # 3) verify replays the authenticated context and reports both identities
+    verify = runner.invoke(
+        app,
+        [
+            "catalog-refresh", "verify",
+            "--run-dir", str(run_dir),
+            "--seal-key", str(tmp_path / "seal.key"),
+        ],
+    )
+    assert verify.exit_code == 0, verify.output
+    assert "valid: yes" in verify.stdout
+    assert (
+        "acquisition: replayed original mode 'offline_supplied' "
+        "(no HTTP/DNS/SQL executed during verification)"
+    ) in verify.stdout
+    assert (
+        f"original generator: tool {expected_tool} · code_revision "
+        f"{expected_revision} (authenticated in the sealed validation.json)"
+    ) in verify.stdout
+    assert "current generator: tool" in verify.stdout
+    assert "(measured at verification time)" in verify.stdout
+
+    verify_json = runner.invoke(
+        app,
+        [
+            "catalog-refresh", "verify",
+            "--run-dir", str(run_dir),
+            "--seal-key", str(tmp_path / "seal.key"),
+            "--json",
+        ],
+    )
+    assert verify_json.exit_code == 0, verify_json.output
+    payload = json.loads(verify_json.stdout)
+    assert payload["valid"] is True
+    assert payload["original_generator"] == {
+        "tool": expected_tool,
+        "code_revision": expected_revision,
+    }
+    assert payload["current_generator"]["tool"] == expected_tool
+    assert payload["checks"]["acquisition"].startswith("replayed original mode")

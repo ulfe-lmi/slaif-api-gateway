@@ -142,9 +142,13 @@ slaif-gateway catalog-refresh export-baseline --out /path/to/baseline.json --db-
 ```
 
 Collect exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED (a blocked
-run is always published, including semantically blocked collects, with the
-`live collection` stage wording), 65 data error where no blocked run is
-published (e.g. an unreadable or invalid `--baseline-file`), 2 usage error.
+run is always published, labeled by the path actually reached:
+`collection not started` when the baseline failed before any retrieval,
+`collection attempted and failed before completion` when the retrieval
+attempt failed, or the `live collection` wording after a completed
+collection, including semantically blocked collects), 65 data error where
+no blocked run is published (e.g. an unreadable or invalid
+`--baseline-file`), 2 usage error.
 Under the documented watchdog prefix a timed-out collect exits non-success
 (124 on the TERM timeout, 137 after the KILL grace for a TERM-ignoring
 process) and publishes no run: the collect writes nothing during the fetch
@@ -186,7 +190,10 @@ writes to the database.
 For `review`, the bundle's `sources` entries are replayed offline, never
 fetched (a bundle produced by `collect` additionally carries the measured
 collection identity, which `review` re-verifies; see
-[catalog-refresh.md](catalog-refresh.md#collection-versus-replay-validation-re-verification)). Only
+[catalog-refresh.md](catalog-refresh.md#collection-versus-replay-validation-re-verification)). The
+report scope is runner-selected: a `review` of a previously collected
+bundle is `supplied_collection`, never `live_collection` — the retrieval
+claims stay the supplied record's. Only
 the registered (provider, source kind) pairs are parsed deterministically:
 `openrouter/openrouter_models_api` (official OpenRouter `/models` shape,
 per-token USD pricing), `openai/openai_models_api` (identity only),

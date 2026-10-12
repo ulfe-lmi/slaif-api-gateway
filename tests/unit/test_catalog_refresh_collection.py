@@ -43,7 +43,11 @@ from slaif_gateway.services.catalog_refresh.baseline import canonical_baseline_c
 from slaif_gateway.services.catalog_refresh.bundle import canonical_bundle_bytes
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 from slaif_gateway.services.catalog_refresh.policy import policy_from_document
-from slaif_gateway.services.catalog_refresh.validation import validate_bundle
+from slaif_gateway.services.catalog_refresh.validation import (
+    ACQUISITION_LIVE,
+    ACQUISITION_OFFLINE,
+    validate_bundle,
+)
 
 NOW = datetime(2026, 9, 21, 12, 0, 0, tzinfo=UTC)
 
@@ -369,12 +373,26 @@ def _baseline_doc(
     )
 
 
-def _validate(bundle, baseline):
+def _validate(bundle, baseline, *, acquisition=None):
+    """Validate a bundle with the RUNNER-SELECTED execution context (181-i).
+
+    ``acquisition`` names the execution path of the simulated invocation.
+    When omitted it simulates the PRODUCING runner: the collect path
+    selected the live context (the bundle carries this invocation's own
+    collection identity); every other path is offline. The I1 scope
+    regressions below pass it explicitly, because the context is a
+    runner decision, never a property of the bundle bytes.
+    """
+    if acquisition is None:
+        acquisition = (
+            ACQUISITION_LIVE if bundle.collection is not None else ACQUISITION_OFFLINE
+        )
     report, artifacts = validate_bundle(
         bundle,
         baseline,
         policy_from_document(bundle.policy),
         sql_capture="first_install" if bundle.baseline.mode == "first_install" else "document",
+        acquisition=acquisition,
     )
     return report, artifacts
 
@@ -907,6 +925,143 @@ def test_supplied_bundle_replay_is_offline_scope() -> None:
     assert report.to_dict()["source_evidence"]["scope"] == "offline_replay"
     live_report, _ = _validate(collected, None)
     assert live_report.to_dict()["source_evidence"]["scope"] == "live_collection"
+
+
+# --- 181-i (I1): runner-selected acquisition scope ----------------------------
+
+
+def test_intact_collected_bundle_reviewed_offline_is_supplied_collection() -> None:
+    """A supplied INTACT bundle keeps its collection identity as historical
+    provenance: the reviewing invocation is offline, the scope is
+    supplied_collection, and the provenance (dates/retrievals/inventory/
+    digests) is preserved and labeled, never renewed or re-dated."""
+    collected = _collect(World(), providers=("openrouter",))
+    original_identity = collected.collection.model_dump()
+
+    report, _ = _validate(collected, None, acquisition=ACQUISITION_OFFLINE)
+    evidence = report.to_dict()["source_evidence"]
+    assert evidence["scope"] == "supplied_collection"
+    # this invocation performed no live retrieval
+    assert "no live retrieval" in evidence["note"] or "reviewed the supplied bytes offline" in evidence["note"]
+    # provenance preserved byte-for-byte
+    supplied_collection = evidence["collection"]
+    assert supplied_collection["tool"] == original_identity["tool"]
+    assert supplied_collection["code_revision"] == original_identity["code_revision"]
+    assert supplied_collection["retrievals_total"] == len(collected.collection.retrievals)
+    assert supplied_collection["retrievals_ok"] == sum(
+        1 for r in collected.collection.retrievals if r.outcome == "ok"
+    )
+    # the context records the offline mode, not a live claim
+    context = report.to_dict()["execution_context"]
+    assert context["acquisition"] == "offline_supplied"
+
+
+def test_fabricated_collection_identity_never_promotes_offline_review() -> None:
+    """A supplied bundle carrying a FABRICATED collection identity (even an
+    intact-shaped one) must not be promoted to live and must not lend its
+    untrusted tool/code_revision to the current generator identity: the
+    generator of the offline review is measured from the running code."""
+    collected = _collect(World(), providers=("openrouter",))
+    forged = collected.collection.model_copy(
+        update={
+            "tool": "attacker-tool/9.9.9",
+            "code_revision": "forged-revision-000",
+        }
+    )
+    forged_bundle = collected.model_copy(update={"collection": forged})
+
+    # offline review (the default for any non-collect invocation)
+    report, _ = _validate(forged_bundle, None, acquisition=ACQUISITION_OFFLINE)
+    assert report.to_dict()["source_evidence"]["scope"] == "supplied_collection"
+    generator = report.to_dict()["execution_context"]["generator"]
+    assert generator["tool"] != "attacker-tool/9.9.9"
+    assert generator["code_revision"] != "forged-revision-000"
+    from slaif_gateway.services.catalog_refresh import execution_identity
+
+    expected_tool, expected_revision = execution_identity.tool_identity()
+    assert generator["tool"] == expected_tool
+    assert generator["code_revision"] == expected_revision
+
+    # the explicit live context also cannot be claimed by label alone: the
+    # generator is still the runner's own measurement (the collect path's),
+    # and a live context without ANY collection identity blocks the run
+    live_report, _ = _validate(forged_bundle, None, acquisition=ACQUISITION_LIVE)
+    live_generator = live_report.to_dict()["execution_context"]["generator"]
+    assert live_generator["tool"] == "attacker-tool/9.9.9"
+    assert live_generator["code_revision"] == "forged-revision-000"
+    assert live_report.to_dict()["source_evidence"]["scope"] == "live_collection"
+
+    no_collection = forged_bundle.model_copy(update={"collection": None})
+    with pytest.raises(CatalogRefreshBlockedError) as excinfo:
+        _validate(no_collection, None, acquisition=ACQUISITION_LIVE)
+    assert excinfo.value.code == "acquisition_context_mismatch"
+
+
+def test_public_validator_default_is_offline_with_current_measured_generator() -> None:
+    """181-i (I1/I2) on the PUBLIC pure-validator contract: calling
+    ``validate_bundle`` directly with NO acquisition argument must treat an
+    intact OR forged collection as supplied historical provenance (offline
+    scope) and measure the current generator from the running code. The
+    helper-based tests above simulate the producing runner, so this pins
+    the library default itself."""
+    from slaif_gateway.services.catalog_refresh import execution_identity
+
+    collected = _collect(World(), providers=("openrouter",))
+    policy = policy_from_document(collected.policy)
+
+    # intact collection, no acquisition argument -> offline, measured generator
+    report, _ = validate_bundle(
+        collected, None, policy, sql_capture="first_install"
+    )
+    evidence = report.to_dict()["source_evidence"]
+    assert evidence["scope"] == "supplied_collection"
+    expected_tool, expected_revision = execution_identity.tool_identity()
+    generator = report.to_dict()["execution_context"]["generator"]
+    assert generator == {"tool": expected_tool, "code_revision": expected_revision}
+    assert report.to_dict()["execution_context"]["acquisition"] == "offline_supplied"
+
+    # forged collection, no acquisition argument -> still offline, and the
+    # forged identity never becomes the current generator
+    forged = collected.model_copy(
+        update={
+            "collection": collected.collection.model_copy(
+                update={
+                    "tool": "attacker-tool/9.9.9",
+                    "code_revision": "forged-revision-000",
+                }
+            )
+        }
+    )
+    forged_report, _ = validate_bundle(
+        forged, None, policy, sql_capture="first_install"
+    )
+    assert forged_report.to_dict()["source_evidence"]["scope"] == "supplied_collection"
+    forged_generator = forged_report.to_dict()["execution_context"]["generator"]
+    assert forged_generator == {"tool": expected_tool, "code_revision": expected_revision}
+    assert forged_generator["tool"] != "attacker-tool/9.9.9"
+    assert forged_generator["code_revision"] != "forged-revision-000"
+
+
+def test_offline_review_generator_versions_are_the_running_code() -> None:
+    """The execution context's generator_versions are the ACTUAL versions
+    of the generating code (runner-owned constants), never the supplied
+    bundle revision/research declarations."""
+    collected = _collect(World(), providers=("openrouter",))
+    report, _ = _validate(collected, None, acquisition=ACQUISITION_OFFLINE)
+    versions = report.to_dict()["execution_context"]["generator_versions"]
+    from slaif_gateway.schemas.catalog_refresh import (
+        EXTRACTOR_ID,
+        POLICY_VERSION,
+        RENDERER_VERSION,
+        SCHEMA_VERSION,
+    )
+
+    assert versions == {
+        "schema_version": SCHEMA_VERSION,
+        "renderer_version": RENDERER_VERSION,
+        "policy_version": POLICY_VERSION,
+        "extractor_version": EXTRACTOR_ID,
+    }
 
 
 # --- 181-b (B1): shared flat billing eligibility ---------------------------------
