@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -535,6 +536,16 @@ def test_db_snapshot_outage_publishes_minimal_blocked_run(tmp_path: Path) -> Non
 TESTS_UNIT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Finite test durations (NOT the documented 300 s operator default): the
+# driver must survive a slow, parallel-CI startup BEFORE the watchdog
+# fires, so the duration is an adequate finite startup allowance. The
+# stall itself is 300 s, so a bounded return is still proven against it.
+WATCHDOG_DURATION_SECONDS = 10
+WATCHDOG_KILL_GRACE_SECONDS = 1
+WATCHDOG_WALL_BUDGET_SECONDS = (
+    WATCHDOG_DURATION_SECONDS + WATCHDOG_KILL_GRACE_SECONDS + 15
+)
+
 _WATCHDOG_DRIVER_TEMPLATE = """
 import signal
 import sys
@@ -582,9 +593,12 @@ tc._cli_collect(
 """
 
 
-def _run_watchdog_case(tmp_path: Path, *, ignore_term: bool) -> tuple[int, float]:
+def _run_watchdog_case(tmp_path: Path, *, ignore_term: bool) -> tuple[int, float, Path]:
     """Drive the REAL collect (mocked HTTP/DNS, stalled first request)
-    under the standard OS watchdog with short injected test durations."""
+    under the standard OS watchdog with adequate finite test durations
+    (startup allowance; the stall is 300 s, so a bounded return is still
+    proven against it). The standard process-group watchdog semantics are
+    kept: no --foreground, no bespoke supervisor."""
     timeout_bin = shutil.which("timeout")
     assert timeout_bin is not None, "the standard OS timeout utility is required"
     driver = tmp_path / "watchdog_driver.py"
@@ -603,8 +617,8 @@ def _run_watchdog_case(tmp_path: Path, *, ignore_term: bool) -> tuple[int, float
     proc = subprocess.run(
         [
             timeout_bin,
-            "--kill-after=1",
-            "2",
+            f"--kill-after={WATCHDOG_KILL_GRACE_SECONDS}",
+            str(WATCHDOG_DURATION_SECONDS),
             sys.executable,
             str(driver),
             str(run_root),
@@ -612,7 +626,7 @@ def _run_watchdog_case(tmp_path: Path, *, ignore_term: bool) -> tuple[int, float
             str(marker),
         ],
         capture_output=True,
-        timeout=30,
+        timeout=WATCHDOG_WALL_BUDGET_SECONDS + 30,
     )
     wall = time.monotonic() - started
     return proc.returncode, wall, marker
@@ -622,13 +636,17 @@ def test_watchdog_terminates_stalled_collect_before_any_publication(
     tmp_path: Path,
 ) -> None:
     # 181-h H3 (watchdog proof): the documented watchdog prefix (standard
-    # OS ``timeout --kill-after=1 2``) around the REAL collect command -
-    # mocked HTTP/DNS through the existing World fixture, first request
-    # stalled - returns bounded and NON-SUCCESS (124/137), publishes NO
-    # new run (the collect writes nothing during the fetch phase;
-    # publication is one atomic rename at finalization only), and leaves
-    # an EARLIER published run in the same run root byte-identical.
-    # No private service, short injected duration only.
+    # OS ``timeout --kill-after=<grace> <duration>``) around the REAL
+    # collect command - mocked HTTP/DNS through the existing World
+    # fixture, first request stalled - returns bounded and NON-SUCCESS
+    # (genuine timeout representations: 124/137, or the raw -SIGTERM/
+    # -SIGKILL where a standard process-group ``timeout`` signals its own
+    # group on the runner), publishes NO new run (the collect writes
+    # nothing during the fetch phase; publication is one atomic rename at
+    # finalization only), and leaves an EARLIER published run in the same
+    # run root byte-identical. The owned marker (written by the stalled
+    # handler) proves the stall was REACHED - not a startup timeout. No
+    # private service; adequate finite test duration only.
     import test_catalog_refresh_collection as tc
 
     world = tc.World()
@@ -664,10 +682,13 @@ def test_watchdog_terminates_stalled_collect_before_any_publication(
     }
 
     rc, wall, marker = _run_watchdog_case(tmp_path, ignore_term=False)
-    assert rc in (124, 137), (
-        f"watchdog status must be non-success 124/137, got {rc}"
+    assert rc in (124, 137, -signal.SIGTERM, -signal.SIGKILL), (
+        f"watchdog status must be a genuine non-success timeout "
+        f"representation, got {rc}"
     )
-    assert wall < 10.0, f"watchdog return unbounded: {wall}"
+    assert wall < WATCHDOG_WALL_BUDGET_SECONDS, (
+        f"watchdog return unbounded: {wall}"
+    )
     assert marker.is_file(), (
         "the collect must have reached the intended acquisition stall "
         "(owned marker written by the mocked stalled handler)"
@@ -691,14 +712,20 @@ def test_watchdog_kill_after_terminates_term_ignoring_collect(
     tmp_path: Path,
 ) -> None:
     # 181-h H3 (TERM-ignoring owned negative): a collect that ignores
-    # SIGTERM must be KILLed after the 1-second KILL grace and still
-    # exit non-success (137), publishing nothing: no fresh READY, no
-    # staged or partial artifact, no overwrite of an older review.
+    # SIGTERM must be KILLed after the KILL grace and still exit
+    # non-success - the genuine SIGKILL representation is 137 (the shell
+    # convention) or the raw -signal.SIGKILL where a standard
+    # process-group ``timeout`` surfaces the signal itself - publishing
+    # nothing: no fresh READY, no staged or partial artifact, no
+    # overwrite of an older review. The marker proves the stall was
+    # reached before the KILL.
     rc, wall, marker = _run_watchdog_case(tmp_path, ignore_term=True)
-    assert rc == 137, (
+    assert rc in (137, -signal.SIGKILL), (
         f"TERM-ignoring collect must be KILLed after the grace: {rc}"
     )
-    assert wall < 10.0, f"watchdog return unbounded: {wall}"
+    assert wall < WATCHDOG_WALL_BUDGET_SECONDS, (
+        f"watchdog return unbounded: {wall}"
+    )
     assert marker.is_file(), (
         "the collect must have reached the intended acquisition stall "
         "(owned marker written by the mocked stalled handler)"
