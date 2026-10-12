@@ -59,8 +59,13 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 
 SCHEMA_VERSION = "1"
-RENDERER_VERSION = "180.6"
+RENDERER_VERSION = "181.1"
 POLICY_VERSION = 1
+# 181-i (I2/I3): the registered deterministic extractor/parser identity of
+# the generating code. Like the contract versions above, this is a
+# RUNNER-OWNED generator version/identity constant of this code; the
+# collector re-exports it (collection.EXTRACTOR_ID) for compatibility.
+EXTRACTOR_ID = "slaif-collector/181.1"
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _HEX64_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -237,6 +242,215 @@ class ResearchIdentity(CatalogRefreshModel):
     prompt_version: Literal["N/A"] = "N/A"
     extractor_version: str = Field(min_length=1, max_length=64)
     tool_version: str = Field(min_length=1, max_length=64)
+
+
+class SourceRetrievalRecord(CatalogRefreshModel):
+    """Objective 181: one measured HTTP retrieval outcome for one URL.
+
+    Records what this invocation ACTUALLY fetched: requested and final
+    URL, retrieval UTC time (retrieval time is never publication time),
+    transport outcome, and content identity. Retrieval time is not
+    publication time, and a model creation time is not a price
+    publication time. Failed retrievals carry a safe code only — never
+    raw response bodies or secret-bearing exception text.
+    """
+
+    requested_url: str
+    final_url: str | None = None
+    retrieved_at: datetime
+    outcome: Literal["ok", "failed"]
+    status: int | None = Field(default=None, ge=0, le=999)
+    failure_code: str | None = Field(default=None, min_length=1, max_length=128)
+    content_type: str | None = Field(default=None, max_length=256)
+    content_bytes: int | None = Field(default=None, ge=0)
+    content_sha256: str | None = None
+    attempts: int = Field(default=1, ge=1, le=8)
+    redirects: int = Field(default=0, ge=0, le=8)
+    published_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "SourceRetrievalRecord":
+        validate_safe_url(self.requested_url, field="requested_url")
+        if self.final_url is not None:
+            validate_safe_url(self.final_url, field="final_url")
+        if self.outcome == "ok":
+            if self.status is None or not (200 <= self.status < 300):
+                raise ValueError("a successful retrieval records its 2xx status")
+            if self.content_bytes is None or not (
+                _HEX64_PATTERN.fullmatch(self.content_sha256 or "")
+            ):
+                raise ValueError("a successful retrieval records content size and digest")
+            if self.failure_code is not None:
+                raise ValueError("a successful retrieval has no failure code")
+        else:
+            if self.failure_code is None:
+                raise ValueError("a failed retrieval records its safe failure code")
+            if self.content_bytes is not None or self.content_sha256 is not None:
+                raise ValueError("a failed retrieval never records body content")
+        if (
+            self.published_at is not None
+            and (
+                self.published_at.tzinfo is None
+                or self.published_at.utcoffset() is None
+            )
+        ):
+            raise ValueError("published_at must be timezone-aware")
+        return self
+
+
+class CollectionInventoryEntry(CatalogRefreshModel):
+    """Objective 181 (C3): one observed source model, one disposition.
+
+    Every model the collected sources observed is reconciled exactly
+    once. Proposed models live in the bundle's facts; every non-proposed
+    observed model appears here exactly once with a compact machine
+    reason code and a bounded human detail. Nothing silently disappears;
+    the report groups the reasons and keeps the full detail inline.
+    """
+
+    provider: str
+    model: str
+    disposition: Literal[
+        "excluded_subset",
+        "unsupported",
+        "incomplete",
+        "deprecated",
+        "retained_local",
+        "unresolved",
+    ]
+    reason_code: str = Field(min_length=1, max_length=128)
+    detail: str = Field(default="", max_length=240)
+
+    @model_validator(mode="after")
+    def _check(self) -> "CollectionInventoryEntry":
+        if self.provider not in KNOWN_PROVIDERS:
+            raise ValueError(f"unknown provider {self.provider!r}")
+        if not (1 <= len(self.model) <= 200):
+            raise ValueError("inventory model IDs are bounded to 1..200 characters")
+        return self
+
+
+class CollectionIdentity(CatalogRefreshModel):
+    """Objective 181: measured identity of a collecting invocation.
+
+    Built by the collect command from actual retrievals. A bundle may
+    also CARRY one as historical provenance: a supplied bundle reviewed
+    offline keeps its recorded collection identity (dates, retrievals,
+    inventory, digests) as SUPPLIED prior provenance — it is never
+    upgraded into a live retrieval of the reviewing invocation, which
+    is decided by the runner-selected execution context (181-i), not by
+    this field's presence. ``code_revision`` is the measured fixed
+    file-set content identity of the collecting code (181-i I3); the
+    package version lives in the tool metadata. ResearchIdentity
+    remains NOT_RUN for Codex in this objective; this identity records
+    the deterministic collector and its real retrieval outcomes, never
+    a researcher's SUCCESS label.
+    """
+
+    tool: str = Field(min_length=1, max_length=128)
+    code_revision: str = Field(min_length=1, max_length=128)
+    profile: Literal["standard-v1"]
+    providers: tuple[str, ...] = Field(min_length=1)
+    model_include: tuple[str, ...] = Field(default=())
+    started_at: datetime
+    finished_at: datetime
+    retrievals: tuple[SourceRetrievalRecord, ...] = Field(default=(), max_length=512)
+    inventory: tuple[CollectionInventoryEntry, ...] = Field(default=(), max_length=2048)
+    deduplicated_fetches: bool = False
+    # 181-b (B3): distinct observed SOURCE model identities per collected
+    # provider (the catalog the sources actually listed). Deliberately
+    # separate from local route/alias rows: a source model count is not a
+    # route count, and the report must not conflate the two.
+    source_model_counts: dict[str, int] = Field(default_factory=dict, max_length=8)
+
+    @model_validator(mode="after")
+    def _check(self) -> "CollectionIdentity":
+        if len(set(self.providers)) != len(self.providers):
+            raise ValueError("collection providers contain duplicates")
+        for provider in self.providers:
+            if provider not in KNOWN_PROVIDERS:
+                raise ValueError(f"unknown provider {provider!r} in collection")
+        if len(set(self.model_include)) != len(self.model_include):
+            raise ValueError("collection model_include contains duplicates")
+        if self.started_at.tzinfo is None or self.started_at.utcoffset() is None:
+            raise ValueError("collection started_at must be timezone-aware")
+        if self.finished_at.tzinfo is None or self.finished_at.utcoffset() is None:
+            raise ValueError("collection finished_at must be timezone-aware")
+        if self.finished_at < self.started_at:
+            raise ValueError("collection finished_at precedes started_at")
+        urls = [retrieval.requested_url for retrieval in self.retrievals]
+        if len(set(urls)) != len(urls):
+            raise ValueError("collection retrievals contain duplicate requested URLs")
+        keys = [(entry.provider, entry.model) for entry in self.inventory]
+        if len(set(keys)) != len(keys):
+            raise ValueError(
+                "inventory entries must reconcile each observed model exactly once"
+            )
+        for provider, count in self.source_model_counts.items():
+            if provider not in KNOWN_PROVIDERS:
+                raise ValueError(f"unknown provider {provider!r} in source model counts")
+            if count < 0:
+                raise ValueError("source model counts must be non-negative")
+        return self
+
+
+EXECUTION_CONTEXT_VERSION = "1"
+
+
+class ExecutionGeneratorIdentity(CatalogRefreshModel):
+    """181-i (I2): identity of the code that generated a sealed run.
+
+    Runner output bound in the authenticated ``validation.json`` — never
+    copied from the untrusted bundle declaration. ``code_revision`` is
+    the measured fixed file-set content identity (181-i I3) or the
+    explicit unavailable marker; the package version lives in ``tool``.
+    """
+
+    tool: str = Field(min_length=1, max_length=128)
+    code_revision: str = Field(min_length=1, max_length=128)
+
+
+class ExecutionGeneratorVersions(CatalogRefreshModel):
+    """181-i (I2/I3): the ACTUAL versions of the generating code.
+
+    Runner-owned: measured from the running code's own constants and
+    bound in the authenticated ``validation.json``. These are NOT the
+    bundle's supplied ``revision``/``research`` declarations, which stay
+    labeled as supplied historical text and are never rendered as this
+    run's generator versions. Replay supports exactly these values: a
+    sealed context carrying any other schema/renderer/policy/extractor
+    version is refused explicitly as an unsupported replay version (no
+    historical renderer fleet, no re-derivation, no re-sealing).
+    """
+
+    schema_version: Literal[SCHEMA_VERSION]
+    renderer_version: Literal[RENDERER_VERSION]
+    policy_version: Literal[POLICY_VERSION]
+    extractor_version: Literal[EXTRACTOR_ID]
+
+
+class ExecutionContext(CatalogRefreshModel):
+    """181-i (I1/I2): runner-owned execution context of the invocation
+    that generated a sealed run.
+
+    Bound in the authenticated ``validation.json`` (a fixed content file
+    of the run's HMAC). ``acquisition`` is the RUNNER-SELECTED mode of
+    that invocation: ``live_collection`` means this invocation executed
+    the collection path (the bundle's collection identity is this
+    invocation's own measurement); ``offline_supplied`` means the
+    invocation only reviewed supplied bytes and performed no live
+    retrieval (any collection identity in the bundle is historical
+    provenance). ``generator`` is the measured code identity of the
+    generating invocation and ``generator_versions`` its actual
+    schema/renderer/policy/extractor versions. Verify replays the
+    ORIGINAL authenticated context; the current verifier identity is
+    reported separately and is never substituted for the original.
+    """
+
+    schema_version: Literal[EXECUTION_CONTEXT_VERSION]
+    acquisition: Literal["live_collection", "offline_supplied"]
+    generator: ExecutionGeneratorIdentity
+    generator_versions: ExecutionGeneratorVersions
 
 
 class ProfileContract(CatalogRefreshModel):
@@ -491,6 +705,12 @@ class BaselineIdentity(CatalogRefreshModel):
     mode: Literal["first_install", "db_snapshot", "exported_file"]
     exported_at: datetime | None = None
     target_database: str | None = Field(default=None, max_length=256)
+    # 181-b (B2): explicit host/port identity fields. 180-era bundles
+    # predate them (None) and keep the database-name-only comparison;
+    # the full target identity is additionally bound inside the hashed
+    # baseline content digest in every mode.
+    target_host: str | None = Field(default=None, max_length=256)
+    target_port: int | None = Field(default=None, ge=1, le=65535)
     postgres_version: str | None = Field(default=None, max_length=32)
     sql_checked: bool = False
     row_counts: dict[str, int] = Field(default_factory=dict)
@@ -499,7 +719,12 @@ class BaselineIdentity(CatalogRefreshModel):
     @model_validator(mode="after")
     def _check(self) -> BaselineIdentity:
         if self.mode == "first_install":
-            if self.exported_at is not None or self.target_database is not None:
+            if (
+                self.exported_at is not None
+                or self.target_database is not None
+                or self.target_host is not None
+                or self.target_port is not None
+            ):
                 raise ValueError("first_install baseline must be explicitly empty")
             if self.sql_checked or self.content_sha256 is not None:
                 raise ValueError("first_install baseline carries no SQL evidence")
@@ -520,6 +745,10 @@ class BaselineIdentity(CatalogRefreshModel):
                 "@" in self.target_database or "://" in self.target_database
             ):
                 raise ValueError("target_database must not carry credentials")
+            if self.target_host is not None and (
+                "@" in self.target_host or "://" in self.target_host
+            ):
+                raise ValueError("target_host must not carry credentials")
         for key, value in self.row_counts.items():
             if not (1 <= len(key) <= 64) or value < 0:
                 raise ValueError("row_counts must map bounded names to non-negative ints")
@@ -560,6 +789,16 @@ class RefreshBundle(CatalogRefreshModel):
     generated_at: datetime
     revision: RevisionIdentity
     research: ResearchIdentity
+    # Objective 181: present for bundles built by the collect command from
+    # actual retrievals; a supplied bundle may carry one as historical
+    # provenance (181-i: the runner-selected execution context, not this
+    # field's presence, decides whether retrieval happened in the
+    # reviewing invocation). Optional (schema version deliberately remains
+    # "1" so pre-181 bundle bytes still parse and can be reviewed offline;
+    # 181-i verify, however, explicitly REFUSES sealed runs whose
+    # authenticated validation.json predates the execution-context
+    # contract - old sealed runs are not re-sealed or rewritten).
+    collection: CollectionIdentity | None = None
     policy: PolicyDocument
     profile: ProfileContract
     selection: Selection

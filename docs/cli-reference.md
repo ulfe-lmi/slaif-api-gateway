@@ -104,16 +104,25 @@ slaif-gateway secrets validate-env
 Codex commands apply only to explicitly registered qualification profiles.
 Configuration validation reports bounded names/status, never secret values.
 
-## Catalog refresh (offline review)
+## Catalog refresh (collect, review, verify)
 
-Bounded offline catalog refresh: one typed proposal bundle, one safe
-baseline, one sealed one-page report. Offline review, verify, and read-only
-export only — live source retrieval is unavailable in this version and there
-is no refresh or apply command in this version. Full semantics, policy
-thresholds, sealing, and exit codes live in
-[Catalog refresh (offline review)](catalog-refresh.md).
+Bounded catalog refresh: bounded live official-source collection, one typed
+proposal bundle, one safe baseline, one sealed one-page report. `collect`,
+`review`, `verify`, and read-only `export-baseline` — no refresh or apply
+command exists in this version and Codex research remains NOT_RUN. Full
+semantics, the source registry, policy thresholds, sealing, and exit codes
+live in [Catalog refresh (collect, review, and
+verify)](catalog-refresh.md).
 
 ```bash
+# Collect the official catalogs now (first install, both providers, all eligible models)
+slaif-gateway catalog-refresh collect --bootstrap
+
+# Refresh collection against an exported baseline with an explicit selection
+slaif-gateway catalog-refresh collect --refresh \
+  --providers openrouter --models synth/alpha,synth/beta \
+  --baseline-file /path/to/baseline.json
+
 # Review a proposal bundle against an exported baseline (sealed run output)
 slaif-gateway catalog-refresh review /path/to/catalog-refresh.json \
   --baseline-file /path/to/baseline.json
@@ -132,8 +141,23 @@ slaif-gateway catalog-refresh verify --run-dir /path/to/run --seal-key ~/.local/
 slaif-gateway catalog-refresh export-baseline --out /path/to/baseline.json --db-url postgresql+asyncpg://user@host:5432/dbname
 ```
 
-Review exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED, 65 data
-error, 2 usage error. Verify: 0 valid, 30 invalid (including a missing,
+Collect exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED (a blocked
+run is always published, labeled by the path actually reached:
+`collection not started` when the baseline failed before any retrieval,
+`collection attempted and failed before completion` when the retrieval
+attempt failed, or the `live collection` wording after a completed
+collection, including semantically blocked collects), 65 data error where
+no blocked run is published (e.g. an unreadable or invalid
+`--baseline-file`), 2 usage error.
+Under the documented watchdog prefix a timed-out collect exits non-success
+(124 on the TERM timeout, 137 after the KILL grace for a TERM-ignoring
+process) and publishes no run: the collect writes nothing during the fetch
+phase, publication is one atomic rename at finalization only, so an
+interrupted run never reports a fresh READY and never overwrites an older
+review. Direct raw collect without the watchdog may exceed the 120-second
+cooperative collection target during blocked DNS or a continuous slow
+stream (documented limit; no hard total bound is claimed). Review exit codes: 0 READY, 10
+READY_WITH_WARNINGS, 20 BLOCKED, 65 data error, 2 usage error. Verify: 0 valid, 30 invalid (including a missing,
 non-directory, or symlinked run directory with an otherwise valid key),
 65 data error (missing or unsafe seal key; verify never creates keys).
 Export-baseline: 0 written, 65 data error (never overwrites output, never
@@ -148,7 +172,7 @@ and a safe error that does not echo input content; a symlinked run
 directory makes `verify` invalid (exit 30). Runs are published atomically
 new-only and never overwritten; `export-baseline` writes only to a
 new output path. Full contract:
-[Catalog refresh (offline review)](catalog-refresh.md#filesystem-trust-contract).
+[Catalog refresh (collect, review, and verify)](catalog-refresh.md#filesystem-trust-contract).
 
 The three review baseline inputs are distinct execution paths with
 distinct SQL evidence: `--db-url` performs the live read-only export
@@ -163,7 +187,13 @@ writes to the database.
 
 ### Offline source input contract
 
-The bundle's `sources` entries are replayed offline, never fetched. Only
+For `review`, the bundle's `sources` entries are replayed offline, never
+fetched (a bundle produced by `collect` additionally carries the measured
+collection identity, which `review` re-verifies; see
+[catalog-refresh.md](catalog-refresh.md#collection-versus-replay-validation-re-verification)). The
+report scope is runner-selected: a `review` of a previously collected
+bundle is `supplied_collection`, never `live_collection` — the retrieval
+claims stay the supplied record's. Only
 the registered (provider, source kind) pairs are parsed deterministically:
 `openrouter/openrouter_models_api` (official OpenRouter `/models` shape,
 per-token USD pricing), `openai/openai_models_api` (identity only),
@@ -210,6 +240,7 @@ slaif-gateway admin reset-password
 slaif-gateway admin list
 slaif-gateway bootstrap openai-completions-catalog
 slaif-gateway calibration summarize
+slaif-gateway catalog-refresh collect
 slaif-gateway catalog-refresh review
 slaif-gateway catalog-refresh verify
 slaif-gateway catalog-refresh export-baseline

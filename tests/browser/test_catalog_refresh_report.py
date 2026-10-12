@@ -77,6 +77,8 @@ from slaif_gateway.services.catalog_refresh.rendering import (  # noqa: E402
     render_report,
 )
 from slaif_gateway.services.catalog_refresh.validation import (  # noqa: E402
+    ACQUISITION_LIVE,
+    ACQUISITION_OFFLINE,
     OVERALL_BLOCKED,
     OVERALL_READY,
     OVERALL_READY_WITH_WARNINGS,
@@ -169,6 +171,53 @@ def _ready_case() -> tuple[object, dict]:
         sql_capture=sql_capture_for_mode(bundle.baseline.mode),
     )
     assert report.state == OVERALL_READY
+    return bundle, report
+
+
+def _collection_bundle() -> object:
+    """The ACTUAL mocked-collect output (real collector identity with
+    measured code revision, real retrieval records, and inventory) —
+    181-i browser coverage uses the genuine collect pipeline, not
+    hand-built collection metadata. The scope is a RUNNER-SELECTED
+    context of the reviewing invocation, never a property of these
+    bytes."""
+    import test_catalog_refresh_collection as _collect_tests
+
+    return _collect_tests._collect(_collect_tests.World(), providers=("openai", "openrouter"))
+
+
+def _collection_case() -> tuple[object, dict]:
+    """The intact collected bundle reviewed under the RUNNER-SELECTED
+    LIVE context (the collect invocation itself): live_collection scope,
+    the scope-card Collection row, and the #collection-details section."""
+    bundle = _collection_bundle()
+    report, _ = validate_bundle(
+        bundle,
+        None,
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+        acquisition=ACQUISITION_LIVE,
+    )
+    assert report.state == OVERALL_READY, report.state_reason
+    assert report.to_dict()["source_evidence"]["scope"] == "live_collection"
+    return bundle, report
+
+
+def _supplied_collection_case() -> tuple[object, dict]:
+    """The SAME intact bundle reviewed under the runner-selected OFFLINE
+    context (a supplied review): supplied_collection scope — the recorded
+    collection identity is historical provenance, preserved and labeled,
+    and this invocation performed no live retrieval (181-i I1)."""
+    bundle = _collection_bundle()
+    report, _ = validate_bundle(
+        bundle,
+        None,
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+        acquisition=ACQUISITION_OFFLINE,
+    )
+    assert report.state == OVERALL_READY, report.state_reason
+    assert report.to_dict()["source_evidence"]["scope"] == "supplied_collection"
     return bundle, report
 
 
@@ -567,6 +616,8 @@ def case_html(tmp_path_factory) -> dict[str, Path]:
     )
     for case, builder in (
         ("ready", _ready_case),
+        ("collection", _collection_case),
+        ("supplied-collection", _supplied_collection_case),
         ("warnings", _warnings_case),
         ("large-unchanged", _large_unchanged_case),
         ("two-provider", _two_provider_case),
@@ -588,6 +639,27 @@ CASE_EXPECTATIONS = {
     "first-install": {"has_sources": False, "pdf": False, "visible": ()},
     "blocked": {"has_sources": True, "pdf": False, "visible": ()},
     "ready": {"has_sources": True, "pdf": False, "visible": ()},
+    "collection": {
+        "has_sources": True,
+        "pdf": False,
+        "visible": (
+            "Collection details",
+            "recorded collection identity",
+            "live-collection scope",
+            "Measured retrieval records",
+            "NOT_RUN",
+        ),
+    },
+    "supplied-collection": {
+        "has_sources": True,
+        "pdf": False,
+        "visible": (
+            "Collection details",
+            "historical provenance",
+            "supplied-collection scope",
+            "reviewed offline",
+        ),
+    },
     "warnings": {"has_sources": True, "pdf": False, "visible": ()},
     "large-unchanged": {"has_sources": True, "pdf": False, "visible": ()},
     "two-provider": {"has_sources": True, "pdf": False, "visible": ()},
@@ -606,6 +678,8 @@ def test_browser_layout_all_cases(playwright, case_html) -> None:
     for case in (
         "first-install",
         "ready",
+        "collection",
+        "supplied-collection",
         "warnings",
         "blocked",
         "large-unchanged",

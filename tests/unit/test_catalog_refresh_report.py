@@ -138,7 +138,31 @@ def test_first_screen_contains_required_decision_facts() -> None:
     assert "What changed" in html_text
     # Product language: no internal objective numbers anywhere in the report.
     assert not re.search(r"objective\s+\d+", html_text, flags=re.IGNORECASE)
-    assert "live source retrieval and apply are unavailable in this version" in html_text
+    # 181-i: scope-correct footer (this case is an offline review of supplied
+    # bytes) and the concise runner-owned generating identity on the first
+    # screen (tool + short digest); the full digest, the generating version
+    # set and the supplied historical bundle declaration stay expanded.
+    assert (
+        "offline scope: review/export/verify only — this invocation performed no "
+        "live retrieval; apply and the Codex researcher are not implemented in this version."
+        in html_text
+    )
+    assert "generator slaif-gateway/" in html_text
+    assert "(runner-measured)" in html_text
+    assert "full identity" in html_text
+    # expanded identity: full authenticated facts + labeled historical declaration
+    assert "Generator identity" in html_text
+    assert "code_revision catalog-ccid/v1:sha256:" in html_text
+    assert "Renderer (generating)" in html_text
+    assert "Bundle revision (supplied)" in html_text
+    compact = html_text.split("id='run-identity-compact'")[1].split("</p>")[0]
+    # first screen: concise digest fragment only — no constant prefix, no
+    # full 64-hex identifier, no version set (those stay expanded)
+    import re as _re
+    assert _re.search("code <code class='wrap'>[0-9a-f]{12}\u2026</code>", compact)
+    assert "catalog-ccid" not in compact
+    assert "renderer" not in compact
+    assert "policy v" not in compact
     _assert_no_external_or_executable_resources(html_text)
 
 

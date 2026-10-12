@@ -38,7 +38,10 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import urlparse
 
-from slaif_gateway.schemas.catalog_refresh import RefreshBundle
+from slaif_gateway.schemas.catalog_refresh import (
+    CollectionInventoryEntry,
+    RefreshBundle,
+)
 
 _STATE_CLASS = {
     "READY": "state-ready",
@@ -380,6 +383,17 @@ def _plan_lines(report: dict[str, Any]) -> tuple[list[str], bool]:
     return lines, blocked
 
 
+def _digest_fragment(value: Any) -> str:
+    """First-screen digest fragment (12 hex). The full identifier —
+    including its catalog-ccid prefix — stays in the expanded identity
+    and the sealed artifacts."""
+    text = str(value or chr(8212))
+    _head, sep, digest = text.rpartition("sha256:")
+    if sep and len(digest) == 64:
+        return digest[:12] + "\u2026"
+    return text
+
+
 def _source_evidence_line(report: dict[str, Any]) -> str:
     """Compact truthful source-evidence summary for the decision box."""
     evidence = report.get("source_evidence", {}) or {}
@@ -398,7 +412,24 @@ def _source_evidence_line(report: dict[str, Any]) -> str:
         f"{evidence_models} model(s) in official snapshots: {selected} selected, "
         f"{retained} retained local, {excluded} excluded, {unexplained} unexplained omission(s)"
     )
-    parts.append("offline replay of supplied bytes — registered deterministic parsers, not a live retrieval")
+    scope = evidence.get("scope")
+    if scope == "live_collection":
+        parts.append(
+            "live collection (recorded collection identity) — bounded official retrieval, "
+            "registered deterministic parsers"
+        )
+    elif scope == "supplied_collection":
+        # concise first-screen scope label only: the provenance and
+        # offline-review explanation lives in the Collection row above
+        # and the expanded note (and the sealed validation.json).
+        parts.append(
+            "supplied collection identity — offline review"
+        )
+    else:
+        parts.append(
+            "offline replay of supplied bytes — registered deterministic parsers, "
+            "not a live retrieval"
+        )
     return esc(" · ".join(parts))
 
 
@@ -493,7 +524,52 @@ def _render_scope_card(bundle: RefreshBundle, report: dict[str, Any]) -> str:
         )
     else:
         baseline_text = "Supplied export — not checked against a live database"
-    revision = bundle.revision
+    # 181-i (I1/I2/I3): the first screen keeps the RUNNER-OWNED generating
+    # identity CONCISE (tool + short digest, runner-measured) with a link;
+    # the generating version set, the full 64-hex digest, and the supplied
+    # historical bundle declaration all stay in the expanded identity.
+    context = report.get("execution_context") or {}
+    generating = context.get("generator") or {}
+    compact_generator = ""
+    if generating:
+        # first screen: the digest fragment only (the catalog-ccid prefix
+        # and the full 64-hex identifier stay expanded), keeping the
+        # label inside the card's two-line budget at every viewport.
+        compact_generator = (
+            f"\u00b7 generator {esc(generating.get('tool'))} \u00b7 "
+            f"code <code class='wrap'>{esc(_digest_fragment(generating.get('code_revision')))}</code> "
+            "(runner-measured)"
+        )
+    # "at" (not "generated at"): the first screen has a two-line budget
+    # at every viewport, and actual collect run ids are long; the
+    # expanded identity carries the full generated-at wording.
+    run_identity_compact = (
+        "<p class='annot' id='run-identity-compact'>"
+        f"Run <code class='wrap'>{esc(report.get('run_id'))}</code> \u00b7 at "
+        f"{esc(report.get('generated_at'))}{compact_generator} "
+        "\u00b7 <a href='#run-identity'>full identity</a></p>"
+    )
+    collection_line = ""
+    if bundle.collection is not None:
+        collection = bundle.collection
+        ok = sum(1 for r in collection.retrievals if r.outcome == "ok")
+        failed = len(collection.retrievals) - ok
+        # 181-i (I1): the label follows the RUNNER-SELECTED scope in the
+        # report, never the mere presence of the collection field.
+        # First-screen row: mode + retrieval counts + details link only —
+        # the collector tool, the full 64-hex revision, the full ISO instants
+        # (start/end), and every retrieval record stay fully visible in the
+        # expanded #collection-details (and the sealed artifacts); the
+        # current generator tool + short digest are in the run-identity line.
+        if report.get("source_evidence", {}).get("scope") == "live_collection":
+            collection_label = "live: "
+        else:
+            collection_label = "supplied (historical, offline): "
+        collection_line = (
+            f"<dt>Collection</dt><dd>{collection_label}"
+            f"retrievals {ok} ok / {failed} failed · "
+            "<a href='#collection-details'>details</a></dd>"
+        )
     return (
         "<section class='card' id='scope-baseline'>"
         "<h2>Scope &amp; baseline</h2>"
@@ -502,12 +578,10 @@ def _render_scope_card(bundle: RefreshBundle, report: dict[str, Any]) -> str:
         f" ({esc(counts.get('considered', 0))} considered, {esc(counts.get('selected', 0))} selected)</dd>"
         f"<dt>Profile</dt><dd>{profile_text}</dd>"
         f"<dt>Baseline</dt><dd>{baseline_text}</dd>"
+        f"{collection_line}"
         f"<dt>Source evidence</dt><dd>{_source_evidence_line(report)}</dd>"
         "</dl>"
-        f"<p class='annot' id='run-identity-compact'>Run <code class='wrap'>{esc(report.get('run_id'))}</code> · generated at "
-        f"{esc(report.get('generated_at'))} · revision {esc(revision.slaif_revision)} (schema {esc(revision.schema_version)}, "
-        f"renderer {esc(revision.renderer_version)}, policy v{esc(report.get('policy_version'))}) · "
-        "<a href='#run-identity'>full identity</a></p>"
+        f"{run_identity_compact}"
         "</section>"
     )
 
@@ -820,9 +894,148 @@ def _kv_block(pairs: list[tuple[str, Any]], html_keys: frozenset[str] = frozense
     return "<dl class='kv'>" + "".join(rows) + "</dl>"
 
 
+def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) -> list[str]:
+    """181: measured collection evidence.
+
+    Rendered FIRST in the detail sections: the identity of the collecting
+    invocation, its real retrieval outcomes, and the observed-but-not-
+    proposed inventory. Absent when the bundle carries no collection
+    identity. The label distinguishes the RUNNER-SELECTED scope (181-i):
+    live_collection is this invocation's own retrieval; supplied_collection
+    is historical provenance of a prior collection, reviewed offline here.
+    """
+    if bundle.collection is None:
+        return []
+    collection = bundle.collection
+    ok = sum(1 for r in collection.retrievals if r.outcome == "ok")
+    failed = len(collection.retrievals) - ok
+    if report.get("source_evidence", {}).get("scope") == "live_collection":
+        scope_heading = "live retrieval recorded by this invocation"
+        scope_note = ""
+    else:
+        scope_heading = (
+            "supplied collection identity — historical provenance of a prior "
+            "collection, reviewed offline by this invocation"
+        )
+        scope_note = (
+            "<p class='muted'>This invocation performed no live retrieval; the retrieval "
+            "outcomes, dates, and inventory are the supplied record's, not this "
+            "invocation's. The provenance is preserved, never renewed or re-dated.</p>"
+        )
+    parts: list[str] = [
+        f"<details id='collection-details' open><summary>Collection details — {scope_heading} "
+        f"({len(collection.retrievals)} retrievals: {ok} ok, {failed} failed · "
+        f"{len(collection.inventory)} observed inventory entries)</summary>"
+        f"{scope_note}"
+    ]
+    kv_rows = [
+        ("Tool", collection.tool),
+        ("Code revision", collection.code_revision),
+        ("Profile", collection.profile),
+        ("Providers", ", ".join(collection.providers)),
+        ("Model selection", ", ".join(collection.model_include) or "all eligible models of selected providers"),
+        ("Started (UTC)", collection.started_at.isoformat()),
+        ("Finished (UTC)", collection.finished_at.isoformat()),
+        ("Retrievals", f"{len(collection.retrievals)} total · {ok} ok · {failed} failed (attempts include bounded retries)"),
+        ("Deduplicated fetches", "yes" if collection.deduplicated_fetches else "no"),
+    ]
+    if collection.source_model_counts:
+        counts_text = " · ".join(
+            f"{provider} {count}"
+            for provider, count in sorted(collection.source_model_counts.items())
+        )
+        kv_rows.append(
+            (
+                "Source models observed",
+                f"{counts_text} (source catalog identities; distinct from local "
+                "route/alias rows)",
+            )
+        )
+    parts.append(_kv_block(kv_rows))
+    parts.append("<h3>Measured retrieval records</h3>")
+    if collection.retrievals:
+        parts.append(
+            "<div class='table-scroll'><table><thead><tr><th>Requested URL</th><th>Outcome</th>"
+            "<th>Status</th><th>Bytes</th><th>SHA-256 (prefix)</th><th>Attempts</th><th>Redirects</th>"
+            "<th>Failure code</th></tr></thead><tbody>"
+        )
+        for record in collection.retrievals:
+            final_note = (
+                f" \u2192 {esc(record.final_url)}"
+                if record.final_url and record.final_url != record.requested_url
+                else ""
+            )
+            parts.append(
+                "<tr>"
+                f"<td class='wrap'>{esc(record.requested_url)}{final_note}</td>"
+                f"<td>{esc(record.outcome)}</td>"
+                f"<td>{esc(record.status) if record.status is not None else esc(chr(8212))}</td>"
+                f"<td class='num'>{esc(record.content_bytes) if record.content_bytes is not None else esc(chr(8212))}</td>"
+                f"<td class='wrap'>{esc(record.content_sha256[:16]) if record.content_sha256 else esc(chr(8212))}</td>"
+                f"<td class='num'>{record.attempts}</td>"
+                f"<td class='num'>{record.redirects}</td>"
+                f"<td class='wrap'>{esc(record.failure_code) if record.failure_code else esc(chr(8212))}</td>"
+                "</tr>"
+            )
+        parts.append("</tbody></table></div>")
+        parts.append(
+            "<p class='muted'>Retrieval time is fetch time, never publication time. Failed retrievals "
+            "record a safe code only — no response bodies, no exception text, no credentials. A "
+            "failed provider catalog retrieval blocks the run as a retrieval failure (source "
+            "outage), never as model disappearance.</p>"
+        )
+    else:
+        parts.append("<p class='muted'>No retrievals recorded.</p>")
+    if collection.inventory:
+        by_reason: dict[str, list[CollectionInventoryEntry]] = {}
+        for entry in collection.inventory:
+            by_reason.setdefault(entry.reason_code, []).append(entry)
+        parts.append(
+            f"<h3>Observed inventory — {len(collection.inventory)} observed model(s) reconciled, "
+            "none proposed</h3>"
+        )
+        parts.append(
+            "<div class='table-scroll'><table><thead><tr><th>Reason</th><th>Disposition</th>"
+            "<th>Count</th><th>Examples</th></tr></thead><tbody>"
+        )
+        for reason in sorted(by_reason):
+            entries = by_reason[reason]
+            examples = ", ".join(esc(f"{e.provider}/{e.model}") for e in entries[:6])
+            if len(entries) > 6:
+                examples += f" (+{len(entries) - 6} more)"
+            parts.append(
+                f"<tr><td class='wrap'>{esc(reason)}</td><td>{esc(entries[0].disposition)}</td>"
+                f"<td class='num'>{len(entries)}</td><td class='wrap'>{examples}</td></tr>"
+            )
+        parts.append("</tbody></table></div>")
+        parts.append(
+            "<p class='muted'>Every model the collected sources observed is reconciled exactly once: "
+            "proposed models appear in the proposal detail below; every other observed model appears "
+            "here with a machine reason. Inventory claims are re-verified against the parsed official "
+            "evidence and the baseline before the report accepts them (unsupported entries block the "
+            "run).</p>"
+        )
+    parts.append(
+        "<p class='muted'>Flat standard-v1 eligibility follows executable billing, not TSV capacity: "
+        "the collector proposes the short-context core text dims plus, only when the source publishes "
+        "it as an explicit zero, the reasoning no-charge (a missing reasoning price would make the "
+        "runtime bill reasoning tokens at the output price). Positive separately billed reasoning "
+        "charges, positive per-request fees, and positive hosted-operation charges (model variants "
+        "are never declared safe by analogy) are excluded with the exact machine reason, as are "
+        "published long-context standard prices, contextual override tiers, positive cache-write "
+        "charges, unknown billing keys, and source sentinels on billable dims; an explicitly selected "
+        "excluded model blocks the run. Research identity: NOT_RUN — no Codex invocation occurred in "
+        "this version. No apply or Codex research command is implemented in this "
+        "version; the sealed run directory is the terminal output.</p>"
+    )
+    parts.append("</details>")
+    return parts
+
+
 def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index: dict[str, dict[str, Any]]) -> list[str]:
     assessments = _assessment_index(report)
     parts: list[str] = []
+    parts.extend(_render_collection_details(bundle, report))
     dispositions = report.get("dispositions", [])
     models_by_key = {(m.provider, m.model): m for m in bundle.models}
 
@@ -876,8 +1089,13 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
         parts.append("</details>")
     disappeared = group("DISAPPEARED")
     if disappeared:
+        source_set_note = (
+            "the complete live-collected source set of this run"
+            if bundle.collection is not None
+            else "the complete offline source set"
+        )
         parts.append(f"<details open><summary>Disappeared models — retain-local, no delete ({len(disappeared)})</summary>")
-        parts.append("<p class='muted'>These models exist in the baseline but were absent from the complete offline source set. This version never deletes; the local rows are retained. Disappearance is a REVIEW, not an error; outage, truncated retrieval, or missing mandatory selection is never reported as disappearance.</p>")
+        parts.append(f"<p class='muted'>These models exist in the baseline but were absent from {source_set_note}. This version never deletes; the local rows are retained. Disappearance is a REVIEW, not an error; outage, truncated retrieval, or missing mandatory selection is never reported as disappearance.</p>")
         parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Note</th></tr></thead><tbody>")
         for d in disappeared:
             parts.append(f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td></tr>")
@@ -1011,9 +1229,30 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
                 ("SHA-256 (full)", source.content_sha256),
             ], html_keys=frozenset({"URL"})))
             parts.append("</div>")
-        parts.append("<p class='muted'>OFFICIAL requires the exact official host for the (provider, source kind) rule, a reviewed registered deterministic parser, supplied evidence whose bytes match the declared digest, and a successful bounded parse of those bytes. A matching digest of arbitrary bytes is not content trust: a safe URL is not an authoritative source (operator-supplied, semantic, off-host, or unverifiable-offline sources classify as REVIEW), and unsupported, contradictory, or unparseable required sources classify as BLOCKED. Supplied/cached evidence parsed offline is explicitly distinguished from live retrieval, which this process never performs.</p>")
     else:
         parts.append("<p class='muted'>No sources recorded in the bundle.</p>")
+    # 181-i (I1): the closing sentence is scope-correct; the trust and
+    # limitation explanation is preserved for every scope, and only the
+    # live scope claims retrieval by this invocation.
+    evidence_scope = report.get("source_evidence", {}).get("scope")
+    if evidence_scope == "live_collection":
+        closing = (
+            "This run’s retrievals are the measured live fetches recorded in the collection "
+            "identity of this invocation; supplied/cached evidence parsed offline is still "
+            "explicitly distinguished from any live retrieval."
+        )
+    elif evidence_scope == "supplied_collection":
+        closing = (
+            "This invocation reviewed the supplied collection record offline and performed no "
+            "live retrieval; the retrieval outcomes are the supplied record’s, and supplied "
+            "bytes remain explicitly distinguished from any live retrieval."
+        )
+    else:
+        closing = (
+            "Supplied/cached evidence parsed offline is explicitly distinguished from live "
+            "retrieval, which this invocation did not perform."
+        )
+    parts.append("<p class='muted'>OFFICIAL requires the exact official host for the (provider, source kind) rule, a reviewed registered deterministic parser, supplied evidence whose bytes match the declared digest, and a successful bounded parse of those bytes. A matching digest of arbitrary bytes is not content trust: a safe URL is not an authoritative source (operator-supplied, semantic, off-host, or unverifiable-offline sources classify as REVIEW), and unsupported, contradictory, or unparseable required sources classify as BLOCKED. " + closing + "</p>")
     parts.append("</details>")
 
     parts.extend(_render_source_evidence_details(report))
@@ -1039,21 +1278,52 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     # Expanded run identity (technical identifiers off the first screen).
     artifacts = report.get("artifacts", {})
     parts.append("<details id='run-identity'><summary>Run identity (expanded)</summary>")
+    execution_context = report.get("execution_context") or {}
+    generating_generator = execution_context.get("generator") or {}
+    generating_versions = execution_context.get("generator_versions") or {}
+    execution_context_rows: list[tuple[str, Any]] = []
+    if execution_context:
+        execution_context_rows = [
+            (
+                "Execution context",
+                f"v{execution_context.get('schema_version')} · acquisition "
+                f"{execution_context.get('acquisition')}",
+            ),
+            (
+                "Generator identity",
+                f"tool {generating_generator.get('tool')} · code_revision "
+                f"{generating_generator.get('code_revision')}",
+            ),
+            ("Schema (generating)", generating_versions.get("schema_version")),
+            ("Renderer (generating)", generating_versions.get("renderer_version")),
+            ("Policy (generating)", f"v{generating_versions.get('policy_version')}"),
+            ("Extractor (generating)", generating_versions.get("extractor_version")),
+        ]
     parts.append(_kv_block([
         ("Run ID", report.get("run_id")),
         ("Generated at (run time)", report.get("generated_at")),
-        ("SLAIF revision", bundle.revision.slaif_revision),
-        ("Schema version", bundle.revision.schema_version),
-        ("Renderer version", bundle.revision.renderer_version),
-        ("Policy version", report.get("policy_version")),
+        (
+            "Bundle revision (supplied)",
+            f"{bundle.revision.slaif_revision} (schema {bundle.revision.schema_version}, "
+            f"renderer {bundle.revision.renderer_version}, policy v{bundle.revision.policy_version})",
+        ),
         ("Profile", f"{bundle.profile.name} — {bundle.profile.endpoint}"
                      + (" (streaming)" if bundle.profile.supports_streaming else "")
                      + (" (local models visible)" if bundle.profile.local_models_visible else "")),
-        ("Research", f"{report.get('research', {}).get('status')} (extractor {report.get('research', {}).get('extractor_version')}, tool {report.get('research', {}).get('tool_version')})"),
+        ("Research (bundle declaration)", f"{report.get('research', {}).get('status')} (extractor {report.get('research', {}).get('extractor_version')}, tool {report.get('research', {}).get('tool_version')})"),
         ("Routes artifact sha256", artifacts.get("routes_tsv_sha256")),
         ("Pricing artifact sha256", artifacts.get("pricing_tsv_sha256")),
         ("FX artifact sha256", artifacts.get("fx_json_sha256")),
+        *execution_context_rows,
     ]))
+    if execution_context:
+        parts.append(
+            "<p class='muted'>Execution context, generator identity, and the (generating) "
+            "version rows are the RUNNER-OWNED facts of the code that generated this run, "
+            "authenticated in the sealed validation.json (never re-derived here); the bundle "
+            "revision and research rows are the bundle's supplied declarations — historical "
+            "provenance, never presented as this run's own identity.</p>"
+        )
     parts.append("</details>")
 
     if bundle.notes:
@@ -1086,14 +1356,34 @@ def _render_source_evidence_details(report: dict[str, Any]) -> list[str]:
     observations that bound each proposed fact, conflicts, and the
     independently derived snapshot inventory. All values escaped; no JS or
     network."""
-    parts: list[str] = [
-        "<details id='source-evidence'><summary>Source evidence — parsed snapshot observations (offline replay)</summary>"
-    ]
     evidence = report.get("source_evidence", {}) or {}
+    scope = evidence.get("scope")
+    if scope == "live_collection":
+        scope_label = "live collection (this run)"
+        claim_note = (
+            "Retrieval times are the measured fetch times of this invocation; published_at "
+            "values are source-declared publication labels, never retrieval times."
+        )
+    elif scope == "supplied_collection":
+        scope_label = "supplied collection (historical provenance; reviewed offline)"
+        claim_note = (
+            "The retrieval outcomes and origin claims (retrieved_at, published_at) belong to "
+            "the supplied collection identity's prior acquisition; this invocation performed "
+            "no live retrieval, and published_at values are source-declared publication "
+            "labels, never retrieval times."
+        )
+    else:
+        scope_label = "offline replay"
+        claim_note = (
+            "Snapshot origin/retrieval claims (retrieved_at, published_at) are caller-supplied "
+            "labels assessed against freshness policy; they are not authenticated retrievals."
+        )
+    parts: list[str] = [
+        f"<details id='source-evidence'><summary>Source evidence — parsed snapshot observations ({scope_label})</summary>"
+    ]
     parts.append(
         f"<p class='muted'>{esc(evidence.get('note', 'offline replay of supplied snapshots'))}. "
-        "Snapshot origin/retrieval claims (retrieved_at, published_at) are caller-supplied "
-        "labels assessed against freshness policy; they are not authenticated retrievals.</p>"
+        f"{claim_note}</p>"
     )
     sources = report.get("sources", []) or []
     if sources:
@@ -1209,19 +1499,52 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
         "<main>",
         "<header>",
         "<h1>SLAIF catalog refresh review</h1>",
-        "<p class='sub'>One-page offline review artifact. This version reviews supplied snapshots; live collection and apply are not implemented. "
-        "Everything needed for the decision is inside this file; detailed evidence is in the expandable sections below. "
-        "No external resources, no JavaScript, no network on open.</p>",
+        (
+            "<p class='sub'>"
+            + (
+                # 181-i (I1): the subtitle follows the RUNNER-SELECTED scope
+                # of this invocation (never mere collection-field presence).
+                "One-page review artifact of a live-collected catalog: this "
+                "invocation fetched the sources below through bounded official "
+                "retrieval (identity below); apply is not implemented. "
+                if (report.get("source_evidence") or {}).get("scope") == "live_collection"
+                else "One-page review of a supplied, previously collected "
+                "catalog: the collection identity is historical provenance; "
+                "this invocation parsed supplied bytes offline (no live "
+                "retrieval). Apply is not implemented. "
+                if (report.get("source_evidence") or {}).get("scope") == "supplied_collection"
+                else "One-page offline review artifact: this invocation parsed "
+                "supplied snapshot bytes offline (no live retrieval). Apply is "
+                "not implemented. "
+            )
+            + "Everything needed for the decision is in this file; no external resources, no "
+            "JavaScript, no network on open.</p>"
+        ),
         "</header>",
     ]
     parts.extend(_render_first_screen(bundle, report))
     parts.extend(_render_changes(bundle, report, source_index))
     parts.extend(_render_details(bundle, report, source_index))
+    footer_context = report.get("execution_context") or {}
+    footer_versions = footer_context.get("generator_versions") or {}
+    footer_scope_value = report.get("source_evidence", {}).get("scope")
+    footer_scope = (
+        "live-collection scope: bounded official retrieval was performed by this invocation; "
+        "apply and the Codex researcher are not implemented in this version. "
+        if footer_scope_value == "live_collection"
+        else "supplied-collection scope: the recorded collection identity is historical "
+        "provenance; this invocation reviewed the supplied bytes offline; apply and the "
+        "Codex researcher are not implemented in this version. "
+        if footer_scope_value == "supplied_collection"
+        else "offline scope: review/export/verify only — this invocation performed no "
+        "live retrieval; apply and the Codex researcher are not implemented in this version. "
+    )
     parts.append(
         "<footer>"
         f"Run {esc(report.get('run_id'))} · generated at {esc(report.get('generated_at'))} · "
-        f"renderer {esc(bundle.revision.renderer_version)} · policy v{esc(report.get('policy_version'))} · "
-        "offline scope: review/export/verify only — live source retrieval and apply are unavailable in this version. "
+        f"renderer {esc(footer_versions.get('renderer_version'))} · "
+        f"policy v{esc(footer_versions.get('policy_version'))} · "
+        f"{footer_scope}"
         "Print behaviour: state borders and textual labels are preserved (colour is not relied on), long values wrap instead of clipping, "
         "and opened (expanded) sections print in full; closed sections print their summary line only. "
         "This file is self-contained: no network requests, no scripts, no external assets."

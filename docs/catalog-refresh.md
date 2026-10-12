@@ -1,27 +1,40 @@
-# Catalog Refresh (Offline Review)
+# Catalog Refresh (Collect, Review, and Verify)
 
-> **Status:** Working offline slice of the catalog refresh workflow
+> **Status:** Working collect/review/verify slice of the catalog refresh
+> workflow
 > **Audience:** Administrators and maintainers who refresh provider catalogs
-> **Boundary:** Offline review, export, and verify only. Live source retrieval
-> is unavailable in this version and no refresh or apply command exists in
-> this version.
+> **Boundary:** Bounded live official-source collection (`collect`), offline
+> review of supplied or collected bundles, read-only export, and verify. No
+> refresh or apply command exists in this version, and Codex-assisted
+> research remains NOT_RUN.
 
 SLAIF catalog refresh is a staged workflow whose end goal is: one refresh,
 one trustworthy one-page report, and one explicit audited apply command.
-This page documents the **working offline slice** and clearly separates it
-from later slices that do not exist yet.
+This page documents the **working slice** — bounded live collection, offline
+review, and verification — and clearly separates it from later slices that
+do not exist yet.
 
-## What exists now (offline)
+## What exists now
 
-The implemented entry points are three CLI commands under
-[CLI reference](cli-reference.md#catalog-refresh-offline-review):
+The implemented entry points are four CLI commands under
+[CLI reference](cli-reference.md#catalog-refresh-collect-review-verify):
 
 ```bash
+slaif-gateway catalog-refresh collect --bootstrap|--refresh [--providers openai,openrouter] [--models a,b] \
+  [--baseline-file FILE | --db-url URL] [--run-root P] [--seal-key P] [--json]
 slaif-gateway catalog-refresh review <bundle> [--baseline-file FILE | --db-url URL | --first-install]
 slaif-gateway catalog-refresh verify --run-dir DIR --seal-key FILE
 slaif-gateway catalog-refresh export-baseline --out FILE [--db-url URL]
 ```
 
+- `collect` performs the bounded live official-source collection in this
+  invocation (registered catalog/pricing/model-page/FX endpoints over HTTPS
+  with bounded retries, redirects, and byte budgets), builds the proposal
+  bundle, and immediately reviews it through the same pipeline as `review`,
+  publishing one sealed run directory. Every retrieval outcome — including
+  failures — is recorded in the bundle's collection identity and
+  re-verified by validation. See
+  [Live collection](#live-collection-the-collect-command).
 - `review` validates one typed proposal bundle against a baseline,
   recomputes every count, warning, and gate, and publishes **one sealed run
   directory** whose primary artifact is a single self-contained
@@ -42,9 +55,10 @@ their rules.
 
 ## What is planned later (not implemented, do not claim)
 
-- **Live sources and research:** deterministic live provider source
-  retrieval (including ECB FX) and isolated Codex-assisted research.
-  Nothing in this slice fetches from the network.
+- **Codex-assisted research:** isolated Codex research remains
+  `NOT_RUN` in this version; live collection is deterministic bounded
+  retrieval and registered parsing only (see
+  [Live collection](#live-collection-the-collect-command)).
 - **Audited supersession and apply:** atomic, audited update/supersession of
   existing rows with accounting protections. Until it exists, every
   execution plan is create-only and any represented existing-row change is
@@ -55,13 +69,514 @@ their rules.
 No refresh or apply command exists. Any tool or script that claims to
 "apply" a catalog refresh is out of contract.
 
+## Live collection (the `collect` command)
+
+`collect` is the bounded live-source slice of this version: one invocation
+fetches the registered official sources, parses them with the registered
+deterministic parsers, builds the standard-v1 proposal bundle, and runs the
+identical review pipeline (validation, seal, one-page report) as `review`.
+
+```bash
+# First install: explicitly empty baseline, both providers, all eligible models
+slaif-gateway catalog-refresh collect --bootstrap
+
+# Refresh against an exported baseline, one provider, explicit selection
+slaif-gateway catalog-refresh collect --refresh \
+  --providers openrouter \
+  --models synth/alpha,synth/beta \
+  --baseline-file /var/lib/slaif/catalog-refresh/baseline.json
+
+# Refresh against a live read-only database snapshot
+slaif-gateway catalog-refresh collect --refresh --db-url "$DATABASE_URL"
+```
+
+Exactly one of `--bootstrap` / `--refresh` is required; `--refresh` requires
+`--baseline-file` or `--db-url` (or `DATABASE_URL`). `--profile` is
+`standard-v1` (the only profile in this version), `--providers` is a
+non-empty subset of `openai,openrouter`, and `--models` is an optional
+explicit selection (a single model is a valid selection). Exit codes:
+0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED — a blocked collect run is
+always published, labeled by the path actually reached (`collection not
+started` before any retrieval, `collection attempted and failed before
+completion` for a failed retrieval attempt, the `live collection` wording
+only after a completed collection; see [Stage wording and execution
+identity](#stage-wording-and-execution-identity)) — 65 data error (input
+problems where no blocked run is published, e.g. an unreadable or invalid
+`--baseline-file`), 2 usage error.
+
+### The bounded official source registry
+
+Collection fetches only these registered endpoints, over HTTPS, on the
+approved host families:
+
+| Provider | Source kind | URL (exact path family) | Body cap |
+|---|---|---|---|
+| `openrouter` | `openrouter_models_api` | `https://openrouter.ai/api/v1/models` | 4 MiB |
+| `openai` | `openai_pricing_docs` | `https://developers.openai.com/api/docs/pricing.md` | 512 KiB |
+| `openai` | `openai_models_docs` | `https://developers.openai.com/api/docs/models.md` | 512 KiB |
+| `openai` | `docs_page` | `https://developers.openai.com/api/docs/models/<slug>.md` (slug = URL-quoted model ID, no raw separators in the segment) | 256 KiB |
+| `ecb` | `ecb_reference_xml` | `https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml` (only when a proposed non-EUR price needs FX) | 1 MiB |
+
+Retrieval guarantees (enforced before the first byte is read, and re-applied
+to **every attempted URL, including each redirect target and every cache
+reuse**):
+
+- HTTPS only, no credentials in the URL, no non-default ports, **no query,
+  no fragment**, and the exact registered path family for the provider and
+  source kind — a 3xx to any other host, path, or query is refused, never
+  followed;
+- a public-destination DNS guard runs before every request and every
+  redirect hop: only **global-unicast** destinations are accepted (positive
+  `is_global` classification in addition to explicit loopback/private/
+  link-local/reserved/multicast/unspecified exclusions — notably RFC 6598
+  shared address space, documentation ranges, and NAT64 ranges are
+  refused), and a **mixed** answer set (any global-unicast address together
+  with any other one) is refused as a whole, never filtered down to its
+  global subset; resolver failures are safe code-only failures; the lookup
+  is ordinary and in-process (trusted host/resolver, 181-h R1) and is
+  followed by a cooperative checkpoint, and the ACTUAL connect re-runs the
+  same vetting on its own answer set;
+- manual redirects are bounded to 3, with relative locations resolved
+  RFC 3986-style against the current URL and re-validated;
+- a 429 with a finite `Retry-After` of at most 30 s is retried (the
+  wait is bounded by the remaining collection target and checkpointed
+  after the wait); an oversized or non-finite `Retry-After` is never
+  waited on; 5xx and transport errors retry up to 3 total attempts;
+- bodies are read as bounded returned chunks against the per-kind
+  byte cap above (a mid-stream overflow fails with `body_too_large`, or —
+  when it crosses the whole-invocation byte budget first — the crossing
+  chunk is debited in full and the invocation is terminally exhausted); a
+  crossing chunk is bounded by the delivered chunk, never by an exact
+  network/TLS/header byte quota (181-h R2); `Content-Length` is never
+  trusted;
+- the transfer encoding is **identity only**: the client sends
+  `Accept-Encoding: identity`, any other `Content-Encoding` is refused
+  BEFORE any decoding or expansion, and bodies are read as raw wire bytes
+  with no decoder ever constructed (so a compressed body can never expand
+  before refusal);
+- the whole invocation runs under ONE collection-owned acquisition
+  context (see below): a finite attempt budget, a finite body-byte budget,
+  a cooperative whole-invocation collection target (181-h R1), and a
+  cross-phase URL outcome cache.
+
+#### Transport and budget guarantees (181-f)
+
+**One whole-invocation budget.** `collect_bundle` creates one
+`AcquisitionContext` before acquisition starts and passes it through the
+catalog phase, the model-doc phase, the ECB phase, and every redirect and
+retry. No later fetch phase can reset any allowance. The attempt
+budget reserves one unit per attempted iteration (conservatively, before
+pre-validation); the recorded *attempts* metadata counts only requests
+actually sent (initial request, each redirect hop, each 429 wait, each
+5xx/transport retry) — rejected preflight/redirect validation is never
+counted as a sent request. One *byte* unit is every RETURNED application
+body chunk on a 2xx response — successful reads, interrupted/failed reads,
+and overflow reads alike; failures never refund; a chunk returned after
+the collection target has passed is still debited (181-h R2). The defaults are
+128 attempts and 32 MiB of body bytes per invocation, plus the per-source
+caps above. When a remaining budget can no longer cover the next spec, the
+run fails closed (`collection_budget_exhausted`) instead of continuing
+partially.
+
+**Overflow is debited in full, and exhaustion is terminal.** When a
+consumed chunk exceeds the remaining byte budget, the FULL chunk is
+debited — the honest deficit is kept in the context (the remaining count
+goes negative, never refunded) — and the invocation is marked TERMINALLY
+exhausted: no later attempt, read, or fetch phase may use any leftover
+credit, and the failure aborts the whole run. A target (deadline)
+failure does not hide already-consumed bytes: every RETURNED chunk —
+including one that arrives after the target has passed — is debited
+BEFORE the failure propagates (181-h R2), and every prior charge remains
+recorded.
+
+**A cooperative 120-second collection target, standard per-operation
+timeouts, and an operator watchdog (181-h R1, human-approved).** The
+context carries a 120-second whole-invocation collection target. The
+HTTP client uses ordinary per-operation timeouts (connect/write/pool
+10 s, read 30 s — the read timeout bounds inactivity, not total elapsed
+time). The target itself is enforced COOPERATIVELY at application
+checkpoints — before each new request (headers may already have consumed
+it), after every returned body chunk, at phase boundaries, and around
+the 429 retry wait — so that once a checkpoint observes expiry, no NEW
+application activity starts. This is an approved relaxation of the 181-g
+in-library enforcement: it is NOT a hard total elapsed bound and there
+is no mid-library cancellation. A blocking in-process DNS lookup (the
+ordinary system resolver on the trusted host), a library operation, or a
+continuous slow stream can exceed the target. The custom DNS child
+process, kill/reap lifecycle, and deadline-wrapped stream of 181-g are
+removed with their machinery-specific claims; the trusted host, its
+administrator, and the OS resolver are the security boundary. The
+documented elapsed-time cutoff for the read-only collect command is the
+standard operator watchdog (below).
+
+**Operator watchdog (read-only collect only).** The supported
+administrator workflow runs the collect command under the standard OS
+job watchdog: `timeout --kill-after=5 300 slaif-gateway catalog-refresh
+collect ...` — 300 s plus a 5-second KILL grace by default; the operator
+may choose any explicit positive finite duration. The watchdog covers the
+READ-ONLY collect command only — never review, verify, export-baseline,
+or any apply/imports/database mutation. A timed-out run exits non-success
+(124 on the TERM timeout; 137 after the KILL grace for a TERM-ignoring
+process); an interrupted run is NEVER a fresh READY and never overwrites
+an older run: the collect writes nothing during the fetch phase,
+publication is one atomic rename of a private staging directory at
+finalization only, so cancellation may produce no final report at all,
+and an incomplete or unsealed run cannot later be applied. No fake sealed
+BLOCKED report is invented after a SIGKILL and no automatic retry occurs.
+The documented qualification drove a stalled mock collect in an owned
+subprocess under the installed watchdog (short injected durations, no
+private service); the utility is the standard `timeout` from GNU or
+uutils coreutils on Linux — no platform matrix or kernel-hard guarantee
+is claimed.
+
+**Cross-phase URL outcome cache.** One URL's success OR failure is cached
+across phases within the invocation: the captured bytes (or safe failure)
+are reused without new retrieval-time claims, duplicate network, or budget
+expenditure. Each cached reuse revalidates the planned spec's registry
+identity (provider, source kind, model, cap, required flag) and the URL
+family before accepting the cached result; an identity mismatch fails
+closed (`duplicate_url_planned`). Caller-supplied JSON never owns the
+context.
+
+**Vetted connection binding.** The production client's only TCP connection
+path is a vetted network backend: on every new connection it resolves the
+approved hostname, vets the COMPLETE answer set (every returned address
+must be a GLOBAL UNICAST address — positive `is_global` classification in
+addition to the explicit loopback/private/link-local/reserved/multicast/
+unspecified exclusions, so addresses that are neither private nor global,
+notably RFC 6598, are refused), and connects only to those vetted numeric
+addresses. TLS then starts on that bound socket with the ORIGINAL hostname
+as SNI and the standard verified certificate context — chain and hostname
+verification are exactly the library defaults (no TLS bypass, no custom
+trust store). A preflight DNS check alone would not be a fix (the
+client could resolve independently and bind elsewhere); the connect-time
+answer set is the one that is bound, so rebinding between lookups cannot
+bypass the decision. Connection reuse reuses sockets a vetted connect
+created; retries and redirect hops open new connections that pass through
+the same vetting. Environment proxies and other implicit network
+configuration are disabled (`trust_env=False` on client and transport);
+Unix-domain sockets are forbidden by the backend.
+
+Every retrieval outcome — success or failure — is recorded in the bundle's
+**collection identity**: requested and final URL, retrieval UTC time (fetch
+time, never publication time), transport status, body size and SHA-256,
+attempts, redirects, and for failures a safe code only (no response
+bodies, no exception text, no credentials). The recorded `final_url` is
+only the LAST VALIDATED SAFE URL (or absent): a rejected redirect target —
+one carrying credentials, a query or fragment, an unapproved host, or a
+malformed port — never leaves the resolution loop variable and is never
+persisted in provenance, metadata, or error text. The identity also
+records the
+tool and code revision, the profile, the providers, the selection, and the
+start/finish window of the collecting invocation.
+
+### Inventory: every observed model reconciled once
+
+Each model the collected sources observed is reconciled exactly once.
+Proposed models carry full facts; every other observed model appears in the
+collection inventory exactly once with a machine reason code:
+
+| Reason code | Meaning |
+|---|---|
+| `service_variant` | `:batch` service variant (the canonical chat row is proposed) |
+| `deprecated_model` | source deprecation flag set |
+| `negative_router_sentinel` | router `-1` pricing sentinel on a billable dimension (the charge cannot be verified; never converted to zero) |
+| `missing_limits` | context length and/or max output not published |
+| `non_text_modality` | text is not an input and output modality |
+| `missing_core_prices` | input and/or output price not representable |
+| `no_standard_short_prices` | no standard short-context input+output prices |
+| `page_unavailable` / `page_parse_failed` / `page_model_mismatch` | the official model page 404'd, failed strict parsing, or declares a different Model ID |
+| `page_no_chat` / `page_no_text` | the model page does not list Chat Completions support / text output |
+| `page_price_conflict` | the model page's text prices conflict with the pricing table |
+| `explicit_selection_excluded` | observed but not in the explicit `--models` selection |
+| `long_context_prices_unrepresentable` | the standard tier publishes long-context prices (even $0 — a published contextual price); the flat short-band proposal cannot bill the model faithfully |
+| `contextual_overrides_unrepresentable` | contextual override tiers (e.g. `min_prompt_tokens` blocks) publish prices the flat standard contract cannot represent |
+| `cache_write_charges_unrepresentable` | a positive cache-write charge (1h or not) is not billable in the flat standard-v1 contract |
+| `unknown_billing_dimension` | a published pricing key outside the recognized billable/observed set; fail-closed |
+| `reasoning_charges_unrepresentable` | a positive separately billed reasoning charge; ordinary Chat admission reserves at the output price and no qualified reasoning billing contract is authorized for standard-v1 |
+| `request_charges_unrepresentable` | a positive per-request fee; ordinary Chat admission and finalization do not bill an additive per-request fee (that column serves native-module contracts) |
+| `hosted_operation_charges_unrepresentable` | a positive hosted-operation charge on an ordinary ID (e.g. `web_search` per call); hosted operations are denied in the profile and no reviewed per-model executable contract proves the charge cannot be incurred |
+| `intrinsic_hosted_variant_unrepresentable` | the documented OpenRouter `:online` model variant - a KNOWN INTRINSIC HOSTED IDENTITY: the official model-variants contract states the suffix enables real-time web search for any model, exactly equivalent to the `web` plugin, and marks the variant deprecated in favor of the `openrouter:web_search` server tool; excluded by IDENTITY, independent of positive, zero, or missing `web_search` fees (a zero cost cannot qualify tool authority, and absent fees cannot establish absence of search); one exact documented variant identity, not a model-name classifier |
+| `price_below_quantum` | a positive charge quantizes to zero at the 9-dp import contract; excluded rather than stored as a free price |
+| `baseline_contract_not_flat` | the stored baseline route contract cannot be proposed flat (a non-flat exact route, a prefix/glob baseline route that governs the upstream under the resolver's destination semantics - a fixed `upstream_model` equal to the upstream, or a passthrough pattern matching the upstream identity - or a MIXED authority set: one or more exact rows together with at least one governing prefix/glob route for the same provider/upstream); the whole authority set is evaluated before any single flat row is chosen; retained locally, all alternatives recorded, never reduced |
+| `baseline_multiple_routes` | multiple local route rows (aliases/priorities) for one upstream; alternatives are never reduced; retained locally |
+| `baseline_currency_mismatch` | the stored baseline pricing currency differs from the published native currency |
+| `index_only_no_standard_prices` | listed in the official models index but no standard short-context Chat pricing is published |
+
+A page 404 or parse failure for an **optional** model page is an observed
+incompleteness, never a disappearance and never an outage claim.
+
+### The models index is model evidence
+
+The fetched OpenAI models index is model evidence, not decoration. The
+current linked-index format is parsed with a bounded deterministic
+extraction: model-page bullets whose link is
+`/api/docs/models/<id>.md` — the ID is the page path, **never the display
+name** (display names include aliases that differ from API IDs); the
+documented specialized-models exception that links elsewhere and declares
+`Model ID: \`<id>\`` inline (exactly one such ID is accepted; zero or
+more than one deterministically skip the bullet); duplicates across
+sections deduplicate to the first occurrence. Non-bullet prose links are
+never extracted. Index rows are identity-only (limits and prices come from
+the model pages and the pricing document).
+
+Every observed model ID — including index-only IDs with no pricing at
+all — receives exactly one explained inventory disposition
+(`index_only_no_standard_prices` for the index-only case). The report's
+`source_model_counts` records distinct observed source identities per
+provider, deliberately distinct from local route/alias rows: a source
+catalog is not a route table, and pricing rows are not the entire official
+model catalog.
+
+### Collection versus replay (validation re-verification)
+
+A bundle that carries a collection identity is **re-verified, not trusted**:
+
+- `collection_source_unbacked` — every source record needs a successful
+  retrieval record with the same URL and matching content digest;
+- `collection_retrieval_failed` — every collected provider needs at least
+  one successful retrieval of its catalog URL: a source outage is a
+  **retrieval failure (BLOCKED), never model disappearance**, and an empty
+  bootstrap is never READY;
+- `collection_inventory_unsupported` — every inventory entry is re-checked
+  against the parsed official evidence and the baseline; a fabricated or
+  stale entry blocks the run;
+- `collection_empty_bootstrap` — a live collection that fetched its sources
+  but proposed no model, route, or pricing is never READY (a refresh
+  against an existing baseline may legitimately propose nothing while
+  retaining every baseline model);
+- billing eligibility is **recomputed** with the shared standard-v1 policy
+  from the parsed official evidence for every bundle — live collection and
+  offline supplied-bundle replay alike: an ineligible proposal blocks
+  (`proposed_row_billing_ineligible`), and a published positive charge that
+  the proposal drops or alters blocks
+  (`proposed_row_billing_dim_missing` / `proposed_row_billing_dim_mismatch`);
+- `alias_route_replaced` — a baseline public alias still mapped to a present
+  upstream is never replaced by proposed route names, and no parallel
+  upstream-named route bypasses it.
+
+The report scope is decided by the RUNNER-SELECTED context of THIS
+invocation, never by the collection field's presence alone, and has three
+truthful values: `live_collection` (this invocation performed the bounded
+collection; the retrieval claims are its own measurement),
+`supplied_collection` (the supplied bundle carries a recorded collection
+identity — historical provenance of a prior collection, re-verified
+offline), and `offline_replay` (no collection identity at all: supplied or
+cached snapshot bytes parsed offline). `review` of a previously collected
+bundle is therefore `supplied_collection`: it re-verifies the recorded
+identity offline, does not fetch again, and does not claim a new
+retrieval — the retrieval claims remain the supplied record's, not this
+invocation's, and the review proves extraction consistency against the
+supplied bytes, not provider authenticity or current data.
+
+### Stage wording and execution identity
+
+Every `collect`/`review` invocation is labeled by the path it ACTUALLY
+reached, and the CLI summary `stage` line and the published report footer
+agree (the minimal blocked report's footer carries the same stage). A
+label can never claim a retrieval that was not performed:
+
+- `live collection` — this command performed the bounded official-source
+  retrieval and then reviewed the collected bundle (including semantically
+  blocked collects and post-collection baseline identity mismatches);
+- `collection not started` — baseline resolution failed before any
+  retrieval; no live collection was performed by this command (pre-
+  acquisition `collect` failures, e.g. a failed live baseline export);
+- `collection attempted and failed before completion` — bounded retrieval
+  was attempted but no complete collection was produced and no sealed
+  collected review exists;
+- `offline review` — `review` of supplied bytes: no live retrieval was
+  performed by this invocation.
+
+The stage and the report scope come from the RUNNER-SELECTED context of
+this invocation. Each sealed run's `validation.json` additionally carries
+a runner-owned `execution_context` inside the HMAC-protected content:
+
+- `acquisition` — the runner-selected mode of the generating invocation
+  (`live_collection` or `offline_supplied`), never inferred from the
+  bundle's collection field;
+- `generator` — the measured code identity of the generating invocation
+  (`tool` plus `code_revision`), measured by the running code, never
+  copied from the untrusted bundle declaration;
+- `generator_versions` — the ACTUAL generating schema/renderer/policy/
+  extractor versions, bound to the running code's own constants (the
+  bundle's supplied `revision`/`research` declarations stay labeled as
+  supplied historical text and are never rendered as this run's generator
+  versions).
+
+`verify` checks content digests, then the HMAC, then the context shape
+and version, and only then replays the validation with the ORIGINAL
+authenticated context (the sealed acquisition mode and generator; the
+current verifier's identity is reported separately as `current generator`
+and the sealed one as `original generator`, authenticated in the sealed
+`validation.json`). Verification executes no HTTP, DNS, or SQL. A sealed
+run whose context is missing (sealed before the runner-owned execution
+context existed) or whose shape or version is unsupported is refused
+explicitly (exit 30) — no historical
+renderer fleet, no re-derivation, no re-sealing.
+
+The generator `code_revision` is a bounded MEASURED content identity: a
+deterministic SHA-256 over the content of a fixed set of fifteen owned
+catalog-refresh files (including the helper that measures them), formatted
+`catalog-ccid/v1:sha256:<64 hex>` — or the explicit `unavailable` marker
+when measurement fails (missing, non-regular, or unreadable file, or bound
+exceeded: 32 files, 512 KiB per file, 8 MiB total). It is not a
+whole-environment digest, not loaded-bytecode attestation, not a security
+boundary, and not a reproducibility promise: relocation or timestamp
+changes do not change it; changed bytes DO change it, even under an
+unchanged package version. It uses no Git inspection, no environment or
+config traversal, no subprocess, and no recursive scan. The package
+version is recorded separately in the tool metadata, so two installations
+with the same version and different bytes remain distinguishable.
+
+### Proposal scope and FX derivation
+
+Eligibility follows **executable billing, not TSV capacity**: a value
+fitting a pricing column is not proof the gateway can safely bill that
+shape. The collector proposes **standard-v1 short-context core pricing**:
+`input`, `output`, and (when published) `cached_input` per 1M tokens in the
+published native currency, plus — only when the source publishes it as an
+**explicit zero** — the `reasoning` no-charge dimension. Before anything is
+proposed, a single deterministic shared policy decides flat billing
+eligibility for each model from **all** authoritative observations of it
+(every billing tier, every context band, every published pricing key); the
+same policy is recomputed by validation from the parsed official evidence,
+so a supplied or tampered bundle cannot bypass eligibility by dropping
+dimensions:
+
+- **Excluded, fail-closed, with the exact machine reason**: the documented
+  OpenRouter **`:online` model variant** - a KNOWN INTRINSIC HOSTED
+  IDENTITY (the official model-variants contract, checked 2026-10-12,
+  states the suffix enables real-time web search for any model, exactly
+  equivalent to the `web` plugin, and marks the variant deprecated in favor
+  of the `openrouter:web_search` server tool); it is excluded by IDENTITY,
+  independent of positive, zero, or missing `web_search` fees - a zero cost
+  cannot qualify tool authority, and absent fees cannot establish absence
+  of search - and this is one exact documented variant identity, not a
+  model-name classifier. Also excluded: positive separately billed
+  **reasoning charges** (ordinary Chat admission reserves at the output
+  price; no qualified reasoning billing contract is authorized), positive
+  **per-request fees** (ordinary Chat admission and finalization do not
+  bill an additive per-request fee; that column serves native-module
+  contracts), positive **hosted-operation charges** on ordinary IDs (hosted
+  operations are denied in the profile and no reviewed per-model executable
+  contract proves the charge cannot be incurred), published long-context
+  standard prices (even $0 — a published contextual price), contextual
+  override tiers, positive cache-write charges (1h or not), unknown
+  published billing keys, source `-1` sentinels on any billable dimension,
+  and positive charges that quantize to zero at the 9-dp import contract
+  (`price_below_quantum`). Other OpenRouter variant classes have **no**
+  reviewed executable ordinary-Chat contract and are not declared safe by
+  analogy: unknown classes remain honestly unsupported/ambiguous and stay
+  subject to the price-based gates.
+- **Zero semantics (documented, tested)**: a **legitimate zero is a
+  no-charge, never a missing fact**. A published zero `reasoning` price is
+  **carried**, because a missing reasoning price makes finalization bill
+  reasoning tokens at the output price (`reasoning_price_fallback_to_output`)
+  — a change of actual local billing. A published zero per-request fee is a
+  documented no-charge (ordinary Chat bills no per-request fee at all), and
+  a published zero web-search charge is a no-charge (the standard chat
+  contract has no web-search billing dimension and a zero publishes no
+  provider-side cost); both are never carried.
+- An excluded model's official model page is **never fetched** (eligibility
+  is decided before page retrieval); explicitly selecting an ineligible
+  model BLOCKs the run.
+- OpenAI `batch`/`flex`/`fast` tiers are **service variants** of the same
+  model (mirroring the OpenRouter `:batch` handling): they never block or
+  flatten the standard tier; a model with only non-standard rows is
+  `no_standard_short_prices`.
+- A collection that fetched sources but produced no usable proposal is
+  `collection_empty_bootstrap` (BLOCKED), never an empty READY bootstrap.
+
+Provider-alias rows (`~` prefix) are proposed under their **exact observed
+identity** (the prefix is part of the published model ID; no alias mapping
+is asserted), and `:batch` variants are excluded as service variants.
+
+OpenAI candidates come from the pricing document's standard short-context
+rows; each eligible candidate's official model page is fetched (bounded to
+64 pages per run) and must declare the matching Model ID, Chat Completions
+support, text output, a context window, and text prices that **exactly
+match** the pricing table (otherwise `page_price_conflict`).
+
+FX is fetched only when a proposed price is non-EUR: the ECB EUR-base daily
+reference XML is parsed and the latest quote for each needed pair is recorded
+**as published** (EUR is the implicit base currency) with per-pair provenance
+`ecb|EUR-<CUR>|ecb_reference_xml`. The native→EUR rate the runtime looks up is
+then reciprocated deterministically by the FX gate (9-dp `HALF_UP`) and marked
+as a derived reciprocal of the original pair in every comparison and FX
+artifact row, so the published direction is never relabeled. An ECB retrieval
+failure blocks the run as an unbound FX fact — never as a missing model.
+
+### Refresh preservation
+
+For `--refresh`, local route authority is keyed by the **upstream**
+identity and is never overridden:
+
+- A single flat-representable exact-route baseline row is a **local route
+  identity**: the proposal preserves its public alias (`requested_model`),
+  match type, `priority`, `enabled`, `visible_in_models`, and
+  `supports_streaming` values, and its capability block projects onto flat
+  standard keys **only when the contract is exactly one `chat_completions`
+  block** — including explicit denials (a denied capability stays denied;
+  nothing is granted). A genuinely unconfigured model keeps the exact
+  upstream name.
+- **Multiple aliases/priorities are never reduced** to one row
+  (`baseline_multiple_routes`): the model is retained locally with no
+  parallel route proposed.
+- A **prefix/glob baseline route that GOVERNS the upstream** is retained
+  (`baseline_contract_not_flat`): coverage is the resolver's actual
+  destination semantics, never public string similarity — an explicit
+  `upstream_model` is a fixed destination (the row governs exactly that
+  upstream, whatever the public pattern is), and an empty `upstream_model`
+  passes the public name through (the row governs the upstreams whose
+  identity matches the public pattern). All governing rows are recorded in
+  the retention reason — alternatives are never reduced — a flat exact
+  proposal cannot preserve wildcard contracts, and the routing pattern
+  itself is local state: retained with an explicit disposition, never a
+  source disappearance, and no parallel route may re-insert a bypass of
+  that authority (supplied bundles are BLOCKed with
+  `wildcard_route_authority_bypassed`).
+- A **MIXED exact + governing-wildcard authority set** (one or more exact
+  rows and at least one governing prefix/glob route for the same
+  provider/upstream) is likewise retain-only
+  (`baseline_contract_not_flat`): the WHOLE local authority set is
+  evaluated before any single flat row is chosen; every exact alias and
+  wildcard alternative keeps local authority (denied alternatives
+  preserved, priorities and destinations recorded), no flat exact route or
+  pricing candidate is invented, and no parallel route may bypass the
+  wildcard (supplied bundles are BLOCKed with
+  `wildcard_route_authority_bypassed`).
+- A **non-flat exact contract** or a **baseline pricing currency other
+  than USD** retains the model locally with an explicit inventory reason
+  instead of re-proposing it under a different contract.
+- An alias **remaining mapped to a present upstream is not a disappeared
+  model**. A supplied bundle that replaces the alias with an
+  upstream-named route, or adds a parallel upstream-named route, BLOCKs
+  (`alias_route_replaced`).
+- The declared baseline target is the **database name plus explicit host
+  and port identity fields**; the full `host:port/database` identity
+  remains bound inside the hashed baseline content, so a substituted
+  document is still rejected (`baseline_identity_mismatch`), and any
+  database/host/port mismatch BLOCKs (`baseline_target_mismatch`).
+
+### Limits
+
+- Codex research identity stays `NOT_RUN`; collection is deterministic
+  retrieval plus parsing, with no model judgment in the loop.
+- No apply or refresh command exists: the sealed run directory is the
+  terminal output; import/apply is a later objective.
+- One profile (`standard-v1`), two providers (`openai`, `openrouter`),
+  OpenAI model pages bounded to 64 per run.
+- The registry is intentionally small and reviewed; adding a source kind or
+  host is a contract change, not a configuration.
+
 ## The proposal bundle (`catalog-refresh.json`)
 
 One versioned, typed JSON document carries the proposal **facts and
 provenance only**:
 
 - run ID, generation time, schema/renderer/policy revision identities;
-- research identities (status `NOT_RUN` is required for this offline slice);
+- research identities (status `NOT_RUN` is required in this version; Codex research is not implemented);
 - the standard v1 profile (ordinary text Chat Completions, explicit streaming,
   local-model visibility, no hosted/multimodal/Responses/Codex capabilities);
 - provider and model selection (an include filter may select a single model;
@@ -296,11 +811,16 @@ base64 homework for the administrator, and the normal view stays compact.
 Seal verification recomputes these same fields from the same deterministic
 pipeline; there is no second semantic truth.
 
-**Exact offline scope.** Evidence assessment is an **offline replay of
-supplied snapshots**: snapshot origin and retrieval claims (`retrieved_at`,
-`published_at`) are caller-supplied labels assessed against freshness
-policy; they are not authenticated retrievals. This version performs no
-network I/O.
+**Scope is bundle-determined.** A bundle **without** a collection
+identity is an **offline replay of supplied snapshots**: snapshot origin and
+retrieval claims (`retrieved_at`, `published_at`) are caller-supplied labels
+assessed against freshness policy; they are not authenticated retrievals,
+and reviewing such a bundle performs no network I/O. A bundle **with** a
+collection identity records the collecting invocation's own bounded
+retrievals (requested/final URL, UTC fetch time, outcome, size, digest,
+attempts, redirects, safe failure code); the review re-verifies those
+claims against the bundle's source records and parsed evidence instead of
+fetching again (see [Live collection](#live-collection-the-collect-command)).
 
 **Versioning note.** The catalog refresh subsystem is not yet merged into
 `main`: `schema_version` stays `1` within the subsystem, and
@@ -349,7 +869,19 @@ words at desktop widths, wide tables scrolling inside their own wrapper
 on narrow viewports, and browser tests that measure the real document
 width, fonts and visible expanded text while writing only to pytest-owned
 temporary output — plus the corrected mutation-namespace wording. No
-state, gate, count, monetary or capability semantics changed.)
+state, gate, count, monetary or capability semantics changed;
+`181.1` adds bounded live official-source collection (the `collect`
+command: the registered source registry with per-attempt host allowlist
+re-validation, the public-destination DNS guard, bounded re-validated
+redirects, bounded 429/5xx/transport retries, mid-stream body byte caps,
+and collection budgets; the collection identity recording every measured
+retrieval outcome and the observed-model inventory; the
+collection-versus-replay validation gates `collection_source_unbacked`,
+`collection_retrieval_failed`, and `collection_inventory_unsupported`; ECB
+FX derivation for proposed non-EUR prices; refresh preservation of baseline
+route attributes including explicit denials, with non-flat-contract and
+currency exclusions; and the scope-aware report wording) — supplied-bundle
+offline replay semantics are unchanged.)
 
 ## Baselines
 
@@ -742,6 +1274,11 @@ apply must consume the authenticated snapshot rather than reread paths.
 
 | Command | Code | Meaning |
 |---|---|---|
+| `collect` | 0 | READY |
+| `collect` | 10 | READY_WITH_WARNINGS |
+| `collect` | 20 | BLOCKED — a blocked run is always published, labeled by the path reached: `collection not started` (baseline failure before any retrieval), `collection attempted and failed before completion` (retrieval failure), or the `live collection` wording (semantic blockers and baseline identity mismatch, after a completed collection) |
+| `collect` | 65 | data error where no blocked run is published (unreadable/invalid `--baseline-file`, unsafe directory configuration, seal key problem) |
+| `collect` | 2 | usage error (contradictory options) |
 | `review` | 0 | READY |
 | `review` | 10 | READY_WITH_WARNINGS |
 | `review` | 20 | BLOCKED (safe blocked run published when possible) |
@@ -772,7 +1309,7 @@ apply must consume the authenticated snapshot rather than reread paths.
 
 ## Related documentation
 
-- [CLI reference](cli-reference.md#catalog-refresh-offline-review)
+- [CLI reference](cli-reference.md#catalog-refresh-collect-review-verify)
 - [Provider catalog proposals](provider-catalog-proposals.md)
 - [Pricing catalog and bounded overrun](pricing-catalog.md)
 - [Database schema](database-schema.md)

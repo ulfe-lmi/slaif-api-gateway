@@ -142,7 +142,7 @@ and desired action.
 The paired communication documents are:
 
 - strategic side:
-  `/home/ubuntu/codex-supervision/slaif-api-gateway/OAP-COMMUNICATION-strategic.md`;
+  `/home/janezp/codex-supervision/slaif-api-gateway/OAP-COMMUNICATION-strategic.md`;
 - coding-agent side: `OAP-COMMUNICATION-coding-agent.md` in this repository.
 
 The presence of those documents or FIFO objects does not activate execution.
