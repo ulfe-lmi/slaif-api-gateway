@@ -328,6 +328,11 @@ def collect_bundle(
         if acquisition is not None
         else new_acquisition_context()
     )
+    # 181-g G1: the collection-owned deadline must reach the ACTUAL
+    # backend/stream operations: bind it to the client's vetted
+    # transport backend (a no-op for clients without one, e.g. unit-
+    # test mock transports with injected resolver seams).
+    sources.bind_acquisition_to_client(client, context)
 
     started_at = now or datetime.now(UTC)
     retrievals: list[RetrievalResult] = []

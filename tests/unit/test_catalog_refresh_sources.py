@@ -17,10 +17,12 @@ code-only failure outcomes.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import gzip
 import socket
 import ssl
+import subprocess
 import time
 
 import httpx
@@ -28,6 +30,7 @@ from httpx._content import IteratorByteStream
 
 import pytest
 
+from slaif_gateway.services.catalog_refresh import source_transport as st
 from slaif_gateway.services.catalog_refresh import sources as src
 from slaif_gateway.services.catalog_refresh.sources import (
     SourceFetchError,
@@ -42,6 +45,7 @@ from slaif_gateway.services.catalog_refresh.sources import (
     validate_source_url,
 )
 from slaif_gateway.services.catalog_refresh.source_transport import (
+    DeadlineStream,
     VettedNetworkBackend,
 )
 
@@ -769,9 +773,16 @@ def test_cache_identity_mismatch_fails_closed() -> None:
 
 
 def test_deadline_stops_slow_dns_before_later_network() -> None:
-    # Slow-DNS negative: each resolver call sleeps 0.35 s; the deadline is
-    # 0.6 s. Two attempts fit (preflight resolves at ~0.0 and ~0.35 s),
-    # the third reservation is refused BEFORE any later DNS/HTTP activity.
+    # Slow-DNS negative (181-g G1 seam level): each resolver call sleeps
+    # 0.35 s; the deadline is 0.6 s. Attempt 1 resolves at ~0.35 s and its
+    # single 503 HTTP request is charged; the 5xx retry's preflight
+    # resolves at ~0.70 s, AFTER the deadline - and NO second HTTP
+    # request starts after expiry (the deadline is re-checked between
+    # the resolver and the next action). Collection-level exhaustion
+    # propagates. (The injected in-process resolver cannot be cancelled
+    # MID-sleep - a documented test-seam limit; the real, interruptible
+    # default-resolver path is proven by
+    # test_real_blocking_dns_is_killed_and_reaped_at_the_deadline.)
     calls = {"dns": 0, "http": 0}
 
     def slow_public(host, port, proto=None):
@@ -791,8 +802,8 @@ def test_deadline_stops_slow_dns_before_later_network() -> None:
         )
     wall = time.monotonic() - started
     assert exc.value.code == "acquisition_deadline_exceeded"
-    assert calls["http"] == 2, "no HTTP request starts after the deadline"
-    assert calls["dns"] == 2, "no later DNS after the deadline"
+    assert calls["http"] == 1, "no HTTP request starts after the deadline"
+    assert calls["dns"] == 2, "the retry preflight ran; nothing later did"
     assert wall < 2.0, f"wall time unbounded: {wall}"
 
 
@@ -1117,3 +1128,637 @@ def test_failed_retrieval_never_records_body_content() -> None:
     assert result.content is None
     assert result.content_sha256() is None
     assert result.failure_code == "http_404"
+
+
+# --- 181-g: G1-G6 regressions (strategic negative probes) -------------------
+
+
+class _FakeSock:
+    """Minimal socket double for the stream/backend seam deadline tests."""
+
+    def __init__(self, recv_side=None, send_side=None):
+        self.recv_calls: list[int] = []
+        self.send_calls = 0
+        self.closed = False
+        self.timeouts: list[float | None] = []
+        self._recv_side = recv_side
+        self._send_side = send_side
+
+    def settimeout(self, value: float | None) -> None:
+        self.timeouts.append(value)
+
+    def setsockopt(self, *args: object) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+    def recv(self, n: int) -> bytes:
+        self.recv_calls.append(n)
+        return self._recv_side(n) if self._recv_side is not None else b""
+
+    def send(self, data: bytes) -> int:
+        self.send_calls += 1
+        if self._send_side is not None:
+            return self._send_side(data)
+        return len(data)
+
+
+# --- G1: one enforceable deadline through the ACTUAL operations -------------
+
+
+def test_real_blocking_dns_is_killed_and_reaped_at_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # G1 (181-g, the required real-blocking DNS negative): the DEFAULT
+    # resolver path runs the genuinely blocking lookup in the owned
+    # child (the child really sleeps 0.12 s BEFORE getaddrinfo, so a
+    # pre-check-only fix cannot pass). A 0.02 s collection deadline must
+    # SIGKILL + REAP the child, raise the safe code, start NO HTTP
+    # request, and open NO TCP connection.
+    monkeypatch.setattr(st, "_RESOLVER_BLOCK_SECONDS", 0.12)
+    spawns: list[subprocess.Popen] = []
+    real_spawn = st._spawn_resolver
+
+    def spy_spawn(*args, **kwargs):
+        proc = real_spawn(*args, **kwargs)
+        spawns.append(proc)
+        return proc
+
+    monkeypatch.setattr(st, "_spawn_resolver", spy_spawn)
+    connects: list = []
+
+    def refusing(address, timeout=None, source_address=None, **kwargs):
+        connects.append(address)
+        raise AssertionError("no TCP connection may start after expired DNS")
+
+    monkeypatch.setattr(socket, "create_connection", refusing)
+    hits = {"http": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits["http"] += 1
+        return httpx.Response(200, content=b"[]")
+
+    ctx = _ctx(deadline_seconds=0.02)
+    started = time.monotonic()
+    with pytest.raises(SourceFetchError) as exc:
+        # NO resolve kwarg: the default resolver (production path).
+        fetch_source(_client(handler), _spec(), context=ctx)
+    wall = time.monotonic() - started
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert len(spawns) == 1, "exactly one owned resolver child"
+    proc = spawns[0]
+    assert proc.poll() is not None, "the child must be REAPED (no zombie/detached lookup)"
+    assert proc.returncode == -9, "SIGKILL (uncatchable) on deadline expiry"
+    assert hits["http"] == 0, "no HTTP request starts after expired DNS"
+    assert connects == [], "no TCP connection after expired DNS"
+    assert wall < 0.02 + 0.25, (
+        f"wall time not bounded by deadline + stated cleanup tolerance: {wall}"
+    )
+
+
+def test_expired_dns_preflight_stops_before_http() -> None:
+    # G1 (injected-seam level; documented limit: the in-process test
+    # seam cannot be killed mid-call, so the deadline is re-checked
+    # between the resolver and the next action): NO HTTP request starts
+    # after expiry.
+    calls = {"http": 0}
+
+    def slow_public(host, port, proto=None):
+        time.sleep(0.05)
+        return [_ainfo(PUBLIC)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["http"] += 1
+        return httpx.Response(200, content=b"[]")
+
+    ctx = _ctx(deadline_seconds=0.02)
+    started = time.monotonic()
+    with pytest.raises(SourceFetchError) as exc:
+        fetch_source(_client(handler), _spec(), context=ctx, resolve=slow_public)
+    wall = time.monotonic() - started
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert calls["http"] == 0, "no HTTP request starts after expired DNS"
+    assert wall < 0.05 + 0.25, f"wall time unbounded: {wall}"
+
+
+def test_expired_connect_closes_socket_and_stops_before_next_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # G1: the first candidate's connect consumes the whole deadline. The
+    # expired socket is CLOSED (no resource leak) and the failure raises
+    # BEFORE the second candidate IP is ever connected.
+    ctx = _ctx(deadline_seconds=0.005)
+    backend = VettedNetworkBackend(
+        resolve=_resolve(PUBLIC, "93.184.216.35"), deadline=ctx
+    )
+    calls: list = []
+    sock = _FakeSock()
+
+    def fake_connect(address, timeout=None, source_address=None, **kwargs):
+        calls.append(address)
+        time.sleep(0.006)
+        if address[0] == PUBLIC:
+            return sock
+        raise AssertionError("second candidate must never be connected after expiry")
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    with pytest.raises(SourceFetchError) as exc:
+        backend.connect_tcp("openrouter.ai", 443)
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert [c[0] for c in calls] == [PUBLIC]
+    assert sock.closed, "the expired connect's socket is closed, not leaked"
+
+
+def test_failed_connect_retry_stops_before_next_candidate_when_expired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # G1: an expired FIRST attempt that also fails (OSError) must stop
+    # the candidate loop BEFORE the next IP is touched.
+    ctx = _ctx(deadline_seconds=0.005)
+    backend = VettedNetworkBackend(
+        resolve=_resolve(PUBLIC, "93.184.216.35"), deadline=ctx
+    )
+    calls: list = []
+
+    def fake_connect(address, timeout=None, source_address=None, **kwargs):
+        calls.append(address)
+        time.sleep(0.006)
+        if address[0] == PUBLIC:
+            raise ConnectionRefusedError("test boundary")
+        raise AssertionError("second candidate must never be connected after expiry")
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    with pytest.raises(SourceFetchError) as exc:
+        backend.connect_tcp("openrouter.ai", 443)
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert [c[0] for c in calls] == [PUBLIC]
+
+
+def test_partial_send_loop_enforces_deadline_inside_the_loop() -> None:
+    # G1 (seam): httpcore's own write loop resets the same timeout on
+    # every partial send; the wrapper must re-check the deadline and
+    # re-clamp the timeout INSIDE the partial-send loop, so repeated
+    # partial sends cannot overrun the total deadline.
+    ctx = _ctx(deadline_seconds=0.002)
+    backend = VettedNetworkBackend(deadline=ctx)
+
+    def slow_send(data: bytes) -> int:
+        time.sleep(0.003)
+        return 1
+
+    sock = _FakeSock(send_side=slow_send)
+    stream = DeadlineStream(backend, sock)
+    with pytest.raises(SourceFetchError) as exc:
+        stream.write(b"abcd", timeout=1.0)
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert sock.send_calls == 1, "no second send starts after expiry"
+
+
+def test_start_tls_refused_when_expired() -> None:
+    # G1: no TLS handshake may START on an expired deadline.
+    ctx = _ctx(deadline_seconds=0)
+    backend = VettedNetworkBackend(deadline=ctx)
+    stream = DeadlineStream(backend, _FakeSock())
+    wrapped: list = []
+
+    class SpyCtx:
+        def wrap_socket(self, sock, server_hostname=None):
+            wrapped.append(server_hostname)
+            raise AssertionError("handshake must not start on an expired deadline")
+
+    with pytest.raises(SourceFetchError) as exc:
+        stream.start_tls(SpyCtx(), server_hostname="openrouter.ai", timeout=1.0)
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert wrapped == [], "wrap_socket never called"
+
+
+def test_start_tls_handshake_consuming_deadline_closes_upgraded_socket() -> None:
+    # G1: the handshake itself may consume the remaining time; the
+    # upgraded socket must be closed before the failure propagates (no
+    # detached resource), and no later operation may use it.
+    ctx = _ctx(deadline_seconds=0.005)
+    backend = VettedNetworkBackend(deadline=ctx)
+    upgraded = _FakeSock()
+
+    class SpyCtx:
+        def wrap_socket(self, sock, server_hostname=None):
+            time.sleep(0.006)
+            return upgraded
+
+    stream = DeadlineStream(backend, _FakeSock())
+    with pytest.raises(SourceFetchError) as exc:
+        stream.start_tls(SpyCtx(), server_hostname="openrouter.ai", timeout=1.0)
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert upgraded.closed, "the upgraded socket is closed, not leaked"
+
+
+def test_stream_read_clamped_to_remaining_budget_and_refused_when_exhausted() -> None:
+    # G1/G2: the requested read size is clamped to the remaining body
+    # budget where practical, and an exhausted context refuses further
+    # reads at the stream seam.
+    ctx = _ctx(max_bytes=10)
+    backend = VettedNetworkBackend(deadline=ctx)
+    sock = _FakeSock()
+    stream = DeadlineStream(backend, sock)
+    stream.read(100, timeout=1.0)
+    assert sock.recv_calls == [10], "requested read size clamped to remaining budget"
+    ctx.exhausted = True
+    with pytest.raises(SourceFetchError) as exc:
+        stream.read(100, timeout=1.0)
+    assert exc.value.code == "collection_budget_exhausted"
+
+
+# --- G2: overflow debited in full, exhaustion terminal ----------------------
+
+
+def test_overflow_chunk_is_debited_and_exhaustion_is_terminal() -> None:
+    # G2 (exact probe case): 256 budget, chunks 200+100. The overflow
+    # chunk is DEBITED in full (honest -44 deficit, never a refund) and
+    # the invocation is terminally exhausted: the later 50-byte fetch is
+    # refused BEFORE its handler runs.
+    ctx = _ctx(max_bytes=256)
+    hits = {"a": 0, "b": 0}
+
+    def handler_a(request: httpx.Request) -> httpx.Response:
+        hits["a"] += 1
+        return httpx.Response(
+            200,
+            content=IteratorByteStream(iter([b"x" * 200, b"y" * 100])),
+            headers={"content-type": "application/json"},
+        )
+
+    def handler_b(request: httpx.Request) -> httpx.Response:
+        hits["b"] += 1
+        return httpx.Response(200, content=b"z" * 50)
+
+    spec_a = _spec(max_bytes=256)
+    with pytest.raises(SourceFetchError) as exc:
+        fetch_sources((spec_a,), client=_client(handler_a), context=ctx, resolve=_ok())
+    assert exc.value.code == "collection_budget_exhausted"
+    assert ctx.bytes_remaining == -44, "all 300 consumed bytes debited (256-300)"
+    assert ctx.exhausted is True
+
+    with pytest.raises(SourceFetchError) as exc2:
+        fetch_sources(
+            (_page_spec("gpt-5.2"),), client=_client(handler_b), context=ctx, resolve=_ok()
+        )
+    assert exc2.value.code == "collection_budget_exhausted"
+    assert hits["a"] == 1
+    assert hits["b"] == 0, "terminal exhaustion blocks the later fetch before its handler"
+
+
+def test_failed_read_bytes_are_never_refunded() -> None:
+    # G2: bytes consumed before a mid-stream failure stay charged (no
+    # refund); the finite retry re-reads and the crossing debit
+    # terminates the invocation. 256 budget, 200+failure, retry 200 ->
+    # an honest -144 deficit, and the later fetch is refused pre-handler.
+    ctx = _ctx(max_bytes=256)
+    hits = {"n": 0, "b": 0}
+
+    def failing(request: httpx.Request) -> httpx.Response:
+        hits["n"] += 1
+
+        def gen():
+            yield b"x" * 200
+            raise OSError("test boundary: reset")
+
+        return httpx.Response(200, content=IteratorByteStream(gen()))
+
+    spec_a = _spec(max_bytes=256)
+    with pytest.raises(SourceFetchError) as exc:
+        fetch_sources((spec_a,), client=_client(failing), context=ctx, resolve=_ok())
+    assert exc.value.code == "collection_budget_exhausted"
+    assert hits["n"] == 2, "finite retry re-reads; both consumed amounts debited"
+    assert ctx.bytes_remaining == -144, "200+200 consumed of 256, no refund of failed bytes"
+    assert ctx.exhausted is True
+
+    def handler_b(request: httpx.Request) -> httpx.Response:
+        hits["b"] += 1
+        return httpx.Response(200, content=b"z" * 100)
+
+    with pytest.raises(SourceFetchError) as exc2:
+        fetch_sources(
+            (_page_spec("gpt-5.2"),), client=_client(handler_b), context=ctx, resolve=_ok()
+        )
+    assert exc2.value.code == "collection_budget_exhausted"
+    assert hits["b"] == 0, "terminal exhaustion blocks the later fetch before its handler"
+
+
+def test_charge_and_reserve_refuse_after_terminal_exhaustion() -> None:
+    # G2 (accounting seam): the crossing debit records the full honest
+    # deficit; charge AND reserve refuse thereafter (no leftover credit).
+    ctx = _ctx(max_bytes=256)
+    ctx.charge_body_bytes(200)
+    assert ctx.bytes_remaining == 56
+    with pytest.raises(SourceFetchError) as exc:
+        ctx.charge_body_bytes(100)
+    assert exc.value.code == "collection_budget_exhausted"
+    assert ctx.bytes_remaining == -44, "the crossing chunk is debited in full"
+    assert ctx.exhausted is True
+    with pytest.raises(SourceFetchError) as exc:
+        ctx.charge_body_bytes(1)
+    assert exc.value.code == "collection_budget_exhausted"
+    with pytest.raises(SourceFetchError) as exc:
+        ctx.reserve_attempt()
+    assert exc.value.code == "collection_budget_exhausted"
+
+
+def test_deadline_failure_does_not_hide_consumed_bytes() -> None:
+    # G2: 200 bytes are consumed, then the stream stalls past the 0.1 s
+    # deadline. The deadline failure aborts the run, but the consumed
+    # bytes remain charged (56 of 256 remain, not 256).
+    ctx = _ctx(max_bytes=256, deadline_seconds=0.1)
+
+    def stalling(request: httpx.Request) -> httpx.Response:
+        def gen():
+            yield b"x" * 200
+            time.sleep(0.3)
+            yield b"y" * 10
+
+        return httpx.Response(200, content=IteratorByteStream(gen()))
+
+    spec_a = _spec(max_bytes=256)
+    with pytest.raises(SourceFetchError) as exc:
+        fetch_sources((spec_a,), client=_client(stalling), context=ctx, resolve=_ok())
+    assert exc.value.code == "acquisition_deadline_exceeded"
+    assert ctx.bytes_remaining == 56, "consumed bytes are not hidden by the deadline failure"
+
+
+# --- G3: global-unicast classification at the actual socket decision -------
+
+
+@pytest.mark.parametrize(
+    "ip",
+    [
+        "100.64.0.1",  # RFC 6598 shared address space (the probe case)
+        "100.127.255.255",  # RFC 6598 upper edge
+        "192.0.2.1",  # TEST-NET-1
+        "198.18.0.1",  # benchmarking
+        "224.0.0.1",  # multicast
+        "240.0.0.1",  # reserved 240/4
+        "2001:db8::1",  # IPv6 documentation
+        "fe80::1",  # link-local
+        "ff02::1",  # multicast
+        "::ffff:100.64.0.1",  # IPv4-mapped CGNAT
+    ],
+)
+def test_non_global_unicast_destination_refused_at_connect(
+    ip: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend = VettedNetworkBackend(resolve=_resolve(ip))
+    calls: list = []
+
+    def refusing(address, timeout=None, source_address=None, **kwargs):
+        calls.append(address)
+        raise AssertionError(f"must never connect to non-global {ip}")
+
+    monkeypatch.setattr(socket, "create_connection", refusing)
+    with pytest.raises(SourceFetchError) as exc:
+        backend.connect_tcp("openrouter.ai", 443, timeout=1.0)
+    assert exc.value.code == "destination_not_public"
+    assert calls == [], "the non-global answer set never reaches a connection"
+
+
+def test_mixed_answer_set_refused_as_a_whole_at_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # G3: a mixed answer set (one global, one CGNAT) is refused as a
+    # WHOLE at the connect decision - never filtered to its public
+    # member.
+    backend = VettedNetworkBackend(resolve=_resolve(PUBLIC, "100.64.0.1"))
+    calls: list = []
+
+    def refusing(address, timeout=None, source_address=None, **kwargs):
+        calls.append(address)
+        raise AssertionError("mixed set must be refused before any connection")
+
+    monkeypatch.setattr(socket, "create_connection", refusing)
+    with pytest.raises(SourceFetchError) as exc:
+        backend.connect_tcp("openrouter.ai", 443, timeout=1.0)
+    assert exc.value.code == "destination_mixed_or_not_public"
+    assert calls == [], "the mixed set is never filtered to its public member"
+
+
+@pytest.mark.parametrize(
+    "ip",
+    [
+        "93.184.216.34",
+        "8.8.8.8",
+        "2606:4700:4700::1111",
+        "::ffff:93.184.216.34",
+    ],
+)
+def test_global_unicast_destination_connects_numerically(
+    ip: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # G3: legitimate global-unicast destinations (v4, v6, mapped) are
+    # connected to the vetted NUMERIC destination.
+    backend = VettedNetworkBackend(resolve=_resolve(ip))
+    calls: list = []
+    sock = _FakeSock()
+
+    def fake_connect(address, timeout=None, source_address=None, **kwargs):
+        calls.append(address)
+        return sock
+
+    monkeypatch.setattr(socket, "create_connection", fake_connect)
+    stream = backend.connect_tcp("openrouter.ai", 443, timeout=1.0)
+    try:
+        assert calls == [(ip, 443)], "connects only to the vetted numeric destination"
+        assert isinstance(stream, DeadlineStream)
+    finally:
+        stream.close()
+    assert sock.closed
+
+
+# --- G4: safe rejected URL provenance ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("location", "code"),
+    [
+        (
+            "https://synthetic-user:synthetic-password@developers.openai.com"
+            "/api/docs/models/a.md?token=synthetic-token",
+            "url_credentials",
+        ),
+        (
+            "https://developers.openai.com/api/docs/models/a.md?token=synthetic-token",
+            "url_query_forbidden",
+        ),
+        (
+            "https://developers.openai.com/api/docs/models/a.md#synthetic-token",
+            "url_fragment_forbidden",
+        ),
+        (
+            "https://evil.example.com/api/docs/models/a.md",
+            "url_host_not_approved",
+        ),
+    ],
+)
+def test_rejected_redirect_target_never_reaches_final_url(location: str, code: str) -> None:
+    # G4 (exact probe case, plus query/fragment/host/malformed-port
+    # variants): the rejected raw target never leaves the loop variable -
+    # final_url is the last VALIDATED safe URL (None when it is the
+    # requested URL), and no synthetic marker survives serialization.
+    spec = _page_spec("gpt-5.2")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == spec.url
+        return httpx.Response(302, headers={"location": location})
+
+    result = fetch_source(_client(handler), spec, context=_ctx(), resolve=_ok())
+    assert result.ok is False
+    assert result.failure_code == code
+    assert result.final_url is None, "only a validated safe URL (or absent) is recorded"
+    text = repr(dataclasses.asdict(result))
+    for marker in ("synthetic-user", "synthetic-password", "synthetic-token"):
+        assert marker not in text, f"rejected target leaked into provenance: {marker}"
+
+
+def test_malformed_numeric_redirect_location_refused_at_revalidation() -> None:
+    # G6 (redirect level): an OUT-OF-RANGE numeric port parses through
+    # httpx's own redirect bookkeeping, so our re-validation is the
+    # decision point: the exact safe code applies, provenance stays clean.
+    spec = _page_spec("gpt-5.2")
+    location = "https://developers.openai.com:99999/api/docs/models/a.md"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": location})
+
+    result = fetch_source(_client(handler), spec, context=_ctx(), resolve=_ok())
+    assert result.ok is False
+    assert result.failure_code == "url_nondefault_port"
+    assert result.final_url is None
+    assert "99999" not in repr(dataclasses.asdict(result))
+
+
+def test_malformed_redirect_location_fails_safely_without_escaping() -> None:
+    # G6 (redirect level): a NON-NUMERIC port cannot be parsed by httpx's
+    # own redirect bookkeeping, which refuses it (RemoteProtocolError)
+    # BEFORE our manual re-validation. The failure is still deterministic
+    # and safe: the httpx error is caught, the SAFE code is recorded, no
+    # ValueError escapes, and no raw target text reaches provenance.
+    spec = _page_spec("gpt-5.2")
+    location = "https://developers.openai.com:not-a-port/api/docs/models/a.md"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": location})
+
+    result = fetch_source(_client(handler), spec, context=_ctx(), resolve=_ok())
+    assert result.ok is False
+    assert result.failure_code == "transport_error", "safe code, no escaping exception"
+    assert result.final_url is None
+    assert "not-a-port" not in repr(dataclasses.asdict(result))
+
+
+def test_redirect_to_encoded_traversal_page_is_refused_safely() -> None:
+    # G5 (redirect level): a 302 whose target only decodes to a
+    # traversal slug is refused with the safe slug code; provenance stays
+    # clean.
+    spec = _page_spec("gpt-5.2")
+    location = (
+        "https://developers.openai.com/api/docs/models/a%2F..%2F..%2Fprivate.md"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": location})
+
+    result = fetch_source(_client(handler), spec, context=_ctx(), resolve=_ok())
+    assert result.ok is False
+    assert result.failure_code == "model_page_slug_invalid"
+    assert result.final_url is None
+    assert "private" not in repr(dataclasses.asdict(result))
+
+
+# --- G5: traversal and ambiguous URL encodings --------------------------------
+
+
+@pytest.mark.parametrize(
+    "slug",
+    [
+        "a%2F..%2F..%2Fprivate",  # the probe case: encoded traversal
+        "%2e%2e%2fsecret",  # encoded dot segments
+        "..%2Fsecret",  # raw dot + encoded separator
+        "a%2F..%2Fb",  # traversal inside the ID
+        "a%5Cb",  # backslash escape
+        "%252Fetc",  # double/ambiguous percent escape
+        "a%00b",  # control character
+        "a%2F%2Fb",  # empty part (double separator)
+        "..%2F..%2Fetc%2Fpasswd",
+    ],
+)
+def test_encoded_traversal_and_ambiguous_slugs_refused(slug: str) -> None:
+    url = f"https://developers.openai.com/api/docs/models/{slug}.md"
+    with pytest.raises(SourceFetchError) as exc:
+        validate_source_url(url, provider="openai")
+    assert exc.value.code == "model_page_slug_invalid"
+
+
+@pytest.mark.parametrize(
+    "slug",
+    [
+        "gpt-4o",
+        "gpt-5.2",
+        "vendor%2Fmodel",
+        "meta%2Fllama-3.1%3Afree",  # legitimate namespaced ID with tag
+        "chat%2D4o",
+    ],
+)
+def test_legitimate_quoted_model_ids_preserved(slug: str) -> None:
+    url = f"https://developers.openai.com/api/docs/models/{slug}.md"
+    validate_source_url(url, provider="openai")  # must not raise
+
+
+def test_model_page_spec_applies_same_slug_admission() -> None:
+    # G5: generated specs get the SAME safe slug admission as supplied
+    # or redirected URLs.
+    with pytest.raises(SourceFetchError) as exc:
+        model_page_spec("openai", "a/../../private")
+    assert exc.value.code == "model_page_slug_invalid"
+    with pytest.raises(SourceFetchError) as exc:
+        model_page_spec("openai", "%2Fetc")
+    assert exc.value.code == "model_page_slug_invalid"
+    with pytest.raises(SourceFetchError) as exc:
+        model_page_spec("openai", "a%2F..%2Fb")
+    assert exc.value.code == "model_page_slug_invalid"
+    spec = model_page_spec("openai", "openai/gpt-4o")
+    assert spec.url == (
+        "https://developers.openai.com/api/docs/models/openai%2Fgpt-4o.md"
+    )
+
+
+# --- G6: safe malformed URL/port handling ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "code"),
+    [
+        (
+            "https://developers.openai.com:not-a-port/api/docs/models/a.md",
+            "url_nondefault_port",
+        ),
+        (
+            "https://developers.openai.com:99999/api/docs/pricing.md",
+            "url_nondefault_port",
+        ),
+        (
+            "https://[::1/api/docs/pricing.md",
+            "url_host_not_approved",
+        ),
+    ],
+)
+def test_malformed_authority_and_port_fail_with_safe_codes(url: str, code: str) -> None:
+    # G6 (exact probe case, plus out-of-range and malformed brackets):
+    # malformed untrusted URLs fail with the SAFE code, never an uncaught
+    # ValueError or raw text.
+    with pytest.raises(SourceFetchError) as exc:
+        validate_source_url(url, provider="openai")
+    assert exc.value.code == code
+
+
+def test_explicit_default_port_still_accepted() -> None:
+    validate_source_url(
+        "https://developers.openai.com:443/api/docs/pricing.md", provider="openai"
+    )

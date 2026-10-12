@@ -108,7 +108,18 @@ MAX_RETRY_AFTER_SECONDS = 30.0
 CONNECT_TIMEOUT = 10.0
 READ_TIMEOUT = 30.0
 _CHUNK_SIZE = 64 * 1024
-_SLUG_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")
+# G5 (181-g): the model-page slug is the URL-QUOTED model ID. After ONE
+# decode it may be a plain ID or a namespaced ID (plain parts separated
+# by single encoded slashes, e.g. ``vendor%2Fmodel``). Dot segments,
+# empty parts, encoded separators that introduce traversal,
+# backslash/control variants, and double/ambiguous percent-escapes are
+# all refused; the fixed official path families are NOT widened.
+# Part alphabet: the plain model-ID alphabet plus ":" for legitimate
+# namespaced IDs (vendor/model:tag, as in the provider catalogs) - the
+# first character must stay alphanumeric.
+_SLUG_PART_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$")
+_SLUG_MAX_PARTS = 32
+_SLUG_MAX_TOTAL = 200
 
 
 class SourceFetchError(Exception):
@@ -183,6 +194,12 @@ class AcquisitionContext:
     attempts_remaining: int
     bytes_remaining: int
     cache: dict[str, RetrievalResult] = field(default_factory=dict)
+    # G2 (181-g): once the byte budget is crossed by a consumed chunk,
+    # the invocation is TERMINALLY exhausted: the crossing (and later)
+    # chunks are still debited (``bytes_remaining`` goes negative - an
+    # honest deficit, never a refund) and no later attempt, read, or
+    # phase may use any leftover credit.
+    exhausted: bool = False
 
     def check_deadline(self) -> None:
         if time.monotonic() >= self.deadline:
@@ -192,19 +209,35 @@ class AcquisitionContext:
         return self.deadline - time.monotonic()
 
     def reserve_attempt(self) -> None:
-        """Reserve ONE real HTTP request; refuse past the deadline or
-        when no attempt budget remains (collection-level failure)."""
+        """Reserve ONE real HTTP request; refuse past the deadline, on
+        terminal exhaustion, or when no attempt budget remains
+        (collection-level failure)."""
         self.check_deadline()
-        if self.attempts_remaining <= 0:
+        if self.exhausted or self.attempts_remaining <= 0:
             raise SourceFetchError("collection_budget_exhausted")
         self.attempts_remaining -= 1
 
     def charge_body_bytes(self, n: int) -> None:
-        """Charge consumed wire body bytes (no refunds)."""
+        """Charge consumed wire body bytes (no refunds).
+
+        An overflow chunk (``n`` greater than the remaining budget) is
+        DEBITED in full - the deficit is recorded honestly in
+        ``bytes_remaining`` - and the invocation is marked terminally
+        exhausted BEFORE the failure propagates, so later attempts,
+        reads, and fetch phases cannot use leftover credit. A deadline
+        failure does not hide already consumed bytes: charging stops at
+        the expiry check and every prior charge remains recorded.
+        """
         self.check_deadline()
+        if self.exhausted:
+            raise SourceFetchError("collection_budget_exhausted")
         if n > self.bytes_remaining:
+            self.bytes_remaining -= n  # negative deficit, honestly kept
+            self.exhausted = True
             raise SourceFetchError("collection_budget_exhausted")
         self.bytes_remaining -= n
+        if self.bytes_remaining < 0:
+            self.exhausted = True
 
     def cache_lookup(self, spec: SourceSpec) -> RetrievalResult | None:
         """Reuse a cached success OR failure for this URL, revalidating
@@ -259,6 +292,41 @@ def source_family_hosts(provider: str) -> frozenset[str]:
         raise SourceFetchError("unknown_provider") from exc
 
 
+def _validate_slug_text(raw_segment: str, decoded: str) -> None:
+    """Safe slug admission for the model-page segment (181-g G5).
+
+    ``raw_segment`` is the single path segment exactly as it appears in
+    the URL (no raw ``/`` - that is checked by the caller); ``decoded``
+    is its ONE-pass percent-decoding. Rules (fail closed):
+
+    - no backslash or control character in the RAW segment;
+    - no double/ambiguous percent-escape: after ONE decode the text
+      must contain no ``%`` (``%25xx``-style ambiguity is refused);
+    - the decoded text splits into at most ``_SLUG_MAX_PARTS`` parts on
+      ``/`` (encoded separators); no empty part and no dot segment
+      (``.``/``..``) - encoded traversal is refused;
+    - every part matches ``_SLUG_PART_PATTERN`` (plain ID alphabet) and
+      the decoded total is bounded.
+
+    Legitimate URL-quoted model IDs - plain IDs and valid namespaced
+    IDs such as ``vendor%2Fmodel`` - are preserved.
+    """
+    if "\\" in raw_segment or any(c < " " or c == "\x7f" for c in raw_segment):
+        raise SourceFetchError("model_page_slug_invalid")
+    if "%" in decoded:
+        raise SourceFetchError("model_page_slug_invalid")
+    if len(decoded) > _SLUG_MAX_TOTAL:
+        raise SourceFetchError("model_page_slug_invalid")
+    parts = decoded.split("/")
+    if len(parts) > _SLUG_MAX_PARTS:
+        raise SourceFetchError("model_page_slug_invalid")
+    for part in parts:
+        if part in ("", ".", ".."):
+            raise SourceFetchError("model_page_slug_invalid")
+        if not _SLUG_PART_PATTERN.fullmatch(part):
+            raise SourceFetchError("model_page_slug_invalid")
+
+
 def _validate_path_family(
     path: str, *, provider: str, source_kind: str | None
 ) -> None:
@@ -290,19 +358,19 @@ def _validate_path_family(
                 raise SourceFetchError("url_path_kind_mismatch")
             # The single path segment is the URL-quoted model ID: a
             # legitimate registry page URL never contains a raw "/" in
-            # the segment (model IDs with slashes are stored as %2F), so
-            # a raw separator is path drift, not a slug - reject it
-            # before any decoding. Decode once, then apply the slug rule
-            # to the decoded value; double-encodings and foreign
-            # characters fail the pattern.
+            # the segment (namespaced IDs keep their separator encoded
+            # as %2F), so a raw separator is path drift, not a slug -
+            # reject it before any decoding. Decode ONCE, then apply
+            # the safe slug admission (G5): dot segments, encoded
+            # traversal, double/ambiguous escapes, and backslash or
+            # control variants fail closed; valid namespaced IDs are
+            # preserved.
             segment = path[
                 len(OPENAI_MODEL_DOC_PREFIX) : -len(OPENAI_MODEL_DOC_SUFFIX)
             ]
             if "/" in segment:
                 raise SourceFetchError("url_path_not_approved")
-            slug = unquote(segment)
-            if not _SLUG_PATTERN.fullmatch(slug):
-                raise SourceFetchError("model_page_slug_invalid")
+            _validate_slug_text(segment, unquote(segment))
         else:
             raise SourceFetchError("url_path_not_approved")
     elif provider == "ecb":
@@ -327,15 +395,30 @@ def validate_source_url(
     default port only, no query, no fragment, and the exact registered
     path family for the provider (and source kind, when given).
     """
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        # Malformed untrusted URL (bad authority/brackets): fail closed
+        # with a safe code, never an uncaught exception or raw text.
+        raise SourceFetchError("url_host_not_approved") from None
     if parsed.scheme != "https":
         raise SourceFetchError("url_not_https")
     if parsed.username is not None or parsed.password is not None:
         raise SourceFetchError("url_credentials")
-    host = (parsed.hostname or "").lower()
+    try:
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        # Malformed authority (e.g. broken IPv6 brackets).
+        raise SourceFetchError("url_host_not_approved") from None
     if not host or host not in source_family_hosts(provider):
         raise SourceFetchError("url_host_not_approved")
-    if parsed.port is not None and parsed.port != 443:
+    try:
+        port = parsed.port
+    except ValueError:
+        # Nonnumeric or out-of-range port (G6): a malformed untrusted
+        # port is treated like any non-default port - refused safely.
+        raise SourceFetchError("url_nondefault_port") from None
+    if port is not None and port != 443:
         raise SourceFetchError("url_nondefault_port")
     if not parsed.path:
         raise SourceFetchError("url_missing_path")
@@ -350,22 +433,30 @@ def guard_public_destination(
     host: str,
     *,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
+    remaining: float | None = None,
 ) -> tuple[str, ...]:
-    """Preflight destination vetting: refuse non-public or MIXED answers.
+    """Preflight destination vetting: refuse non-global-unicast or
+    MIXED answers, bounded by the collection deadline (181-g G1).
 
     Runs before every request and every redirect hop and returns the
-    vetted public numeric destinations (provenance). It is an early safe
-    failure, not the binding: the ACTUAL connection is vetted again at
-    connect time inside ``source_transport.VettedNetworkBackend`` (a
-    preflight lookup followed by an independent client resolution is not
-    a fix - the connect-time answer set is the one that is bound).
-    Resolver failure is itself a safe failure.
+    vetted global-unicast numeric destinations (provenance). It is an
+    early safe failure, not the binding: the ACTUAL connection is
+    vetted again at connect time inside
+    ``source_transport.VettedNetworkBackend`` (a preflight lookup
+    followed by an independent client resolution is not a fix - the
+    connect-time answer set is the one that is bound). With
+    ``remaining`` (the context's remaining whole-invocation seconds)
+    the DEFAULT resolver is bounded by the owned killed/reaped child
+    and the deadline is re-checked around any resolver; the caller
+    must re-check the deadline before the next action.
     """
     from slaif_gateway.services.catalog_refresh.source_transport import (
-        vet_public_destination,
+        resolve_vetted_public_destination,
     )
 
-    return vet_public_destination(host, resolve=resolve)
+    return resolve_vetted_public_destination(
+        host, resolve=resolve, remaining=remaining
+    )
 
 
 def plan_catalog_specs(providers: tuple[str, ...]) -> list[SourceSpec]:
@@ -424,8 +515,11 @@ def model_page_spec(provider: str, model_id: str) -> SourceSpec:
     """
     if provider != "openai":
         raise SourceFetchError("unknown_provider")
-    if not _SLUG_PATTERN.fullmatch(model_id):
-        raise SourceFetchError("model_page_slug_invalid")
+    # Equivalent safe slug admission (G5) for GENERATED specs: the
+    # model ID (decoded form) must pass the same rules as a supplied
+    # or redirected URL, so a fetched or supplied ID cannot mint a
+    # traversal or ambiguous page URL.
+    _validate_slug_text(model_id, model_id)
     return SourceSpec(
         provider="openai",
         source_kind="docs_page",
@@ -485,11 +579,20 @@ def _read_bounded(
         # Pre-buffered response (httpx buffers Response(content=...)
         # bodies at construction; the production live-stream path never
         # takes this branch). The buffer holds exactly the wire bytes;
-        # serve it in bounded slices with the same accounting.
-        for i in range(0, len(buffered), _CHUNK_SIZE):
-            chunk = buffered[i : i + _CHUNK_SIZE]
+        # serve it in bounded slices with the same accounting. Slice
+        # sizes are limited by the REMAINING collection byte budget
+        # where practical (G2): a crossing read can then exceed the
+        # budget only by at most that bounded slice, and the charge
+        # layer debits it and terminates the invocation.
+        i = 0
+        while i < len(buffered):
+            n = min(_CHUNK_SIZE, len(buffered) - i)
+            if context.bytes_remaining > 0:
+                n = min(n, max(1, context.bytes_remaining))
+            chunk = buffered[i : i + n]
             charge_and_check(len(chunk))
             chunks.append(chunk)
+            i += n
     else:
         # Live network stream: every raw wire read is charged as it is
         # consumed, and the deadline is checked before every raw read.
@@ -505,15 +608,23 @@ def _failed(
     spec: SourceSpec,
     *,
     current_url: str,
+    last_safe_url: str,
     last_status: int | None,
     attempts: int,
     redirects: int,
     code: str,
 ) -> RetrievalResult:
+    """Safe-code failure result.
+
+    G4 (181-g): ``final_url`` records only the LAST VALIDATED SAFE URL
+    (the rejected raw target - e.g. one carrying credentials, query,
+    or an unapproved host - never leaves the loop variable and is
+    never persisted in provenance, metadata, or error text).
+    """
     return RetrievalResult(
         spec=spec,
         ok=False,
-        final_url=current_url if current_url != spec.url else None,
+        final_url=last_safe_url if last_safe_url != spec.url else None,
         retrieved_at=datetime.now(UTC),
         status=last_status,
         content_type=None,
@@ -571,6 +682,9 @@ def fetch_source(
     of this function to BLOCK the whole run; per-spec failures return.
     """
     current_url = spec.url
+    # G4: the last VALIDATED SAFE URL - rejected redirect targets never
+    # leave this loop variable (never persisted in provenance).
+    last_safe_url = spec.url
     redirects = 0
     attempts = 0
     last_status: int | None = None
@@ -591,40 +705,68 @@ def fetch_source(
             return _failed(
                 spec,
                 current_url=current_url,
+                last_safe_url=last_safe_url,
                 last_status=last_status,
                 attempts=attempts,
                 redirects=redirects,
                 code=exc.code,
             )
+        last_safe_url = current_url
         try:
             guard_public_destination(
-                urlparse(current_url).hostname or "", resolve=resolve
+                urlparse(current_url).hostname or "",
+                resolve=resolve,
+                remaining=context.remaining_seconds(),
             )
         except SourceFetchError as exc:
+            # Collection-level exhaustion (deadline/budget) aborts the
+            # WHOLE invocation - no per-spec masking.
+            if _collection_level(exc):
+                raise
             return _failed(
                 spec,
                 current_url=current_url,
+                last_safe_url=last_safe_url,
                 last_status=last_status,
                 attempts=attempts,
                 redirects=redirects,
                 code=exc.code,
             )
+        # G1: stop BEFORE the HTTP request after expired DNS (the
+        # blocking resolver may have consumed the remaining time).
+        context.check_deadline()
+        # G1: per-request timeouts clamped to the remaining whole-
+        # invocation time (no refreshed per-request deadline).
+        rem = context.remaining_seconds()
+        request_timeout = httpx.Timeout(
+            connect=min(CONNECT_TIMEOUT, rem),
+            read=min(READ_TIMEOUT, rem),
+            write=min(CONNECT_TIMEOUT, rem),
+            pool=min(CONNECT_TIMEOUT, rem),
+        )
         try:
             with client.stream(
-                "GET", current_url, follow_redirects=False
+                "GET",
+                current_url,
+                follow_redirects=False,
+                timeout=request_timeout,
             ) as response:
                 last_status = response.status_code
                 if 300 <= response.status_code < 400:
                     location = response.headers.get("location")
                     if not location:
                         return _failed(
-                            spec, current_url=current_url, last_status=last_status,
+                            spec, current_url=current_url,
+                            last_safe_url=last_safe_url,
+                            last_status=last_status,
                             attempts=attempts, redirects=redirects,
                             code="redirect_missing_location",
                         )
                     if redirects >= MAX_REDIRECTS:
                         return _failed(
-                            spec, current_url=current_url, last_status=last_status,
+                            spec, current_url=current_url,
+                            last_safe_url=last_safe_url,
+                            last_status=last_status,
                             attempts=attempts, redirects=redirects,
                             code="redirect_unbounded",
                         )
@@ -659,14 +801,18 @@ def fetch_source(
                         context.check_deadline()
                         continue
                     return _failed(
-                        spec, current_url=current_url, last_status=last_status,
+                        spec, current_url=current_url,
+                        last_safe_url=last_safe_url,
+                        last_status=last_status,
                         attempts=attempts, redirects=redirects, code="rate_limited",
                     )
                 if 500 <= response.status_code < 600:
                     if attempts < MAX_ATTEMPTS:
                         continue
                     return _failed(
-                        spec, current_url=current_url, last_status=last_status,
+                        spec, current_url=current_url,
+                        last_safe_url=last_safe_url,
+                        last_status=last_status,
                         attempts=attempts, redirects=redirects, code="http_5xx",
                     )
                 if 200 <= response.status_code < 300:
@@ -678,14 +824,18 @@ def fetch_source(
                     ).lower()
                     if encoding != "identity":
                         return _failed(
-                            spec, current_url=current_url, last_status=last_status,
+                            spec, current_url=current_url,
+                            last_safe_url=last_safe_url,
+                            last_status=last_status,
                             attempts=attempts, redirects=redirects,
                             code="unexpected_encoding",
                         )
                     content_type = response.headers.get("content-type")
                     if content_type is not None and len(content_type) > 256:
                         return _failed(
-                            spec, current_url=current_url, last_status=last_status,
+                            spec, current_url=current_url,
+                            last_safe_url=last_safe_url,
+                            last_status=last_status,
                             attempts=attempts, redirects=redirects,
                             code="header_too_large",
                         )
@@ -697,14 +847,16 @@ def fetch_source(
                         if _collection_level(exc):
                             raise
                         return _failed(
-                            spec, current_url=current_url, last_status=last_status,
+                            spec, current_url=current_url,
+                            last_safe_url=last_safe_url,
+                            last_status=last_status,
                             attempts=attempts, redirects=redirects, code=exc.code,
                         )
                     return RetrievalResult(
                         spec=spec,
                         ok=True,
                         final_url=(
-                            current_url if current_url != spec.url else None
+                            last_safe_url if last_safe_url != spec.url else None
                         ),
                         retrieved_at=datetime.now(UTC),
                         status=last_status,
@@ -716,7 +868,9 @@ def fetch_source(
                         redirects=redirects,
                     )
                 return _failed(
-                    spec, current_url=current_url, last_status=last_status,
+                    spec, current_url=current_url,
+                    last_safe_url=last_safe_url,
+                    last_status=last_status,
                     attempts=attempts, redirects=redirects,
                     code=f"http_{response.status_code}",
                 )
@@ -728,7 +882,9 @@ def fetch_source(
             if attempts < MAX_ATTEMPTS:
                 continue
             return _failed(
-                spec, current_url=current_url, last_status=last_status,
+                spec, current_url=current_url,
+                last_safe_url=last_safe_url,
+                last_status=last_status,
                 attempts=attempts, redirects=redirects, code=exc.code,
             )
         except (httpx.HTTPError, OSError) as exc:
@@ -739,7 +895,9 @@ def fetch_source(
             if attempts < MAX_ATTEMPTS:
                 continue
             return _failed(
-                spec, current_url=current_url, last_status=last_status,
+                spec, current_url=current_url,
+                last_safe_url=last_safe_url,
+                last_status=last_status,
                 attempts=attempts, redirects=redirects, code=code,
             )
 
@@ -772,9 +930,11 @@ def fetch_sources(
         if cached is not None:
             results[spec.url] = cached
             continue
-        if context.attempts_remaining < 1:
-            raise SourceFetchError("collection_budget_exhausted")
-        if context.bytes_remaining < spec.max_bytes:
+        if (
+            context.exhausted
+            or context.attempts_remaining < 1
+            or context.bytes_remaining < spec.max_bytes
+        ):
             raise SourceFetchError("collection_budget_exhausted")
         result = fetch_source(
             client, spec, context=context, resolve=resolve
@@ -787,14 +947,20 @@ def fetch_sources(
 def new_client(
     *,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
+    acquisition: AcquisitionContext | None = None,
 ) -> httpx.Client:
     """Production client: vetted-connection transport, identity transfer,
     bounded timeouts, no implicit redirects, no environment proxies.
 
-    The transport binds every real TCP connection to the vetted public
-    numeric destination (original hostname, SNI, and verified
-    certificate policy intact) and disables environment proxies and
-    other implicit network configuration (``trust_env=False``).
+    The transport binds every real TCP connection to the vetted
+    global-unicast numeric destination (original hostname, SNI, and
+    verified certificate policy intact) and disables environment
+    proxies and other implicit network configuration
+    (``trust_env=False``). ``acquisition`` (the collection-owned
+    context, when known at construction time) is handed to the
+    transport backend so every real operation is deadline-bounded;
+    ``collect_bundle`` additionally binds the context to a caller-
+    supplied client through :func:`bind_acquisition_to_client`.
     """
     from slaif_gateway.services.catalog_refresh.source_transport import (
         VettedHTTPTransport,
@@ -816,9 +982,32 @@ def new_client(
         trust_env=False,
         transport=VettedHTTPTransport(
             resolve=resolve,
+            deadline=acquisition,
             limits=httpx.Limits(
                 max_connections=MAX_CONCURRENCY,
                 max_keepalive_connections=MAX_CONCURRENCY,
             ),
         ),
     )
+
+
+def bind_acquisition_to_client(
+    client: httpx.Client, context: AcquisitionContext
+) -> None:
+    """Bind the collection-owned context to a client's vetted transport
+    backend (181-g G1, budget/client lifecycle).
+
+    The deadline must reach the ACTUAL backend/stream operations even
+    when the client was constructed before the context existed (the
+    CLI path constructs the client, then the collection creates the
+    context). Clients without a vetted backend (unit-test mock
+    transports) are left untouched: their injected resolvers are
+    documented test seams, and the deadline is still enforced around
+    every resolver call and at every decision point.
+    """
+    transport = getattr(client, "_transport", None)
+    pool = getattr(transport, "_pool", None)
+    backend = getattr(pool, "_network_backend", None)
+    bind = getattr(backend, "bind_deadline", None)
+    if callable(bind):
+        bind(context)

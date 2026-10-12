@@ -123,10 +123,15 @@ reuse**):
   source kind — a 3xx to any other host, path, or query is refused, never
   followed;
 - a public-destination DNS guard runs before every request and every
-  redirect hop: private, loopback, link-local, reserved, or unspecified
-  destinations are refused, and a **mixed** answer set (any public address
-  together with any non-public one) is refused as a whole, never filtered
-  down to its public subset; resolver failures are safe code-only failures;
+  redirect hop: only **global-unicast** destinations are accepted (positive
+  `is_global` classification in addition to explicit loopback/private/
+  link-local/reserved/multicast/unspecified exclusions — notably RFC 6598
+  shared address space, documentation ranges, and NAT64 ranges are
+  refused), and a **mixed** answer set (any global-unicast address together
+  with any other one) is refused as a whole, never filtered down to its
+  global subset; resolver failures are safe code-only failures; the guard
+  is bounded by the acquisition deadline (see below), and the ACTUAL
+  connect re-runs the same vetting on its own answer set;
 - manual redirects are bounded to 3, with relative locations resolved
   RFC 3986-style against the current URL and re-validated;
 - a 429 with a finite `Retry-After` of at most 30 s is retried (the wait
@@ -134,7 +139,11 @@ reuse**):
   `Retry-After` is never waited on; 5xx and transport errors retry up to 3
   total attempts;
 - bodies are read as bounded wire chunks against the per-kind byte cap
-  above (a mid-stream overflow fails with `body_too_large`);
+  above (a mid-stream overflow fails with `body_too_large`, or — when it
+  crosses the whole-invocation byte budget first — the crossing chunk is
+  debited in full and the invocation is terminally exhausted); requested
+  read sizes are limited by the remaining budget where practical, so a
+  crossing read can overrun the budget only by that bounded read size;
   `Content-Length` is never trusted;
 - the transfer encoding is **identity only**: the client sends
   `Accept-Encoding: identity`, any other `Content-Encoding` is refused
@@ -160,16 +169,45 @@ caps above. When a remaining budget can no longer cover the next spec, the
 run fails closed (`collection_budget_exhausted`) instead of continuing
 partially.
 
-**A finite acquisition deadline.** The context carries a 120-second global
-monotonic deadline. DNS resolution, connect, TLS, body reads, retry
-sleeps, and gaps between fetch phases all consume it: every new network
-action is refused once it has passed, and an expired deadline aborts the
-run with `acquisition_deadline_exceeded` before any later HTTP activity.
-Honest limit: a single in-flight operation (one DNS lookup, one connect,
-one read between deadline checks) may complete slightly past the deadline
-before the next action is refused; it is additionally bounded by the
-per-operation connect/read timeouts (10 s / 30 s), so wall time stays
-finite.
+**Overflow is debited in full, and exhaustion is terminal.** When a
+consumed chunk exceeds the remaining byte budget, the FULL chunk is
+debited — the honest deficit is kept in the context (the remaining count
+goes negative, never refunded) — and the invocation is marked TERMINALLY
+exhausted: no later attempt, read, or fetch phase may use any leftover
+credit, and the failure aborts the whole run. A deadline failure does not
+hide already-consumed bytes: every prior charge remains recorded.
+
+**A finite acquisition deadline, enforced at the actual operations.** The
+context carries a 120-second global monotonic deadline, and the deadline
+reaches the ACTUAL backend operations, not just the guard: `collect_bundle`
+binds the context to the client's vetted transport backend, so the default
+(production) resolver, every candidate-IP connect, the TLS handshake, and
+every stream read/partial-write re-check the deadline and clamp their
+socket timeout to the REMAINING whole-invocation time. The default
+blocking resolver (`socket.getaddrinfo`) cannot be cancelled in-process;
+it therefore runs in a short-lived OWNED child process (`sys.executable -I`
+with an EMPTY environment — it inherits no secrets, site configuration, or
+provider/DB/seal authority and executes only stdlib `json`/`socket`/
+`sys`/`time`); the parent waits with the remaining deadline seconds, and
+on expiry the child is SIGKILLed (uncatchable) and reaped — bounded
+lifetime, reaped on success/failure/timeout, no detached lookup, no daemon
+thread, no process-global timer. The deadline is re-checked after every
+resolver call, before EVERY candidate-IP connect (an expired attempt stops
+before the next IP), after the connect (the expired socket is closed
+before the failure propagates), before AND after the TLS handshake (the
+upgraded socket is closed the same way), and INSIDE the partial-send loop
+before every socket write (httpcore's own loop resets the same timeout on
+each partial send; clamping once would let repeated partial sends overrun
+the total deadline). No later action starts after expiry; one
+already-started operation may finish slightly past expiry, bounded by its
+own deadline-clamped timeout. Real (default-resolver) DNS is bounded even
+WITHOUT a context (capped at 120 s), so no execution context silently
+falls back to unbounded DNS. Honest platform limits: spawning the
+resolver child adds a small bounded overhead per resolution; the reap
+wait after SIGKILL has a 5-second extreme safety net; an INJECTED resolver
+(unit-test seam only — production never injects one) is called in-process
+and cannot be killed mid-call, so the deadline is enforced around it and
+between it and the next action.
 
 **Cross-phase URL outcome cache.** One URL's success OR failure is cached
 across phases within the invocation: the captured bytes (or safe failure)
@@ -183,7 +221,10 @@ context.
 **Vetted connection binding.** The production client's only TCP connection
 path is a vetted network backend: on every new connection it resolves the
 approved hostname, vets the COMPLETE answer set (every returned address
-must be globally public), and connects only to those vetted numeric
+must be a GLOBAL UNICAST address — positive `is_global` classification in
+addition to the explicit loopback/private/link-local/reserved/multicast/
+unspecified exclusions, so addresses that are neither private nor global,
+notably RFC 6598, are refused), and connects only to those vetted numeric
 addresses. TLS then starts on that bound socket with the ORIGINAL hostname
 as SNI and the standard verified certificate context — chain and hostname
 verification are exactly the library defaults (no TLS bypass, no custom
@@ -200,7 +241,12 @@ Every retrieval outcome — success or failure — is recorded in the bundle's
 **collection identity**: requested and final URL, retrieval UTC time (fetch
 time, never publication time), transport status, body size and SHA-256,
 attempts, redirects, and for failures a safe code only (no response
-bodies, no exception text, no credentials). The identity also records the
+bodies, no exception text, no credentials). The recorded `final_url` is
+only the LAST VALIDATED SAFE URL (or absent): a rejected redirect target —
+one carrying credentials, a query or fragment, an unapproved host, or a
+malformed port — never leaves the resolution loop variable and is never
+persisted in provenance, metadata, or error text. The identity also
+records the
 tool and code revision, the profile, the providers, the selection, and the
 start/finish window of the collecting invocation.
 

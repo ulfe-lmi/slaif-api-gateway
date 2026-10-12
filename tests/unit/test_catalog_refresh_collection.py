@@ -2569,3 +2569,176 @@ def test_cli_collect_deadline_exhaustion_publishes_blocked_run(tmp_path, monkeyp
     validation = json.loads((run_dirs[0] / "validation.json").read_text())
     assert validation["state"] == "BLOCKED"
     assert "acquisition_deadline_exceeded" in validation["state_reason"]
+
+
+# --- 181-g: G1-G6 regressions (strategic negative probes) -------------------
+
+
+def test_collect_bundle_binds_context_to_client_transport() -> None:
+    # G1: the collection-owned deadline context must reach the ACTUAL
+    # transport backend (connect/stream operations), including when the
+    # client was constructed before the context existed (the CLI path).
+    from slaif_gateway.services.catalog_refresh.source_transport import (
+        VettedHTTPTransport,
+        VettedNetworkBackend,
+    )
+
+    context = src.new_acquisition_context()
+    client = httpx.Client(transport=VettedHTTPTransport(resolve=_resolve_public))
+
+    class _BindingSentinel(Exception):
+        pass
+
+    def fetch_probe(specs, **kw):
+        raise _BindingSentinel()
+
+    try:
+        with pytest.raises(_BindingSentinel):
+            coll.collect_bundle(
+                providers=("openrouter",),
+                model_include=(),
+                baseline_mode="first_install",
+                baseline=None,
+                client=client,
+                resolve=_resolve_public,
+                fetch=fetch_probe,
+                acquisition=context,
+            )
+    finally:
+        client.close()
+    backend = client._transport._pool._network_backend
+    assert isinstance(backend, VettedNetworkBackend)
+    assert backend._deadline is context, "the context is bound to the actual backend"
+
+    # A mock-transport client has no vetted backend: the bind is a
+    # documented no-op, and the full collection still succeeds.
+    world = World()
+    _collect(world, providers=("openrouter",), acquisition=src.new_acquisition_context())
+
+
+def test_cli_collect_rejected_redirect_secrets_absent_from_sealed_output(
+    tmp_path, monkeypatch
+) -> None:
+    # G4 (sealed level, exact probe case): a 302 to the approved host
+    # carrying credentials AND a query is refused safely, and the
+    # synthetic markers must be ABSENT from EVERY file of the sealed run
+    # directory (collector JSON, rendered review, validation, receipt,
+    # manifest) - not just the exception type.
+    world = World()
+    unsafe = (
+        "https://synthetic-user:synthetic-password@openrouter.ai"
+        "/api/v1/models?token=synthetic-token"
+    )
+    original_handler = world.handler
+
+    def redirecting(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == OR_URL:
+            return httpx.Response(302, headers={"location": unsafe})
+        return original_handler(request)
+
+    world.handler = redirecting  # instance attribute shadows the method
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openrouter",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
+        "--json",
+    )
+    assert result.exit_code == 20, result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "BLOCKED"
+    run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
+    assert len(run_dirs) == 1
+    bundle = json.loads((run_dirs[0] / "catalog-refresh.json").read_text())
+    failures = [
+        r.get("failure_code") for r in bundle["collection"]["retrievals"]
+    ]
+    assert "url_credentials" in failures, (
+        "the safe code is recorded in the retrieval record"
+    )
+    # The rendered review carries the safe code too - and NOTHING else
+    # from the rejected target.
+    html = (run_dirs[0] / "REVIEW.html").read_text()
+    assert "url_credentials" in html
+    markers = (
+        b"synthetic-user",
+        b"synthetic-password",
+        b"synthetic-token",
+        unsafe.encode("utf-8"),
+    )
+    scanned: list[str] = []
+    for path in sorted(run_dirs[0].rglob("*")):
+        if path.is_file():
+            data = path.read_bytes()
+            scanned.append(path.name)
+            for marker in markers:
+                assert marker not in data, f"rejected target leaked into {path.name}"
+    for expected in ("catalog-refresh.json", "REVIEW.html", "validation.json", "receipt.json"):
+        assert expected in scanned, f"expected sealed artifact {expected}"
+
+
+def test_cli_collect_malformed_port_redirect_blocks_safely(tmp_path, monkeypatch) -> None:
+    # G6 (CLI level, exact probe case): a 302 to a malformed-port target
+    # fails deterministically with the safe code url_nondefault_port -
+    # no ValueError escape, no traceback, a proper BLOCKED run. (The
+    # out-of-range NUMERIC port is the variant httpx itself can parse in
+    # its redirect bookkeeping, so our re-validation is the decision
+    # point; the non-numeric variant is refused even earlier by httpx
+    # and still surfaces as the safe transport_error - see the sources
+    # tests.)
+    world = World()
+    unsafe = "https://developers.openai.com:99999/api/docs/pricing.md"
+    original_handler = world.handler
+
+    def redirecting(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == PRICING_URL:
+            return httpx.Response(302, headers={"location": unsafe})
+        return original_handler(request)
+
+    world.handler = redirecting
+    run_root = tmp_path / "runs"
+    key = tmp_path / "seal.key"
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openai",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
+        "--json",
+    )
+    assert result.exit_code == 20, result.output
+    assert "Traceback" not in result.output
+    assert "ValueError" not in result.output
+    assert "not-a-port" not in result.output
+    assert "99999" not in result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "BLOCKED"
+    run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
+    assert len(run_dirs) == 1
+    validation = json.loads((run_dirs[0] / "validation.json").read_text())
+    assert validation["state"] == "BLOCKED"
+    bundle = json.loads((run_dirs[0] / "catalog-refresh.json").read_text())
+    failures = [
+        r.get("failure_code") for r in bundle["collection"]["retrievals"]
+    ]
+    assert "url_nondefault_port" in failures, (
+        "the exact safe code is recorded in the retrieval record"
+    )
+    html = (run_dirs[0] / "REVIEW.html").read_text()
+    assert "url_nondefault_port" in html
+    assert "99999" not in html
