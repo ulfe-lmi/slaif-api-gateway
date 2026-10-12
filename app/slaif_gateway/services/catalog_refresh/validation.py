@@ -2262,23 +2262,30 @@ def validate_bundle(
                         for _dim, value, _unit in decision.carried
                     )
                 elif entry.reason_code == "baseline_contract_not_flat":
-                    # 181-b (B2) / 181-c (C3): upstream-keyed - exactly one
-                    # non-flat exact row, or a prefix/glob baseline route
-                    # that GOVERNS the upstream under the resolver's actual
-                    # destination semantics (fixed upstream_model equality,
-                    # or passthrough pattern == upstream identity) - never
-                    # public-pattern string similarity.
+                    # 181-b (B2) / 181-c (C3) / 181-d (D2): upstream-keyed -
+                    # exactly one non-flat exact row, a prefix/glob baseline
+                    # route that GOVERNS the upstream under the resolver's
+                    # actual destination semantics (fixed upstream_model
+                    # equality, or passthrough pattern == upstream identity -
+                    # never public-pattern string similarity), or a MIXED
+                    # authority set: one or more exact rows together with at
+                    # least one governing wildcard row. The whole set is
+                    # evaluated before any single flat row is chosen, so the
+                    # collector retains the mixed contract locally instead of
+                    # proposing the exact alias (which the wildcard gate
+                    # would block).
                     exact_here = baseline_chat_rows_by_upstream.get(
                         (provider, model_id), []
                     )
-                    if len(exact_here) == 1:
-                        verified = not _baseline_route_flat_capable(exact_here[0])
-                    else:
-                        verified = any(
-                            row.provider == provider
-                            and se.wildcard_route_governs_upstream(row, model_id)
-                            for row in baseline_wildcard_route_rows
-                        )
+                    governing_wildcard = any(
+                        row.provider == provider
+                        and se.wildcard_route_governs_upstream(row, model_id)
+                        for row in baseline_wildcard_route_rows
+                    )
+                    verified = governing_wildcard or (
+                        len(exact_here) == 1
+                        and not _baseline_route_flat_capable(exact_here[0])
+                    )
                 elif entry.reason_code == "baseline_multiple_routes":
                     verified = len(
                         baseline_chat_rows_by_upstream.get((provider, model_id), [])

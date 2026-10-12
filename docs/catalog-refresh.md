@@ -167,9 +167,10 @@ collection inventory exactly once with a machine reason code:
 | `unknown_billing_dimension` | a published pricing key outside the recognized billable/observed set; fail-closed |
 | `reasoning_charges_unrepresentable` | a positive separately billed reasoning charge; ordinary Chat admission reserves at the output price and no qualified reasoning billing contract is authorized for standard-v1 |
 | `request_charges_unrepresentable` | a positive per-request fee; ordinary Chat admission and finalization do not bill an additive per-request fee (that column serves native-module contracts) |
-| `hosted_operation_charges_unrepresentable` | a positive hosted-operation charge (e.g. `web_search` per call); hosted operations are denied in the profile and no reviewed per-model executable contract proves the charge cannot be incurred |
+| `hosted_operation_charges_unrepresentable` | a positive hosted-operation charge on an ordinary ID (e.g. `web_search` per call); hosted operations are denied in the profile and no reviewed per-model executable contract proves the charge cannot be incurred |
+| `intrinsic_hosted_variant_unrepresentable` | the documented OpenRouter `:online` model variant - a KNOWN INTRINSIC HOSTED IDENTITY: the official model-variants contract states the suffix enables real-time web search for any model, exactly equivalent to the `web` plugin, and marks the variant deprecated in favor of the `openrouter:web_search` server tool; excluded by IDENTITY, independent of positive, zero, or missing `web_search` fees (a zero cost cannot qualify tool authority, and absent fees cannot establish absence of search); one exact documented variant identity, not a model-name classifier |
 | `price_below_quantum` | a positive charge quantizes to zero at the 9-dp import contract; excluded rather than stored as a free price |
-| `baseline_contract_not_flat` | the stored baseline route contract cannot be proposed flat (a non-flat exact route, or a prefix/glob baseline route that governs the upstream under the resolver's destination semantics - a fixed `upstream_model` equal to the upstream, or a passthrough pattern matching the upstream identity); retained locally, all governing rows recorded |
+| `baseline_contract_not_flat` | the stored baseline route contract cannot be proposed flat (a non-flat exact route, a prefix/glob baseline route that governs the upstream under the resolver's destination semantics - a fixed `upstream_model` equal to the upstream, or a passthrough pattern matching the upstream identity - or a MIXED authority set: one or more exact rows together with at least one governing prefix/glob route for the same provider/upstream); the whole authority set is evaluated before any single flat row is chosen; retained locally, all alternatives recorded, never reduced |
 | `baseline_multiple_routes` | multiple local route rows (aliases/priorities) for one upstream; alternatives are never reduced; retained locally |
 | `baseline_currency_mismatch` | the stored baseline pricing currency differs from the published native currency |
 | `index_only_no_standard_prices` | listed in the official models index but no standard short-context Chat pricing is published |
@@ -247,20 +248,31 @@ same policy is recomputed by validation from the parsed official evidence,
 so a supplied or tampered bundle cannot bypass eligibility by dropping
 dimensions:
 
-- **Excluded, fail-closed, with the exact machine reason**: positive
-  separately billed **reasoning charges** (ordinary Chat admission reserves
-  at the output price; no qualified reasoning billing contract is
-  authorized), positive **per-request fees** (ordinary Chat admission and
-  finalization do not bill an additive per-request fee; that column serves
-  native-module contracts), positive **hosted-operation charges** (hosted
+- **Excluded, fail-closed, with the exact machine reason**: the documented
+  OpenRouter **`:online` model variant** - a KNOWN INTRINSIC HOSTED
+  IDENTITY (the official model-variants contract, checked 2026-10-12,
+  states the suffix enables real-time web search for any model, exactly
+  equivalent to the `web` plugin, and marks the variant deprecated in favor
+  of the `openrouter:web_search` server tool); it is excluded by IDENTITY,
+  independent of positive, zero, or missing `web_search` fees - a zero cost
+  cannot qualify tool authority, and absent fees cannot establish absence
+  of search - and this is one exact documented variant identity, not a
+  model-name classifier. Also excluded: positive separately billed
+  **reasoning charges** (ordinary Chat admission reserves at the output
+  price; no qualified reasoning billing contract is authorized), positive
+  **per-request fees** (ordinary Chat admission and finalization do not
+  bill an additive per-request fee; that column serves native-module
+  contracts), positive **hosted-operation charges** on ordinary IDs (hosted
   operations are denied in the profile and no reviewed per-model executable
-  contract proves the charge cannot be incurred — model variants such as
-  `:online` are never declared safe by analogy), published long-context
+  contract proves the charge cannot be incurred), published long-context
   standard prices (even $0 — a published contextual price), contextual
   override tiers, positive cache-write charges (1h or not), unknown
   published billing keys, source `-1` sentinels on any billable dimension,
   and positive charges that quantize to zero at the 9-dp import contract
-  (`price_below_quantum`).
+  (`price_below_quantum`). Other OpenRouter variant classes have **no**
+  reviewed executable ordinary-Chat contract and are not declared safe by
+  analogy: unknown classes remain honestly unsupported/ambiguous and stay
+  subject to the price-based gates.
 - **Zero semantics (documented, tested)**: a **legitimate zero is a
   no-charge, never a missing fact**. A published zero `reasoning` price is
   **carried**, because a missing reasoning price makes finalization bill
@@ -327,6 +339,16 @@ identity and is never overridden:
   itself is local state: retained with an explicit disposition, never a
   source disappearance, and no parallel route may re-insert a bypass of
   that authority (supplied bundles are BLOCKed with
+  `wildcard_route_authority_bypassed`).
+- A **MIXED exact + governing-wildcard authority set** (one or more exact
+  rows and at least one governing prefix/glob route for the same
+  provider/upstream) is likewise retain-only
+  (`baseline_contract_not_flat`): the WHOLE local authority set is
+  evaluated before any single flat row is chosen; every exact alias and
+  wildcard alternative keeps local authority (denied alternatives
+  preserved, priorities and destinations recorded), no flat exact route or
+  pricing candidate is invented, and no parallel route may bypass the
+  wildcard (supplied bundles are BLOCKed with
   `wildcard_route_authority_bypassed`).
 - A **non-flat exact contract** or a **baseline pricing currency other
   than USD** retains the model locally with an explicit inventory reason

@@ -182,11 +182,21 @@ def _baseline_identity_for(
 
     Returns (row, reason_code, reason_detail):
 
+    - the WHOLE local exact/wildcard authority set is inspected BEFORE any
+      single flat row is chosen (181-d D2): when at least one exact chat
+      route AND at least one governing prefix/glob route exist for the same
+      provider/upstream, the authority is MIXED - no single flat proposal
+      row can preserve the wildcard contract, and proposing the exact alias
+      would be a parallel route that the validator (correctly) blocks. The
+      mixed alternatives are therefore retained locally with an explained
+      disposition, never reduced and never paralleled by a new exact
+      route/pricing candidate;
     - no exact row and no covering wildcard route: ``(None, None, None)`` —
       a genuinely unconfigured model, default proposal identity;
-    - exactly one flat-representable exact row: ``(row, None, None)`` — the
-      proposal preserves that row's public alias, match type, priority,
-      enabled/visibility, streaming and every approved denial;
+    - exactly one flat-representable exact row (and no governing wildcard):
+      ``(row, None, None)`` — the proposal preserves that row's public
+      alias, match type, priority, enabled/visibility, streaming and every
+      approved denial (disabled/hidden/non-streaming rows included);
     - one non-flat exact row, or any prefix/glob route that GOVERNS the
       upstream (181-c C3: a fixed ``upstream_model`` destination equal to the
       upstream, or a passthrough row whose public pattern matches the upstream
@@ -194,9 +204,36 @@ def _baseline_identity_for(
       string similarity): the local contract cannot be proposed flat; the
       model is retained locally with an explicit deterministic reason and NO
       parallel route is proposed;
-    - more than one exact row: alternatives are never reduced; retained.
+    - more than one exact row (and no governing wildcard): alternatives are
+      never reduced; retained.
     """
+    provider, upstream_model = key
     exact_rows = baseline_chat_rows_by_upstream.get(key, [])
+    # 181-c (C3): coverage is the resolver's ACTUAL destination semantics
+    # (fixed upstream_model equality, or passthrough pattern == upstream
+    # identity), shared with the validator - not public-pattern string
+    # similarity. Multiple governing rows are all recorded, never reduced.
+    covering = [
+        row
+        for row in baseline_wildcard_routes
+        if row.provider == provider
+        and se.wildcard_route_governs_upstream(row, upstream_model)
+    ]
+    # 181-d (D2): the complete authority set is evaluated FIRST. A mixed
+    # exact + governing-wildcard set is a retain-only contract: the exact
+    # alias and every wildcard alternative keep local authority, and no
+    # flat row is chosen (choosing one early is the collector/validator
+    # disagreement this round repairs).
+    if exact_rows and covering:
+        exact_names = sorted(str(r.requested_model) for r in exact_rows)
+        names = ", ".join(repr(name) for name in exact_names[:4])
+        more = f" (+{len(exact_names) - 4} more)" if len(exact_names) > 4 else ""
+        return None, REASON_BASELINE_CONTRACT_NOT_FLAT, (
+            f"baseline route authority for this upstream is mixed: exact {names}{more} "
+            f"and governing {se.baseline_wildcard_route_descriptions(covering)}; a flat exact "
+            "proposal cannot preserve the wildcard contract and a parallel exact route "
+            "would bypass it; alternatives are never reduced; retained locally"
+        )
     if len(exact_rows) == 1:
         row = exact_rows[0]
         if _baseline_route_flat_capable(row):
@@ -210,29 +247,11 @@ def _baseline_identity_for(
             f"({', '.join(sorted(str(r.requested_model) for r in exact_rows))[:160]}); "
             "alternatives are never reduced; retained locally"
         )
-    provider, upstream_model = key
-    # 181-c (C3): coverage is the resolver's ACTUAL destination semantics
-    # (fixed upstream_model equality, or passthrough pattern == upstream
-    # identity), shared with the validator - not public-pattern string
-    # similarity. Multiple governing rows are all recorded, never reduced.
-    covering = [
-        row
-        for row in baseline_wildcard_routes
-        if row.provider == provider
-        and se.wildcard_route_governs_upstream(row, upstream_model)
-    ]
     if covering:
-        descriptions = []
-        for row in covering[:4]:
-            fixed = getattr(row, "upstream_model", "") or ""
-            if fixed:
-                descriptions.append(f"{row.match_type} {row.requested_model!r} -> {fixed!r}")
-            else:
-                descriptions.append(f"{row.match_type} {row.requested_model!r} (passthrough)")
-        more = f" (+{len(covering) - 4} more)" if len(covering) > 4 else ""
         return None, REASON_BASELINE_CONTRACT_NOT_FLAT, (
-            f"baseline wildcard route(s) {', '.join(descriptions)}{more} govern this upstream; "
-            "a flat exact proposal cannot preserve wildcard contracts; retained locally"
+            f"baseline wildcard route(s) {se.baseline_wildcard_route_descriptions(covering)} govern "
+            "this upstream; a flat exact proposal cannot preserve wildcard contracts; "
+            "retained locally"
         )
     return None, None, None
 

@@ -15,8 +15,8 @@ Fixed locations and identity:
 
 ```text
 GITHUB_REPOSITORY=ulfe-lmi/slaif-api-gateway
-REPO_ROOT=/home/ubuntu/codex-work/slaif-api-gateway
-STRATEGIC_HOME=/home/ubuntu/codex-supervision/slaif-api-gateway
+REPO_ROOT=/home/janezp/codex-work/slaif-api-gateway
+STRATEGIC_HOME=/home/janezp/codex-supervision/slaif-api-gateway
 ```
 
 Before every active objective:
@@ -139,19 +139,19 @@ Do not treat an unpushed local commit as completed project work.
 ### 4.1 Repository root
 
 ```text
-/home/ubuntu/codex-work/slaif-api-gateway
+/home/janezp/codex-work/slaif-api-gateway
 ```
 
 Define:
 
 ```text
-REPO_ROOT=/home/ubuntu/codex-work/slaif-api-gateway
+REPO_ROOT=/home/janezp/codex-work/slaif-api-gateway
 GITHUB_REPOSITORY=ulfe-lmi/slaif-api-gateway
-STRATEGIC_HOME=/home/ubuntu/codex-supervision/slaif-api-gateway
-OAP_ROOT=/home/ubuntu/codex-work/slaif-api-gateway/oap
-ORDERS_DIR=/home/ubuntu/codex-work/slaif-api-gateway/oap/orders
-REPORTS_DIR=/home/ubuntu/codex-work/slaif-api-gateway/oap/reports
-ACTIVE_FILE=/home/ubuntu/codex-work/slaif-api-gateway/oap/active
+STRATEGIC_HOME=/home/janezp/codex-supervision/slaif-api-gateway
+OAP_ROOT=/home/janezp/codex-work/slaif-api-gateway/oap
+ORDERS_DIR=/home/janezp/codex-work/slaif-api-gateway/oap/orders
+REPORTS_DIR=/home/janezp/codex-work/slaif-api-gateway/oap/reports
+ACTIVE_FILE=/home/janezp/codex-work/slaif-api-gateway/oap/active
 ```
 
 ### 4.2 FIFOs
@@ -163,7 +163,7 @@ ${STRATEGIC_HOME}/control.fifo
 ${STRATEGIC_HOME}/response.fifo
 ```
 
-For this project, `STRATEGIC_HOME` is fixed to `/home/ubuntu/codex-supervision/slaif-api-gateway`. Do not substitute your own unrelated `$HOME` if you run under another user. Use these exact FIFO objects.
+For this project, `STRATEGIC_HOME` is fixed to `/home/janezp/codex-supervision/slaif-api-gateway`. Do not substitute your own unrelated `$HOME` if you run under another user. Use these exact FIFO objects.
 
 The FIFOs are intentionally **blocking**.
 
@@ -437,7 +437,7 @@ Proceed only if the received payload is exactly `OK`.
 Read:
 
 ```text
-/home/ubuntu/codex-work/slaif-api-gateway/oap/active
+/home/janezp/codex-work/slaif-api-gateway/oap/active
 ```
 
 Validate a syntactically valid identifier such as `013-b`.
@@ -447,7 +447,7 @@ Validate a syntactically valid identifier such as `013-b`.
 For `013-b`, resolve exactly one:
 
 ```text
-/home/ubuntu/codex-work/slaif-api-gateway/oap/orders/013-b-*.md
+/home/janezp/codex-work/slaif-api-gateway/oap/orders/013-b-*.md
 ```
 
 Do not choose among ambiguous matches.
@@ -658,7 +658,7 @@ implementation head SHA.
 Publish the report under:
 
 ```text
-/home/ubuntu/codex-work/slaif-api-gateway/oap/reports
+/home/janezp/codex-work/slaif-api-gateway/oap/reports
 ```
 
 using:

@@ -1470,16 +1470,26 @@ EXTRA_DIM_UNITS: dict[str, str] = {
 # shape. The flat standard-v1 profile bills ordinary Chat: the core text dims
 # (input / cached_input / output, per-1M) plus, only when the source
 # publishes it as an explicit zero, the reasoning no-charge. Excluded
-# (fail-closed, exact machine reason): positive separately billed reasoning
-# charges (ordinary Chat admission reserves at the output price; no qualified
-# reasoning billing contract is authorized), positive per-request fees
-# (ordinary Chat admission and finalization do not bill an additive
-# per-request fee; that column serves native-module contracts), positive
-# hosted-operation charges (hosted operations are denied in the profile and
-# no reviewed per-model executable contract proves the charge cannot be
-# incurred), published long-context standard prices, contextual override
-# tiers, positive cache-write charges, unknown billing keys, and source
-# sentinels on billable dims.
+# (fail-closed, exact machine reason): the documented OpenRouter ``:online``
+# model variant - a KNOWN INTRINSIC HOSTED IDENTITY (the official model-
+# variants contract states the suffix enables real-time web search, for any
+# model, exactly equivalent to the ``web`` plugin, and marks the variant
+# deprecated in favor of the ``openrouter:web_search`` server tool); it is
+# excluded by IDENTITY, independent of positive, zero, or missing
+# web_search fees - zero cost cannot qualify tool authority, and absent
+# fees cannot establish absence of search. Further excluded: positive
+# separately billed reasoning charges (ordinary Chat admission reserves at
+# the output price; no qualified reasoning billing contract is authorized),
+# positive per-request fees (ordinary Chat admission and finalization do not
+# bill an additive per-request fee; that column serves native-module
+# contracts), positive hosted-operation charges on ordinary IDs (hosted
+# operations are denied in the profile and no reviewed per-model executable
+# contract proves the charge cannot be incurred), published long-context
+# standard prices, contextual override tiers, positive cache-write charges,
+# unknown billing keys, and source sentinels on billable dims. Other
+# OpenRouter variant classes have no reviewed executable ordinary-Chat
+# contract and are not declared safe by analogy: unknown classes remain
+# honestly unsupported/ambiguous and stay subject to the price-based gates.
 #
 # Documented zero semantics (tested): a published zero per-request fee is a
 # no-charge - ordinary Chat bills no per-request fee at all, so carrying
@@ -1501,6 +1511,15 @@ REASON_BILLING_SENTINEL = "negative_router_sentinel"
 REASON_REASONING_CHARGES = "reasoning_charges_unrepresentable"
 REASON_REQUEST_CHARGES = "request_charges_unrepresentable"
 REASON_HOSTED_CHARGES = "hosted_operation_charges_unrepresentable"
+# 181-d (D1): identity-based exclusion for the KNOWN DOCUMENTED intrinsic
+# hosted identity. OpenRouter's official model-variants contract states the
+# ``:online`` suffix enables real-time web search for any model (exactly
+# equivalent to the ``web`` plugin) and marks the variant deprecated in
+# favor of the ``openrouter:web_search`` server tool (contract checked
+# 2026-10-12). This is one exact documented variant identity, not a
+# model-name classifier: no other variant class is inferred from it.
+REASON_INTRINSIC_HOSTED_VARIANT = "intrinsic_hosted_variant_unrepresentable"
+ROUTER_INTRINSIC_HOSTED_VARIANT_SUFFIX = ":online"
 
 #: inventory reason codes that the billing decision itself verifies
 BILLING_EXCLUSION_REASONS = frozenset(
@@ -1513,6 +1532,7 @@ BILLING_EXCLUSION_REASONS = frozenset(
         REASON_REASONING_CHARGES,
         REASON_REQUEST_CHARGES,
         REASON_HOSTED_CHARGES,
+        REASON_INTRINSIC_HOSTED_VARIANT,
     }
 )
 
@@ -1560,6 +1580,31 @@ def wildcard_route_governs_upstream(row: object, upstream_model: str) -> bool:
     return fnmatchcase(upstream_model, pattern)
 
 
+def baseline_wildcard_route_descriptions(covering: Sequence[object]) -> str:
+    """181-d (D2): concise description of governing baseline wildcard rows.
+
+    Records match type, public pattern, fixed destination (or passthrough)
+    and priority for every governing row (first four named, remainder
+    counted). Shared wording for collector inventory detail and any other
+    consumer: alternatives are explained, never reduced.
+    """
+    descriptions = []
+    for row in covering[:4]:
+        fixed = getattr(row, "upstream_model", "") or ""
+        priority = getattr(row, "priority", None)
+        suffix = f" (priority {priority})" if priority is not None else ""
+        if fixed:
+            descriptions.append(
+                f"{row.match_type} {row.requested_model!r} -> {fixed!r}{suffix}"
+            )
+        else:
+            descriptions.append(
+                f"{row.match_type} {row.requested_model!r} (passthrough){suffix}"
+            )
+    more = f" (+{len(covering) - 4} more)" if len(covering) > 4 else ""
+    return ", ".join(descriptions) + more
+
+
 def _billing_positive(value: str) -> bool:
     try:
         decimal = Decimal(value)
@@ -1569,6 +1614,25 @@ def _billing_positive(value: str) -> bool:
 
 
 def _router_billing_decision(rows: Sequence[ParsedModel]) -> BillingDecision:
+    # 181-d (D1): the documented intrinsic hosted identity is excluded by
+    # IDENTITY, before any price is considered. A positive, zero, or absent
+    # web_search fee all leave the intrinsic hosted behavior of the
+    # ``:online`` variant intact, so no fee state can qualify it for the
+    # flat standard-v1 contract. This runs in the collector (before
+    # proposal) and is recomputed by validation from the parsed official
+    # rows (supplied-bundle replay), so caller-supplied inventory,
+    # warnings, or labels cannot launder the identity.
+    if any(
+        row.model.endswith(ROUTER_INTRINSIC_HOSTED_VARIANT_SUFFIX) for row in rows
+    ):
+        return BillingDecision(
+            False,
+            REASON_INTRINSIC_HOSTED_VARIANT,
+            "documented OpenRouter ':online' model variant intrinsically enables real-time "
+            "hosted web search (official model-variants contract); hosted operations are "
+            "denied in the standard-v1 profile and no reviewed ordinary-Chat contract "
+            "exists for this identity, independent of published web_search fees",
+        )
     unknown = sorted({key for row in rows for key in row.unknown_pricing_keys})
     if unknown:
         return BillingDecision(

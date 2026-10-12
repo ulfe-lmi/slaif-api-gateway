@@ -54,7 +54,11 @@ and `verify` replays the sealed bytes without executing SQL.
 
 Collection proposes the flat standard-v1 short-context core text prices
 and, only when the source publishes it as an explicit zero, the reasoning
-no-charge. Eligibility follows executable billing, not TSV capacity: models
+no-charge. The documented OpenRouter `:online` variant (its official
+contract states the suffix enables real-time hosted web search for any
+model) is excluded by IDENTITY, independent of positive, zero, or missing
+`web_search` fees. Eligibility otherwise follows executable billing, not
+TSV capacity: models
 with positive separately billed reasoning charges, positive per-request
 fees, positive hosted-operation charges, published long-context standard
 prices (even $0), contextual override tiers, positive cache-write charges,
@@ -62,9 +66,11 @@ unknown billing keys, or source sentinels on billable dimensions are
 excluded with the exact machine reason, and explicitly selecting one blocks
 the run. Refresh preserves local route authority: one flat baseline row
 keeps its public alias, match type, priority, enabled/visible/streaming
-state, and every approved denial; multiple aliases and wildcard routes that
+state, and every approved denial; multiple aliases, mixed
+exact+governing-wildcard authority sets, and wildcard routes that
 govern the upstream (fixed destination or passthrough pattern) or non-flat
-contracts are retained locally, never reduced or bypassed, and a baseline
+contracts are retained locally as a whole, never reduced or bypassed, and a
+baseline
 alias still mapped to a present upstream is never reported as disappeared.
 
 ## Preparing source evidence (offline replay)

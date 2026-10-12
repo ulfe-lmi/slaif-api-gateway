@@ -7,7 +7,7 @@ is defined by
 The strategic-side protocol is stored outside the repository at:
 
 ```text
-/home/ubuntu/codex-supervision/slaif-api-gateway/OAP-COMMUNICATION-strategic.md
+/home/janezp/codex-supervision/slaif-api-gateway/OAP-COMMUNICATION-strategic.md
 ```
 
 ## Activation lifecycle
@@ -47,8 +47,8 @@ FIFO `OK` messages provide synchronization only. The two FIFO objects live
 outside the repository at:
 
 ```text
-/home/ubuntu/codex-supervision/slaif-api-gateway/control.fifo
-/home/ubuntu/codex-supervision/slaif-api-gateway/response.fifo
+/home/janezp/codex-supervision/slaif-api-gateway/control.fifo
+/home/janezp/codex-supervision/slaif-api-gateway/response.fifo
 ```
 
 The strategic model writes `control.fifo`; the coding agent writes

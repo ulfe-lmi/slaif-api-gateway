@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import socket
+import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -26,6 +27,7 @@ from hashlib import sha256
 import httpx
 import pytest
 
+from slaif_gateway.cli import catalog_refresh as cli_catalog_refresh
 from slaif_gateway.schemas.catalog_refresh import (
     BaselineCounts,
     BaselineDocument,
@@ -390,6 +392,139 @@ def _inventory(bundle) -> dict[tuple[str, str], tuple[str, str]]:
 
 def _codes(report) -> set[str]:
     return {w.code for w in report.warnings}
+
+
+# --- 181-d (T1/D3): live-I/O guard, coherent clocks, injection helper --------
+
+
+def _refuse_live_dns(*args, **kwargs):
+    raise AssertionError("focused test reached a default DNS resolver (live network escape)")
+
+
+def _refuse_live_connect(*args, **kwargs):
+    raise AssertionError("focused test attempted a real socket connection (live network escape)")
+
+
+@pytest.fixture(autouse=True)
+def _no_live_io_guard(monkeypatch):
+    """181-d (T1/D3): fail-on-live-I/O guard over the WHOLE focused
+    collection/CLI surface in this module.
+
+    The only permitted I/O seams are the ``httpx.MockTransport`` client and
+    the explicitly injected resolver (``resolve=_resolve_public`` directly,
+    or through the ``_cli_collect`` seam). This guard is the negative half
+    of the isolation proof: it refuses any dynamic default-DNS lookup and
+    any real socket connection, AND re-points the import-time DEFAULT
+    resolver bindings (Python binds function defaults at ``def`` time, so
+    patching ``socket.getaddrinfo`` alone would not cover them) to a
+    refusing tripwire. An un-injected call therefore fails loudly instead
+    of performing a public DNS lookup. The guard itself installs no
+    synthetic resolver: the explicit ``resolve`` injection is the isolation
+    fix, and this fixture only proves nothing leaks past it.
+    """
+    monkeypatch.setattr(socket, "getaddrinfo", _refuse_live_dns)
+    monkeypatch.setattr(socket.socket, "connect", _refuse_live_connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", _refuse_live_connect)
+    for fn in (
+        src.fetch_source,
+        src.fetch_sources,
+        src.guard_public_destination,
+        coll.collect_bundle,
+    ):
+        kwdefaults = dict(getattr(fn, "__kwdefaults__", None) or {})
+        if "resolve" in kwdefaults:
+            kwdefaults["resolve"] = _refuse_live_dns
+            monkeypatch.setattr(fn, "__kwdefaults__", kwdefaults)
+    yield
+
+
+# 181-d (T2/D3): one coherent frozen pipeline clock. The FX freshness
+# boundary is a CALENDAR-DAY property (UTC publication date vs UTC review
+# date), so the fixture date and the pipeline clock must come from the SAME
+# instant. Pre-fix, the fixture was created at one real date and the
+# pipeline ran at a later real time: a real UTC midnight crossing between
+# the two aged the quote by a day with no code change (the flake). Freezing
+# every pipeline wall-clock read to one shared instant proves the boundary
+# is midnight-independent.
+FROZEN_MIDNIGHT_EDGE = datetime(2026, 10, 11, 23, 59, 59, tzinfo=UTC)
+FROZEN_POST_MIDNIGHT_EDGE = datetime(2026, 10, 12, 0, 0, 1, tzinfo=UTC)
+
+
+def _freeze_pipeline_clock(monkeypatch, frozen: datetime) -> None:
+    """Freeze fixture, collection, retrieval and CLI clocks to ONE instant.
+
+    Validation derives its clock from ``bundle.generated_at`` (the frozen
+    collection finish), so it stays coherent automatically.
+    """
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen
+
+    monkeypatch.setattr(sys.modules[__name__], "datetime", _FrozenDatetime)
+    monkeypatch.setattr(src, "datetime", _FrozenDatetime)
+    monkeypatch.setattr(coll, "datetime", _FrozenDatetime)
+    monkeypatch.setattr(cli_catalog_refresh, "datetime", _FrozenDatetime)
+
+
+def _inject_proposal_facts(bundle, model: str, valid_from: datetime):
+    """Build fully grounded proposal facts (route + model + pricing) for a
+    model ID, mirroring the collected provenance: valid source references,
+    normal TSV dimensions, and the exact published default-row prices
+    (0.54 / 0.054 / 2.16 USD per 1M). The strongest supplied-bundle
+    injection shape - only the policy itself may refuse it."""
+    from slaif_gateway.schemas.catalog_refresh import (
+        FieldProvenance,
+        ModelFacts,
+        ModelPricingFacts,
+        PricingDimension,
+        RouteFacts,
+    )
+
+    prov = FieldProvenance(
+        sources=("openrouter|catalog|openrouter_models_api",),
+        extractor=coll.EXTRACTOR_ID,
+        extraction="deterministic",
+    )
+    route = RouteFacts(
+        provider="openrouter",
+        requested_model=model,
+        upstream_model=model,
+        match_type="exact",
+        endpoint="/v1/chat/completions",
+        priority=100,
+        enabled=True,
+        visible_in_models=True,
+        supports_streaming=True,
+        capabilities={"text": True, "streaming": True},
+        provenance=prov,
+    )
+    model_facts = ModelFacts(
+        provider="openrouter",
+        model=model,
+        display_name=model,
+        context_length=128000,
+        max_output_tokens=8192,
+        supports_streaming=True,
+        capabilities={"text": True, "streaming": True},
+        deprecated=False,
+        provenance=prov,
+    )
+    pricing = ModelPricingFacts(
+        provider="openrouter",
+        model=model,
+        endpoint="/v1/chat/completions",
+        currency="USD",
+        dimensions=(
+            PricingDimension(name="input", value="0.54", unit="per_1m_tokens", currency="USD"),
+            PricingDimension(name="cached_input", value="0.054", unit="per_1m_tokens", currency="USD"),
+            PricingDimension(name="output", value="2.16", unit="per_1m_tokens", currency="USD"),
+        ),
+        valid_from=valid_from,
+        provenance=prov,
+    )
+    return route, model_facts, pricing
 
 
 # --- bootstrap ---------------------------------------------------------------
@@ -989,11 +1124,11 @@ def test_router_web_search_charge_excluded() -> None:
 
 
 def test_router_online_variant_hosted_charge_excluded_and_sibling_kept() -> None:
-    """181-c (C2): model variants or intrinsic hosted-style identities are
-    never declared safe by analogy with optional tools - a :online-style ID
-    with a positive hosted charge is excluded on the price (identity is not
-    laundering), identically to an ordinary flat ID; the flat sibling stays
-    proposed."""
+    """181-c (C2) / 181-d (D1): a :online-style ID with a positive hosted
+    charge is excluded identically to an ordinary flat ID with the same
+    charge; 181-d tightens the variant case to the INTRINSIC IDENTITY
+    reason (the documented :online contract enables hosted web search
+    regardless of the fee); the flat sibling stays proposed."""
     online = _or_row("synth/alpha:online")
     online["pricing"]["web_search"] = "0.01"
     world = World()
@@ -1002,7 +1137,7 @@ def test_router_online_variant_hosted_charge_excluded_and_sibling_kept() -> None
     assert _proposed_models(bundle) == {"openrouter/synth/beta"}
     assert _inventory(bundle)[("openrouter", "synth/alpha:online")] == (
         "excluded_subset",
-        "hosted_operation_charges_unrepresentable",
+        "intrinsic_hosted_variant_unrepresentable",
     )
     plain = _or_row("synth/alpha")
     plain["pricing"]["web_search"] = "0.01"
@@ -1013,6 +1148,89 @@ def test_router_online_variant_hosted_charge_excluded_and_sibling_kept() -> None
         "excluded_subset",
         "hosted_operation_charges_unrepresentable",
     )
+
+
+def test_router_online_variant_excluded_by_intrinsic_identity_not_fee() -> None:
+    """181-d (D1): the documented OpenRouter ':online' variant is a known
+    intrinsic hosted identity (official model-variants contract: the suffix
+    enables real-time web search for any model, exactly equivalent to the
+    web plugin, and is deprecated in favor of the openrouter:web_search
+    server tool). It is excluded by IDENTITY - positive, zero, and missing
+    web_search fees all yield the exact intrinsic reason (zero cost cannot
+    qualify tool authority; absent fees cannot establish absence of
+    search) - while the flat sibling stays proposed."""
+    for fee in ("0.01", "0", None):
+        online = _or_row("synth/alpha:online")
+        if fee is not None:
+            online["pricing"]["web_search"] = fee
+        world = World()
+        world.or_rows = [online, _or_row("synth/beta", inp="0.1", out="0.4")]
+        bundle = _collect(world, providers=("openrouter",))
+        assert _proposed_models(bundle) == {"openrouter/synth/beta"}, fee
+        assert _inventory(bundle)[("openrouter", "synth/alpha:online")] == (
+            "excluded_subset",
+            "intrinsic_hosted_variant_unrepresentable",
+        ), fee
+
+
+def test_router_online_variant_explicit_selection_blocks() -> None:
+    """181-d (D1): explicitly selecting the intrinsic hosted identity does
+    not launder it: with a published ZERO fee and complete flat facts the
+    selection still BLOCKs exactly like any other excluded model
+    (missing_required_selection), never READY."""
+    online = _or_row("synth/alpha:online")
+    online["pricing"]["web_search"] = "0"
+    world = World()
+    world.or_rows = [online, _or_row("synth/beta", inp="0.1", out="0.4")]
+    bundle = _collect(
+        world, providers=("openrouter",), model_include=("synth/alpha:online",)
+    )
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/alpha:online")] == (
+        "excluded_subset",
+        "intrinsic_hosted_variant_unrepresentable",
+    )
+    assert _inventory(bundle)[("openrouter", "synth/beta")] == (
+        "excluded_subset",
+        "explicit_selection_excluded",
+    )
+    report, _ = _validate(bundle, None)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "missing_required_selection" in _codes(report)
+
+
+def test_supplied_bundle_online_variant_proposal_blocks_regardless_of_fee() -> None:
+    """181-d (D1) independent supplied-bundle negative: a ready proposal for
+    the intrinsic ':online' identity with fully valid source provenance,
+    normal TSV dimensions, and the exact published prices still BLOCKS -
+    the shared policy is recomputed from the parsed official rows, so
+    caller-supplied inventory, warnings, or labels cannot launder the
+    identity. Positive, zero, and missing fee states all block."""
+    for fee in ("0.01", "0", None):
+        online = _or_row("synth/alpha:online")
+        if fee is not None:
+            online["pricing"]["web_search"] = fee
+        world = World()
+        world.or_rows = [online, _or_row("synth/beta", inp="0.1", out="0.4")]
+        collected = _collect(world, providers=("openrouter",))
+        bundle = _roundtrip_bundle(collected)
+        route, model_facts, pricing = _inject_proposal_facts(
+            bundle, "synth/alpha:online", collected.generated_at
+        )
+        bundle = bundle.model_copy(
+            update={
+                "routes": bundle.routes + (route,),
+                "models": bundle.models + (model_facts,),
+                "pricing": bundle.pricing + (pricing,),
+            }
+        )
+        report, _ = _validate(bundle, None)
+        assert report.state == "BLOCKED", (fee, sorted(_codes(report)))
+        assert "proposed_row_billing_ineligible" in _codes(report), fee
+        ineligible = next(
+            w for w in report.warnings if w.code == "proposed_row_billing_ineligible"
+        )
+        assert "intrinsic_hosted_variant_unrepresentable" in ineligible.detail, fee
 
 
 def test_router_zero_web_search_is_no_charge_not_missing() -> None:
@@ -1659,6 +1877,131 @@ def test_supplied_bundle_parallel_wildcard_route_blocks() -> None:
     assert "wildcard_route_authority_bypassed" in _codes(report)
 
 
+def _mixed_baseline(match_type: str, pattern: str) -> BaselineDocument:
+    """181-d (D2): one flat exact public alias plus one GOVERNING fixed
+    upstream prefix/glob for the same provider/upstream - the MIXED local
+    authority set, with the denied wildcard alternative preserved
+    (disabled/hidden/non-streaming row kept, priorities and destinations
+    intact)."""
+    baseline = _baseline_doc(
+        routes={
+            "public-alias": {},
+            pattern: {
+                "enabled": False,
+                "visible": False,
+                "streaming": False,
+            },
+        },
+        pricing={
+            "synth/alpha": {"input": "0.54", "output": "2.16", "cached": "0.054"}
+        },
+    )
+    return baseline.model_copy(
+        update={
+            "routes": tuple(
+                r.model_copy(
+                    update={
+                        "upstream_model": "synth/alpha",
+                        "match_type": (
+                            match_type if r.requested_model == pattern else "exact"
+                        ),
+                    }
+                )
+                for r in baseline.routes
+            )
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "match_type,pattern",
+    [("prefix", "public/"), ("glob", "public/*")],
+)
+def test_refresh_mixed_exact_and_wildcard_baseline_retained_coherent(
+    match_type: str, pattern: str
+) -> None:
+    """181-d (D2) strategic reproducer: a flat exact public alias AND a
+    governing fixed-upstream prefix/glob for the same provider/upstream
+    form a MIXED authority set. The collector evaluates the WHOLE set
+    before choosing any flat row and retains every alternative locally
+    with an explained disposition - no exact route/pricing candidate is
+    invented - and the validator confirms the claim: a coherent
+    non-blocked plan, denied alternative preserved, nothing
+    disappeared."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _mixed_baseline(match_type, pattern)
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert bundle.routes == ()
+    assert bundle.pricing == ()
+    assert bundle.models == ()
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "baseline_contract_not_flat",
+    )
+    detail = next(
+        e.detail for e in bundle.collection.inventory if e.model == "synth/alpha"
+    )
+    assert "public-alias" in detail and pattern in detail
+    report, artifacts = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "wildcard_route_authority_bypassed" not in _codes(report)
+    assert "model_disappeared" not in _codes(report)
+    # artifact plan: no parallel exact route or pricing row invented
+    assert "synth/alpha" not in artifacts["routes-proposal.tsv"].decode()
+    assert "synth/alpha" not in artifacts["pricing-proposal.tsv"].decode()
+    # both retained alternatives and the governed upstream keep explicit
+    # deterministic NOT_FETCHED dispositions
+    dispositions = {
+        d.model: d.disposition
+        for d in report.dispositions
+        if d.model in ("public-alias", pattern, "synth/alpha")
+    }
+    assert dispositions == {
+        "public-alias": "NOT_FETCHED",
+        pattern: "NOT_FETCHED",
+        "synth/alpha": "NOT_FETCHED",
+    }
+
+
+def test_supplied_bundle_parallel_route_on_mixed_baseline_blocks() -> None:
+    """181-d (D2) independent supplied-bundle negative: even on a MIXED
+    exact + governing-wildcard baseline, a supplied bundle that re-inserts
+    the parallel exact route for the governed upstream (fully grounded,
+    valid provenance, normal TSV dimensions, exact published prices)
+    BLOCKS - the wildcard retains local authority and no parallel route
+    bypasses it."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _mixed_baseline("prefix", "public/")
+    collected = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert collected.routes == ()  # the collector retains, never invents
+    bundle = _roundtrip_bundle(collected)
+    route, model_facts, pricing = _inject_proposal_facts(
+        bundle, "synth/alpha", collected.generated_at
+    )
+    bundle = bundle.model_copy(
+        update={
+            "routes": bundle.routes + (route,),
+            "models": bundle.models + (model_facts,),
+            "pricing": bundle.pricing + (pricing,),
+        }
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "BLOCKED", sorted(_codes(report))
+    assert "wildcard_route_authority_bypassed" in _codes(report)
+
+
 # --- 181-b (B3): models-index inventory ----------------------------------------
 
 
@@ -1744,25 +2087,27 @@ def test_cli_collect_bootstrap_publishes_sealed_run(tmp_path, monkeypatch) -> No
 
     from slaif_gateway.cli.main import app
 
+    # 181-d (D3): the collect stage runs through the ``_cli_collect`` seam,
+    # which injects the explicit public-DNS resolver (``resolve=``); the
+    # module-wide live-I/O guard proves no default resolver call and no
+    # real socket connection can escape this CLI test (the pre-fix version
+    # performed public DNS lookups for openrouter.ai and www.ecb.europa.eu
+    # through the production default resolver).
     world = World()
-    monkeypatch.setattr(
-        src, "new_client", lambda: world.client()
-    )
     run_root = tmp_path / "runs"
     key = tmp_path / "seal.key"
-    result = CliRunner().invoke(
-        app,
-        [
-            "catalog-refresh",
-            "collect",
-            "--bootstrap",
-            "--providers",
-            "openrouter",
-            "--run-root",
-            str(run_root),
-            "--seal-key",
-            str(key),
-        ],
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openrouter",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
     )
     assert result.exit_code in (0, 10), result.output
     run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
@@ -1775,6 +2120,8 @@ def test_cli_collect_bootstrap_publishes_sealed_run(tmp_path, monkeypatch) -> No
     assert "#collection-details" in html
     assert "live-collection scope" in html
 
+    # ``verify`` re-reads the published run directory only (no retrieval);
+    # the module-wide guard covers this direct invocation as well.
     verify = CliRunner().invoke(
         app,
         [
@@ -1791,28 +2138,25 @@ def test_cli_collect_bootstrap_publishes_sealed_run(tmp_path, monkeypatch) -> No
 
 
 def test_cli_collect_blocked_world_publishes_blocked_run(tmp_path, monkeypatch) -> None:
-    from typer.testing import CliRunner
-
-    from slaif_gateway.cli.main import app
-
+    # 181-d (D3): resolver-injected through the ``_cli_collect`` seam: the
+    # 503 retry loop (three attempts) performs zero default resolver calls
+    # and zero real connections; the guard makes any escape fail loudly.
     world = World()
     world.statuses[OR_URL] = 503
-    monkeypatch.setattr(src, "new_client", lambda: world.client())
     run_root = tmp_path / "runs"
     key = tmp_path / "seal.key"
-    result = CliRunner().invoke(
-        app,
-        [
-            "catalog-refresh",
-            "collect",
-            "--bootstrap",
-            "--providers",
-            "openrouter",
-            "--run-root",
-            str(run_root),
-            "--seal-key",
-            str(key),
-        ],
+    result = _cli_collect(
+        monkeypatch,
+        world,
+        "catalog-refresh",
+        "collect",
+        "--bootstrap",
+        "--providers",
+        "openrouter",
+        "--run-root",
+        str(run_root),
+        "--seal-key",
+        str(key),
     )
     assert result.exit_code == 20, result.output
     run_dirs = sorted(p for p in run_root.iterdir() if p.is_dir())
@@ -2042,9 +2386,16 @@ def test_cli_review_target_mismatch_rejected(tmp_path, monkeypatch) -> None:
 
 
 def test_cli_collect_stale_fx_review_exit_10(tmp_path, monkeypatch) -> None:
+    # 181-d (D3): one coherent frozen clock at the PRE-midnight edge
+    # (2026-10-11T23:59:59Z). The fixture quote date and every pipeline
+    # wall-clock read (fixture, collection, retrieval, CLI, validation)
+    # share that one instant, so the calendar age is exactly four days by
+    # construction: the four-calendar-day review boundary is proven
+    # independent of the real UTC date the test happens to run on.
+    _freeze_pipeline_clock(monkeypatch, FROZEN_MIDNIGHT_EDGE)
     world = World()
     world.ecb = _ecb_xml(
-        date_s=(datetime.now(UTC).date() - timedelta(days=4)).isoformat()
+        date_s=(FROZEN_MIDNIGHT_EDGE.date() - timedelta(days=4)).isoformat()
     )
     run_root = tmp_path / "runs"
     key = tmp_path / "seal.key"
@@ -2072,11 +2423,23 @@ def test_cli_collect_stale_fx_review_exit_10(tmp_path, monkeypatch) -> None:
     )
 
 
-def test_cli_collect_fx_fresh_boundary_exit_0(tmp_path, monkeypatch) -> None:
-    # calendar age exactly at the fresh boundary (3 days) stays READY
+@pytest.mark.parametrize(
+    "frozen",
+    [FROZEN_MIDNIGHT_EDGE, FROZEN_POST_MIDNIGHT_EDGE],
+    ids=["pre-midnight-23-59-59", "post-midnight-00-00-01"],
+)
+def test_cli_collect_fx_fresh_boundary_exit_0(tmp_path, monkeypatch, frozen) -> None:
+    # 181-d (D3): calendar age exactly at the fresh boundary (3 days)
+    # stays READY - proven at BOTH the pre-midnight edge (23:59:59Z) and
+    # the post-midnight edge (00:00:01Z) with one coherent frozen clock:
+    # the fixture quote date is derived from the SAME instant the pipeline
+    # uses, so a real UTC midnight crossing between fixture creation and
+    # collection can no longer age the quote (midnight independence; the
+    # real three-calendar-day fresh rule is unchanged).
+    _freeze_pipeline_clock(monkeypatch, frozen)
     world = World()
     world.ecb = _ecb_xml(
-        date_s=(datetime.now(UTC).date() - timedelta(days=3)).isoformat()
+        date_s=(frozen.date() - timedelta(days=3)).isoformat()
     )
     run_root = tmp_path / "runs"
     key = tmp_path / "seal.key"
