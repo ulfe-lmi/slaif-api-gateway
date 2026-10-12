@@ -556,21 +556,19 @@ def _render_scope_card(bundle: RefreshBundle, report: dict[str, Any]) -> str:
         failed = len(collection.retrievals) - ok
         # 181-i (I1): the label follows the RUNNER-SELECTED scope in the
         # report, never the mere presence of the collection field.
+        # First-screen row: mode + retrieval counts + details link only —
+        # the collector tool, the full 64-hex revision, the full ISO instants
+        # (start/end), and every retrieval record stay fully visible in the
+        # expanded #collection-details (and the sealed artifacts); the
+        # current generator tool + short digest are in the run-identity line.
         if report.get("source_evidence", {}).get("scope") == "live_collection":
-            collection_label = "live (recorded collection identity): "
-            collection_note = ""
+            collection_label = "live: "
         else:
-            collection_label = "supplied (historical provenance): "
-            collection_note = " · reviewed offline"
-        # concise first-screen label: tool + digest fragment + counts.
-        # The full 64-hex revision, the full ISO instants (start/end),
-        # and every retrieval record stay in the expanded
-        # #collection-details (and the sealed artifacts).
+            collection_label = "supplied (historical, offline): "
         collection_line = (
-            f"<dt>Collection</dt><dd>{collection_label}{esc(collection.tool)} · "
-            f"<code class='wrap'>{esc(_digest_fragment(collection.code_revision))}</code> · "
-            f"retrievals {ok} ok / {failed} failed"
-            f"{collection_note} · <a href='#collection-details'>details</a></dd>"
+            f"<dt>Collection</dt><dd>{collection_label}"
+            f"retrievals {ok} ok / {failed} failed · "
+            "<a href='#collection-details'>details</a></dd>"
         )
     return (
         "<section class='card' id='scope-baseline'>"
