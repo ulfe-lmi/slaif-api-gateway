@@ -17,7 +17,7 @@ dependencies = [
   "pydantic",
   "pydantic-settings",
   "httpx",
-  "sqlalchemy",
+  "sqlalchemy[asyncio]",
   "asyncpg",
   "alembic",
   "redis",

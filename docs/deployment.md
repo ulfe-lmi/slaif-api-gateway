@@ -61,6 +61,16 @@ the deployment-level facts operators need beyond a first boot.
   `OPENAI_BASE_URL` variables; `OPENAI_API_KEY` is always the
   gateway-issued key, never the upstream provider key.
 
+Runtime install/build dependency note: the async database stack uses
+SQLAlchemy's asyncio extension, which requires the `greenlet` bridge.
+Both `pyproject.toml` and `requirements.txt` therefore declare the
+runtime dependency as `sqlalchemy[asyncio]`; a runtime-only install
+(without dev extras) must include `greenlet` as a result. A bare
+`sqlalchemy` declaration fails the explicit migration step with
+`ImportError: The SQLAlchemy asyncio module requires that the Python
+'greenlet' library is installed`. This is a runtime dependency
+declaration only; it changes no ordinary operator commands.
+
 Mailpit is available at `http://localhost:8025` by default. Its SMTP endpoint
 is `mailpit:1025` from containers and `localhost:1025` from the host. Compose
 host ports are configurable with `API_HOST_PORT`, `POSTGRES_HOST_PORT`,
