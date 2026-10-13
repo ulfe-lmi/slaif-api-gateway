@@ -767,8 +767,8 @@ def _render_plan_line(report: dict[str, Any]) -> str:
         )
         return (
             "<p class='line' id='plan-line'><strong>Apply plan:</strong> "
-            f"{esc(len(ops))} operation(s) — {esc(breakdown)}; one explicit atomic apply at one "
-            f"effective time{blocked_note}. <a href='#apply-plan'>apply plan detail →</a></p>"
+            f"{esc(len(ops))} operation(s) — {esc(breakdown)}; one atomic apply{blocked_note}. "
+            "<a href='#apply-plan'>apply plan detail →</a></p>"
         )
     if blocked_rows:
         return (
@@ -1596,10 +1596,10 @@ def _render_apply_plan_details(report: dict[str, Any]) -> list[str]:
         _kv_block(
             [
                 ("Plan schema version", plan.get("schema_version", "")),
-                ("Plan SHA-256 (authenticated in validation.json)", plan.get("plan_sha256", "")),
+                ("Plan SHA-256 (in validation.json)", plan.get("plan_sha256", "")),
                 (
                     "Effective time",
-                    "one T chosen inside the apply transaction; the plan itself never embeds the wall clock",
+                    "one T chosen in the apply transaction; never embedded in the plan",
                 ),
             ]
         )

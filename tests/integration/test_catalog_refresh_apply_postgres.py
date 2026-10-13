@@ -474,6 +474,7 @@ def test_bootstrap_apply_is_atomic_and_retry_is_idempotent(
         out["audit_applied"] = await _scalar(
             engine, "SELECT count(*) FROM audit_log WHERE action = 'catalog_refresh_applied'"
         )
+        out["current_user"] = await _scalar(engine, "SELECT current_user")
         return out
 
     state = _phase(url, _check)
@@ -495,7 +496,8 @@ def test_bootstrap_apply_is_atomic_and_retry_is_idempotent(
     assert plan_sha == sealed_plan["plan_sha256"]
     assert mode == "bootstrap"
     assert actor == "ops@itg"
-    assert db_actor == "slaif_synth"  # the ACTUAL database user, not the operator text
+    # the ACTUAL (environment-dependent) database user, not the operator text
+    assert db_actor == state["current_user"]
     assert reason == "itg: apply reviewed plan"
     assert hmac == receipt["hmac_sha256"]
     assert outcome == "committed"
@@ -942,8 +944,8 @@ def test_duplicate_committed_records_are_refused_as_ambiguous(
     async def _inject_anomaly(engine: AsyncEngine) -> None:
         record = (await _rows(
             engine,
-            "SELECT run_id, bundle_sha256, receipt_hmac_sha256, effective_at "
-            "FROM catalog_refresh_applications",
+            "SELECT run_id, bundle_sha256, receipt_hmac_sha256, effective_at, "
+            "db_actor FROM catalog_refresh_applications",
         ))[0]
         async with engine.begin() as conn:
             await conn.execute(
@@ -952,7 +954,7 @@ def test_duplicate_committed_records_are_refused_as_ambiguous(
                     "bundle_sha256, receipt_hmac_sha256, plan_sha256, mode, "
                     "operator_actor, db_actor, reason, effective_at, outcome, "
                     "created_at) VALUES (:id, :run_id, :bundle, :hmac, :plan, "
-                    "'bootstrap', 'ops@itg', 'slaif_synth', 'anomaly', "
+                    "'bootstrap', 'ops@itg', :db_actor, 'anomaly', "
                     ":eff, 'committed', :now)"
                 ),
                 {
@@ -960,6 +962,7 @@ def test_duplicate_committed_records_are_refused_as_ambiguous(
                     "run_id": record[0],
                     "bundle": record[1],
                     "hmac": record[2],
+                    "db_actor": record[4],
                     "plan": "f" * 64,
                     "eff": record[3],
                     "now": datetime.now(UTC),
