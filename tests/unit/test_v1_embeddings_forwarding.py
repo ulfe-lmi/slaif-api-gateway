@@ -441,3 +441,64 @@ def test_embeddings_missing_provider_usage_uses_safe_estimated_finalization(
     _request_id, kwargs = state["custom_finalize_calls"][0]
     assert kwargs["response_metadata_extra"]["embeddings_estimate_reason"] == "usage_missing_estimated"
     assert kwargs["response_metadata_extra"]["provider_usage_available"] is False
+
+
+def test_b2_admission_capture_facts_reach_estimate_at_embeddings_call_site(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    """182-b B2: the embeddings call site passes the captured price+FX facts
+    (row IDs included) into the embeddings cost estimate."""
+    import slaif_gateway.services.embeddings_gateway as main_module
+
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    _wire_embeddings_pipeline(monkeypatch, app, dimensions_capability=True)
+
+    price_id = uuid.uuid4()
+    fx_id = uuid.uuid4()
+    capture = SimpleNamespace(
+        pricing=SimpleNamespace(pricing_rule_id=price_id),
+        fx=SimpleNamespace(fx_rate_id=fx_id, rate=Decimal("0.925925926")),
+    )
+    seen: dict[str, object] = {}
+
+    async def _capture_facts(self, *args: object, **kwargs: object) -> object:
+        _ = (self, args, kwargs)
+        return capture
+
+    async def _record_estimate(self, **kwargs: object) -> object:
+        seen["pricing"] = kwargs.get("pricing")
+        seen["fx"] = kwargs.get("fx")
+        return _estimate()
+
+    monkeypatch.setattr(main_module.PricingService, "capture_pricing_and_fx", _capture_facts)
+    monkeypatch.setattr(main_module.PricingService, "estimate_embeddings_cost", _record_estimate)
+
+    respx_mock.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 4, "total_tokens": 4},
+            },
+            headers={"content-type": "application/json"},
+        )
+    )
+    response = TestClient(app).post(
+        "/v1/embeddings",
+        json={
+            "model": "classroom-embedding",
+            "input": ["hello", "world"],
+            "encoding_format": "float",
+            "dimensions": 8,
+        },
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+    assert response.status_code == 200
+    assert seen["pricing"] is not None
+    assert seen["pricing"].pricing_rule_id == price_id
+    assert seen["fx"] is not None
+    assert seen["fx"].fx_rate_id == fx_id

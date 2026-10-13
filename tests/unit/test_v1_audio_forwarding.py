@@ -472,3 +472,54 @@ def test_openrouter_audio_endpoint_fails_closed(
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "unsupported_provider_endpoint"
     assert state["failure_release_calls"] == ["unsupported_provider_endpoint"]
+
+
+def test_b2_admission_capture_facts_reach_estimate_at_audio_call_site(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    """182-b B2: the audio call site passes the captured price+FX facts
+    (row IDs included) into the audio cost estimate."""
+    import slaif_gateway.services.audio_gateway as main_module
+
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    _wire_audio_pipeline(monkeypatch, app, endpoint="/v1/audio/speech")
+
+    price_id = uuid.uuid4()
+    fx_id = uuid.uuid4()
+    capture = SimpleNamespace(
+        pricing=SimpleNamespace(pricing_rule_id=price_id),
+        fx=SimpleNamespace(fx_rate_id=fx_id, rate=Decimal("0.925925926")),
+    )
+    seen: dict[str, object] = {}
+
+    async def _capture_facts(self, *args: object, **kwargs: object) -> object:
+        _ = (self, args, kwargs)
+        return capture
+
+    async def _record_estimate(self, **kwargs: object) -> object:
+        seen["pricing"] = kwargs.get("pricing")
+        seen["fx"] = kwargs.get("fx")
+        return _estimate()
+
+    monkeypatch.setattr(main_module.PricingService, "capture_pricing_and_fx", _capture_facts)
+    monkeypatch.setattr(main_module.PricingService, "estimate_audio_operation_cost", _record_estimate)
+
+    respx_mock.post("https://api.openai.com/v1/audio/speech").mock(
+        return_value=httpx.Response(
+            200,
+            content=b"audio-bytes",
+            headers={"content-type": "audio/mpeg", "content-length": "11"},
+        )
+    )
+    response = TestClient(app).post(
+        "/v1/audio/speech",
+        json={"model": "classroom-audio", "input": "hello", "voice": "alloy"},
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+    assert response.status_code == 200
+    assert seen["pricing"] is not None
+    assert seen["pricing"].pricing_rule_id == price_id
+    assert seen["fx"] is not None
+    assert seen["fx"].fx_rate_id == fx_id

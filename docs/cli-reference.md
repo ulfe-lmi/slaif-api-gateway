@@ -184,8 +184,8 @@ same-bundle retry, which returns the prior record and never overwrites),
 `apply_freshness_blocked`, `apply_no_plan`, `apply_plan_unsupported`,
 `apply_plan_mismatch`), 30 seal/authentication failure (no database contact
 made), 65 blocked execution or data error (`apply_target_mismatch`,
-`apply_bootstrap_not_empty`, `apply_stale_baseline`, `apply_unknown_admin`,
-`apply_duplicate_record`, `apply_close_guard_drift`, `apply_database_error`,
+`apply_bootstrap_not_empty`, `apply_baseline_stale`, `apply_admin_unknown`,
+`apply_duplicate_record`, `apply_supersession_guard_failed`, `apply_database_error`,
 missing `--confirm`, or blank `--actor`/`--reason`). Status: 0 (committed or
 not — the fact is reported), 30 seal/authentication failure, 65 data error.
 

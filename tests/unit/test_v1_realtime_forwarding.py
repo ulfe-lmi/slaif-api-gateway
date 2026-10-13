@@ -467,3 +467,62 @@ def test_openrouter_realtime_client_secrets_fail_closed(monkeypatch) -> None:
 
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "unsupported_provider_endpoint"
+
+
+@respx.mock
+def test_b2_admission_capture_facts_reach_estimate_at_realtime_call_site(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    """182-b B2: the realtime call site passes the captured price+FX facts
+    (row IDs included) into the realtime cost estimate."""
+    import slaif_gateway.services.realtime_gateway as main_module
+
+    client, app = _app()
+    _wire_realtime_pipeline(monkeypatch, app)
+
+    price_id = uuid.uuid4()
+    fx_id = uuid.uuid4()
+    capture = SimpleNamespace(
+        pricing=SimpleNamespace(pricing_rule_id=price_id),
+        fx=SimpleNamespace(fx_rate_id=fx_id, rate=Decimal("0.925925926")),
+    )
+    seen: dict[str, object] = {}
+
+    async def _capture_facts(self, *args: object, **kwargs: object) -> object:
+        _ = (self, args, kwargs)
+        return capture
+
+    async def _record_estimate(self, **kwargs: object) -> object:
+        seen["pricing"] = kwargs.get("pricing")
+        seen["fx"] = kwargs.get("fx")
+        return _estimate()
+
+    monkeypatch.setattr(main_module.PricingService, "capture_pricing_and_fx", _capture_facts)
+    monkeypatch.setattr(main_module.PricingService, "estimate_realtime_client_secret_cost", _record_estimate)
+
+    respx_mock.post("https://api.openai.com/v1/realtime/client_secrets").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "value": "rtcs_b2",
+                "expires_at": 1893456000,
+                "session": {
+                    "id": "sess_b2",
+                    "object": "realtime.session",
+                    "type": "session",
+                    "model": "gpt-realtime-mini",
+                    "output_modalities": ["audio"],
+                    "audio": {"output": {"voice": "cedar", "format": {"type": "audio/pcmu"}}},
+                },
+            },
+            headers={"content-type": "application/json"},
+        )
+    )
+    response = client.post("/v1/realtime/client_secrets", json=_request_body())
+
+    assert response.status_code == 200, response.text
+    assert seen["pricing"] is not None
+    assert seen["pricing"].pricing_rule_id == price_id
+    assert seen["fx"] is not None
+    assert seen["fx"].fx_rate_id == fx_id

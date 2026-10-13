@@ -1340,17 +1340,17 @@ slaif-gateway catalog-refresh status \
 6. **Stale-baseline comparison.** The locked live projection of the four
    catalog tables is compared row-for-row against the baseline captured at
    review time (excluding the informational `updated_at`). Any drift
-   refuses (`apply_stale_baseline`); nothing is mutated in any refusal
+   refuses (`apply_baseline_stale`); nothing is mutated in any refusal
    path.
-7. **One effective instant.** A single `T` (UTC, chosen once at the start
-   of the transaction) is the effective time for every operation: each
+7. **One effective instant.** A single `T` (UTC, chosen once inside the
+   transaction after all checks pass) is the effective time for every operation: each
    supersession closes the reviewed old window at exactly `T` and opens the
    new row at exactly `T`. Amounts, currency, metadata, and row identity
    are preserved — history is never repriced in place. Each close is
    guarded on the exact reviewed facts (row identity, currency, opening
    instant, the reviewed closing instant via NULL-safe
    `IS NOT DISTINCT FROM`, still enabled, still active at `T`); any drift
-   refuses the whole transaction (`apply_close_guard_drift`).
+   refuses the whole transaction (`apply_supersession_guard_failed`).
 8. **Execution and record.** The sealed plan operations execute in plan
    order through the same verified services the admin dashboard and CLI
    use (each row keeps its own audit trail). The transaction then writes
@@ -1403,7 +1403,7 @@ for the full option and exit-code surface.
 | `apply` | 10 | `apply_warnings_unacknowledged` — pass each code to `--ack-warnings` |
 | `apply` | 20 | plan not applicable: `apply_state_not_applicable`, `apply_freshness_blocked`, `apply_no_plan`, `apply_plan_unsupported`, or `apply_plan_mismatch` |
 | `apply` | 30 | seal/authentication failure (wrong key, tampered or unreadable run) — no database contact was made |
-| `apply` | 65 | blocked execution or data error: `apply_target_mismatch`, `apply_bootstrap_not_empty`, `apply_stale_baseline`, `apply_unknown_admin`, `apply_duplicate_record`, `apply_close_guard_drift`, `apply_database_error`, missing `--confirm`, or blank `--actor`/`--reason` |
+| `apply` | 65 | blocked execution or data error: `apply_target_mismatch`, `apply_bootstrap_not_empty`, `apply_baseline_stale`, `apply_admin_unknown`, `apply_duplicate_record`, `apply_supersession_guard_failed`, `apply_database_error`, missing `--confirm`, or blank `--actor`/`--reason` |
 | `status` | 0 | status reported (committed or not — the fact is printed) |
 | `status` | 30 | seal/authentication failure |
 | `status` | 65 | data error (lookup or configuration failure) |
@@ -1411,8 +1411,10 @@ for the full option and exit-code surface.
 ## Limits
 
 - `collect` makes bounded live official-source retrieval calls and performs
-  no Codex research; `review`, `verify`, `export-baseline`, `apply`, and
-  `status` make no network calls.
+  no Codex research; `review`, `verify`, `export-baseline`, and `status`
+  make no network calls. `apply`'s only network contact is the authenticated
+  PostgreSQL connection to the reviewed target (permitted database network):
+  it performs no source retrieval, provider inference, or research traffic.
 - Apply is explicit and single-target: one sealed run, one database, one
   effective instant, one durable record. It is a catalog refresh tool, not
   a migration or backup tool, and it is never wrapped in the collect

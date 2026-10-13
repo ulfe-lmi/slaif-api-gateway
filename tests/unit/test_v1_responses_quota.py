@@ -4997,3 +4997,44 @@ def test_quota_exceeded_returns_openai_error(monkeypatch) -> None:
     assert response.json()["error"]["code"] == "quota_limit_exceeded"
     assert reserve_calls == ["classroom-responses"]
     assert release_calls == []
+
+
+def test_b2_admission_capture_facts_reach_estimate_at_responses_call_site(
+    monkeypatch,
+) -> None:
+    """182-b B2: the responses call site passes the captured price+FX facts
+    (row IDs included) into the shared cost estimate."""
+    import slaif_gateway.services.responses_gateway as main_module
+
+    app = create_app()
+    _wire_auth_and_db(monkeypatch, app)
+    _wire_successful_route_pricing_quota(monkeypatch)
+    _wire_successful_forwarding(monkeypatch)
+
+    price_id = uuid.uuid4()
+    fx_id = uuid.uuid4()
+    capture = SimpleNamespace(
+        pricing=SimpleNamespace(pricing_rule_id=price_id),
+        fx=SimpleNamespace(fx_rate_id=fx_id, rate=Decimal("0.925925926")),
+    )
+    seen: dict[str, object] = {}
+
+    async def _capture_facts(self, *args: object, **kwargs: object) -> object:
+        _ = (self, args, kwargs)
+        return capture
+
+    async def _record_estimate(self, **kwargs: object) -> object:
+        seen["pricing"] = kwargs.get("pricing")
+        seen["fx"] = kwargs.get("fx")
+        assert kwargs.get("endpoint") == "/v1/responses"
+        return _estimate()
+
+    monkeypatch.setattr(main_module.PricingService, "capture_pricing_and_fx", _capture_facts)
+    monkeypatch.setattr(main_module.PricingService, "estimate_chat_completion_cost", _record_estimate)
+
+    response = TestClient(app).post("/v1/responses", json=_responses_request())
+    assert response.status_code == 200, response.text
+    assert seen["pricing"] is not None
+    assert seen["pricing"].pricing_rule_id == price_id
+    assert seen["fx"] is not None
+    assert seen["fx"].fx_rate_id == fx_id
