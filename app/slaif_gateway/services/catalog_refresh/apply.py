@@ -7,6 +7,11 @@ Trust and safety contract (order 182, A1-A3):
   execution context, and the replayed report. This module never reopens or
   reparses run files after authentication; the recorded identity comes from
   the captured receipt fields, not a re-read of receipt.json.
+- Lifecycle binding: when the CLI passes the run-directory handle it
+  already checked, the authenticated capture is read through that held
+  descriptor after a hop-by-hop boundary re-check; the service never
+  re-anchors a checked path by name and never closes a caller-owned
+  descriptor.
 - No source HTTP, inference, research, email, provider discovery, or
   credential loading. The operator database URL is configuration only and
   never enters errors, audit rows, or the durable application record.
@@ -34,7 +39,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -75,6 +80,9 @@ from slaif_gateway.services.fx_rate_service import FxRateService
 from slaif_gateway.services.model_route_service import ModelRouteService
 from slaif_gateway.services.pricing_rule_service import PricingRuleService
 from slaif_gateway.services.provider_config_service import ProviderConfigService
+
+if TYPE_CHECKING:
+    from slaif_gateway.services.catalog_refresh.filesystem import AnchoredDir
 
 _MODES = ("bootstrap", "refresh")
 
@@ -639,6 +647,7 @@ async def apply_reviewed_run(
     actor: str,
     admin_id: uuid.UUID | None = None,
     ack_warnings: tuple[str, ...] = (),
+    run_handle: AnchoredDir | None = None,
 ) -> ApplyResult:
     """Apply one authenticated reviewed run atomically (A1/A2/A3).
 
@@ -660,7 +669,9 @@ async def apply_reviewed_run(
             "apply requires non-blank operator actor and reason assertions",
         )
 
-    capture = load_verified_capture(run_dir, seal_key)
+    if run_handle is not None:
+        run_handle.assert_name_binding(str(run_dir))
+    capture = load_verified_capture(run_dir, seal_key, run_handle=run_handle)
     if capture.result.state not in ("READY", "READY_WITH_WARNINGS"):
         raise CatalogRefreshBlockedError(
             "apply_state_not_applicable",
@@ -704,6 +715,7 @@ async def apply_status(
     run_dir: Path,
     seal_key: bytes,
     database_url: str,
+    run_handle: AnchoredDir | None = None,
 ) -> ApplyStatus:
     """Read-only committed-outcome visibility for one reviewed run.
 
@@ -711,7 +723,9 @@ async def apply_status(
     never mutates. The run is authenticated first so the lookup is by the
     canonical bundle identity, not an operator-supplied value.
     """
-    capture = load_verified_capture(run_dir, seal_key)
+    if run_handle is not None:
+        run_handle.assert_name_binding(str(run_dir))
+    capture = load_verified_capture(run_dir, seal_key, run_handle=run_handle)
     bundle_sha256 = capture.receipt["semantic_bundle_sha256"]
     _host, _port, _database, engine_url = _target_parts_from_url(database_url)
     engine: AsyncEngine = create_async_engine(engine_url, pool_pre_ping=True)

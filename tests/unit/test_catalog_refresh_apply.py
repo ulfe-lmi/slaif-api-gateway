@@ -12,6 +12,7 @@ tests/integration/test_catalog_refresh_apply_postgres.py.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -22,7 +23,10 @@ from typer.testing import CliRunner
 from slaif_gateway.cli.main import app
 from slaif_gateway.services.catalog_refresh import apply as apply_mod
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
-from slaif_gateway.services.catalog_refresh.filesystem import load_seal_key_bytes
+from slaif_gateway.services.catalog_refresh.filesystem import (
+    load_seal_key_bytes,
+    open_anchored_handle,
+)
 from slaif_gateway.services.catalog_refresh.sealing import CatalogRefreshSealError
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "catalog_refresh"
@@ -191,7 +195,7 @@ async def test_blocked_sealed_state_refuses_before_database(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        apply_mod, "load_verified_capture", lambda _d, _k: _fake_capture(state="BLOCKED")
+        apply_mod, "load_verified_capture", lambda _d, _k, run_handle=None: _fake_capture(state="BLOCKED")
     )
     _no_db_contact(monkeypatch)
     with pytest.raises(CatalogRefreshBlockedError) as excinfo:
@@ -211,7 +215,7 @@ async def test_run_without_executable_plan_refuses_before_database(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        apply_mod, "load_verified_capture", lambda _d, _k: _fake_capture(plan=None)
+        apply_mod, "load_verified_capture", lambda _d, _k, run_handle=None: _fake_capture(plan=None)
     )
     _no_db_contact(monkeypatch)
     with pytest.raises(CatalogRefreshBlockedError) as excinfo:
@@ -237,7 +241,7 @@ async def test_unsupported_sealed_plan_schema_refuses_before_database(
         "operations": [{"type": "create_provider", "provider": "openrouter"}],
     }
     monkeypatch.setattr(
-        apply_mod, "load_verified_capture", lambda _d, _k: _fake_capture(plan=plan)
+        apply_mod, "load_verified_capture", lambda _d, _k, run_handle=None: _fake_capture(plan=plan)
     )
     _no_db_contact(monkeypatch)
     with pytest.raises(CatalogRefreshBlockedError) as excinfo:
@@ -355,7 +359,7 @@ async def test_refresh_target_mismatch_locks_then_refuses_without_writes(
     monkeypatch.setattr(
         apply_mod,
         "load_verified_capture",
-        lambda _d, _k: _fake_capture(
+        lambda _d, _k, run_handle=None: _fake_capture(
             mode="refresh",
             target=SimpleNamespace(
                 server_host="reviewed-host", server_port=5432, database="reviewed_db"
@@ -438,5 +442,274 @@ async def test_apply_status_is_lock_free_and_read_only(
     assert len(lookups) == 1
     assert lookups[0]["bundle_sha256"] == receipt["semantic_bundle_sha256"]
     assert lookups[0]["engine"] is fake_engine
+    assert statements == []
+    assert fake_engine.disposed is True
+
+# ---------------------------------------------------------------------------
+# Lifecycle binding: the CLI's already-checked run/key-parent handles carry
+# the apply and status paths -- key read and authenticated capture reuse the
+# held descriptors (no path reopen), the boundary is re-asserted hop by hop
+# before each sensitive phase, and a swapped directory is refused before any
+# database contact.
+# ---------------------------------------------------------------------------
+
+
+def _write_seal_key(parent: Path, name: str = "seal.key") -> tuple[Path, bytes]:
+    key = bytes.fromhex("ab" * 32)
+    path = parent / name
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(key.hex().encode("ascii"))
+    return path, key
+
+
+def _no_reanchor(_path: Path) -> None:
+    raise AssertionError("a checked lifecycle handle must not be re-anchored by name")
+
+
+@pytest.mark.asyncio
+async def test_run_binding_change_before_capture_refuses_without_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A run directory swapped after the check is refused at the
+    capture boundary re-check -- before authentication and before any
+    database contact."""
+    run_dir, key = _make_first_install_run(tmp_path)
+    _no_db_contact(monkeypatch)
+    handle = open_anchored_handle(run_dir)
+    try:
+        run_dir.rename(run_dir.parent / "swapped-first-install-001")
+        with pytest.raises(CatalogRefreshSealError) as excinfo:
+            await apply_mod.apply_reviewed_run(
+                run_dir=run_dir,
+                seal_key=key,
+                database_url=LEAK_DB_URL,
+                reason="why",
+                actor="who",
+                run_handle=handle,
+            )
+        assert "checked directory binding changed" in str(excinfo.value)
+    finally:
+        handle.close()
+
+
+@pytest.mark.asyncio
+async def test_capture_through_held_run_handle_reuses_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With an intact checked handle the REAL authenticated capture runs
+    through the HELD descriptor (no re-anchor, no database engine) and the
+    exact captured receipt identity reaches the transaction."""
+    run_dir, key = _make_first_install_run(tmp_path)
+    receipt = json.loads((run_dir / "receipt.json").read_text(encoding="utf-8"))
+    _no_db_contact(monkeypatch)
+    import slaif_gateway.services.catalog_refresh.filesystem as fs_mod
+
+    monkeypatch.setattr(fs_mod, "_open_anchored", _no_reanchor)
+    recorded: dict[str, Any] = {}
+
+    async def _fake_execute(
+        _capture: Any,
+        *,
+        operations: list[dict[str, Any]],
+        plan_sha256: str,
+        bundle_sha256: str,
+        database_url: str,
+        reason: str,
+        actor: str,
+        admin_id: Any,
+        ack_warnings: tuple[str, ...] = (),
+    ) -> apply_mod.ApplyResult:
+        _ = (operations, plan_sha256, database_url, reason, actor, admin_id, ack_warnings)
+        recorded["capture"] = _capture
+        recorded["bundle_sha256"] = bundle_sha256
+        return apply_mod.ApplyResult(
+            status="committed",
+            run_id="fixture-first-install-001",
+            bundle_sha256=bundle_sha256,
+            plan_sha256=plan_sha256,
+            effective_at=None,
+            counts={},
+        )
+
+    monkeypatch.setattr(apply_mod, "_execute_transaction", _fake_execute)
+    handle = open_anchored_handle(run_dir)
+    try:
+        await apply_mod.apply_reviewed_run(
+            run_dir=run_dir,
+            seal_key=key,
+            database_url=LEAK_DB_URL,
+            reason="why",
+            actor="who",
+            run_handle=handle,
+        )
+    finally:
+        handle.close()
+    # the capture that reached the transaction is the real authenticated
+    # capture read through the held descriptor
+    assert recorded["capture"].receipt["semantic_bundle_sha256"] == receipt["semantic_bundle_sha256"]
+    assert recorded["bundle_sha256"] == receipt["semantic_bundle_sha256"]
+
+
+@pytest.mark.asyncio
+async def test_status_through_held_run_handle_reuses_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir, key = _make_first_install_run(tmp_path)
+    statements: list[str] = []
+    fake_engine = _FakeEngine(statements)
+    monkeypatch.setattr(apply_mod, "create_async_engine", lambda *_a, **_k: fake_engine)
+    import slaif_gateway.services.catalog_refresh.filesystem as fs_mod
+
+    monkeypatch.setattr(fs_mod, "_open_anchored", _no_reanchor)
+
+    lookups: list[str] = []
+
+    async def _fake_lookup(engine: Any, *, bundle_sha256: str) -> list[Any]:
+        lookups.append(bundle_sha256)
+        return []
+
+    monkeypatch.setattr(apply_mod, "_lookup_committed_by_bundle", _fake_lookup)
+    handle = open_anchored_handle(run_dir)
+    try:
+        status = await apply_mod.apply_status(
+            run_dir=run_dir,
+            seal_key=key,
+            database_url=LEAK_DB_URL,
+            run_handle=handle,
+        )
+    finally:
+        handle.close()
+    assert status.committed is False
+    assert len(lookups) == 1
+    assert statements == []
+    assert fake_engine.disposed is True
+
+
+def test_key_binding_change_refuses_before_key_read(tmp_path: Path) -> None:
+    """A seal-key parent swapped after the check is refused by the loader
+    boundary re-check, before any key byte is read."""
+    key_parent = tmp_path / "seal-parent"
+    key_parent.mkdir(mode=0o700)
+    key_path, _key = _write_seal_key(key_parent)
+    handle = open_anchored_handle(key_parent)
+    try:
+        key_parent.rename(tmp_path / "seal-parent-swapped")
+        with pytest.raises(CatalogRefreshSealError) as excinfo:
+            load_seal_key_bytes(key_path, parent_handle=handle)
+        assert "checked directory binding changed" in str(excinfo.value)
+    finally:
+        handle.close()
+
+
+def test_key_read_through_held_parent_reuses_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key_parent = tmp_path / "seal-parent"
+    key_parent.mkdir(mode=0o700)
+    key_path, key = _write_seal_key(key_parent)
+    import slaif_gateway.services.catalog_refresh.filesystem as fs_mod
+
+    monkeypatch.setattr(fs_mod, "_open_anchored", _no_reanchor)
+    handle = open_anchored_handle(key_parent)
+    try:
+        assert load_seal_key_bytes(key_path, parent_handle=handle) == key
+    finally:
+        handle.close()
+
+
+def test_apply_cli_lifecycle_reuses_checked_handles_without_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end CLI apply without a database: the CLI's checked run and
+    key-parent handles carry the whole lifecycle -- key read and
+    authenticated capture both run through the held descriptors (no
+    re-anchor) and no database engine is ever created."""
+    run_dir, _key = _make_first_install_run(tmp_path)
+    _no_db_contact(monkeypatch)
+    import slaif_gateway.services.catalog_refresh.filesystem as fs_mod
+
+    monkeypatch.setattr(fs_mod, "_open_anchored", _no_reanchor)
+
+    async def _fake_execute(
+        _capture: Any,
+        *,
+        operations: list[dict[str, Any]],
+        plan_sha256: str,
+        bundle_sha256: str,
+        database_url: str,
+        reason: str,
+        actor: str,
+        admin_id: Any,
+        ack_warnings: tuple[str, ...] = (),
+    ) -> apply_mod.ApplyResult:
+        _ = (operations, database_url, reason, actor, admin_id, ack_warnings)
+        return apply_mod.ApplyResult(
+            status="committed",
+            run_id="fixture-first-install-001",
+            bundle_sha256=bundle_sha256,
+            plan_sha256=plan_sha256,
+            effective_at=None,
+            counts={},
+        )
+
+    monkeypatch.setattr(apply_mod, "_execute_transaction", _fake_execute)
+    result = runner.invoke(
+        app,
+        [
+            "catalog-refresh",
+            "apply",
+            "--run-dir",
+            str(run_dir),
+            "--seal-key",
+            str(tmp_path / "seal.key"),
+            "--db-url",
+            LEAK_DB_URL,
+            "--confirm",
+            "--reason",
+            "why",
+            "--actor",
+            "who",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "status: committed" in result.output
+    assert LEAK_PASS not in result.output
+
+
+def test_status_cli_lifecycle_reuses_checked_handles_without_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end CLI status without a database: checked handles carry the
+    lifecycle (no re-anchor), the read-only lookup runs on the created
+    engine and the engine is always disposed."""
+    run_dir, _key = _make_first_install_run(tmp_path)
+    statements: list[str] = []
+    fake_engine = _FakeEngine(statements)
+    monkeypatch.setattr(apply_mod, "create_async_engine", lambda *_a, **_k: fake_engine)
+    import slaif_gateway.services.catalog_refresh.filesystem as fs_mod
+
+    monkeypatch.setattr(fs_mod, "_open_anchored", _no_reanchor)
+
+    async def _fake_lookup(engine: Any, *, bundle_sha256: str) -> list[Any]:
+        _ = engine, bundle_sha256
+        return []
+
+    monkeypatch.setattr(apply_mod, "_lookup_committed_by_bundle", _fake_lookup)
+    result = runner.invoke(
+        app,
+        [
+            "catalog-refresh",
+            "status",
+            "--run-dir",
+            str(run_dir),
+            "--seal-key",
+            str(tmp_path / "seal.key"),
+            "--db-url",
+            LEAK_DB_URL,
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "committed: false" in result.output
     assert statements == []
     assert fake_engine.disposed is True

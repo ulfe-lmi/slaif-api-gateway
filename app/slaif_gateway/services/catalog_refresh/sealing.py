@@ -351,7 +351,9 @@ def verify_run(run_dir: Path, key: bytes) -> VerifyResult:
         os.close(run_fd)
 
 
-def load_verified_capture(run_dir: Path, key: bytes) -> VerifiedCapture:
+def load_verified_capture(
+    run_dir: Path, key: bytes, run_handle: "fs.AnchoredDir | None" = None
+) -> VerifiedCapture:
     """Authenticate one sealed run and return its held capture.
 
     The single verified-capture authority for applying a reviewed run
@@ -361,12 +363,22 @@ def load_verified_capture(run_dir: Path, key: bytes) -> VerifiedCapture:
     checks are returned together with the replayed report. A failed
     authentication raises CatalogRefreshSealError with safe code-only
     detail; nothing is returned for execution.
+
+    When the caller passes a ``run_handle`` retained from an earlier
+    checked lifecycle handle (descriptor lineage -- no path reopen),
+    the held descriptor serves every read and is NOT closed here; the
+    caller re-asserts the binding immediately before capture. When it
+    is omitted, the run directory is anchored once here and closed on
+    exit.
     """
-    run_fd, _chain = fs._open_anchored(Path(run_dir))
-    try:
-        outcome = _verify_and_capture_fd(run_fd, key)
-    finally:
-        os.close(run_fd)
+    if run_handle is not None:
+        outcome = _verify_and_capture_fd(run_handle.dir_fd, key)
+    else:
+        run_fd, _chain = fs._open_anchored(Path(run_dir))
+        try:
+            outcome = _verify_and_capture_fd(run_fd, key)
+        finally:
+            os.close(run_fd)
     if isinstance(outcome, VerifyResult):
         detail = "; ".join(f"{name}={value}" for name, value in sorted(outcome.checks.items()))
         raise CatalogRefreshSealError(f"capture authentication failed: {detail}")

@@ -146,15 +146,18 @@ def _settings_database_url() -> str:
     return settings.DATABASE_URL
 
 
-def _read_existing_seal_key(path: Path) -> bytes:
+def _read_existing_seal_key(path: Path, handle: AnchoredDir | None = None) -> bytes:
     """Read a runner-owned seal key; verify never creates keys.
 
     The key is loaded through the shared anchored boundary: no-follow at
     every component, regular file / 0600 / current-runner ownership / 64
-    lowercase hex bytes validated on the OPENED descriptor.
+    lowercase hex bytes validated on the OPENED descriptor. When the
+    caller passes its checked key-parent handle, the key is read through
+    that held descriptor (binding re-asserted inside the loader, no path
+    reopen) instead of re-anchoring the parent.
     """
     try:
-        return load_seal_key_bytes(Path(path).expanduser())
+        return load_seal_key_bytes(Path(path).expanduser(), parent_handle=handle)
     except CatalogRefreshSealError as exc:
         raise CliError(str(exc)) from exc
 
@@ -1298,7 +1301,8 @@ def apply_run(
         key_handle = _open_optional_anchored_handle(seal_key_path.parent)
         try:
             _check_key_containment(run_dir_path, seal_key_path, run_dir_handle, key_handle)
-            key = _read_existing_seal_key(seal_key_path)
+            _assert_review_bindings(run_dir_path, seal_key_path, run_dir_handle, key_handle)
+            key = _read_existing_seal_key(seal_key_path, key_handle)
             try:
                 result = run_async(
                     apply_reviewed_run(
@@ -1311,6 +1315,7 @@ def apply_run(
                         ack_warnings=tuple(
                             code.strip() for code in (ack_warnings or "").split(",") if code.strip()
                         ),
+                        run_handle=run_dir_handle,
                     )
                 )
             except CatalogRefreshSealError as exc:
@@ -1403,13 +1408,15 @@ def apply_status_command(
         key_handle = _open_optional_anchored_handle(seal_key_path.parent)
         try:
             _check_key_containment(run_dir_path, seal_key_path, run_dir_handle, key_handle)
-            key = _read_existing_seal_key(seal_key_path)
+            _assert_review_bindings(run_dir_path, seal_key_path, run_dir_handle, key_handle)
+            key = _read_existing_seal_key(seal_key_path, key_handle)
             try:
                 status = run_async(
                     apply_status(
                         run_dir=run_dir_path,
                         seal_key=key,
                         database_url=db_url,
+                        run_handle=run_dir_handle,
                     )
                 )
             except CatalogRefreshSealError as exc:

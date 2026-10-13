@@ -10,6 +10,7 @@ from alembic.script import ScriptDirectory
 MIGRATION = Path("migrations/versions/0024_quota_reservation_accounting_facts.py")
 REVISION = "0024_quota_reservation_accounting_facts"
 DOWN_REVISION = "0023_module_provider_foundation"
+HEAD = "0025_catalog_refresh_applications"
 
 
 def test_quota_reservation_accounting_facts_is_a_single_nullable_upgrade() -> None:
@@ -33,5 +34,5 @@ def test_quota_reservation_accounting_facts_is_a_single_nullable_upgrade() -> No
 
 def test_alembic_chain_has_one_head_and_0024_downgrades_to_0023() -> None:
     script = ScriptDirectory.from_config(Config("alembic.ini"))
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == DOWN_REVISION

@@ -42,7 +42,7 @@ def test_alembic_has_exactly_one_head_revision_after_fence_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0024_quota_reservation_accounting_facts"]
+    assert heads == ["0025_catalog_refresh_applications"]
 
 
 def test_fence_migration_adds_only_the_fence_foundation_columns() -> None:
