@@ -104,14 +104,15 @@ slaif-gateway secrets validate-env
 Codex commands apply only to explicitly registered qualification profiles.
 Configuration validation reports bounded names/status, never secret values.
 
-## Catalog refresh (collect, review, verify)
+## Catalog refresh (collect, review, verify, apply)
 
 Bounded catalog refresh: bounded live official-source collection, one typed
-proposal bundle, one safe baseline, one sealed one-page report. `collect`,
-`review`, `verify`, and read-only `export-baseline` — no refresh or apply
-command exists in this version and Codex research remains NOT_RUN. Full
-semantics, the source registry, policy thresholds, sealing, and exit codes
-live in [Catalog refresh (collect, review, and
+proposal bundle, one safe baseline, one sealed one-page report, and the one
+explicit atomic `apply` of a reviewed run. `collect`, `review`, `verify`,
+read-only `export-baseline`, mutating `apply`, and read-only `status` —
+Codex research remains NOT_RUN. Full semantics, the source registry, policy
+thresholds, sealing, apply ordering, and exit codes live in
+[Catalog refresh (collect, review, and
 verify)](catalog-refresh.md).
 
 ```bash
@@ -139,6 +140,21 @@ slaif-gateway catalog-refresh verify --run-dir /path/to/run --seal-key ~/.local/
 
 # Export a read-only consistent baseline document
 slaif-gateway catalog-refresh export-baseline --out /path/to/baseline.json --db-url postgresql+asyncpg://user@host:5432/dbname
+
+# Apply the reviewed plan of one sealed READY/READY_WITH_WARNINGS run
+# atomically (explicit operator confirmation; one effective instant; one
+# durable application record). Never wrap this in the collect watchdog.
+slaif-gateway catalog-refresh apply --run-dir /path/to/run \
+  --db-url postgresql+asyncpg://user@host:5432/dbname \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key \
+  --confirm --actor "ops:alice" --reason "apply reviewed openrouter refresh" \
+  [--admin-id UUID] [--ack-warnings new_model_exposure] [--json]
+
+# Read-only committed-outcome visibility (lock-free; never mutates or
+# blocks writers)
+slaif-gateway catalog-refresh status --run-dir /path/to/run \
+  --db-url postgresql+asyncpg://user@host:5432/dbname \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key [--json]
 ```
 
 Collect exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED (a blocked
@@ -161,7 +177,17 @@ READY_WITH_WARNINGS, 20 BLOCKED, 65 data error, 2 usage error. Verify: 0 valid, 
 non-directory, or symlinked run directory with an otherwise valid key),
 65 data error (missing or unsafe seal key; verify never creates keys).
 Export-baseline: 0 written, 65 data error (never overwrites output, never
-bootstraps empty).
+bootstraps empty). Apply: 0 committed (or `already_committed` for a
+same-bundle retry, which returns the prior record and never overwrites),
+10 unacknowledged apply-time findings (pass each code to `--ack-warnings`),
+20 plan not applicable (`apply_state_not_applicable`,
+`apply_freshness_blocked`, `apply_no_plan`, `apply_plan_unsupported`,
+`apply_plan_mismatch`), 30 seal/authentication failure (no database contact
+made), 65 blocked execution or data error (`apply_target_mismatch`,
+`apply_bootstrap_not_empty`, `apply_stale_baseline`, `apply_unknown_admin`,
+`apply_duplicate_record`, `apply_close_guard_drift`, `apply_database_error`,
+missing `--confirm`, or blank `--actor`/`--reason`). Status: 0 (committed or
+not — the fact is reported), 30 seal/authentication failure, 65 data error.
 
 Filesystem inputs and outputs are handled by a descriptor-anchored,
 symlink-free boundary: symlinked bundle/baseline/key paths, FIFOs and

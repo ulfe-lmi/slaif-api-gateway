@@ -1,9 +1,10 @@
-# Admin: catalog refresh (collect, review, verify)
+# Admin: catalog refresh (collect, review, verify, apply)
 
 Operator entry points for the working slice of the catalog refresh
 workflow: bounded live official-source collection, offline review,
-verification, and read-only export. No refresh or apply command exists in
-this version and Codex research remains NOT_RUN. Full semantics live in
+verification, read-only export, and the one explicit atomic `apply` of a
+reviewed run (plus read-only `status`). Codex research remains NOT_RUN.
+Full semantics live in
 [`docs/catalog-refresh.md`](../../docs/catalog-refresh.md).
 
 ## Current entry points
@@ -46,14 +47,36 @@ slaif-gateway catalog-refresh review /path/to/catalog-refresh.json \
 slaif-gateway catalog-refresh verify \
   --run-dir /var/lib/slaif/catalog-refresh/runs/<run-id> \
   --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
+
+# 4) Apply the reviewed plan of one sealed READY/READY_WITH_WARNINGS run
+#    atomically: one explicit operator confirmation, one effective instant,
+#    one durable application record. Idempotent per reviewed bundle (a
+#    retry returns the committed record and never re-applies). Never wrap
+#    apply in the collect watchdog:
+slaif-gateway catalog-refresh apply \
+  --run-dir /var/lib/slaif/catalog-refresh/runs/<run-id> \
+  --db-url "$DATABASE_URL" \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key \
+  --confirm --actor "ops:alice" \
+  --reason "apply reviewed openrouter refresh" \
+  [--admin-id UUID] [--ack-warnings new_model_exposure] [--json]
+
+# 5) Read-only committed-outcome visibility (lock-free; never mutates or
+#    blocks writers)
+slaif-gateway catalog-refresh status \
+  --run-dir /var/lib/slaif/catalog-refresh/runs/<run-id> \
+  --db-url "$DATABASE_URL" \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key [--json]
 ```
 
 Exit codes: collect and review 0/10/20/65/2, verify 0/30/65 (a missing or unsafe
 run directory with a valid key is 30 — including sealed runs whose
 authenticated execution context is missing (sealed before the execution
 context existed) or has an unsupported shape or version; a
-missing or unsafe seal key is 65), export-baseline 0/65 (see the docs
-page for the table). A blocked collect run is always published and
+missing or unsafe seal key is 65), export-baseline 0/65, apply 0/10/20/30/65 (0 = committed or
+already committed; 10 = unacknowledged apply-time findings; 20 = plan not
+applicable; 30 = seal/authentication failure; 65 = blocked execution or
+data error), status 0/30/65 (see the docs page for the tables). A blocked collect run is always published and
 labeled by the path actually reached: `collection not started` (baseline
 failure before any retrieval), `collection attempted and failed before
 completion` (failed retrieval attempt), or the `live collection` wording
@@ -144,18 +167,14 @@ Operator notes for the sealed filesystem boundary:
 
 ## What does not exist yet
 
-- **No refresh command.** Live source retrieval (provider APIs, ECB FX) and
-  Codex-assisted research are planned for a later slice and are not
-  implemented in this version. Bundles are produced out-of-band and reviewed
-  here.
-- **No apply command.** Supersession/update of existing rows with accounting
-  protections is planned for a later slice. Until it exists, every execution
-  plan is create-only and the report marks existing-row apply as BLOCKED (no
-  apply operation in this version).
+- **No Codex-assisted research.** Isolated Codex research remains NOT_RUN in
+  this version. Bundles are produced by the bounded deterministic live
+  `collect` or out-of-band and reviewed here.
 
-Do not add shell scripts or dashboard buttons that claim to refresh or apply
-catalog data before those slices exist; an honest blocked label is part of
-the contract.
+Do not add shell scripts or dashboard buttons that apply catalog data by
+any path other than the explicit `apply` command on one sealed
+READY/READY_WITH_WARNINGS run; an honest blocked label is part of the
+contract.
 
 ## Eventual wrapper contract (planned for a later slice)
 
@@ -170,8 +189,9 @@ documented here:
    `REVIEW.html` in an ordinary browser (the accepted one-command,
    one-static-report architecture — the wrapper must NOT require a new
    management dashboard surface);
-5. require an explicit, separately audited apply step that re-validates the
-   baseline identity before superseding rows.
+5. require the explicit, separately audited `apply` CLI step (documented
+   above), which re-authenticates the sealed run and re-validates the
+   baseline identity inside the transaction before superseding rows.
 
 The wrapper must never weaken the bundle schema, the readiness
 recomputation, the sealing, or the read-only export semantics defined in

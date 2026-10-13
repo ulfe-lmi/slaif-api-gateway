@@ -1,23 +1,23 @@
 # Catalog Refresh (Collect, Review, and Verify)
 
-> **Status:** Working collect/review/verify slice of the catalog refresh
-> workflow
+> **Status:** Working collect/review/verify/apply slice of the catalog
+> refresh workflow
 > **Audience:** Administrators and maintainers who refresh provider catalogs
 > **Boundary:** Bounded live official-source collection (`collect`), offline
-> review of supplied or collected bundles, read-only export, and verify. No
-> refresh or apply command exists in this version, and Codex-assisted
-> research remains NOT_RUN.
+> review of supplied or collected bundles, read-only export, verify, and the
+> one explicit atomic `apply` of a reviewed run (plus read-only `status`).
+> Codex-assisted research remains NOT_RUN.
 
-SLAIF catalog refresh is a staged workflow whose end goal is: one refresh,
-one trustworthy one-page report, and one explicit audited apply command.
-This page documents the **working slice** — bounded live collection, offline
-review, and verification — and clearly separates it from later slices that
-do not exist yet.
+SLAIF catalog refresh is a staged workflow: one refresh, one trustworthy
+one-page report, and one explicit audited apply command. This page documents
+the working slice — bounded live collection, offline review, verification,
+and the atomic apply of a reviewed run — and clearly separates it from later
+slices that do not exist yet.
 
 ## What exists now
 
-The implemented entry points are four CLI commands under
-[CLI reference](cli-reference.md#catalog-refresh-collect-review-verify):
+The implemented entry points are six CLI commands under
+[CLI reference](cli-reference.md#catalog-refresh-collect-review-verify-apply):
 
 ```bash
 slaif-gateway catalog-refresh collect --bootstrap|--refresh [--providers openai,openrouter] [--models a,b] \
@@ -25,6 +25,9 @@ slaif-gateway catalog-refresh collect --bootstrap|--refresh [--providers openai,
 slaif-gateway catalog-refresh review <bundle> [--baseline-file FILE | --db-url URL | --first-install]
 slaif-gateway catalog-refresh verify --run-dir DIR --seal-key FILE
 slaif-gateway catalog-refresh export-baseline --out FILE [--db-url URL]
+slaif-gateway catalog-refresh apply --run-dir DIR --db-url URL [--seal-key P] --confirm --actor NAME --reason TEXT \
+  [--admin-id UUID] [--ack-warnings CODE,...] [--json]
+slaif-gateway catalog-refresh status --run-dir DIR --db-url URL [--seal-key P] [--json]
 ```
 
 - `collect` performs the bounded live official-source collection in this
@@ -46,6 +49,13 @@ slaif-gateway catalog-refresh export-baseline --out FILE [--db-url URL]
 - `export-baseline` writes a read-only, consistent, allowlisted PostgreSQL
   baseline document. It never writes to the database and never produces an
   empty bootstrap from a failed connection.
+- `apply` applies the reviewed plan of one sealed run atomically to
+  PostgreSQL: one explicit operator confirmation, one effective instant, one
+  durable application record. See
+  [Apply](#apply-one-explicit-atomic-command).
+- `status` reports the committed apply outcome for one sealed run by its
+  canonical bundle identity. It is lock-free read-only and never mutates or
+  blocks writers.
 
 The bounded proposal tooling in
 [Provider catalog proposals](provider-catalog-proposals.md) remains the
@@ -59,14 +69,11 @@ their rules.
   `NOT_RUN` in this version; live collection is deterministic bounded
   retrieval and registered parsing only (see
   [Live collection](#live-collection-the-collect-command)).
-- **Audited supersession and apply:** atomic, audited update/supersession of
-  existing rows with accounting protections. Until it exists, every
-  execution plan is create-only and any represented existing-row change is
-  displayed as **BLOCKED** (no apply operation in this version), never
-  executed.
 - **Shell UX, E2E, and docs completion.**
 
-No refresh or apply command exists. Any tool or script that claims to
+The only in-contract apply path is the explicit
+[apply](#apply-one-explicit-atomic-command) command on one sealed
+READY/READY_WITH_WARNINGS run. Any other tool or script that claims to
 "apply" a catalog refresh is out of contract.
 
 ## Live collection (the `collect` command)
@@ -1270,6 +1277,109 @@ kernel behavior. Filesystem permissions do not make reviewed files
 immutable — later mutation is detected by verification, and any future
 apply must consume the authenticated snapshot rather than reread paths.
 
+## Apply (one explicit atomic command)
+
+`apply` is the single in-contract execution path for a reviewed run. It is
+always explicit: it requires `--confirm`, a non-blank operator `--actor`,
+and a non-blank `--reason`, and it never runs as a side effect of
+`collect`, `review`, `verify`, or any other command. The OS watchdog prefix
+documented for `collect` is never used around `apply` (it mutates) and never
+around `status`, `review`, or `verify`.
+
+```bash
+slaif-gateway catalog-refresh apply \
+  --run-dir /path/to/run \
+  --db-url postgresql+asyncpg://user@host:5432/dbname \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key \
+  --confirm --actor "ops:alice" \
+  --reason "apply reviewed openrouter refresh 2026-10-13" \
+  [--admin-id UUID] [--ack-warnings new_model_exposure] [--json]
+
+slaif-gateway catalog-refresh status \
+  --run-dir /path/to/run \
+  --db-url postgresql+asyncpg://user@host:5432/dbname \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key [--json]
+```
+
+### What apply checks, in order
+
+1. **Authentication (before any database contact).** The run directory is
+   re-verified byte-for-byte against the same runner-owned seal key
+   (content digests, manifest, and HMAC receipt). A wrong key or any
+   tampering fails with exit 30 before any connection is opened. Only
+   `READY` and `READY_WITH_WARNINGS` runs are applicable; the sealed
+   `validation.json` must carry an apply plan with a supported schema
+   version.
+2. **One transaction.** Everything else happens inside one PostgreSQL
+   transaction with a bounded prelude (10-second lock waits, 60-second
+   statement limit) and fixed-order catalog table locks
+   (`fx_rates`, `model_routes`, `pricing_rules`,
+   `provider_configs`) taken as `SHARE ROW EXCLUSIVE`: ordinary catalog
+   writers (INSERT/UPDATE/DELETE) are blocked while apply holds the locks;
+   plain reads are not.
+3. **Target check (refresh mode).** The operator `--db-url` host, port, and
+   database must match the reviewed baseline target. Bootstrap mode instead
+   proves all four catalog tables are empty
+   (`apply_bootstrap_not_empty` otherwise); an existing catalog is never
+   "bootstrapped over".
+4. **Known-committed lookup first.** The transaction looks up
+   `catalog_refresh_applications` by the canonical bundle identity *before*
+   any apply-time gate or mutation. A retry of an already-applied bundle —
+   even after source aging, a finite validity window expiring, or a
+   re-derived plan drifting — returns the prior committed record (same
+   `operator_actor`, `db_actor`, `effective_at`, and counts) as
+   `already_committed`; it never overwrites, re-applies, re-charges, or
+   re-audits.
+5. **Current execution gates (after the lookup, before any mutation).**
+   The review is re-computed at apply time on the captured, authenticated
+   run: a freshly `BLOCKED` plan refuses (`apply_freshness_blocked`),
+   unacknowledged review findings refuse unless each code is passed to
+   `--ack-warnings` (`apply_warnings_unacknowledged`), and a re-derived
+   plan identity different from the sealed plan refuses
+   (`apply_plan_mismatch`).
+6. **Stale-baseline comparison.** The locked live projection of the four
+   catalog tables is compared row-for-row against the baseline captured at
+   review time (excluding the informational `updated_at`). Any drift
+   refuses (`apply_stale_baseline`); nothing is mutated in any refusal
+   path.
+7. **One effective instant.** A single `T` (UTC, chosen once at the start
+   of the transaction) is the effective time for every operation: each
+   supersession closes the reviewed old window at exactly `T` and opens the
+   new row at exactly `T`. Amounts, currency, metadata, and row identity
+   are preserved — history is never repriced in place. Each close is
+   guarded on the exact reviewed facts (row identity, currency, opening
+   instant, the reviewed closing instant via NULL-safe
+   `IS NOT DISTINCT FROM`, still enabled, still active at `T`); any drift
+   refuses the whole transaction (`apply_close_guard_drift`).
+8. **Execution and record.** The sealed plan operations execute in plan
+   order through the same verified services the admin dashboard and CLI
+   use (each row keeps its own audit trail). The transaction then writes
+   exactly one `catalog_refresh_applications` record (safe fields only:
+   bundle/receipt/plan identities, actor assertions, `T`, affected row IDs,
+   counts) and one `catalog_refresh_applied` audit row, and commits.
+
+Any failure anywhere rolls the entire transaction back and surfaces a safe
+`code: detail` error (never a database URL, credential, or provider key).
+The `--admin-id` value, when supplied, is verified to exist in the target
+database inside the transaction; a blank actor or reason is refused at the
+service entry as well as the CLI.
+
+### Idempotency and concurrency
+
+- `unique(bundle_sha256, plan_sha256)` on the application record makes
+  same-bundle retries resolve the committed outcome. Two concurrent applies
+  of the same bundle serialize on the catalog locks: one commits, the other
+  finds the committed record (or loses a unique conflict and re-reads) and
+  reports `already_committed` — never a double apply.
+- `status` performs the same identity lookup without any catalog lock: it
+  never blocks writers and never mutates. Exit 0 reports whether the
+  bundle is committed (with the safe record); exit 30 is a seal
+  authentication failure; exit 65 is a data error.
+
+See the [application record schema](database-schema.md#524-catalog_refresh_applications)
+and the [CLI reference](cli-reference.md#catalog-refresh-collect-review-verify-apply)
+for the full option and exit-code surface.
+
 ## Exit codes
 
 | Command | Code | Meaning |
@@ -1289,14 +1399,25 @@ apply must consume the authenticated snapshot rather than reread paths.
 | `verify` | 65 | data error (missing or unsafe seal key: a key path or parent refused by the no-follow walk, a non-regular file, a mode other than exactly 0600, foreign ownership, or wrong length/content; verify never creates keys. A key stored in a group/other-writable parent is still accepted — verify performs no mutation) |
 | `export-baseline` | 0 | baseline written |
 | `export-baseline` | 65 | data error (never overwrites output — new-only atomic write; never bootstraps empty) |
+| `apply` | 0 | committed — or `already_committed` for a same-bundle retry (the prior record is returned, never overwritten) |
+| `apply` | 10 | `apply_warnings_unacknowledged` — pass each code to `--ack-warnings` |
+| `apply` | 20 | plan not applicable: `apply_state_not_applicable`, `apply_freshness_blocked`, `apply_no_plan`, `apply_plan_unsupported`, or `apply_plan_mismatch` |
+| `apply` | 30 | seal/authentication failure (wrong key, tampered or unreadable run) — no database contact was made |
+| `apply` | 65 | blocked execution or data error: `apply_target_mismatch`, `apply_bootstrap_not_empty`, `apply_stale_baseline`, `apply_unknown_admin`, `apply_duplicate_record`, `apply_close_guard_drift`, `apply_database_error`, missing `--confirm`, or blank `--actor`/`--reason` |
+| `status` | 0 | status reported (committed or not — the fact is printed) |
+| `status` | 30 | seal/authentication failure |
+| `status` | 65 | data error (lookup or configuration failure) |
 
 ## Limits
 
-- Offline only: this slice makes no network calls and performs no Codex
-  research; live source retrieval is unavailable in this version.
-- Apply is unavailable: represented existing-row changes are displayed,
-  their execution plans are blocked, and no refresh or apply entry point
-  exists in this version.
+- `collect` makes bounded live official-source retrieval calls and performs
+  no Codex research; `review`, `verify`, `export-baseline`, `apply`, and
+  `status` make no network calls.
+- Apply is explicit and single-target: one sealed run, one database, one
+  effective instant, one durable record. It is a catalog refresh tool, not
+  a migration or backup tool, and it is never wrapped in the collect
+  watchdog. Supersession preserves history (windows close, rows are added)
+  and never reprices rows in place.
 - The seal is a local integrity tool, not a substitute for GitHub/audit
   authority or protection against a key-holding administrator.
 - The sealed-run filesystem boundary assumes Linux (atomic
@@ -1304,12 +1425,15 @@ apply must consume the authenticated snapshot rather than reread paths.
   peers, not privileged or key-controlling code.
 - Baseline export reads four metadata tables; it is not a database backup
   (see [Backup and restore](backup-restore.md)).
-- Pricing/FX validity-window lookup and normal finalization behavior are
-  unchanged; history protection belongs to the later apply slice.
+- Admission cost estimation uses the coherent single-statement
+  pricing+FX capture described in
+  [Accounting](accounting.md#coherent-admission-capture-pricing-and-fx);
+  apply supersession closes reviewed validity windows at the one effective
+  instant and preserves history.
 
 ## Related documentation
 
-- [CLI reference](cli-reference.md#catalog-refresh-collect-review-verify)
+- [CLI reference](cli-reference.md#catalog-refresh-collect-review-verify-apply)
 - [Provider catalog proposals](provider-catalog-proposals.md)
 - [Pricing catalog and bounded overrun](pricing-catalog.md)
 - [Database schema](database-schema.md)

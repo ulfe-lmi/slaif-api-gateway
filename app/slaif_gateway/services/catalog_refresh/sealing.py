@@ -59,9 +59,20 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from slaif_gateway.schemas.catalog_refresh import ExecutionContext
+from slaif_gateway.schemas.catalog_refresh import (
+    SUPPORTED_RENDERER_VERSIONS,
+    ExecutionContext,
+)
+
+if TYPE_CHECKING:
+    from slaif_gateway.schemas.catalog_refresh import (
+        BaselineDocument,
+        RefreshBundle,
+    )
+    from slaif_gateway.services.catalog_refresh.policy import RefreshPolicy
+    from slaif_gateway.services.catalog_refresh.validation import ValidationReport
 from slaif_gateway.services.catalog_refresh import execution_identity
 from slaif_gateway.services.catalog_refresh import filesystem as fs
 from slaif_gateway.services.catalog_refresh.bundle import (
@@ -135,6 +146,30 @@ class VerifyResult:
         if self.current_generator is not None:
             payload["current_generator"] = dict(sorted(self.current_generator.items()))
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedCapture:
+    """One authenticated run's held capture (182, A1).
+
+    The single authority an apply executes: the SAME captured bytes that
+    passed digest/HMAC/semantic verification, plus the replayed report and
+    the parsed documents those bytes denote. An apply consumes this object
+    only; it never reopens or reparses run files after authentication.
+    """
+
+    result: VerifyResult
+    content: dict[str, bytes]
+    # Parsed canonical receipt of the SAME held capture: apply records
+    # receipt_hmac_sha256 / semantic_bundle_sha256 / manifest_sha256 from
+    # these authenticated fields instead of re-opening receipt.json.
+    receipt: dict[str, Any]
+    bundle: RefreshBundle
+    baseline: BaselineDocument | None
+    policy: RefreshPolicy
+    report: ValidationReport
+    artifacts: dict[str, bytes]
+    execution_context: ExecutionContext
 
 
 def _parse_manifest(raw: bytes) -> list[dict[str, Any]]:
@@ -316,7 +351,34 @@ def verify_run(run_dir: Path, key: bytes) -> VerifyResult:
         os.close(run_fd)
 
 
+def load_verified_capture(run_dir: Path, key: bytes) -> VerifiedCapture:
+    """Authenticate one sealed run and return its held capture.
+
+    The single verified-capture authority for applying a reviewed run
+    (182, A1): the run directory is anchored ONCE, the held descriptor
+    serves every read, and the SAME captured bytes that pass digests,
+    HMAC, canonical-bundle, context, and semantic/report correspondence
+    checks are returned together with the replayed report. A failed
+    authentication raises CatalogRefreshSealError with safe code-only
+    detail; nothing is returned for execution.
+    """
+    run_fd, _chain = fs._open_anchored(Path(run_dir))
+    try:
+        outcome = _verify_and_capture_fd(run_fd, key)
+    finally:
+        os.close(run_fd)
+    if isinstance(outcome, VerifyResult):
+        detail = "; ".join(f"{name}={value}" for name, value in sorted(outcome.checks.items()))
+        raise CatalogRefreshSealError(f"capture authentication failed: {detail}")
+    return outcome
+
+
 def _verify_run_fd(run_fd: int, key: bytes) -> VerifyResult:
+    outcome = _verify_and_capture_fd(run_fd, key)
+    return outcome if isinstance(outcome, VerifyResult) else outcome.result
+
+
+def _verify_and_capture_fd(run_fd: int, key: bytes) -> VerifiedCapture | VerifyResult:
     try:
         receipt_raw = fs.anchored_read_fd(run_fd, RECEIPT_NAME, fs.MAX_AUX_BYTES)
         manifest_raw = fs.anchored_read_fd(run_fd, MANIFEST_NAME, fs.MAX_AUX_BYTES)
@@ -410,6 +472,21 @@ def _verify_run_fd(run_fd: int, key: bytes) -> VerifyResult:
     try:
         execution_context = ExecutionContext.model_validate(validation_document["execution_context"])
     except (ValueError, TypeError):
+        raw_versions = validation_document["execution_context"].get("generator_versions")
+        raw_renderer = (
+            raw_versions.get("renderer_version") if isinstance(raw_versions, dict) else None
+        )
+        if raw_renderer is not None and raw_renderer not in SUPPORTED_RENDERER_VERSIONS:
+            # Explicit, distinguishable refusal: a sealed context of a
+            # renderer version this verifier cannot replay byte-stably
+            # (e.g. pre-182 181.1 runs) is an unsupported replay version,
+            # never silently re-derived or re-sealed. The message is FIXED:
+            # the authenticated value is untrusted input and must not be
+            # echoed into error output (A1 safe-error surface).
+            return VerifyResult(
+                False,
+                {**checks, "context": "unsupported renderer version in sealed context; re-run the review under the current CLI"},
+            )
         return VerifyResult(False, {**checks, "context": "unsupported context shape or version"})
 
     # 3) semantic/renderer correspondence: recompute validation + report
@@ -472,15 +549,25 @@ def _verify_run_fd(run_fd: int, key: bytes) -> VerifyResult:
             return VerifyResult(False, checks, state)
     checks["correspondence"] = "ok"
     current_tool, current_revision = execution_identity.tool_identity()
-    return VerifyResult(
-        True,
-        checks,
-        state,
-        original_generator={
-            "tool": execution_context.generator.tool,
-            "code_revision": execution_context.generator.code_revision,
-        },
-        current_generator={"tool": current_tool, "code_revision": current_revision},
+    return VerifiedCapture(
+        result=VerifyResult(
+            True,
+            checks,
+            state,
+            original_generator={
+                "tool": execution_context.generator.tool,
+                "code_revision": execution_context.generator.code_revision,
+            },
+            current_generator={"tool": current_tool, "code_revision": current_revision},
+        ),
+        receipt=receipt,
+        content=content,
+        bundle=bundle,
+        baseline=baseline,
+        policy=policy,
+        report=report,
+        artifacts=artifacts,
+        execution_context=execution_context,
     )
 
 

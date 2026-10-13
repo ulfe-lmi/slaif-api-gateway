@@ -15,12 +15,21 @@ from slaif_gateway.main import create_app
 from slaif_gateway.providers.errors import MissingProviderApiKeyError, ProviderTimeoutError
 from slaif_gateway.schemas.accounting import FinalizedAccountingResult
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.pricing import ChatCostEstimate, ExternalToolPricing
+from slaif_gateway.schemas.pricing import (
+    ChatCostEstimate,
+    ExternalToolPricing,
+    FxConversionResult,
+    PricingCapture,
+    PricingLookupResult,
+)
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderStreamChunk, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting_errors import ReservationFinalizationError
-from slaif_gateway.services.pricing_errors import PricingRuleNotFoundError
+from slaif_gateway.services.pricing_errors import (
+    InvalidPricingDataError,
+    PricingRuleNotFoundError,
+)
 from slaif_gateway.services.quota_errors import QuotaLimitExceededError
 from slaif_gateway.services.responses_route_capabilities import default_responses_capabilities
 from slaif_gateway.services.routing_errors import ModelNotFoundError
@@ -126,6 +135,37 @@ def _estimate() -> ChatCostEstimate:
         estimated_total_cost_eur=Decimal("0.003"),
         pricing_rule_id=None,
         fx_rate_id=None,
+    )
+
+
+def _capture() -> PricingCapture:
+    return PricingCapture(
+        pricing=PricingLookupResult(
+            provider="openai",
+            model="gpt-5.2",
+            endpoint="/v1/responses",
+            currency="EUR",
+            input_price_per_1m=Decimal("0.05"),
+            cached_input_price_per_1m=None,
+            output_price_per_1m=Decimal("0.15"),
+            reasoning_price_per_1m=None,
+            audio_output_price_per_1m=None,
+            request_price=None,
+            cache_write_input_price_per_1m=None,
+            cache_write_input_multiplier=None,
+            long_context_threshold_tokens=None,
+            long_context_input_multiplier=None,
+            long_context_output_multiplier=None,
+            pricing_rule_id=None,
+            valid_from=datetime.now(UTC),
+            valid_until=None,
+        ),
+        fx=FxConversionResult(
+            from_currency="EUR",
+            to_currency="EUR",
+            rate=Decimal("1"),
+            fx_rate_id=None,
+        ),
     )
 
 
@@ -340,7 +380,16 @@ def _wire_successful_route_pricing_quota(
             expires_at=datetime.now(UTC) + timedelta(minutes=15),
         )
 
+    async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return _capture()
+
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
+    )
     monkeypatch.setattr(
         main_module.PricingService,
         "estimate_chat_completion_cost",
@@ -600,10 +649,11 @@ def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
     )
-    async def _fake_find_active_pricing_rule(self, *, provider, model, endpoint, at=None):
-        _ = (self, provider, model, endpoint, at)
-        pricing_lookup_calls.append(model)
-        return pricing_row
+    async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        pricing_lookup_calls.append(1)
+        fx_lookup_calls.append(1)
+        return SimpleNamespace(pricing=pricing_row, fx=fx_fact)
 
     async def _fake_acquire(self, acquire_input):
         assert acquire_input.route.provider == "openai"
@@ -619,15 +669,9 @@ def test_allowed_web_search_forwards_canonical_body_and_finalizes(monkeypatch) -
 
     monkeypatch.setattr(
         main_module.PricingService,
-        "find_active_pricing_rule",
-        _fake_find_active_pricing_rule,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
-    async def _fake_convert_to_eur(self, amount, native_currency, at=None):
-        _ = (self, native_currency, at)
-        fx_lookup_calls.append(amount)
-        return amount, fx_fact
-
-    monkeypatch.setattr(main_module.PricingService, "convert_to_eur", _fake_convert_to_eur)
     monkeypatch.setattr(main_module.ExternalToolFenceService, "acquire", _fake_acquire)
     _wire_successful_forwarding(monkeypatch)
 
@@ -731,17 +775,20 @@ def test_hosted_pricing_and_max_tool_calls_fail_before_redis_fence_provider(
         assert endpoint == "/v1/responses"
         return _route_result(requested_model, external_tool_policy=route_policy)
 
-    async def _find_active(self, **kwargs):
-        _ = kwargs
+    async def _capture(self, *args, **kwargs):
+        _ = (args, kwargs)
         if case == "missing_pricing":
-            return SimpleNamespace(external_tool_pricing=None)
-        return SimpleNamespace(external_tool_pricing=SimpleNamespace())
+            return SimpleNamespace(
+                pricing=SimpleNamespace(external_tool_pricing=None),
+                fx=object(),
+            )
+        raise InvalidPricingDataError("External-tool pricing metadata is malformed.")
 
     monkeypatch.setattr(main_module, "_reserve_redis_rate_limit", _reserve_redis)
     monkeypatch.setattr(main_module.ExternalToolFenceService, "acquire", _acquire_fence)
     monkeypatch.setattr(main_module, "get_provider_adapter", _build_adapter)
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _resolve_model)
-    monkeypatch.setattr(main_module.PricingService, "find_active_pricing_rule", _find_active)
+    monkeypatch.setattr(main_module.PricingService, "capture_pricing_and_fx", _capture)
 
     body = _responses_request()
     if case == "max_tool_calls_without_web_search":
@@ -2722,11 +2769,17 @@ def test_responses_compact_reserves_and_finalizes_with_endpoint_specific_pricing
         route_calls.append((requested_model, endpoint))
         return _route_result(requested_model, responses_compact=True)
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
-        _ = (self, route, at)
+    async def _fake_estimate_chat_completion_cost(
+        self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None
+    ):
+        _ = (self, route, at, pricing, fx)
         pricing_calls.append(endpoint)
         assert policy.effective_output_tokens == 12000
         return _estimate()
+
+    async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return _capture()
 
     async def _fake_reserve(
         self,
@@ -2814,6 +2867,11 @@ def test_responses_compact_reserves_and_finalizes_with_endpoint_specific_pricing
             )
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
+    )
     monkeypatch.setattr(
         main_module.PricingService,
         "estimate_chat_completion_cost",
@@ -2909,9 +2967,15 @@ def test_responses_compact_missing_usage_releases_reservation_and_fails_safely(m
         _ = (self, authenticated_key, endpoint)
         return _route_result(requested_model, responses_compact=True)
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
-        _ = (self, route, policy, endpoint, at)
+    async def _fake_estimate_chat_completion_cost(
+        self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None
+    ):
+        _ = (self, route, policy, endpoint, at, pricing, fx)
         return _estimate()
+
+    async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return _capture()
 
     async def _fake_reserve(
         self,
@@ -2976,6 +3040,11 @@ def test_responses_compact_missing_usage_releases_reservation_and_fails_safely(m
             )
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
+    )
     monkeypatch.setattr(
         main_module.PricingService,
         "estimate_chat_completion_cost",
@@ -4846,15 +4915,24 @@ def test_pricing_failure_happens_before_quota_reservation(monkeypatch) -> None:
         _ = (self, authenticated_key, endpoint)
         return _route_result(requested_model)
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
-        _ = (self, route, policy, endpoint, at)
+    async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+        _ = (self, args, kwargs)
         raise PricingRuleNotFoundError(param="model")
+
+    async def _fake_estimate_chat_completion_cost(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        raise AssertionError("estimate must not run once the capture failed")
 
     async def _fake_reserve(self, **kwargs):
         _ = self
         quota_calls.append(str(kwargs))
 
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
+    )
     monkeypatch.setattr(
         main_module.PricingService,
         "estimate_chat_completion_cost",

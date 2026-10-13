@@ -1615,3 +1615,84 @@ class ApprovedCatalogEntry(Base):
     __table_args__ = (
         UniqueConstraint("revision_id", "entry_kind", "provider", "name", name="uq_approved_catalog_entry"),
     )
+
+
+class CatalogRefreshApplication(Base):
+    """Durable idempotent outcome of one authenticated catalog-refresh apply.
+
+    One apply transaction writes exactly one row, bound to the canonical
+    reviewed bundle identity and the authenticated receipt/plan identity, so a
+    same-bundle retry or concurrent duplicate observes the committed result
+    instead of applying, charging, or auditing twice. This is the application
+    record for the catalog-refresh workflow only — not a generic event journal
+    and not a catalog versioning system. Safe fields only: no database URL,
+    credentials, provider keys, or raw source bodies are ever stored here.
+    """
+
+    __tablename__ = "catalog_refresh_applications"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    # Canonical reviewed bundle identity (semantic bundle SHA-256 from the
+    # authenticated receipt).
+    bundle_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    # Authenticated receipt HMAC binding the sealed artifact set.
+    receipt_hmac_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    # Canonical typed apply-plan serialization identity.
+    plan_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    # Operator assertion (CLI --actor); never a verified RBAC identity.
+    operator_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    # Actual PostgreSQL current_user observed in the applying transaction.
+    db_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    # Existing admin ID when supplied AND verified to exist.
+    admin_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    # The one effective T chosen for the successful transaction: every
+    # supersession window closes at this instant and every new row opens at it.
+    effective_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    applied_provider_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    applied_route_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    applied_pricing_created_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    applied_pricing_superseded_old_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    applied_pricing_superseded_new_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    applied_fx_created_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    applied_fx_superseded_old_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    applied_fx_superseded_new_ids: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    created_providers: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_routes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_pricing: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    created_fx: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    superseded_pricing: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    superseded_fx: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("mode in ('bootstrap', 'refresh')", name="catalog_refresh_applications_mode_allowed"),
+        CheckConstraint("outcome in ('committed')", name="catalog_refresh_applications_outcome_allowed"),
+        # The uniqueness boundary: the same reviewed bundle + plan may only
+        # ever commit once. A retry observes the committed row instead of
+        # applying a second time.
+        UniqueConstraint(
+            "bundle_sha256", "plan_sha256", name="uq_catalog_refresh_application_identity"
+        ),
+        Index("ix_catalog_refresh_applications_run_id", "run_id"),
+        Index("ix_catalog_refresh_applications_effective_at", "effective_at"),
+    )

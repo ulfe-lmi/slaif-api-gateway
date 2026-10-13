@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 import json
+from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -34,6 +35,13 @@ class FakeSession:
 
     async def commit(self) -> None:
         self.commit_calls += 1
+
+
+async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+    # Cost estimation is faked per test; the coherent capture only needs to
+    # succeed so the faked estimate receives its injection arguments.
+    _ = (self, args, kwargs)
+    return SimpleNamespace(pricing=object(), fx=object())
 
 
 def _auth(
@@ -237,8 +245,10 @@ def _wire_pipeline(
         assert requested_model == expected_requested_model
         return route_result
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
-        _ = (self, route, policy, endpoint, at)
+    async def _fake_estimate_chat_completion_cost(
+        self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None
+    ):
+        _ = (self, route, policy, endpoint, at, pricing, fx)
         return estimate
 
     async def _fake_reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, now=None):
@@ -299,6 +309,11 @@ def _wire_pipeline(
     monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(main_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
+    )
     monkeypatch.setattr(
         main_module.PricingService,
         "estimate_chat_completion_cost",

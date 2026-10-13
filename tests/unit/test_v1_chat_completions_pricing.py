@@ -60,6 +60,42 @@ def _route_result(requested_model: str = "classroom-cheap") -> RouteResolutionRe
     )
 
 
+def _valid_capture():
+    from slaif_gateway.schemas.pricing import (
+        FxConversionResult,
+        PricingCapture,
+        PricingLookupResult,
+    )
+
+    pricing = PricingLookupResult(
+        provider="openai",
+        model="gpt-4.1-mini",
+        endpoint="/v1/chat/completions",
+        currency="USD",
+        input_price_per_1m=Decimal("1"),
+        cached_input_price_per_1m=None,
+        output_price_per_1m=Decimal("2"),
+        reasoning_price_per_1m=None,
+        audio_output_price_per_1m=None,
+        request_price=None,
+        cache_write_input_price_per_1m=None,
+        cache_write_input_multiplier=None,
+        long_context_threshold_tokens=None,
+        long_context_input_multiplier=None,
+        long_context_output_multiplier=None,
+        pricing_rule_id=uuid.uuid4(),
+        valid_from=datetime.now(UTC),
+        valid_until=None,
+    )
+    fx = FxConversionResult(
+        from_currency="USD",
+        to_currency="EUR",
+        rate=Decimal("0.9"),
+        fx_rate_id=uuid.uuid4(),
+    )
+    return PricingCapture(pricing=pricing, fx=fx)
+
+
 def _wire_auth_and_db(monkeypatch, app) -> None:
     from slaif_gateway.api import dependencies as dependencies_module
     import slaif_gateway.services.chat_completion_gateway as main_module
@@ -161,12 +197,23 @@ def test_valid_route_and_pricing_reaches_provider_forwarding(monkeypatch) -> Non
         policy,
         endpoint="chat.completions",
         at=None,
+        pricing=None,
+        fx=None,
     ):
-        _ = (self, policy, at)
+        _ = (self, policy, at, pricing, fx)
         calls.append((route.requested_model, route.resolved_model, endpoint))
         return object()
 
+    async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+        _ = (self, args, kwargs)
+        return _valid_capture()
+
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
+    )
     monkeypatch.setattr(
         main_module.PricingService,
         "estimate_chat_completion_cost",
@@ -207,11 +254,37 @@ def _assert_pricing_error(monkeypatch, pricing_error, expected_status: int, expe
         _ = (self, authenticated_key)
         return _route_result(requested_model)
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
-        _ = (self, route, policy, endpoint, at)
+    async def _fake_estimate_chat_completion_cost(
+        self,
+        *,
+        route,
+        policy,
+        endpoint="chat.completions",
+        at=None,
+        pricing=None,
+        fx=None,
+    ):
+        _ = (self, route, policy, endpoint, at, pricing, fx)
         raise pricing_error
 
+    if isinstance(pricing_error, (PricingRuleNotFoundError, FxRateNotFoundError)):
+        # Lookup-stage failures now surface from the coherent capture.
+
+        async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+            _ = (self, args, kwargs)
+            raise pricing_error
+    else:
+
+        async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+            _ = (self, args, kwargs)
+            return _valid_capture()
+
     monkeypatch.setattr(main_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
+    )
     monkeypatch.setattr(
         main_module.PricingService,
         "estimate_chat_completion_cost",

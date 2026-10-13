@@ -1,11 +1,17 @@
 """Deterministic policy thresholds, freshness semantics, and FX direction.
 
-State model under test (180-b): a genuinely unchanged row is a no-op (READY
-contribution), a real changed row is a blocked mutation (overall BLOCKED,
-because no apply operation exists in this version), and REVIEW findings make
-the state at least READY_WITH_WARNINGS. The exact boundary tests use a
-programmatic mini-baseline whose scope matches the bundle exactly, so the
-overall state isolates the property under test.
+State model under test (182): a genuinely unchanged row is a no-op (READY
+contribution). A real price/FX change against a single valid active baseline
+row is a REPRESENTABLE SUPERSESSION (plan operation; the run no longer blocks
+on it). A new route/pricing row is a create operation. Every new public route
+name is new exposure to allow-all keys and surfaces a REVIEW warning that
+requires acknowledgement at apply time (new_model_exposure, or
+new_route_with_changed_pricing in the mixed create+supersession case), so
+runs containing creates are at least READY_WITH_WARNINGS. Non-representable
+states (route mutations, ambiguous/duplicate/disabled/future baseline rows)
+still BLOCK. The exact boundary tests use a programmatic mini-baseline whose
+scope matches the bundle exactly, so the overall state isolates the property
+under test.
 """
 
 from __future__ import annotations
@@ -81,6 +87,16 @@ def _bundle(**overrides) -> RefreshBundle:
 
 def _codes(report) -> set[str]:
     return {warning.code for warning in report.warnings}
+
+
+def _plan_ops(report) -> list[dict]:
+    """The canonical apply-plan operations (present only when non-empty)."""
+    assert report.apply_plan is not None, "expected a non-empty apply plan"
+    return report.apply_plan["operations"]
+
+
+def _ops_of_type(ops: list[dict], op_type: str) -> list[dict]:
+    return [op for op in ops if op["type"] == op_type]
 
 
 # Per-1m USD values carried by the fixture OpenRouter snapshot (the 1.08
@@ -362,9 +378,12 @@ def test_price_move_exactly_25_percent_is_not_review() -> None:
     changed = [c for c in report.price_comparisons if c.model == "synthetic/updated-v1" and c.dimension == "input"]
     assert Decimal(changed[0].percent_change) == Decimal("0.25")
     assert changed[0].state == "CHANGED"
-    # The changed row itself blocks: updates are not apply operations in
-    # this version (the finding threshold is no longer the state driver).
-    assert report.state == OVERALL_BLOCKED
+    # 182: the changed price is a representable supersession (plan
+    # operation); the finding threshold no longer drives state. The only
+    # review finding is the new-v1 exposure warning.
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert "new_model_exposure" in _codes(report)
+    assert len(_ops_of_type(_plan_ops(report), "supersede_pricing")) == 1
 
 
 def test_price_move_above_25_percent_adds_review_finding() -> None:
@@ -372,7 +391,11 @@ def test_price_move_above_25_percent_adds_review_finding() -> None:
     assert "price_moved_review" in _codes(report)
     changed = [c for c in report.price_comparisons if c.model == "synthetic/updated-v1" and c.dimension == "input"]
     assert changed[0].state == "CHANGED_REVIEW"
-    assert report.state == OVERALL_BLOCKED
+    # 182: the changed price is a representable supersession; the review
+    # finding (threshold exceeded) and the new-v1 exposure warning make the
+    # state READY_WITH_WARNINGS.
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert len(_ops_of_type(_plan_ops(report), "supersede_pricing")) == 1
 
 
 def test_price_zero_transitions_are_review_without_percent_division() -> None:
@@ -394,7 +417,10 @@ def test_price_zero_transitions_are_review_without_percent_division() -> None:
     moved = [c for c in report.price_comparisons if c.model == "synthetic/stable-v1" and c.dimension == "input"]
     assert moved[0].state == "ZERO_TRANSITION"
     assert moved[0].percent_change is None
-    assert report.state == OVERALL_BLOCKED  # the zero crossing is a real change
+    # 182: the zero crossing is a real change but a representable
+    # supersession; the state reflects the review findings only.
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert len(_ops_of_type(_plan_ops(report), "supersede_pricing")) == 1
 
 
 # --- baseline active-row selection (no fallback) ----------------------------
@@ -402,8 +428,10 @@ def test_price_zero_transitions_are_review_without_percent_division() -> None:
 def test_expired_baseline_rows_are_not_fallback() -> None:
     bundle = _bundle()
     # All baseline pricing expired before the run time: no before-values are
-    # invented; the compared dimensions read as NEW against an existing row,
-    # i.e. a real mutation (update) rather than a no-op.
+    # invented; the compared dimensions read as NEW against an existing row.
+    # 182: expired (closed) history is never touched; the proposal prices
+    # the model again as a CREATE operation (no supersession, because there
+    # is no active window to close).
     baseline = _mini_baseline()
     expired = baseline.model_copy(
         update={
@@ -424,7 +452,15 @@ def test_expired_baseline_rows_are_not_fallback() -> None:
     assert all(state == "NEW" for state in states.values())
     assert all(c.old is None for c in report.price_comparisons)
     assert report.counts["unchanged"] == 0
-    assert report.state == OVERALL_BLOCKED  # existing rows would need updates
+    assert report.state == OVERALL_READY_WITH_WARNINGS  # new-v1 exposure warning only
+    ops = _plan_ops(report)
+    creates = _ops_of_type(ops, "create_pricing")
+    # one create for each expired-history model plus the genuine new-v1
+    assert {op["model"] for op in creates} == {
+        "synthetic/stable-v1", "synthetic/updated-v1", "synthetic/new-v1"
+    }
+    assert _ops_of_type(ops, "supersede_pricing") == []
+    assert all(op["new_valid_from"] == "effective_t" for op in creates)
 
 
 def test_future_baseline_rows_are_not_active() -> None:
@@ -484,6 +520,118 @@ def test_ambiguous_overlapping_active_baseline_rows_block() -> None:
     assert report.state == OVERALL_BLOCKED
 
 
+def test_identical_duplicate_active_rows_block_supersession() -> None:
+    """182 (A3): two overlapping ACTIVE baseline rows with IDENTICAL values
+    are not ambiguous for the comparison (the before-value is
+    well-defined), but a supersession must not silently choose/close one of
+    them: the required operation BLOCKS, and no supersession operation is
+    built (the unchanged no-op behavior for identical values is preserved)."""
+    bundle = _bundle()  # updated-v1 proposes input 1.2
+    baseline = _mini_baseline(
+        pricing={
+            "synthetic/stable-v1": {"input": "0.5", "output": "2"},
+            "synthetic/updated-v1": {"input": "1", "output": "4"},
+        }
+    )
+    orig = next(row for row in baseline.pricing if row.upstream_model == "synthetic/updated-v1")
+    extra = orig.model_copy(update={"id": "33333333-0000-4000-8000-999999999999"})
+    dup = baseline.model_copy(
+        update={
+            "pricing": baseline.pricing + (extra,),
+            "counts": BaselineCounts(providers=1, routes=2, pricing_rules=3, fx_rates=0),
+        }
+    )
+    digest = hashlib.sha256(
+        canonical_baseline_content(dup.model_copy(update={"content_sha256": "0" * 64}))
+    ).hexdigest()
+    dup = dup.model_copy(update={"content_sha256": digest})
+    report = validate_bundle(bundle, dup, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
+    assert "baseline_duplicate_active_rows" in _codes(report)
+    assert "baseline_ambiguous_rows" not in _codes(report)  # identical values: not an ambiguity
+    assert report.state == OVERALL_BLOCKED
+    # the comparison still reads a real before-value (no fallback invented)
+    changed = [c for c in report.price_comparisons if c.model == "synthetic/updated-v1" and c.dimension == "input"]
+    assert changed[0].old == "1"
+    assert changed[0].state == "CHANGED"
+    # but NO supersession operation may be built for the multiply-active row
+    ops = report.apply_plan["operations"] if report.apply_plan else []
+    assert _ops_of_type(ops, "supersede_pricing") == []
+
+
+def test_mixed_new_route_and_changed_price_yields_both_operations() -> None:
+    """182 (A2, mixed plan): a NEW public alias for an existing upstream
+    whose price also changes yields BOTH a create_route and a
+    supersede_pricing operation (independent surface derivation — the
+    alias's route create is not suppressed by the price change), surfaces
+    the mixed-exposure warning, and requires acknowledgement. The shared
+    upstream row is superseded exactly ONCE (deduplicated across the two
+    selected names)."""
+    payload = _bundle_payload()
+    payload["run_id"] = "test-mixed-plan-001"
+    payload["selection"]["model_include"].append("synthetic/alias-v1")
+    # shared upstream price change: 0.5 -> 0.6 (below the 25% review
+    # threshold, so no price finding fires)
+    for item in payload["pricing"]:
+        if item["model"] == "synthetic/stable-v1":
+            for dimension in item["dimensions"]:
+                if dimension["name"] == "input":
+                    dimension["value"] = "0.6"
+    # the new public alias route (provenance: a dedicated source record)
+    route_provenance = copy.deepcopy(payload["routes"][0]["provenance"])
+    route_provenance["sources"] = ["openrouter|synthetic/alias-v1|openrouter_models_api"]
+    payload["routes"].append(
+        {
+            "provider": "openrouter",
+            "requested_model": "synthetic/alias-v1",
+            "upstream_model": "synthetic/stable-v1",
+            "match_type": "exact",
+            "endpoint": "/v1/chat/completions",
+            "priority": 100,
+            "enabled": True,
+            "visible_in_models": True,
+            "supports_streaming": True,
+            "capabilities": {},
+            "provenance": route_provenance,
+            "warnings": [],
+        }
+    )
+    alias_source = copy.deepcopy(payload["sources"][0])
+    alias_source["model"] = "synthetic/alias-v1"
+    payload["sources"].append(alias_source)
+    # the evidence must carry the proposed price: re-emit the shared
+    # OpenRouter snapshot with the changed stable-v1 input
+    _evidence_tests.set_openrouter_evidence(
+        payload, {**_evidence_tests.DEFAULT_PRICES, "synthetic/stable-v1": ("0.6", "2")}
+    )
+    bundle = load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    baseline = _mini_baseline()
+    report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    codes = _codes(report)
+    assert "new_route_with_changed_pricing" in codes  # the mixed case
+    assert "price_moved_review" not in codes
+    ops = _plan_ops(report)
+    creates = _ops_of_type(ops, "create_route")
+    # both the alias and the genuine new-v1 route are created
+    assert sorted(op["requested_model"] for op in creates) == [
+        "synthetic/alias-v1", "synthetic/new-v1"
+    ]
+    alias_ops = [op for op in creates if op["requested_model"] == "synthetic/alias-v1"]
+    assert alias_ops[0]["upstream_model"] == "synthetic/stable-v1"
+    supersessions = _ops_of_type(ops, "supersede_pricing")
+    assert len(supersessions) == 1  # deduplicated across alias-v1 + stable-v1
+    assert supersessions[0]["model"] == "synthetic/stable-v1"
+    assert supersessions[0]["old"]["dimensions"]["input"] == "0.5"
+    assert supersessions[0]["new"]["dimensions"]["input"] == "0.6"
+    assert supersessions[0]["new"]["new_valid_from"] == "effective_t"
+    # the executable TSV artifact keeps both new route rows
+    route_tsv = None
+    report2, artifacts = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
+    route_tsv = artifacts["routes-proposal.tsv"].decode("utf-8")
+    assert "synthetic/alias-v1" in route_tsv
+    assert "synthetic/new-v1" in route_tsv
+
+
 # --- source age boundaries (isolated state) ---------------------------------
 
 def _source_age_report(hours: float):
@@ -499,9 +647,12 @@ def _source_age_report(hours: float):
 def test_source_age_boundaries_are_exact() -> None:
     # 180-f (F4): <= 24h fresh (inclusive), > 24h through 72h review,
     # > 72h blocked.
-    assert _source_age_report(23).state == OVERALL_READY
+    # 182: the new-v1 exposure warning makes even a fresh, no-change refresh
+    # READY_WITH_WARNINGS; the boundary codes below are the property under
+    # test.
+    assert _source_age_report(23).state == OVERALL_READY_WITH_WARNINGS
     assert "source_stale_review" not in _codes(_source_age_report(24))  # age == 24h -> fresh
-    assert _source_age_report(24).state == OVERALL_READY
+    assert _source_age_report(24).state == OVERALL_READY_WITH_WARNINGS
     assert "source_stale_review" in _codes(_source_age_report(24 + 1 / 60))
     assert "source_stale_blocked" not in _codes(_source_age_report(72))  # age == 72h -> review
     assert "source_stale_blocked" in _codes(_source_age_report(72 + 1 / 60))
@@ -607,9 +758,10 @@ def test_fx_move_exactly_3_percent_is_not_review() -> None:
     assert "fx_moved_review" not in _codes(report)
     comparison = next(c for c in report.fx_comparisons if c["pair"] == "USD→EUR")
     assert comparison["state"] == "CHANGED"
-    # The moved existing rate is a real update: no apply operation exists in
-    # this version, so the run blocks even without the review finding.
-    assert report.state == OVERALL_BLOCKED
+    # 182: the moved existing rate is a representable FX supersession (plan
+    # operation); with no review findings the run is READY.
+    assert report.state == OVERALL_READY
+    assert len(_ops_of_type(_plan_ops(report), "supersede_fx")) == 1
 
 
 def test_fx_move_above_3_percent_is_review() -> None:
@@ -617,7 +769,10 @@ def test_fx_move_above_3_percent_is_review() -> None:
     assert "fx_moved_review" in _codes(report)
     comparison = next(c for c in report.fx_comparisons if c["pair"] == "USD→EUR")
     assert comparison["state"] == "CHANGED_REVIEW"
-    assert report.state == OVERALL_BLOCKED
+    # 182: representable FX supersession; the review finding (threshold)
+    # plus the exposure warning drive the state.
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert len(_ops_of_type(_plan_ops(report), "supersede_fx")) == 1
 
 
 def test_fx_equivalent_spellings_do_not_contradict() -> None:
@@ -859,14 +1014,20 @@ def test_missing_required_pair_blocks_when_non_eur_pricing_selected() -> None:
 def test_true_no_change_refresh_is_ready() -> None:
     bundle = _bundle()
     report = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
-    assert report.state == OVERALL_READY
+    # 182: the unchanged rows are no-ops, but the new-v1 create is new
+    # exposure -> READY_WITH_WARNINGS (exposure warning requires ACK).
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert "new_model_exposure" in _codes(report)
     assert report.counts["unchanged"] == 2
     assert report.counts["new"] == 1
     assert report.counts["changed"] == 0
     assert report.counts["ready"] == 3
 
 
-def test_changed_row_alone_blocks_the_run() -> None:
+def test_changed_price_row_yields_supersession_plan() -> None:
+    """182: a changed price against a single valid active baseline row is a
+    representable supersession (plan operation); the run no longer blocks on
+    the change itself (only the new-v1 exposure warning fires)."""
     bundle = _bundle()  # updated-v1 proposes input 1.2
     baseline = _mini_baseline(
         pricing={
@@ -876,7 +1037,14 @@ def test_changed_row_alone_blocks_the_run() -> None:
     )
     report = validate_bundle(bundle, baseline, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))[0]
     assert report.counts["changed"] == 1
-    assert report.state == OVERALL_BLOCKED
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    ops = _plan_ops(report)
+    supersessions = _ops_of_type(ops, "supersede_pricing")
+    assert len(supersessions) == 1
+    assert supersessions[0]["model"] == "synthetic/updated-v1"
+    assert supersessions[0]["old"]["dimensions"]["input"] == "1.1"
+    assert supersessions[0]["new"]["dimensions"]["input"] == "1.2"
+    assert supersessions[0]["new"]["new_valid_from"] == "effective_t"
     pricing_gate = next(g for g in report.import_gates if g.kind == "pricing")
     assert pricing_gate.excluded_mutations == 1
 
@@ -942,7 +1110,9 @@ def test_public_alias_pairs_by_upstream_model() -> None:
     report, artifacts = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
     codes = _codes(report)
     assert not ({"missing_pricing", "missing_route", "route_upstream_contradiction"} & codes)
-    assert report.state == OVERALL_READY
+    # 182: the new alias route is new exposure -> READY_WITH_WARNINGS
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    assert "new_model_exposure" in codes
     assert report.counts["new"] == 1
     assert report.counts["changed"] == 0
     route_tsv = artifacts["routes-proposal.tsv"].decode("utf-8")

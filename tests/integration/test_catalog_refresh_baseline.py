@@ -1423,7 +1423,9 @@ def test_f2_generated_routes_survive_create_export_refresh(
     migrated_postgres_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """180-f (F2): the complete local round trip in a fresh task-owned
-    database. Generate the valid first-install fixture (READY), dry-run and
+    database. Generate the valid first-install fixture (READY_WITH_WARNINGS
+    under 182 A2: the created bootstrap route is new public exposure
+    requiring acknowledgement), dry-run and
     explicitly confirm the deterministic route/pricing imports with an audit
     reason, assert the ACTUAL persisted capabilities (the conservative
     create contract - no permission widening), export the real rows, and
@@ -1439,14 +1441,24 @@ def test_f2_generated_routes_survive_create_export_refresh(
     seal_key = tmp_path / "seal.key"
     run_root = tmp_path / "runs"
 
-    # 1) first-install review of the committed fixture: READY.
+    # 1) first-install review of the committed fixture. Under 182 (A2)
+    # every bootstrap route create is new public exposure: the state is
+    # READY_WITH_WARNINGS (exit 10) carrying the REVIEW
+    # new_model_exposure warning; it must not be BLOCKED and the
+    # executable artifacts are still published.
     result = runner.invoke(
         app,
         ["catalog-refresh", "review", str(bundle_path), "--first-install",
          "--run-root", str(run_root), "--seal-key", str(seal_key)],
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 10, result.output
     run_dir = run_root / "fixture-first-install-001"
+    first_validation = json.loads(
+        (run_dir / "validation.json").read_text(encoding="utf-8")
+    )
+    first_codes = {w["code"] for w in first_validation["warnings"]}
+    assert "new_model_exposure" in first_codes
+    assert not any(w["severity"] == "BLOCKER" for w in first_validation["warnings"])
     routes_tsv = run_dir / "routes-proposal.tsv"
     pricing_tsv = run_dir / "pricing-proposal.tsv"
     with routes_tsv.open(encoding="utf-8") as fh:

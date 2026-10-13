@@ -2,17 +2,18 @@
 
 Scope in this version: collect (bounded live official-source collection
 followed by review of the collected bundle), review (offline review of a
-supplied bundle), verify, and read-only export-baseline. Live collection is
-limited to the registered official catalog, pricing, and FX endpoints over
-HTTPS with bounded retries, redirects, and byte budgets; there is no refresh
-or apply command in this version, and supersession/apply must never be
-claimed to work.
+supplied bundle), verify, read-only export-baseline, and the explicit
+atomic apply of a reviewed sealed run (plus read-only apply status). Live
+collection is limited to the registered official catalog, pricing, and FX
+endpoints over HTTPS with bounded retries, redirects, and byte budgets; the
+Codex researcher remains not implemented in this version.
 
 Exit codes:
 - 0  review state READY
 - 10 review state READY_WITH_WARNINGS
 - 20 review state BLOCKED (safe blocked run published when possible)
 - 30 verify: run directory failed verification
+- 30 apply: seal/authentication failure (wrong key, tampered, unsupported)
 - 65 data error: unreadable/unparseable input, bad baseline file, missing
    database configuration, seal key problem, or output conflict
 - 2  usage error (typer standard, e.g. contradictory options)
@@ -23,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -34,6 +36,10 @@ from slaif_gateway.schemas.catalog_refresh import BaselineDocument, RefreshBundl
 from slaif_gateway.services.catalog_refresh import collection as catalog_collection
 from slaif_gateway.services.catalog_refresh import sources as catalog_sources
 from slaif_gateway.services.catalog_refresh.sources import SourceFetchError
+from slaif_gateway.services.catalog_refresh.apply import (
+    apply_reviewed_run,
+    apply_status,
+)
 from slaif_gateway.services.catalog_refresh.baseline import (
     MAX_BASELINE_BYTES,
     export_baseline,
@@ -84,7 +90,7 @@ from slaif_gateway.services.catalog_refresh.validation import (
     validation_json_bytes,
 )
 
-app = typer.Typer(help="Bounded catalog refresh: collect, review, verify, export-baseline (apply and the Codex researcher are not implemented in this version)")
+app = typer.Typer(help="Bounded catalog refresh: collect, review, verify, export-baseline, apply, status (the Codex researcher is not implemented in this version)")
 
 EXIT_READY = 0
 EXIT_READY_WITH_WARNINGS = 10
@@ -94,26 +100,26 @@ EXIT_DATA_ERROR = 65
 
 STAGE_LINE = (
     "offline review: this invocation reviewed supplied bytes and performed no "
-    "live retrieval; export/verify available; apply and the Codex researcher are "
-    "not implemented in this version"
+    "live retrieval; export/verify available; apply is a separate explicit "
+    "command; the Codex researcher is not implemented in this version"
 )
 STAGE_LINE_COLLECT = (
     "live collection: bounded official-source retrieval performed by this command, "
-    "then review of the collected bundle; apply and the Codex researcher are not "
-    "implemented in this version"
+    "then review of the collected bundle; apply is a separate explicit command; "
+    "the Codex researcher is not implemented in this version"
 )
 # 181-i (I1): failed collects must be labeled by the path actually REACHED.
 # A label can never claim a retrieval that was not performed.
 STAGE_LINE_COLLECT_NOT_STARTED = (
     "collection not started: baseline resolution failed before any retrieval; "
-    "no live collection was performed by this command; apply and the Codex "
-    "researcher are not implemented in this version"
+    "no live collection was performed by this command; apply is a separate "
+    "explicit command; the Codex researcher is not implemented in this version"
 )
 STAGE_LINE_COLLECT_INCOMPLETE = (
     "collection attempted and failed before completion: bounded official-source "
     "retrieval was attempted, but no complete collection was produced and no "
-    "sealed collected review exists; apply and the Codex researcher are not "
-    "implemented in this version"
+    "sealed collected review exists; apply is a separate explicit command; the "
+    "Codex researcher is not implemented in this version"
 )
 
 DEFAULT_SEAL_KEY = Path("~/.local/state/slaif/catalog-refresh/seal.key")
@@ -1208,3 +1214,236 @@ def export_baseline_command(
         else:
             typer.echo(f"{key}: {value}")
     raise typer.Exit(EXIT_READY)
+
+
+@app.command("apply")
+def apply_run(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", help="Sealed run directory whose reviewed plan will be applied."),
+    ],
+    db_url: Annotated[
+        str,
+        typer.Option(
+            "--db-url",
+            help="PostgreSQL URL of the target database (explicit operator configuration; never defaulted).",
+        ),
+    ],
+    seal_key: Annotated[
+        Path,
+        typer.Option(
+            "--seal-key",
+            help="Runner-owned seal key file. Must be outside the run directory.",
+        ),
+    ] = DEFAULT_SEAL_KEY,
+    confirm: Annotated[
+        bool,
+        typer.Option("--confirm", help="Explicit operator confirmation that this run is to be applied."),
+    ] = False,
+    reason: Annotated[
+        str,
+        typer.Option("--reason", help="Operator reason recorded with the durable application record."),
+    ] = "",
+    actor: Annotated[
+        str,
+        typer.Option(
+            "--actor",
+            help="Operator assertion of who is applying (recorded as supplied; not a verified RBAC identity).",
+        ),
+    ] = "",
+    admin_id: Annotated[
+        str | None,
+        typer.Option(
+            "--admin-id",
+            help="Existing admin user ID recorded as the acting admin (verified to exist in the target database).",
+        ),
+    ] = None,
+    ack_warnings: Annotated[
+        str | None,
+        typer.Option(
+            "--ack-warnings",
+            help="Comma-separated review finding codes acknowledged at apply time.",
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a compact JSON summary instead of text."),
+    ] = False,
+) -> None:
+    """Apply the reviewed plan of one sealed run atomically to PostgreSQL.
+
+    Exit codes: 0 committed (or already committed), 10 unacknowledged
+    apply-time findings, 20 plan not applicable (blocked, absent, or
+    mismatched), 30 seal/authentication failure, 65 data error (target
+    mismatch, stale baseline, non-empty bootstrap, unknown admin,
+    close-guard drift, database failure).
+    """
+    try:
+        admin_uuid: uuid.UUID | None = None
+        if admin_id is not None:
+            try:
+                admin_uuid = uuid.UUID(admin_id)
+            except ValueError:
+                raise CliError("--admin-id must be a UUID") from None
+        if not confirm:
+            raise CliError("apply requires explicit --confirm")
+        if not reason.strip():
+            raise CliError("apply requires a non-empty --reason")
+        if not actor.strip():
+            raise CliError("apply requires a non-empty --actor")
+
+        run_dir_path = Path(run_dir).expanduser().absolute()
+        seal_key_path = Path(seal_key).expanduser().absolute()
+        run_dir_handle = _open_optional_anchored_handle(run_dir_path)
+        key_handle = _open_optional_anchored_handle(seal_key_path.parent)
+        try:
+            _check_key_containment(run_dir_path, seal_key_path, run_dir_handle, key_handle)
+            key = _read_existing_seal_key(seal_key_path)
+            try:
+                result = run_async(
+                    apply_reviewed_run(
+                        run_dir=run_dir_path,
+                        seal_key=key,
+                        database_url=db_url,
+                        reason=reason.strip(),
+                        actor=actor.strip(),
+                        admin_id=admin_uuid,
+                        ack_warnings=tuple(
+                            code.strip() for code in (ack_warnings or "").split(",") if code.strip()
+                        ),
+                    )
+                )
+            except CatalogRefreshSealError as exc:
+                typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+                raise typer.Exit(EXIT_VERIFY_INVALID) from exc
+            except CatalogRefreshBlockedError as exc:
+                typer.secho(f"Error: {exc.code}: {exc.detail}", fg=typer.colors.RED, err=True)
+                if exc.code == "apply_warnings_unacknowledged":
+                    raise typer.Exit(EXIT_READY_WITH_WARNINGS) from exc
+                if exc.code in (
+                    "apply_state_not_applicable",
+                    "apply_freshness_blocked",
+                    "apply_no_plan",
+                    "apply_plan_unsupported",
+                    "apply_plan_mismatch",
+                ):
+                    raise typer.Exit(EXIT_BLOCKED) from exc
+                raise typer.Exit(EXIT_DATA_ERROR) from exc
+        finally:
+            if run_dir_handle is not None:
+                run_dir_handle.close()
+            if key_handle is not None:
+                key_handle.close()
+
+        summary: dict[str, Any] = {
+            "status": result.status,
+            "run_id": result.run_id,
+            "bundle_sha256": result.bundle_sha256,
+            "plan_sha256": result.plan_sha256,
+            "effective_at": result.effective_at,
+            "counts": dict(sorted(result.counts.items())),
+        }
+        if result.record is not None:
+            summary["record"] = dict(sorted(result.record.items()))
+        if json_output:
+            emit_json(summary)
+            raise typer.Exit(EXIT_READY)
+        for key, value in summary.items():
+            if key == "counts":
+                typer.echo("counts: " + " ".join(f"{k}={v}" for k, v in value.items()))
+            elif key == "record":
+                typer.echo("record: " + json.dumps(value, sort_keys=True))
+            else:
+                typer.echo(f"{key}: {value}")
+        raise typer.Exit(EXIT_READY)
+    except typer.Exit:
+        raise
+    except CliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR) from exc
+    except CatalogRefreshSealError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR) from exc
+
+
+@app.command("status")
+def apply_status_command(
+    run_dir: Annotated[
+        Path,
+        typer.Option("--run-dir", help="Sealed run directory to look up."),
+    ],
+    db_url: Annotated[
+        str,
+        typer.Option(
+            "--db-url",
+            help="PostgreSQL URL to query (read-only; never mutates, never takes catalog locks).",
+        ),
+    ],
+    seal_key: Annotated[
+        Path,
+        typer.Option(
+            "--seal-key",
+            help="Runner-owned seal key file. Must be outside the run directory.",
+        ),
+    ] = DEFAULT_SEAL_KEY,
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit a compact JSON summary instead of text."),
+    ] = False,
+) -> None:
+    """Read-only visibility of the committed apply outcome for one sealed run.
+
+    Exit codes: 0 (committed or not yet committed — the fact is reported),
+    30 seal/authentication failure, 65 data error.
+    """
+    try:
+        run_dir_path = Path(run_dir).expanduser().absolute()
+        seal_key_path = Path(seal_key).expanduser().absolute()
+        run_dir_handle = _open_optional_anchored_handle(run_dir_path)
+        key_handle = _open_optional_anchored_handle(seal_key_path.parent)
+        try:
+            _check_key_containment(run_dir_path, seal_key_path, run_dir_handle, key_handle)
+            key = _read_existing_seal_key(seal_key_path)
+            try:
+                status = run_async(
+                    apply_status(
+                        run_dir=run_dir_path,
+                        seal_key=key,
+                        database_url=db_url,
+                    )
+                )
+            except CatalogRefreshSealError as exc:
+                typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+                raise typer.Exit(EXIT_VERIFY_INVALID) from exc
+        finally:
+            if run_dir_handle is not None:
+                run_dir_handle.close()
+            if key_handle is not None:
+                key_handle.close()
+
+        summary: dict[str, Any] = {
+            "run_id": status.run_id,
+            "bundle_sha256": status.bundle_sha256,
+            "committed": status.committed,
+            "records": list(status.records),
+        }
+        if json_output:
+            emit_json(summary)
+            raise typer.Exit(EXIT_READY)
+        typer.echo(f"run_id: {status.run_id}")
+        typer.echo(f"bundle_sha256: {status.bundle_sha256}")
+        typer.echo(f"committed: {str(status.committed).lower()}")
+        for record in status.records:
+            typer.echo("record: " + json.dumps(record, sort_keys=True))
+        raise typer.Exit(EXIT_READY)
+    except typer.Exit:
+        raise
+    except CliError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR) from exc
+    except CatalogRefreshSealError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR) from exc
+    except CatalogRefreshBlockedError as exc:
+        typer.secho(f"Error: {exc.code}: {exc.detail}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(EXIT_DATA_ERROR) from exc

@@ -435,89 +435,73 @@ def _target_parts_from_url(database_url: str) -> tuple[str, int, str, str]:
     return host, port, database, engine_url
 
 
-async def export_baseline(
-    database_url: str, *, now: datetime, page_size: int = 500
-) -> BaselineDocument:
-    """Read-only consistent export in one REPEATABLE READ transaction.
+async def project_catalog_rows(
+    connection: Any, *, page_size: int = 500
+) -> tuple[
+    tuple[BaselineProviderRow, ...],
+    tuple[BaselineRouteRow, ...],
+    tuple[BaselinePricingRow, ...],
+    tuple[BaselineFxRow, ...],
+]:
+    """Project the four catalog tables into baseline row documents.
 
-    Raises CatalogRefreshBlockedError on connection failure or consistency
-    mismatch — a connection failure must never become an empty bootstrap.
+    Shared by the read-only export (called inside its REPEATABLE READ
+    transaction) and the apply transaction (called on the locked writer
+    connection after the fixed-order catalog table locks): the SAME
+    selected-row projection and canonical row construction feeds both, so a
+    locked writer view compared against the captured baseline uses exactly
+    the export's semantics.
     """
-    if page_size <= 0 or page_size > 5000:
-        raise CatalogRefreshBlockedError("baseline_page_invalid", "page_size must be in 1..5000")
-    server_host, server_port, database, engine_url = _target_parts_from_url(database_url)
-    engine: AsyncEngine = create_async_engine(
-        engine_url, isolation_level="REPEATABLE READ", pool_pre_ping=True
+    counts = {
+        name: (
+            await connection.execute(text(f"SELECT COUNT(*) FROM {name}"))
+        ).scalar_one()
+        for name in ("provider_configs", "model_routes", "pricing_rules", "fx_rates")
+    }
+    providers = await _page_rows(
+        connection,
+        "provider_configs",
+        "id",
+        (
+            "id, provider, display_name, kind, base_url, api_key_env_var, "
+            "enabled, timeout_seconds, max_retries, created_at, updated_at"
+        ),
+        counts["provider_configs"],
+        page_size,
     )
-    try:
-        async with engine.connect() as connection:
-            async with connection.begin():
-                await connection.execute(text("SET TRANSACTION READ ONLY"))
-                server_version = _normalize_pg_version(
-                    str(
-                        (
-                            await connection.execute(text("SHOW server_version"))
-                        ).scalar_one()
-                    )
-                )
-                counts = {
-                    name: (
-                        await connection.execute(text(f"SELECT COUNT(*) FROM {name}"))
-                    ).scalar_one()
-                    for name in ("provider_configs", "model_routes", "pricing_rules", "fx_rates")
-                }
-                providers = await _page_rows(
-                    connection,
-                    "provider_configs",
-                    "id",
-                    (
-                        "id, provider, display_name, kind, base_url, api_key_env_var, "
-                        "enabled, timeout_seconds, max_retries, created_at, updated_at"
-                    ),
-                    counts["provider_configs"],
-                    page_size,
-                )
-                routes = await _page_rows(
-                    connection,
-                    "model_routes",
-                    "id",
-                    (
-                        "id, requested_model, match_type, endpoint, provider, upstream_model, "
-                        "priority, enabled, visible_in_models, supports_streaming, capabilities, "
-                        "created_at, updated_at"
-                    ),
-                    counts["model_routes"],
-                    page_size,
-                )
-                pricing = await _page_rows(
-                    connection,
-                    "pricing_rules",
-                    "id",
-                    (
-                        "id, provider, upstream_model, endpoint, currency, input_price_per_1m, "
-                        "cached_input_price_per_1m, output_price_per_1m, reasoning_price_per_1m, "
-                        "request_price, pricing_metadata, valid_from, valid_until, enabled, "
-                        "source_url, created_at, updated_at"
-                    ),
-                    counts["pricing_rules"],
-                    page_size,
-                )
-                fx = await _page_rows(
-                    connection,
-                    "fx_rates",
-                    "id",
-                    "id, base_currency, quote_currency, rate, valid_from, valid_until, source, created_at",
-                    counts["fx_rates"],
-                    page_size,
-                )
-    except CatalogRefreshBlockedError:
-        raise
-    except Exception as exc:  # noqa: BLE001 - connection/schema failures must stay safe
-        raise CatalogRefreshBlockedError(
-            "baseline_export_failed", f"read-only export failed: {type(exc).__name__}"
-        ) from exc
-    finally:
-        await engine.dispose()
+    routes = await _page_rows(
+        connection,
+        "model_routes",
+        "id",
+        (
+            "id, requested_model, match_type, endpoint, provider, upstream_model, "
+            "priority, enabled, visible_in_models, supports_streaming, capabilities, "
+            "created_at, updated_at"
+        ),
+        counts["model_routes"],
+        page_size,
+    )
+    pricing = await _page_rows(
+        connection,
+        "pricing_rules",
+        "id",
+        (
+            "id, provider, upstream_model, endpoint, currency, input_price_per_1m, "
+            "cached_input_price_per_1m, output_price_per_1m, reasoning_price_per_1m, "
+            "request_price, pricing_metadata, valid_from, valid_until, enabled, "
+            "source_url, created_at, updated_at"
+        ),
+        counts["pricing_rules"],
+        page_size,
+    )
+    fx = await _page_rows(
+        connection,
+        "fx_rates",
+        "id",
+        "id, base_currency, quote_currency, rate, valid_from, valid_until, source, created_at",
+        counts["fx_rates"],
+        page_size,
+    )
 
     provider_rows = tuple(
         BaselineProviderRow(
@@ -598,6 +582,50 @@ async def export_baseline(
         )
         for row in fx
     )
+
+    return provider_rows, route_rows, pricing_rows, fx_rows
+
+
+async def export_baseline(
+    database_url: str, *, now: datetime, page_size: int = 500
+) -> BaselineDocument:
+    """Read-only consistent export in one REPEATABLE READ transaction.
+
+    Raises CatalogRefreshBlockedError on connection failure or consistency
+    mismatch — a connection failure must never become an empty bootstrap.
+    """
+    if page_size <= 0 or page_size > 5000:
+        raise CatalogRefreshBlockedError("baseline_page_invalid", "page_size must be in 1..5000")
+    server_host, server_port, database, engine_url = _target_parts_from_url(database_url)
+    engine: AsyncEngine = create_async_engine(
+        engine_url, isolation_level="REPEATABLE READ", pool_pre_ping=True
+    )
+    try:
+        async with engine.connect() as connection:
+            async with connection.begin():
+                await connection.execute(text("SET TRANSACTION READ ONLY"))
+                server_version = _normalize_pg_version(
+                    str(
+                        (
+                            await connection.execute(text("SHOW server_version"))
+                        ).scalar_one()
+                    )
+                )
+                (
+                    provider_rows,
+                    route_rows,
+                    pricing_rows,
+                    fx_rows,
+                ) = await project_catalog_rows(connection, page_size=page_size)
+    except CatalogRefreshBlockedError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - connection/schema failures must stay safe
+        raise CatalogRefreshBlockedError(
+            "baseline_export_failed", f"read-only export failed: {type(exc).__name__}"
+        ) from exc
+    finally:
+        await engine.dispose()
+
     baseline = BaselineDocument(
         schema_version="1",
         exported_at=now.astimezone(UTC),

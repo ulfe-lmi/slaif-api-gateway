@@ -364,3 +364,40 @@ Streaming, Responses, facial-specific behavior, content persistence, and
 dynamic module/plugin loading are not enabled by this foundation. Module
 credentials remain server-side and are resolved only from the configured
 environment-variable name.
+
+## Coherent Admission Capture (pricing and FX)
+
+Admission cost estimation for Chat Completions, standalone Audio,
+Embeddings, Realtime client-secret admission, and Responses (including the
+pre-fence hosted-tool pricing validation) reads the active pricing row and
+the native-to-EUR FX row **in one statement**
+(`PricingRulesRepository.find_active_pricing_rule_with_fx`, consumed through
+`PricingService.capture_pricing_and_fx`):
+
+- the price side selects exactly the same active enabled row as the
+  historical two-step lookup (same validity window, most recent
+  `valid_from` first);
+- the FX side selects the same rate row as `find_latest_rate` for
+  `(base_currency=<price currency>, quote_currency='EUR')` (same window,
+  most recent `valid_from` first, `created_at` tie-break);
+- EUR-priced rows capture the read-free identity conversion (no FX read);
+- fail-closed: a missing pricing rule raises `PricingRuleNotFoundError` and
+  a missing non-EUR rate raises `FxRateNotFoundError`, exactly as before.
+
+Why one statement: under READ COMMITTED, the historical two reads (price,
+then FX) could straddle a concurrent price+FX supersession and mix an old
+price with a new rate (or the reverse), producing a one-off cost estimate
+that matches neither complete catalog state. One statement takes one
+snapshot, so a concurrent atomic supersession is observed only as the
+complete old pair or the complete new pair — never mixed. The captured pair
+(`PricingCapture`) is injected into the estimates; the estimates perform no
+additional pricing/FX reads when a capture is supplied, and the pre-fence
+Responses hosted-tool validation no longer performs a second FX read.
+
+This changes no reservation, finalization, reconciliation, or ledger
+semantics: the estimate still reserves the same worst-case cost, provider
+usage still wins at finalization, and `convert_to_eur` remains available for
+callers that do not capture (including the legacy internal path). See
+[Pricing catalog and bounded
+overrun](pricing-catalog.md#coherent-admission-capture-and-supersession) for
+the supersession side of the same guarantee.

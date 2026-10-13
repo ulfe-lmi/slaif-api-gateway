@@ -720,10 +720,17 @@ async def _reserve_chat_completion_quota(
             fx_rates_repository=FxRatesRepository(session),
         )
         try:
+            capture = await pricing_service.capture_pricing_and_fx(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint="chat.completions",
+            )
             cost_estimate = await pricing_service.estimate_chat_completion_cost(
                 route=route,
                 policy=policy_result,
                 endpoint="chat.completions",
+                pricing=capture.pricing,
+                fx=capture.fx,
             )
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc

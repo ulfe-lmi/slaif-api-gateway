@@ -194,11 +194,18 @@ async def _reserve_realtime_quota(
             quota_reservations_repository=QuotaReservationsRepository(session),
         )
         try:
+            capture = await pricing.capture_pricing_and_fx(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint=REALTIME_CLIENT_SECRETS_ENDPOINT,
+            )
             cost_estimate = await pricing.estimate_realtime_client_secret_cost(
                 route=route,
                 policy=policy_result,
                 endpoint=REALTIME_CLIENT_SECRETS_ENDPOINT,
                 admission_pricing_only=admission_pricing_only,
+                pricing=capture.pricing,
+                fx=capture.fx,
             )
             reservation = await quota.reserve_for_chat_completion(
                 authenticated_key=authenticated_key,

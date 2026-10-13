@@ -73,6 +73,7 @@ from slaif_gateway.services.catalog_refresh.bundle import (
     selected_model_keys,
 )
 from slaif_gateway.services.catalog_refresh import execution_identity
+from slaif_gateway.services.catalog_refresh import planning
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 from slaif_gateway.services.catalog_refresh.policy import RefreshPolicy
 from slaif_gateway.services.fx_import import (
@@ -301,10 +302,11 @@ class ValidationReport:
     fx_comparisons: list[dict[str, Any]] = field(default_factory=list)
     source_evidence: dict[str, Any] = field(default_factory=dict)
     execution_context: dict[str, Any] = field(default_factory=dict)
+    apply_plan: dict[str, Any] | None = field(default=None)
 
     def to_dict(self) -> dict[str, Any]:
         order = {name: index for index, name in enumerate(_GATE_ORDER)}
-        return {
+        document = {
             "state": self.state,
             "state_reason": self.state_reason,
             "run_id": self.run_id,
@@ -400,6 +402,11 @@ class ValidationReport:
             ],
             "execution_context": dict(sorted(self.execution_context.items())),
         }
+        if self.apply_plan:
+            # 182 (A2): present only when non-empty, so no-change runs keep
+            # byte-stable validation.json.
+            document["apply_plan"] = self.apply_plan
+        return document
 
 
 def validation_json_bytes(report: ValidationReport) -> bytes:
@@ -504,6 +511,31 @@ def _select_active_fx(rows, now: datetime) -> tuple[Any, bool]:
     if len({row.rate for row in active}) > 1:
         return None, True
     return max(active, key=lambda row: _utc(row.valid_from)), False
+
+
+def _count_active_pricing(rows, now: datetime) -> int:
+    """Number of baseline pricing rows ACTIVE at ``now`` (same strict window
+    + enabled filter as :func:`_select_active_pricing`). Supersession
+    operations require this count to be exactly one even when every active
+    duplicate is economically identical: apply must never silently choose or
+    close one history among several."""
+    return sum(
+        1
+        for row in rows
+        if row.enabled
+        and _utc(row.valid_from) <= now
+        and (row.valid_until is None or _utc(row.valid_until) > now)
+    )
+
+
+def _count_active_fx(rows, now: datetime) -> int:
+    """Number of baseline FX rows ACTIVE at ``now`` (same strict window
+    filter as :func:`_select_active_fx`)."""
+    return sum(
+        1
+        for row in rows
+        if _utc(row.valid_from) <= now and (row.valid_until is None or _utc(row.valid_until) > now)
+    )
 
 
 def _host_allowed(hostname: str, hosts: frozenset[str]) -> bool:
@@ -708,6 +740,7 @@ def validate_bundle(
     sql_capture: str,
     acquisition: str = ACQUISITION_OFFLINE,
     generator: ExecutionGeneratorIdentity | None = None,
+    now: datetime | None = None,
 ) -> tuple[ValidationReport, dict[str, bytes]]:
     """Recompute the full review result. Pure and deterministic.
 
@@ -732,6 +765,11 @@ def validate_bundle(
     otherwise from the running code's measured fixed file-set identity.
     Verify passes the ORIGINAL authenticated generator from the sealed
     validation.json, never a re-measurement.
+
+    ``now`` is the explicit review reference instant (182, A1): by default
+    the bundle's own generated_at (byte-stable replay semantics); the apply
+    path passes the apply-time wall clock so freshness is RE-EVALUATED at
+    apply time instead of being trusted from collection time.
     """
     if sql_capture not in _SQL_CAPTURES:
         raise CatalogRefreshBlockedError(
@@ -788,7 +826,7 @@ def validate_bundle(
             "a first_install review reads no database and a refresh review requires a baseline document",
         )
     warnings: list[Warning] = []
-    now = _utc(bundle.generated_at)
+    now = _utc(bundle.generated_at) if now is None else _utc(now)
     selected = selected_model_keys(bundle)
 
     def add(severity: str, code: str, detail: str, provider: str | None = None, model: str | None = None) -> None:
@@ -1410,6 +1448,10 @@ def validate_bundle(
     upstream_by_key: dict[tuple[str, str], str] = {}
     excluded_route_mutations = 0
     excluded_pricing_mutations = 0
+    apply_ops: list[dict[str, Any]] = []
+    pricing_create_ops = 0
+    pricing_supersede_ops = 0
+    supersession_row_ids: set[str] = set()
 
     def bump(provider: str, key: str) -> None:
         per_provider.setdefault(provider, {})
@@ -2063,33 +2105,143 @@ def validate_bundle(
         if dimension_blocked or currency_conflict or pricing_ambiguous or route_unrepresented or baseline_metadata_unrepresented or streaming_conflict or text_disabled_create:
             disposition = DISPOSITION_BLOCKED
             disposition_detail = "blocked: " + "; ".join(sorted(set(changed_fields + ["required pricing dimension(s) missing" if dimension_blocked else ""] + ["currency inconsistency" if currency_conflict else ""] + ["ambiguous baseline rows" if pricing_ambiguous else ""] + ["unrepresentable baseline capabilities" if route_unrepresented else ""] + ["unrepresentable baseline metadata" if baseline_metadata_unrepresented else ""] + ["streaming intent conflict" if streaming_conflict else ""] + ["text disabled route" if text_disabled_create else ""])))
-        elif route_changed or price_changed:
-            disposition = DISPOSITION_CHANGED
-            disposition_detail = "; ".join(sorted(set(changed_fields)))
-            excluded_route_mutations += 1 if route_changed else 0
-            excluded_pricing_mutations += 1 if price_changed else 0
-        elif route_new or pricing_no_baseline:
-            disposition = DISPOSITION_NEW
-            parts = []
-            if route_new:
-                parts.append("new route")
-            if pricing_no_baseline:
-                parts.append("new pricing")
-            disposition_detail = " + ".join(parts) + " (create-only)"
-            # executable artifacts: only the genuinely new rows
-            if route_new:
-                route_artifact_rows.extend(
-                    route for route, old in zip(routes, old_route_rows) if old is None
-                )
-            if pricing_no_baseline and not dimension_blocked:
-                pricing_artifact_rows.append(pricing_facts)
         else:
-            disposition = DISPOSITION_UNCHANGED
-            disposition_detail = "all compared fields identical to the active baseline (no-op)"
+            superseded_this_model = False
+            # 182 (A2): the representable operations of each surface are
+            # derived INDEPENDENTLY (route surface: create only; pricing
+            # surface: create or supersession), so a new route for a model
+            # whose price also changes yields BOTH operations. Governors
+            # above (BLOCKED branch) suppress all operations.
+            new_routes: list[RouteFacts] = []
+            if route_new:
+                new_routes = [route for route, old in zip(routes, old_route_rows) if old is None]
+                route_artifact_rows.extend(new_routes)
+                apply_ops.extend(planning.create_route_op(route) for route in new_routes)
+            if pricing_no_baseline and not dimension_blocked:
+                # executable artifacts: only the genuinely new rows (no
+                # baseline row at all for this key)
+                pricing_artifact_rows.append(pricing_facts)
+                pricing_create_ops += 1
+                apply_ops.append(
+                    planning.create_pricing_op(bundle, pricing_facts, upstream=upstream)
+                )
+            if old_rows and old_pricing is None and not dimension_blocked:
+                # 182 (A2): the baseline rows for this model are not ACTIVE
+                # at the review instant: the proposal prices the model
+                # again -> a create operation (closed history is never
+                # touched). Two governors preserve explicit intent:
+                # - a DISABLED baseline row is an intentional denial; the
+                #   apply must never re-enable it by inferring create
+                #   (block instead);
+                # - a FUTURE row would overlap the created [T, ...) window,
+                #   which a plain create cannot express safely (block).
+                if any(not row.enabled for row in old_rows):
+                    add(
+                        SEVERITY_BLOCKER,
+                        "baseline_disabled_rows",
+                        "the baseline carries disabled pricing for this model; the apply must not re-enable intentionally disabled pricing",
+                        provider,
+                        model,
+                    )
+                elif any(row.enabled and _utc(row.valid_from) > now for row in old_rows):
+                    add(
+                        SEVERITY_BLOCKER,
+                        "baseline_future_row_overlap",
+                        "a future baseline pricing row would overlap the created active window; the change is not representable as a safe create",
+                        provider,
+                        model,
+                    )
+                else:
+                    pricing_create_ops += 1
+                    apply_ops.append(
+                        planning.create_pricing_op(bundle, pricing_facts, upstream=upstream)
+                    )
+            if price_changed and old_pricing is not None:
+                if _count_active_pricing(old_rows, now) != 1:
+                    # 182 (A3): supersession requires EXACTLY ONE active
+                    # eligible row. Overlapping active duplicates (even with
+                    # identical values) are never silently chosen or closed.
+                    add(
+                        SEVERITY_BLOCKER,
+                        "baseline_duplicate_active_rows",
+                        "multiple overlapping active baseline pricing rows; supersession requires exactly one active row and no history is silently chosen or closed",
+                        provider,
+                        model,
+                    )
+                else:
+                    # 182 (A2/A3): a changed price against a single valid
+                    # active baseline row is a representable supersession
+                    # (close the reviewed window at T, insert the new row
+                    # at T). Currency conflicts, ambiguity, and
+                    # unrepresentable metadata never reach this branch
+                    # (they BLOCK above). Several selected names may pair
+                    # to the SAME upstream row (public aliases): the
+                    # supersession is per BASELINE ROW — deduplicated, so
+                    # one row is never closed twice by one plan.
+                    superseded_this_model = True
+                    if old_pricing.id not in supersession_row_ids:
+                        supersession_row_ids.add(old_pricing.id)
+                        pricing_supersede_ops += 1
+                        apply_ops.append(
+                            planning.supersede_pricing_op(bundle, old_pricing, pricing_facts)
+                        )
+
+            if new_routes:
+                # 182 (A2, order): new route visibility to allow-all keys
+                # must be surfaced as a warning requiring acknowledgement.
+                # Every created public route name is new exposure:
+                # allow_all_models keys (and keys permitting the model) can
+                # use it from apply time; the operator must ack explicitly.
+                if superseded_this_model:
+                    # the mixed case: new public name created while the
+                    # shared upstream price is superseded in the same plan
+                    add(
+                        SEVERITY_REVIEW,
+                        "new_route_with_changed_pricing",
+                        "new route row(s) for a model whose pricing is superseded in the same plan; the apply would create the route(s) and supersede the price together (new public exposure with a price change)",
+                        provider,
+                        model,
+                    )
+                else:
+                    add(
+                        SEVERITY_REVIEW,
+                        "new_model_exposure",
+                        "new route row(s) create public model exposure: allow_all_models keys and keys permitting the model can use it from apply time; acknowledgement required at apply",
+                        provider,
+                        model,
+                    )
+            if route_changed or price_changed:
+                disposition = DISPOSITION_CHANGED
+                disposition_detail = "; ".join(sorted(set(changed_fields)))
+                excluded_route_mutations += 1 if route_changed else 0
+                excluded_pricing_mutations += 1 if price_changed else 0
+            elif route_new or pricing_no_baseline:
+                disposition = DISPOSITION_NEW
+                parts = []
+                if route_new:
+                    parts.append("new route")
+                if pricing_no_baseline:
+                    parts.append("new pricing")
+                disposition_detail = " + ".join(parts) + " (create-only)"
+            else:
+                disposition = DISPOSITION_UNCHANGED
+                disposition_detail = "all compared fields identical to the active baseline (no-op)"
         bump(provider, disposition.lower())
         if disposition == DISPOSITION_CHANGED:
             per_provider.setdefault(provider, {})["mutations"] = per_provider.get(provider, {}).get("mutations", 0) + 1
         dispositions.append(Disposition(provider, model, disposition, disposition_detail))
+
+    # 182 (A2): create operations for providers the executable artifacts
+    # reference that the baseline does not carry (bootstrap providers).
+    artifact_providers = (
+        {route.provider for route in route_artifact_rows}
+        | {pricing.provider for pricing in pricing_artifact_rows}
+    )
+    baseline_providers = (
+        {row.provider for row in baseline.providers} if baseline is not None else set()
+    )
+    for provider in sorted(artifact_providers - baseline_providers):
+        apply_ops.append(planning.create_provider_op(provider))
 
     # disappeared/deprecated models tracked separately from fetched records
     considered_keys = {
@@ -2158,13 +2310,14 @@ def validate_bundle(
     # a missing-pair blocker instead of an executable row with a guessed
     # rate.
     bundle_for_fx = bundle if len(bound_fx) == len(bundle.fx) else bundle.model_copy(update={"fx": tuple(bound_fx)})
-    fx_rows, fx_gate, fx_comparisons = _run_fx_gate(
+    fx_rows, fx_gate, fx_comparisons, fx_plan_ops = _run_fx_gate(
         baseline, bundle_for_fx, now, fx_required_currencies, policy, add
     )
+    apply_ops.extend(fx_plan_ops)
     fx_json = generate_fx_json(fx_rows)
 
     route_gate = _run_route_gate(bundle, baseline, route_tsv, excluded_route_mutations, baseline is not None)
-    pricing_gate = _run_pricing_gate(baseline, pricing_tsv, excluded_pricing_mutations, baseline is not None)
+    pricing_gate = _run_pricing_gate(baseline, pricing_tsv, excluded_pricing_mutations, baseline is not None, create_ops=pricing_create_ops, supersede_ops=pricing_supersede_ops)
 
     # pairing gate: a pricing identity that matches neither the route public
     # name nor its upstream model is selected under its own (provider, model)
@@ -2723,6 +2876,7 @@ def validate_bundle(
         fx_comparisons=fx_comparisons,
         source_evidence=source_evidence_report,
         execution_context=execution_context,
+        apply_plan=planning.build_apply_plan(apply_ops) if apply_ops else None,
     )
     artifacts = {"routes-proposal.tsv": route_tsv, "pricing-proposal.tsv": pricing_tsv, "fx-proposal.json": fx_json}
     return report, artifacts
@@ -2808,7 +2962,7 @@ def _run_route_gate(bundle, baseline, tsv_bytes: bytes, excluded_mutations: int,
     elif non_create:
         result.gates.append(Gate(ROUTE_GATE, EVIDENCE_BLOCKED, f"executable artifact leaked {len(non_create)} non-create row(s): {non_create[0].classification}"))
     elif excluded_mutations:
-        result.gates.append(Gate(ROUTE_GATE, EVIDENCE_BLOCKED, f"{excluded_mutations} proposed route update(s) excluded — no apply operation exists in this version"))
+        result.gates.append(Gate(ROUTE_GATE, EVIDENCE_BLOCKED, f"{excluded_mutations} proposed route update(s) excluded — route mutations are outside the 182 apply scope (route create + pricing/FX supersession only)"))
     elif rows:
         result.gates.append(Gate(ROUTE_GATE, EVIDENCE_VERIFIED, f"create-only plan executable ({len(rows)} new route row(s))"))
     else:
@@ -2828,7 +2982,14 @@ def _run_route_gate(bundle, baseline, tsv_bytes: bytes, excluded_mutations: int,
     return result
 
 
-def _run_pricing_gate(baseline, tsv_bytes: bytes, excluded_mutations: int, have_baseline: bool) -> _GateBundle:
+def _run_pricing_gate(
+    baseline,
+    tsv_bytes: bytes,
+    excluded_mutations: int,
+    have_baseline: bool,
+    create_ops: int = 0,
+    supersede_ops: int = 0,
+) -> _GateBundle:
     result = _GateBundle()
     text_payload = tsv_bytes.decode("utf-8")
     try:
@@ -2864,10 +3025,15 @@ def _run_pricing_gate(baseline, tsv_bytes: bytes, excluded_mutations: int, have_
         result.gates.append(Gate(PRICING_GATE, EVIDENCE_BLOCKED, f"{len(invalid)} pricing rows invalid: {invalid[0].errors[0][:200]}"))
     elif non_create:
         result.gates.append(Gate(PRICING_GATE, EVIDENCE_BLOCKED, f"executable artifact leaked {len(non_create)} non-create row(s): {non_create[0].classification}"))
-    elif excluded_mutations:
-        result.gates.append(Gate(PRICING_GATE, EVIDENCE_BLOCKED, f"{excluded_mutations} proposed pricing update(s) excluded — no apply operation exists in this version"))
-    elif rows:
-        result.gates.append(Gate(PRICING_GATE, EVIDENCE_VERIFIED, f"create-only plan executable ({len(rows)} new pricing row(s))"))
+    elif excluded_mutations and supersede_ops == 0 and create_ops == 0:
+        # 182 (A3): the mutation exists but is NOT representable (e.g. the
+        # exact-one-active-row guard refused the supersession). Never claim
+        # an operation that was not built.
+        result.gates.append(Gate(PRICING_GATE, EVIDENCE_BLOCKED, f"{excluded_mutations} proposed pricing update(s) are not representable (no single active baseline row); blocked"))
+    elif supersede_ops:
+        result.gates.append(Gate(PRICING_GATE, EVIDENCE_VERIFIED, f"supersession plan executable ({create_ops} create row(s), {supersede_ops} supersession operation(s))"))
+    elif create_ops or rows:
+        result.gates.append(Gate(PRICING_GATE, EVIDENCE_VERIFIED, f"create-only plan executable ({create_ops} new pricing row(s))"))
     else:
         result.gates.append(Gate(PRICING_GATE, EVIDENCE_NA, "no pricing rows proposed (NO CHANGES)"))
     result.import_gate = ImportGate(
@@ -2896,14 +3062,21 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
       must agree within the 1e-8 tolerance or the run blocks.
     - Only executable create rows (per the real FX import classifier) are
       emitted; existing-window conflicts are excluded mutations.
-    Returns (artifact_rows, gate_bundle, comparisons).
+    - 182 (A2/A3): the APPLY plan operations are bound to the BASELINE
+      COMPARISON state, not to the TSV classifier's window arithmetic:
+      CHANGED/CHANGED_REVIEW against the single valid active baseline row
+      -> supersede_fx; comparison state NEW (no active row, including
+      closed-history-only pairs) -> create_fx. The TSV row may be present,
+      omitted, or excluded independently of the plan operation.
+    Returns (artifact_rows, gate_bundle, comparisons, plan_ops).
     """
     result = _GateBundle()
     comparisons: list[dict[str, Any]] = []
+    fx_plan_ops: list[dict[str, Any]] = []
     if not required_currencies and not bundle.fx:
         result.gates.append(Gate(FX_GATE, EVIDENCE_NA, "all selected prices are EUR; FX is N/A"))
         result.import_gate = ImportGate("fx", True, 0, 0, 0, {}, 0, 0, "N/A: every selected price is EUR")
-        return [], result, comparisons
+        return [], result, comparisons, fx_plan_ops
 
     # FX provenance references must be FX-specific (currency-pair model part,
     # operator_input/docs_page kind) — a model's source reference may never
@@ -3062,12 +3235,68 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
             no_op_rows += 1
         else:
             excluded_mutations += 1
+        # 182 (A2/A3): apply-plan operations from the baseline comparison
+        # state (bound to the comparison, independent of the TSV row above;
+        # ambiguous baselines are BLOCKERs and never yield operations).
+        if state in ("CHANGED", "CHANGED_REVIEW") and base_direct is not None:
+            if _count_active_fx(base_rows, now) != 1:
+                # 182 (A3): supersession requires EXACTLY ONE active
+                # eligible row; overlapping active duplicates (even with
+                # identical rates) are never silently chosen or closed.
+                fx_add(
+                    SEVERITY_BLOCKER,
+                    "fx_duplicate_active_rows",
+                    f"multiple overlapping active baseline FX rows for {currency}\u2192EUR; supersession requires exactly one active row and no history is silently chosen or closed",
+                )
+            else:
+                fx_plan_ops.append(
+                    planning.supersede_fx_op(
+                        base_direct,
+                        rate=str(normalized_rate),
+                        source=fact.source,
+                        published_at=fact.published_at,
+                        derived=derived,
+                        source_pair=source_pair,
+                    )
+                )
+        elif (
+            state == "NEW"
+            and base_direct is None
+            and not base_direct_ambiguous
+            and not inverse_ambiguous
+        ):
+            fx_plan_ops.append(
+                planning.create_fx_op(
+                    (currency, "EUR"),
+                    rate=str(normalized_rate),
+                    source=fact.source,
+                    published_at=fact.published_at,
+                    derived=derived,
+                    source_pair=source_pair,
+                )
+            )
 
     # Gate verdict
-    if excluded_mutations:
-        result.gates.append(Gate(FX_GATE, EVIDENCE_BLOCKED, f"{excluded_mutations} existing FX row(s) require an update — no apply operation exists in this version"))
-    elif fx_blocker_codes:
+    n_fx_create = sum(1 for op in fx_plan_ops if op["type"] == "create_fx")
+    n_fx_supersede = len(fx_plan_ops) - n_fx_create
+    if fx_blocker_codes:
         result.gates.append(Gate(FX_GATE, EVIDENCE_BLOCKED, "FX requirements not met: " + ", ".join(sorted(fx_blocker_codes))))
+    elif fx_plan_ops:
+        result.gates.append(
+            Gate(
+                FX_GATE,
+                EVIDENCE_VERIFIED,
+                f"supersession plan executable ({n_fx_create} create row(s), {n_fx_supersede} supersession operation(s))",
+            )
+        )
+    elif excluded_mutations:
+        result.gates.append(
+            Gate(
+                FX_GATE,
+                EVIDENCE_BLOCKED,
+                f"{excluded_mutations} FX row(s) propose redundant or conflicting window(s) without a state change; not executable in this version",
+            )
+        )
     elif artifact_rows:
         result.gates.append(Gate(FX_GATE, EVIDENCE_VERIFIED, f"create-only FX plan executable ({len(artifact_rows)} new native→EUR rate(s))"))
     elif no_op_rows:
@@ -3088,7 +3317,7 @@ def _run_fx_gate(baseline, bundle, now, required_currencies, policy, add):
         f"{len(artifact_rows)} rows to create, {no_op_rows} duplicate no-op(s), {excluded_mutations} update(s) excluded",
         excluded_mutations,
     )
-    return artifact_rows, result, comparisons
+    return artifact_rows, result, comparisons, fx_plan_ops
 
 
 def baseline_fx_by_pair_ref(baseline, pair):
@@ -3105,6 +3334,7 @@ def validate_against_baseline_document(
     sql_capture: str,
     acquisition: str = ACQUISITION_OFFLINE,
     generator: ExecutionGeneratorIdentity | None = None,
+    now: datetime | None = None,
 ) -> tuple[ValidationReport, dict[str, bytes]]:
     """Public entry: mode-consistent validation (first install must have no baseline).
 
@@ -3121,4 +3351,5 @@ def validate_against_baseline_document(
         sql_capture=sql_capture,
         acquisition=acquisition,
         generator=generator,
+        now=now,
     )

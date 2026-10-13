@@ -82,7 +82,8 @@ def sealed_run_like(tmp_path: Path) -> tuple[Path, Path]:
     run_root = tmp_path / "runs"
     seal_key = tmp_path / "seal.key"
     result = _invoke_review(tmp_path, run_root, seal_key)
-    assert result.exit_code == 0, result.output
+    # 182: first-install = new exposure warnings -> READY_WITH_WARNINGS (10)
+    assert result.exit_code == 10, result.output
     return run_root / "fixture-first-install-001", seal_key
 
 # --- anchored walks and bounded reads -----------------------------------------
@@ -736,7 +737,8 @@ def test_ancestor_symlink_run_dir_safe_rejects(tmp_path: Path) -> None:
     os.chmod(run_root, 0o700)
     seal_key = tmp_path / "anc.key"
     result = _invoke_review(tmp_path, run_root, seal_key)
-    assert result.exit_code == 0, result.output
+    # 182: first-install = new exposure warnings -> READY_WITH_WARNINGS (10)
+    assert result.exit_code == 10, result.output
     run_dir = run_root / "fixture-first-install-001"
     outside = tmp_path / "outside-anc"
     (outside / "runs" / "fixture-first-install-001").mkdir(parents=True)
@@ -805,7 +807,8 @@ def test_seal_capture_once_per_file(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(fs, "anchored_read_fd", counting)
     result = _invoke_review(tmp_path, tmp_path / "runs", tmp_path / "seal.key")
-    assert result.exit_code == 0, result.output
+    # 182: first-install = new exposure warnings -> READY_WITH_WARNINGS (10)
+    assert result.exit_code == 10, result.output
     for name in CONTENT_FILES:
         assert counts.get(name) == 1, counts
     assert counts.get("manifest.json") == 1

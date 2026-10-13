@@ -126,7 +126,9 @@ SINGLE_LINE_HEADERS = (
     "Deprecated",
 )
 
-_CLI_EXPECTED_EXIT = {"first-install": 0, "blocked": 20}
+# first-install is READY_WITH_WARNINGS (exit 10) since 182 (A2): the
+# bootstrap route create is new public model exposure requiring ACK.
+_CLI_EXPECTED_EXIT = {"first-install": 10, "blocked": 20}
 
 
 # --------------------------------------------------------------------------
@@ -147,7 +149,15 @@ def _two_provider_case() -> tuple[object, dict]:
         policy_from_document(bundle.policy),
         sql_capture=sql_capture_for_mode(bundle.baseline.mode),
     )
-    assert report.state == OVERALL_READY
+    # Since 182 (A2) the openai long-id route is NEW against the
+    # fixture baseline: exactly one REVIEW new_model_exposure finding
+    # (no blocker) flips the canonical READY to READY_WITH_WARNINGS.
+    # The long-identifier wrap layout under test renders identically.
+    assert report.state == OVERALL_READY_WITH_WARNINGS
+    two_warnings = report.to_dict()["warnings"]
+    assert {w["code"] for w in two_warnings} == {"new_model_exposure"}
+    assert all(w["severity"] == "REVIEW" for w in two_warnings)
+    assert len(two_warnings) == 1
     return bundle, report
 
 
@@ -198,7 +208,14 @@ def _collection_case() -> tuple[object, dict]:
         sql_capture=sql_capture_for_mode(bundle.baseline.mode),
         acquisition=ACQUISITION_LIVE,
     )
-    assert report.state == OVERALL_READY, report.state_reason
+    # Since 182 (A2): with no baseline every collected route is new
+    # public model exposure: READY_WITH_WARNINGS carrying only the
+    # REVIEW new_model_exposure findings (never a blocker); the
+    # collection scope-card layout under test renders identically.
+    assert report.state == OVERALL_READY_WITH_WARNINGS, report.state_reason
+    live_warnings = report.to_dict()["warnings"]
+    assert {w["code"] for w in live_warnings} == {"new_model_exposure"}
+    assert all(w["severity"] == "REVIEW" for w in live_warnings)
     assert report.to_dict()["source_evidence"]["scope"] == "live_collection"
     return bundle, report
 
@@ -216,7 +233,12 @@ def _supplied_collection_case() -> tuple[object, dict]:
         sql_capture=sql_capture_for_mode(bundle.baseline.mode),
         acquisition=ACQUISITION_OFFLINE,
     )
-    assert report.state == OVERALL_READY, report.state_reason
+    # Same A2 exposure findings under the OFFLINE supplied context;
+    # historical provenance rendering is unchanged by the state flip.
+    assert report.state == OVERALL_READY_WITH_WARNINGS, report.state_reason
+    off_warnings = report.to_dict()["warnings"]
+    assert {w["code"] for w in off_warnings} == {"new_model_exposure"}
+    assert all(w["severity"] == "REVIEW" for w in off_warnings)
     assert report.to_dict()["source_evidence"]["scope"] == "supplied_collection"
     return bundle, report
 
