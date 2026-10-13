@@ -543,13 +543,14 @@ def _render_scope_card(bundle: RefreshBundle, report: dict[str, Any]) -> str:
             f"code <code class='wrap'>{esc(_digest_fragment(generating.get('code_revision')))}</code> "
             "(runner-measured)"
         )
-    # "at" (not "generated at"): the first screen has a two-line budget
-    # at every viewport, and actual collect run ids are long; the
-    # expanded identity carries the full generated-at wording.
+    # The first screen keeps a two-line budget at every viewport; actual
+    # collect run ids are long, so the wall-clock generated-at instant is
+    # not repeated on this line (the run id carries the date-time, and the
+    # full instant stays in the footer and the expanded Run identity).
     run_identity_compact = (
         "<p class='annot' id='run-identity-compact'>"
-        f"Run <code class='wrap'>{esc(report.get('run_id'))}</code> \u00b7 at "
-        f"{esc(report.get('generated_at'))}{compact_generator} "
+        f"Run <code class='wrap'>{esc(report.get('run_id'))}</code>"
+        f"{compact_generator} "
         "\u00b7 <a href='#run-identity'>full identity</a></p>"
     )
     collection_line = ""
