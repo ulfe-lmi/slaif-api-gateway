@@ -3,7 +3,10 @@
 Operator entry points for the working slice of the catalog refresh
 workflow: bounded live official-source collection, offline review,
 verification, read-only export, and the one explicit atomic `apply` of a
-reviewed run (plus read-only `status`). Codex research remains NOT_RUN.
+reviewed run (plus read-only `status`). Isolated Codex research is an
+opt-in `collect` configuration (default off): it completes unresolved
+official-source facts inside an enforced boundary, and research stays
+NOT_RUN whenever it is not configured.
 Full semantics live in
 [`docs/catalog-refresh.md`](../../docs/catalog-refresh.md).
 
@@ -167,9 +170,12 @@ Operator notes for the sealed filesystem boundary:
 
 ## What does not exist yet
 
-- **No Codex-assisted research.** Isolated Codex research remains NOT_RUN in
-  this version. Bundles are produced by the bounded deterministic live
-  `collect` or out-of-band and reviewed here.
+- **No one-command wrapper.** The isolated Codex research fallback is opt-in
+  per `collect` invocation (default off, never runs without explicit
+  configuration), and there is still no thin wrapper chaining collect ->
+  review -> export-baseline -> apply. Research template/schema assets are
+  resolved from the source-checkout layout; installed-package
+  qualification is a pending later slice.
 
 Do not add shell scripts or dashboard buttons that apply catalog data by
 any path other than the explicit `apply` command on one sealed
@@ -178,9 +184,10 @@ contract.
 
 ## Eventual wrapper contract (planned for a later slice)
 
-When the live-research and audited-apply slices land, the intended
-operator surface will be a thin wrapper around the same primitives
-documented here:
+When the wrapper slice lands, the intended operator surface will be a thin
+wrapper around the same primitives documented here (the deterministic live
+retrieval + optional research pass, the audited `apply` step already
+implemented today):
 
 1. trigger a deterministic live retrieval + research pass;
 2. produce one typed bundle with full provenance;
@@ -189,9 +196,10 @@ documented here:
    `REVIEW.html` in an ordinary browser (the accepted one-command,
    one-static-report architecture — the wrapper must NOT require a new
    management dashboard surface);
-5. require the explicit, separately audited `apply` CLI step (documented
-   above), which re-authenticates the sealed run and re-validates the
-   baseline identity inside the transaction before superseding rows.
+5. require the explicit, separately audited `apply` CLI step (already
+   implemented, documented above), which re-authenticates the sealed run
+   and re-validates the baseline identity inside the transaction before
+   superseding rows.
 
 The wrapper must never weaken the bundle schema, the readiness
 recomputation, the sealing, or the read-only export semantics defined in
