@@ -127,8 +127,8 @@ _FINDING_LABELS = {
     "fx_baseline_ambiguous": "ambiguous FX baseline rows",
     "fx_row_invalid": "invalid FX row",
     "fx_provenance_invalid_reference": "FX source reference invalid",
-    "new_model_exposure": "new model is publicly visible to allow-all keys (requires acknowledgement before apply)",
-    "new_route_with_changed_pricing": "new route published alongside a changed price (requires acknowledgement before apply)",
+    "new_model_exposure": "new model is publicly visible to allow-all keys (ACK required before apply)",
+    "new_route_with_changed_pricing": "new route published alongside a changed price (ACK required before apply)",
     "gate:import.routes": "route import plan blocked",
     "gate:import.pricing": "pricing import plan blocked",
     "gate:import.fx": "FX import plan blocked",
@@ -500,7 +500,7 @@ def _plain_reason_html(report: dict[str, Any], blockers: list[dict[str, Any]]) -
     labels = "; ".join(_finding_label(c) for c in codes[:3])
     text = f"{len(blockers)} blocking issue(s): {labels}"
     if len(codes) > 3:
-        text += f" (+{len(codes) - 3} more codes in the findings)"
+        text += f" (+{len(codes) - 3} more)"
     return text
 
 
@@ -829,8 +829,8 @@ def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[
         f"<p class='state {_STATE_CLASS[state]}'><strong>{esc(state)}</strong> — {_plain_reason_html(report, blockers)}</p>",
         "<div class='chips'>",
         f"<span class='chip {'chip-blocker' if blockers else ''}'>BLOCKERS {len(blockers)}</span>",
-        f"<span class='chip {'chip-review' if reviews else ''}'>REVIEW findings {len(reviews)}</span>",
-        f"<span class='chip'>all findings {len(warnings)}</span>",
+        f"<span class='chip {'chip-review' if reviews else ''}'>REVIEW {len(reviews)}</span>",
+        f"<span class='chip'>findings {len(warnings)}</span>",
         "</div>",
         "</div>",
         "<div class='grid-2'>",
