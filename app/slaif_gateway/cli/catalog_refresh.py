@@ -5,8 +5,10 @@ followed by review of the collected bundle), review (offline review of a
 supplied bundle), verify, read-only export-baseline, and the explicit
 atomic apply of a reviewed sealed run (plus read-only apply status). Live
 collection is limited to the registered official catalog, pricing, and FX
-endpoints over HTTPS with bounded retries, redirects, and byte budgets; the
-Codex researcher remains not implemented in this version.
+endpoints over HTTPS with bounded retries, redirects, and byte budgets. When
+enabled, the isolated Codex semantic research fallback (real CLI in an
+enforced outer boundary, parent re-grounding; deterministic parsing stays
+first) may transcribe eligible unresolved facts from the captured bytes.
 
 Exit codes:
 - 0  review state READY
@@ -34,6 +36,7 @@ import typer
 from slaif_gateway.cli.common import CliError, emit_json, run_async
 from slaif_gateway.schemas.catalog_refresh import BaselineDocument, RefreshBundle
 from slaif_gateway.services.catalog_refresh import collection as catalog_collection
+from slaif_gateway.services.catalog_refresh import research as catalog_research
 from slaif_gateway.services.catalog_refresh import sources as catalog_sources
 from slaif_gateway.services.catalog_refresh.sources import SourceFetchError
 from slaif_gateway.services.catalog_refresh.apply import (
@@ -90,7 +93,7 @@ from slaif_gateway.services.catalog_refresh.validation import (
     validation_json_bytes,
 )
 
-app = typer.Typer(help="Bounded catalog refresh: collect, review, verify, export-baseline, apply, status (the Codex researcher is not implemented in this version)")
+app = typer.Typer(help="Bounded catalog refresh: collect, review, verify, export-baseline, apply, status")
 
 EXIT_READY = 0
 EXIT_READY_WITH_WARNINGS = 10
@@ -100,26 +103,27 @@ EXIT_DATA_ERROR = 65
 
 STAGE_LINE = (
     "offline review: this invocation reviewed supplied bytes and performed no "
-    "live retrieval; export/verify available; apply is a separate explicit "
-    "command; the Codex researcher is not implemented in this version"
+    "live retrieval; export/verify available; any sealed research facts are "
+    "re-verified against the captured source bytes; apply is a separate "
+    "explicit command"
 )
 STAGE_LINE_COLLECT = (
     "live collection: bounded official-source retrieval performed by this command, "
-    "then review of the collected bundle; apply is a separate explicit command; "
-    "the Codex researcher is not implemented in this version"
+    "then review of the collected bundle; the isolated Codex semantic research "
+    "fallback (when enabled) is part of the live collection path and its sealed "
+    "facts are re-verified in this review; apply is a separate explicit command"
 )
 # 181-i (I1): failed collects must be labeled by the path actually REACHED.
 # A label can never claim a retrieval that was not performed.
 STAGE_LINE_COLLECT_NOT_STARTED = (
     "collection not started: baseline resolution failed before any retrieval; "
-    "no live collection was performed by this command; apply is a separate "
-    "explicit command; the Codex researcher is not implemented in this version"
+    "no live collection (and no research) was performed by this command; apply "
+    "is a separate explicit command"
 )
 STAGE_LINE_COLLECT_INCOMPLETE = (
     "collection attempted and failed before completion: bounded official-source "
     "retrieval was attempted, but no complete collection was produced and no "
-    "sealed collected review exists; apply is a separate explicit command; the "
-    "Codex researcher is not implemented in this version"
+    "sealed collected review exists; apply is a separate explicit command"
 )
 
 DEFAULT_SEAL_KEY = Path("~/.local/state/slaif/catalog-refresh/seal.key")
@@ -854,6 +858,34 @@ def collect_command(
         bool,
         typer.Option("--json", help="Emit a compact JSON summary instead of text."),
     ] = False,
+    research: Annotated[
+        bool,
+        typer.Option(
+            "--research/--no-research",
+            help="Enable the isolated Codex semantic research fallback for eligible "
+                 "unresolved facts (default off; deterministic parsing stays first).",
+        ),
+    ] = False,
+    research_cli_bin: Annotated[
+        Path | None,
+        typer.Option("--research-cli-bin", help="Verified codex CLI binary (required with --research)."),
+    ] = None,
+    research_endpoint: Annotated[
+        str | None,
+        typer.Option("--research-endpoint", help="HTTPS research inference endpoint (required with --research)."),
+    ] = None,
+    research_model: Annotated[
+        str | None,
+        typer.Option("--research-model", help="Model name for the research endpoint (required with --research)."),
+    ] = None,
+    research_auth_env: Annotated[
+        str | None,
+        typer.Option("--research-auth-env", help="Environment variable NAME holding the research operator key (value never printed)."),
+    ] = None,
+    research_timeout: Annotated[
+        int,
+        typer.Option("--research-timeout", help="Per-task research child timeout in seconds (10-600, default 120)."),
+    ] = 120,
 ) -> None:
     """Collect authoritative provider catalogs now, then review the collected bundle.
 
@@ -861,8 +893,11 @@ def collect_command(
     catalog, pricing, and model-page endpoints plus the ECB reference XML,
     over HTTPS with bounded retries, redirects, and byte budgets. Every
     retrieval outcome (including failures) is recorded in the bundle's
-    collection identity and re-verified by validation. Codex research is
-    NOT_RUN in this version; no import/apply is performed.
+    collection identity and re-verified by validation. By default Codex
+    research is NOT_RUN; with --research, eligible unresolved facts may be
+    transcribed by the isolated Codex semantic fallback (real CLI in an
+    enforced outer boundary; the parent re-grounds every fact). No
+    import/apply is performed.
 
     Exit codes: 0 READY, 10 READY_WITH_WARNINGS, 20 BLOCKED, 65 data error.
     """
@@ -878,6 +913,12 @@ def collect_command(
             run_root=run_root,
             seal_key=seal_key,
             json_output=json_output,
+            research=research,
+            research_cli_bin=research_cli_bin,
+            research_endpoint=research_endpoint,
+            research_model=research_model,
+            research_auth_env=research_auth_env,
+            research_timeout=research_timeout,
         ))
     except typer.Exit:
         raise
@@ -901,11 +942,49 @@ def _collect_impl(
     run_root: Path,
     seal_key: Path,
     json_output: bool,
+    research: bool,
+    research_cli_bin: Path | None,
+    research_endpoint: str | None,
+    research_model: str | None,
+    research_auth_env: str | None,
+    research_timeout: int,
 ) -> int:
     if bootstrap == refresh:
         raise typer.BadParameter("exactly one of --bootstrap or --refresh is required")
     if profile != "standard-v1":
         raise typer.BadParameter("only the standard-v1 profile exists in this version")
+    research_config: catalog_research.ResearchConfig | None = None
+    if research:
+        missing = [
+            name
+            for name, value in (
+                ("--research-cli-bin", research_cli_bin),
+                ("--research-endpoint", research_endpoint),
+                ("--research-model", research_model),
+                ("--research-auth-env", research_auth_env),
+            )
+            if not value
+        ]
+        if missing:
+            raise typer.BadParameter("--research requires " + ", ".join(missing))
+        endpoint = str(research_endpoint)
+        if not endpoint.lower().startswith("https://"):
+            raise typer.BadParameter("--research-endpoint must be an HTTPS endpoint")
+        if not 10 <= research_timeout <= 600:
+            raise typer.BadParameter("--research-timeout must be between 10 and 600")
+        if not str(research_auth_env) or not os.environ.get(str(research_auth_env)):
+            raise typer.BadParameter(f"--research-auth-env {research_auth_env} is not set to a non-empty value")
+        cli_bin_path = Path(research_cli_bin).expanduser().absolute()
+        if not cli_bin_path.is_file():
+            raise typer.BadParameter(f"--research-cli-bin is not a readable file: {cli_bin_path}")
+        research_config = catalog_research.ResearchConfig(
+            enabled=True,
+            cli_bin=str(cli_bin_path),
+            model_endpoint=endpoint,
+            model_name=str(research_model),
+            model_auth_env=str(research_auth_env),
+            timeout_seconds=research_timeout,
+        )
     provider_tuple = tuple(sorted({p.strip() for p in providers.split(",") if p.strip()}))
     if not provider_tuple or any(p not in ("openai", "openrouter") for p in provider_tuple):
         raise typer.BadParameter("providers must be a non-empty subset of openai,openrouter")
@@ -991,6 +1070,7 @@ def _collect_impl(
                 baseline_mode=baseline_mode,
                 baseline=baseline_doc,
                 client=client,
+                research=research_config,
             )
         except (CatalogRefreshBlockedError, SourceFetchError) as exc:
             code = getattr(exc, "code", None) or "collection_failed"

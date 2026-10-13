@@ -148,8 +148,9 @@ def test_first_screen_contains_required_decision_facts() -> None:
     # set and the supplied historical bundle declaration stay expanded.
     assert (
         "offline scope: review/export/verify only — this invocation performed no "
-        "live retrieval; apply of the reviewed plan is a separate explicit CLI "
-        "command; the Codex researcher is not implemented in this version."
+        "live retrieval; any sealed research facts in the supplied bundle are "
+        "re-verified against the captured source bytes by this review; apply of "
+        "the reviewed plan is a separate explicit CLI command."
         in html_text
     )
     assert "generator slaif-gateway/" in html_text

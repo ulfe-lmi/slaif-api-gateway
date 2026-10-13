@@ -23,8 +23,14 @@ documents, and the ECB daily reference XML. The orchestrator:
   approved capability denials on refresh.
 
 Nothing here is an import/apply path: the output is the same canonical
-bundle the 180 review pipeline validates, seals, and reports. Codex
-research is NOT_RUN in this objective (182 owns that boundary).
+bundle the 180 review pipeline validates, seals, and reports.
+
+183: deterministic collection stays FIRST; only unresolved eligible
+facts may be grounded by the isolated Codex research fallback
+(``research.py`` + ``research_isolation.py``), whose parent-verified
+cells are sealed in the bundle's ``research_facts`` and whose measured
+identity lives in ``research``. Research never chooses readiness,
+signs, or applies.
 """
 
 from __future__ import annotations
@@ -44,6 +50,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     FLAT_CAPABILITY_TO_CHAT_FIELD,
     POLICY_VERSION,
     RENDERER_VERSION,
+    RESEARCH_EXTRACTOR_ID,
     SCHEMA_VERSION,
     BaselineDocument,
     BaselineIdentity,
@@ -57,6 +64,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     PricingDimension,
     ProfileContract,
     RefreshBundle,
+    ResearchGroundedFact,
     ResearchIdentity,
     RevisionIdentity,
     RouteFacts,
@@ -65,6 +73,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     SourceRetrievalRecord,
 )
 from slaif_gateway.services.catalog_refresh import execution_identity as _execution_identity
+from slaif_gateway.services.catalog_refresh import research as _research
 from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh import sources
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
@@ -103,6 +112,8 @@ REASON_BASELINE_MULTIPLE_ROUTES = "baseline_multiple_routes"
 REASON_INDEX_ONLY = "index_only_no_standard_prices"
 REASON_EXPLICIT_SELECTION_EXCLUDED = "explicit_selection_excluded"
 REASON_PRICE_BELOW_QUANTUM = "price_below_quantum"
+REASON_RESEARCH_REJECTED = "research_rejected"
+REASON_RESEARCH_TASK_BOUND = "research_task_bound"
 
 
 # 181-i (I3): the package version and the measured code identity live in
@@ -287,6 +298,7 @@ def collect_bundle(
     fetch: Callable[..., list[RetrievalResult]] = fetch_sources,
     resolve: Callable[..., list[tuple]] = socket.getaddrinfo,
     acquisition: AcquisitionContext | None = None,
+    research: _research.ResearchConfig | None = None,
 ) -> RefreshBundle:
     """Run the full collection and return the canonical bundle.
 
@@ -341,11 +353,18 @@ def collect_bundle(
     openrouter_rows: list[se.ParsedModel] = []
     openai_pricing_rows: list[se.ParsedModel] = []
     openai_index_rows: list[se.ParsedModel] = []
+    # 183: (captured bytes, deterministic parse) per source kind - the raw
+    # bytes are the ONLY research evidence, even when the parse failed.
+    phase1_evidence: dict[tuple[str, str], tuple[bytes, se.SnapshotParse]] = {}
     for result in phase1:
         if not result.ok or result.content is None:
             continue
         parsed = se.parse_snapshot(
             result.spec.provider, result.spec.source_kind, result.content
+        )
+        phase1_evidence[(result.spec.provider, result.spec.source_kind)] = (
+            result.content,
+            parsed,
         )
         if not parsed.ok:
             continue  # recorded via the source record + validation
@@ -386,6 +405,71 @@ def collect_bundle(
     inventory: list[CollectionInventoryEntry] = []
     proposals: dict[tuple[str, str], _Proposal] = {}
     page_results: list[RetrievalResult] = []
+
+    # --- 183 research pass 1: snapshot-phase unresolved eligible facts -----
+    # Deterministic parsing is first: research is planned ONLY from rows the
+    # deterministic parser left unresolved although the captured bytes carry
+    # the fact, or from snapshots whose deterministic parse failed. The
+    # parent re-grounds every transcription; rejected models get one
+    # explicit inventory entry (the loop below must not double-count them).
+    research_outcomes: list[_research.ResearchPhaseOutcome] = []
+    research_backed: set[tuple[str, str]] = set()
+    research_page_backed: set[str] = set()
+    research_rejected: dict[tuple[str, str], str] = {}
+    research_unattempted_models: list[str] = []
+    if research is not None and research.enabled:
+        orr = phase1_evidence.get(("openrouter", "openrouter_models_api"))
+        op = phase1_evidence.get(("openai", "openai_pricing_docs"))
+        snapshot_plan = _research.plan_snapshot_tasks(
+            openrouter_bytes=orr[0] if orr else None,
+            openrouter_parse=orr[1] if orr else None,
+            openai_pricing_bytes=op[0] if op else None,
+            openai_pricing_parse=op[1] if op else None,
+            model_include=include_set,
+        )
+        for _source_key, _provider, _models in snapshot_plan.remaining:
+            for _model in _models:
+                research_unattempted_models.append(_model)
+                inventory.append(
+                    CollectionInventoryEntry(
+                        provider=_provider,
+                        model=_model,
+                        disposition="incomplete",
+                        reason_code=REASON_RESEARCH_TASK_BOUND,
+                        detail=(
+                            "research task bound: eligible unresolved fact remained "
+                            "unattempted; deterministic disposition stands"
+                        )[:240],
+                    )
+                )
+        if snapshot_plan.tasks:
+            outcome = _research.run_research_phase(research, snapshot_plan)
+            research_outcomes.append(outcome)
+            if outcome.identity.status == "SUCCEEDED":
+                for (provider, model), rows in sorted(outcome.grounded_rows.items()):
+                    if provider == "openrouter":
+                        # the research-built row REPLACES the deterministic
+                        # one (same bytes, parent re-normalized values)
+                        openrouter_rows = [
+                            row for row in openrouter_rows if row.model != model
+                        ] + rows
+                    else:
+                        openai_pricing_rows.extend(rows)
+                    research_backed.add((provider, model))
+                research_rejected.update(outcome.rejected)
+                for (provider, model), code in sorted(outcome.rejected.items()):
+                    inventory.append(
+                        CollectionInventoryEntry(
+                            provider=provider,
+                            model=model,
+                            disposition="incomplete",
+                            reason_code=REASON_RESEARCH_REJECTED,
+                            detail=(
+                                "isolated Codex research transcription rejected by "
+                                f"parent validation: {code}"
+                            )[:240],
+                        )
+                    )
 
     # --- OpenRouter eligibility ---------------------------------------------
     for row in sorted(openrouter_rows, key=lambda m: m.model):
@@ -429,11 +513,17 @@ def collect_bundle(
             )
             continue
         if row.context_length is None or row.max_output_tokens is None:
+            detail = "context length and/or max output tokens not published"
+            if ("openrouter", model_id) in research_rejected:
+                detail += (
+                    "; isolated research attempted and rejected: "
+                    + research_rejected[("openrouter", model_id)]
+                )
             inventory.append(
                 CollectionInventoryEntry(
                     provider="openrouter", model=model_id, disposition="incomplete",
                     reason_code=REASON_MISSING_LIMITS,
-                    detail="context length and/or max output tokens not published",
+                    detail=detail[:240],
                 )
             )
             continue
@@ -511,7 +601,16 @@ def collect_bundle(
                 )
             )
             continue
-        proposals[key] = _router_proposal(row, baseline_row, carried_dims, started_at)
+        proposals[key] = _router_proposal(
+            row,
+            baseline_row,
+            carried_dims,
+            started_at,
+            extraction="semantic" if key in research_backed else "deterministic",
+            extractor=(
+                RESEARCH_EXTRACTOR_ID if key in research_backed else EXTRACTOR_ID
+            ),
+        )
 
     # --- OpenAI candidates, model pages, and the models index ---------------
     openai_index_ids: set[str] = set()
@@ -562,6 +661,7 @@ def collect_bundle(
 
         pages: dict[str, se.ParsedModel | None] = {}
         page_failed: dict[str, str] = {}
+        page_evidence: dict[str, bytes] = {}
         for result in page_results:
             model_id = result.spec.model
             if not result.ok or result.content is None:
@@ -579,7 +679,61 @@ def collect_bundle(
                 page_failed[model_id] = "page_model_mismatch"
                 continue
             pages[model_id] = page
+            page_evidence[model_id] = result.content
 
+        # --- 183 research pass 2: parsed-but-incomplete model pages --------
+        # A page the deterministic parser succeeded on but left a limit
+        # unresolved (readable layout drift) may be grounded from the SAME
+        # captured page bytes. Pages that were never fetched or that failed
+        # deterministic parsing are never candidates: their other gates are
+        # unknown and research covers limits only.
+        if research is not None and research.enabled and pages:
+            page_plan = _research.plan_docs_page_tasks(
+                [
+                    (model_id, page_evidence[model_id], pages[model_id])
+                    for model_id in sorted(pages)
+                    if pages[model_id] is not None
+                ],
+                model_include=include_set,
+            )
+            for _source_key, _provider, _models in page_plan.remaining:
+                for _model in _models:
+                    research_unattempted_models.append(_model)
+                    inventory.append(
+                        CollectionInventoryEntry(
+                            provider=_provider,
+                            model=_model,
+                            disposition="incomplete",
+                            reason_code=REASON_RESEARCH_TASK_BOUND,
+                            detail=(
+                                "research task bound: eligible unresolved fact remained "
+                                "unattempted; deterministic disposition stands"
+                            )[:240],
+                        )
+                    )
+            if page_plan.tasks:
+                page_outcome = _research.run_research_phase(
+                    research,
+                    page_plan,
+                    facts_bound=_research.MAX_RESEARCH_FACTS - sum(len(o.facts) for o in research_outcomes),
+                )
+                research_outcomes.append(page_outcome)
+                if page_outcome.identity.status == "SUCCEEDED":
+                    for model_id, resolved in sorted(page_outcome.docs_resolved.items()):
+                        if model_id not in pages or pages[model_id] is None:
+                            continue
+                        old_page = pages[model_id]
+                        pages[model_id] = se.replace_parsed_model(
+                            old_page,
+                            context_length=resolved.get(
+                                "model:context_length", old_page.context_length
+                            ),
+                            max_output_tokens=resolved.get(
+                                "model:max_output_tokens", old_page.max_output_tokens
+                            ),
+                        )
+                        research_page_backed.add(model_id)
+                    research_rejected.update(page_outcome.rejected)
         for model_id in sorted(observed):
             row = standard_rows.get(model_id)
             if row is None:
@@ -692,7 +846,21 @@ def collect_bundle(
                     )
                     break
             else:
-                proposals[key] = _openai_proposal(row, page, baseline_row, carried_dims, started_at)
+                proposals[key] = _openai_proposal(
+                    row,
+                    page,
+                    baseline_row,
+                    carried_dims,
+                    started_at,
+                    pricing_extraction="semantic" if key in research_backed else "deterministic",
+                    pricing_extractor=(
+                        RESEARCH_EXTRACTOR_ID if key in research_backed else EXTRACTOR_ID
+                    ),
+                    page_extraction="semantic" if model_id in research_page_backed else "deterministic",
+                    page_extractor=(
+                        RESEARCH_EXTRACTOR_ID if model_id in research_page_backed else EXTRACTOR_ID
+                    ),
+                )
         # 181-b (B3): the fetched models index is model evidence, not
         # decoration: every index-only ID (no standard pricing rows at
         # all) receives exactly one explained source disposition instead
@@ -861,6 +1029,48 @@ def collect_bundle(
 
     version = package_version()
     collection_tool, collection_code_revision = _execution_identity.tool_identity()
+
+    # --- 183: aggregate the measured research identity + sealed facts --------
+    # The identity is PARENT-SET (the model cannot self-certify); a NOT_RUN
+    # bundle seals no facts, and SUCCEEDED facts are the grounded cells only.
+    research_identity = ResearchIdentity(
+        status="NOT_RUN",
+        extractor_version=RESEARCH_EXTRACTOR_ID,
+        tool_version=version,
+    )
+    research_facts: list[ResearchGroundedFact] = []
+    for outcome in research_outcomes:
+        research_identity = _research.merge_phase_identities(research_identity, outcome.identity)
+        research_facts.extend(outcome.facts)
+    # Each phase was executed against the REMAINING bundle capacity
+    # (facts_bound), so the aggregate can never exceed the bundle bound;
+    # there is no truncation here to hide.
+    assert len(research_facts) <= _research.MAX_RESEARCH_FACTS
+
+    if research_identity.status == "NOT_RUN":
+        research_note = "Codex research NOT_RUN (disabled or no eligible unresolved fact)"
+    elif research_identity.status == "UNAVAILABLE":
+        research_note = (
+            f"Codex research UNAVAILABLE ({research_identity.failure_code}); "
+            "deterministic dispositions stand"
+        )
+    elif research_identity.status == "FAILED":
+        research_note = (
+            f"Codex research FAILED ({research_identity.failure_code}); "
+            "deterministic dispositions stand"
+        )
+    else:
+        research_note = (
+            f"Codex research SUCCEEDED ({research_identity.facts_accepted} fact(s) "
+            f"grounded, {research_identity.facts_rejected} rejected; semantic method, "
+            "parent-verified against captured bytes)"
+        )
+        if research_identity.tasks_unattempted:
+            research_note += (
+                f"; {len(research_unattempted_models)} eligible model(s) unattempted "
+                "(research task bound)"
+            )
+
     return RefreshBundle(
         schema_version=SCHEMA_VERSION,
         run_id=run_id,
@@ -871,11 +1081,8 @@ def collect_bundle(
             renderer_version=RENDERER_VERSION,
             policy_version=POLICY_VERSION,
         ),
-        research=ResearchIdentity(
-            status="NOT_RUN",
-            extractor_version=EXTRACTOR_ID,
-            tool_version=version,
-        ),
+        research=research_identity,
+        research_facts=tuple(research_facts),
         collection=CollectionIdentity(
             tool=collection_tool,
             # 181-i (I3): the measured fixed file-set content identity of
@@ -913,7 +1120,7 @@ def collect_bundle(
         baseline=baseline_identity,
         notes=(
             f"standard-v1 collection: {len(proposals)} proposed model(s), "
-            f"{len(inventory)} reconciled exclusion(s); Codex research NOT_RUN; "
+            f"{len(inventory)} reconciled exclusion(s); {research_note}; "
             "no import/apply performed"
         ),
     )
@@ -924,12 +1131,15 @@ def _router_proposal(
     baseline_row: object | None,
     carried_dims: list[PricingDimension],
     valid_from: datetime,
+    *,
+    extraction: str = "deterministic",
+    extractor: str = EXTRACTOR_ID,
 ) -> _Proposal:
     provider, model_id = "openrouter", row.model
     provenance = FieldProvenance(
         sources=(f"openrouter|{CATALOG_MODEL}|openrouter_models_api",),
-        extractor=EXTRACTOR_ID,
-        extraction="deterministic",
+        extractor=extractor,
+        extraction=extraction,  # type: ignore[arg-type]
     )
     supports_streaming = True
     flat_capabilities = {"text": True, "streaming": True}
@@ -1011,18 +1221,23 @@ def _openai_proposal(
     baseline_row: object | None,
     carried_dims: list[PricingDimension],
     valid_from: datetime,
+    *,
+    pricing_extraction: str = "deterministic",
+    pricing_extractor: str = EXTRACTOR_ID,
+    page_extraction: str = "deterministic",
+    page_extractor: str = EXTRACTOR_ID,
 ) -> _Proposal:
     provider, model_id = "openai", row.model
     price_sources = (f"openai|{CATALOG_MODEL}|openai_pricing_docs", f"openai|{model_id}|docs_page")
     page_provenance = FieldProvenance(
         sources=(f"openai|{model_id}|docs_page",),
-        extractor=EXTRACTOR_ID,
-        extraction="deterministic",
+        extractor=page_extractor,
+        extraction=page_extraction,  # type: ignore[arg-type]
     )
     price_provenance = FieldProvenance(
         sources=price_sources,
-        extractor=EXTRACTOR_ID,
-        extraction="deterministic",
+        extractor=pricing_extractor,
+        extraction=pricing_extraction,  # type: ignore[arg-type]
     )
     supports_streaming = True
     flat_capabilities = {"text": True, "streaming": True}

@@ -1069,6 +1069,67 @@ neither written nor printed. Pytest exercises only pure harness validators; CI,
 startup, Docker, migrations, and HPC verification never invoke the installed
 Codex binary.
 
+## Catalog Refresh Research Boundary
+
+The opt-in catalog-refresh research fallback (`collect --research`) runs a
+real Codex CLI outside the repository, in a private per-task workspace,
+inside ONE enforced outer boundary (Docker). The boundary covers the CLI and
+every tool/child it spawns; there is never an unsandboxed host fallback, and
+an unavailable boundary refuses research (safe code, deterministic
+dispositions stand).
+
+Enforced limits (verified from the daemon and the container, not just the
+command line):
+
+- **Process/filesystem:** nonroot (uid 65534), read-only root filesystem,
+  all capabilities dropped, `no-new-privileges`, bounded PID/memory/CPU, and
+  task-only mounts: the verified pinned CLI binary, the captured official
+  evidence bytes, the checked-in instruction template (copied as the
+  task-local `AGENTS.md`), the checked-in output schema, the task JSON, and
+  empty task-local config/home/output scratch. No host repository, home,
+  `.codex`, `.env`, SSH/Git credentials, FIFOs, Docker socket, database, or
+  shared volume is reachable; host canary files are probe-verified absent
+  before any model work.
+- **Network:** the researcher joins only a task-internal bridge network
+  created `--internal` with the standard isolated gateway mode (IPv6
+  disabled); an owned probe container on that network proves, before any
+  model work, that the task relay is reachable while the host canary
+  listener, the external internet, the upstream host, and (forward mode) the
+  configured upstream endpoint itself are all unreachable.
+- **Credential isolation:** the researcher holds only a synthetic task
+  credential for the task-owned relay. In forward mode the operator
+  credential lives in a private 0400 file inside the relay's read-only
+  mount — never in argv, env, or logs, and never mounted into the
+  researcher. No database, provider, or seal secret exists in the task
+  environment.
+- **Model authority:** the relay is inference-only for the configured
+  model/path/credential and refuses background/state/store references,
+  provider-hosted tools, MCP/connectors, unknown or unreviewed tool
+  authorities, oversized requests, and redirects BEFORE serving or
+  forwarding. The CLI is further narrowed at qualification to the reviewed
+  local (client-executed) tool catalog, with hosted web search, delegation,
+  goals, and the image tool disabled; the researcher's local tools execute
+  only inside the enforced boundary.
+- **Worker-only sandbox override:** on hosts where the kernel/AppArmor
+  denies unprivileged user namespaces (so the CLI's nested bubblewrap cannot
+  start), the CLI runs with a sandbox override INSIDE the independently
+  qualified outer container. The override is never used on the host and
+  adds no authority beyond the enforced outer limits; it is documented as
+  a worker-only choice, not a relaxation.
+- **Bounds and honesty:** finite task/elapsed/output bounds (no silent
+  truncation), a measured identity set by the parent (actual CLI version
+  and binary hash, template/output-schema identity, safe counts, elapsed
+  time, safe failure code, result hash), and cleanup of ONLY the
+  label-verified owned resources (a failed cleanup is observable and
+  refuses would-be success).
+- **Result handling:** the only result is the CLI's final message, schema-
+  validated (bounded JSON with per-cell locator + exact raw quote), written
+  to one expected path and captured with the anchored no-follow bounded
+  reader. The parent re-resolves every locator/quote against the captured
+  bytes before any fact enters the bundle; every sealed fact is re-grounded
+  again at review/verify time. Raw reasoning, session transcripts, and
+  model debug output are never stored.
+
 ## Redis Rate Limiting
 
 When enabled, Redis enforces request, estimated-token, and active-concurrency
