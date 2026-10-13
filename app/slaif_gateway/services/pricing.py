@@ -17,6 +17,7 @@ from slaif_gateway.schemas.pricing import (
     ChatCostEstimate,
     ExternalToolPricing,
     FxConversionResult,
+    PricingCapture,
     PricingLookupResult,
 )
 from slaif_gateway.schemas.realtime import RealtimePolicyResult
@@ -114,6 +115,54 @@ class PricingService:
         conversion = _fx_conversion_result(row)
         return amount * conversion.rate, conversion
 
+    async def capture_pricing_and_fx(
+        self,
+        *,
+        provider: str,
+        model: str,
+        endpoint: str,
+        at: datetime | None = None,
+    ) -> PricingCapture:
+        """Coherent admission capture of the pricing row and FX conversion.
+
+        The active enabled pricing rule and, for non-EUR currency, the
+        native->EUR FX row are selected in ONE statement, so a concurrent
+        price+FX supersession is observed only as the complete old pair or
+        the complete new pair. EUR prices capture the read-free identity
+        conversion. Fail-closed: a missing pricing rule raises
+        PricingRuleNotFoundError and a missing non-EUR rate raises
+        FxRateNotFoundError.
+        """
+        at_time = _aware_time(at)
+        normalized_endpoint = _normalize_endpoint(endpoint)
+        price_row, fx_row = await self._pricing_rules_repository.find_active_pricing_rule_with_fx(
+            provider=provider,
+            upstream_model=model,
+            endpoint=normalized_endpoint,
+            at_time=at_time,
+        )
+        if price_row is None:
+            raise PricingRuleNotFoundError(param="model")
+        pricing = _pricing_lookup_result(price_row)
+        if fx_row is None:
+            if pricing.currency == _EUR:
+                fx: FxConversionResult | None = FxConversionResult(
+                    from_currency=_EUR,
+                    to_currency=_EUR,
+                    rate=Decimal("1"),
+                    fx_rate_id=None,
+                )
+            else:
+                raise FxRateNotFoundError(param="currency")
+        else:
+            if (
+                _normalize_currency(fx_row.base_currency) != pricing.currency
+                or _normalize_currency(fx_row.quote_currency) != _EUR
+            ):
+                raise InvalidFxRateError(param="currency")
+            fx = _fx_conversion_result(fx_row)
+        return PricingCapture(pricing=pricing, fx=fx)
+
     async def estimate_chat_completion_cost(
         self,
         *,
@@ -141,7 +190,10 @@ class PricingService:
                 pricing.request_price,
                 field_name="request_price",
             )
-            total_eur, fx = await self.convert_to_eur(request_price, pricing.currency, at=at)
+            if fx is None:
+                total_eur, fx = await self.convert_to_eur(request_price, pricing.currency, at=at)
+            else:
+                total_eur = request_price * fx.rate
             return ChatCostEstimate(
                 provider=route.provider,
                 requested_model=route.requested_model,
@@ -239,13 +291,16 @@ class PricingService:
         policy: AudioPolicyResult,
         endpoint: str,
         at: datetime | None = None,
+        pricing: PricingLookupResult | None = None,
+        fx: FxConversionResult | None = None,
     ) -> ChatCostEstimate:
-        pricing = await self.find_active_pricing_rule(
-            provider=route.provider,
-            model=route.resolved_model,
-            endpoint=endpoint,
-            at=at,
-        )
+        if pricing is None:
+            pricing = await self.find_active_pricing_rule(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint=endpoint,
+                at=at,
+            )
 
         input_tokens = policy.estimated_input_tokens
         output_tokens = 0
@@ -258,7 +313,10 @@ class PricingService:
         elif endpoint in {"/v1/audio/transcriptions", "/v1/audio/translations"}:
             raise AudioRequestPricingNotSupportedError(param="model")
 
-        total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
+        if fx is None:
+            total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
+        else:
+            total_eur = total_native * fx.rate
 
         return ChatCostEstimate(
             provider=route.provider,
@@ -289,17 +347,23 @@ class PricingService:
         policy: EmbeddingsPolicyResult,
         endpoint: str = "/v1/embeddings",
         at: datetime | None = None,
+        pricing: PricingLookupResult | None = None,
+        fx: FxConversionResult | None = None,
     ) -> ChatCostEstimate:
-        pricing = await self.find_active_pricing_rule(
-            provider=route.provider,
-            model=route.resolved_model,
-            endpoint=endpoint,
-            at=at,
-        )
+        if pricing is None:
+            pricing = await self.find_active_pricing_rule(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint=endpoint,
+                at=at,
+            )
 
         input_tokens = policy.estimated_input_tokens
         input_cost_native = Decimal(input_tokens) / _ONE_MILLION * pricing.input_price_per_1m
-        total_eur, fx = await self.convert_to_eur(input_cost_native, pricing.currency, at=at)
+        if fx is None:
+            total_eur, fx = await self.convert_to_eur(input_cost_native, pricing.currency, at=at)
+        else:
+            total_eur = input_cost_native * fx.rate
 
         return ChatCostEstimate(
             provider=route.provider,
@@ -331,13 +395,16 @@ class PricingService:
         endpoint: str = "/v1/realtime/client_secrets",
         admission_pricing_only: bool = False,
         at: datetime | None = None,
+        pricing: PricingLookupResult | None = None,
+        fx: FxConversionResult | None = None,
     ) -> ChatCostEstimate:
-        pricing = await self.find_active_pricing_rule(
-            provider=route.provider,
-            model=route.resolved_model,
-            endpoint=endpoint,
-            at=at,
-        )
+        if pricing is None:
+            pricing = await self.find_active_pricing_rule(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint=endpoint,
+                at=at,
+            )
 
         input_tokens = policy.estimated_input_tokens
         output_tokens = policy.effective_output_tokens
@@ -353,7 +420,10 @@ class PricingService:
             total_native = input_cost_native + output_cost_native
             if pricing.request_price is not None:
                 total_native = max(total_native, pricing.request_price)
-        total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
+        if fx is None:
+            total_eur, fx = await self.convert_to_eur(total_native, pricing.currency, at=at)
+        else:
+            total_eur = total_native * fx.rate
 
         return ChatCostEstimate(
             provider=route.provider,

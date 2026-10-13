@@ -59,8 +59,34 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 
 SCHEMA_VERSION = "1"
-RENDERER_VERSION = "181.1"
+# 182: the report renderer gained the reviewed apply-plan section and
+# scope-correct static wording, so the sealed artifacts of pre-182 (181.1)
+# runs are NOT byte-stable under this verifier's recomputation. The
+# authenticated execution context therefore accepts exactly the renderer
+# versions this verifier can replay byte-stably: 182.1 only. A sealed context
+# carrying 181.1 (or any other value) is refused explicitly as an unsupported
+# replay version — no historical renderer fleet, no re-derivation, no
+# re-sealing. The supported path for legacy proposal data is a fresh review
+# (or collection) under the current CLI, which produces current artifacts
+# without rewriting sealed archives or source dates.
+SUPPORTED_RENDERER_VERSIONS: tuple[str, ...] = ("182.1",)
+RENDERER_VERSION = "182.1"
 POLICY_VERSION = 1
+# 182: canonical typed apply-plan contract (bounded plan/result/version).
+# The plan is a deterministic derivation from the authenticated sealed bytes
+# (bundle + baseline document + validation report) only: it carries no
+# effective T, no clock, and no live database state, so its identity is
+# stable for the same sealed run.
+APPLY_PLAN_SCHEMA_VERSION = "1"
+APPLY_MODES: tuple[str, ...] = ("bootstrap", "refresh")
+APPLY_OPERATION_TYPES: tuple[str, ...] = (
+    "create_provider",
+    "create_route",
+    "create_pricing",
+    "supersede_pricing",
+    "create_fx",
+    "supersede_fx",
+)
 # 181-i (I2/I3): the registered deterministic extractor/parser identity of
 # the generating code. Like the contract versions above, this is a
 # RUNNER-OWNED generator version/identity constant of this code; the
@@ -424,7 +450,7 @@ class ExecutionGeneratorVersions(CatalogRefreshModel):
     """
 
     schema_version: Literal[SCHEMA_VERSION]
-    renderer_version: Literal[RENDERER_VERSION]
+    renderer_version: Literal["182.1"]
     policy_version: Literal[POLICY_VERSION]
     extractor_version: Literal[EXTRACTOR_ID]
 

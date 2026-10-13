@@ -12,12 +12,53 @@ from slaif_gateway.config import Settings
 from slaif_gateway.providers.errors import ProviderTimeoutError
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.openai import ChatCompletionRequest
-from slaif_gateway.schemas.pricing import ChatCostEstimate
+from slaif_gateway.schemas.pricing import (
+    ChatCostEstimate,
+    FxConversionResult,
+    PricingCapture,
+    PricingLookupResult,
+)
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting_errors import ReservationFinalizationError
 from slaif_gateway.services.quota_errors import QuotaLimitExceededError
+
+
+
+
+def _capture_result() -> PricingCapture:
+    """Equivalent coherent-capture facts for the fake admission seam."""
+    return PricingCapture(
+        pricing=PricingLookupResult(
+            provider="openai",
+            model="gpt-4.1-mini",
+            endpoint="chat.completions",
+            currency="EUR",
+            input_price_per_1m=Decimal("0.5"),
+            cached_input_price_per_1m=None,
+            output_price_per_1m=Decimal("1.5"),
+            reasoning_price_per_1m=None,
+            audio_output_price_per_1m=None,
+            request_price=None,
+            cache_write_input_price_per_1m=None,
+            cache_write_input_multiplier=None,
+            long_context_threshold_tokens=None,
+            long_context_input_multiplier=None,
+            long_context_output_multiplier=None,
+            pricing_rule_id=None,
+            valid_from=datetime.now(UTC),
+            valid_until=None,
+        ),
+        fx=FxConversionResult(
+            from_currency="EUR", to_currency="EUR", rate=Decimal("1"), fx_rate_id=None
+        ),
+    )
+
+
+async def _fake_capture_pricing_and_fx(self, *, provider, model, endpoint, at=None):
+    _ = (self, provider, model, endpoint, at)
+    return _capture_result()
 
 
 class _FakeSession:
@@ -144,10 +185,15 @@ def _wire_success(monkeypatch, state: dict[str, object], auth: AuthenticatedGate
         state["events"].append(f"{self._model_routes_repository._session.label}:resolve")
         return route
 
-    async def _estimate_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _estimate_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (route, policy, endpoint, at)
         state["events"].append(f"{self._pricing_rules_repository._session.label}:price")
         return estimate
+
+    async def _capture(self, *, provider, model, endpoint, at=None):
+        _ = (provider, model, endpoint, at)
+        state["events"].append(f"{self._pricing_rules_repository._session.label}:capture")
+        return _capture_result()
 
     async def _reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, now=None):
         _ = (authenticated_key, route, policy, cost_estimate, request_id, now)
@@ -168,6 +214,7 @@ def _wire_success(monkeypatch, state: dict[str, object], auth: AuthenticatedGate
 
     monkeypatch.setattr(gateway_module.RouteResolutionService, "resolve_model", _resolve_model)
     monkeypatch.setattr(gateway_module.PricingService, "estimate_chat_completion_cost", _estimate_cost)
+    monkeypatch.setattr(gateway_module.PricingService, "capture_pricing_and_fx", _capture)
     monkeypatch.setattr(gateway_module.QuotaService, "reserve_for_chat_completion", _reserve)
     monkeypatch.setattr(gateway_module.AccountingService, "finalize_successful_response", _finalize)
     monkeypatch.setattr(gateway_module, "get_provider_adapter", lambda provider, settings: _Adapter())
@@ -191,6 +238,7 @@ async def test_reservation_commits_and_closes_before_provider_call(monkeypatch) 
         "tx1:resolve",
         "tx1:close",
         "tx2:open",
+        "tx2:capture",
         "tx2:price",
         "tx2:reserve",
         "tx2:commit",
@@ -257,6 +305,7 @@ async def test_provider_failure_releases_reservation_in_separate_transaction(mon
         "tx1:resolve",
         "tx1:close",
         "tx2:open",
+        "tx2:capture",
         "tx2:price",
         "tx2:reserve",
         "tx2:commit",

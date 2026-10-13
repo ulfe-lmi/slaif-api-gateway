@@ -2,14 +2,80 @@
 
 from __future__ import annotations
 
+import types
 import uuid
 from datetime import datetime
 from decimal import Decimal
-
-from sqlalchemy import Select, select
+from sqlalchemy import Select, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import PricingRule
+
+# Column keys of the pricing_rules row returned by _COHERENT_PAIR_SQL. The
+# attribute set matches what services.pricing._pricing_lookup_result reads
+# off a pricing row, so a SimpleNamespace built from these keys can be
+# passed through the same lookup-result construction.
+_PRICE_ROW_KEYS = (
+    "id",
+    "provider",
+    "upstream_model",
+    "endpoint",
+    "currency",
+    "input_price_per_1m",
+    "cached_input_price_per_1m",
+    "output_price_per_1m",
+    "reasoning_price_per_1m",
+    "request_price",
+    "pricing_metadata",
+    "valid_from",
+    "valid_until",
+    "enabled",
+)
+
+# Single-statement coherent pair capture. One snapshot (one statement under
+# READ COMMITTED) selects BOTH the active enabled pricing rule and the
+# native->EUR FX row, so a concurrent price+FX supersession can only be
+# observed as the complete old pair or the complete new pair, never mixed.
+#
+# Price side mirrors PricingRulesRepository.find_active_pricing_rule exactly:
+# enabled, valid_from <= at_time, valid_until IS NULL OR > at_time, most
+# recent valid_from first. FX side mirrors FxRatesRepository.find_latest_rate
+# for (base_currency=<price currency>, quote_currency='EUR'): same validity
+# window, most recent valid_from first, created_at tie-break. The LEFT JOIN
+# LATERAL leaves the fx columns NULL when the price currency is EUR (the
+# read-free conversion) or no active rate exists; the caller decides the
+# fail-closed behavior.
+_COHERENT_PAIR_SQL = text(
+    "SELECT p.id, p.provider, p.upstream_model, p.endpoint, p.currency, "
+    "p.input_price_per_1m, p.cached_input_price_per_1m, "
+    "p.output_price_per_1m, p.reasoning_price_per_1m, p.request_price, "
+    "p.pricing_metadata, p.valid_from, p.valid_until, p.enabled, "
+    "f.id AS fx_id, f.base_currency AS fx_base_currency, "
+    "f.quote_currency AS fx_quote_currency, f.rate AS fx_rate, "
+    "f.valid_from AS fx_valid_from, f.valid_until AS fx_valid_until, "
+    "f.source AS fx_source, f.created_at AS fx_created_at "
+    "FROM ("
+    "  SELECT * FROM pricing_rules "
+    "  WHERE provider = :provider "
+    "    AND upstream_model = :upstream_model "
+    "    AND endpoint = :endpoint "
+    "    AND enabled = TRUE "
+    "    AND valid_from <= :at_time "
+    "    AND (valid_until IS NULL OR valid_until > :at_time) "
+    "  ORDER BY valid_from DESC "
+    "  LIMIT 1"
+    ") AS p "
+    "LEFT JOIN LATERAL ("
+    "  SELECT * FROM fx_rates "
+    "  WHERE base_currency = p.currency "
+    "    AND quote_currency = 'EUR' "
+    "    AND p.currency <> 'EUR' "
+    "    AND valid_from <= :at_time "
+    "    AND (valid_until IS NULL OR valid_until > :at_time) "
+    "  ORDER BY valid_from DESC, created_at DESC "
+    "  LIMIT 1"
+    ") AS f ON TRUE"
+)
 
 
 class PricingRulesRepository:
@@ -236,3 +302,98 @@ class PricingRulesRepository:
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def find_active_pricing_rule_with_fx(
+        self,
+        *,
+        provider: str,
+        upstream_model: str,
+        endpoint: str,
+        at_time: datetime,
+    ) -> tuple[types.SimpleNamespace | None, types.SimpleNamespace | None]:
+        """Coherent admission capture: price row AND native->EUR FX row from
+        ONE statement (one snapshot), or (None, None) when no active enabled
+        pricing rule matches. The FX row is None when the currency is EUR or
+        no active rate exists (the caller decides the fail-closed behavior).
+        """
+        result = await self._session.execute(
+            _COHERENT_PAIR_SQL,
+            {
+                "provider": provider,
+                "upstream_model": upstream_model,
+                "endpoint": endpoint,
+                "at_time": at_time,
+            },
+        )
+        row = result.mappings().first()
+        if row is None:
+            return None, None
+        price = types.SimpleNamespace(**{key: row[key] for key in _PRICE_ROW_KEYS})
+        if row["fx_id"] is None:
+            return price, None
+        fx = types.SimpleNamespace(
+            id=row["fx_id"],
+            base_currency=row["fx_base_currency"],
+            quote_currency=row["fx_quote_currency"],
+            rate=row["fx_rate"],
+            valid_from=row["fx_valid_from"],
+            valid_until=row["fx_valid_until"],
+            source=row["fx_source"],
+            created_at=row["fx_created_at"],
+        )
+        return price, fx
+
+    async def close_active_pricing_rule(
+        self,
+        *,
+        pricing_rule_id: uuid.UUID,
+        provider: str,
+        upstream_model: str,
+        endpoint: str,
+        currency: str,
+        valid_from: datetime,
+        expected_valid_until: datetime | None,
+        effective_at: datetime,
+    ) -> bool:
+        """Supersession close: end the active validity window of EXACTLY the
+        row the reviewed plan identified, at the one effective T.
+
+        Guarded on the baseline facts recorded in the plan (row identity,
+        currency, opening instant, the REVIEWED closing instant, still
+        active at T, still enabled). The reviewed closing instant is
+        compared with exact NULL-safe equality (IS NOT DISTINCT FROM): a
+        reviewed NULL end must still be NULL at apply time (a NULL ->
+        finite drift is rejected, never wildcarded), and a reviewed finite
+        future end — ordinary refresh state — must still be exactly that
+        end and still in the future at T. Any drift or expiry means the row
+        is not the reviewed active row and NOTHING is mutated. The window
+        is then safely ended at the one effective T while the amount,
+        currency, metadata and row identity stay untouched; the new row is
+        inserted at the same instant by the caller (history is preserved,
+        never repriced in place).
+        """
+        result = await self._session.execute(
+            text(
+                "UPDATE pricing_rules SET valid_until = :effective_at "
+                "WHERE id = :id "
+                "AND provider = :provider "
+                "AND upstream_model = :upstream_model "
+                "AND endpoint = :endpoint "
+                "AND currency = :currency "
+                "AND valid_from = :valid_from "
+                "AND enabled = TRUE "
+                "AND valid_until IS NOT DISTINCT FROM :expected_valid_until "
+                "AND (valid_until IS NULL OR valid_until > :effective_at)"
+            ),
+            {
+                "id": pricing_rule_id,
+                "provider": provider,
+                "upstream_model": upstream_model,
+                "endpoint": endpoint,
+                "currency": currency,
+                "valid_from": valid_from,
+                "expected_valid_until": expected_valid_until,
+                "effective_at": effective_at,
+            },
+        )
+        return result.rowcount == 1

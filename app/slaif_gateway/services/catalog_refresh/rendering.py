@@ -127,6 +127,8 @@ _FINDING_LABELS = {
     "fx_baseline_ambiguous": "ambiguous FX baseline rows",
     "fx_row_invalid": "invalid FX row",
     "fx_provenance_invalid_reference": "FX source reference invalid",
+    "new_model_exposure": "new model is publicly visible to allow-all keys (ACK required before apply)",
+    "new_route_with_changed_pricing": "new route published alongside a changed price (ACK required before apply)",
     "gate:import.routes": "route import plan blocked",
     "gate:import.pricing": "pricing import plan blocked",
     "gate:import.fx": "FX import plan blocked",
@@ -370,8 +372,9 @@ def _plan_lines(report: dict[str, Any]) -> tuple[list[str], bool]:
             blocked = True
             lines.append(
                 f"<li>\u2022 {esc(kind)}: <strong class='ev-blocked'>BLOCKED</strong> — "
-                f"{esc(ready)} create row(s) executable, {esc(excluded + plan_blocked)} row(s) require an apply "
-                "operation that does not exist in this version (excluded from the executable artifact)</li>"
+                f"{esc(ready)} create row(s) executable, {esc(excluded + plan_blocked)} row(s) excluded "
+                "from the executable artifact (representable price/FX changes carry as supersession "
+                "operations in the apply plan)</li>"
             )
         elif gate.get("total_rows", 0) == 0:
             lines.append(f"<li>\u2022 {esc(kind)}: nothing to create (NO CHANGES)</li>")
@@ -497,7 +500,7 @@ def _plain_reason_html(report: dict[str, Any], blockers: list[dict[str, Any]]) -
     labels = "; ".join(_finding_label(c) for c in codes[:3])
     text = f"{len(blockers)} blocking issue(s): {labels}"
     if len(codes) > 3:
-        text += f" (+{len(codes) - 3} more codes in the findings)"
+        text += f" (+{len(codes) - 3} more)"
     return text
 
 
@@ -540,13 +543,14 @@ def _render_scope_card(bundle: RefreshBundle, report: dict[str, Any]) -> str:
             f"code <code class='wrap'>{esc(_digest_fragment(generating.get('code_revision')))}</code> "
             "(runner-measured)"
         )
-    # "at" (not "generated at"): the first screen has a two-line budget
-    # at every viewport, and actual collect run ids are long; the
-    # expanded identity carries the full generated-at wording.
+    # The first screen keeps a two-line budget at every viewport; actual
+    # collect run ids are long, so the wall-clock generated-at instant is
+    # not repeated on this line (the run id carries the date-time, and the
+    # full instant stays in the footer and the expanded Run identity).
     run_identity_compact = (
         "<p class='annot' id='run-identity-compact'>"
-        f"Run <code class='wrap'>{esc(report.get('run_id'))}</code> \u00b7 at "
-        f"{esc(report.get('generated_at'))}{compact_generator} "
+        f"Run <code class='wrap'>{esc(report.get('run_id'))}</code>"
+        f"{compact_generator} "
         "\u00b7 <a href='#run-identity'>full identity</a></p>"
     )
     collection_line = ""
@@ -687,8 +691,9 @@ def _render_providers_summary(
         honest,
         "<p class='annot'>Populations are not additive: the change columns compare the proposed bundle "
         "against the local baseline in effect at review time, while the snapshot columns replay the "
-        "supplied source documents offline. 'Mutations' are existing-row updates excluded from the "
-        "executable artifact (no apply operation exists in this version).</p>",
+        "supplied source documents offline. 'Mutations' are existing-row update facts excluded from "
+        "the create-only executable artifact; the representable subset appears in the apply "
+        "plan.</p>",
         "<p class='countsline'><strong>Counts (recomputed):</strong> "
         + " ".join(
             f"<span class='kvchip'>{esc(key.replace('_', ' '))} {esc(counts.get(key, 0))}</span>"
@@ -741,12 +746,36 @@ def _plan_totals(report: dict[str, Any]) -> tuple[int, int, int]:
 
 
 def _render_plan_line(report: dict[str, Any]) -> str:
+    """The single first-screen actionable-plan summary.
+
+    When the authenticated apply plan is non-empty it is the canonical
+    actionable summary (operation counts + one atomic apply); the legacy
+    TSV create-row / import-gate mechanics stay in the expanded
+    #plan-details section. Without an apply plan the historical import-plan
+    wording is preserved."""
     ready, blocked_rows, total = _plan_totals(report)
+    plan = report.get("apply_plan")
+    ops = plan.get("operations", []) if plan else []
+    if ops:
+        by_type: dict[str, int] = {}
+        for op in ops:
+            by_type[op["type"]] = by_type.get(op["type"], 0) + 1
+        breakdown = " · ".join(f"{count} {kind.replace('_', ' ')}" for kind, count in sorted(by_type.items()))
+        blocked_note = (
+            f"; {esc(blocked_rows)} existing-row update(s) remain excluded from the executable artifact"
+            if blocked_rows
+            else ""
+        )
+        return (
+            "<p class='line' id='plan-line'><strong>Apply plan:</strong> "
+            f"{esc(len(ops))} operation(s) — {esc(breakdown)}; one atomic apply{blocked_note}. "
+            "<a href='#apply-plan'>apply plan detail →</a></p>"
+        )
     if blocked_rows:
         return (
             "<p class='line' id='plan-line'><strong class='ev-blocked'>Import plan BLOCKED</strong> — "
-            f"{esc(ready)} create row(s) executable; {esc(blocked_rows)} existing-row update(s) have no "
-            "apply operation in this version. <a href='#plan-details'>plan detail →</a></p>"
+            f"{esc(ready)} create row(s) executable; {esc(blocked_rows)} existing-row update(s) are "
+            "excluded from the executable artifact. <a href='#plan-details'>plan detail →</a></p>"
         )
     if total == 0:
         return (
@@ -755,8 +784,7 @@ def _render_plan_line(report: dict[str, Any]) -> str:
         )
     return (
         "<p class='line' id='plan-line'>Import plan: create-only — "
-        f"{esc(ready)} executable create row(s); existing-row updates/supersessions are not apply "
-        "operations in this version. <a href='#plan-details'>plan detail →</a></p>"
+        f"{esc(ready)} executable create row(s). <a href='#plan-details'>plan detail →</a></p>"
     )
 
 
@@ -802,8 +830,8 @@ def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[
         f"<p class='state {_STATE_CLASS[state]}'><strong>{esc(state)}</strong> — {_plain_reason_html(report, blockers)}</p>",
         "<div class='chips'>",
         f"<span class='chip {'chip-blocker' if blockers else ''}'>BLOCKERS {len(blockers)}</span>",
-        f"<span class='chip {'chip-review' if reviews else ''}'>REVIEW findings {len(reviews)}</span>",
-        f"<span class='chip'>all findings {len(warnings)}</span>",
+        f"<span class='chip {'chip-review' if reviews else ''}'>REVIEW {len(reviews)}</span>",
+        f"<span class='chip'>findings {len(warnings)}</span>",
         "</div>",
         "</div>",
         "<div class='grid-2'>",
@@ -855,7 +883,8 @@ def _render_changes(bundle: RefreshBundle, report: dict[str, Any], source_index:
                 else "—"
             )
             reason = (
-                "existing-row update/supersession; no apply operation exists in this version — excluded from the executable artifact"
+                "existing-row change; representable price/FX supersessions are apply-plan operations, "
+                "non-representable changes stay excluded from the executable artifact"
             )
             parts.append(
                 f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td><td>{proposed}</td><td>{esc(reason)}</td></tr>"
@@ -1025,8 +1054,9 @@ def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) ->
         "published long-context standard prices, contextual override tiers, positive cache-write "
         "charges, unknown billing keys, and source sentinels on billable dims; an explicitly selected "
         "excluded model blocks the run. Research identity: NOT_RUN — no Codex invocation occurred in "
-        "this version. No apply or Codex research command is implemented in this "
-        "version; the sealed run directory is the terminal output.</p>"
+        "this version and the Codex researcher is not implemented in this objective. Apply of the "
+        "reviewed plan is a separate explicit CLI command over the sealed run directory; "
+        "review/verify itself remains read-only.</p>"
     )
     parts.append("</details>")
     return parts
@@ -1157,11 +1187,12 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     _ready, plan_totals_blocked, plan_totals_total = _plan_totals(report)
     plan_open = plan_blocked or report["state"] == "BLOCKED"
     plan_open_attr = " open" if plan_open else ""
-    parts.append(f"<details id='plan-details'{plan_open_attr}><summary>Import plan detail (create-only)</summary>")
+    parts.append(f"<details id='plan-details'{plan_open_attr}><summary>Import plan detail (create rows)</summary>")
     if plan_totals_blocked:
         parts.append(
-            "<p class='plan-blocked'>At least one execution plan is BLOCKED: existing-row updates/supersessions "
-            "are not apply operations in this version. Only create rows enter the executable artifacts.</p>"
+            "<p class='plan-blocked'>At least one execution plan is BLOCKED: the affected existing-row "
+            "changes stay excluded from the executable artifacts. The apply plan carries only "
+            "non-blocked, representable operations.</p>"
         )
     elif report["state"] == "READY_WITH_WARNINGS":
         parts.append(
@@ -1175,6 +1206,7 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     else:
         parts.append("<p class='muted'>No import gates were evaluated (no proposed rows).</p>")
     parts.append("</details>")
+    parts.extend(_render_apply_plan_details(report))
 
     # Full per-gate checklist (the first-screen compact checklist links here;
     # open on BLOCKED so the blocking gate detail is visible without hunting).
@@ -1201,7 +1233,7 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
                 ("Detail", gate["detail"]),
             ]))
             parts.append("</div>")
-        parts.append("<p class='muted'>Existing create-only execution remains unchanged. Updates/supersessions are represented as changed rows above; their apply plan is BLOCKED because no apply operation exists in this version. An empty unchanged plan is a truthful NO CHANGES result, not an invalid import.</p>")
+        parts.append("<p class='muted'>Existing create-only execution remains unchanged. Updates/supersessions are represented as changed rows above; representable price/FX changes are supersession operations in the apply plan, blocked or non-representable changes stay excluded. An empty unchanged plan is a truthful NO CHANGES result, not an invalid import.</p>")
         parts.append("</details>")
 
     parts.append("<details id='source-inventory'><summary>Source inventory and reconciliation (trust derived, never declared)</summary>")
@@ -1482,6 +1514,119 @@ def _render_source_evidence_details(report: dict[str, Any]) -> list[str]:
     return parts
 
 
+def _apply_op_scope(op: dict[str, Any]) -> str:
+    op_type = op["type"]
+    if op_type == "create_provider":
+        return f"provider {op.get('provider')}"
+    if op_type == "create_route":
+        return (
+            f"{op.get('provider')} · {op.get('requested_model')} → {op.get('upstream_model')} "
+            f"({op.get('match_type')})"
+        )
+    if op_type in ("create_pricing", "supersede_pricing"):
+        return f"{op.get('provider')} · {op.get('model')} · {op.get('endpoint')}"
+    return f"FX {op.get('base_currency')} → {op.get('quote_currency')}"
+
+
+def _apply_op_facts(op: dict[str, Any]) -> str:
+    op_type = op["type"]
+    if op_type == "create_provider":
+        return (
+            f"display_name={op.get('display_name')}, base_url={op.get('base_url')}, "
+            f"api_key_env_var={op.get('api_key_env_var')}, kind={op.get('kind')}, "
+            f"enabled={op.get('enabled')}, timeout={op.get('timeout_seconds')}s, "
+            f"max_retries={op.get('max_retries')}"
+        )
+    if op_type == "create_route":
+        caps = op.get("capabilities") or {}
+        cap_list = ", ".join(sorted(caps)) if caps else "none"
+        return (
+            f"priority={op.get('priority')}, enabled={op.get('enabled')}, "
+            f"visible_in_models={op.get('visible_in_models')}, "
+            f"supports_streaming={op.get('supports_streaming')}, endpoint={op.get('endpoint')}, "
+            f"capabilities={cap_list}"
+        )
+    if op_type == "create_pricing":
+        dims = " ".join(
+            f"{name}={value}" for name, value in sorted((op.get("dimensions") or {}).items()) if value is not None
+        )
+        return (
+            f"currency={op.get('currency')}, {dims}, source_url={op.get('source_url') or '—'}, "
+            "valid_from=effective T"
+        )
+    if op_type == "supersede_pricing":
+        old = op.get("old") or {}
+        new = op.get("new") or {}
+        old_dims = " ".join(
+            f"{name}={value}" for name, value in sorted((old.get("dimensions") or {}).items()) if value is not None
+        )
+        new_dims = " ".join(
+            f"{name}={value}" for name, value in sorted((new.get("dimensions") or {}).items()) if value is not None
+        )
+        return (
+            f"old row {str(old.get('row_id'))[:8]}: currency={old.get('currency')}, {old_dims}, "
+            f"window {old.get('valid_from')} → {old.get('valid_until') or 'open'}, enabled={old.get('enabled')}; "
+            f"new row: currency={new.get('currency')}, {new_dims}, source_url={new.get('source_url') or '—'}, "
+            "valid_from=effective T"
+        )
+    if op_type == "create_fx":
+        return (
+            f"rate={op.get('rate')}, source={op.get('source') or '—'}, "
+            f"published_at={op.get('published_at') or '—'}, derived_reciprocal={op.get('derived_reciprocal')}, "
+            "valid_from=effective T"
+        )
+    old = op.get("old") or {}
+    new = op.get("new") or {}
+    return (
+        f"old row {str(old.get('row_id'))[:8]}: rate={old.get('rate')}, window "
+        f"{old.get('valid_from')} → {old.get('valid_until') or 'open'}, source={old.get('source') or '—'}; "
+        f"new row: rate={new.get('rate')}, source={new.get('source') or '—'}, "
+        f"published_at={new.get('published_at') or '—'}, valid_from=effective T"
+    )
+
+
+def _render_apply_plan_details(report: dict[str, Any]) -> list[str]:
+    plan = report.get("apply_plan")
+    if not plan:
+        return []
+    ops = plan.get("operations", [])
+    parts: list[str] = [
+        f"<details id='apply-plan' open><summary>Apply plan — {len(ops)} operation(s)</summary>"
+    ]
+    parts.append(
+        _kv_block(
+            [
+                ("Plan schema version", plan.get("schema_version", "")),
+                ("Plan SHA-256 (in validation.json)", plan.get("plan_sha256", "")),
+                (
+                    "Effective time",
+                    "one T chosen in the apply transaction; never embedded in the plan",
+                ),
+            ]
+        )
+    )
+    parts.append(
+        "<div class='table-scroll'><table><thead><tr><th>#</th><th>Operation</th>"
+        "<th>Scope</th><th>Reviewed facts</th></tr></thead><tbody>"
+    )
+    for index, op in enumerate(ops, 1):
+        parts.append(
+            f"<tr><td class='num'>{index}</td><td>{esc(op['type'].replace('_', ' '))}</td>"
+            f"<td class='wrap'>{esc(_apply_op_scope(op))}</td>"
+            f"<td class='wrap'>{esc(_apply_op_facts(op))}</td></tr>"
+        )
+    parts.append("</tbody></table></div>")
+    parts.append(
+        "<p class='muted'>Apply executes every operation in ONE PostgreSQL transaction at ONE effective "
+        "time T: each supersession re-verifies the reviewed old row (identity, values, reviewed window "
+        "end) with a close guard, closes that window at T, and inserts the reviewed new row at T. Old "
+        "amounts, sources and row identities are preserved — history is never re-priced in place. "
+        "Apply refuses to run if the re-derived plan differs from the authenticated plan identity.</p>"
+    )
+    parts.append("</details>")
+    return parts
+
+
 def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
     """Render the sealed one-page REVIEW.html. Pure function of inputs."""
     source_index = _source_index(bundle)
@@ -1506,16 +1651,17 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
                 # of this invocation (never mere collection-field presence).
                 "One-page review artifact of a live-collected catalog: this "
                 "invocation fetched the sources below through bounded official "
-                "retrieval (identity below); apply is not implemented. "
+                "retrieval (identity below); apply of the reviewed plan is a separate explicit "
+                "command. "
                 if (report.get("source_evidence") or {}).get("scope") == "live_collection"
                 else "One-page review of a supplied, previously collected "
                 "catalog: the collection identity is historical provenance; "
                 "this invocation parsed supplied bytes offline (no live "
-                "retrieval). Apply is not implemented. "
+                "retrieval). Apply of the reviewed plan is a separate explicit command. "
                 if (report.get("source_evidence") or {}).get("scope") == "supplied_collection"
                 else "One-page offline review artifact: this invocation parsed "
-                "supplied snapshot bytes offline (no live retrieval). Apply is "
-                "not implemented. "
+                "supplied snapshot bytes offline (no live retrieval). Apply of the reviewed "
+                "plan is a separate explicit command. "
             )
             + "Everything needed for the decision is in this file; no external resources, no "
             "JavaScript, no network on open.</p>"
@@ -1530,14 +1676,17 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
     footer_scope_value = report.get("source_evidence", {}).get("scope")
     footer_scope = (
         "live-collection scope: bounded official retrieval was performed by this invocation; "
-        "apply and the Codex researcher are not implemented in this version. "
+        "apply of the reviewed plan is a separate explicit CLI command; the Codex "
+        "researcher is not implemented in this version. "
         if footer_scope_value == "live_collection"
         else "supplied-collection scope: the recorded collection identity is historical "
-        "provenance; this invocation reviewed the supplied bytes offline; apply and the "
-        "Codex researcher are not implemented in this version. "
+        "provenance; this invocation reviewed the supplied bytes offline; apply of the "
+        "reviewed plan is a separate explicit CLI command; the Codex researcher is not "
+        "implemented in this version. "
         if footer_scope_value == "supplied_collection"
         else "offline scope: review/export/verify only — this invocation performed no "
-        "live retrieval; apply and the Codex researcher are not implemented in this version. "
+        "live retrieval; apply of the reviewed plan is a separate explicit CLI command; "
+        "the Codex researcher is not implemented in this version. "
     )
     parts.append(
         "<footer>"

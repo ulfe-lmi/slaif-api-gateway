@@ -2361,13 +2361,14 @@ async def _validate_external_tool_pricing(
             fx_rates_repository=FxRatesRepository(session),
         )
         try:
-            pricing_row = await pricing_service.find_active_pricing_rule(
+            capture = await pricing_service.capture_pricing_and_fx(
                 provider=route.provider,
                 model=route.resolved_model,
                 endpoint=endpoint,
             )
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc
+        pricing_row = capture.pricing
         if pricing_row.external_tool_pricing is None:
             raise openai_error_from_pricing_error(
                 PricingError(
@@ -2375,13 +2376,7 @@ async def _validate_external_tool_pricing(
                     param="model",
                 )
             )
-        pricing_currency = getattr(
-            pricing_row,
-            "currency",
-            pricing_row.external_tool_pricing.currency,
-        )
-        _, fx = await pricing_service.convert_to_eur(Decimal("0"), pricing_currency)
-        return _ExternalToolPricingFacts(lookup=pricing_row, fx=fx)
+        return _ExternalToolPricingFacts(lookup=pricing_row, fx=capture.fx)
     finally:
         await session_iterator.aclose()
 
@@ -2418,6 +2413,14 @@ async def _reserve_responses_quota(
             if external_pricing_facts is not None:
                 estimate_kwargs["pricing"] = external_pricing_facts.lookup
                 estimate_kwargs["fx"] = external_pricing_facts.fx
+            else:
+                capture = await pricing_service.capture_pricing_and_fx(
+                    provider=route.provider,
+                    model=route.resolved_model,
+                    endpoint=endpoint,
+                )
+                estimate_kwargs["pricing"] = capture.pricing
+                estimate_kwargs["fx"] = capture.fx
             cost_estimate = await pricing_service.estimate_chat_completion_cost(**estimate_kwargs)
         except PricingError as exc:
             raise openai_error_from_pricing_error(exc) from exc

@@ -11,7 +11,10 @@ import pytest
 
 from slaif_gateway.schemas.audio import AudioPolicyResult
 from slaif_gateway.schemas.embeddings import EmbeddingsPolicyResult
-from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
+from slaif_gateway.schemas.policy import (
+    ChatCompletionPolicyResult,
+    ResponsesPolicyResult,
+)
 from slaif_gateway.schemas.realtime import RealtimePolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.pricing import PricingService
@@ -956,3 +959,441 @@ async def test_module_chat_fixed_request_pricing_requires_request_price() -> Non
             endpoint="chat.completions",
             at=datetime(2026, 4, 25, tzinfo=UTC),
         )
+
+# ---------------------------------------------------------------------------
+# Objective 182-b B2: compact capture/estimate matrix over the real shared
+# pricing seam (capture_pricing_and_fx + family estimates) with USD FX and
+# EUR identity: Chat, strict Responses/Codex, Audio, Embeddings, Realtime,
+# fixed-request module billing, missing-rate fail-closed, and hosted
+# Responses pre-fence facts/reuse.
+# ---------------------------------------------------------------------------
+
+B2_AT = datetime(2026, 5, 1, tzinfo=UTC)
+B2_USD_INPUT = Decimal("0.270000000")
+B2_USD_OUTPUT = Decimal("1.080000000")
+B2_USD_FX = Decimal("0.925925926")
+B2_EUR_INPUT = Decimal("0.250000000")
+B2_EUR_OUTPUT = Decimal("1.000000000")
+
+
+class B2PricingRulesRepository(FakePricingRulesRepository):
+    """Pair-capture fake mirroring the real one-statement repository
+    semantics, counting capture versus single-row lookups."""
+
+    def __init__(
+        self, rows: list[SimpleNamespace], fx_rows: list[SimpleNamespace]
+    ) -> None:
+        super().__init__(rows)
+        self._fx_rows = list(fx_rows)
+        self.pair_calls = 0
+        self.single_calls = 0
+
+    async def find_active_pricing_rule(self, **kwargs: object) -> SimpleNamespace | None:
+        self.single_calls += 1
+        return await super().find_active_pricing_rule(**kwargs)  # type: ignore[arg-type]
+
+    async def find_active_pricing_rule_with_fx(
+        self,
+        *,
+        provider: str,
+        upstream_model: str,
+        endpoint: str,
+        at_time: datetime,
+    ) -> tuple[SimpleNamespace | None, SimpleNamespace | None]:
+        self.pair_calls += 1
+        row = await super().find_active_pricing_rule(
+            provider=provider,
+            upstream_model=upstream_model,
+            endpoint=endpoint,
+            at_time=at_time,
+        )
+        if row is None:
+            return None, None
+        if row.currency == "EUR":
+            return row, None
+        fx_rows = [
+            fx
+            for fx in self._fx_rows
+            if fx.base_currency == row.currency
+            and fx.quote_currency == "EUR"
+            and fx.valid_from <= at_time
+            and (fx.valid_until is None or fx.valid_until > at_time)
+        ]
+        fx_rows.sort(key=lambda fx: fx.valid_from, reverse=True)
+        return row, (fx_rows[0] if fx_rows else None)
+
+
+def _b2_service(repo: B2PricingRulesRepository) -> PricingService:
+    return PricingService(
+        pricing_rules_repository=repo,
+        fx_rates_repository=FakeFxRatesRepository(repo._fx_rows),
+    )
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_estimate_chat_carries_usd_fx_pair_ids() -> None:
+    row = _pricing_rule(
+        currency="USD",
+        input_price_per_1m=B2_USD_INPUT,
+        output_price_per_1m=B2_USD_OUTPUT,
+    )
+    fx = _fx_rate(base_currency="USD", quote_currency="EUR", rate=B2_USD_FX)
+    repo = B2PricingRulesRepository([row], [fx])
+    service = _b2_service(repo)
+
+    capture = await service.capture_pricing_and_fx(
+        provider="openai", model="gpt-4.1-mini", endpoint="/v1/chat/completions"
+    )
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(),
+        policy=_policy(),
+        endpoint="/v1/chat/completions",
+        pricing=capture.pricing,
+        fx=capture.fx,
+    )
+
+    assert repo.pair_calls == 1
+    assert repo.single_calls == 0  # no extra price/FX lookup for the estimate
+    assert capture.pricing.pricing_rule_id == row.id
+    assert capture.fx.fx_rate_id == fx.id
+    assert estimate.pricing_rule_id == row.id
+    assert estimate.fx_rate_id == fx.id
+    assert estimate.native_currency == "USD"
+    assert estimate.fx_rate == B2_USD_FX
+    expected_native = (
+        B2_USD_INPUT * Decimal(1000) + B2_USD_OUTPUT * Decimal(2000)
+    ) / Decimal(10**6)
+    assert estimate.estimated_total_cost_native == expected_native
+    assert estimate.estimated_total_cost_eur == expected_native * B2_USD_FX
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_estimate_chat_eur_identity_needs_no_fx_row() -> None:
+    row = _pricing_rule(
+        currency="EUR",
+        input_price_per_1m=B2_EUR_INPUT,
+        output_price_per_1m=B2_EUR_OUTPUT,
+    )
+    repo = B2PricingRulesRepository([row], [])
+    service = _b2_service(repo)
+
+    capture = await service.capture_pricing_and_fx(
+        provider="openai", model="gpt-4.1-mini", endpoint="/v1/chat/completions"
+    )
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(),
+        policy=_policy(),
+        endpoint="/v1/chat/completions",
+        pricing=capture.pricing,
+        fx=capture.fx,
+    )
+
+    assert capture.fx.fx_rate_id is None
+    assert capture.fx.rate == Decimal("1")
+    assert estimate.fx_rate_id is None
+    assert estimate.pricing_rule_id == row.id
+    assert estimate.estimated_total_cost_eur == estimate.estimated_total_cost_native
+    assert repo.pair_calls == 1
+    assert repo.single_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_usd_without_fx_rate_fails_closed() -> None:
+    row = _pricing_rule(
+        currency="USD",
+        input_price_per_1m=B2_USD_INPUT,
+        output_price_per_1m=B2_USD_OUTPUT,
+    )
+    repo = B2PricingRulesRepository([row], [])
+    service = _b2_service(repo)
+
+    with pytest.raises(FxRateNotFoundError):
+        await service.capture_pricing_and_fx(
+            provider="openai", model="gpt-4.1-mini", endpoint="/v1/chat/completions"
+        )
+    assert repo.pair_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_estimate_responses_codex_strict_complete_metadata() -> None:
+    codex_row = _pricing_rule(
+        currency="USD",
+        input_price_per_1m=B2_USD_INPUT,
+        output_price_per_1m=B2_USD_OUTPUT,
+        cached_input_price_per_1m=Decimal("0.027000000"),
+        reasoning_price_per_1m=Decimal("0.216000000"),
+        pricing_metadata={
+            "codex_accounting": {
+                "long_context_threshold_tokens": 1050000,
+                "long_context_input_multiplier": "1.75",
+                "long_context_output_multiplier": "2.0",
+                "cache_write_input_price_per_1m": "0.0000003375",
+            }
+        },
+    )
+    fx = _fx_rate(base_currency="USD", quote_currency="EUR", rate=B2_USD_FX)
+    repo = B2PricingRulesRepository([codex_row], [fx])
+    service = _b2_service(repo)
+    codex_policy = ResponsesPolicyResult(
+        effective_body={"model": "classroom-responses", "input": "hi"},
+        requested_output_tokens=2000,
+        effective_output_tokens=2000,
+        injected_default_output_tokens=False,
+        estimated_input_tokens=1000,
+        codex_limits_applied=True,
+    )
+
+    capture = await service.capture_pricing_and_fx(
+        provider="openai", model="gpt-4.1-mini", endpoint="/v1/chat/completions"
+    )
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(),
+        policy=codex_policy,
+        endpoint="/v1/chat/completions",
+        pricing=capture.pricing,
+        fx=capture.fx,
+    )
+
+    assert estimate.codex_accounting is True
+    assert estimate.pricing_rule_id == codex_row.id
+    assert estimate.fx_rate_id == fx.id
+    input_price = max(B2_USD_INPUT, Decimal("0.0000003375")) * Decimal("1.75")
+    output_price = max(B2_USD_OUTPUT, Decimal("0.216000000")) * Decimal("2.0")
+    expected_native = (
+        Decimal(1000) * input_price + Decimal(2000) * output_price
+    ) / Decimal(10**6)
+    assert estimate.estimated_total_cost_native == expected_native
+    assert estimate.estimated_total_cost_eur == expected_native * B2_USD_FX
+
+    # strict: the same codex policy against a row WITHOUT complete metadata
+    # fails closed instead of inventing cache/long-context prices
+    bare_row = _pricing_rule(
+        currency="USD",
+        input_price_per_1m=B2_USD_INPUT,
+        output_price_per_1m=B2_USD_OUTPUT,
+    )
+    bare_repo = B2PricingRulesRepository([bare_row], [fx])
+    bare_service = _b2_service(bare_repo)
+    bare_capture = await bare_service.capture_pricing_and_fx(
+        provider="openai", model="gpt-4.1-mini", endpoint="/v1/chat/completions"
+    )
+    with pytest.raises(InvalidPricingDataError):
+        await bare_service.estimate_chat_completion_cost(
+            route=_route(),
+            policy=codex_policy,
+            endpoint="/v1/chat/completions",
+            pricing=bare_capture.pricing,
+            fx=bare_capture.fx,
+        )
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_estimate_audio_speech_carries_pair_ids() -> None:
+    row = _pricing_rule(
+        provider="openai",
+        upstream_model="tts-1",
+        endpoint="/v1/audio/speech",
+        currency="USD",
+        input_price_per_1m=B2_USD_INPUT,
+        output_price_per_1m=B2_USD_OUTPUT,
+        request_price=Decimal("0.004000000"),
+    )
+    fx = _fx_rate(base_currency="USD", quote_currency="EUR", rate=B2_USD_FX)
+    repo = B2PricingRulesRepository([row], [fx])
+    service = _b2_service(repo)
+
+    capture = await service.capture_pricing_and_fx(
+        provider="openai", model="tts-1", endpoint="/v1/audio/speech"
+    )
+    estimate = await service.estimate_audio_operation_cost(
+        route=_route(requested_model="classroom-audio", resolved_model="tts-1"),
+        policy=AudioPolicyResult(
+            effective_body={"model": "classroom-audio", "input": "hi", "voice": "alloy"},
+            estimated_input_tokens=100,
+        ),
+        endpoint="/v1/audio/speech",
+        pricing=capture.pricing,
+        fx=capture.fx,
+    )
+
+    assert estimate.pricing_rule_id == row.id
+    assert estimate.fx_rate_id == fx.id
+    assert estimate.native_currency == "USD"
+    # fixed request price dominates token-based pricing
+    assert estimate.estimated_total_cost_native == Decimal("0.004000000")
+    assert estimate.estimated_total_cost_eur == Decimal("0.004000000") * B2_USD_FX
+    assert repo.pair_calls == 1
+    assert repo.single_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_estimate_embeddings_carries_pair_ids() -> None:
+    row = _pricing_rule(
+        provider="openai",
+        upstream_model="text-embedding-3-small",
+        endpoint="/v1/embeddings",
+        currency="USD",
+        input_price_per_1m=Decimal("0.020000000"),
+        output_price_per_1m=Decimal("0"),
+    )
+    fx = _fx_rate(base_currency="USD", quote_currency="EUR", rate=B2_USD_FX)
+    repo = B2PricingRulesRepository([row], [fx])
+    service = _b2_service(repo)
+
+    capture = await service.capture_pricing_and_fx(
+        provider="openai",
+        model="text-embedding-3-small",
+        endpoint="/v1/embeddings",
+    )
+    estimate = await service.estimate_embeddings_cost(
+        route=_route(
+            requested_model="classroom-embedding",
+            resolved_model="text-embedding-3-small",
+        ),
+        policy=EmbeddingsPolicyResult(
+            effective_body={"model": "classroom-embedding", "input": ["a", "b"]},
+            estimated_input_tokens=8,
+        ),
+        endpoint="/v1/embeddings",
+        pricing=capture.pricing,
+        fx=capture.fx,
+    )
+
+    assert estimate.pricing_rule_id == row.id
+    assert estimate.fx_rate_id == fx.id
+    expected_native = Decimal(8) * Decimal("0.020000000") / Decimal(10**6)
+    assert estimate.estimated_total_cost_native == expected_native
+    assert estimate.estimated_total_cost_eur == expected_native * B2_USD_FX
+    assert repo.pair_calls == 1
+    assert repo.single_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_estimate_realtime_carries_pair_ids() -> None:
+    row = _pricing_rule(
+        provider="openai",
+        upstream_model="gpt-realtime-mini",
+        endpoint="/v1/realtime/client_secrets",
+        currency="USD",
+        input_price_per_1m=Decimal("0.060000000"),
+        output_price_per_1m=Decimal("0.240000000"),
+        request_price=Decimal("0.001000000"),
+    )
+    fx = _fx_rate(base_currency="USD", quote_currency="EUR", rate=B2_USD_FX)
+    repo = B2PricingRulesRepository([row], [fx])
+    service = _b2_service(repo)
+
+    capture = await service.capture_pricing_and_fx(
+        provider="openai",
+        model="gpt-realtime-mini",
+        endpoint="/v1/realtime/client_secrets",
+    )
+    estimate = await service.estimate_realtime_client_secret_cost(
+        route=_route(requested_model="classroom-realtime", resolved_model="gpt-realtime-mini"),
+        policy=RealtimePolicyResult(
+            effective_body={"model": "classroom-realtime"},
+            estimated_input_tokens=1000,
+            effective_output_tokens=2000,
+        ),
+        endpoint="/v1/realtime/client_secrets",
+        pricing=capture.pricing,
+        fx=capture.fx,
+    )
+
+    assert estimate.pricing_rule_id == row.id
+    assert estimate.fx_rate_id == fx.id
+    token_native = (
+        Decimal(1000) * Decimal("0.060000000") + Decimal(2000) * Decimal("0.240000000")
+    ) / Decimal(10**6)
+    assert token_native < Decimal("0.001000000")
+    assert estimate.estimated_total_cost_native == Decimal("0.001000000")
+    assert estimate.estimated_total_cost_eur == Decimal("0.001000000") * B2_USD_FX
+    assert repo.pair_calls == 1
+    assert repo.single_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_estimate_fixed_request_module_billing() -> None:
+    row = _pricing_rule(
+        provider="openai",
+        upstream_model="module-model",
+        endpoint="/v1/chat/completions",
+        currency="USD",
+        input_price_per_1m=Decimal("0"),
+        output_price_per_1m=Decimal("0"),
+        request_price=Decimal("0.002500000"),
+    )
+    fx = _fx_rate(base_currency="USD", quote_currency="EUR", rate=B2_USD_FX)
+    repo = B2PricingRulesRepository([row], [fx])
+    service = _b2_service(repo)
+
+    capture = await service.capture_pricing_and_fx(
+        provider="openai", model="module-model", endpoint="/v1/chat/completions"
+    )
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(requested_model="facial", resolved_model="module-model", provider_kind="module"),
+        policy=_policy(),
+        endpoint="/v1/chat/completions",
+        pricing=capture.pricing,
+        fx=capture.fx,
+    )
+
+    assert estimate.estimated_input_tokens == 0
+    assert estimate.estimated_output_tokens == 0
+    assert estimate.estimated_total_cost_native == Decimal("0.002500000")
+    assert estimate.estimated_total_cost_eur == Decimal("0.002500000") * B2_USD_FX
+    assert estimate.pricing_rule_id == row.id
+    assert estimate.fx_rate_id == fx.id
+    assert repo.pair_calls == 1
+    assert repo.single_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_b2_capture_hosted_responses_external_tool_pricing_facts_reused() -> None:
+    row = _pricing_rule(
+        endpoint="/v1/responses",
+        currency="USD",
+        input_price_per_1m=B2_USD_INPUT,
+        output_price_per_1m=B2_USD_OUTPUT,
+        pricing_metadata={
+            "external_tool_pricing": {
+                "openai_web_search_call_price_native": "0.01",
+                "source": "openai_published_per_call",
+            }
+        },
+    )
+    fx = _fx_rate(base_currency="USD", quote_currency="EUR", rate=B2_USD_FX)
+    repo = B2PricingRulesRepository([row], [fx])
+    service = _b2_service(repo)
+
+    # the pre-fence capture parses the hosted-tool facts AND carries the
+    # complete price/FX identity in one PricingCapture
+    capture = await service.capture_pricing_and_fx(
+        provider="openai", model="gpt-4.1-mini", endpoint="/v1/responses"
+    )
+    hosted = capture.pricing.external_tool_pricing
+    assert hosted is not None
+    assert hosted.currency == "USD"
+    assert hosted.unit_price_native == Decimal("0.01")
+    assert hosted.source == "openai_published_per_call"
+    assert capture.pricing.pricing_rule_id == row.id
+    assert capture.fx.fx_rate_id == fx.id
+
+    # the estimate reuses the supplied capture: no further lookups, same IDs
+    estimate = await service.estimate_chat_completion_cost(
+        route=_route(requested_model="classroom-responses"),
+        policy=ResponsesPolicyResult(
+            effective_body={"model": "classroom-responses", "input": "hi"},
+            requested_output_tokens=2000,
+            effective_output_tokens=2000,
+            injected_default_output_tokens=False,
+            estimated_input_tokens=1000,
+        ),
+        endpoint="/v1/responses",
+        pricing=capture.pricing,
+        fx=capture.fx,
+    )
+    assert estimate.pricing_rule_id == row.id
+    assert estimate.fx_rate_id == fx.id
+    assert repo.pair_calls == 1
+    assert repo.single_calls == 0

@@ -606,7 +606,9 @@ def test_bootstrap_collection_both_providers_ready() -> None:
     assert all(r.outcome == "ok" for r in bundle.collection.retrievals)
 
     report, artifacts = _validate(bundle, None)
-    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
     assert report.to_dict()["source_evidence"]["scope"] == "live_collection"
     assert report.to_dict()["source_evidence"]["collection"]["source_model_counts"] == {
         "openai": 4,
@@ -649,7 +651,9 @@ def test_single_model_selection_limits_pages_and_proposals() -> None:
     page_urls = [u for u in {r.requested_url for r in bundle.collection.retrievals} if u.startswith(PAGE_PREFIX)]
     assert page_urls == [f"{PAGE_PREFIX}gpt-syn-2.md"]
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_explicit_selection_of_billing_ineligible_model_blocks() -> None:
@@ -702,7 +706,9 @@ def test_alias_rows_proposed_under_exact_id_and_batch_excluded() -> None:
         "service_variant",
     )
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_long_band_prices_never_proposed() -> None:
@@ -730,7 +736,9 @@ def test_page_price_conflict_is_not_proposed() -> None:
         "openrouter/synth/beta",
     }
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_page_with_conflicting_tables_parse_fails_closed() -> None:
@@ -767,7 +775,9 @@ def test_page_404_records_failed_retrieval_and_incomplete() -> None:
         "openrouter/synth/beta",
     }
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 # --- retrieval failures -------------------------------------------------------
@@ -831,7 +841,9 @@ def test_refresh_preserves_baseline_route_attributes_and_denials() -> None:
     assert route.capabilities == {"text": True, "streaming": False}
     assert "function_tools" not in route.capabilities
     report, _ = _validate(bundle, baseline)
-    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_baseline_contract_not_flat_is_retained_not_proposed() -> None:
@@ -852,7 +864,9 @@ def test_baseline_contract_not_flat_is_retained_not_proposed() -> None:
         "baseline_contract_not_flat",
     )
     report, _ = _validate(bundle, baseline)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_baseline_currency_mismatch_is_retained_not_proposed() -> None:
@@ -1117,7 +1131,9 @@ def test_router_zero_cache_write_is_no_charge_not_missing() -> None:
     pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
     assert {d.name for d in pricing.dimensions} == {"input", "cached_input", "output"}
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_router_reasoning_charge_excluded_under_standard_v1() -> None:
@@ -1158,7 +1174,9 @@ def test_router_zero_reasoning_charge_carried_as_no_charge() -> None:
     assert dims["input"] == ("0.54", "per_1m_tokens")
     assert dims["output"] == ("2.16", "per_1m_tokens")
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_router_request_charge_excluded_under_standard_v1() -> None:
@@ -1194,7 +1212,9 @@ def test_router_zero_request_charge_is_no_charge_not_missing() -> None:
     pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
     assert {d.name for d in pricing.dimensions} == {"input", "cached_input", "output"}
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_router_tiny_positive_request_charge_excluded() -> None:
@@ -1400,7 +1420,9 @@ def test_router_zero_web_search_is_no_charge_not_missing() -> None:
     pricing = next(item for item in bundle.pricing if item.model == "synth/alpha")
     assert {d.name for d in pricing.dimensions} == {"input", "cached_input", "output"}
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_empty_usable_bootstrap_blocks() -> None:
@@ -1561,7 +1583,9 @@ def test_openai_long_zero_price_still_excluded() -> None:
     ]
     assert page_urls == [f"{PAGE_PREFIX}gpt-syn-3.md"]
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_openai_batch_tier_is_service_variant_not_context_band() -> None:
@@ -1585,7 +1609,9 @@ def test_openai_batch_tier_is_service_variant_not_context_band() -> None:
     assert _proposed_models(bundle) == {"openai/gpt-syn-batch"}
     assert ("openai", "gpt-syn-batch") not in _inventory(bundle)
     report, _ = _validate(bundle, None)
-    assert report.state == "READY", sorted(_codes(report))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
 
 
 def test_openai_cache_write_charge_excluded() -> None:
@@ -1883,7 +1909,9 @@ def test_refresh_fixed_prefix_to_other_upstream_not_covered() -> None:
     assert route.match_type == "exact"
     assert route.upstream_model == "synth/alpha"
     report, _ = _validate(bundle, baseline)
-    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(_codes(report)) == ["new_model_exposure"]
     assert "wildcard_route_authority_bypassed" not in _codes(report)
 
 
@@ -2351,7 +2379,7 @@ def _cli_json(result) -> dict:
     return json.loads(result.stdout)
 
 
-def test_cli_collect_bootstrap_ready_exit_0(tmp_path, monkeypatch) -> None:
+def test_cli_collect_bootstrap_exposure_warning_exit_10(tmp_path, monkeypatch) -> None:
     world = World()
     run_root = tmp_path / "runs"
     key = tmp_path / "seal.key"
@@ -2369,9 +2397,11 @@ def test_cli_collect_bootstrap_ready_exit_0(tmp_path, monkeypatch) -> None:
         str(key),
         "--json",
     )
-    assert result.exit_code == 0, result.output
+    # 182: the created models' exposure warnings make this run exit 10
+    assert result.exit_code == 10, result.output
     summary = _cli_json(result)
-    assert summary["state"] == "READY"
+    assert summary["state"] == "READY_WITH_WARNINGS"
+    assert summary["warnings"] == 2
     assert summary["stage"].startswith("live collection")
     from typer.testing import CliRunner
 
@@ -2393,7 +2423,7 @@ def test_cli_collect_bootstrap_ready_exit_0(tmp_path, monkeypatch) -> None:
     assert verify.exit_code == 0, verify.output
 
 
-def test_cli_collect_refresh_baseline_file_ready_exit_0(tmp_path, monkeypatch) -> None:
+def test_cli_collect_refresh_baseline_file_exposure_warning_exit_10(tmp_path, monkeypatch) -> None:
     """181-b (B2) strategic reproducer: a real collect --refresh
     --baseline-file against a valid canonical-digest baseline now succeeds
     (it returned 20/baseline_target_mismatch before the target
@@ -2428,9 +2458,11 @@ def test_cli_collect_refresh_baseline_file_ready_exit_0(tmp_path, monkeypatch) -
         str(key),
         "--json",
     )
-    assert result.exit_code == 0, result.output
+    # 182: the created model's exposure warning makes this run exit 10
+    assert result.exit_code == 10, result.output
     summary = _cli_json(result)
-    assert summary["state"] == "READY"
+    assert summary["state"] == "READY_WITH_WARNINGS"
+    assert summary["warnings"] == 1
     assert summary["stage"].startswith("live collection")
 
 
@@ -2584,9 +2616,10 @@ def test_cli_collect_stale_fx_review_exit_10(tmp_path, monkeypatch) -> None:
     [FROZEN_MIDNIGHT_EDGE, FROZEN_POST_MIDNIGHT_EDGE],
     ids=["pre-midnight-23-59-59", "post-midnight-00-00-01"],
 )
-def test_cli_collect_fx_fresh_boundary_exit_0(tmp_path, monkeypatch, frozen) -> None:
+def test_cli_collect_fx_fresh_boundary_exposure_warning_exit_10(tmp_path, monkeypatch, frozen) -> None:
     # 181-d (D3): calendar age exactly at the fresh boundary (3 days)
-    # stays READY - proven at BOTH the pre-midnight edge (23:59:59Z) and
+    # stays ready (the created model's exposure warning is the only
+    # finding) - proven at BOTH the pre-midnight edge (23:59:59Z) and
     # the post-midnight edge (00:00:01Z) with one coherent frozen clock:
     # the fixture quote date is derived from the SAME instant the pipeline
     # uses, so a real UTC midnight crossing between fixture creation and
@@ -2613,8 +2646,11 @@ def test_cli_collect_fx_fresh_boundary_exit_0(tmp_path, monkeypatch, frozen) -> 
         str(key),
         "--json",
     )
-    assert result.exit_code == 0, result.output
-    assert _cli_json(result)["state"] == "READY"
+    # 182: the created model's exposure warning makes this run exit 10
+    assert result.exit_code == 10, result.output
+    summary = _cli_json(result)
+    assert summary["state"] == "READY_WITH_WARNINGS"
+    assert summary["warnings"] == 2
 
 
 def test_cli_collect_blocked_exit_20_collect_stage(tmp_path, monkeypatch) -> None:

@@ -17,9 +17,50 @@ from slaif_gateway.providers.errors import ProviderTimeoutError
 from slaif_gateway.services.accounting_errors import ReservationFinalizationError
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.providers import ProviderStreamChunk, ProviderUsage
-from slaif_gateway.schemas.pricing import ChatCostEstimate
+from slaif_gateway.schemas.pricing import (
+    ChatCostEstimate,
+    FxConversionResult,
+    PricingCapture,
+    PricingLookupResult,
+)
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
+
+
+
+
+def _capture_result() -> PricingCapture:
+    """Equivalent coherent-capture facts for the fake admission seam."""
+    return PricingCapture(
+        pricing=PricingLookupResult(
+            provider="openai",
+            model="gpt-4.1-mini",
+            endpoint="chat.completions",
+            currency="EUR",
+            input_price_per_1m=Decimal("0.5"),
+            cached_input_price_per_1m=None,
+            output_price_per_1m=Decimal("1.5"),
+            reasoning_price_per_1m=None,
+            audio_output_price_per_1m=None,
+            request_price=None,
+            cache_write_input_price_per_1m=None,
+            cache_write_input_multiplier=None,
+            long_context_threshold_tokens=None,
+            long_context_input_multiplier=None,
+            long_context_output_multiplier=None,
+            pricing_rule_id=None,
+            valid_from=datetime.now(UTC),
+            valid_until=None,
+        ),
+        fx=FxConversionResult(
+            from_currency="EUR", to_currency="EUR", rate=Decimal("1"), fx_rate_id=None
+        ),
+    )
+
+
+async def _fake_capture_pricing_and_fx(self, *, provider, model, endpoint, at=None):
+    _ = (self, provider, model, endpoint, at)
+    return _capture_result()
 
 
 def _auth() -> AuthenticatedGatewayKey:
@@ -138,7 +179,7 @@ def _wire_streaming_pipeline(
         state["route_calls"].append(requested_model)
         return _route(provider=provider, provider_kind=provider_kind)
 
-    async def _fake_estimate(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         state["pricing_calls"].append("priced")
         return _cost_estimate()
@@ -203,6 +244,7 @@ def _wire_streaming_pipeline(
     monkeypatch.setattr(gateway_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(gateway_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
     monkeypatch.setattr(gateway_module.PricingService, "estimate_chat_completion_cost", _fake_estimate)
+    monkeypatch.setattr(gateway_module.PricingService, "capture_pricing_and_fx", _fake_capture_pricing_and_fx)
     monkeypatch.setattr(gateway_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(
         gateway_module.AccountingService,

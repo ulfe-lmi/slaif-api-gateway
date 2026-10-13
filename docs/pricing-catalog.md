@@ -605,6 +605,30 @@ Preferred recommendation inputs for participant templates:
 - local pricing rows and FX rates where known;
 - provider-reported cost metadata where available.
 
+## Coherent admission capture and supersession
+
+Two complementary guarantees keep pricing and FX consistent at admission
+and during audited refresh:
+
+- **Coherent admission capture.** The admission estimate reads the active
+  pricing row and the native-to-EUR FX row in one statement (one snapshot),
+  so a concurrent price+FX supersession can only be observed as the
+  complete old pair or the complete new pair — never an old price with a
+  new rate. See
+  [Accounting: coherent admission capture](accounting.md#coherent-admission-capture-pricing-and-fx).
+- **Reviewed supersession at one instant.** The audited catalog-refresh
+  `apply` ends the reviewed active window of exactly the row the reviewed
+  plan identified and opens the replacement row at the same single
+  effective instant `T`. The close is guarded on the reviewed facts (row
+  identity, currency, opening instant, the reviewed closing instant with
+  NULL-safe `IS NOT DISTINCT FROM`, still enabled, still active at `T`): a
+  reviewed NULL end must still be NULL (a NULL-to-finite drift is rejected,
+  never wildcarded), a reviewed finite future end must still be exactly
+  that end and still in the future, and any other drift refuses the whole
+  transaction. Amounts, metadata, and row identity are preserved — history
+  is never repriced in place, and an intentional `enabled=false` or
+  future-dated governor is never reactivated by a refresh.
+
 ## No Silent Replacement
 
 Pricing refresh workflows must not mutate production pricing invisibly. They

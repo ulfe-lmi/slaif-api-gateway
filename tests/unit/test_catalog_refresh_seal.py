@@ -41,7 +41,9 @@ def sealed_run(tmp_path: Path) -> tuple[Path, Path]:
             "--seal-key", str(seal_key),
         ],
     )
-    assert result.exit_code == 0, result.output
+    # 182: every first-install model is new exposure -> the run is
+    # READY_WITH_WARNINGS (exit 10); the run is still sealed/verifiable.
+    assert result.exit_code == 10, result.output
     return run_root / "fixture-first-install-001", seal_key
 
 
@@ -57,7 +59,8 @@ def test_round_trip_verifies_cleanly(sealed_run: tuple[Path, Path]) -> None:
     run_dir, seal_key = sealed_run
     result = verify_run(run_dir, _raw_key(seal_key))
     assert result.valid
-    assert result.state == "READY"
+    # 182: first-install carries new-exposure warnings -> READY_WITH_WARNINGS
+    assert result.state == "READY_WITH_WARNINGS"
     assert result.checks["digests"] == "ok"
     assert result.checks["hmac"] == "ok"
     assert result.checks["correspondence"] == "ok"
@@ -438,9 +441,11 @@ def test_new_sealed_run_binds_authenticated_execution_context(sealed_run: tuple[
         "tool": expected_tool,
         "code_revision": expected_revision,
     }
+    from slaif_gateway.schemas.catalog_refresh import RENDERER_VERSION
+
     assert context["generator_versions"] == {
         "schema_version": "1",
-        "renderer_version": "181.1",
+        "renderer_version": RENDERER_VERSION,
         "policy_version": 1,
         "extractor_version": "slaif-collector/181.1",
     }
@@ -498,7 +503,6 @@ def test_context_flip_tamper_fails_hmac_authentication(sealed_run: tuple[Path, P
 
 
 @pytest.mark.parametrize("mutate", [
-    lambda ctx: ctx["generator_versions"].__setitem__("renderer_version", "999.9"),
     lambda ctx: ctx.__setitem__("schema_version", "2"),
     lambda ctx: ctx["generator_versions"].__setitem__("extractor_version", "slaif-collector/999.9"),
     lambda ctx: ctx.__setitem__("bogus_field", "x"),
@@ -521,6 +525,41 @@ def test_resealed_unsupported_context_is_refused(
     assert result.checks.get("digests") == "ok"
     assert result.checks.get("hmac") == "ok"  # authentication passed...
     assert result.checks.get("context") == "unsupported context shape or version"
+    victim.write_bytes(original)
+    _reseal_with_key(run_dir, seal_key)
+    assert verify_run(run_dir, _raw_key(seal_key)).valid
+
+
+@pytest.mark.parametrize("version", ["181.1", "999.9", "CANARY-SECRET-\x01\x02malicious"])
+def test_resealed_unsupported_renderer_version_is_refused(
+    sealed_run: tuple[Path, Path], version: str
+) -> None:
+    """A FORGED context of a renderer version this verifier cannot replay
+    byte-stably is refused explicitly and distinguishably: 181.1 is the
+    concrete pre-182 boundary (its sealed artifacts are not byte-stable
+    under the 182 renderer); unknown future values are refused the same
+    way. No historical renderer fleet, no re-derivation. The refusal
+    message is fixed and never echoes the authenticated (untrusted) value
+    (A1 safe-error surface)."""
+    run_dir, seal_key = sealed_run
+    victim = run_dir / "validation.json"
+    original = victim.read_bytes()
+    document = json.loads(original)
+    document["execution_context"]["generator_versions"]["renderer_version"] = version
+    victim.write_bytes((json.dumps(document, sort_keys=True, indent=1) + "\n").encode("utf-8"))
+    _reseal_with_key(run_dir, seal_key)
+    result = verify_run(run_dir, _raw_key(seal_key))
+    assert not result.valid
+    assert result.checks.get("digests") == "ok"
+    assert result.checks.get("hmac") == "ok"  # authentication passed...
+    assert result.checks.get("context") == (
+        "unsupported renderer version in sealed context; "
+        "re-run the review under the current CLI"
+    )
+    # negative canary: the forged value (including private text/control
+    # characters) must not reach any error output
+    if "CANARY" in version:
+        assert "CANARY" not in json.dumps(result.checks, default=str)
     victim.write_bytes(original)
     _reseal_with_key(run_dir, seal_key)
     assert verify_run(run_dir, _raw_key(seal_key)).valid

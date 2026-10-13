@@ -64,6 +64,21 @@ class FxConversionResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PricingCapture:
+    """One coherent admission snapshot: the pricing row plus its FX conversion.
+
+    Both halves are selected in a single statement (see
+    ``PricingRulesRepository.find_active_pricing_rule_with_fx``) so a
+    concurrent price+FX supersession is observed only as the complete old
+    pair or the complete new pair, never an old price with a new rate. For
+    EUR-priced models the fx half is the read-free identity conversion.
+    """
+
+    pricing: PricingLookupResult
+    fx: FxConversionResult | None
+
+
+@dataclass(frozen=True, slots=True)
 class ChatCostEstimate:
     """Maximum possible chat-completions cost estimate after policy and routing."""
 

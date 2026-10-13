@@ -15,7 +15,12 @@ from slaif_gateway.providers.errors import (
     ProviderTimeoutError,
 )
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.pricing import ChatCostEstimate
+from slaif_gateway.schemas.pricing import (
+    ChatCostEstimate,
+    FxConversionResult,
+    PricingCapture,
+    PricingLookupResult,
+)
 from slaif_gateway.schemas.providers import ProviderResponse
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
@@ -24,6 +29,42 @@ from slaif_gateway.services.policy_errors import OutputTokenLimitExceededError
 from slaif_gateway.services.pricing_errors import PricingRuleNotFoundError
 from slaif_gateway.services.quota_errors import QuotaLimitExceededError
 from slaif_gateway.services.routing_errors import ModelNotFoundError
+
+
+
+
+def _capture_result() -> PricingCapture:
+    """Equivalent coherent-capture facts for the fake admission seam."""
+    return PricingCapture(
+        pricing=PricingLookupResult(
+            provider="openai",
+            model="gpt-4.1-mini",
+            endpoint="chat.completions",
+            currency="EUR",
+            input_price_per_1m=Decimal("0.5"),
+            cached_input_price_per_1m=None,
+            output_price_per_1m=Decimal("1.5"),
+            reasoning_price_per_1m=None,
+            audio_output_price_per_1m=None,
+            request_price=None,
+            cache_write_input_price_per_1m=None,
+            cache_write_input_multiplier=None,
+            long_context_threshold_tokens=None,
+            long_context_input_multiplier=None,
+            long_context_output_multiplier=None,
+            pricing_rule_id=None,
+            valid_from=datetime.now(UTC),
+            valid_until=None,
+        ),
+        fx=FxConversionResult(
+            from_currency="EUR", to_currency="EUR", rate=Decimal("1"), fx_rate_id=None
+        ),
+    )
+
+
+async def _fake_capture_pricing_and_fx(self, *, provider, model, endpoint, at=None):
+    _ = (self, provider, model, endpoint, at)
+    return _capture_result()
 
 
 def _auth() -> AuthenticatedGatewayKey:
@@ -126,7 +167,7 @@ def _wire_pipeline(
             raise route_error
         return _route(provider)
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, policy, endpoint, at)
         state["pricing_calls"].append(route.requested_model)
         if pricing_error is not None:
@@ -166,6 +207,11 @@ def _wire_pipeline(
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module.AccountingService, "record_provider_failure_and_release", _fake_record_failure)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from types import SimpleNamespace
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -26,6 +27,13 @@ class FakeSession:
 
     async def commit(self) -> None:
         self.commit_calls += 1
+
+
+async def _fake_capture_pricing_and_fx(self, *args, **kwargs):
+    # Cost estimation is faked per test; the coherent capture only needs to
+    # succeed so the faked estimate receives its injection arguments.
+    _ = (self, args, kwargs)
+    return SimpleNamespace(pricing=object(), fx=object())
 
 
 def _auth(*, allowed_endpoints: tuple[str, ...] | None = None) -> AuthenticatedGatewayKey:
@@ -155,8 +163,8 @@ def _wire_audio_pipeline(
         }
         return route_result
 
-    async def _fake_estimate_audio_operation_cost(self, *, route, policy, endpoint, at=None):
-        _ = (self, route, policy, endpoint, at)
+    async def _fake_estimate_audio_operation_cost(self, *, route, policy, endpoint, at=None, pricing=None, fx=None):
+        _ = (self, route, policy, endpoint, at, pricing, fx)
         return estimate
 
     async def _fake_reserve(self, *, authenticated_key, route, policy, cost_estimate, request_id, endpoint, now=None):
@@ -248,6 +256,11 @@ def _wire_audio_pipeline(
     monkeypatch.setattr(dependencies_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(audio_module, "_get_db_session_after_auth_header_check", _dummy_db_session)
     monkeypatch.setattr(audio_module.RouteResolutionService, "resolve_model", _fake_resolve_model)
+    monkeypatch.setattr(
+        audio_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
+    )
     monkeypatch.setattr(
         audio_module.PricingService,
         "estimate_audio_operation_cost",
@@ -459,3 +472,54 @@ def test_openrouter_audio_endpoint_fails_closed(
     assert response.status_code == 500
     assert response.json()["error"]["code"] == "unsupported_provider_endpoint"
     assert state["failure_release_calls"] == ["unsupported_provider_endpoint"]
+
+
+def test_b2_admission_capture_facts_reach_estimate_at_audio_call_site(
+    monkeypatch,
+    respx_mock,
+) -> None:
+    """182-b B2: the audio call site passes the captured price+FX facts
+    (row IDs included) into the audio cost estimate."""
+    import slaif_gateway.services.audio_gateway as main_module
+
+    settings = Settings(OPENAI_UPSTREAM_API_KEY="openai-upstream-key")
+    app = create_app(settings)
+    _wire_audio_pipeline(monkeypatch, app, endpoint="/v1/audio/speech")
+
+    price_id = uuid.uuid4()
+    fx_id = uuid.uuid4()
+    capture = SimpleNamespace(
+        pricing=SimpleNamespace(pricing_rule_id=price_id),
+        fx=SimpleNamespace(fx_rate_id=fx_id, rate=Decimal("0.925925926")),
+    )
+    seen: dict[str, object] = {}
+
+    async def _capture_facts(self, *args: object, **kwargs: object) -> object:
+        _ = (self, args, kwargs)
+        return capture
+
+    async def _record_estimate(self, **kwargs: object) -> object:
+        seen["pricing"] = kwargs.get("pricing")
+        seen["fx"] = kwargs.get("fx")
+        return _estimate()
+
+    monkeypatch.setattr(main_module.PricingService, "capture_pricing_and_fx", _capture_facts)
+    monkeypatch.setattr(main_module.PricingService, "estimate_audio_operation_cost", _record_estimate)
+
+    respx_mock.post("https://api.openai.com/v1/audio/speech").mock(
+        return_value=httpx.Response(
+            200,
+            content=b"audio-bytes",
+            headers={"content-type": "audio/mpeg", "content-length": "11"},
+        )
+    )
+    response = TestClient(app).post(
+        "/v1/audio/speech",
+        json={"model": "classroom-audio", "input": "hello", "voice": "alloy"},
+        headers={"Authorization": "Bearer client-gateway-key"},
+    )
+    assert response.status_code == 200
+    assert seen["pricing"] is not None
+    assert seen["pricing"].pricing_rule_id == price_id
+    assert seen["fx"] is not None
+    assert seen["fx"].fx_rate_id == fx_id

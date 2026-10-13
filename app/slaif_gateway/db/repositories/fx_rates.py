@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import FxRate
@@ -158,3 +158,57 @@ class FxRatesRepository:
         )
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    # ------------------------------------------------------------------
+    # 182: atomic apply supersession helper (A3). Additive: all
+    # existing public methods above are preserved unchanged.
+    # ------------------------------------------------------------------
+    async def close_active_fx_rate(
+        self,
+        *,
+        fx_rate_id: uuid.UUID,
+        base_currency: str,
+        quote_currency: str,
+        rate: Decimal,
+        valid_from: datetime,
+        expected_valid_until: datetime | None,
+        effective_at: datetime,
+    ) -> bool:
+        """Supersession close: end the active validity window of EXACTLY the
+        FX row the reviewed plan identified, at the one effective T.
+
+        Guarded on the baseline facts recorded in the plan (row identity,
+        pair, exact rate, opening instant, the REVIEWED closing instant,
+        still active at T). The reviewed closing instant is compared with
+        exact NULL-safe equality (IS NOT DISTINCT FROM): a reviewed NULL
+        end must still be NULL at apply time (a NULL -> finite drift is
+        rejected, never wildcarded), and a reviewed finite future end —
+        ordinary refresh state — must still be exactly that end and still
+        in the future at T. Any drift or expiry means the row is not the
+        reviewed active row and NOTHING is mutated. The window is then
+        safely ended at the one effective T while the rate value and row
+        identity stay untouched; the new rate is inserted as a new row at
+        the same instant by the caller.
+        """
+        result = await self._session.execute(
+            text(
+                "UPDATE fx_rates SET valid_until = :effective_at "
+                "WHERE id = :id "
+                "AND base_currency = :base_currency "
+                "AND quote_currency = :quote_currency "
+                "AND rate = :rate "
+                "AND valid_from = :valid_from "
+                "AND valid_until IS NOT DISTINCT FROM :expected_valid_until "
+                "AND (valid_until IS NULL OR valid_until > :effective_at)"
+            ),
+            {
+                "id": fx_rate_id,
+                "base_currency": base_currency,
+                "quote_currency": quote_currency,
+                "rate": rate,
+                "valid_from": valid_from,
+                "expected_valid_until": expected_valid_until,
+                "effective_at": effective_at,
+            },
+        )
+        return result.rowcount == 1

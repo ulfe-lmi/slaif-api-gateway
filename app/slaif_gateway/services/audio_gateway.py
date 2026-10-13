@@ -321,10 +321,17 @@ async def _reserve_audio_quota(
             quota_reservations_repository=QuotaReservationsRepository(session),
         )
         try:
+            capture = await pricing.capture_pricing_and_fx(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint=endpoint,
+            )
             cost_estimate = await pricing.estimate_audio_operation_cost(
                 route=route,
                 policy=policy_result,
                 endpoint=endpoint,
+                pricing=capture.pricing,
+                fx=capture.fx,
             )
             reservation = await quota.reserve_for_chat_completion(
                 authenticated_key=authenticated_key,

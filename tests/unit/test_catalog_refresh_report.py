@@ -100,13 +100,14 @@ def _assert_no_external_or_executable_resources(html_text: str) -> None:
 def test_first_screen_contains_required_decision_facts() -> None:
     bundle = _bundle("bundle-first-install.json")
     report = _report_for(bundle, None)
-    assert report.state == OVERALL_READY
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == OVERALL_READY_WITH_WARNINGS
     html_text = render_report(bundle, report.to_dict()).decode("utf-8")
     assert html_text.startswith("<!DOCTYPE html>")
     assert "<h1>SLAIF catalog refresh review</h1>" in html_text
     assert "fixture-first-install-001" in html_text
     # State with the plain-language reason and blocker/review counts.
-    assert "<strong>READY</strong>" in html_text
+    assert "<strong>READY_WITH_WARNINGS</strong>" in html_text
     assert "BLOCKERS 0" in html_text
     # Compact scope/baseline card: plain baseline meaning, profile,
     # source evidence, and the compact run identity.
@@ -130,11 +131,14 @@ def test_first_screen_contains_required_decision_facts() -> None:
     # Full-width provider change summary with the recomputed counts.
     assert "Providers &amp; changes" in html_text
     assert "Counts (recomputed)" in html_text
-    # FX line (N/A — all selected prices are EUR), plan line, findings
-    # line, and the changes section as the next visible section.
+    # FX line (N/A — all selected prices are EUR), plan line, the
+    # apply-plan line, and the findings line carrying the required
+    # exposure finding; the changes section is the next visible section.
     assert "FX:" in html_text
     assert "Import plan" in html_text
-    assert "No blockers, no review findings" in html_text
+    assert "Apply plan:" in html_text
+    assert "new_model_exposure" in html_text
+    assert "all 1 findings with per-item detail" in html_text
     assert "What changed" in html_text
     # Product language: no internal objective numbers anywhere in the report.
     assert not re.search(r"objective\s+\d+", html_text, flags=re.IGNORECASE)
@@ -144,7 +148,8 @@ def test_first_screen_contains_required_decision_facts() -> None:
     # set and the supplied historical bundle declaration stay expanded.
     assert (
         "offline scope: review/export/verify only — this invocation performed no "
-        "live retrieval; apply and the Codex researcher are not implemented in this version."
+        "live retrieval; apply of the reviewed plan is a separate explicit CLI "
+        "command; the Codex researcher is not implemented in this version."
         in html_text
     )
     assert "generator slaif-gateway/" in html_text
@@ -269,8 +274,9 @@ def test_ready_with_warnings_report_shows_findings() -> None:
     assert "READY_WITH_WARNINGS" in html_text
     assert "source_stale_review" in html_text
     # Four aged sources (three openrouter plus the ecb reference source)
-    # plus the derived sources-gate finding.
-    assert "All warnings and findings (5)" in html_text
+    # plus the derived sources-gate finding plus the required
+    # new-model exposure warning for the bundle's new model.
+    assert "All warnings and findings (6)" in html_text
 
 
 def test_blocked_report_lists_blockers_on_first_screen() -> None:

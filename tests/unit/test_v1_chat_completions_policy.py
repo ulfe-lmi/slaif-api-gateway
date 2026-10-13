@@ -12,9 +12,50 @@ from fastapi.testclient import TestClient
 from slaif_gateway.config import Settings
 from slaif_gateway.main import create_app
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
+from slaif_gateway.schemas.pricing import (
+    FxConversionResult,
+    PricingCapture,
+    PricingLookupResult,
+)
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderStreamChunk, ProviderUsage
 from slaif_gateway.schemas.quota import QuotaReservationResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
+
+
+
+
+def _capture_result() -> PricingCapture:
+    """Equivalent coherent-capture facts for the fake admission seam."""
+    return PricingCapture(
+        pricing=PricingLookupResult(
+            provider="openai",
+            model="gpt-4.1-mini",
+            endpoint="chat.completions",
+            currency="EUR",
+            input_price_per_1m=Decimal("0.5"),
+            cached_input_price_per_1m=None,
+            output_price_per_1m=Decimal("1.5"),
+            reasoning_price_per_1m=None,
+            audio_output_price_per_1m=None,
+            request_price=None,
+            cache_write_input_price_per_1m=None,
+            cache_write_input_multiplier=None,
+            long_context_threshold_tokens=None,
+            long_context_input_multiplier=None,
+            long_context_output_multiplier=None,
+            pricing_rule_id=None,
+            valid_from=datetime.now(UTC),
+            valid_until=None,
+        ),
+        fx=FxConversionResult(
+            from_currency="EUR", to_currency="EUR", rate=Decimal("1"), fx_rate_id=None
+        ),
+    )
+
+
+async def _fake_capture_pricing_and_fx(self, *, provider, model, endpoint, at=None):
+    _ = (self, provider, model, endpoint, at)
+    return _capture_result()
 
 
 def _fake_authenticated_gateway_key() -> AuthenticatedGatewayKey:
@@ -116,7 +157,7 @@ def _route_result(
 def _wire_successful_pricing(monkeypatch) -> None:
     import slaif_gateway.services.chat_completion_gateway as main_module
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         return object()
 
@@ -124,6 +165,11 @@ def _wire_successful_pricing(monkeypatch) -> None:
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
 
 
@@ -303,7 +349,7 @@ def test_large_tools_schema_rejects_before_redis_route_pricing_quota_or_provider
         calls.append("route")
         return _route_result()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -324,6 +370,11 @@ def test_large_tools_schema_rejects_before_redis_route_pricing_quota_or_provider
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -412,7 +463,7 @@ def test_multiple_choice_capability_denial_rejects_before_redis_pricing_quota_or
         calls.append("route")
         return _route_result()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -433,6 +484,11 @@ def test_multiple_choice_capability_denial_rejects_before_redis_pricing_quota_or
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -477,7 +533,7 @@ def test_image_capability_denial_rejects_before_redis_pricing_quota_or_provider(
         calls.append("route")
         return _route_result()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -498,6 +554,11 @@ def test_image_capability_denial_rejects_before_redis_pricing_quota_or_provider(
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -553,7 +614,7 @@ def test_file_capability_denial_rejects_before_redis_pricing_quota_or_provider(
         calls.append("route")
         return _route_result()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -574,6 +635,11 @@ def test_file_capability_denial_rejects_before_redis_pricing_quota_or_provider(
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -632,7 +698,7 @@ def test_audio_capability_denial_rejects_before_redis_pricing_quota_or_provider(
         calls.append("route")
         return _route_result()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -653,6 +719,11 @@ def test_audio_capability_denial_rejects_before_redis_pricing_quota_or_provider(
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -710,7 +781,7 @@ def test_audio_output_capability_denial_rejects_before_redis_pricing_quota_or_pr
         calls.append("route")
         return _route_result("gpt-audio")
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -731,6 +802,11 @@ def test_audio_output_capability_denial_rejects_before_redis_pricing_quota_or_pr
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -777,7 +853,7 @@ def test_invalid_choice_count_rejects_before_redis_route_pricing_quota_or_provid
         calls.append("route")
         return _route_result()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -798,6 +874,11 @@ def test_invalid_choice_count_rejects_before_redis_route_pricing_quota_or_provid
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -894,7 +975,7 @@ def test_hosted_tool_policy_rejects_before_redis_route_pricing_quota_or_provider
         calls.append("route")
         return _route_result()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -915,6 +996,11 @@ def test_hosted_tool_policy_rejects_before_redis_route_pricing_quota_or_provider
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -968,7 +1054,7 @@ def test_request_caps_reject_before_redis_route_pricing_quota_or_provider(monkey
         calls.append("route")
         return _route_result()
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -989,6 +1075,11 @@ def test_request_caps_reject_before_redis_route_pricing_quota_or_provider(monkey
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -1028,7 +1119,7 @@ def test_route_capability_mismatch_rejects_before_redis_pricing_quota_or_provide
             capabilities={"chat_completions": {"chat_text": False}},
         )
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -1049,6 +1140,11 @@ def test_route_capability_mismatch_rejects_before_redis_pricing_quota_or_provide
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)
@@ -1096,7 +1192,7 @@ def test_custom_tool_route_capability_mismatch_rejects_before_redis_pricing_quot
             capabilities={"chat_completions": {"chat_text": True}},
         )
 
-    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None):
+    async def _fake_estimate_chat_completion_cost(self, *, route, policy, endpoint="chat.completions", at=None, pricing=None, fx=None):
         _ = (self, route, policy, endpoint, at)
         calls.append("pricing")
         return object()
@@ -1117,6 +1213,11 @@ def test_custom_tool_route_capability_mismatch_rejects_before_redis_pricing_quot
         main_module.PricingService,
         "estimate_chat_completion_cost",
         _fake_estimate_chat_completion_cost,
+    )
+    monkeypatch.setattr(
+        main_module.PricingService,
+        "capture_pricing_and_fx",
+        _fake_capture_pricing_and_fx,
     )
     monkeypatch.setattr(main_module.QuotaService, "reserve_for_chat_completion", _fake_reserve)
     monkeypatch.setattr(main_module, "get_provider_adapter", _fake_get_provider_adapter)

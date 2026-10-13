@@ -26,7 +26,12 @@ from slaif_gateway.schemas.external_tool_fence import (
     ExternalToolFenceAcquireInput,
     ExternalToolFenceRouteFacts,
 )
-from slaif_gateway.schemas.pricing import ExternalToolPricing, FxConversionResult
+from slaif_gateway.schemas.pricing import (
+    ExternalToolPricing,
+    FxConversionResult,
+    PricingCapture,
+    PricingLookupResult,
+)
 from slaif_gateway.schemas.providers import ProviderResponse, ProviderStreamChunk, ProviderUsage
 from slaif_gateway.providers.errors import ProviderError
 from slaif_gateway.schemas.routing import RouteResolutionResult
@@ -234,31 +239,36 @@ async def _gateway_client(
     external_pricing = ExternalToolPricing(
         currency="EUR", unit_price_native=Decimal("0.01"), source="openai_published_per_call"
     )
-    pricing_row = SimpleNamespace(
-        currency="EUR",
-        input_price_per_1m=model_price,
-        output_price_per_1m=model_price,
-        cached_input_price_per_1m=None,
-        reasoning_price_per_1m=None,
-        audio_output_price_per_1m=None,
-        request_price=None,
-        cache_write_input_price_per_1m=None,
-        cache_write_input_multiplier=None,
-        long_context_threshold_tokens=None,
-        long_context_input_multiplier=None,
-        long_context_output_multiplier=None,
-        pricing_rule_id=None,
-        external_tool_pricing=external_pricing,
+    capture = PricingCapture(
+        pricing=PricingLookupResult(
+            provider="openai",
+            model="gpt-4.1-mini",
+            endpoint="responses",
+            currency="EUR",
+            input_price_per_1m=model_price,
+            cached_input_price_per_1m=None,
+            output_price_per_1m=model_price,
+            reasoning_price_per_1m=None,
+            audio_output_price_per_1m=None,
+            request_price=None,
+            cache_write_input_price_per_1m=None,
+            cache_write_input_multiplier=None,
+            long_context_threshold_tokens=None,
+            long_context_input_multiplier=None,
+            long_context_output_multiplier=None,
+            pricing_rule_id=None,
+            valid_from=datetime.now(UTC),
+            valid_until=None,
+            external_tool_pricing=external_pricing,
+        ),
+        fx=FxConversionResult("EUR", "EUR", Decimal("1"), None),
     )
-    async def find_active(self, **_kwargs):
-        return pricing_row
 
-    async def convert_to_eur(self, amount, native_currency, at=None):
-        _ = (amount, native_currency, at)
-        return amount, FxConversionResult("EUR", "EUR", Decimal("1"), None)
+    async def capture_pricing_and_fx(self, *, provider, model, endpoint, at=None):
+        _ = (self, provider, model, endpoint, at)
+        return capture
 
-    monkeypatch.setattr(pricing_module.PricingService, "find_active_pricing_rule", find_active)
-    monkeypatch.setattr(pricing_module.PricingService, "convert_to_eur", convert_to_eur)
+    monkeypatch.setattr(pricing_module.PricingService, "capture_pricing_and_fx", capture_pricing_and_fx)
 
     class Adapter:
         async def forward_response(self, request):

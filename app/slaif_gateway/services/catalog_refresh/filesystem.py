@@ -650,17 +650,28 @@ def _load_seal_key_fd(parent_fd: int, leaf: str, display: Path) -> bytes:
     return bytes.fromhex(text)
 
 
-def load_seal_key_bytes(path: Path) -> bytes:
+def load_seal_key_bytes(
+    path: Path, parent_handle: "AnchoredDir | None" = None
+) -> bytes:
     """Load an EXISTING seal key through the anchored no-follow boundary.
 
     The parent directory is opened once with a descriptor-anchored walk;
     the key is then validated on the opened descriptor. Verify-style use:
     never creates anything; a missing key stays missing.
+
+    When the caller passes a ``parent_handle`` retained from an earlier
+    checked lifecycle handle (descriptor lineage -- no path reopen), the
+    binding is re-asserted hop by hop and the key is read through that
+    held descriptor, which is NOT closed here. When it is omitted, the
+    parent is opened (and closed on exit) as before.
     """
     absolute = Path(os.path.abspath(os.path.expanduser(str(path))))
     leaf = absolute.name
     if not leaf or leaf in (".", ".."):
         raise CatalogRefreshSealError("seal key path is unsafe")
+    if parent_handle is not None:
+        parent_handle.assert_name_binding(str(absolute.parent))
+        return _load_seal_key_fd(parent_handle.dir_fd, leaf, Path(path).expanduser())
     try:
         parent_fd, _chain = _open_anchored(absolute.parent)
     except CatalogRefreshSealError as exc:

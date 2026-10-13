@@ -1,7 +1,7 @@
 # Database Schema for `slaif-api-gateway`
 
 > **Authority:** Current SQLAlchemy/Alembic schema contract
-> **Migration head:** `0024_quota_reservation_accounting_facts`
+> **Migration head:** `0025_catalog_refresh_applications`
 
 This reference describes the schema at the named Alembic head. The runtime
 stack is:
@@ -2224,6 +2224,73 @@ pricing checks until a reviewed runtime path explicitly adopts a bundle.
 
 ---
 
+## 5.24 `catalog_refresh_applications`
+
+Durable idempotent outcome record for the audited catalog-refresh `apply`
+command (one row per successfully applied reviewed run).
+
+Columns:
+
+```text
+id UUID primary key
+run_id text not null
+bundle_sha256 text not null
+receipt_hmac_sha256 text not null
+plan_sha256 text not null
+mode text not null                  -- 'bootstrap' | 'refresh'
+operator_actor text not null        -- operator assertion; not a verified RBAC identity
+db_actor text not null              -- PostgreSQL current_user observed in the transaction
+admin_user_id uuid null             -- existing admin, verified to exist in the target database
+reason text not null
+effective_at timestamptz not null   -- the one effective T of the successful transaction
+applied_provider_ids jsonb not null
+applied_route_ids jsonb not null
+applied_pricing_created_ids jsonb not null
+applied_pricing_superseded_old_ids jsonb not null
+applied_pricing_superseded_new_ids jsonb not null
+applied_fx_created_ids jsonb not null
+applied_fx_superseded_old_ids jsonb not null
+applied_fx_superseded_new_ids jsonb not null
+created_providers integer not null default 0
+created_routes integer not null default 0
+created_pricing integer not null default 0
+created_fx integer not null default 0
+superseded_pricing integer not null default 0
+superseded_fx integer not null default 0
+outcome text not null               -- 'committed'
+created_at timestamptz not null
+```
+
+Constraints/indexes:
+
+```text
+unique(bundle_sha256, plan_sha256)
+index(run_id)
+index(effective_at)
+check(mode in ('bootstrap', 'refresh'))
+check(outcome in ('committed'))
+```
+
+Rules:
+
+- One apply transaction writes exactly one row, bound to the canonical
+  reviewed bundle identity (`bundle_sha256` from the authenticated receipt),
+  the receipt HMAC, and the sealed typed apply-plan identity
+  (`plan_sha256`). The unique pair makes same-bundle retries and concurrent
+  duplicates resolve the committed outcome instead of applying, charging,
+  or auditing twice.
+- `effective_at` is the single instant at which every supersession window
+  closed and every new row opened in that transaction; retry records never
+  overwrite an earlier record, and the first committed record keeps the
+  original `operator_actor`, `db_actor`, and `effective_at`.
+- Safe fields only: no database URL, credentials, provider keys, or raw
+  source bodies are ever stored in this table.
+- This is the application record for the catalog-refresh workflow only —
+  not a generic event journal and not a catalog versioning system. See
+  [Catalog refresh (collect, review, and verify)](catalog-refresh.md#apply-one-explicit-atomic-command).
+
+---
+
 ## 6. Quota reservation algorithm
 
 Before forwarding an upstream request:
@@ -2344,7 +2411,7 @@ keys.
 
 ## 10. Current table inventory
 
-Migration head `0024_quota_reservation_accounting_facts` contains 31 tables.
+Migration head `0025_catalog_refresh_applications` contains 32 tables.
 
 Current Gateway and operator-path tables:
 
@@ -2359,7 +2426,7 @@ fx_rates                     audit_log
 key_templates                key_template_revisions
 response_references           conversation_references
 codex_replay_references       one_time_secrets
-email_deliveries
+email_deliveries              catalog_refresh_applications
 ```
 
 Schema or repository foundations whose product wiring is partial or absent:

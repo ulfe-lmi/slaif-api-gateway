@@ -33,14 +33,16 @@ def _review(args: list[str], tmp_path: Path):
 
 def test_review_first_install_is_ready(tmp_path: Path) -> None:
     result = _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path)
-    assert result.exit_code == 0, result.output
+    # the first-install bundle creates models, so the A2 new-model
+    # exposure review warning makes this READY_WITH_WARNINGS (exit 10)
+    assert result.exit_code == 10, result.output
     lines = result.stdout.splitlines()
-    assert lines[0] == "state: READY"
+    assert lines[0] == "state: READY_WITH_WARNINGS"
     assert "reason:" in lines[1]
     assert lines[3].startswith("report: file://")
     assert lines[4].startswith("run_dir: file://")
     assert "changed: 0" in lines
-    assert "warnings: 0" in lines
+    assert "warnings: 1" in lines
     assert "blockers: 0" in lines
     assert any(line.startswith("stage: offline review:") for line in lines)
     assert "review these ten files" not in result.stdout
@@ -50,8 +52,9 @@ def test_review_first_install_is_ready(tmp_path: Path) -> None:
 
 
 def test_review_refresh_with_changes_is_blocked(tmp_path: Path) -> None:
-    """The fixture's changed row is an update: no apply operation exists in
-    this version, so the run is BLOCKED even though it is sealed/verifiable."""
+    """The fixture's changed row is an update of an existing row: the
+    import gate blocks the route change, so the run is BLOCKED even
+    though it is sealed/verifiable."""
     result = _review(
         [str(FIXTURES / "bundle-refresh-ready.json"),
          "--baseline-file", str(FIXTURES / "baseline-synthetic.json")],
@@ -244,7 +247,7 @@ def test_stale_baseline_with_same_shape_is_rejected(tmp_path: Path) -> None:
 def test_run_directory_is_never_overwritten(tmp_path: Path) -> None:
     args = [str(FIXTURES / "bundle-first-install.json"), "--first-install"]
     first = _review(args, tmp_path)
-    assert first.exit_code == 0
+    assert first.exit_code == 10  # RWW: new-model exposure warning
     second = _review(args, tmp_path)
     assert second.exit_code == 65
     assert "already exists" in second.stderr
@@ -270,9 +273,9 @@ def test_review_json_summary(tmp_path: Path) -> None:
          "--seal-key", str(tmp_path / "seal.key"),
          "--json"],
     )
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 10, result.output
     payload = json.loads(result.stdout)
-    assert payload["state"] == "READY"
+    assert payload["state"] == "READY_WITH_WARNINGS"
     assert payload["run_id"] == "fixture-first-install-001"
     assert payload["report"].startswith("file://")
     assert payload["changed"] == 0
@@ -280,7 +283,7 @@ def test_review_json_summary(tmp_path: Path) -> None:
 
 
 def test_verify_valid_run(tmp_path: Path) -> None:
-    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 0
+    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 10
     result = runner.invoke(
         app,
         ["catalog-refresh", "verify",
@@ -294,7 +297,7 @@ def test_verify_valid_run(tmp_path: Path) -> None:
 
 
 def test_verify_tampered_run_exit_30(tmp_path: Path) -> None:
-    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 0
+    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 10
     victim = tmp_path / "runs" / "fixture-first-install-001" / "REVIEW.html"
     victim.write_bytes(victim.read_bytes() + b"tampered")
     result = runner.invoke(
@@ -308,7 +311,7 @@ def test_verify_tampered_run_exit_30(tmp_path: Path) -> None:
 
 
 def test_verify_missing_key_is_data_error(tmp_path: Path) -> None:
-    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 0
+    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 10
     result = runner.invoke(
         app,
         ["catalog-refresh", "verify",
@@ -321,7 +324,7 @@ def test_verify_missing_key_is_data_error(tmp_path: Path) -> None:
 
 
 def test_verify_missing_run_dir_exit_30(tmp_path: Path) -> None:
-    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 0
+    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 10
     result = runner.invoke(
         app,
         ["catalog-refresh", "verify",
@@ -333,7 +336,7 @@ def test_verify_missing_run_dir_exit_30(tmp_path: Path) -> None:
 
 
 def test_verify_wrong_key_exit_30(tmp_path: Path) -> None:
-    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 0
+    assert _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path).exit_code == 10
     other_key = tmp_path / "other.key"
     # Create a second, different key via the CLI review in a separate root.
     assert runner.invoke(
@@ -342,7 +345,7 @@ def test_verify_wrong_key_exit_30(tmp_path: Path) -> None:
          "--first-install",
          "--run-root", str(tmp_path / "other-runs"),
          "--seal-key", str(other_key)],
-    ).exit_code == 0
+    ).exit_code == 10
     result = runner.invoke(
         app,
         ["catalog-refresh", "verify",
@@ -412,7 +415,7 @@ def _run_validation_json(tmp_path: Path, run_id: str) -> dict:
 
 def test_sql_capture_first_install_run(tmp_path: Path) -> None:
     result = _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path)
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 10, result.output  # RWW: new-model exposure warning
     validation = _run_validation_json(tmp_path, "fixture-first-install-001")
     sql_checks = validation["sql_checks"]
     assert sql_checks["capture"] == "first_install"
@@ -487,7 +490,7 @@ def test_falsified_sql_capture_claims_are_blocked(tmp_path: Path) -> None:
 
 def test_verify_replay_records_no_sql_executed(tmp_path: Path) -> None:
     result = _review([str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path)
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 10, result.output  # RWW: new-model exposure warning
     verify = runner.invoke(
         app,
         ["catalog-refresh", "verify",
@@ -882,7 +885,7 @@ def test_watchdog_terminates_stalled_collect_before_any_publication(
         )
     finally:
         mp.undo()
-    assert base.exit_code == 0, base.output
+    assert base.exit_code == 10, base.output  # RWW: new-model exposure warning
     before_dirs = sorted(p.name for p in run_root.iterdir())
     assert len(before_dirs) == 1
     before_bytes = {
@@ -1002,8 +1005,8 @@ def test_cli_review_of_intact_collected_bundle_is_offline_with_measured_generato
             "--seal-key", str(tmp_path / "seal.key"),
         ],
     )
-    assert result.exit_code == 0, result.output
-    assert result.stdout.splitlines()[0] == "state: READY"
+    assert result.exit_code == 10, result.output  # RWW: new-model exposure warning
+    assert result.stdout.splitlines()[0] == "state: READY_WITH_WARNINGS"
     assert any(line.startswith("stage: offline review:") for line in result.stdout.splitlines())
     assert "performed no live retrieval" in result.stdout
 

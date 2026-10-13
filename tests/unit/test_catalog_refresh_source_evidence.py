@@ -627,7 +627,9 @@ def test_ecb_quote_and_date_bind_usd_normalization() -> None:
         sources=[ecb_source_dict(date_s="2026-09-21", rate="1.08")],
     )
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     assert report.source_evidence["fx_backed"][0]["pair"] == "EUR to USD"
     # USD observations converted exactly: 0.27 USD == 0.25 EUR @ 1.08
     fields = {item["field"] for item in report.source_evidence["backed_facts"]}
@@ -679,7 +681,9 @@ def test_fx_cited_second_source_with_identical_quote_is_ready() -> None:
     payload["sources"].append({**ecb, "model": "USD-EUR"})
     payload["fx"][0]["provenance"]["sources"] = ["ecb|USD-EUR|ecb_reference_xml"]
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     assert "source_evidence_reference_mismatch" not in _codes(report)
     assert "source_observations_contradict" not in _codes(report)
     (fx_backed,) = report.source_evidence["fx_backed"]
@@ -701,7 +705,9 @@ def test_fx_cited_later_matching_quote_not_shadowed_by_earlier_uncited() -> None
     )
     payload["fx"][0]["provenance"]["sources"] = ["ecb|USD-EUR|ecb_reference_xml"]
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+    # 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     (fx_backed,) = report.source_evidence["fx_backed"]
     assert fx_backed["backed_by"] == "ecb|USD-EUR|ecb_reference_xml"
     assert fx_backed["quote_date"] == "2026-09-21"
@@ -878,7 +884,9 @@ def test_explicit_subset_proposing_every_eligible_model_is_ready() -> None:
     payload = _proposed_extra_model_payload()
     payload["run_id"] = "test-d4-subset-both"
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+    # 182: created models surface the required exposure warning(s)
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     assert report.artifacts["pricing_rows"] == 2
     inventory = report.source_evidence["inventory"]["openrouter"]
     assert inventory["evidence_models"] == 2
@@ -898,7 +906,9 @@ def test_explicit_subset_excluding_eligible_model_is_ready_and_named() -> None:
     payload["pricing"] = [p for p in payload["pricing"] if p["model"] != EXTRA_MODEL]
     payload["sources"] = [s for s in payload["sources"] if s["model"] != EXTRA_MODEL]
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+    # 182: created models surface the required exposure warning(s)
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     assert report.artifacts["pricing_rows"] == 1
     inventory = report.source_evidence["inventory"]["openrouter"]
     assert inventory["explicitly_excluded_models"] == 1
@@ -1065,7 +1075,9 @@ def test_text_claim_still_binds_when_source_observations_text() -> None:
         item["capabilities"] = {"streaming": True, "text": True}
     set_openrouter_evidence(payload, {"synthetic/chat-v1": ("0.25", "1.0")})
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+# 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     fields = {item["field"] for item in report.source_evidence["backed_facts"]}
     assert "model:capability:text" in fields
 
@@ -1084,7 +1096,9 @@ def test_absent_deprecation_observation_is_not_a_conflict_when_text_is_observed(
             source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
             source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+# 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     assert "source_evidence_value_mismatch" not in _codes(report)
 
 
@@ -1184,7 +1198,9 @@ def test_dropped_baseline_candidate_is_disappeared_not_silently_dropped() -> Non
 def test_valid_bootstrap_create_only_stays_ready() -> None:
     bundle = load_bundle((FIXTURES / "bundle-first-install.json").read_bytes())
     report, artifacts = validate_bundle(bundle, None, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
-    assert report.state == "READY"
+    # 182: the one created model surfaces the required exposure warning
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     assert report.counts["new"] == 1
     assert report.artifacts["route_rows"] == 1
     assert report.artifacts["pricing_rows"] == 1
@@ -1196,7 +1212,9 @@ def test_true_no_change_refresh_stays_ready() -> None:
 
     bundle = _bundle()
     report, _artifacts = validate_bundle(bundle, _mini_baseline(), policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
-    assert report.state == "READY"
+    # 182: the one new model surfaces the required exposure warning
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     assert report.counts["unchanged"] == 2
     assert report.counts["new"] == 1
     assert report.counts["changed"] == 0
@@ -1232,7 +1250,9 @@ def test_public_alias_binds_through_upstream_identity() -> None:
         "content_sha256": None,
     }
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+# 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     # No baseline supplied: create-only run, so every selected model is new.
     assert report.counts["new"] == 3
     # The alias's facts bound through the upstream row in the snapshot.
@@ -1421,7 +1441,9 @@ def test_openai_official_sources_bind_a_positive_path() -> None:
     baseline = load_baseline((FIXTURES / "baseline-synthetic.json").read_bytes())
     _bundle, report, _artifacts = _validate_payload(payload, baseline)
     codes = _codes(report)
-    assert report.state == "READY", (codes, [w.detail for w in report.warnings])
+    # 182: the one new openai model surfaces the required exposure warning
+    assert report.state == "READY_WITH_WARNINGS", (codes, [w.detail for w in report.warnings])
+    assert codes == {"new_model_exposure"}
     dispositions = {(d.provider, d.model): d.disposition for d in report.dispositions}
     assert dispositions[("openai", "gpt-5.2")] == "NEW"
     assert dispositions[("openrouter", "synthetic/stable-v1")] == "UNCHANGED"
@@ -1443,7 +1465,8 @@ def test_openai_official_sources_bind_a_positive_path() -> None:
 
 def test_openai_positive_path_through_the_cli(tmp_path: Path) -> None:
     """The same positive OpenAI bundle passes the complete CLI review
-    (schema acceptance of openai_models_docs included) and exits 0."""
+    (schema acceptance of openai_models_docs included) and exits 10
+    with the exposure warning."""
     payload = _openai_positive_payload()
     bundle_path = tmp_path / "bundle-openai-positive.json"
     bundle_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
@@ -1453,8 +1476,9 @@ def test_openai_positive_path_through_the_cli(tmp_path: Path) -> None:
          "--baseline-file", str(FIXTURES / "baseline-synthetic.json"),
          "--run-root", str(tmp_path / "runs"), "--seal-key", str(tmp_path / "seal.key")],
     )
-    assert result.exit_code == 0, result.output
-    assert "state: READY" in result.stdout
+    # 182: bootstrap create-only carries the exposure warning
+    assert result.exit_code == 10, result.output
+    assert "state: READY_WITH_WARNINGS" in result.stdout
     html = (tmp_path / "runs" / "test-openai-positive" / "REVIEW.html").read_text()
     assert "gpt-5.2" in html
     # The models-docs locator for the observed context limit is rendered.
@@ -1695,7 +1719,8 @@ def test_d5_first_install_report_contains_actual_observations(tmp_path: Path) ->
          "--first-install", "--run-root", str(tmp_path / "runs"),
          "--seal-key", str(tmp_path / "seal.key")],
     )
-    assert result.exit_code == 0, result.output
+    # 182: first-install create-only carries the exposure warning
+    assert result.exit_code == 10, result.output
     html = (tmp_path / "runs" / "fixture-first-install-001" / "REVIEW.html").read_text()
     # The exact locator and the observed USD value are in the evidence details.
     assert "data[0].pricing.prompt" in html
@@ -1751,8 +1776,9 @@ def test_cli_valid_bootstrap_still_ready_after_evidence_contract(tmp_path: Path)
          "--first-install", "--run-root", str(tmp_path / "runs"),
          "--seal-key", str(tmp_path / "seal.key")],
     )
-    assert result.exit_code == 0, result.output
-    assert "state: READY" in result.stdout
+    # 182: bootstrap create-only carries the exposure warning
+    assert result.exit_code == 10, result.output
+    assert "state: READY_WITH_WARNINGS" in result.stdout
 
 
 # --- offline guarantees (family 6) --------------------------------------------------
@@ -1764,7 +1790,9 @@ def test_parsing_and_validation_perform_no_network_io() -> None:
 
     bundle = load_bundle((FIXTURES / "bundle-first-install.json").read_bytes())
     report, _artifacts = validate_bundle(bundle, None, policy_from_document(bundle.policy), sql_capture=sql_capture_for_mode(bundle.baseline.mode))
-    assert report.state == "READY"
+# 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     html = render_report(bundle, report.to_dict())
     assert b"<script" not in html.lower()
 
@@ -1790,7 +1818,9 @@ def test_snapshot_text_cannot_become_report_markup() -> None:
             source["content_sha256"] = hashlib.sha256(snapshot).hexdigest()
             source["evidence_b64"] = base64.b64encode(snapshot).decode("ascii")
     _bundle, report, _artifacts = _validate_payload(payload)
-    assert report.state == "READY", _codes(report)
+# 182: the created model's public exposure warning is the only finding
+    assert report.state == "READY_WITH_WARNINGS"
+    assert _codes(report) == {"new_model_exposure"}
     html = render_report(_bundle, report.to_dict()).decode("utf-8")
     assert not re.search(r"<img\b", html, flags=re.IGNORECASE)
     assert "onerror=alert(1)" in html  # present only in escaped form
