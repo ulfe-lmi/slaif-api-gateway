@@ -23,6 +23,7 @@ necessity).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -41,7 +42,6 @@ from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
-from slaif_gateway.schemas.accounting import ActualUsage
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
@@ -613,10 +613,11 @@ def test_default_isolation_paired_capture_price_and_fx_across_actual_apply(
     migrated_postgres_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A default READ COMMITTED reader spanning the ACTUAL apply never sees a
-    mixed price/FX pair: the deterministic capture while the apply holds the
-    catalog locks (uncommitted) is the complete OLD pair, the post-commit
-    capture is the complete NEW pair, and explicit at-boundary captures
-    resolve the old/new history exactly."""
+    mixed price/FX pair: the DETERMINISTIC capture while the writer HOLDS its
+    open transaction and catalog locks (paused before commit) is the complete
+    OLD pair, the post-commit capture is the complete NEW pair (values AND row
+    IDs), and explicit at-boundary captures resolve the old/new history
+    exactly."""
     url = migrated_postgres_url
     run_dir = _review_usd_refresh_run(tmp_path, url, "itg-b2-pair", OR_INPUT_B, FX_NEW)
     key = _seal_key_bytes(tmp_path)
@@ -628,12 +629,18 @@ def test_default_isolation_paired_capture_price_and_fx_across_actual_apply(
     assert old_pair[5] == B2_OLD_FX
 
     async def _span(engine) -> dict[str, Any]:
+        # Two events make the pause deterministic: the writer signals after
+        # acquiring the catalog locks and HOLDS its open transaction + locks
+        # until the reader has captured the complete old pair. No sleeps; all
+        # waits are bounded and the release is guaranteed on exceptions.
         lock_held = asyncio.Event()
+        reader_done = asyncio.Event()
         real_lock = apply_mod.lock_catalog_tables
 
         async def _signal_locks(connection: Any) -> None:
             await real_lock(connection)
             lock_held.set()
+            await asyncio.wait_for(reader_done.wait(), timeout=120)
 
         monkeypatch.setattr(apply_mod, "lock_catalog_tables", _signal_locks)
 
@@ -652,9 +659,12 @@ def test_default_isolation_paired_capture_price_and_fx_across_actual_apply(
             ).scalar_one()
         before = await _capture(engine)
         writer_task = asyncio.create_task(_writer())
-        await lock_held.wait()
-        mid = await _capture(engine)
-        apply_result = await writer_task
+        try:
+            await asyncio.wait_for(lock_held.wait(), timeout=120)
+            mid = await _capture(engine)
+        finally:
+            reader_done.set()  # release the writer even on reader failure
+        apply_result = await asyncio.wait_for(writer_task, timeout=180)
         after = await _capture(engine)
         return {
             "isolation": isolation,
@@ -675,7 +685,7 @@ def test_default_isolation_paired_capture_price_and_fx_across_actual_apply(
     )
     # every capture is a complete old-or-new fact tuple, never a mix
     assert old == old_pair
-    assert mid == old_pair  # writer holds the catalog locks but has not committed
+    assert mid == old_pair  # writer paused holding the locks, transaction uncommitted
     assert new != old
     assert new[1:4] == (B2_NEW_INPUT, B2_OLD_OUTPUT, "USD")
     assert new[5] == B2_NEW_FX
@@ -894,10 +904,12 @@ def test_retained_capture_estimate_survives_refresh_to_finalization(
 def test_provider_completed_recovery_after_refresh_uses_real_old_capture_facts(
     migrated_postgres_url: str, tmp_path: Path
 ) -> None:
-    """Provider-completed recovery after the ACTUAL refresh repairs from the
-    REAL capture-derived persisted facts (old price/FX IDs, old costs) and
-    issues ZERO pricing_rules/fx_rates statements -- history is never
-    re-priced from the refreshed catalog."""
+    """Provider-completed recovery after the ACTUAL refresh: the PRODUCTION
+    writer chain (record_provider_completed_before_finalization + the
+    existing finalization-failure state transition) persists the
+    capture-derived facts (old price/FX IDs, old costs, safe metadata, no
+    response content), and recovery issues ZERO pricing_rules/fx_rates
+    statements -- history is never re-priced from the refreshed catalog."""
     url = migrated_postgres_url
     _phase(url, _cleanup)
     _phase(url, lambda e: _seed_catalog_usd(e))
@@ -919,63 +931,63 @@ def test_provider_completed_recovery_after_refresh_uses_real_old_capture_facts(
             )
             request_id = f"req-b2-recovery-{uuid.uuid4().hex}"
             reservation = await _reserve(session, key_row, estimate, request_id)
-            # the provider completed; finalization failed after the response,
-            # leaving the recovery-state ledger row with capture-derived facts
-            actual = AccountingService(session).compute_actual_cost(
-                _provider_response(),
-                _route(),
-                ActualUsage(prompt_tokens=50, completion_tokens=25, total_tokens=75),
-                estimate,
+            # PRODUCTION writer chain: the durable provider-completed record
+            # is written from the retained capture/estimate (no manually
+            # synthesized usage row/metadata), then the existing
+            # finalization-failure state transition makes it
+            # provider-completed-recovery eligible
+            response = _provider_response()
+            response = ProviderResponse(
+                provider=response.provider,
+                upstream_model=response.upstream_model,
+                status_code=response.status_code,
+                json_body={"choices": [{"message": {"content": "b2-sensitive-marker"}}]},
+                upstream_request_id=response.upstream_request_id,
+                usage=response.usage,
             )
-            now = datetime.now(UTC)
-            ledger = await UsageLedgerRepository(session).create_usage_record(
-                success=None,
-                accounting_status="failed",
-                error_type="accounting_finalization_failed",
-                error_message="accounting_finalization_failed",
+            accounting = AccountingService(session)
+            record = await accounting.record_provider_completed_before_finalization(
+                reservation.reservation_id,
+                _authenticated_key(key_row),
+                _route(),
+                estimate,
+                response,
                 request_id=request_id,
-                quota_reservation_id=reservation.reservation_id,
-                gateway_key_id=key_row.id,
                 endpoint=ENDPOINT,
-                provider=PROVIDER,
-                requested_model=MODEL,
-                resolved_model=UPSTREAM,
-                upstream_request_id="upstream-itg-b2-recovery",
-                streaming=True,
-                http_status=200,
-                prompt_tokens=50,
-                completion_tokens=25,
-                input_tokens=50,
-                output_tokens=25,
-                cached_tokens=0,
-                reasoning_tokens=0,
-                total_tokens=75,
-                estimated_cost_eur=estimate.estimated_total_cost_eur,
-                actual_cost_eur=actual.actual_cost_eur,
-                actual_cost_native=actual.actual_cost_native,
-                native_currency=actual.native_currency,
-                usage_raw={"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75},
-                response_metadata={
-                    "needs_reconciliation": True,
-                    "recovery_state": "provider_completed_finalization_failed",
-                    "pricing_rule_id": str(estimate.pricing_rule_id),
-                    "fx_rate_id": str(estimate.fx_rate_id),
-                },
-                started_at=now - timedelta(seconds=2),
-                finished_at=now,
-                latency_ms=2000,
+                started_at=datetime.now(UTC) - timedelta(seconds=2),
+            )
+            failure = await accounting.mark_provider_completed_finalization_failed(
+                record.usage_ledger_id,
+                reservation.reservation_id,
+                RuntimeError("simulated finalization failure after provider completion"),
             )
             await session.commit()
+            ledger = await UsageLedgerRepository(session).get_usage_record_by_id(
+                record.usage_ledger_id
+            )
             return {
                 "key_id": str(key_row.id),
-                "ledger_id": str(ledger.id),
+                "ledger_id": str(record.usage_ledger_id),
                 "price_id": str(estimate.pricing_rule_id),
                 "fx_id": str(estimate.fx_rate_id),
-                "actual_native": actual.actual_cost_native,
+                "actual_native": ledger.actual_cost_native,
+                "actual_eur": ledger.actual_cost_eur,
+                "currency": ledger.native_currency,
+                "meta_price_id": ledger.response_metadata.get("pricing_rule_id"),
+                "meta_fx_id": ledger.response_metadata.get("fx_rate_id"),
+                "failure_status": failure.new_status,
+                "metadata_json": json.dumps(ledger.response_metadata, sort_keys=True),
             }
 
     admitted = _phase(url, _admit_and_fail_finalization)
+    # the PRODUCTION writer persisted the capture-derived facts (old pair)
     assert admitted["actual_native"] == B2_NATIVE_50_25
+    assert admitted["actual_eur"] == B2_EUR_50_25
+    assert admitted["currency"] == "USD"
+    assert admitted["meta_price_id"] == admitted["price_id"]
+    assert admitted["meta_fx_id"] == admitted["fx_id"]
+    # safe metadata: cost/provenance facts only, never response content
+    assert "b2-sensitive-marker" not in admitted["metadata_json"]
 
     # the ACTUAL reviewed apply supersedes the USD price AND the FX row
     baseline_doc = _export_baseline(tmp_path, url, "baseline-b2-recovery.json")

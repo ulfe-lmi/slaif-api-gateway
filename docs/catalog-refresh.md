@@ -1410,11 +1410,14 @@ for the full option and exit-code surface.
 
 ## Limits
 
-- `collect` makes bounded live official-source retrieval calls and performs
-  no Codex research; `review`, `verify`, `export-baseline`, and `status`
-  make no network calls. `apply`'s only network contact is the authenticated
-  PostgreSQL connection to the reviewed target (permitted database network):
-  it performs no source retrieval, provider inference, or research traffic.
+- `collect` makes bounded live official-source retrieval calls and, only when
+  `--refresh` is combined with `--db-url`, performs a read-only PostgreSQL
+  baseline capture of the target database; it performs no Codex research.
+  `verify` is fully offline. The other commands make no source, provider, or
+  research traffic; their only possible network contact is the permitted
+  PostgreSQL connection to their target database: `export-baseline` and
+  `status` use it, `apply` uses the reviewed target, and `review` only when
+  `--db-url` reads a live baseline.
 - Apply is explicit and single-target: one sealed run, one database, one
   effective instant, one durable record. It is a catalog refresh tool, not
   a migration or backup tool, and it is never wrapped in the collect

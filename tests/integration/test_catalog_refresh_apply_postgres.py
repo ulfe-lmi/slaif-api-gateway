@@ -2235,7 +2235,7 @@ def test_aged_retry_returns_original_outcome_and_refuses_new_stale_work(
     relaxed."""
     url = migrated_postgres_url
     _phase(url, _cleanup)
-    _phase(url, lambda e: _seed_catalog_usd(e))
+    seeded = _phase(url, lambda e: _seed_catalog_usd(e))
     baseline_doc = _export_baseline(tmp_path, url, "baseline-aged.json")
 
     def _bundle(run_id: str, or_input: str) -> Path:
@@ -2257,6 +2257,7 @@ def test_aged_retry_returns_original_outcome_and_refuses_new_stale_work(
 
     run_a = _bundle("itg182b-aged-a", OR_INPUT_B)
     run_b = _bundle("itg182b-aged-b", "0.29")  # different unapplied work
+    bundle_created_at = datetime.now(UTC)
     key = _seal_key_bytes(tmp_path)
 
     async def _apply_a(engine: AsyncEngine) -> Any:
@@ -2299,7 +2300,11 @@ def test_aged_retry_returns_original_outcome_and_refuses_new_stale_work(
                 return super().now(tz)
             return cls._frozen
 
-    _FrozenDatetime._frozen = datetime.now(UTC) + timedelta(days=3)
+    # past the ACTUAL reviewed finite future end (seed: now + 30d) AND
+    # past the source freshness block limit (72h from bundle generation)
+    _FrozenDatetime._frozen = seeded["pricing_model_until"] + timedelta(days=1)
+    assert _FrozenDatetime._frozen > seeded["pricing_model_until"]
+    assert _FrozenDatetime._frozen > bundle_created_at + timedelta(hours=72)
     monkeypatch.setattr(apply_mod, "datetime", _FrozenDatetime)
 
     # 1) the authenticated retry of the SAME bundle: original actor/T/counts
