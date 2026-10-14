@@ -616,19 +616,7 @@ def test_r3r4_installed_bootstrap_verify_apply(
 
     # The warning set is exactly the per-model new-exposure findings.
     validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
-    codes: list[str] = []
-
-    def _walk(obj) -> None:
-        if isinstance(obj, dict):
-            if "code" in obj and "severity" in obj:
-                codes.append(obj["code"])
-            for value in obj.values():
-                _walk(value)
-        elif isinstance(obj, list):
-            for value in obj:
-                _walk(value)
-
-    _walk(validation)
+    codes = [w["code"] for w in validation["warnings"]]
     assert sorted(codes) == ["new_model_exposure"] * 3, codes
 
     # The sealed HTML carries both providers' models and the FX rate.
@@ -843,19 +831,7 @@ def test_r4b_installed_refresh_changed_prices_fx_and_apply(
     _STATE["run_dir_refresh"] = str(run_dir)
 
     validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
-    codes: list[str] = []
-
-    def _walk(obj) -> None:
-        if isinstance(obj, dict):
-            if "code" in obj and "severity" in obj:
-                codes.append(obj["code"])
-            for value in obj.values():
-                _walk(value)
-        elif isinstance(obj, list):
-            for value in obj:
-                _walk(value)
-
-    _walk(validation)
+    codes = [w["code"] for w in validation["warnings"]]
     assert sorted(codes) == [
         "fx_moved_review",
         "price_moved_review",
