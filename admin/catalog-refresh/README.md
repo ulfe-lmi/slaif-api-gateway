@@ -12,22 +12,36 @@ Full semantics live in
 
 ## Current entry points
 
-There is exactly one supported way to run this workflow: the CLI.
+There is exactly one supported way to run this workflow: the CLI. The
+one-command administrator wrapper is the supported entry point; it
+validates the mode before spawning, runs the read-only collect under the
+standard OS watchdog (300 s default plus a 5-second KILL grace; any
+explicit positive finite durations may be chosen), and preserves the
+child's exact exit code. The watchdog is built in and is never used
+around review, verify, export-baseline, or any apply:
 
 ```bash
-# 0) Collect now: bounded official-source retrieval plus review in one
-#    invocation; publishes one sealed run directory (REVIEW.html).
-#    The supported administrator workflow prefixes the read-only collect
-#    with the standard OS watchdog: 300 s default plus a 5-second KILL
-#    grace (any explicit positive finite duration may be chosen). The
-#    watchdog is never used around review, verify, export-baseline, or
-#    any apply:
-timeout --kill-after=5 300 slaif-gateway catalog-refresh collect --bootstrap \
+# 0) One refresh, one report: bootstrap on an empty catalog ...
+slaif-catalog-refresh --mode bootstrap \
   --run-root /var/lib/slaif/catalog-refresh/runs \
-  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key --json
 
-# 0') Refresh collection against the current baseline (live export)
-slaif-gateway catalog-refresh collect --refresh --db-url "$DATABASE_URL" \
+# 0') ... or refresh against the current baseline (live read-only export)
+slaif-catalog-refresh --mode refresh --db-url "$DATABASE_URL" \
+  --run-root /var/lib/slaif/catalog-refresh/runs \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key --json
+```
+
+Each invocation publishes one sealed run directory (REVIEW.html) and
+prints only the compact state summary with the exact report path. The
+wrapper invokes the installed `slaif-gateway catalog-refresh collect`
+command (shown below with the same options for the lower-level
+entry points); `--research` and its options pass through to the opt-in
+isolated Codex research fallback.
+
+```bash
+# 0'') Lower-level equivalent of (0)/(0'): the raw collect command
+slaif-gateway catalog-refresh collect --bootstrap \
   --run-root /var/lib/slaif/catalog-refresh/runs \
   --seal-key ~/.local/state/slaif/catalog-refresh/seal.key
 
@@ -170,37 +184,45 @@ Operator notes for the sealed filesystem boundary:
 
 ## What does not exist yet
 
-- **No one-command wrapper.** The isolated Codex research fallback is opt-in
-  per `collect` invocation (default off, never runs without explicit
-  configuration), and there is still no thin wrapper chaining collect ->
-  review -> export-baseline -> apply. Research template/schema assets are
-  resolved from the source-checkout layout; installed-package
-  qualification is a pending later slice.
+- **No interactive shell UX** beyond the one-command wrapper (watch
+  modes, TUI review, scripted multi-run orchestration). The isolated
+  Codex research fallback is opt-in per invocation (default off, never
+  runs without explicit configuration). The research template/schema
+  assets are packaged with the installed wheel
+  (`slaif_gateway.resources.catalog_refresh`); the installed
+  qualification is recorded in
+  [Installed workflow qualification](../../docs/verification/catalog-refresh-installed-workflow.md).
 
 Do not add shell scripts or dashboard buttons that apply catalog data by
 any path other than the explicit `apply` command on one sealed
 READY/READY_WITH_WARNINGS run; an honest blocked label is part of the
 contract.
 
-## Eventual wrapper contract (planned for a later slice)
+## The implemented one-command wrapper
 
-When the wrapper slice lands, the intended operator surface will be a thin
+The one-command administrator wrapper `slaif-catalog-refresh` is a thin
 wrapper around the same primitives documented here (the deterministic live
-retrieval + optional research pass, the audited `apply` step already
-implemented today):
+retrieval + optional research pass, and the separate audited `apply`
+step):
 
-1. trigger a deterministic live retrieval + research pass;
+1. trigger a deterministic live retrieval + optional research pass
+   (bootstrap or refresh mode is explicit; bootstrap is first-install
+   and never combines with a baseline source);
 2. produce one typed bundle with full provenance;
-3. run the same offline `review` against a fresh `export-baseline`;
-4. print the local report path so the operator opens the single
-   `REVIEW.html` in an ordinary browser (the accepted one-command,
-   one-static-report architecture — the wrapper must NOT require a new
-   management dashboard surface);
-5. require the explicit, separately audited `apply` CLI step (already
-   implemented, documented above), which re-authenticates the sealed run
-   and re-validates the baseline identity inside the transaction before
-   superseding rows.
+3. run the same offline review against the selected baseline (empty
+   catalog for bootstrap; live read-only export or exported file for
+   refresh) in the same invocation;
+4. print the compact state summary with the local report path so the
+   operator opens the single `REVIEW.html` in an ordinary browser (the
+   accepted one-command, one-static-report architecture — the wrapper
+   does NOT require a new management dashboard surface);
+5. never apply: the explicit, separately audited `apply` CLI step
+   re-authenticates the sealed run and re-validates the baseline
+   identity inside the transaction before superseding rows.
 
-The wrapper must never weaken the bundle schema, the readiness
+The wrapper validates the mode before spawning, runs the read-only
+collect under the standard Linux `timeout(1)` watchdog (300 s default +
+5 s KILL grace; both must stay positive), and preserves the child's
+exact exit code. It must never weaken the bundle schema, the readiness
 recomputation, the sealing, or the read-only export semantics defined in
 `docs/catalog-refresh.md`.

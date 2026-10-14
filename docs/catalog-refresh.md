@@ -16,10 +16,15 @@ slices that do not exist yet.
 
 ## What exists now
 
-The implemented entry points are six CLI commands under
+The implemented entry points are the one-command administrator wrapper
+`slaif-catalog-refresh` plus six `slaif-gateway catalog-refresh` commands,
+under
 [CLI reference](cli-reference.md#catalog-refresh-collect-review-verify-apply):
 
 ```bash
+slaif-catalog-refresh --mode bootstrap|refresh [--providers openai,openrouter] [--models a,b] \
+  [--baseline-file FILE | --db-url URL] [--run-root P] [--seal-key P] [--json] \
+  [--timeout S] [--kill-grace S] [--research ...]
 slaif-gateway catalog-refresh collect --bootstrap|--refresh [--providers openai,openrouter] [--models a,b] \
   [--baseline-file FILE | --db-url URL] [--run-root P] [--seal-key P] [--json]
 slaif-gateway catalog-refresh review <bundle> [--baseline-file FILE | --db-url URL | --first-install]
@@ -63,9 +68,133 @@ existing proposal surface; catalog refresh consumes the same route/pricing/FX
 parse, validate, classify, and execution-plan functions and does not duplicate
 their rules.
 
+## One-command administrator workflow (`slaif-catalog-refresh`)
+
+The installed administrator workflow is one read-only command that
+produces one sealed report, followed by the separate explicit
+[apply](#apply-one-explicit-atomic-command):
+
+```bash
+# first install (empty baseline; never combined with a baseline source)
+slaif-catalog-refresh --mode bootstrap --run-root /var/lib/slaif/catalog-refresh-runs \
+  --seal-key /var/lib/slaif/catalog-refresh/seal.key --json
+
+# refresh against the existing catalog (live read-only baseline export)
+slaif-catalog-refresh --mode refresh --db-url "$DATABASE_URL" \
+  --run-root /var/lib/slaif/catalog-refresh-runs \
+  --seal-key /var/lib/slaif/catalog-refresh/seal.key --json
+```
+
+`slaif-catalog-refresh` is a thin wrapper around the installed
+`slaif-gateway catalog-refresh collect` command:
+
+- it validates `--mode` (and the mode/baseline-source combination)
+  BEFORE the child is spawned;
+- it runs the read-only collect under a standard Linux `timeout(1)`
+  watchdog (`--timeout`, default 300 s, plus `--kill-grace`, default 5 s,
+  both required to be positive) so a stalled collection is cancelled
+  without leaving a partial run behind;
+- it preserves the child's exact exit code (0/10/20/65, plus 2 for
+  usage refusals) and 124/137 when the watchdog cancels a stalled
+  collection;
+- it never applies, never retries, never opens a browser or server, and
+  never starts the Gateway;
+- `--research` and its options (`--research-cli-bin`,
+  `--research-endpoint`, `--research-model`, `--research-auth-env`,
+  `--research-timeout`) pass through to the opt-in
+  [isolated Codex research fallback](#isolated-codex-research-fallback-opt-in).
+
+The command works before the Gateway web app is started: it only reads
+the configured official sources (or, in `refresh` mode, one read-only
+PostgreSQL baseline export), writes one sealed run directory, and prints
+the compact state summary with the exact report path. The report, not
+the command output, is the review surface. The installed wheel ships the
+research task assets, so the command runs identically outside the source
+checkout (see
+[Installed workflow qualification](verification/catalog-refresh-installed-workflow.md)).
+
+## First install and operation (installed wheel)
+
+The workflow is a set of installed CLI commands; it works before the
+Gateway web app is started (no running Gateway is required).
+
+Supported versions/limits for this surface:
+
+- Python 3.12+ (the wheel is built with standard build isolation; no
+  dev `PYTHONPATH` or editable install is needed or supported for
+  operation);
+- PostgreSQL 16+ for `refresh` (live baseline export) and `apply`
+  (migrations run from the source checkout's Alembic configuration —
+  the wheel does not ship `migrations/`);
+- Linux `timeout(1)` on `PATH` for the one-command wrapper watchdog;
+- one profile (`standard-v1`), two providers (`openai`, `openrouter`).
+
+Executable fresh-install path (owned temporary environment):
+
+```bash
+# 1) fresh checkout of the implementation head
+git clone --no-hardlinks https://github.com/ulfe-lmi/slaif-api-gateway /tmp/slaif-install
+cd /tmp/slaif-install && git checkout --detach <implementation-head-sha>
+
+# 2) build the wheel (standard build isolation) and install it into a
+#    clean environment (no dev PYTHONPATH, no editable install)
+python3 -m venv /tmp/slaif-install-venv
+/tmp/slaif-install-venv/bin/pip wheel . --no-deps -w /tmp/slaif-dist
+/tmp/slaif-install-venv/bin/pip install --no-cache-dir /tmp/slaif-dist/slaif_api_gateway-*.whl
+
+# 3) one explicit, consistently configured database target (persisted for
+#    migration, refresh, and apply below)
+export DATABASE_URL="postgresql+asyncpg://user:pass@127.0.0.1:5433/slaif"
+
+# 4) owned PostgreSQL 16+ (your deployment's normal setup), then run the
+#    schema migrations from the SOURCE CHECKOUT (the wheel does not ship
+#    migrations/):
+cd /tmp/slaif-install
+/tmp/slaif-install-venv/bin/python -m alembic upgrade head
+```
+
+Owned run-root and seal-key parent preparation (first install):
+
+```bash
+# run root: an OPERATOR-WRITABLE owned path, not group/other-writable.
+# (The CLI refuses unsafe directories instead of fixing permissions; a
+# system-wide path such as /var/lib/slaif/... requires a documented
+# ownership setup, e.g. chown to the operating user.)
+mkdir -p -m 0700 ~/.local/state/slaif/catalog-refresh/runs
+
+# seal key parent: the DEFAULT seal-key parent (~/.local/state/slaif/
+# catalog-refresh/) may be ABSENT on a first install — create it owned
+# with restrictive permissions. The CLI creates the seal key file 0600
+# if missing; it never repairs permissions of pre-existing directories.
+mkdir -p -m 0700 ~/.local/state/slaif/catalog-refresh
+```
+
+Then the one refresh and the separate explicit apply. The wrapper
+resolves its `slaif-gateway` child from PATH, so the same installed
+venv must be on PATH for the wrapper invocation (activate it, or pass
+`--cli-bin /tmp/slaif-install-venv/bin/slaif-gateway` explicitly):
+
+```bash
+source /tmp/slaif-install-venv/bin/activate
+slaif-catalog-refresh --mode bootstrap \
+  --run-root ~/.local/state/slaif/catalog-refresh/runs \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key --json
+# ... review the sealed REVIEW.html ...
+slaif-gateway catalog-refresh apply \
+  --run-dir <run_dir> --db-url "$DATABASE_URL" \
+  --seal-key ~/.local/state/slaif/catalog-refresh/seal.key \
+  --confirm --actor <identity> --reason <reason> \
+  [--ack-warnings <code>[,<code>...]] --json
+```
+
+The installed workflow qualification (fresh-clone wheel environment,
+owned PostgreSQL, exact commands and artifacts) is recorded in
+[Installed workflow qualification](verification/catalog-refresh-installed-workflow.md).
+
 ## What is planned later (not implemented, do not claim)
 
-- **Shell UX, E2E, and docs completion.**
+- **Interactive shell UX** beyond the one-command wrapper (watch modes,
+  TUI review, scripted multi-run orchestration) is not implemented.
 
 The only in-contract apply path is the explicit
 [apply](#apply-one-explicit-atomic-command) command on one sealed
@@ -569,8 +698,10 @@ identity and is never overridden:
   eligible unresolved facts may be transcribed by the isolated Codex
   semantic fallback (real CLI in an enforced outer boundary, parent
   re-grounding — see [Isolated Codex research fallback](#isolated-codex-research-fallback-opt-in)).
-- No apply or refresh command exists: the sealed run directory is the
-  terminal output; import/apply is a later objective.
+- Every refresh command is read-only: the sealed run directory is the
+  terminal output of `collect`/`slaif-catalog-refresh`; changing the
+  catalog requires the separate explicit [apply](#apply-one-explicit-atomic-command)
+  on one sealed READY/READY_WITH_WARNINGS run.
 - One profile (`standard-v1`), two providers (`openai`, `openrouter`),
   OpenAI model pages bounded to 64 per run.
 - The registry is intentionally small and reviewed; adding a source kind or
@@ -1140,10 +1271,15 @@ without expanding details or scrolling through evidence prose:
   rates, signed delta, state, publication date and source, with
   derived-reciprocal markers and the direct/derived distinction — or one
   concise, truthful "not required" line when no conversion is needed;
-- the **import-plan line**: create-only with the executable row count, or
-  a conspicuous BLOCKED line when existing-row updates have no apply
-  operation in this version, linking to the "Import plan detail"
-  expandable section (open whenever a plan is blocked);
+- the **plan line**: the single first-screen actionable-plan summary —
+  when the authenticated apply plan is non-empty it shows the operation
+  counts plus the one atomic apply (representable existing-row updates
+  execute as supersession operations in that plan; only the legacy
+  create-only TSV export omits them), and without an apply plan it shows
+  the historical create-only import-plan wording (executable create rows,
+  "nothing to create", or a conspicuous BLOCKED line), linking to the
+  "Import plan detail" expandable section (open whenever a plan is
+  blocked);
 - the leading **findings line**: the top finding groups ranked by severity
   with concise human labels (exact codes retained) and a link to the full
   per-item list — ranked aggregates plus a link, not pages of codes, when
@@ -1169,7 +1305,8 @@ currencies and signed percentages — with a note that displayed
 percentages are rounded to 0.001 % while the gate decision uses the exact
 stored ratio (a strictly above-threshold movement can display at the
 threshold); route/model attribute changes with current → proposed values
-and the reason (create-only: no apply operation exists in this version);
+and the reason (refresh never modifies existing route rows; representable
+price/FX changes carry as supersession operations in the apply plan);
 and an explicit "Unchanged: N model(s)" line pointing to the collapsed
 unchanged section. Disappearance is displayed as an observation, not a
 delete operation, and no decision is downgraded by presentation logic.
@@ -1457,6 +1594,10 @@ for the full option and exit-code surface.
 | `status` | 0 | status reported (committed or not — the fact is printed) |
 | `status` | 30 | seal/authentication failure |
 | `status` | 65 | data error (lookup or configuration failure) |
+| `slaif-catalog-refresh` | 0 / 10 / 20 | the child `collect` exit code, preserved exactly (same meanings as `collect`) |
+| `slaif-catalog-refresh` | 2 | a child usage refusal, preserved exactly (e.g. an unsupported `--profile` preset) |
+| `slaif-catalog-refresh` | 65 | wrapper-own argument validation before spawn (invalid `--mode`, non-positive `--timeout`/`--kill-grace`, contradictory `--mode bootstrap` plus `--baseline-file`/`--db-url`, or missing `timeout`/`slaif-gateway` binaries), or the child `collect` data error |
+| `slaif-catalog-refresh` | 124 / 137 | the watchdog cancelled a stalled read-only collection (TERM, then KILL after `--kill-grace`); no run is published |
 
 ## Limits
 
@@ -1495,3 +1636,4 @@ for the full option and exit-code surface.
 - [Provider catalog proposals](provider-catalog-proposals.md)
 - [Pricing catalog and bounded overrun](pricing-catalog.md)
 - [Database schema](database-schema.md)
+- [Installed administrator workflow qualification](verification/catalog-refresh-installed-workflow.md)

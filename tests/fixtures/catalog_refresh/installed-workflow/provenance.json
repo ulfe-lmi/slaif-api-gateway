@@ -1,62 +1,72 @@
 {
-  "artifact": "installed-workflow fixtures (184 R3-R8 controlled inputs)",
-  "scope": "Controlled source/model fixture inputs for the installed administrator workflow qualification. Served ONLY by the test-only shim installed in the owned qualification venv (sitecustomize) through the existing sources.fetch_source seam; the actual installed commands execute normally around the shim. No physical network in the installed workflow runs; unmapped URLs refuse. This is a fixture/mock qualification: no live source-format or model-accuracy claim.",
-  "seams": {
-    "source_bytes": "test-only sitecustomize wraps slaif_gateway.services.catalog_refresh.sources.fetch_source (module-global seam of the product fetch pipeline); serves these checked-in bytes for the fixed official URLs and refuses every unmapped URL; optional SLAIF184_STALL_SECONDS delays each mapped fetch (watchdog qualification) and optional SLAIF184_FAIL_URLS makes the listed mapped fetches raise the safe code-only SourceFetchError fixture_forced_failure (failed-collect label qualification)",
-    "model_transport": "test-only sitecustomize wraps slaif_gateway.services.catalog_refresh.collection.collect_bundle (module-global seam); dataclasses.replace the CLI-created ResearchConfig with the already-qualified canned mock transport (mock_model + canned result + prepared tool sequence); the REAL Codex worker still executes inside the enforced outer Docker boundary"
+ "artifact": "installed-workflow fixtures (184 R3-R8 controlled inputs)",
+ "scope": "Controlled source/model fixture inputs for the installed administrator workflow qualification. Served ONLY by the test-only shim installed in the owned qualification venv (sitecustomize) through the existing sources.fetch_source seam; the actual installed commands execute normally around the shim. No physical network in the installed workflow runs; unmapped URLs refuse. This is a fixture/mock qualification: no live source-format or model-accuracy claim.",
+ "seams": {
+  "source_bytes": "test-only sitecustomize wraps slaif_gateway.services.catalog_refresh.sources.fetch_source (module-global seam of the product fetch pipeline); serves these checked-in bytes for the fixed official URLs and refuses every unmapped URL; optional SLAIF184_STALL_SECONDS delays each mapped fetch (watchdog qualification) and optional SLAIF184_FAIL_URLS makes the listed mapped fetches raise the safe code-only SourceFetchError fixture_forced_failure (failed-collect label qualification)",
+  "model_transport": "test-only sitecustomize wraps slaif_gateway.services.catalog_refresh.collection.collect_bundle (module-global seam); dataclasses.replace the CLI-created ResearchConfig with the already-qualified canned mock transport (mock_model + canned result + prepared tool sequence); the REAL Codex worker still executes inside the enforced outer Docker boundary"
+ },
+ "files": {
+  "openrouter-models-v1.json": {
+   "sha256": "193890b78e1897973b8c2449f7980b43076c5f2d9b8c0cd8b0e96bb1c60bbe32",
+   "origin": "synthetic controlled rows (183-proven deterministic row shape; integer context_length so every v1 fact is deterministically resolvable with research off); NOT a live OpenRouter capture"
   },
-  "files": {
-    "openrouter-models-v1.json": {
-      "sha256": "193890b78e1897973b8c2449f7980b43076c5f2d9b8c0cd8b0e96bb1c60bbe32",
-      "origin": "synthetic controlled rows (183-proven deterministic row shape; integer context_length so every v1 fact is deterministically resolvable with research off); NOT a live OpenRouter capture"
-    },
-    "openrouter-models-v2.json": {
-      "sha256": "ddef39e0c1b0696617fb94d660524a210dc697f30c2bdcc9247fc36cb43b2159",
-      "origin": "v1 with syn/orc-a native USD prompt price changed 0.000005 -> 0.000007 (+40%, REVIEW trigger); integer context_length"
-    },
-    "openai-pricing-v1.md": {
-      "sha256": "428f6a77ba3996ba1af3f0013d570402c5d64ca7f76ed56fe5c5da673a44d0f4",
-      "origin": "synthetic standard-v1 pricing table (183-b proven table shape); gpt-3.5-turbo $0.50/$1.50 short context"
-    },
-    "openai-pricing-v2.md": {
-      "sha256": "01d7159854e58be801fee74995f758c7e6e52320acd6e9d6863e56a5a572c1b7",
-      "origin": "v1 with gpt-3.5-turbo short-context input changed $0.50 -> $0.75 (+50%, REVIEW trigger)"
-    },
-    "openai-models.md": {
-      "sha256": "69852d49a88530d9cc13f01e2536bdfaf9cdb17809d32d0f9036915f94fae22f",
-      "origin": "synthetic models index (183-b proven shape) listing gpt-3.5-turbo"
-    },
-    "openai-gpt-3.5-turbo-captured-listitem.md": {
-      "sha256": "b4c0d8628e5a72d9ac94fd4a6fc26ce236ce3bda51a48d3bff042a9b8301f4e7",
-      "origin": "RECONSTRUCTED AND DIGEST-VERIFIED against the prior official capture: 181-h collect run collect-20261012-211145-052117ddc02d, retrieved 2026-10-12T21:11:46.135021Z, https://developers.openai.com/api/docs/models/gpt-3.5-turbo.md; exact two-line inverse of the strategic transformation (source-page-provenance-verified.json). Served for source sets v1 (and as the captured reference); v2 serves the labeled v2 price derivative instead"
-    },
-    "research-openai-page-variant.md": {
-      "sha256": "1167433c22fc055af0dbd2480afeff869107cf53969dbb9b7fe76478070b3f0c",
-      "origin": "referenced in place (not copied): tests/fixtures/catalog_refresh/research-openai-page-variant.md - documented exact two-line synthetic derivative of the captured official page (183-b provenance record)"
-    },
-    "ecb-daily-template.xml": {
-      "sha256": "f8d6460e361f455887e0b9abe24caa01dfda44d58fbb84e32df38cae86d9d4f3",
-      "origin": "synthetic ECB reference-rate template; the harness materializes the per-run instance with YESTERDAY's date (the collector's deterministic request) and the source-set rate (1.08 v1/v3, 1.12 v2: +3.7% FX movement REVIEW trigger)"
-    },
-    "research-canned-result.json": {
-      "sha256": "2a17ce4d5257141b9f258b3aaf1bc3dbde7fc422d4800303e4e7ab945fd2fb50",
-      "origin": "canned structured research result for the docs-page task; quotes are the EXACT captured page limit lines (183-b proven shape); served by the qualified mock transport only"
-    },
-    "openai-gpt-3.5-turbo-v2-price-derivative.md": {
-      "sha256": "9fa25e8b105247fe8caa27c1271404da6a6940a58f8c66e58441e57b69142e60",
-      "origin": "SYNTHETIC two-occurrence price derivative of the digest-verified captured list-item page: the per-model contract row 'Input $0.5' and the multi-model table row 'GPT-3.5 Turbo $0.5' both changed to $0.75 to stay consistent with openai-pricing-v2.md; every other byte is unchanged. Served only for source set v2."
-    }
+  "openrouter-models-v2.json": {
+   "sha256": "ddef39e0c1b0696617fb94d660524a210dc697f30c2bdcc9247fc36cb43b2159",
+   "origin": "v1 with syn/orc-a native USD prompt price changed 0.000005 -> 0.000007 (+40%, REVIEW trigger); integer context_length"
   },
-  "urls_served": {
-    "https://openrouter.ai/api/v1/models": "openrouter-models-v{set}.json",
-    "https://developers.openai.com/api/docs/pricing.md": "openai-pricing-v{set}.md",
-    "https://developers.openai.com/api/docs/models.md": "openai-models.md",
-    "https://developers.openai.com/api/docs/models/gpt-3.5-turbo.md": "openai-gpt-3.5-turbo-captured-listitem.md (v1), openai-gpt-3.5-turbo-v2-price-derivative.md (v2), or research-openai-page-variant.md (v3)",
-    "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml": "ecb-daily.xml (materialized)"
+  "openai-pricing-v1.md": {
+   "sha256": "428f6a77ba3996ba1af3f0013d570402c5d64ca7f76ed56fe5c5da673a44d0f4",
+   "origin": "synthetic standard-v1 pricing table (183-b proven table shape); gpt-3.5-turbo $0.50/$1.50 short context"
   },
-  "source_sets": {
-    "v1": "bootstrap: both providers, all facts deterministically resolvable",
-    "v2": "refresh: changed native prices (both providers) + changed ECB rate",
-    "v3": "research: OpenAI only, prose-layout page with unresolved limits + canned mock research"
+  "openai-pricing-v2.md": {
+   "sha256": "01d7159854e58be801fee74995f758c7e6e52320acd6e9d6863e56a5a572c1b7",
+   "origin": "v1 with gpt-3.5-turbo short-context input changed $0.50 -> $0.75 (+50%, REVIEW trigger)"
+  },
+  "openai-models.md": {
+   "sha256": "69852d49a88530d9cc13f01e2536bdfaf9cdb17809d32d0f9036915f94fae22f",
+   "origin": "synthetic models index (183-b proven shape) listing gpt-3.5-turbo"
+  },
+  "openai-gpt-3.5-turbo-captured-listitem.md": {
+   "sha256": "b4c0d8628e5a72d9ac94fd4a6fc26ce236ce3bda51a48d3bff042a9b8301f4e7",
+   "origin": "RECONSTRUCTED AND DIGEST-VERIFIED against the prior official capture: 181-h collect run collect-20261012-211145-052117ddc02d, retrieved 2026-10-12T21:11:46.135021Z, https://developers.openai.com/api/docs/models/gpt-3.5-turbo.md; exact two-line inverse of the strategic transformation (source-page-provenance-verified.json). Served for source sets v1 (and as the captured reference); v2 serves the labeled v2 price derivative instead"
+  },
+  "research-openai-page-variant.md": {
+   "sha256": "1167433c22fc055af0dbd2480afeff869107cf53969dbb9b7fe76478070b3f0c",
+   "origin": "referenced in place (not copied): tests/fixtures/catalog_refresh/research-openai-page-variant.md - documented exact two-line synthetic derivative of the captured official page (183-b provenance record)"
+  },
+  "ecb-daily-template.xml": {
+   "sha256": "f8d6460e361f455887e0b9abe24caa01dfda44d58fbb84e32df38cae86d9d4f3",
+   "origin": "synthetic ECB reference-rate template; the harness materializes the per-run instance with YESTERDAY's date (the collector's deterministic request) and the source-set rate (1.08 v1/v3, 1.12 v2: +3.7% FX movement REVIEW trigger)"
+  },
+  "research-canned-result.json": {
+   "sha256": "2a17ce4d5257141b9f258b3aaf1bc3dbde7fc422d4800303e4e7ab945fd2fb50",
+   "origin": "canned structured research result for the docs-page task; quotes are the EXACT captured page limit lines (183-b proven shape); served by the qualified mock transport only"
+  },
+  "openai-gpt-3.5-turbo-v2-price-derivative.md": {
+   "sha256": "9fa25e8b105247fe8caa27c1271404da6a6940a58f8c66e58441e57b69142e60",
+   "origin": "SYNTHETIC two-occurrence price derivative of the digest-verified captured list-item page: the per-model contract row 'Input $0.5' and the multi-model table row 'GPT-3.5 Turbo $0.5' both changed to $0.75 to stay consistent with openai-pricing-v2.md; every other byte is unchanged. Served only for source set v2."
+  },
+  "openrouter-models-v5.json": {
+   "sha256": "8bf8da90370e6092e5508e8916c2b8cdccfd142a2a6be76ae65c19f1b8651dcc",
+   "origin": "v2 rows (matching the post-refresh baseline) with a positive per-request fee pricing.request=0.001 added to the selected syn/orc-a: the standard-v1 billing decision fails closed with request_charges_unrepresentable before any page fetch (unsupported-billing refresh closure; no new parser/adapter)"
+  },
+  "openai-gpt-3.5-turbo-v2-page-truncated.md": {
+   "sha256": "d81b5048093324af60578a995df968fe2ea102a44086ea23503bb3b0ae5f02aa",
+   "origin": "the v2 price-derivative page truncated mid-Output row of the Text tokens table (bytes stop at '| Output | $1', no newline): the model-doc parser rejects it with openai_model_doc:malformed_price_row (parser-truncation refresh closure; a transport outage would not produce this code). Served only for source set v4."
   }
+ },
+ "urls_served": {
+  "https://openrouter.ai/api/v1/models": "openrouter-models-v{set}.json",
+  "https://developers.openai.com/api/docs/pricing.md": "openai-pricing-v{set}.md",
+  "https://developers.openai.com/api/docs/models.md": "openai-models.md",
+  "https://developers.openai.com/api/docs/models/gpt-3.5-turbo.md": "openai-gpt-3.5-turbo-captured-listitem.md (v1), openai-gpt-3.5-turbo-v2-price-derivative.md (v2, v5), openai-gpt-3.5-turbo-v2-page-truncated.md (v4), or research-openai-page-variant.md (v3)",
+  "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml": "ecb-daily.xml (materialized)"
+ },
+ "source_sets": {
+  "v1": "bootstrap: both providers, all facts deterministically resolvable",
+  "v2": "refresh: changed native prices (both providers) + changed ECB rate",
+  "v3": "research: OpenAI only, prose-layout page with unresolved limits + canned mock research",
+  "v4": "refresh source failure: v2 composition (OpenRouter v2, OpenAI v2 pricing, the test-selected ECB rate (1.08: a genuine movement against the post-R4b stored rate, keeping the FX import gate a clean supersession)) with the model page replaced by the truncated variant; parser-level rejection of a REQUIRED model page",
+  "v5": "refresh billing failure: v2 composition with openrouter-models-v5.json (selected syn/orc-a carries a positive per-request fee); billing excluded before page fetch; the v2 model page is mapped but never fetched; the test-selected ECB rate (1.08) keeps the FX import gate a clean supersession so the selection blocker is the only refusal under test"
+ }
 }

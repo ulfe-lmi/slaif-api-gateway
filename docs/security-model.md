@@ -1081,8 +1081,11 @@ dispositions stand).
 Enforced limits (verified from the daemon and the container, not just the
 command line):
 
-- **Process/filesystem:** nonroot (uid 65534), read-only root filesystem,
-  all capabilities dropped, `no-new-privileges`, bounded PID/memory/CPU, and
+- **Process/filesystem:** nonroot (the researcher runs as the invoking
+  uid, which must already be nonroot; when the invoking process is root it
+  is dropped to the fixed unprivileged fallback uid 65534), read-only root
+  filesystem, all capabilities dropped, `no-new-privileges`, bounded
+  PID/memory/CPU, and
   task-only mounts: the verified pinned CLI binary, the captured official
   evidence bytes, the checked-in instruction template (copied as the
   task-local `AGENTS.md`), the checked-in output schema, the task JSON, and

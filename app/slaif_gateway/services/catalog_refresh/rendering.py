@@ -108,6 +108,7 @@ _FINDING_LABELS = {
     "missing_route": "route is missing",
     "model_deprecated": "model is deprecated",
     "model_disappeared": "model absent from the source set (observation, not a delete)",
+    "explicitly_selected_not_proposable": "required selected model cannot be safely proposed (observed; retained locally)",
     "price_moved_review": "price movement beyond the review threshold",
     "price_zero_transition": "price moved to or from zero",
     "route_upstream_contradiction": "route and upstream model disagree",
@@ -697,9 +698,9 @@ def _render_providers_summary(
         honest,
         "<p class='annot'>Populations are not additive: the change columns compare the proposed bundle "
         "against the local baseline in effect at review time, while the snapshot columns replay the "
-        "supplied source documents offline. 'Mutations' are existing-row update facts excluded from "
-        "the create-only executable artifact; the representable subset appears in the apply "
-        "plan.</p>",
+        "supplied source documents offline. 'Mutations' are existing-row update facts omitted from "
+        "the legacy create-only TSV export; their representable subset executes as supersession "
+        "operations in the reviewed apply plan.</p>",
         "<p class='countsline'><strong>Counts (recomputed):</strong> "
         + " ".join(
             f"<span class='kvchip'>{esc(key.replace('_', ' '))} {esc(counts.get(key, 0))}</span>"
@@ -768,7 +769,9 @@ def _render_plan_line(report: dict[str, Any]) -> str:
             by_type[op["type"]] = by_type.get(op["type"], 0) + 1
         breakdown = " · ".join(f"{count} {kind.replace('_', ' ')}" for kind, count in sorted(by_type.items()))
         blocked_note = (
-            f"; {esc(blocked_rows)} existing-row update(s) remain excluded from the executable artifact"
+            f"; {esc(blocked_rows)} existing-row update(s) are omitted from the legacy "
+            "create-only TSV export only — the reviewed apply plan executes the "
+            "representable supersessions"
             if blocked_rows
             else ""
         )
@@ -781,7 +784,8 @@ def _render_plan_line(report: dict[str, Any]) -> str:
         return (
             "<p class='line' id='plan-line'><strong class='ev-blocked'>Import plan BLOCKED</strong> — "
             f"{esc(ready)} create row(s) executable; {esc(blocked_rows)} existing-row update(s) are "
-            "excluded from the executable artifact. <a href='#plan-details'>plan detail →</a></p>"
+            "omitted from the create-only TSV export, and a blocked run carries no atomic apply "
+            "plan. <a href='#plan-details'>plan detail →</a></p>"
         )
     if total == 0:
         return (

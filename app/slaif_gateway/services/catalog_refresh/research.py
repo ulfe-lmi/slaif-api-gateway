@@ -784,14 +784,17 @@ def run_research_phase(
     try:
         try:
             if base.get("codex_version") == "N/A":
-                # The binary was hashed but could not report its own
-                # version (for example it is not executable): the
+                # The binary was hashed, and its version-availability
+                # probe (the `--version` preflight, which is NOT a
+                # research/model task) could not report a version
+                # (for example the file is not executable): the
                 # qualified CLI boundary is not proven, so the phase
-                # refuses BEFORE any invocation with the safe refusal
-                # code. A FAILED identity for an unversioned CLI is
-                # impossible by the identity contract (SUCCEEDED/FAILED
-                # require the actual measured version), so this refusal
-                # must not fall through to the measured-failure path.
+                # refuses BEFORE any research task invocation with the
+                # safe refusal code. A FAILED identity for an unversioned
+                # CLI is impossible by the identity contract
+                # (SUCCEEDED/FAILED require the actual measured version),
+                # so this refusal must not fall through to the
+                # measured-failure path.
                 outcome = _unavailable(cfg, "cli_unversioned")
             else:
                 outcome = _run_phase_tasks(

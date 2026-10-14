@@ -295,7 +295,8 @@ def test_phase_refuses_unversioned_cli_before_invocation(
 ) -> None:
     """184 R7: a CLI binary that hashes but cannot report its own version
     (e.g. it is not executable) must refuse the phase with the safe
-    pre-invocation UNAVAILABLE code BEFORE any CLI invocation. The
+    pre-invocation UNAVAILABLE code BEFORE any research task invocation
+    (the version-availability probe itself is not a research task). The
     identity contract forbids a measured FAILED without the actual
     measured version, so falling through to the measured-failure path
     would crash inside identity validation instead of refusing safely."""

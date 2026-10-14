@@ -18,6 +18,9 @@ Environment (built once per module run, owned by this test module):
   retrieval). When active it serves checked-in fixture bytes at the
   existing ``sources.fetch_source`` seam for the five fixed official
   URLs, refuses every unmapped URL, and denies any physical httpx send.
+  With ``SLAIF184_APPLY_AGE_SECONDS`` additionally set, the EXISTING
+  ``apply.datetime`` seam is test-only substituted with a finite shifted
+  wall clock (stale-at-apply refusal; no host clock, no runtime flag).
 
 No physical network, DNS, or model call occurs in the installed runs:
 the fetch seam is replaced in-place and the httpx client the CLI builds
@@ -170,6 +173,30 @@ def _install() -> None:
             return real_bundle(*args, **kwargs)
 
         collection.collect_bundle = collect_bundle
+
+    apply_age = os.environ.get("SLAIF184_APPLY_AGE_SECONDS")
+    if apply_age:
+        # Test-only clock substitution at the EXISTING apply.datetime seam
+        # (apply.py calls datetime.now(UTC) for the apply-time freshness
+        # re-check): the one wall-clock call shifts by a finite, explicit
+        # number of seconds so an otherwise-fresh authenticated run can be
+        # proven to refuse on source age at apply. No host clock is touched
+        # and no runtime flag or general time framework is added: the
+        # product code path is unchanged, and this substitution exists only
+        # in this disposable qualification venv under the explicit env var.
+        from datetime import timedelta as _timedelta
+
+        import slaif_gateway.services.catalog_refresh.apply as _apply_mod
+
+        _real_datetime = _apply_mod.datetime
+        _age_shift = _timedelta(seconds=float(apply_age))
+
+        class _AgedDatetime(_real_datetime):
+            @classmethod
+            def now(cls, tz=None):  # type: ignore[override]
+                return _real_datetime.now(tz) + _age_shift
+
+        _apply_mod.datetime = _AgedDatetime
 
 
 if os.environ.get("SLAIF184_FIXTURE_DIR"):
@@ -456,18 +483,30 @@ def _summary(proc: subprocess.CompletedProcess) -> dict:
 
 
 def _materialize_source_set(
-    target: Path, *, set_name: str, rate: str, pricing_set: str | None = None
+    target: Path,
+    *,
+    set_name: str,
+    rate: str,
+    pricing_set: str | None = None,
+    page_set: str | None = None,
+    or_set: str | None = None,
 ) -> Path:
     """Materialize one controlled source set with canonical file names.
 
     ``pricing_set`` may differ from ``set_name``: the v3 research set reuses
-    the v1 pricing rows with the v3 prose-layout model page (the provenance
-    record documents this exact composition).
+    the v1 pricing rows with the v3 prose-layout model page, and v4 reuses
+    the v2 pricing rows with the truncated model page (the provenance
+    record documents each exact composition). ``page_set`` overrides the
+    per-set model page choice when it differs from ``set_name``.
+    ``or_set`` overrides ONLY the OpenRouter models file (v5 reuses the v2
+    OpenAI pricing/page with the v5 OpenRouter rows - the provenance
+    record documents each exact composition).
     """
     pricing_set = pricing_set or set_name
+    or_set = or_set or pricing_set
     target.mkdir(parents=True, exist_ok=True)
     (target / "openrouter-models.json").write_bytes(
-        (FIXTURE_DIR / f"openrouter-models-{pricing_set}.json").read_bytes()
+        (FIXTURE_DIR / f"openrouter-models-{or_set}.json").read_bytes()
     )
     (target / "openai-pricing.md").write_bytes(
         (FIXTURE_DIR / f"openai-pricing-{pricing_set}.md").read_bytes()
@@ -479,8 +518,10 @@ def _materialize_source_set(
         "v1": "openai-gpt-3.5-turbo-captured-listitem.md",
         "v2": "openai-gpt-3.5-turbo-v2-price-derivative.md",
         "v3": None,  # referenced in place (183-b proven variant)
+        "v4": "openai-gpt-3.5-turbo-v2-page-truncated.md",
+        "v5": "openai-gpt-3.5-turbo-v2-price-derivative.md",
     }
-    page_name = page_names[set_name]
+    page_name = page_names[page_set or set_name]
     page_src = (
         FIXTURE_DIR / page_name
         if page_name
@@ -508,6 +549,30 @@ def _sql(url: str, query: str, params: dict | None = None) -> list[tuple]:
             async with engine.connect() as conn:
                 result = await conn.execute(text(query), params or {})
                 return list(result)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def _sql_exec(url: str, query: str, params: dict | None = None) -> int:
+    """Run ONE DML statement in an explicit committed transaction.
+
+    ``_sql`` uses ``engine.connect()`` without a commit (read snapshots
+    only; DML there would roll back). Deliberate test-setup edits need a
+    real committed write, so they go through this tiny helper, which
+    returns the affected row count for the caller to assert.
+    """
+
+    async def _run() -> int:
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        engine = create_async_engine(url, future=True)
+        try:
+            async with engine.begin() as conn:
+                result = await conn.execute(text(query), params or {})
+                return result.rowcount
         finally:
             await engine.dispose()
 
@@ -803,11 +868,17 @@ def test_r3r4_installed_bootstrap_verify_apply(
     )
     assert [r[0] for r in routes] == ["gpt-3.5-turbo", "syn/orc-a", "syn/orc-b"], routes
     _STATE["route_rows_boot"] = [
-        [str(r[0]), r[1], r[2], r[3], bool(r[4]), str(r[5]), str(r[6])]
+        [
+            str(r[0]), r[1], r[2], r[3], r[4], r[5], r[6], r[7], bool(r[8]),
+            bool(r[9]), bool(r[10]), json.dumps(r[11], sort_keys=True),
+            r[12], str(r[13]),
+        ]
         for r in _sql(
             db_url,
-            "SELECT id, requested_model, provider, upstream_model, enabled, "
-            "created_at, updated_at FROM model_routes ORDER BY requested_model",
+            "SELECT id, requested_model, match_type, endpoint, provider, "
+            "upstream_model, priority, enabled, visible_in_models, "
+            "supports_streaming, capabilities, notes, created_at, updated_at "
+            "FROM model_routes ORDER BY requested_model",
         )
     ]
     assert {(r[1], r[2]) for r in routes} == {
@@ -1066,14 +1137,21 @@ def test_r4b_installed_refresh_changed_prices_fx_and_apply(
     # --- route authority preserved -------------------------------------------
     routes = _sql(
         db_url,
-        "SELECT id, requested_model, provider, upstream_model, enabled, "
-        "created_at, updated_at FROM model_routes ORDER BY requested_model",
+        "SELECT id, requested_model, match_type, endpoint, provider, "
+        "upstream_model, priority, enabled, visible_in_models, "
+        "supports_streaming, capabilities, notes, created_at, updated_at "
+        "FROM model_routes ORDER BY requested_model",
     )
     after_rows = [
-        [str(r[0]), r[1], r[2], r[3], bool(r[4]), str(r[5]), str(r[6])] for r in routes
+        [
+            str(r[0]), r[1], r[2], r[3], r[4], r[5], r[6], r[7], bool(r[8]),
+            bool(r[9]), bool(r[10]), json.dumps(r[11], sort_keys=True),
+            r[12], str(r[13]),
+        ]
+        for r in routes
     ]
     assert after_rows == _STATE["route_rows_boot"], (
-        "refresh must not create, drop, or modify existing route rows"
+        "refresh must not create, drop, or modify ANY column of existing route rows"
     )
 
     # --- second durable application row ---------------------------------------
@@ -1728,16 +1806,19 @@ def test_r7_installed_apply_negatives(
     summary = _summary(proc)
     assert summary["state"] == "BLOCKED", summary
     assert summary["stage"].startswith("live collection"), summary
+    assert "collection_empty_bootstrap" in summary["reason"], summary
     run_dir_r10 = Path(urlparse(summary["run_dir"]).path)
     cr_r10 = json.loads((run_dir_r10 / "catalog-refresh.json").read_text(encoding="utf-8"))
     research_r10 = cr_r10["research"]
     assert research_r10["status"] == "UNAVAILABLE", research_r10
     assert research_r10["failure_code"] == "cli_unversioned", research_r10
     assert research_r10["cli_sha256"] is None, research_r10
-    # the unresolved required facts remain incomplete, never inferred
-    model_r10 = cr_r10["models"][0]
-    assert model_r10["context_length"] is None, model_r10
-    assert model_r10["max_output_tokens"] is None, model_r10
+    assert research_r10["facts_requested"] == 0 and research_r10["facts_returned"] == 0
+    # the model whose required facts stayed unresolved is EXCLUDED from the
+    # proposal (never invented), and the exclusion is reconciled explicitly
+    assert cr_r10["models"] == []
+    assert "Codex research UNAVAILABLE (cli_unversioned)" in cr_r10["notes"], cr_r10["notes"]
+    assert "1 reconciled exclusion(s)" in cr_r10["notes"], cr_r10["notes"]
     assert _catalog_snapshot(db_url) == snap0, "r10 changed the DB"
 
     # --- (r7) watchdog: stalled collect killed, no run published ----------
@@ -1769,6 +1850,343 @@ def test_r7_installed_apply_negatives(
     assert _digest_tree(boot_root) == boot_digest_before, (
         "watchdog run must not touch existing runs"
     )
+
+
+def test_r7b_installed_apply_boundary_negatives(
+    installed_env: dict[str, str], installed_pg_url: str, tmp_path_factory
+) -> None:
+    """R7 apply boundary (worksheet rows 14/20/29): two installed
+    authenticated-run refusals beyond the sealed-run negatives, each with
+    actual DB state equality. Both runs are UNAPPLIED refreshes that carry
+    a NON-EMPTY apply plan (changed v1 sources against the current v2
+    baseline), so the sealed-document plan check passes and the intended
+    execution gate is the one under test.
+
+    (a) stale-at-apply: the apply-time wall clock (the existing
+        apply.datetime seam, shifted by an explicit finite test-only
+        substitution in the qualification venv) ages every source beyond
+        the blocked threshold: exact apply_freshness_blocked with
+        source_stale_blocked, no DB mutation, no application record. The
+        host clock is never touched; the known-committed-first lookup
+        still runs before the current gates (this run has no prior
+        application record, so the freshness gate is what refuses).
+    (b) baseline drift: a fresh UNAPPLIED reviewed refresh is taken, then
+        ONE ordinary catalog row is deliberately changed AFTER review
+        (the deliberate test-setup edit, executed separately and
+        identified on its own), and the acknowledged installed apply is
+        refused with the exact apply_baseline_stale code: the refused
+        operation adds no mutation on top of the deliberate edit.
+    """
+    env = installed_env
+    db_url = installed_pg_url
+    scratch = tmp_path_factory.mktemp("slaif184-r7b")
+    seal_key = Path(_STATE["seal_key"])
+    # v1 sources against the post-R4b (v2) baseline: real price/FX
+    # movements -> non-empty authenticated apply plan.
+    fx_v1 = _materialize_source_set(scratch / "fx-v1", set_name="v1", rate="1.08")
+
+    def ack_codes_for(run_dir: Path) -> str:
+        validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+        return ",".join(sorted({w["code"] for w in validation["warnings"]}))
+
+    def ready_refresh_with_changes(tag: str) -> Path:
+        root = scratch / f"runs-{tag}"
+        proc = _run_installed(
+            env,
+            [
+                "slaif-catalog-refresh",
+                "--mode", "refresh",
+                "--db-url", db_url,
+                "--run-root", str(root),
+                "--seal-key", str(seal_key),
+                "--json", "--timeout", "120",
+            ],
+            cwd=scratch,
+            extra={"SLAIF184_FIXTURE_DIR": str(fx_v1)},
+            timeout=300,
+        )
+        assert proc.returncode == 10, (
+            f"{tag} refresh expected READY_WITH_WARNINGS (10), "
+            f"got {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+        )
+        summary = _summary(proc)
+        assert summary["state"] == "READY_WITH_WARNINGS", summary
+        run_dir = Path(urlparse(summary["run_dir"]).path)
+        validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+        assert validation.get("apply_plan", {}).get("operations"), (
+            f"{tag}: a non-empty authenticated apply plan is required for this case"
+        )
+        vproc = _run_installed(
+            env,
+            [
+                "slaif-gateway", "catalog-refresh", "verify",
+                "--run-dir", str(run_dir), "--seal-key", str(seal_key), "--json",
+            ],
+            cwd=scratch,
+            timeout=120,
+        )
+        assert vproc.returncode == 0, vproc.stderr
+        return run_dir
+
+    def apply_argv(run_dir: Path, reason: str, *, ack: bool = False) -> list[str]:
+        argv = [
+            "slaif-gateway", "catalog-refresh", "apply",
+            "--run-dir", str(run_dir),
+            "--db-url", db_url,
+            "--seal-key", str(seal_key),
+            "--confirm", "--actor", "oap-184-r7b", "--reason", reason,
+        ]
+        if ack:
+            argv += ["--ack-warnings", ack_codes_for(Path(run_dir))]
+        argv.append("--json")
+        return argv
+
+    # --- (a) stale at apply: finite test-only clock shift at the seam -----
+    stale_run = ready_refresh_with_changes("stale")
+    snap_a0 = _catalog_snapshot(db_url)
+    aged_extra = {
+        "SLAIF184_FIXTURE_DIR": str(fx_v1),
+        # 8 days: beyond the 72h source blocked threshold (and the 7d FX
+        # blocked threshold) for an otherwise-fresh authenticated run.
+        "SLAIF184_APPLY_AGE_SECONDS": str(8 * 24 * 3600),
+    }
+    aproc = _run_installed(
+        env,
+        apply_argv(stale_run, "negative: aged apply must be refused on freshness"),
+        cwd=scratch,
+        extra=aged_extra,
+        timeout=180,
+    )
+    assert aproc.returncode == 20, (
+        f"aged apply expected BLOCKED (20), got {aproc.returncode}\n"
+        f"{aproc.stdout}\n{aproc.stderr}"
+    )
+    assert "apply_freshness_blocked" in aproc.stderr, aproc.stderr
+    assert "source_stale_blocked" in aproc.stderr, aproc.stderr
+    assert _catalog_snapshot(db_url) == snap_a0, "aged refusal changed the DB"
+    # deterministic repeat: still refused, still no application record
+    aproc2 = _run_installed(
+        env,
+        apply_argv(stale_run, "negative: aged apply repeat"),
+        cwd=scratch,
+        extra=aged_extra,
+        timeout=180,
+    )
+    assert aproc2.returncode == 20, (
+        f"aged apply repeat expected 20, got {aproc2.returncode}\n"
+        f"{aproc2.stdout}\n{aproc2.stderr}"
+    )
+    assert "apply_freshness_blocked" in aproc2.stderr, aproc2.stderr
+    apps = _sql(
+        db_url,
+        "SELECT count(*) FROM catalog_refresh_applications WHERE run_id = :run",
+        {"run": Path(stale_run).name},
+    )
+    assert apps[0][0] == 0, "aged refusal must not record an application"
+
+    # --- (b) deliberate post-review baseline drift -------------------------
+    drift_run = ready_refresh_with_changes("drift")
+    snap_b0 = _catalog_snapshot(db_url)
+    # Deliberate TEST-SETUP edit, identified separately from the refused
+    # operation: one ordinary active pricing row, nudged AFTER the review,
+    # committed through an explicit transaction (read-snapshot _sql would
+    # roll DML back).
+    assert _sql_exec(
+        db_url,
+        "UPDATE pricing_rules SET input_price_per_1m = input_price_per_1m + 0.000001 "
+        "WHERE provider = 'openai' AND upstream_model = 'gpt-3.5-turbo' "
+        "AND valid_until IS NULL",
+    ) == 1, "deliberate test-setup edit must touch exactly one row"
+    snap_b1 = _catalog_snapshot(db_url)
+    assert snap_b1 != snap_b0, "deliberate test-setup edit did not take effect"
+    bproc = _run_installed(
+        env,
+        apply_argv(drift_run, "negative: drifted baseline must be refused", ack=True),
+        cwd=scratch,
+        timeout=180,
+    )
+    assert bproc.returncode == 65, (
+        f"drifted apply expected 65, got {bproc.returncode}\n"
+        f"{bproc.stdout}\n{bproc.stderr}"
+    )
+    assert "apply_baseline_stale" in bproc.stderr, bproc.stderr
+    assert "pricing_rules" in bproc.stderr, bproc.stderr
+    assert _catalog_snapshot(db_url) == snap_b1, (
+        "refused apply changed the DB beyond the deliberate test-setup edit"
+    )
+    # Deliberate test-setup cleanup: the nudged row is restored to the
+    # reviewed value (identified separately; the refusal proofs above are
+    # unaffected by this restoration).
+    assert _sql_exec(
+        db_url,
+        "UPDATE pricing_rules SET input_price_per_1m = input_price_per_1m - 0.000001 "
+        "WHERE provider = 'openai' AND upstream_model = 'gpt-3.5-turbo' "
+        "AND valid_until IS NULL",
+    ) == 1, "cleanup of the deliberate edit must touch exactly one row"
+    assert _catalog_snapshot(db_url) == snap_b0, (
+        "cleanup of the deliberate edit did not restore the pre-edit state"
+    )
+
+
+def test_r7c_installed_refresh_source_failures(
+    installed_env: dict[str, str], installed_pg_url: str, tmp_path_factory
+) -> None:
+    """R7 source-failure closure (worksheet rows 8/12/15): SELECTED
+    unsupported billing and a malformed/truncated REFRESH source, each
+    through the installed command with an explicit ``--models`` selection,
+    with actual DB state equality.
+
+    Both are distinct mechanisms: (a) a billing-representability refusal
+    decided from the observed pricing rows (no transport outage, no parser
+    failure - the model page is never fetched), and (b) a parser rejection
+    of received bytes (not a transport outage: the bytes were delivered
+    and the parser refused them).
+
+    Contract pinned here (184 observed-model refusal): a selected
+    in-baseline model that is OBSERVED in the collection inventory but
+    cannot be safely proposed is BLOCKED (20) with the exact machine
+    reason, the observation is retained with its exact inventory entry,
+    the model is never reported as absent from the source set, and no DB
+    mutation occurs; apply refuses the sealed BLOCKED state before any
+    plan use or DB contact (the run is not actionable).
+
+    FX design note: both sets materialize the 1.08 quote against the
+    post-R4b stored 1.12-derived rate, i.e. a genuine FX movement, so the
+    FX import gate is a clean executable supersession (VERIFIED) and the
+    selection blocker is the ONLY refusal under test. A same-rate
+    unchanged fixture date is a separate conservative import gate
+    (window conflict without a state change) and is out of scope here.
+    """
+    env = installed_env
+    db_url = installed_pg_url
+    scratch = tmp_path_factory.mktemp("slaif184-r7c")
+    seal_key = Path(_STATE["seal_key"])
+
+    def refresh_collect(tag: str, fx_dir: Path, model: str):
+        root = scratch / f"runs-{tag}"
+        proc = _run_installed(
+            env,
+            [
+                "slaif-catalog-refresh",
+                "--mode", "refresh",
+                "--db-url", db_url,
+                "--models", model,
+                "--run-root", str(root),
+                "--seal-key", str(seal_key),
+                "--json", "--timeout", "120",
+            ],
+            cwd=scratch,
+            extra={"SLAIF184_FIXTURE_DIR": str(fx_dir)},
+            timeout=300,
+        )
+        summary = _summary(proc)
+        run_dir = Path(urlparse(summary["run_dir"]).path)
+        return proc, summary, run_dir
+
+    def inventory_entry(cr: dict, provider: str, model: str) -> dict:
+        entries = [
+            e for e in cr["collection"]["inventory"]
+            if e["provider"] == provider and e["model"] == model
+        ]
+        assert len(entries) == 1, f"inventory for {provider}/{model}: {entries}"
+        return entries[0]
+
+    def assert_sealed_blocked_not_actionable(run_dir: Path) -> None:
+        """A BLOCKED refresh is not actionable: apply refuses the sealed
+        BLOCKED state before any plan use or DB contact (exact code)."""
+        aproc = _run_installed(
+            env,
+            [
+                "slaif-gateway", "catalog-refresh", "apply",
+                "--run-dir", str(run_dir),
+                "--db-url", db_url,
+                "--seal-key", str(seal_key),
+                "--confirm", "--actor", "oap-184-r7c",
+                "--reason", "negative: blocked run must not apply",
+                "--json",
+            ],
+            cwd=scratch,
+            timeout=180,
+        )
+        assert aproc.returncode == 65, (
+            f"blocked-run apply expected 65, got {aproc.returncode}\n"
+            f"{aproc.stdout}\n{aproc.stderr}"
+        )
+        assert "apply_state_not_applicable" in aproc.stderr, aproc.stderr
+
+    def assert_selected_refusal(
+        tag: str,
+        proc,
+        summary,
+        run_dir: Path,
+        *,
+        provider: str,
+        model: str,
+        disposition: str,
+        reason_code: str,
+        extra_codes: tuple[str, ...] = (),
+    ) -> None:
+        assert proc.returncode == 20, (
+            f"{tag} selected-refresh expected BLOCKED (20), "
+            f"got {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+        )
+        assert summary["state"] == "BLOCKED", summary
+        cr = json.loads((run_dir / "catalog-refresh.json").read_text(encoding="utf-8"))
+        validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+        codes = {w["code"] for w in validation["warnings"]}
+        assert "explicitly_selected_not_proposable" in codes, sorted(codes)
+        assert "model_disappeared" not in codes, sorted(codes)
+        for code in extra_codes:
+            assert code in codes, (code, sorted(codes))
+        # the observed fact with its exact machine reason
+        entry = inventory_entry(cr, provider, model)
+        assert entry["disposition"] == disposition, entry
+        assert entry["reason_code"] == reason_code, entry
+        # nothing is proposed: the observed model is retained locally
+        assert cr["models"] == [], cr["models"]
+        assert_sealed_blocked_not_actionable(run_dir)
+
+    # --- (a) SELECTED unsupported billing (positive per-request fee) -------
+    fx_v5 = _materialize_source_set(
+        scratch / "fx-v5", set_name="v5", rate="1.08",
+        pricing_set="v2", page_set="v2", or_set="v5",
+    )
+    snap0 = _catalog_snapshot(db_url)
+    proc, summary, run_dir = refresh_collect("billing", fx_v5, "syn/orc-a")
+    assert_selected_refusal(
+        "selected unsupported-billing", proc, summary, run_dir,
+        provider="openrouter", model="syn/orc-a",
+        disposition="excluded_subset",
+        reason_code="request_charges_unrepresentable",
+    )
+    # no deletion: the reviewed local rows are retained; no mutation at all
+    assert _sql(db_url, "SELECT count(*) FROM model_routes WHERE requested_model = 'syn/orc-a'")[0][0] == 1
+    assert _sql(db_url, "SELECT count(*) FROM pricing_rules WHERE provider = 'openrouter' AND upstream_model = 'syn/orc-a' AND valid_until IS NULL")[0][0] == 1
+    assert _catalog_snapshot(db_url) == snap0, "unsupported-billing refresh changed the DB"
+
+    # --- (b) SELECTED malformed/truncated REFRESH source (parser) ----------
+    fx_v4 = _materialize_source_set(
+        scratch / "fx-v4", set_name="v4", rate="1.08",
+        pricing_set="v2", page_set="v4",
+    )
+    proc, summary, run_dir = refresh_collect("truncated", fx_v4, "gpt-3.5-turbo")
+    assert_selected_refusal(
+        "selected truncated-source", proc, summary, run_dir,
+        provider="openai", model="gpt-3.5-turbo",
+        disposition="incomplete",
+        reason_code="page_parse_failed",
+        extra_codes=("source_evidence_parse_failed",),
+    )
+    # the exact parser code is preserved in the retained observation detail
+    entry = next(
+        e for e in json.loads((run_dir / "catalog-refresh.json").read_text(encoding="utf-8"))["collection"]["inventory"]
+        if e["provider"] == "openai" and e["model"] == "gpt-3.5-turbo"
+    )
+    assert "openai_model_doc:malformed_price_row" in entry["detail"], entry
+    # no deletion: the reviewed local rows are retained; no mutation at all
+    assert _sql(db_url, "SELECT count(*) FROM model_routes WHERE requested_model = 'gpt-3.5-turbo'")[0][0] == 1
+    assert _sql(db_url, "SELECT count(*) FROM pricing_rules WHERE provider = 'openai' AND upstream_model = 'gpt-3.5-turbo' AND valid_until IS NULL")[0][0] == 1
+    assert _catalog_snapshot(db_url) == snap0, "truncated-source refresh changed the DB"
 
 
 def test_r8_installed_report_browser_gates(tmp_path_factory) -> None:
