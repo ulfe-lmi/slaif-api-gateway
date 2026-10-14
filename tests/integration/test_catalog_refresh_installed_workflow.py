@@ -27,7 +27,8 @@ this is fixture-qualified workflow evidence, not a live-source claim.
 
 Migrations run from the source checkout's Alembic configuration (the
 wheel does not ship ``migrations/``) against one owned testcontainers
-PostgreSQL 16 per module (fresh temp ownership, stopped in finally).
+PostgreSQL 16 per module (owned loopback/tmpfs container with a unique
+slaif184.owner label; identity-checked, removed in finally).
 """
 
 from __future__ import annotations
@@ -36,8 +37,9 @@ import asyncio
 import hashlib
 import json
 import os
-
+import secrets
 import subprocess
+import time
 import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -295,23 +297,88 @@ def installed_env(tmp_path_factory) -> dict[str, str]:
 
 @pytest.fixture(scope="module")
 def installed_pg_url() -> Iterator[str]:
-    """One owned testcontainers PostgreSQL 16 for this module, migrated to
-    head with the approved repository helper (the wheel does not ship
-    ``migrations/``; migrations run from the source checkout)."""
-    from testcontainers.postgres import PostgresContainer
+    """One owned, loopback-bound, tmpfs-backed PostgreSQL 16 for this module.
 
-    container = PostgresContainer("postgres:16")
-    container.start()
+    Ownership discipline (same as the 183 research probes): a unique
+    ``slaif184.owner`` label, an explicit 127.0.0.1 port binding, and a
+    tmpfs data directory (no persistent volume). The exact created
+    container ID/label/binding are inspected BEFORE any migration, and
+    cleanup re-checks that identity and removes ONLY this container.
+
+    The container is driven directly with the already-installed docker
+    SDK (the installed testcontainers version cannot forward
+    ``labels``/``tmpfs`` through ``with_kwargs`` - both collide with
+    explicit named parameters of its create path). Migrations use the
+    approved repository helper (the wheel does not ship
+    ``migrations/``; they run from the source checkout)."""
+    import docker
+
+    owner = f"slaif184-{secrets.token_hex(8)}"
+    client = docker.from_env()
+    container = client.containers.run(
+        "postgres:16",
+        environment={"POSTGRES_USER": "test", "POSTGRES_PASSWORD": "test", "POSTGRES_DB": "test"},
+        ports={5432: ("127.0.0.1", None)},
+        labels={"slaif184.owner": owner},
+        tmpfs={"/var/lib/postgresql/data": "rw"},
+        detach=True,
+    )
     try:
-        port = container.get_exposed_port(5432)
-        url = (
-            f"postgresql+asyncpg://{container.username}:{container.password}"
-            f"@{container.get_container_host_ip()}:{port}/{container.dbname}"
+        # Inspect the EXACT created identity before any migration.
+        attrs = container.attrs
+        labels = attrs["Config"].get("Labels") or {}
+        assert labels.get("slaif184.owner") == owner, "owned PG label mismatch"
+        host_config = attrs["HostConfig"] or {}
+        tmpfs = host_config.get("Tmpfs") or {}
+        assert "/var/lib/postgresql/data" in tmpfs, "owned PG tmpfs missing"
+        bindings = host_config.get("PortBindings") or {}
+        bound = bindings.get("5432/tcp") or []
+        assert bound and all(b.get("HostIp") == "127.0.0.1" for b in bound), (
+            f"owned PG must bind loopback, got: {bound}"
         )
+        port = bound[0]["HostPort"]
+        assert port, "owned PG port binding missing"
+
+        async def _wait_ready() -> None:
+            import asyncpg
+
+            deadline = time.monotonic() + 90
+            last: object = None
+            while time.monotonic() < deadline:
+                try:
+                    conn = await asyncpg.connect(
+                        "postgresql://test:test@127.0.0.1:%s/test" % port, timeout=3
+                    )
+                    await conn.close()
+                    return
+                except Exception as exc:  # noqa: BLE001 - startup retry
+                    last = exc
+                    await asyncio.sleep(0.5)
+            raise AssertionError(f"owned PG did not become ready: {last!r}")
+
+        asyncio.run(_wait_ready())
+        url = "postgresql+asyncpg://test:test@127.0.0.1:%s/test" % port
         run_alembic_upgrade_head(url)
         yield url
     finally:
-        container.stop()
+        # Cleanup re-verifies identity and removes ONLY this container.
+        try:
+            c = client.containers.get(container.id)
+            c_labels = c.attrs["Config"].get("Labels") or {}
+            assert c_labels.get("slaif184.owner") == owner, (
+                "refusing to remove a container whose owner label changed"
+            )
+            c.stop(timeout=10)
+            c.remove(force=True)
+        except Exception:
+            # Last-resort ownership check via label filter (never by name).
+            leftover = client.containers.list(
+                all=True, filters={"label": f"slaif184.owner={owner}"}
+            )
+            for c in leftover:
+                c.stop(timeout=10)
+                c.remove(force=True)
+
 
 
 # --- installed command runner -----------------------------------------------
