@@ -834,14 +834,16 @@ def test_r4b_installed_refresh_changed_prices_fx_and_apply(
     codes = [w["code"] for w in validation["warnings"]]
     assert sorted(codes) == [
         "fx_moved_review",
+        "gate:changes",
         "price_moved_review",
         "price_moved_review",
     ], codes
 
-    # The sealed report carries BOTH old and new values for the movements.
+    # The sealed report carries BOTH old and new values for the movements
+    # (FX rendered as the stored native->EUR reciprocals of the quotes).
     html = (run_dir / "REVIEW.html").read_text(encoding="utf-8")
     assert "0.5" in html and "0.75" in html
-    assert "1.08" in html and "1.12" in html
+    assert "0.925925926" in html and "0.892857143" in html
 
     vproc = _run_installed(
         env,
@@ -882,7 +884,7 @@ def test_r4b_installed_refresh_changed_prices_fx_and_apply(
             "--actor",
             actor,
             "--ack-warnings",
-            "price_moved_review,fx_moved_review",
+            "price_moved_review,fx_moved_review,gate:changes",
             "--json",
         ],
         cwd=scratch,
