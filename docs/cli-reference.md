@@ -108,16 +108,41 @@ Configuration validation reports bounded names/status, never secret values.
 
 Bounded catalog refresh: bounded live official-source collection, one typed
 proposal bundle, one safe baseline, one sealed one-page report, and the one
-explicit atomic `apply` of a reviewed run. `collect`, `review`, `verify`,
-read-only `export-baseline`, mutating `apply`, and read-only `status` —
-Codex research is opt-in (`--research`) and NOT_RUN by default. Full
-semantics, the source registry, policy thresholds, sealing, apply ordering,
-and exit codes live in
+explicit atomic `apply` of a reviewed run. The one-command administrator
+wrapper `slaif-catalog-refresh` (bootstrap/refresh, built-in read-only
+watchdog, exact child exit codes) plus the lower-level `collect`, `review`,
+`verify`, read-only `export-baseline`, mutating `apply`, and read-only
+`status` commands — Codex research is opt-in (`--research`) and NOT_RUN by
+default. Full semantics, the source registry, policy thresholds, sealing,
+apply ordering, and exit codes live in
 [Catalog refresh (collect, review, and
 verify)](catalog-refresh.md).
 
 ```bash
-# Collect the official catalogs now (first install, both providers, all eligible models)
+# ONE refresh, ONE report: the supported administrator entry point.
+# Validates the mode before spawning, runs the read-only collect under the
+# standard watchdog (300 s default + 5 s KILL grace; --timeout/--kill-grace
+# must be positive), preserves the child exit code, never applies.
+slaif-catalog-refresh --mode bootstrap \
+  [--providers openai,openrouter] [--models a,b] \
+  [--run-root P] [--seal-key P] [--json] \
+  [--timeout 300] [--kill-grace 5]
+
+# Refresh against the existing catalog (live read-only baseline export;
+# bootstrap is never combined with --baseline-file or --db-url)
+slaif-catalog-refresh --mode refresh --db-url postgresql+asyncpg://user@host:5432/dbname \
+  [--providers openai,openrouter] [--models a,b] \
+  [--run-root P] [--seal-key P] [--json]
+
+# Refresh with the opt-in isolated Codex research fallback
+slaif-catalog-refresh --mode refresh --db-url "$DATABASE_URL" \
+  --research --research-cli-bin /path/to/codex \
+  --research-endpoint https://inference.example.test/v1 \
+  --research-model gpt-example --research-auth-env SLAIF_RESEARCH_UPSTREAM_KEY \
+  [--research-timeout 120]
+
+# Lower-level entry point: collect the official catalogs now (first install,
+# both providers, all eligible models)
 slaif-gateway catalog-refresh collect --bootstrap
 
 # Refresh collection against an exported baseline with an explicit selection

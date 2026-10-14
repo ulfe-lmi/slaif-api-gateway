@@ -290,6 +290,40 @@ def test_forward_mode_refuses_unconfigured_endpoint(tmp_path: Path, monkeypatch:
     assert outcome.identity.failure_code == "research_endpoint_unconfigured"
 
 
+def test_phase_refuses_unversioned_cli_before_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """184 R7: a CLI binary that hashes but cannot report its own version
+    (e.g. it is not executable) must refuse the phase with the safe
+    pre-invocation UNAVAILABLE code BEFORE any research task invocation
+    (the version-availability probe itself is not a research task). The
+    identity contract forbids a measured FAILED without the actual
+    measured version, so falling through to the measured-failure path
+    would crash inside identity validation instead of refusing safely."""
+    monkeypatch.setattr(
+        iso,
+        "execute_task",
+        lambda *a, **k: pytest.fail("execute_task must not run for an unversioned CLI"),
+    )
+    bad_cli = tmp_path / "codex"
+    bad_cli.write_text("not an executable codex binary\n", encoding="utf-8")
+    cfg = _cfg(tmp_path, cli_bin=str(bad_cli))
+    outcome = r.run_research_phase(cfg, _plan_one())
+    assert outcome.identity.status == "UNAVAILABLE"
+    assert outcome.identity.failure_code == "cli_unversioned"
+    # the safe UNAVAILABLE contract: no measured fields at all
+    assert outcome.identity.cli_sha256 is None
+    assert outcome.identity.codex_version == "N/A"
+    assert outcome.identity.failure_code is not None
+    # the created owned workspace (slaif-research/run-*) is removed on the
+    # refusal path - a task-* search alone could not prove this earlier
+    # phase's cleanup (no task dirs were ever created here)
+    research_root = Path(cfg.workspace_root) / "slaif-research"
+    assert not research_root.exists() or not any(research_root.iterdir()), (
+        sorted(str(d) for d in research_root.iterdir())
+    )
+
+
 def test_phase_refuses_incomplete_configuration(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, cli_bin="")
     assert r.run_research_phase(cfg, _plan_one()).identity.status == "UNAVAILABLE"
@@ -307,6 +341,45 @@ def test_phase_refuses_missing_template_or_schema(tmp_path: Path, monkeypatch: p
     monkeypatch.undo()
     monkeypatch.setattr(r, "_schema_path", lambda: tmp_path / "absent-schema.json")
     outcome = r.run_research_phase(cfg, _plan_one())
+    assert outcome.identity.failure_code == "research_schema_missing"
+
+
+ASSET_TEMPLATE_SHA256 = (
+    "5ba7ff44d58fa21f7d020fbb793e5611bfb416b0475e5d92e23d566a45081d18"
+)
+ASSET_SCHEMA_SHA256 = (
+    "89c57bd740aca25a60e90f304cd70b657993910d9555ac289adc875cf9564a87"
+)
+
+
+def test_packaged_assets_resolve_with_canonical_bytes() -> None:
+    """184 R2: the research template/schema are canonical PACKAGED assets
+    resolved through importlib.resources (identical in a source checkout
+    and a wheel install). The exact bytes are digest-pinned; the identity
+    binding (template_sha256) measures these same bytes per phase."""
+    template = r._template_path()
+    schema = r._schema_path()
+    assert hashlib.sha256(template.read_bytes()).hexdigest() == ASSET_TEMPLATE_SHA256
+    assert hashlib.sha256(schema.read_bytes()).hexdigest() == ASSET_SCHEMA_SHA256
+    # resolved inside the installed package, not a repository-relative path
+    assert "slaif_gateway" in template.parts and "resources" in template.parts
+
+
+def test_phase_refuses_missing_asset_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """184 R2: a broken installation can lack the packaged asset package
+    itself; importlib.resources.files then raises ModuleNotFoundError
+    (not OSError). Resolution errors must normalize to the same safe
+    UNAVAILABLE refusals instead of escaping run_research_phase."""
+    cfg = _cfg(tmp_path)
+    missing = ModuleNotFoundError("No module named 'slaif_gateway.resources.catalog_refresh'")
+    monkeypatch.setattr(r, "_template_path", lambda: (_ for _ in ()).throw(missing))
+    outcome = r.run_research_phase(cfg, _plan_one())
+    assert outcome.identity.status == "UNAVAILABLE"
+    assert outcome.identity.failure_code == "research_template_missing"
+    monkeypatch.undo()
+    monkeypatch.setattr(r, "_schema_path", lambda: (_ for _ in ()).throw(missing))
+    outcome = r.run_research_phase(cfg, _plan_one())
+    assert outcome.identity.status == "UNAVAILABLE"
     assert outcome.identity.failure_code == "research_schema_missing"
 
 

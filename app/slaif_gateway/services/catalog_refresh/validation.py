@@ -1731,29 +1731,90 @@ def validate_bundle(
                             )
                             if _entry is not None:
                                 break
+                    # 184 (observed-model refusal): a collection inventory
+                    # entry proves the ID was OBSERVED in this collection
+                    # (excluded or incomplete), so it can never be reported
+                    # as "absent from complete source retrieval":
+                    # - the three baseline-contract reasons keep the
+                    #   established retain-local semantics (the stored
+                    #   contract cannot be proposed flat);
+                    # - an explicitly required selection whose observation
+                    #   prevents a safe proposal (unsupported billing,
+                    #   incomplete required source facts, ...) is BLOCKED
+                    #   with the exact reason; retain-local, no delete
+                    #   semantics, no actionable plan for it;
+                    # - any other observed-but-unproposed ID (out-of-scope
+                    #   exclusion included) is a documented retain-local,
+                    #   never disappearance.
+                    _retain_reasons = (
+                        "baseline_contract_not_flat",
+                        "baseline_currency_mismatch",
+                        "baseline_multiple_routes",
+                    )
                     if (
                         _entry is not None
-                        and _entry.reason_code
-                        in (
-                            "baseline_contract_not_flat",
-                            "baseline_currency_mismatch",
-                            "baseline_multiple_routes",
-                        )
                         and (provider, model) in baseline_model_keys
                     ):
-                        dispositions.append(
-                            Disposition(
+                        if (
+                            explicitly_selected
+                            and _entry.reason_code not in _retain_reasons
+                            and _entry.reason_code != "explicit_selection_excluded"
+                        ):
+                            add(
+                                SEVERITY_BLOCKER,
+                                "explicitly_selected_not_proposable",
+                                f"explicitly selected model is observed in sources but cannot be safely proposed ({_entry.reason_code}); baseline row retained, no delete semantics",
                                 provider,
                                 model,
-                                DISPOSITION_NOT_FETCHED,
-                                f"retained locally per collection inventory ({_entry.reason_code}); observed in sources, not proposed",
                             )
-                        )
-                        bump(provider, "not_fetched")
+                            dispositions.append(
+                                Disposition(
+                                    provider,
+                                    model,
+                                    DISPOSITION_BLOCKED,
+                                    f"explicitly selected model not proposable ({_entry.reason_code}); retain-local",
+                                )
+                            )
+                            bump(provider, "blocked")
+                        else:
+                            dispositions.append(
+                                Disposition(
+                                    provider,
+                                    model,
+                                    DISPOSITION_NOT_FETCHED,
+                                    f"retained locally per collection inventory ({_entry.reason_code}); observed in sources, not proposed",
+                                )
+                            )
+                            bump(provider, "not_fetched")
                     else:
-                        dispositions.append(Disposition(provider, model, DISPOSITION_DISAPPEARED, "in baseline but absent from complete sources; retain-local, no delete semantics in this version"))
-                        bump(provider, "disappeared")
-                        add(SEVERITY_REVIEW, "model_disappeared", "model present in baseline but absent from complete source retrieval; retained locally", provider, model)
+                        if explicitly_selected:
+                            # 184: an explicitly required selection cannot
+                            # be satisfied when the baseline ID is
+                            # GENUINELY absent from the complete sources
+                            # (no observation recorded): missing required
+                            # facts BLOCK. The local row is still retained
+                            # - the disposition states the truthful absence,
+                            # with no delete semantics.
+                            add(
+                                SEVERITY_BLOCKER,
+                                "missing_required_selection",
+                                "explicitly selected baseline model is absent from the complete source retrieval; the required selection carries no facts, routes, or pricing",
+                                provider,
+                                model,
+                            )
+                            dispositions.append(
+                                Disposition(
+                                    provider,
+                                    model,
+                                    DISPOSITION_BLOCKED,
+                                    "explicitly selected model absent from complete sources; retain-local, no delete semantics in this version",
+                                )
+                            )
+                            bump(provider, "blocked")
+                        else:
+                            dispositions.append(Disposition(provider, model, DISPOSITION_DISAPPEARED, "in baseline but absent from complete sources; retain-local, no delete semantics in this version"))
+                            bump(provider, "disappeared")
+                            add(SEVERITY_REVIEW, "model_disappeared", "model present in baseline but absent from complete source retrieval; retained locally", provider, model)
             else:
                 # explicitly selected but nothing proposed
                 if explicitly_selected:

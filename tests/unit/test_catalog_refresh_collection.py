@@ -2891,3 +2891,212 @@ def test_cli_collect_malformed_port_redirect_blocks_safely(tmp_path, monkeypatch
     html = (run_dirs[0] / "REVIEW.html").read_text()
     assert "url_nondefault_port" in html
     assert "99999" not in html
+
+
+# --- 184: observed-model truthful refusal (selected BLOCK, retention) ------
+#
+# A collection inventory entry proves the ID was OBSERVED in this collection
+# (excluded or incomplete). Such an ID is never "absent from complete source
+# retrieval": an explicitly required selection that cannot be safely proposed
+# is BLOCKED with the exact reason, and any other observed-but-unproposed ID
+# is a documented retain-local. Genuine absence keeps the established
+# disappearance semantics.
+
+
+def test_refresh_selected_unrepresentable_billing_blocks_truthfully() -> None:
+    """184: an explicitly selected in-baseline model whose observed billing
+    cannot be safely proposed is BLOCKED with the exact machine reason -
+    never reported as absent from the source set, never an actionable plan."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha"), _or_row("synth/billing")]
+    world.or_rows[1]["pricing"]["request"] = "0.001"
+    baseline = _baseline_doc(
+        routes={"synth/billing": {}},
+        pricing={"synth/billing": {"input": "0.5", "output": "2.0"}},
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+        model_include=("synth/billing",),
+    )
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openrouter", "synth/billing")] == (
+        "excluded_subset",
+        "request_charges_unrepresentable",
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "BLOCKED", (report.state, sorted(_codes(report)))
+    assert "explicitly_selected_not_proposable" in _codes(report)
+    assert "model_disappeared" not in _codes(report)
+    disp = {d.model: d for d in report.dispositions if d.provider == "openrouter"}
+    assert disp["synth/billing"].disposition == "BLOCKED"
+    assert "request_charges_unrepresentable" in disp["synth/billing"].detail
+    assert report.apply_plan is None
+
+
+def test_refresh_unselected_observed_excluded_retained_not_disappeared() -> None:
+    """184: an in-baseline model observed but excluded in an all-eligible
+    refresh is a documented retain-local - never disappearance, and no plan
+    operation may touch it."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha"), _or_row("synth/billing")]
+    world.or_rows[1]["pricing"]["request"] = "0.001"
+    baseline = _baseline_doc(
+        routes={"synth/billing": {}},
+        pricing={"synth/billing": {"input": "0.5", "output": "2.0"}},
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert _inventory(bundle)[("openrouter", "synth/billing")] == (
+        "excluded_subset",
+        "request_charges_unrepresentable",
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state in ("READY", "READY_WITH_WARNINGS"), (
+        report.state,
+        sorted(_codes(report)),
+    )
+    assert "model_disappeared" not in _codes(report)
+    disp = {d.model: d for d in report.dispositions if d.provider == "openrouter"}
+    assert disp["synth/billing"].disposition == "NOT_FETCHED"
+    assert "request_charges_unrepresentable" in disp["synth/billing"].detail
+    for op in (report.apply_plan or {}).get("operations") or ():
+        assert op.get("model") != "synth/billing"
+        assert op.get("requested_model") != "synth/billing"
+        assert op.get("upstream_model") != "synth/billing"
+
+
+def test_refresh_selected_unparseable_page_blocks_truthfully() -> None:
+    """184: an explicitly selected in-baseline model whose required page is
+    delivered but fails to parse is BLOCKED with the exact parser reason -
+    observed facts are retained, never absence."""
+    world = World()
+    world.or_rows = []
+    world.pricing_rows = [("gpt-syn-1", "0.54", "0.054", "2.16", None, None)]
+    page = _page("gpt-syn-1")
+    # truncate mid-cell of the Output price row: the bytes are delivered,
+    # the parser refuses them (malformed price row)
+    idx = page.find(b"| Output | $2.16 |")
+    world.pages = {"gpt-syn-1": page[: idx + len(b"| Output | $2.1")]}
+    baseline = _baseline_doc(
+        pricing={"gpt-syn-1": {"input": "0.54", "output": "2.16"}}
+    )
+    baseline = baseline.model_copy(
+        update={
+            "pricing": tuple(
+                r.model_copy(update={"provider": "openai"})
+                for r in baseline.pricing
+            )
+        }
+    )
+    bundle = _collect(
+        world,
+        providers=("openai",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+        model_include=("gpt-syn-1",),
+    )
+    assert _proposed_models(bundle) == set()
+    assert _inventory(bundle)[("openai", "gpt-syn-1")] == (
+        "incomplete",
+        "page_parse_failed",
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "BLOCKED", (report.state, sorted(_codes(report)))
+    assert "explicitly_selected_not_proposable" in _codes(report)
+    assert "source_evidence_parse_failed" in _codes(report)
+    assert "model_disappeared" not in _codes(report)
+    disp = {d.model: d for d in report.dispositions if d.provider == "openai"}
+    assert disp["gpt-syn-1"].disposition == "BLOCKED"
+    assert "page_parse_failed" in disp["gpt-syn-1"].detail
+    assert report.apply_plan is None
+
+
+def test_refresh_true_absence_still_disappears() -> None:
+    """184: a baseline model with NO observation recorded (genuinely absent
+    from the complete sources) keeps the established disappearance and
+    retain-local semantics."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(
+        routes={"synth/gone": {}},
+        pricing={"synth/gone": {"input": "0.5", "output": "2.0"}},
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert _inventory(bundle) == {}
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "READY_WITH_WARNINGS"
+    assert "model_disappeared" in _codes(report)
+    disp = {d.model: d for d in report.dispositions if d.provider == "openrouter"}
+    assert disp["synth/gone"].disposition == "DISAPPEARED"
+
+
+def test_refresh_alias_of_observed_excluded_upstream_retained() -> None:
+    """184: a public alias whose observed upstream is excluded for an
+    observed reason is retained locally through the alias identity - never
+    disappearance."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    world.or_rows[0]["pricing"]["request"] = "0.001"
+    baseline = _alias_baseline()
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+    )
+    assert _inventory(bundle)[("openrouter", "synth/alpha")] == (
+        "excluded_subset",
+        "request_charges_unrepresentable",
+    )
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "READY", (report.state, sorted(_codes(report)))
+    assert "model_disappeared" not in _codes(report)
+    disp = {d.model: d for d in report.dispositions if d.provider == "openrouter"}
+    assert disp["public-alias"].disposition == "NOT_FETCHED"
+    assert "request_charges_unrepresentable" in disp["public-alias"].detail
+
+
+def test_refresh_selected_genuinely_absent_baseline_blocks() -> None:
+    """184: an explicitly selected in-baseline model that is GENUINELY
+    absent from the complete sources (no observation recorded) still
+    BLOCKS: the required selection carries no facts to review. The
+    disposition states the truthful absence (retain-local, no delete);
+    the ordinary all-eligible disappearance REVIEW stays as-is (see the
+    previous test)."""
+    world = World()
+    world.or_rows = [_or_row("synth/alpha")]
+    baseline = _baseline_doc(
+        routes={"synth/gone": {}},
+        pricing={"synth/gone": {"input": "0.5", "output": "2.0"}},
+    )
+    bundle = _collect(
+        world,
+        providers=("openrouter",),
+        baseline=baseline,
+        baseline_mode="exported_file",
+        model_include=("synth/gone",),
+    )
+    assert _proposed_models(bundle) == set()
+    # no observation of the selected model: it is genuinely absent
+    assert ("openrouter", "synth/gone") not in _inventory(bundle)
+    report, _ = _validate(bundle, baseline)
+    assert report.state == "BLOCKED", (report.state, sorted(_codes(report)))
+    assert "missing_required_selection" in _codes(report)
+    assert "model_disappeared" not in _codes(report)
+    disp = {d.model: d for d in report.dispositions if d.provider == "openrouter"}
+    assert disp["synth/gone"].disposition == "BLOCKED"
+    assert "absent from complete sources" in disp["synth/gone"].detail
+    assert "no delete" in disp["synth/gone"].detail
+    assert report.apply_plan is None
