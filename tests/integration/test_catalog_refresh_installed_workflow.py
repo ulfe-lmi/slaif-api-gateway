@@ -174,6 +174,7 @@ if os.environ.get("SLAIF184_FIXTURE_DIR"):
             "(terminating before CLI; physical retrieval is never a fallback)",
             file=sys.stderr,
         )
+        sys.stderr.flush()
         os._exit(65)
 '''
 
@@ -195,6 +196,7 @@ if _os.environ.get("SLAIF184_FIXTURE_DIR"):
             "(terminating before CLI; physical retrieval is never a fallback)\\n"
             % (_exc,)
         )
+        _sys.stderr.flush()
         _os._exit(65)
 '''
 
