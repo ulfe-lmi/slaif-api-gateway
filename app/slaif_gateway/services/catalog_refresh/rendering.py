@@ -138,14 +138,14 @@ _FINDING_LABELS = {
 
 _CSS = """
 :root { color-scheme: light; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 12px 16px; color: #1a202c; background: #ffffff; line-height: 1.4; font-size: 15px; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; margin: 0; padding: 10px 16px; color: #1a202c; background: #ffffff; line-height: 1.4; font-size: 15px; }
 main { max-width: 1160px; margin: 0 auto; }
 h1 { font-size: 24px; margin: 0 0 2px; line-height: 1.25; }
-h2 { font-size: 17px; margin: 0 0 4px; line-height: 1.3; }
+h2 { font-size: 17px; margin: 0 0 3px; line-height: 1.3; }
 h3 { font-size: 15px; margin: 4px 0 2px; }
 p { margin: 3px 0; }
 p.sub { color: #4a5568; margin: 0 0 6px; font-size: 14px; }
-.banner-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin: 6px 0; }
+.banner-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin: 4px 0; }
 .state { font-size: 18px; font-weight: 600; padding: 6px 12px; border-radius: 6px; border: 1px solid; margin: 0; flex: 1 1 360px; line-height: 1.35; }
 .state-ready { background: #f0fff4; border-color: #2f855a; color: #22543d; }
 .state-review { background: #fffaf0; border-color: #b7791f; color: #744210; }
@@ -157,7 +157,7 @@ p.sub { color: #4a5568; margin: 0 0 6px; font-size: 14px; }
 .chip-review { border-color: #b7791f; color: #744210; background: #fffaf0; }
 .chip-verified { border-color: #2f855a; color: #22543d; background: #f0fff4; }
 .chip-na { border-color: #cbd5e0; color: #718096; background: #ffffff; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 0; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0; }
 .card { border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 12px; min-width: 0; }
 .card h2 { border-bottom: 1px solid #edf2f7; padding-bottom: 3px; }
 .card + .card { margin-top: 10px; }
