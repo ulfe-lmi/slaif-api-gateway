@@ -813,6 +813,105 @@ def _pipeline_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
 
 
+# --- 183-b B3: captured official docs-page layout derivative --------------------
+
+DOCS_PAGE_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures" / "catalog_refresh" / "research-openai-page-variant.md"
+)
+DOCS_PAGE_VARIANT_SHA256 = (
+    "1167433c22fc055af0dbd2480afeff869107cf53969dbb9b7fe76478070b3f0c"
+)
+
+
+def _openai_pricing_md_bytes() -> bytes:
+    """Standard-v1 eligible row (short-context input+output only, no cache
+    writes, no long-context tier)."""
+    return (
+        "# Pricing\n\n"
+        "### Standard pricing data\n\n"
+        "| Model | Short context input | Short context cached input | Short context output | Long context input | Long context output |\n"
+        "|---|---|---|---|---|---|\n"
+        "| gpt-3.5-turbo | $0.50 | - | $1.50 | - | - |\n\n"
+    ).encode("utf-8")
+
+
+def _models_index_md_bytes() -> bytes:
+    return (
+        "# Models\n\n"
+        "## Featured models\n\n"
+        "- [GPT-3.5 Turbo](/api/docs/models/gpt-3.5-turbo.md): Legacy GPT model.\n"
+    ).encode("utf-8")
+
+
+def _docs_page_canned() -> dict:
+    """The captured page's exact limit lines (0-based line numbers of the
+    pinned fixture bytes)."""
+    return {
+        "schema": RESEARCH_OUTPUT_SCHEMA_VERSION,
+        "task": "openai_docs_page",
+        "models": [
+            {
+                "model": "gpt-3.5-turbo",
+                "context_length": {
+                    "locator": "line[15]",
+                    "quote": "Context window (tokens): 16,385",
+                },
+                "max_output_tokens": {
+                    "locator": "line[16]",
+                    "quote": "Maximum output (tokens): 4,096",
+                },
+            }
+        ],
+    }
+
+
+def _docs_page_pipeline_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    page_bytes: bytes | None = None,
+    canned: dict | None = None,
+):
+    """183-b B3: a first-install OpenAI collect over the captured official
+    docs-page LAYOUT DERIVATIVE (provenance:
+    research-openai-page-variant-provenance.json). The deterministic parser
+    succeeds on prices/modalities/endpoints but leaves BOTH limits
+    unresolved in the prose layout; the (stand-in) mock research transport
+    completes them from the SAME captured page bytes. No physical network:
+    every URL is served by the fixture fetcher."""
+    page = (
+        page_bytes
+        if page_bytes is not None
+        else DOCS_PAGE_FIXTURE.read_bytes()
+    )
+    if canned is None:
+        canned = _docs_page_canned()
+    canned_bytes = json.dumps(canned, separators=(",", ":")).encode("utf-8")
+    monkeypatch.setattr(iso, "execute_task", lambda *a, **k: _completed(canned_bytes))
+    _fake_cli(tmp_path / "codex")
+    cfg = _cfg(tmp_path, mock_model=True, mock_result_json=canned_bytes.decode("utf-8"))
+    from datetime import timedelta
+
+    ecb_date = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+    return catalog_collection.collect_bundle(
+        providers=("openai",),
+        model_include=(),
+        baseline_mode="first_install",
+        baseline=None,
+        client=httpx.Client(),
+        fetch=_fake_fetch(
+            {
+                src.OPENAI_PRICING_MD_URL: _openai_pricing_md_bytes(),
+                src.OPENAI_MODELS_MD_URL: _models_index_md_bytes(),
+                src.OPENAI_MODEL_PAGE_URL.format(slug="gpt-3.5-turbo"): page,
+                src.ECB_DAILY_XML_URL: _ecb_xml_bytes(ecb_date, "1.08"),
+            }
+        ),
+        research=cfg,
+    )
+
+
 def test_full_pipeline_mock_research_seals_grounded_facts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from slaif_gateway.services.catalog_refresh.policy import policy_from_document
     from slaif_gateway.services.catalog_refresh.validation import (
@@ -927,3 +1026,115 @@ def test_regrounding_refuses_facts_without_success(tmp_path: Path, monkeypatch: 
             sql_capture=sql_capture_for_mode(bundle.baseline.mode),
         )
     assert excinfo.value.code == "research_facts_without_success"
+
+# --- 183-b B3: captured official docs-page layout derivative --------------------
+
+
+def test_docs_page_captured_variant_plans_single_task() -> None:
+    # The pinned captured-page derivative: deterministic parse succeeds
+    # (prices/modalities/endpoints) but leaves both limits unresolved in the
+    # prose layout; the parent page scan resolves BOTH uniquely, so the page
+    # is exactly one eligible docs_page task.
+    page = DOCS_PAGE_FIXTURE.read_bytes()
+    assert hashlib.sha256(page).hexdigest() == DOCS_PAGE_VARIANT_SHA256
+    parsed = se.parse_snapshot("openai", "docs_page", page)
+    assert parsed.ok
+    assert len(parsed.models) == 1
+    model = parsed.models[0]
+    assert model.model == "gpt-3.5-turbo"
+    assert model.context_length is None  # deterministic pass unresolved
+    assert model.max_output_tokens is None
+    assert model.prices is not None  # pricing still parsed
+    plan = r.plan_docs_page_tasks([("gpt-3.5-turbo", page, model)])
+    assert len(plan.tasks) == 1
+    task = plan.tasks[0]
+    assert task.task == r.TASK_DOCS_PAGE
+    assert task.source_key == "openai|gpt-3.5-turbo|docs_page"
+    assert task.requested_fields == ("model:context_length", "model:max_output_tokens")
+    assert task.content_sha256 == hashlib.sha256(page).hexdigest()
+    assert plan.remaining == ()
+
+
+def test_full_docs_page_pipeline_mock_research_seals_limit_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from slaif_gateway.services.catalog_refresh.policy import policy_from_document
+    from slaif_gateway.services.catalog_refresh.validation import (
+        ACQUISITION_LIVE,
+        sql_capture_for_mode,
+        validate_bundle,
+    )
+
+    bundle = _docs_page_pipeline_bundle(tmp_path, monkeypatch)
+    assert bundle.research.status == "SUCCEEDED"
+    assert bundle.research.mock_model is True
+    facts = bundle.research_facts
+    assert len(facts) == 2  # exactly the two unresolved limits, nothing else
+    assert {
+        (f.provider, f.model, f.field) for f in facts
+    } == {
+        ("openai", "gpt-3.5-turbo", "model:context_length"),
+        ("openai", "gpt-3.5-turbo", "model:max_output_tokens"),
+    }
+    model = next(m for m in bundle.models if m.model == "gpt-3.5-turbo")
+    assert model.context_length == 16385
+    assert model.max_output_tokens == 4096
+    # semantic provenance for the researched limits, deterministic for the rest
+    assert model.provenance.extraction == "semantic"
+    report, _ = validate_bundle(
+        bundle,
+        None,
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+        acquisition=ACQUISITION_LIVE,
+    )
+    assert report.state == "READY_WITH_WARNINGS"
+    assert sorted(w.code for w in report.warnings) == [
+        "new_model_exposure",
+        "research_semantic_method",
+    ]
+    research = report.to_dict()["research"]
+    assert research["review"] == {"facts_sealed": 2, "facts_regrounded": 2}
+    assert research["declared"]["status"] == "SUCCEEDED"
+    assert research["declared"]["mock_model"] is True
+
+
+def test_docs_page_without_readable_limits_is_never_researched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A page that states NO limit the parent can ground is never a research
+    # candidate: research stays NOT_RUN (nothing was invoked), the
+    # deterministic disposition (incomplete/missing_limits) stands, and no
+    # model is proposed.
+    page = DOCS_PAGE_FIXTURE.read_bytes().replace(
+        b"Context window (tokens): 16,385\nMaximum output (tokens): 4,096\n", b""
+    )
+    bundle = _docs_page_pipeline_bundle(tmp_path, monkeypatch, page_bytes=page)
+    assert bundle.research.status == "NOT_RUN"
+    assert bundle.research_facts == ()
+    assert bundle.models == ()
+    entries = {
+        (e.provider, e.model): (e.disposition, e.reason_code) for e in bundle.collection.inventory
+    }
+    assert entries[("openai", "gpt-3.5-turbo")] == ("incomplete", "missing_limits")
+
+
+def test_docs_page_fabricated_quote_is_rejected_not_grounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A transcription whose quote is NOT a line of the captured page bytes
+    # is rejected by the parent grounding: zero sealed facts, the measured
+    # phase identity (SUCCEEDED exit, 2 rejected) is retained, and the
+    # deterministic disposition stands.
+    canned = _docs_page_canned()
+    canned["models"][0]["context_length"]["quote"] = "Context window (tokens): 999,999"
+    bundle = _docs_page_pipeline_bundle(tmp_path, monkeypatch, canned=canned)
+    assert bundle.research.status == "SUCCEEDED"
+    assert bundle.research.child_exit_code == 0
+    assert bundle.research_facts == ()
+    assert bundle.research.facts_rejected == 2
+    assert bundle.models == ()
+    entries = {
+        (e.provider, e.model): (e.disposition, e.reason_code) for e in bundle.collection.inventory
+    }
+    assert entries[("openai", "gpt-3.5-turbo")] == ("incomplete", "missing_limits")

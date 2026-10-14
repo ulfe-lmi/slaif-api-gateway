@@ -409,6 +409,41 @@ def _research_supplied_case(tmp: Path) -> tuple[object, dict]:
     return _research_case(tmp, ACQUISITION_OFFLINE)
 
 
+def _research_docs_page_pipeline_bundle(tmp: Path):
+    """The unit-suite docs-page pipeline builder (183-b B3): a first-install
+    OpenAI collect over the captured official docs-page layout derivative
+    (pinned fixture bytes) whose two prose-layout limits are completed by
+    the qualification mock research transport (stand-in execute_task;
+    grounding, collection, bundle, validation and rendering are the real
+    product code)."""
+    from tests.unit.test_catalog_refresh_research import (
+        _docs_page_pipeline_bundle,
+    )
+
+    patch = _attr_patch()
+    try:
+        return _docs_page_pipeline_bundle(tmp, patch)
+    finally:
+        patch.undo()
+
+
+def _research_docs_page_case(tmp: Path) -> tuple[object, dict]:
+    """Docs-page research-backed bundle through the real validate path:
+    LIVE = the collect invocation's runner-selected scope."""
+    tmp.mkdir(parents=True, exist_ok=True)  # research workspace root (distinct from the report dir)
+    bundle = _research_docs_page_pipeline_bundle(tmp)
+    assert bundle.research.status == "SUCCEEDED"
+    assert len(bundle.research_facts) == 2
+    report, _ = validate_bundle(
+        bundle,
+        None,
+        policy_from_document(bundle.policy),
+        sql_capture=sql_capture_for_mode(bundle.baseline.mode),
+        acquisition=ACQUISITION_LIVE,
+    )
+    return bundle, report
+
+
 def _cli_run_report(tmp_path: Path, name: str, extra: list[str]) -> Path:
     """Drive the real CLI to publish a sealed run; return REVIEW.html."""
     from typer.testing import CliRunner
@@ -707,6 +742,8 @@ def case_html(tmp_path_factory) -> dict[str, Path]:
         ("fx-required", _fx_required_case),
         ("research-live", lambda: _research_live_case(tmp / "research-live-ws")),
         ("research-supplied", lambda: _research_supplied_case(tmp / "research-supplied-ws")),
+        ("research-docs-page",
+         lambda: _research_docs_page_case(tmp / "research-docs-page-ws")),
     ):
         bundle, report = builder()
         html = tmp / case / "REVIEW.html"
@@ -773,6 +810,16 @@ CASE_EXPECTATIONS = {
             "supplied-collection scope",
         ),
     },
+    "research-docs-page": {
+        "has_sources": True,
+        "pdf": False,
+        "visible": (
+            "research 2/2 re-grounded",
+            "Research evidence (semantic fallback)",
+            "Mock model (declaration)",
+            "live-collection scope",
+        ),
+    },
 }
 
 
@@ -792,6 +839,7 @@ def test_browser_layout_all_cases(playwright, case_html) -> None:
         "fx-required",
         "research-live",
         "research-supplied",
+        "research-docs-page",
     ):
         _check_case(playwright, case, case_html[case], CASE_EXPECTATIONS[case], out_dir, metrics)
     metrics_path = out_dir / "metrics-final.json"

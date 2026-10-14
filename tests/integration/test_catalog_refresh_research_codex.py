@@ -777,3 +777,120 @@ def test_rp1_real_cli_full_pipeline_bundle_seal_verify_plan(tmp_path: Path) -> N
     html = (run_dir / "REVIEW.html").read_bytes()
     assert b"syn-1" in html
     assert b"research" in html
+
+
+@requires_boundary
+def test_rp1_real_cli_docs_page_pipeline_bundle_seal_verify_plan(
+    tmp_path: Path,
+) -> None:
+    """RP1 on the captured official OpenAI docs page: the REAL CLI 0.162.1
+    completes the two limit fields the deterministic parser cannot resolve
+    in the captured gpt-3.5-turbo page's prose limit layout (fixture: the
+    documented exact two-line synthetic derivative of the 181-h official
+    capture). The ACTUAL product pipeline then drives collect bundle ->
+    validate/plan -> render -> staged sealed publish -> verify_run. The
+    model transport stays the qualification mock; source bytes are the
+    captured fixture (no physical network, no live model)."""
+    cli = _cli_binary()
+    assert cli is not None
+    import sys
+    from datetime import UTC, datetime, timedelta
+
+    sys.path.insert(0, str(REPO_ROOT / "tests" / "unit"))
+    from tests.unit.test_catalog_refresh_research import (
+        _docs_page_canned,
+        _models_index_md_bytes,
+        _openai_pricing_md_bytes,
+    )
+
+    page_path = (
+        REPO_ROOT / "tests" / "fixtures" / "catalog_refresh"
+        / "research-openai-page-variant.md"
+    )
+    page = page_path.read_bytes()
+    assert hashlib.sha256(page).hexdigest() == (
+        "1167433c22fc055af0dbd2480afeff869107cf53969dbb9b7fe76478070b3f0c"
+    )
+    canned = _docs_page_canned()
+    # the real CLI performs the useful local read of the captured evidence
+    # (the container-side evidence path is the exact /workspace/inputs/evidence)
+    seq = _tool_call_sse(MODEL, {"cmd": "cat /workspace/inputs/evidence"})
+    cfg = r.ResearchConfig(
+        enabled=True,
+        cli_bin=cli,
+        model_name=MODEL,
+        workspace_root=str(SCRATCH_ROOT / f"rp1docpage-{secrets.token_hex(4)}"),
+        repo_root=str(REPO_ROOT),
+        mock_model=True,
+        mock_result_json=json.dumps(canned, separators=(",", ":")),
+        mock_tool_sequence_sse=seq,
+    )
+    # fixture row is USD-priced -> the collector acquires the ECB reference
+    # rate for the FX gate (fixture bytes, no physical network)
+    ecb_date = (datetime.now(UTC) - timedelta(days=1)).date().isoformat()
+    client = httpx.Client()
+    try:
+        bundle = catalog_collection.collect_bundle(
+            providers=("openai",),
+            model_include=(),
+            baseline_mode="first_install",
+            baseline=None,
+            client=client,
+            fetch=_fake_fetch(
+                {
+                    src.OPENAI_PRICING_MD_URL: _openai_pricing_md_bytes(),
+                    src.OPENAI_MODELS_MD_URL: _models_index_md_bytes(),
+                    src.OPENAI_MODEL_PAGE_URL.format(slug="gpt-3.5-turbo"): page,
+                    src.ECB_DAILY_XML_URL: _ecb_xml_bytes(ecb_date, "1.08"),
+                }
+            ),
+            research=cfg,
+        )
+    finally:
+        client.close()
+    # parent-grounded research facts sealed in the bundle; the REAL CLI
+    # identity is measured, not declared
+    assert bundle.research.status == "SUCCEEDED"
+    assert bundle.research.mock_model is True
+    assert bundle.research.codex_version and bundle.research.cli_sha256
+    # exactly the two unresolved limit fields, grounded on the captured page
+    facts = bundle.research_facts
+    assert {(f.provider, f.model, f.field) for f in facts} == {
+        ("openai", "gpt-3.5-turbo", "model:context_length"),
+        ("openai", "gpt-3.5-turbo", "model:max_output_tokens"),
+    }
+    model = next(m for m in bundle.models if m.model == "gpt-3.5-turbo")
+    assert model.context_length == 16385
+    assert model.max_output_tokens == 4096
+    assert model.provenance.extraction == "semantic"
+    # the ACTUAL finalize pipeline: validate + plan + HTML + atomic sealed
+    # publish (the runner-selected live-collection acquisition scope)
+    run_root = tmp_path / "runs"
+    seal_key_path = tmp_path / "seal.key"
+    rc = cli_mod._finalize_review_pipeline(
+        bundle=bundle,
+        baseline_doc=None,
+        sql_capture=validation.sql_capture_for_mode(bundle.baseline.mode),
+        run_root=run_root,
+        seal_key_path=seal_key_path,
+        json_output=False,
+        run_root_handle=None,
+        key_handle=None,
+        stage=cli_mod.STAGE_LINE_COLLECT,
+        acquisition=validation.ACQUISITION_LIVE,
+    )
+    assert rc in (cli_mod.EXIT_READY, cli_mod.EXIT_READY_WITH_WARNINGS), rc
+    run_dir = run_root / bundle.run_id
+    assert (run_dir / "receipt.json").is_file()
+    # verify-style key load: the file stores 64 lowercase hex characters;
+    # the HMAC key is the decoded 32 bytes
+    verify = sealing.verify_run(run_dir, fs.load_seal_key_bytes(seal_key_path))
+    assert verify.valid is True
+    # the plan (proposal) artifacts exist and carry the researched model
+    routes = (run_dir / "routes-proposal.tsv").read_text(encoding="utf-8")
+    pricing = (run_dir / "pricing-proposal.tsv").read_text(encoding="utf-8")
+    assert "gpt-3.5-turbo" in routes or "gpt-3.5-turbo" in pricing
+    # the rendered report carries the model and the research section
+    html = (run_dir / "REVIEW.html").read_bytes()
+    assert b"gpt-3.5-turbo" in html
+    assert b"research" in html
