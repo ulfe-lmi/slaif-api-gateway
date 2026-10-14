@@ -142,8 +142,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helv
 main { max-width: 1160px; margin: 0 auto; }
 h1 { font-size: 24px; margin: 0 0 2px; line-height: 1.25; }
 h2 { font-size: 17px; margin: 0 0 4px; line-height: 1.3; }
-h3 { font-size: 15px; margin: 5px 0 2px; }
-p { margin: 4px 0; }
+h3 { font-size: 15px; margin: 4px 0 2px; }
+p { margin: 3px 0; }
 p.sub { color: #4a5568; margin: 0 0 6px; font-size: 14px; }
 .banner-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; margin: 6px 0; }
 .state { font-size: 18px; font-weight: 600; padding: 6px 12px; border-radius: 6px; border: 1px solid; margin: 0; flex: 1 1 360px; line-height: 1.35; }
@@ -170,8 +170,8 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 .gate-grid { display: grid; grid-template-columns: 1fr; gap: 0; font-size: 14px; }
 .gate-line { margin: 2px 0; overflow-wrap: anywhere; }
 .gate-line .muted { font-size: 14px; }
-.line { font-size: 15px; margin: 4px 0; }
-.annot { color: #4a5568; font-size: 12.5px; margin: 3px 0; overflow-wrap: anywhere; }
+.line { font-size: 15px; margin: 3px 0; }
+.annot { color: #4a5568; font-size: 12.5px; margin: 2px 0; overflow-wrap: anywhere; }
 .checkline { font-size: 15px; margin: 3px 0; overflow-wrap: anywhere; }
 .checkline .group { font-weight: 600; }
 table { border-collapse: collapse; width: 100%; margin: 4px 0 8px; font-size: 14px; }
