@@ -783,9 +783,21 @@ def run_research_phase(
     cleanup_errors: tuple[str, ...] = ()
     try:
         try:
-            outcome: ResearchPhaseOutcome = _run_phase_tasks(
-                cfg, plan, base_dir, template_bytes, schema_bytes, facts_bound, base
-            )
+            if base.get("codex_version") == "N/A":
+                # The binary was hashed but could not report its own
+                # version (for example it is not executable): the
+                # qualified CLI boundary is not proven, so the phase
+                # refuses BEFORE any invocation with the safe refusal
+                # code. A FAILED identity for an unversioned CLI is
+                # impossible by the identity contract (SUCCEEDED/FAILED
+                # require the actual measured version), so this refusal
+                # must not fall through to the measured-failure path.
+                outcome = _unavailable(cfg, "cli_unversioned")
+            else:
+                outcome = _run_phase_tasks(
+                    cfg, plan, base_dir, template_bytes, schema_bytes,
+                    facts_bound, base,
+                )
         except Exception as exc:
             # Last resort (an identity-construction defect or a replaced
             # loop): the CLI WAS verified and the phase was attempted, so

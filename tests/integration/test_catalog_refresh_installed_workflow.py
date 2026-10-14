@@ -38,9 +38,10 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import subprocess
-import time
 import sys
+import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -49,6 +50,9 @@ from urllib.parse import urlparse
 import pytest
 
 from tests.integration.db_test_utils import run_alembic_upgrade_head
+from tests.integration.test_catalog_refresh_research_codex import (
+    requires_boundary,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_DIR = (
@@ -67,7 +71,10 @@ SHIM_MODULE = '''\
 Inert unless SLAIF184_FIXTURE_DIR is set. When active it serves
 checked-in fixture bytes for the five fixed official URLs at the
 existing ``sources.fetch_source`` module-global seam, refuses every
-unmapped URL, and denies ANY physical httpx send. When
+unmapped URL, and denies ANY physical httpx send. Optional
+SLAIF184_FAIL_URLS (comma-separated official URLs) makes those mapped
+fetches raise the safe code-only SourceFetchError, simulating a
+source outage for the failed-collect labels. When
 SLAIF184_MOCK_RESEARCH is set (JSON with result_file/tool_sequence_file),
 ``collection.collect_bundle`` is wrapped to replace the CLI-created
 ResearchConfig with the already-qualified canned mock transport (the
@@ -111,6 +118,9 @@ def _install() -> None:
         if stall:
             time.sleep(float(stall))
         context.reserve_attempt()
+        fail_urls = os.environ.get("SLAIF184_FAIL_URLS")
+        if fail_urls and spec.url in fail_urls.split(","):
+            raise sources.SourceFetchError("fixture_forced_failure")
         entry = _URL_FILES.get(spec.url)
         if entry is None:
             raise sources.SourceFetchError("fixture_unmapped_url")
@@ -373,24 +383,25 @@ def installed_pg_url() -> Iterator[str]:
         run_alembic_upgrade_head(url)
         yield url
     finally:
-        # Cleanup re-verifies identity and removes ONLY this container.
+        # Cleanup re-verifies the EXACT created container ID and its owner
+        # label, then removes ONLY that container. A Docker NotFound means
+        # it was already removed; every other failure is a real cleanup
+        # failure and is re-raised. There is deliberately NO label-scan
+        # fallback: an uncreated ID is never removed even if some other
+        # container happens to carry the owner label.
         try:
             c = client.containers.get(container.id)
-            c.reload()
-            c_labels = c.attrs["Config"].get("Labels") or {}
-            assert c_labels.get("slaif184.owner") == owner, (
-                "refusing to remove a container whose owner label changed"
-            )
-            c.stop(timeout=10)
-            c.remove(force=True)
-        except Exception:
-            # Last-resort ownership check via label filter (never by name).
-            leftover = client.containers.list(
-                all=True, filters={"label": f"slaif184.owner={owner}"}
-            )
-            for c in leftover:
-                c.stop(timeout=10)
-                c.remove(force=True)
+        except docker.errors.NotFound:
+            _STATE["pg_cleanup"] = f"already_absent:{container.id[:12]}"
+            return
+        c.reload()
+        c_labels = c.attrs["Config"].get("Labels") or {}
+        assert c_labels.get("slaif184.owner") == owner, (
+            "refusing to remove a container whose owner label changed"
+        )
+        c.stop(timeout=10)
+        c.remove(force=True)
+        _STATE["pg_cleanup"] = f"removed:{container.id[:12]}"
 
 
 
@@ -444,14 +455,22 @@ def _summary(proc: subprocess.CompletedProcess) -> dict:
 # --- controlled source-set materialization (harness side, recorded) ---------
 
 
-def _materialize_source_set(target: Path, *, set_name: str, rate: str) -> Path:
-    """Materialize one controlled source set with canonical file names."""
+def _materialize_source_set(
+    target: Path, *, set_name: str, rate: str, pricing_set: str | None = None
+) -> Path:
+    """Materialize one controlled source set with canonical file names.
+
+    ``pricing_set`` may differ from ``set_name``: the v3 research set reuses
+    the v1 pricing rows with the v3 prose-layout model page (the provenance
+    record documents this exact composition).
+    """
+    pricing_set = pricing_set or set_name
     target.mkdir(parents=True, exist_ok=True)
     (target / "openrouter-models.json").write_bytes(
-        (FIXTURE_DIR / f"openrouter-models-{set_name}.json").read_bytes()
+        (FIXTURE_DIR / f"openrouter-models-{pricing_set}.json").read_bytes()
     )
     (target / "openai-pricing.md").write_bytes(
-        (FIXTURE_DIR / f"openai-pricing-{set_name}.md").read_bytes()
+        (FIXTURE_DIR / f"openai-pricing-{pricing_set}.md").read_bytes()
     )
     (target / "openai-models.md").write_bytes(
         (FIXTURE_DIR / "openai-models.md").read_bytes()
@@ -495,8 +514,22 @@ def _sql(url: str, query: str, params: dict | None = None) -> list[tuple]:
     return asyncio.run(_run())
 
 
+def _digest_tree(root: Path) -> str:
+    """Order-stable digest of every file under ``root`` (content only)."""
+    h = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if path.is_file():
+            h.update(str(path.relative_to(root)).encode("utf-8"))
+            h.update(path.read_bytes())
+    return h.hexdigest()
+
+
 def _catalog_snapshot(url: str) -> str:
     """Order-stable digest of the catalog tables around a refusal probe."""
+    providers = _sql(
+        url,
+        "SELECT * FROM provider_configs ORDER BY id",
+    )
     rows = _sql(
         url,
         "SELECT requested_model, provider, upstream_model, enabled FROM model_routes "
@@ -525,6 +558,7 @@ def _catalog_snapshot(url: str) -> str:
     )
     blob = json.dumps(
         {
+            "providers": [list(r) for r in providers],
             "routes": [list(r) for r in rows],
             "pricing": [list(r) for r in pricing],
             "fx": [list(r) for r in fx],
@@ -1073,3 +1107,744 @@ def test_r4b_installed_refresh_changed_prices_fx_and_apply(
     assert sproc.returncode == 0, sproc.stderr
     ssum = json.loads([ln for ln in sproc.stdout.splitlines() if ln.strip()][-1])
     assert ssum["committed"] is True
+
+
+def test_r5_installed_selection_and_refusals(
+    installed_env: dict[str, str], installed_pg_url: str, tmp_path_factory
+) -> None:
+    """R5 (worksheet rows 13/14/16): installed model selection and
+    refusal boundaries, each with actual DB state equality around the
+    refusal (not only exit codes).
+
+    (a) single-model scope filter: both-provider sources, one selected
+        model, exclusions reconciled explicitly;
+    (b) unknown requested model: BLOCKED collect run, empty proposal;
+    (c) unsupported preset: child Typer refusal BEFORE any run is created;
+    (d) unreachable baseline DB: refresh refused before collection,
+        blocked run published, collection-not-started stage.
+    """
+    env = installed_env
+    db_url = installed_pg_url
+    scratch = tmp_path_factory.mktemp("slaif184-r5")
+    fx_v1 = _materialize_source_set(scratch / "fx-v1", set_name="v1", rate="1.08")
+    seal_key = scratch / "seal.key"
+    _STATE["seal_key_r5"] = str(seal_key)
+
+    # --- (a) single-model scope: only the selected model, explicit -------
+    # reconciled exclusions (bootstrap == first_install baseline, so the
+    # result is identical on any DB state; collect never writes the DB).
+    run_root_a = scratch / "runs-a"
+    snap_before = _catalog_snapshot(db_url)
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode",
+            "bootstrap",
+            "--models",
+            "gpt-3.5-turbo",
+            "--run-root",
+            str(run_root_a),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+            "--timeout",
+            "120",
+        ],
+        cwd=scratch,
+        extra={"SLAIF184_FIXTURE_DIR": str(fx_v1)},
+        timeout=300,
+    )
+    assert proc.returncode == 10, (
+        f"single-model bootstrap expected 10, got {proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    summary = _summary(proc)
+    assert summary["state"] == "READY_WITH_WARNINGS"
+    assert summary["warnings"] == 1 and summary["blockers"] == 0, summary
+    run_dir = Path(urlparse(summary["run_dir"]).path)
+    assert run_dir.parent == run_root_a or run_dir.parent == run_root_a.resolve()
+    cr = json.loads((run_dir / "catalog-refresh.json").read_text(encoding="utf-8"))
+    assert cr["selection"]["model_include"] == ["gpt-3.5-turbo"]
+    assert cr["selection"]["providers"] == ["openai", "openrouter"]
+    assert [m["model"] for m in cr["models"]] == ["gpt-3.5-turbo"]
+    validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+    counts = validation["counts"]
+    assert counts["selected"] == 1 and counts["new"] == 1, counts
+    # the other-provider models are reconciled EXPLICITLY, not silently
+    # dropped from the inventory
+    assert "2 reconciled exclusion(s)" in cr["notes"], cr["notes"]
+    codes = [w["code"] for w in validation["warnings"]]
+    assert codes == ["new_model_exposure"], codes
+    assert _catalog_snapshot(db_url) == snap_before, "collect-only run changed the DB"
+    _STATE["run_dir_r5a"] = str(run_dir)
+
+    # --- (b) unknown requested model: BLOCKED, empty proposal ------------
+    run_root_b = scratch / "runs-b"
+    snap_before_b = _catalog_snapshot(db_url)
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode",
+            "bootstrap",
+            "--models",
+            "nonexistent-model-x",
+            "--run-root",
+            str(run_root_b),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+            "--timeout",
+            "120",
+        ],
+        cwd=scratch,
+        extra={"SLAIF184_FIXTURE_DIR": str(fx_v1)},
+        timeout=300,
+    )
+    assert proc.returncode == 20, (
+        f"unknown-model bootstrap expected 20, got {proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    summary = _summary(proc)
+    assert summary["state"] == "BLOCKED"
+    assert summary["blockers"] == 4, summary
+    assert "missing_required_selection" in summary["reason"], summary
+    run_dir_b = Path(urlparse(summary["run_dir"]).path)
+    assert run_dir_b.parent == run_root_b or run_dir_b.parent == run_root_b.resolve()
+    cr_b = json.loads((run_dir_b / "catalog-refresh.json").read_text(encoding="utf-8"))
+    assert cr_b["models"] == []
+    assert _catalog_snapshot(db_url) == snap_before_b, "blocked run changed the DB"
+    _STATE["run_dir_r5b"] = str(run_dir_b)
+
+    # --- (c) unsupported preset: refused before any run is created -------
+    run_root_c = scratch / "runs-c"
+    snap_before_c = _catalog_snapshot(db_url)
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode",
+            "bootstrap",
+            "--profile",
+            "enterprise-v2",
+            "--run-root",
+            str(run_root_c),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+            "--timeout",
+            "120",
+        ],
+        cwd=scratch,
+        extra={"SLAIF184_FIXTURE_DIR": str(fx_v1)},
+        timeout=120,
+    )
+    assert proc.returncode == 2, (
+        f"unsupported preset expected Typer refusal (2), got {proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    assert "only the standard-v1 profile exists in this version" in proc.stderr
+    assert not run_root_c.exists() or not any(run_root_c.iterdir()), (
+        "preset refusal must not create a run"
+    )
+    assert _catalog_snapshot(db_url) == snap_before_c
+
+    # --- (d) unreachable baseline DB: refused BEFORE collection ----------
+    run_root_d = scratch / "runs-d"
+    snap_before_d = _catalog_snapshot(db_url)
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode",
+            "refresh",
+            "--db-url",
+            "postgresql+asyncpg://test:test@127.0.0.1:1/nope",
+            "--run-root",
+            str(run_root_d),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+            "--timeout",
+            "120",
+        ],
+        cwd=scratch,
+        extra={"SLAIF184_FIXTURE_DIR": str(fx_v1)},
+        timeout=300,
+    )
+    assert proc.returncode == 20, (
+        f"unreachable-baseline refresh expected 20, got {proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    summary = _summary(proc)
+    assert summary["state"] == "BLOCKED"
+    assert summary["stage"].startswith("collection not started"), summary
+    assert "baseline_export_failed" in summary["reason"], summary
+    run_dir_d = Path(urlparse(summary["run_dir"]).path)
+    assert run_dir_d.name.startswith("blocked-baseline_export_failed"), run_dir_d.name
+    assert run_dir_d.parent == run_root_d or run_dir_d.parent == run_root_d.resolve()
+    assert _catalog_snapshot(db_url) == snap_before_d, "blocked refresh changed the DB"
+
+
+QUALIFIED_CODX_CLI = (
+    Path("/home/janezp/.codex/packages/standalone/releases/")
+    / "0.162.1-x86_64-unknown-linux-musl"
+    / "bin"
+    / "codex"
+)
+QUALIFIED_CODX_CLI_SHA256 = (
+    "628e35487d888a28f0427fc37501da529dd3d81fcbad7a2c3421c1e8670d92e1"
+)
+PACKAGED_RESEARCH_TEMPLATE_SHA256 = (
+    "5ba7ff44d58fa21f7d020fbb793e5611bfb416b0475e5d92e23d566a45081d18"
+)
+
+
+@pytest.mark.skipif(
+    not QUALIFIED_CODX_CLI.is_file(),
+    reason="R6 requires the exact qualified Codex CLI 0.162.1 at the recorded path",
+)
+@requires_boundary
+def test_r6_installed_research_fallback(
+    installed_env: dict[str, str], tmp_path_factory
+) -> None:
+    """R6 (worksheet row 9): the useful isolated-Codex fallback through the
+    INSTALLED refresh with the packaged template/schema assets and the REAL
+    qualified CLI 0.162.1. The mock substitution is transport-only (the
+    documented fixture seam): the real Codex worker still executes inside
+    the enforced outer boundary; no physical network, no live model.
+
+    Skips only on machines without the qualified CLI/Docker boundary (the
+    183 capability marker); on the qualified host this case is REQUIRED and
+    must pass (the local run at the final head is the recorded evidence).
+
+    Source set v3 = v1 pricing + prose-layout OpenAI model page whose limit
+    lines the deterministic parser cannot resolve -> exactly two eligible
+    facts -> canned qualified research result fills both.
+    """
+    env = installed_env
+    scratch = tmp_path_factory.mktemp("slaif184-r6")
+    fx_v3 = _materialize_source_set(
+        scratch / "fx-v3", set_name="v3", rate="1.08", pricing_set="v1"
+    )
+    seal_key = scratch / "seal.key"
+
+    assert _sha256_file(QUALIFIED_CODX_CLI) == QUALIFIED_CODX_CLI_SHA256, (
+        "qualified Codex CLI bytes changed"
+    )
+
+    from tests.integration.test_catalog_refresh_research_codex import _tool_call_sse
+
+    seq_file = scratch / "tool-sequence.sse"
+    seq_file.write_text(
+        _tool_call_sse("synthetic/research", {"cmd": "cat /workspace/inputs/evidence"}),
+        encoding="utf-8",
+    )
+    result_file = FIXTURE_DIR / "research-canned-result.json"
+
+    run_root = scratch / "runs-research"
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode",
+            "bootstrap",
+            "--providers",
+            "openai",
+            "--run-root",
+            str(run_root),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+            "--timeout",
+            "300",
+            "--research",
+            "--research-cli-bin",
+            str(QUALIFIED_CODX_CLI),
+            "--research-endpoint",
+            "https://synthetic.invalid/v1",
+            "--research-model",
+            "synthetic/research",
+            "--research-auth-env",
+            "SLAIF184_SYNTHETIC_KEY",
+        ],
+        cwd=scratch,
+        extra={
+            "SLAIF184_FIXTURE_DIR": str(fx_v3),
+            "SLAIF184_SYNTHETIC_KEY": "sk-synthetic-184-not-real",
+            "SLAIF184_MOCK_RESEARCH": json.dumps(
+                {
+                    "result_file": str(result_file),
+                    "tool_sequence_file": str(seq_file),
+                }
+            ),
+        },
+        timeout=600,
+    )
+    assert proc.returncode == 10, (
+        f"research bootstrap expected READY_WITH_WARNINGS (10), "
+        f"got {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+    )
+    summary = _summary(proc)
+    assert summary["state"] == "READY_WITH_WARNINGS"
+    assert summary["warnings"] == 2 and summary["blockers"] == 0, summary
+    run_dir = Path(urlparse(summary["run_dir"]).path)
+    assert run_dir.parent == run_root or run_dir.parent == run_root.resolve()
+
+    cr = json.loads((run_dir / "catalog-refresh.json").read_text(encoding="utf-8"))
+    research = cr["research"]
+    assert research["status"] == "SUCCEEDED", research
+    assert research["mock_model"] is True
+    assert research["cli_sha256"] == QUALIFIED_CODX_CLI_SHA256, research
+    assert research["codex_version"] != "N/A", research
+    # the template is the PACKAGED wheel asset, not a source-checkout path
+    assert research["template_sha256"] == PACKAGED_RESEARCH_TEMPLATE_SHA256, research
+    assert (
+        research["facts_requested"] == 2
+        and research["facts_returned"] == 2
+        and research["facts_accepted"] == 2
+        and research["facts_rejected"] == 0
+    ), research
+    assert len(cr["research_facts"]) == 2, cr["research_facts"]
+
+    assert [m["model"] for m in cr["models"]] == ["gpt-3.5-turbo"]
+    model = cr["models"][0]
+    # deterministic pricing + semantically researched limits
+    assert model["context_length"] == 16385
+    assert model["max_output_tokens"] == 4096
+    assert model["provenance"]["extraction"] == "semantic", model["provenance"]
+
+    validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+    codes = [w["code"] for w in validation["warnings"]]
+    # the useful docs-page fallback carries BOTH mandatory REVIEW codes:
+    # the new-model exposure and the semantic-method disclosure that the
+    # apply-time ACK guard still requires
+    assert sorted(codes) == ["new_model_exposure", "research_semantic_method"], codes
+
+    # installed verify over the sealed research run
+    vproc = _run_installed(
+        env,
+        [
+            "slaif-gateway",
+            "catalog-refresh",
+            "verify",
+            "--run-dir",
+            str(run_dir),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+        ],
+        cwd=scratch,
+        timeout=120,
+    )
+    assert vproc.returncode == 0, vproc.stderr
+    vsummary = json.loads([ln for ln in vproc.stdout.splitlines() if ln.strip()][-1])
+    assert vsummary.get("valid") is True, vsummary
+    _STATE["run_dir_research"] = str(run_dir)
+
+
+def test_r7_installed_apply_negatives(
+    installed_env: dict[str, str], installed_pg_url: str, tmp_path_factory
+) -> None:
+    """R7 (worksheet rows 18/19): installed apply/verify refusals with
+    actual DB state equality around each refusal.
+
+    Seal/authentication refusals and the blocked-state refusal happen
+    BEFORE database contact; the unacknowledged-findings refusal happens
+    after the known-committed lookup inside the locked transaction, so
+    that case also proves the live DB is untouched.
+    """
+    env = installed_env
+    db_url = installed_pg_url
+    scratch = tmp_path_factory.mktemp("slaif184-r7")
+    ready_run = Path(_STATE["run_dir_r5a"])
+    blocked_run = Path(_STATE["run_dir_r5b"])
+    # an EXISTING run tree the watchdog run must not touch
+    boot_root = ready_run.parent
+    # the R5 runs were sealed with THEIR OWN key; authenticating them with
+    # the bootstrap key would test the wrong-key path, not the state path
+    seal_key = Path(_STATE["seal_key_r5"])
+    assert ready_run.is_dir() and blocked_run.is_dir() and seal_key.is_file()
+    snap0 = _catalog_snapshot(db_url)
+
+    fx_v1 = _materialize_source_set(scratch / "fx-v1", set_name="v1", rate="1.08")
+
+    def verify(run_dir: Path, key: Path) -> subprocess.CompletedProcess:
+        return _run_installed(
+            env,
+            [
+                "slaif-gateway", "catalog-refresh", "verify",
+                "--run-dir", str(run_dir), "--seal-key", str(key), "--json",
+            ],
+            cwd=scratch,
+            timeout=120,
+        )
+
+    def apply_argv(run_dir: Path, key: Path, *extra: str) -> list[str]:
+        return [
+            "slaif-gateway", "catalog-refresh", "apply",
+            "--run-dir", str(run_dir), "--db-url", db_url,
+            "--seal-key", str(key), *extra, "--json",
+        ]
+
+    def bundle_sha(run_dir: Path) -> str:
+        return json.loads((run_dir / "receipt.json").read_text(encoding="utf-8"))[
+            "semantic_bundle_sha256"
+        ]
+
+    def app_rows_for(bundle: str) -> list:
+        return _sql(
+            db_url,
+            "SELECT bundle_sha256, plan_sha256, outcome FROM catalog_refresh_applications "
+            "WHERE bundle_sha256 = :b",
+            {"b": bundle},
+        )
+
+    # --- (r1) BLOCKED run is not applicable: refused before DB contact ----
+    proc = _run_installed(
+        env,
+        apply_argv(blocked_run, seal_key, "--confirm", "--actor", "oap-184-r7",
+                   "--reason", "negative: blocked run must not apply"),
+        cwd=scratch,
+        timeout=120,
+    )
+    assert proc.returncode == 20, (
+        f"blocked-run apply expected 20, got {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert "apply_state_not_applicable" in proc.stderr, proc.stderr
+    assert app_rows_for(bundle_sha(blocked_run)) == []
+    assert _catalog_snapshot(db_url) == snap0, "r1 changed the DB"
+
+    # --- (r2) unsealed run (receipt removed): verify AND apply refuse -----
+    unsealed = scratch / "runs" / "unsealed"
+    unsealed.parent.mkdir()
+
+    shutil.copytree(ready_run, unsealed)
+    (unsealed / "receipt.json").unlink()
+    vproc = verify(unsealed, seal_key)
+    assert vproc.returncode == 30, vproc.stderr
+    aproc = _run_installed(
+        env,
+        apply_argv(unsealed, seal_key, "--confirm", "--actor", "oap-184-r7",
+                   "--reason", "negative: unsealed run must not apply"),
+        cwd=scratch,
+        timeout=120,
+    )
+    assert aproc.returncode == 30, (
+        f"unsealed apply expected 30, got {aproc.returncode}\n{aproc.stdout}\n{aproc.stderr}"
+    )
+    assert _catalog_snapshot(db_url) == snap0, "r2 changed the DB"
+
+    # --- (r3) tampered proposal byte: verify AND apply refuse -------------
+    tampered = scratch / "runs" / "tampered"
+    shutil.copytree(ready_run, tampered)
+    tsv = tampered / "pricing-proposal.tsv"
+    data = bytearray(tsv.read_bytes())
+    data[-1] = (data[-1] + 1) % 256
+    tsv.write_bytes(bytes(data))
+    vproc = verify(tampered, seal_key)
+    assert vproc.returncode == 30, vproc.stderr
+    aproc = _run_installed(
+        env,
+        apply_argv(tampered, seal_key, "--confirm", "--actor", "oap-184-r7",
+                   "--reason", "negative: tampered run must not apply"),
+        cwd=scratch,
+        timeout=120,
+    )
+    assert aproc.returncode == 30, (
+        f"tampered apply expected 30, got {aproc.returncode}\n{aproc.stdout}\n{aproc.stderr}"
+    )
+    assert _catalog_snapshot(db_url) == snap0, "r3 changed the DB"
+
+    # --- (r4) wrong seal key: verify AND apply refuse ----------------------
+    wrong_key = scratch / "wrong-seal.key"
+    # a DIFFERENT but valid key (64 lowercase hex chars, 0600): an invalid
+    # format would exit 65 and would not prove the authentication refusal
+    wrong_key.write_bytes(os.urandom(32).hex().encode("ascii"))
+    wrong_key.chmod(0o600)
+    vproc = verify(ready_run, wrong_key)
+    assert vproc.returncode == 30, vproc.stderr
+    aproc = _run_installed(
+        env,
+        apply_argv(ready_run, wrong_key, "--confirm", "--actor", "oap-184-r7",
+                   "--reason", "negative: wrong key must not apply"),
+        cwd=scratch,
+        timeout=120,
+    )
+    assert aproc.returncode == 30, (
+        f"wrong-key apply expected 30, got {aproc.returncode}\n{aproc.stdout}\n{aproc.stderr}"
+    )
+    assert _catalog_snapshot(db_url) == snap0, "r4 changed the DB"
+
+    # --- (r5) missing confirm/actor/reason: refused before DB contact -----
+    intent_cases = {
+        "confirm": ["--actor", "oap-184-r7", "--reason", "negative: missing confirm"],
+        "actor": ["--confirm", "--reason", "negative: missing actor"],
+        "reason": ["--confirm", "--actor", "oap-184-r7"],
+    }
+    for label, extra in intent_cases.items():
+        proc = _run_installed(
+            env,
+            apply_argv(ready_run, seal_key, *extra),
+            cwd=scratch,
+            timeout=120,
+        )
+        assert proc.returncode == 65, (
+            f"missing-{label} apply expected 65, got {proc.returncode}\n"
+            f"{proc.stdout}\n{proc.stderr}"
+        )
+    assert _catalog_snapshot(db_url) == snap0, "r5 changed the DB"
+
+    # --- (r6) unacknowledged warning: refused inside the locked ----------
+    # transaction after the known-committed lookup; DB untouched.
+    snap_before = _catalog_snapshot(db_url)
+    ready_bundle = bundle_sha(ready_run)
+    assert app_rows_for(ready_bundle) == []
+    proc = _run_installed(
+        env,
+        apply_argv(ready_run, seal_key, "--confirm", "--actor", "oap-184-r7",
+                   "--reason", "negative: unacked findings must not apply"),
+        cwd=scratch,
+        timeout=180,
+    )
+    assert proc.returncode == 10, (
+        f"unacked apply expected 10, got {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert "apply_warnings_unacknowledged" in proc.stderr, proc.stderr
+    assert app_rows_for(ready_bundle) == []
+    assert _catalog_snapshot(db_url) == snap_before, "unacked refusal changed the DB"
+
+    # --- (r8) wrong baseline source for a bootstrap bundle ---------------
+    # (worksheet row 14, installed representative): the bootstrap bundle
+    # declares the first-install baseline, so ANY live baseline source is
+    # a wrong-baseline invocation and is refused at the wrapper boundary
+    # before the child is spawned.
+    run_root_r8 = scratch / "runs-r8"
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode", "bootstrap",
+            "--db-url", db_url,
+            "--run-root", str(run_root_r8),
+            "--seal-key", str(seal_key),
+            "--json", "--timeout", "120",
+        ],
+        cwd=scratch,
+        extra={"SLAIF184_FIXTURE_DIR": str(fx_v1)},
+        timeout=120,
+    )
+    assert proc.returncode == 65, (
+        f"wrong-baseline bootstrap expected 65, got {proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    assert (
+        "--mode bootstrap cannot be combined with --baseline-file or --db-url"
+        in proc.stderr
+    ), proc.stderr
+    assert not run_root_r8.exists() or not any(run_root_r8.iterdir())
+    assert _catalog_snapshot(db_url) == snap0, "r8 changed the DB"
+
+    # --- (r9) forced source outage: honest failed-collect labeling -------
+    # (worksheet rows 15/24, installed representative): one official
+    # source refuses retrieval (simulated at the documented seam); the
+    # run is BLOCKED with the attempted-and-failed stage, no sealed
+    # collected review, and no DB contact of any kind.
+    run_root_r9 = scratch / "runs-r9"
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode", "bootstrap",
+            "--providers", "openai",
+            "--run-root", str(run_root_r9),
+            "--seal-key", str(seal_key),
+            "--json", "--timeout", "120",
+        ],
+        cwd=scratch,
+        extra={
+            "SLAIF184_FIXTURE_DIR": str(fx_v1),
+            "SLAIF184_FAIL_URLS": "https://developers.openai.com/api/docs/pricing.md",
+        },
+        timeout=120,
+    )
+    assert proc.returncode == 20, (
+        f"forced-outage bootstrap expected 20, got {proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    summary = _summary(proc)
+    assert summary["state"] == "BLOCKED"
+    assert summary["stage"].startswith(
+        "collection attempted and failed before completion"
+    ), summary
+    assert "collection failed" in summary["reason"], summary
+    run_dir_r9 = Path(urlparse(summary["run_dir"]).path)
+    assert run_dir_r9.name.startswith("blocked-fixture_forced_failure"), run_dir_r9.name
+    # an incomplete collection never yields a sealed collected review
+    assert not (run_dir_r9 / "receipt.json").is_file()
+    assert not (run_dir_r9 / "catalog-refresh.json").is_file()
+    assert (run_dir_r9 / "REVIEW.html").is_file()
+    assert _catalog_snapshot(db_url) == snap0, "r9 changed the DB"
+
+    # --- (r10) research CLI that cannot prove its identity ---------------
+    # (worksheet rows 9/24, installed representative): a research CLI
+    # binary that hashes but cannot report its version (not executable)
+    # refuses the phase BEFORE any invocation (safe UNAVAILABLE code);
+    # the unresolved facts then block the review deterministically. No
+    # crash, no fabricated measured identity, no DB contact.
+    fake_cli = scratch / "fake-codex"
+    fake_cli.write_text("not an executable codex binary\n", encoding="utf-8")
+    fx_v3 = _materialize_source_set(
+        scratch / "fx-v3", set_name="v3", rate="1.08", pricing_set="v1"
+    )
+    run_root_r10 = scratch / "runs-r10"
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode", "bootstrap",
+            "--providers", "openai",
+            "--run-root", str(run_root_r10),
+            "--seal-key", str(seal_key),
+            "--json", "--timeout", "300",
+            "--research",
+            "--research-cli-bin", str(fake_cli),
+            "--research-endpoint", "https://synthetic.invalid/v1",
+            "--research-model", "synthetic/research",
+            "--research-auth-env", "SLAIF184_SYNTHETIC_KEY",
+        ],
+        cwd=scratch,
+        extra={
+            "SLAIF184_FIXTURE_DIR": str(fx_v3),
+            "SLAIF184_SYNTHETIC_KEY": "sk-synthetic-184-not-real",
+        },
+        timeout=600,
+    )
+    assert proc.returncode == 20, (
+        f"unversioned-CLI research bootstrap expected 20, got {proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    summary = _summary(proc)
+    assert summary["state"] == "BLOCKED", summary
+    assert summary["stage"].startswith("live collection"), summary
+    run_dir_r10 = Path(urlparse(summary["run_dir"]).path)
+    cr_r10 = json.loads((run_dir_r10 / "catalog-refresh.json").read_text(encoding="utf-8"))
+    research_r10 = cr_r10["research"]
+    assert research_r10["status"] == "UNAVAILABLE", research_r10
+    assert research_r10["failure_code"] == "cli_unversioned", research_r10
+    assert research_r10["cli_sha256"] is None, research_r10
+    # the unresolved required facts remain incomplete, never inferred
+    model_r10 = cr_r10["models"][0]
+    assert model_r10["context_length"] is None, model_r10
+    assert model_r10["max_output_tokens"] is None, model_r10
+    assert _catalog_snapshot(db_url) == snap0, "r10 changed the DB"
+
+    # --- (r7) watchdog: stalled collect killed, no run published ----------
+    stall_root = scratch / "runs-stall"
+    boot_digest_before = _digest_tree(boot_root)
+    env_extra = {
+        "SLAIF184_FIXTURE_DIR": str(fx_v1),
+        "SLAIF184_STALL_SECONDS": "60",
+    }
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode", "bootstrap",
+            "--run-root", str(stall_root),
+            "--seal-key", str(seal_key),
+            "--json", "--timeout", "10", "--kill-grace", "2",
+        ],
+        cwd=scratch,
+        extra=env_extra,
+        timeout=120,
+    )
+    assert proc.returncode in (124, 137), (
+        f"watchdog expected 124/137, got {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+    )
+    assert not stall_root.exists() or not any(stall_root.iterdir()), (
+        "watchdog-killed collect must not publish a run"
+    )
+    assert _digest_tree(boot_root) == boot_digest_before, (
+        "watchdog run must not touch existing runs"
+    )
+
+
+def test_r8_installed_report_browser_gates(tmp_path_factory) -> None:
+    """R8 (worksheet rows 2/3/22): the EXACT sealed installed artifacts
+    (bootstrap, price+FX refresh, blocked selection) pass the unchanged
+    browser decision-surface gates: JS-off, exactly one document request,
+    static offline HTML, internal link targets, first-screen 1440x900
+    selectors, 1440/1280/375 collapsed+expanded widths, font floors,
+    visible decision values, and executed print for the price/FX reports.
+
+    The gate is the UNCHANGED helper of tests/browser (the CI renderer
+    gates stay there); this integration case gates the exact installed
+    sealed runs. Skips honestly when Chromium is unavailable on the
+    machine; the local run at the final head is the recorded evidence.
+    """
+    bootstrap_run = Path(_STATE["run_dir_boot"])
+    refresh_run = Path(_STATE["run_dir_refresh"])
+    blocked_run = Path(_STATE["run_dir_r5b"])
+    for run_dir in (bootstrap_run, refresh_run, blocked_run):
+        assert (run_dir / "REVIEW.html").is_file(), f"missing run: {run_dir}"
+
+    playwright_sync = pytest.importorskip("playwright.sync_api")
+    try:
+        with playwright_sync.sync_playwright() as probe_pw:
+            probe = probe_pw.chromium.launch()
+            probe.close()
+    except Exception as exc:  # noqa: BLE001 - a missing toolchain is a skip
+        pytest.skip(f"playwright chromium unavailable: {exc}")
+
+    from tests.browser.test_catalog_refresh_report import _check_case
+
+    out_dir = tmp_path_factory.mktemp("slaif184-r8")
+    cases = {
+        "installed-bootstrap-184": (
+            bootstrap_run / "REVIEW.html",
+            {
+                "has_sources": True,
+                "pdf": True,
+                "visible": (
+                    "gpt-3.5-turbo",
+                    "syn/orc-a",
+                    "syn/orc-b",
+                    "0.925925926",
+                    "new_model_exposure",
+                ),
+            },
+        ),
+        "installed-refresh-184": (
+            refresh_run / "REVIEW.html",
+            {
+                "has_sources": True,
+                "pdf": True,
+                "visible": (
+                    "gpt-3.5-turbo",
+                    "syn/orc-a",
+                    "0.925925926",
+                    "0.892857143",
+                    "0.75",
+                    "price_moved_review",
+                    "fx_moved_review",
+                ),
+            },
+        ),
+        "installed-blocked-184": (
+            blocked_run / "REVIEW.html",
+            {
+                "has_sources": True,
+                "pdf": False,
+                "visible": ("BLOCKED", "missing_required_selection"),
+            },
+        ),
+    }
+    metrics: dict = {}
+    with playwright_sync.sync_playwright() as pw:
+        for case, (html_path, expected) in cases.items():
+            _check_case(pw, case, html_path, expected, out_dir, metrics)
+    (out_dir / "metrics-final.json").write_text(
+        json.dumps(metrics, indent=1, sort_keys=True) + "\n", encoding="utf-8"
+    )

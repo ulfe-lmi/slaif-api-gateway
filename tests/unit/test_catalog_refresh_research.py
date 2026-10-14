@@ -290,6 +290,39 @@ def test_forward_mode_refuses_unconfigured_endpoint(tmp_path: Path, monkeypatch:
     assert outcome.identity.failure_code == "research_endpoint_unconfigured"
 
 
+def test_phase_refuses_unversioned_cli_before_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """184 R7: a CLI binary that hashes but cannot report its own version
+    (e.g. it is not executable) must refuse the phase with the safe
+    pre-invocation UNAVAILABLE code BEFORE any CLI invocation. The
+    identity contract forbids a measured FAILED without the actual
+    measured version, so falling through to the measured-failure path
+    would crash inside identity validation instead of refusing safely."""
+    monkeypatch.setattr(
+        iso,
+        "execute_task",
+        lambda *a, **k: pytest.fail("execute_task must not run for an unversioned CLI"),
+    )
+    bad_cli = tmp_path / "codex"
+    bad_cli.write_text("not an executable codex binary\n", encoding="utf-8")
+    cfg = _cfg(tmp_path, cli_bin=str(bad_cli))
+    outcome = r.run_research_phase(cfg, _plan_one())
+    assert outcome.identity.status == "UNAVAILABLE"
+    assert outcome.identity.failure_code == "cli_unversioned"
+    # the safe UNAVAILABLE contract: no measured fields at all
+    assert outcome.identity.cli_sha256 is None
+    assert outcome.identity.codex_version == "N/A"
+    assert outcome.identity.failure_code is not None
+    # the created owned workspace (slaif-research/run-*) is removed on the
+    # refusal path - a task-* search alone could not prove this earlier
+    # phase's cleanup (no task dirs were ever created here)
+    research_root = Path(cfg.workspace_root) / "slaif-research"
+    assert not research_root.exists() or not any(research_root.iterdir()), (
+        sorted(str(d) for d in research_root.iterdir())
+    )
+
+
 def test_phase_refuses_incomplete_configuration(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, cli_bin="")
     assert r.run_research_phase(cfg, _plan_one()).identity.status == "UNAVAILABLE"

@@ -2,7 +2,7 @@
   "artifact": "installed-workflow fixtures (184 R3-R8 controlled inputs)",
   "scope": "Controlled source/model fixture inputs for the installed administrator workflow qualification. Served ONLY by the test-only shim installed in the owned qualification venv (sitecustomize) through the existing sources.fetch_source seam; the actual installed commands execute normally around the shim. No physical network in the installed workflow runs; unmapped URLs refuse. This is a fixture/mock qualification: no live source-format or model-accuracy claim.",
   "seams": {
-    "source_bytes": "test-only sitecustomize wraps slaif_gateway.services.catalog_refresh.sources.fetch_source (module-global seam of the product fetch pipeline); serves these checked-in bytes for the fixed official URLs and refuses every unmapped URL",
+    "source_bytes": "test-only sitecustomize wraps slaif_gateway.services.catalog_refresh.sources.fetch_source (module-global seam of the product fetch pipeline); serves these checked-in bytes for the fixed official URLs and refuses every unmapped URL; optional SLAIF184_STALL_SECONDS delays each mapped fetch (watchdog qualification) and optional SLAIF184_FAIL_URLS makes the listed mapped fetches raise the safe code-only SourceFetchError fixture_forced_failure (failed-collect label qualification)",
     "model_transport": "test-only sitecustomize wraps slaif_gateway.services.catalog_refresh.collection.collect_bundle (module-global seam); dataclasses.replace the CLI-created ResearchConfig with the already-qualified canned mock transport (mock_model + canned result + prepared tool sequence); the REAL Codex worker still executes inside the enforced outer Docker boundary"
   },
   "files": {
