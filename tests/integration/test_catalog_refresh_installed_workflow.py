@@ -688,6 +688,14 @@ def test_r3r4_installed_bootstrap_verify_apply(
         "ORDER BY requested_model",
     )
     assert [r[0] for r in routes] == ["gpt-3.5-turbo", "syn/orc-a", "syn/orc-b"], routes
+    _STATE["route_rows_boot"] = [
+        [str(r[0]), r[1], r[2], bool(r[3]), str(r[4]), str(r[5])]
+        for r in _sql(
+            db_url,
+            "SELECT id, requested_model, provider, upstream_model, enabled, "
+            "created_at, updated_at FROM model_routes ORDER BY requested_model",
+        )
+    ]
     assert {(r[1], r[2]) for r in routes} == {
         ("openai", "gpt-3.5-turbo"),
         ("openrouter", "syn/orc-a"),
@@ -944,13 +952,15 @@ def test_r4b_installed_refresh_changed_prices_fx_and_apply(
     # --- route authority preserved -------------------------------------------
     routes = _sql(
         db_url,
-        "SELECT id, requested_model, provider, upstream_model, enabled, created_at, updated_at "
-        "FROM model_routes ORDER BY requested_model",
+        "SELECT id, requested_model, provider, upstream_model, enabled, "
+        "created_at, updated_at FROM model_routes ORDER BY requested_model",
     )
-    assert [r[1] for r in routes] == ["gpt-3.5-turbo", "syn/orc-a", "syn/orc-b"]
-    assert all(r[4] for r in routes)
-    for row in routes:
-        assert row[5] == row[6], "refresh must not touch existing route rows"
+    after_rows = [
+        [str(r[0]), r[1], r[2], bool(r[3]), str(r[4]), str(r[5])] for r in routes
+    ]
+    assert after_rows == _STATE["route_rows_boot"], (
+        "refresh must not create, drop, or modify existing route rows"
+    )
 
     # --- second durable application row ---------------------------------------
     apps = _sql(
