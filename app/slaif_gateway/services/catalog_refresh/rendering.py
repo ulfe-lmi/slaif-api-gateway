@@ -493,17 +493,20 @@ def _render_gate_checklist(gates: list[dict[str, Any]]) -> list[str]:
 def _plain_reason_html(report: dict[str, Any], blockers: list[dict[str, Any]]) -> str:
     """Concise plain-language banner reason (already-safe HTML).
 
-    BLOCKED states lead with the human labels of the first blocking codes
-    (exact codes stay in the findings); other states reuse the exact
-    state_reason.
+    BLOCKED states lead with the human label of the first blocking code
+    plus the full blocker count; the remaining blocking codes and their
+    labels stay visible in the findings line and the expanded findings
+    section. Other states reuse the exact state_reason.
     """
     if report["state"] != "BLOCKED":
         return esc(report["state_reason"])
     codes = sorted({w["code"] for w in blockers})
-    labels = "; ".join(_finding_label(c) for c in codes[:3])
-    text = f"{len(blockers)} blocking issue(s): {labels}"
-    if len(codes) > 3:
-        text += f" (+{len(codes) - 3} more)"
+    if not codes:
+        return esc(report["state_reason"])
+    label = _FINDING_LABELS.get(codes[0]) or codes[0]
+    text = f"{len(blockers)} blocking issue(s): {esc(label)}"
+    if len(codes) > 1:
+        text += f" (+{len(codes) - 1} more)"
     return text
 
 
@@ -839,7 +842,7 @@ def _research_chip_text(report: dict[str, Any]) -> str:
     if sealed:
         return f"research {regrounded}/{sealed} re-grounded"
     if status == "NOT_RUN":
-        return "research NOT_RUN (deterministic only)"
+        return "research NOT_RUN"
     code = declared.get("failure_code")
     return f"research declared {status}" + (f" ({code})" if code else "")
 
