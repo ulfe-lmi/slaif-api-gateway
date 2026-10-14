@@ -4,17 +4,20 @@ Installed evidence for the objective-184 mandate rows: the ACTUAL
 installed commands (wheel console scripts) execute the administrator
 catalog-refresh workflow from OUTSIDE the source checkout.
 
-Environment (built once per implementation head, module-scoped):
+Environment (built once per module run, owned by this test module):
 
-- a fresh ``git clone`` of the implementation head (no hardlinks);
+- a fresh ``git clone`` of the exact implementation HEAD (no hardlinks);
 - a wheel built from that checkout (``pip wheel``, standard build
   isolation, no extra dependencies);
 - a separate owned venv that installs ONLY that wheel (PyPI
   dependencies); no editable install, no source-checkout PYTHONPATH;
-- a test-only ``sitecustomize`` shim in that venv which is INERT unless
-  ``SLAIF184_FIXTURE_DIR`` is set; when set, it serves checked-in
-  fixture bytes at the existing ``sources.fetch_source`` seam for the
-  five fixed official URLs and refuses every unmapped URL.
+- a test-only ``sitecustomize`` shim in that venv. The shim is INERT
+  unless ``SLAIF184_FIXTURE_DIR`` is set; when set it MUST succeed at
+  interpreter startup (an ImportError or install exception terminates
+  the process before any CLI runs - it never falls back to physical
+  retrieval). When active it serves checked-in fixture bytes at the
+  existing ``sources.fetch_source`` seam for the five fixed official
+  URLs, refuses every unmapped URL, and denies any physical httpx send.
 
 No physical network, DNS, or model call occurs in the installed runs:
 the fetch seam is replaced in-place and the httpx client the CLI builds
@@ -23,8 +26,8 @@ is never used. The substitution is documented here and in
 this is fixture-qualified workflow evidence, not a live-source claim.
 
 Migrations run from the source checkout's Alembic configuration (the
-wheel does not ship ``migrations/``); the target database is the
-session-owned testcontainers PostgreSQL from the integration conftest.
+wheel does not ship ``migrations/``) against one owned testcontainers
+PostgreSQL 16 per module (fresh temp ownership, stopped in finally).
 """
 
 from __future__ import annotations
@@ -33,38 +36,43 @@ import asyncio
 import hashlib
 import json
 import os
-import shutil
+
 import subprocess
 import sys
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-BRANCH = "oap/184-installed-admin-workflow"
-FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "catalog_refresh" / "installed-workflow"
-ENV_CACHE_ROOT = Path("/tmp/slaif184-installed-env")
+from tests.integration.db_test_utils import run_alembic_upgrade_head
 
-CLI_SHA256_EXPECTED = "628e35487d888a28f0427fc37501da529dd3d81fcbad7a2c3421c1e8670d92e1"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FIXTURE_DIR = (
+    REPO_ROOT / "tests" / "fixtures" / "catalog_refresh" / "installed-workflow"
+)
 
 # Shared state so later tests in this module can reuse the runs created
 # here (file order is the dependency order).
 _STATE: dict[str, object] = {}
 
-# --- the test-only fixture shim (written into the owned venv) -------------
+# --- the test-only fixture seam (written into the owned venv) --------------
 
 SHIM_MODULE = '''\
-"""184 test-only source-fixture seam (inert without SLAIF184_FIXTURE_DIR).
+"""184 test-only source-fixture seam.
 
-Serves checked-in fixture bytes for the five fixed official URLs at the
-existing ``sources.fetch_source`` module-global seam and refuses every
-unmapped URL. When SLAIF184_MOCK_RESEARCH is set (JSON with
-result_file/tool_sequence_file), ``collection.collect_bundle`` is
-wrapped to replace the CLI-created ResearchConfig with the
-already-qualified canned mock transport (the real Codex worker still
-executes inside the enforced outer boundary). No other behavior changes.
+Inert unless SLAIF184_FIXTURE_DIR is set. When active it serves
+checked-in fixture bytes for the five fixed official URLs at the
+existing ``sources.fetch_source`` module-global seam, refuses every
+unmapped URL, and denies ANY physical httpx send. When
+SLAIF184_MOCK_RESEARCH is set (JSON with result_file/tool_sequence_file),
+``collection.collect_bundle`` is wrapped to replace the CLI-created
+ResearchConfig with the already-qualified canned mock transport (the
+real Codex worker still executes inside the enforced outer boundary).
+
+An active-but-broken shim must terminate the interpreter at startup -
+never degrade to physical retrieval.
 """
 
 import dataclasses
@@ -89,6 +97,8 @@ _URL_FILES = {
 
 
 def _install() -> None:
+    import httpx
+
     import slaif_gateway.services.catalog_refresh.collection as collection
     import slaif_gateway.services.catalog_refresh.sources as sources
 
@@ -118,8 +128,16 @@ def _install() -> None:
         )
 
     # fetch_sources() calls the module-global fetch_source by name, so the
-    # replacement covers the whole collection pipeline (no DNS, no client use).
+    # replacement covers the whole collection pipeline (no DNS, no client).
     sources.fetch_source = fetch_source
+
+    # Belt and braces: ANY physical send attempt is a seam failure. The
+    # documented fixture path never sends; deny loudly instead of
+    # degrading to real network access.
+    def _deny_send(self, request, *args, **kwargs):
+        raise RuntimeError("slaif184 fixture seam active: physical HTTP denied")
+
+    httpx.Client.send = _deny_send
 
     mock_spec = os.environ.get("SLAIF184_MOCK_RESEARCH")
     if mock_spec:
@@ -142,27 +160,20 @@ def _install() -> None:
         collection.collect_bundle = collect_bundle
 
 
-def _activate() -> None:
-    if os.environ.get("SLAIF184_FIXTURE_DIR"):
-        _install()
-
-
-try:
-    _activate()
-except Exception:
-    # A broken shim must fail installed runs LOUDLY, never hide silently.
-    raise
+if os.environ.get("SLAIF184_FIXTURE_DIR"):
+    # Module import == activation; an exception here terminates the
+    # interpreter at startup (site import failure), never the CLI.
+    _install()
 '''
 
 SITECUSTOMIZE = '''\
-try:
-    import _slaif184_fixture_shim
-
-    _slaif184_fixture_shim.activate = _slaif184_fixture_shim._activate
-    _slaif184_fixture_shim._activate()
-except ImportError:
-    pass
+# 184 test-only seam bootstrap. No ImportError swallowing: a missing or
+# broken shim must fail the interpreter at startup, before any CLI runs.
+import _slaif184_fixture_shim  # noqa: F401
 '''
+
+
+# --- installed environment (fresh temp ownership) ---------------------------
 
 
 def _sha256_file(path: Path) -> str:
@@ -176,50 +187,65 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
-def _build_installed_env(cache: Path, head: str) -> dict[str, str]:
-    checkout = cache / "checkout"
-    venv = cache / "venv"
-    dist = cache / "dist"
-    home = cache / "home"
-    for path in (checkout, dist, home):
-        path.mkdir(parents=True, exist_ok=True)
+def _run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False, **kwargs)
+    return proc
 
-    _git(REPO_ROOT, "clone", "--no-hardlinks", "--quiet", str(REPO_ROOT), str(checkout))
-    _git(checkout, "fetch", "--quiet", str(REPO_ROOT), BRANCH)
-    _git(checkout, "checkout", "--quiet", "--detach", "FETCH_HEAD")
+
+def _build_installed_env(root: Path, head: str) -> dict[str, str]:
+    checkout = root / "checkout"
+    buildvenv = root / "buildvenv"
+    venv = root / "venv"
+    dist = root / "dist"
+    home = root / "home"
+    dist.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
+
+    # Fresh clone of the exact implementation HEAD (all local refs/objects
+    # are present; no branch-name assumption - CI may be detached).
+    proc = _run(["git", "clone", "--no-hardlinks", "--quiet", str(REPO_ROOT), str(checkout)])
+    assert proc.returncode == 0, f"clone failed: {proc.stderr}"
+    proc = _run(["git", "-C", str(checkout), "checkout", "--quiet", "--detach", head])
+    assert proc.returncode == 0, f"checkout failed: {proc.stderr}"
     assert _git(checkout, "rev-parse", "HEAD") == head, "clone is not at the implementation head"
 
-    proc = subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", str(checkout), "--no-deps",
+    # Build environment with pip (the invoking venv may be pip-less).
+    proc = _run([sys.executable, "-m", "venv", str(buildvenv)])
+    assert proc.returncode == 0, f"buildvenv failed: {proc.stderr}"
+    proc = _run(
+        [str(buildvenv / "bin" / "pip"), "wheel", str(checkout), "--no-deps",
          "-w", str(dist), "-q"],
-        capture_output=True, text=True, check=False,
+        timeout=900,
     )
-    assert proc.returncode == 0, f"wheel build failed:\n{proc.stdout}\n{proc.stderr}"
+    assert proc.returncode == 0, (
+        f"wheel build failed:\n{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}"
+    )
     wheels = sorted(dist.glob("slaif_api_gateway-*.whl"))
     assert len(wheels) == 1, f"expected one wheel, found: {wheels}"
 
-    subprocess.run(
-        [sys.executable, "-m", "venv", str(venv)], check=True, capture_output=True, text=True
-    )
-    venv_bin = venv / "bin"
-    proc = subprocess.run(
-        [str(venv_bin / "pip"), "install", "--no-cache-dir", "-q", str(wheels[0])],
-        capture_output=True, text=True, check=False,
+    # Target environment: installs ONLY the wheel (PyPI dependencies).
+    proc = _run([sys.executable, "-m", "venv", str(venv)])
+    assert proc.returncode == 0, f"venv failed: {proc.stderr}"
+    proc = _run(
+        [str(venv / "bin" / "pip"), "install", "--no-cache-dir", "-q", str(wheels[0])],
+        timeout=1800,
     )
     assert proc.returncode == 0, (
         f"wheel install failed:\n{proc.stdout[-4000:]}\n{proc.stderr[-4000:]}"
     )
 
-    site_packages = venv_bin.parent / (
-        f"python{sys.version_info.major}.{sys.version_info.minor}"
-    ) / "site-packages"
+    # Query the NEW venv for its purelib instead of constructing the path.
+    proc = _run([str(venv / "bin" / "python"), "-c",
+                 "import sysconfig; print(sysconfig.get_paths()['purelib'])"])
+    assert proc.returncode == 0, proc.stderr
+    site_packages = Path(proc.stdout.strip())
     (site_packages / "_slaif184_fixture_shim.py").write_text(SHIM_MODULE, encoding="utf-8")
     (site_packages / "sitecustomize.py").write_text(SITECUSTOMIZE, encoding="utf-8")
 
     return {
         "head": head,
         "checkout": str(checkout),
-        "venv_bin": str(venv_bin),
+        "venv_bin": str(venv / "bin"),
         "home": str(home),
         "wheel": str(wheels[0]),
         "wheel_sha256": _sha256_file(wheels[0]),
@@ -227,22 +253,41 @@ def _build_installed_env(cache: Path, head: str) -> dict[str, str]:
 
 
 @pytest.fixture(scope="module")
-def installed_env() -> dict[str, str]:
+def installed_env(tmp_path_factory) -> dict[str, str]:
     """Fresh-clone wheel + separate owned venv for the implementation head."""
     head = _git(REPO_ROOT, "rev-parse", "HEAD")
-    cache = ENV_CACHE_ROOT / head[:8]
-    ready = cache / "ready.json"
-    if not ready.is_file():
-        # A previous attempt may have left a partial tree; git clone refuses
-        # a non-empty destination, so start clean (no shell rm: shutil only).
-        shutil.rmtree(cache, ignore_errors=True)
-        cache.mkdir(parents=True, exist_ok=True)
-        info = _build_installed_env(cache, head)
-        ready.write_text(json.dumps(info, indent=2), encoding="utf-8")
-    return json.loads(ready.read_text(encoding="utf-8"))
+    root = tmp_path_factory.mktemp(f"slaif184-env-{head[:8]}")
+    info = _build_installed_env(root, head)
+    info["root"] = str(root)
+    return info
 
 
-# --- installed command runner ---------------------------------------------
+# --- owned PostgreSQL (module scope) ----------------------------------------
+
+
+@pytest.fixture(scope="module")
+def installed_pg_url() -> Iterator[str]:
+    """One owned testcontainers PostgreSQL 16 for this module, migrated to
+    head with the approved repository helper (the wheel does not ship
+    ``migrations/``; migrations run from the source checkout)."""
+    from testcontainers.postgres import PostgresContainer
+
+    container = PostgresContainer("postgres:16")
+    container.start()
+    try:
+        creds = container.get_credentials()
+        port = container.exposed_port(5432)
+        url = (
+            f"postgresql+asyncpg://{creds['username']}:{creds['password']}"
+            f"@{container.get_container_host_ip()}:{port}/{creds['dbname']}"
+        )
+        run_alembic_upgrade_head(url)
+        yield url
+    finally:
+        container.stop()
+
+
+# --- installed command runner -----------------------------------------------
 
 
 def _installed_env_dict(env: dict[str, str], extra: dict[str, str] | None = None) -> dict:
@@ -289,7 +334,7 @@ def _summary(proc: subprocess.CompletedProcess) -> dict:
     return json.loads(lines[-1])
 
 
-# --- controlled source-set materialization (harness side, recorded) --------
+# --- controlled source-set materialization (harness side, recorded) ---------
 
 
 def _materialize_source_set(target: Path, *, set_name: str, rate: str) -> Path:
@@ -327,7 +372,7 @@ def _materialize_source_set(target: Path, *, set_name: str, rate: str) -> Path:
 # --- small async SQL helpers (test-process side) ----------------------------
 
 
-def _sql(url: str, query: str, *params: object) -> list[tuple]:
+def _sql(url: str, query: str, params: dict | None = None) -> list[tuple]:
     async def _run() -> list[tuple]:
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import create_async_engine
@@ -335,7 +380,7 @@ def _sql(url: str, query: str, *params: object) -> list[tuple]:
         engine = create_async_engine(url, future=True)
         try:
             async with engine.connect() as conn:
-                result = await conn.execute(text(query), params)
+                result = await conn.execute(text(query), params or {})
                 return list(result)
         finally:
             await engine.dispose()
@@ -364,14 +409,21 @@ def _catalog_snapshot(url: str) -> str:
     apps = _sql(
         url,
         "SELECT run_id, bundle_sha256, plan_sha256, mode, operator_actor, reason, "
-        "effective_at FROM catalog_refresh_applications ORDER BY bundle_sha256, plan_sha256",
+        "effective_at FROM catalog_refresh_applications "
+        "ORDER BY bundle_sha256, plan_sha256",
     )
-    audit = _sql(url, "SELECT action, entity_type, created_at FROM audit_log "
-                      "ORDER BY created_at, action")
+    audit = _sql(
+        url,
+        "SELECT action, entity_type, created_at FROM audit_log ORDER BY created_at, action",
+    )
     blob = json.dumps(
-        {"routes": [list(r) for r in rows], "pricing": [list(r) for r in pricing],
-         "fx": [list(r) for r in fx], "apps": [list(r) for r in apps],
-         "audit": [list(r) for r in audit]},
+        {
+            "routes": [list(r) for r in rows],
+            "pricing": [list(r) for r in pricing],
+            "fx": [list(r) for r in fx],
+            "apps": [list(r) for r in apps],
+            "audit": [list(r) for r in audit],
+        },
         default=str,
         sort_keys=True,
     )
@@ -382,57 +434,103 @@ def _catalog_snapshot(url: str) -> str:
 
 
 def test_r3r4_installed_bootstrap_verify_apply(
-    installed_env: dict[str, str], migrated_postgres_url: str, tmp_path_factory
+    installed_env: dict[str, str], installed_pg_url: str, tmp_path_factory
 ) -> None:
-    """R3+R4 first case: installed BOTH-provider bootstrap over the controlled
-    ECB/source fixtures -> sealed run -> installed verify -> SQL-empty
-    baseline -> installed apply -> SQL proof -> status -> idempotent retry."""
+    """R3+R4 first case: installed BOTH-provider bootstrap over the
+    controlled ECB/source fixtures -> sealed run -> installed verify ->
+    SQL-empty baseline -> installed apply (acknowledged exposure warning)
+    -> SQL proofs -> status -> idempotent retry."""
     env = installed_env
-    db_url = migrated_postgres_url
+    db_url = installed_pg_url
     scratch = tmp_path_factory.mktemp("slaif184")
     fx_v1 = _materialize_source_set(scratch / "fx-v1", set_name="v1", rate="1.08")
 
-    # --- R3: the installed entry points resolve INSIDE the wheel venv -------
+    # --- R3: the installed entry points resolve INSIDE the wheel venv ------
     origin_proc = _run_installed(
         env,
-        ["python", "-c", (
-            "import importlib.metadata as md, importlib.resources as r, "
-            "slaif_gateway, slaif_gateway.cli.catalog_refresh_admin as adm, json; "
-            "print(json.dumps({"
-            "'module': slaif_gateway.__file__, "
-            "'admin': adm.__file__, "
-            "'assets': str(r.files('slaif_gateway.resources.catalog_refresh') "
-            "/ 'research-instructions.md'), "
-            "'version': md.version('slaif-api-gateway')}, sort_keys=True))"
-        )],
+        [
+            "python",
+            "-c",
+            (
+                "import importlib.metadata as md, importlib.resources as r, "
+                "slaif_gateway, slaif_gateway.cli.catalog_refresh_admin as adm, json; "
+                "print(json.dumps({"
+                "'module': slaif_gateway.__file__, "
+                "'admin': adm.__file__, "
+                "'assets': str(r.files('slaif_gateway.resources.catalog_refresh') "
+                "/ 'research-instructions.md'), "
+                "'version': md.version('slaif-api-gateway')}, sort_keys=True))"
+            ),
+        ],
         cwd=scratch,
         timeout=120,
     )
     assert origin_proc.returncode == 0, origin_proc.stderr
     origins = json.loads(origin_proc.stdout.strip().splitlines()[-1])
+    venv_lib = Path(env["venv_bin"]).parent / "lib"
     for key in ("module", "admin", "assets"):
         resolved = Path(origins[key]).resolve()
-        assert str(resolved).startswith(str(Path(env["venv_bin"]).parent / "lib")), (
+        assert str(resolved).startswith(str(venv_lib)), (
             f"{key} does not resolve inside the installed venv: {resolved}"
         )
     assert origins["version"]
     for entry in ("slaif-catalog-refresh", "slaif-gateway"):
         help_proc = _run_installed(env, [entry, "--help"], cwd=scratch, timeout=120)
         assert help_proc.returncode == 0, help_proc.stderr
+
+    # --- R3: seam activation is verifiable and physical HTTP is denied -----
+    seam_proc = _run_installed(
+        env,
+        [
+            "python",
+            "-c",
+            (
+                "import httpx, json, "
+                "slaif_gateway.services.catalog_refresh.sources as s; "
+                "print(json.dumps({"
+                "'fetch_module': s.fetch_source.__module__, "
+                "'send_module': httpx.Client.send.__module__}))"
+            ),
+        ],
+        cwd=scratch,
+        extra={"SLAIF184_FIXTURE_DIR": str(fx_v1)},
+        timeout=120,
+    )
+    assert seam_proc.returncode == 0, seam_proc.stderr
+    seam = json.loads(seam_proc.stdout.strip().splitlines()[-1])
+    assert seam["fetch_module"] == "_slaif184_fixture_shim", seam
+    assert seam["send_module"] == "_slaif184_fixture_shim", seam
+    # And with the env unset the product module is untouched.
+    seam_off = _run_installed(
+        env,
+        [
+            "python",
+            "-c",
+            "import slaif_gateway.services.catalog_refresh.sources as s; "
+            "print(s.fetch_source.__module__)",
+        ],
+        cwd=scratch,
+        timeout=120,
+    )
+    assert seam_off.stdout.strip() == "slaif_gateway.services.catalog_refresh.sources"
     _STATE["origins"] = origins
 
-    # --- R4a: installed bootstrap, both providers, controlled ECB fixture ---
+    # --- R4a: installed bootstrap, both providers, controlled ECB fixture --
     run_root = scratch / "runs-boot"
     seal_key = scratch / "seal.key"
     proc = _run_installed(
         env,
         [
             "slaif-catalog-refresh",
-            "--mode", "bootstrap",
-            "--run-root", str(run_root),
-            "--seal-key", str(seal_key),
+            "--mode",
+            "bootstrap",
+            "--run-root",
+            str(run_root),
+            "--seal-key",
+            str(seal_key),
             "--json",
-            "--timeout", "120",
+            "--timeout",
+            "120",
         ],
         cwd=scratch,
         extra={"SLAIF184_FIXTURE_DIR": str(fx_v1)},
@@ -444,11 +542,17 @@ def test_r3r4_installed_bootstrap_verify_apply(
     )
     summary = _summary(proc)
     assert summary["state"] == "READY_WITH_WARNINGS"
+    assert summary["warnings"] == 3 and summary["blockers"] == 0, summary
     run_dir = Path(urlparse(summary["run_dir"]).path)
     assert run_dir.parent == run_root.resolve() or run_dir.parent == run_root
     for artifact in (
-        "receipt.json", "REVIEW.html", "validation.json", "catalog-refresh.json",
-        "manifest.json", "routes-proposal.tsv", "pricing-proposal.tsv",
+        "receipt.json",
+        "REVIEW.html",
+        "validation.json",
+        "catalog-refresh.json",
+        "manifest.json",
+        "routes-proposal.tsv",
+        "pricing-proposal.tsv",
         "fx-proposal.json",
     ):
         assert (run_dir / artifact).is_file(), f"missing {artifact}"
@@ -456,28 +560,48 @@ def test_r3r4_installed_bootstrap_verify_apply(
     _STATE["seal_key"] = str(seal_key)
     _STATE["run_dir_boot"] = str(run_dir)
 
-    # The report names the exposure warning and carries both providers'
-    # values plus the ECB rate in the sealed HTML.
+    # The warning set is exactly the per-model new-exposure findings.
+    validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+    codes: list[str] = []
+
+    def _walk(obj) -> None:
+        if isinstance(obj, dict):
+            if "code" in obj and "severity" in obj:
+                codes.append(obj["code"])
+            for value in obj.values():
+                _walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                _walk(value)
+
+    _walk(validation)
+    assert sorted(codes) == ["new_model_exposure"] * 3, codes
+
+    # The sealed HTML carries both providers' models and the FX rate.
     html = (run_dir / "REVIEW.html").read_text(encoding="utf-8")
     assert "gpt-3.5-turbo" in html
     assert "syn/orc-a" in html and "syn/orc-b" in html
-    assert "1.08" in html
+    assert "0.925925926" in html
 
-    # --- R4b: installed verify (exact sealed identity) ----------------------
+    # --- R4b: installed verify (exact sealed identity) ---------------------
     vproc = _run_installed(
         env,
-        ["slaif-gateway", "catalog-refresh", "verify",
-         "--run-dir", str(run_dir), "--seal-key", str(seal_key), "--json"],
+        [
+            "slaif-gateway",
+            "catalog-refresh",
+            "verify",
+            "--run-dir",
+            str(run_dir),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+        ],
         cwd=scratch,
         timeout=120,
     )
-    assert vproc.returncode == 0, (
-        f"verify rc={vproc.returncode}\n{vproc.stdout}\n{vproc.stderr}"
-    )
-    vsummary = json.loads(
-        [ln for ln in vproc.stdout.splitlines() if ln.strip()][-1]
-    )
-    assert vsummary.get("valid") is True or vsummary.get("state") in ("valid", "READY"), vsummary
+    assert vproc.returncode == 0, f"verify rc={vproc.returncode}\n{vproc.stdout}\n{vproc.stderr}"
+    vsummary = json.loads([ln for ln in vproc.stdout.splitlines() if ln.strip()][-1])
+    assert vsummary.get("valid") is True, vsummary
 
     # --- R4c: empty-catalog baseline, then installed apply ------------------
     before = _catalog_snapshot(db_url)
@@ -487,26 +611,35 @@ def test_r3r4_installed_bootstrap_verify_apply(
 
     actor = "oap-184-qualification"
     reason = "184-a qualification: installed bootstrap of both providers"
-    aproc = _run_installed(
-        env,
-        ["slaif-gateway", "catalog-refresh", "apply",
-         "--run-dir", str(run_dir),
-         "--db-url", db_url,
-         "--seal-key", str(seal_key),
-         "--confirm",
-         "--reason", reason,
-         "--actor", actor,
-         "--json"],
-        cwd=scratch,
-        timeout=180,
-    )
+    apply_argv = [
+        "slaif-gateway",
+        "catalog-refresh",
+        "apply",
+        "--run-dir",
+        str(run_dir),
+        "--db-url",
+        db_url,
+        "--seal-key",
+        str(seal_key),
+        "--confirm",
+        "--reason",
+        reason,
+        "--actor",
+        actor,
+        "--ack-warnings",
+        "new_model_exposure",
+        "--json",
+    ]
+    aproc = _run_installed(env, apply_argv, cwd=scratch, timeout=180)
     assert aproc.returncode == 0, (
         f"apply rc={aproc.returncode}\n{aproc.stdout}\n{aproc.stderr}"
     )
     asum = json.loads([ln for ln in aproc.stdout.splitlines() if ln.strip()][-1])
-    assert asum["status"] in ("committed", "already_committed"), asum
+    assert asum["status"] == "committed", asum
 
-    # --- R4d: SQL proofs ------------------------------------------------------
+    # --- R4d: SQL proofs -----------------------------------------------------
+    from decimal import Decimal
+
     routes = _sql(
         db_url,
         "SELECT requested_model, provider, upstream_model, enabled FROM model_routes "
@@ -523,31 +656,33 @@ def test_r3r4_installed_bootstrap_verify_apply(
     def price(provider: str, model: str) -> tuple:
         rows = _sql(
             db_url,
-            "SELECT currency, input_price_per_1m, output_price_per_1m, valid_until "
-            "FROM pricing_rules WHERE provider=%s AND upstream_model=%s "
+            "SELECT currency, input_price_per_1m, cached_input_price_per_1m, "
+            "output_price_per_1m, valid_until FROM pricing_rules "
+            "WHERE provider=:provider AND upstream_model=:model "
             "ORDER BY valid_from DESC LIMIT 1",
-            provider, model,
+            {"provider": provider, "model": model},
         )
         assert len(rows) == 1, rows
         return rows[0]
 
-    from decimal import Decimal
-
-    cur, p_in, p_out, p_until = price("openai", "gpt-3.5-turbo")
+    cur, p_in, p_cached, p_out, p_until = price("openai", "gpt-3.5-turbo")
     assert str(cur) == "USD" and p_in == Decimal("0.5") and p_out == Decimal("1.5")
+    assert p_cached is None and p_until is None
+    cur, p_in, p_cached, p_out, p_until = price("openrouter", "syn/orc-a")
+    # per-token fixture prices stored per-1M: 0.000005 -> 5, 0.000015 -> 15
+    assert p_in == Decimal("5") and p_cached == Decimal("0.5") and p_out == Decimal("15")
     assert p_until is None
-    cur, p_in, p_out, p_until = price("openrouter", "syn/orc-a")
-    assert p_in == Decimal("0.000005") and p_out == Decimal("0.000015")
-    assert p_until is None
-    cur, p_in, p_out, p_until = price("openrouter", "syn/orc-b")
-    assert p_in == Decimal("0.000004") and p_out == Decimal("0.000012")
+    cur, p_in, p_cached, p_out, p_until = price("openrouter", "syn/orc-b")
+    assert p_in == Decimal("4") and p_cached == Decimal("0.4") and p_out == Decimal("12")
 
     fx = _sql(
         db_url,
         "SELECT base_currency, quote_currency, rate, valid_until FROM fx_rates",
     )
     assert len(fx) == 1, fx
-    assert fx[0][0] == "EUR" and fx[0][1] == "USD" and fx[0][2] == Decimal("1.08")
+    # native->EUR stored as the derived reciprocal of the published EUR-USD quote
+    assert fx[0][0] == "USD" and fx[0][1] == "EUR"
+    assert fx[0][2] == Decimal("0.925925926"), fx[0][2]
     assert fx[0][3] is None
 
     apps = _sql(
@@ -557,7 +692,12 @@ def test_r3r4_installed_bootstrap_verify_apply(
     )
     assert len(apps) == 1, apps
     (app_run, app_mode, app_outcome, app_actor, app_reason, app_t, app_bundle, app_plan) = apps[0]
-    assert (app_mode, app_outcome, app_actor, app_reason) == ("bootstrap", "committed", actor, reason)
+    assert (
+        app_mode,
+        app_outcome,
+        app_actor,
+        app_reason,
+    ) == ("bootstrap", "committed", actor, reason)
     assert app_run == Path(run_dir).name
     assert app_bundle and app_plan and app_t is not None
 
@@ -567,9 +707,18 @@ def test_r3r4_installed_bootstrap_verify_apply(
     # --- R4e: installed status + idempotent retry ---------------------------
     sproc = _run_installed(
         env,
-        ["slaif-gateway", "catalog-refresh", "status",
-         "--run-dir", str(run_dir), "--db-url", db_url,
-         "--seal-key", str(seal_key), "--json"],
+        [
+            "slaif-gateway",
+            "catalog-refresh",
+            "status",
+            "--run-dir",
+            str(run_dir),
+            "--db-url",
+            db_url,
+            "--seal-key",
+            str(seal_key),
+            "--json",
+        ],
         cwd=scratch,
         timeout=120,
     )
@@ -578,26 +727,15 @@ def test_r3r4_installed_bootstrap_verify_apply(
     assert ssum["committed"] is True
     assert ssum["bundle_sha256"] == app_bundle
 
-    retry = _run_installed(
-        env,
-        ["slaif-gateway", "catalog-refresh", "apply",
-         "--run-dir", str(run_dir),
-         "--db-url", db_url,
-         "--seal-key", str(seal_key),
-         "--confirm",
-         "--reason", reason,
-         "--actor", actor,
-         "--json"],
-        cwd=scratch,
-        timeout=180,
-    )
+    retry = _run_installed(env, apply_argv, cwd=scratch, timeout=180)
     assert retry.returncode == 0, (
         f"retry apply rc={retry.returncode}\n{retry.stdout}\n{retry.stderr}"
     )
+    rsum = json.loads([ln for ln in retry.stdout.splitlines() if ln.strip()][-1])
+    assert rsum["status"] == "already_committed", rsum
     apps_after = _sql(
         db_url,
-        "SELECT count(*), min(effective_at), max(effective_at) "
-        "FROM catalog_refresh_applications",
+        "SELECT count(*), min(effective_at), max(effective_at) FROM catalog_refresh_applications",
     )
     assert apps_after[0][0] == 1, "idempotent retry must not add a second application row"
     assert apps_after[0][1] == apps_after[0][2] == app_t
