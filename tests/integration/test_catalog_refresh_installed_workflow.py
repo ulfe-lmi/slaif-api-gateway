@@ -314,7 +314,8 @@ def installed_pg_url() -> Iterator[str]:
     import docker
 
     owner = f"slaif184-{secrets.token_hex(8)}"
-    client = docker.from_env()
+    # Explicit qualified daemon (no inherited DOCKER_HOST ambiguity).
+    client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
     container = client.containers.run(
         "postgres:16",
         environment={"POSTGRES_USER": "test", "POSTGRES_PASSWORD": "test", "POSTGRES_DB": "test"},
@@ -324,7 +325,10 @@ def installed_pg_url() -> Iterator[str]:
         detach=True,
     )
     try:
-        # Inspect the EXACT created identity before any migration.
+        # Inspect the EXACT created identity before any migration. The SDK
+        # caches attrs; reload so this is the running state, not the
+        # create-time snapshot (port mapping is assigned at start).
+        container.reload()
         attrs = container.attrs
         labels = attrs["Config"].get("Labels") or {}
         assert labels.get("slaif184.owner") == owner, "owned PG label mismatch"
@@ -372,6 +376,7 @@ def installed_pg_url() -> Iterator[str]:
         # Cleanup re-verifies identity and removes ONLY this container.
         try:
             c = client.containers.get(container.id)
+            c.reload()
             c_labels = c.attrs["Config"].get("Labels") or {}
             assert c_labels.get("slaif184.owner") == owner, (
                 "refusing to remove a container whose owner label changed"
