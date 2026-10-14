@@ -769,9 +769,8 @@ def _render_plan_line(report: dict[str, Any]) -> str:
             by_type[op["type"]] = by_type.get(op["type"], 0) + 1
         breakdown = " · ".join(f"{count} {kind.replace('_', ' ')}" for kind, count in sorted(by_type.items()))
         blocked_note = (
-            f"; {esc(blocked_rows)} existing-row update(s) are omitted from the legacy "
-            "create-only TSV export only — the reviewed apply plan executes the "
-            "representable supersessions"
+            "; TSV exports contain creates only; "
+            f"{esc(blocked_rows)} reviewed updates execute here"
             if blocked_rows
             else ""
         )

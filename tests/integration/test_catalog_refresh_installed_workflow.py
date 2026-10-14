@@ -2093,7 +2093,8 @@ def test_r7c_installed_refresh_source_failures(
 
     def assert_sealed_blocked_not_actionable(run_dir: Path) -> None:
         """A BLOCKED refresh is not actionable: apply refuses the sealed
-        BLOCKED state before any plan use or DB contact (exact code)."""
+        BLOCKED state before any plan use or DB contact (exact code; the
+        CLI maps CatalogRefreshBlockedError to exit 20)."""
         aproc = _run_installed(
             env,
             [
@@ -2108,8 +2109,8 @@ def test_r7c_installed_refresh_source_failures(
             cwd=scratch,
             timeout=180,
         )
-        assert aproc.returncode == 65, (
-            f"blocked-run apply expected 65, got {aproc.returncode}\n"
+        assert aproc.returncode == 20, (
+            f"blocked-run apply expected 20, got {aproc.returncode}\n"
             f"{aproc.stdout}\n{aproc.stderr}"
         )
         assert "apply_state_not_applicable" in aproc.stderr, aproc.stderr
