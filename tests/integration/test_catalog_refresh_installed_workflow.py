@@ -275,11 +275,10 @@ def installed_pg_url() -> Iterator[str]:
     container = PostgresContainer("postgres:16")
     container.start()
     try:
-        creds = container.get_credentials()
-        port = container.exposed_port(5432)
+        port = container.get_exposed_port(5432)
         url = (
-            f"postgresql+asyncpg://{creds['username']}:{creds['password']}"
-            f"@{container.get_container_host_ip()}:{port}/{creds['dbname']}"
+            f"postgresql+asyncpg://{container.username}:{container.password}"
+            f"@{container.get_container_host_ip()}:{port}/{container.dbname}"
         )
         run_alembic_upgrade_head(url)
         yield url
