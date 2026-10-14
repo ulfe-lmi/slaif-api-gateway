@@ -38,7 +38,7 @@ import re
 from fnmatch import fnmatchcase
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Mapping
@@ -286,6 +286,79 @@ def _openrouter_price_decimal(cell: str) -> Decimal:
     ):
         raise ValueError("bound")
     return per_1m
+
+
+# --- 183 research grounding seams (parent-owned) ------------------------------
+# Small public surface for the isolated research fallback (research_grounding):
+# the same bounded JSON/price/header grammars the deterministic parsers use,
+# re-exposed so the PARENT re-derives every value from the sealed evidence
+# bytes with exactly the existing value-level rules. Nothing here relaxes a
+# deterministic parser; it only lets the grounding resolver reuse them.
+
+
+class _RawNumber:
+    """Identity-parsed JSON numeric literal (exact source spelling)."""
+
+    __slots__ = ("literal",)
+
+    def __init__(self, literal: str) -> None:
+        self.literal = literal
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return f"RawNumber({self.literal!r})"
+
+
+def loads_raw_snapshot_json(evidence: bytes, *, kind: str) -> Any:
+    """Bounded strict JSON parse with EXACT numeric literals retained.
+
+    Same fail-closed rules as :func:`_json_loads_bounded` (byte bound, UTF-8,
+    duplicate keys, non-finite constants) plus identity ``parse_float`` /
+    ``parse_int`` hooks so every number is available as its exact source
+    spelling (a JSON number is never round-tripped through a lossy float).
+    """
+    text = _decode_bounded(evidence, kind=f"research:{kind}", max_bytes=MAX_SNAPSHOT_BYTES)
+    try:
+        return json.loads(
+            text,
+            object_pairs_hook=_reject_duplicate_key,
+            parse_constant=_reject_non_finite_constant,
+            parse_float=lambda literal: _RawNumber(literal),
+            parse_int=lambda literal: _RawNumber(literal),
+        )
+    except SnapshotFormatError as exc:
+        raise SnapshotFormatError(f"research:{kind}:{exc.code}") from None
+    except json.JSONDecodeError:
+        raise SnapshotFormatError(f"research:{kind}:malformed_json") from None
+
+
+def process_router_price_cell(cell: str) -> Decimal:
+    """Public seam for :func:`_openrouter_price_decimal` (183 grounding)."""
+    return _openrouter_price_decimal(cell)
+
+
+def parse_openai_v2_price_cell_value(cell: str) -> Decimal | None:
+    """Public seam for :func:`_openai_v2_price_cell` (183 grounding): the
+    strict deterministic cell grammar. ``None`` is the explicit missing
+    marker; an unrecognized cell raises the deterministic format error,
+    which the grounding resolver treats as ungroundable (never a guess)."""
+    return _openai_v2_price_cell(cell)
+
+
+def parse_openai_v2_model_cell_id(cell: str) -> tuple[str, str | None]:
+    """Public seam for :func:`_openai_v2_model_cell` (183 grounding)."""
+    return _openai_v2_model_cell(cell)
+
+
+def router_price_cell_bound_check(value: Decimal) -> None:
+    """Value-level import-contract bounds for one per-1M cell (183): the
+    same magnitude/quantum caps the deterministic path enforces after
+    conversion; raises ValueError on bound escape."""
+    if value.is_finite() is False or value < 0 or value >= _OPENROUTER_PER_1M_MAGNITUDE_CAP:
+        raise ValueError("bound")
+    if 0 < value < _OPENROUTER_PRICE_QUANTUM:
+        raise ValueError("bound")
+
+
 
 
 def _openrouter_validated_rows(payload: Any, *, kind: str) -> list[Mapping[str, object]]:
@@ -2072,6 +2145,33 @@ def contradicting_values(
 
 # --- reconciliation -------------------------------------------------------------
 
+def _research_fact_record(
+    fact: Any,
+    urls: Mapping[str, str],
+    digests: Mapping[str, str],
+    source_times: Mapping[str, str],
+) -> dict[str, Any]:
+    """Serializable record of one re-grounded research fact (183): the
+    parent-verified semantic transcription of the sealed captured bytes,
+    distinguished from deterministic observations by its method label."""
+    return {
+        "source": fact.source_key,
+        "url": urls.get(fact.source_key, ""),
+        "digest": digests.get(fact.source_key, ""),
+        "retrieved_at": source_times.get(fact.source_key, ""),
+        "parser": "research-grounded",
+        "locator": fact.locator,
+        "observed_value": fact.quote,
+        "unit": fact.unit,
+        "currency": fact.currency,
+        "normalized_eur": None,
+        "conversion": (
+            "semantic method: re-grounded research fact (quote re-derived from the "
+            "sealed captured bytes at review time; not a deterministic observation)"
+        ),
+    }
+
+
 def _observation_record(
     observation: Observation,
     urls: Mapping[str, str],
@@ -2129,6 +2229,7 @@ def reconcile_model_facts(
     source_times: Mapping[str, str],
     fx_info: Mapping[str, Mapping[str, Any]],
     required_price_dims: tuple[str, ...] = ("input", "output"),
+    research_facts: Mapping[str, Any] | None = None,
 ) -> tuple[list[ReconciliationFinding], dict[str, BackedFact], set[str], set[str]]:
     """Reconcile proposed financial/capability/limit facts against parsed
     observations for one (provider, binding model).
@@ -2140,6 +2241,20 @@ def reconcile_model_facts(
     ``proposed`` maps field names to specs:
       pricing:<dim> -> {"value": str|None, "currency": str, "required": bool}
       model:<field> -> int | bool (only fields that are actually proposed)
+
+    ``research_facts`` (183) maps field names to re-grounded research
+    facts for this (provider, binding model): a fact the PARENT re-derived
+    from the sealed captured bytes at review time (semantic method). A
+    re-grounded quote is verified evidence, not a bare semantic label, but
+    it backs ONLY fields that have NO deterministic official observation
+    in the full (provider, model, field) context: deterministic evidence
+    always takes precedence, and a full-context contradiction blocks even
+    when the isolated quote re-grounds. The fact's source must be OFFICIAL
+    and among the field's declared sources (the same per-field
+    reference binding as deterministic observations); a proposed value
+    that DISAGREES with the grounded fact is a mismatch BLOCKER, and
+    fields without either an official observation or an admissible
+    re-grounded fact remain BLOCKED exactly as before.
 
     Each field is validated against the sources its own fact declares
     (``declared_sources``): referenced-but-wrong field/model/provider
@@ -2185,6 +2300,9 @@ def reconcile_model_facts(
 
     def _record(observation: Observation) -> dict[str, Any]:
         return _observation_record(observation, urls, digests, source_times, fx_info, fx_to_eur)
+
+    def _research_record(fact: Any) -> dict[str, Any]:
+        return _research_fact_record(fact, urls, digests, source_times)
 
     for field_name in sorted(proposed):
         spec = proposed[field_name]
@@ -2330,6 +2448,59 @@ def reconcile_model_facts(
                 observations=tuple(_record(obs) for obs in matching[:8]),
             )
             continue
+        research_fact = (research_facts or {}).get(field_name)
+        if research_fact is not None and not official_all:
+            # Research grounding completes ONLY fields with no
+            # deterministic official observation in the full context: the
+            # deterministic paths above (match / undeclared match /
+            # declared mismatch / observation conflict) own every field
+            # where an official observation exists, so a re-grounded quote
+            # can never replace a different deterministic limit.
+            if (
+                research_fact.source_key not in declared_sources.get(field_name, frozenset())
+                or research_fact.source_key not in official_source_keys
+            ):
+                findings.append(
+                    ReconciliationFinding(
+                        "BLOCKER",
+                        "source_evidence_reference_mismatch",
+                        f"the re-grounded research fact for {field_name} cites {research_fact.source_key}, "
+                        f"which is not an OFFICIAL source among the fact's declared sources for "
+                        f"{provider}/{binding_model}; per-field references must bind the supporting "
+                        "evidence",
+                        provider,
+                        binding_model,
+                    )
+                )
+                unresolved.add(field_name)
+                continue
+            if canonical == str(research_fact.value):
+                # A re-grounded research fact completes the field: the
+                # parent re-derived the quoted value from the sealed
+                # captured bytes at review time (verified semantic
+                # method, never a bare semantic label) from an OFFICIAL
+                # source the field's fact declares.
+                backed[field_name] = BackedFact(
+                    field=field_name,
+                    proposed=canonical,
+                    proposed_normalized=canonical,
+                    backed_by=(research_fact.source_key,),
+                    independent_sources=1,
+                    observations=(_research_record(research_fact),),
+                )
+                continue
+            findings.append(
+                ReconciliationFinding(
+                    "BLOCKER",
+                    "source_evidence_value_mismatch",
+                    f"proposed {field_name}={canonical} disagrees with the re-grounded research "
+                    f"fact value {research_fact.value} for {provider}/{binding_model}",
+                    provider,
+                    binding_model,
+                )
+            )
+            unresolved.add(field_name)
+            continue
         undeclared_match = any(
             observation.value == canonical
             for observation in official_all
@@ -2372,3 +2543,23 @@ def reconcile_model_facts(
             )
         unresolved.add(field_name)
     return findings, backed, unresolved, missing_fx
+# 183 grounding seams: public aliases for the private grammar constants
+# (module end: every referenced name is defined above this point).
+ROUTER_RECOGNIZED_PRICING_KEYS: frozenset[str] = _OPENROUTER_PRICING_KEYS
+OPENAI_V2_TIER_NAMES: tuple[str, ...] = _OPENAI_TIER_NAMES
+OPENAI_V2_PRICE_HEADER_MAP: dict[str, tuple[str, str]] = _OPENAI_PRICE_HEADER_MAP
+OPENAI_V2_TIER_HEADING_RE = _OPENAI_TIER_HEADING
+OPENAI_DOC_MODEL_ID_RE = _OPENAI_DOC_MODEL_ID
+OPENAI_SEPARATOR_ROW_CHECK = _is_separator_row
+OPENAI_MAX_SNAPSHOT_BYTES = MAX_SNAPSHOT_BYTES
+OPENAI_MAX_TABLE_ROWS = MAX_TABLE_ROWS
+OPENAI_MAX_MODELS_PER_SNAPSHOT = MAX_MODELS_PER_SNAPSHOT
+ROUTER_OVERRIDE_KEYS = _OPENROUTER_OVERRIDE_KEYS
+ROUTER_OVERRIDE_PRICE_KEYS = _OPENROUTER_OVERRIDE_PRICE_KEYS
+ROUTER_OVERRIDE_BLOCK_RE = _OPENROUTER_OVERRIDE_BLOCK
+
+
+def replace_parsed_model(model: ParsedModel, **changes: Any) -> ParsedModel:
+    """Public seam (183): frozen :class:`ParsedModel` with named fields
+    replaced (research limit supplements; everything else preserved)."""
+    return replace(model, **changes)

@@ -6,7 +6,7 @@
 > **Boundary:** Bounded live official-source collection (`collect`), offline
 > review of supplied or collected bundles, read-only export, verify, and the
 > one explicit atomic `apply` of a reviewed run (plus read-only `status`).
-> Codex-assisted research remains NOT_RUN.
+> Codex-assisted research is opt-in (`--research`) and NOT_RUN by default.
 
 SLAIF catalog refresh is a staged workflow: one refresh, one trustworthy
 one-page report, and one explicit audited apply command. This page documents
@@ -65,10 +65,6 @@ their rules.
 
 ## What is planned later (not implemented, do not claim)
 
-- **Codex-assisted research:** isolated Codex research remains
-  `NOT_RUN` in this version; live collection is deterministic bounded
-  retrieval and registered parsing only (see
-  [Live collection](#live-collection-the-collect-command)).
 - **Shell UX, E2E, and docs completion.**
 
 The only in-contract apply path is the explicit
@@ -568,8 +564,11 @@ identity and is never overridden:
 
 ### Limits
 
-- Codex research identity stays `NOT_RUN`; collection is deterministic
-  retrieval plus parsing, with no model judgment in the loop.
+- Codex research is opt-in (`--research`) and stays `NOT_RUN` by default;
+  when enabled, deterministic retrieval plus parsing remains first and only
+  eligible unresolved facts may be transcribed by the isolated Codex
+  semantic fallback (real CLI in an enforced outer boundary, parent
+  re-grounding — see [Isolated Codex research fallback](#isolated-codex-research-fallback-opt-in)).
 - No apply or refresh command exists: the sealed run directory is the
   terminal output; import/apply is a later objective.
 - One profile (`standard-v1`), two providers (`openai`, `openrouter`),
@@ -577,13 +576,64 @@ identity and is never overridden:
 - The registry is intentionally small and reviewed; adding a source kind or
   host is a contract change, not a configuration.
 
+## Isolated Codex research fallback (opt-in)
+
+Deterministic official-source collection and parsing are always first. Only
+when an eligible required standard-v1 fact remains unresolved **from the
+already-captured bytes** (for example a readable limit in a layout the
+registered parser does not resolve) may the `collect` command, with explicit
+`--research` operator configuration, plan a bounded research task. The
+fallback is a real Codex CLI running outside the repository in a private
+task workspace, inside one enforced outer boundary (Docker): nonroot,
+read-only root, dropped capabilities, task-only mounts, an isolated internal
+network, and an inference-only relay that refuses every non-inference
+authority before serving or forwarding. The researcher receives no database,
+provider, seal, or host credentials; the structured result is the CLI's own
+final message, validated against a checked-in bounded output schema, and the
+parent re-resolves every claimed locator/quote against the captured bytes
+before any fact can enter the bundle.
+
+Contract points:
+
+- **Deterministic first.** Existing registered observations win whenever
+  complete; research only unresolved eligible facts. With research enabled,
+  a fully deterministic collect still records research `NOT_RUN`.
+- **Measured identity, parent-set.** The bundle carries the producing
+  run's measured research identity (status, actual CLI version and binary
+  hash, template/output-schema identities, safe counts, elapsed time,
+  failure code, result hash). A model or a supplied bundle can never
+  certify an execution: for a supplied or offline review the identity is a
+  historical declaration, and the report labels it as such.
+- **Re-grounded at review time.** Every sealed research fact is re-derived
+  from the sealed source bytes by the parent in every review and verify
+  (one ungroundable fact BLOCKs the run); offline re-grounding verifies the
+  sealed facts, not the original CLI execution. Grounded cells render as
+  semantic-method evidence, never as deterministic extraction.
+- **Honest failures.** A child timeout/failure, malformed result, a
+  boundary refusal after earlier tasks executed, or a required cleanup
+  failure records a measured `FAILED` identity that preserves the verified
+  CLI identity and execution history (scope, timing, exit record) while
+  discarding all research output; only a refusal before any invocation
+  records `UNAVAILABLE`; the deterministic dispositions stand and no
+  partial research data is used.
+- **Mock versus live.** Qualification runs may wire the relay to a parent
+  prepared mock model transport; such runs are flagged `mock_model` in the
+  identity and are never presented as live model evidence. Live runs use
+  the operator-configured endpoint (HTTPS required at the CLI).
+- **No authority growth.** Research never chooses readiness, signs,
+  re-fetches arbitrary URLs, touches the database, or applies; the same
+  gates, seal chain, and artifact set apply to the resulting bundle.
+
+See [Security model — catalog refresh research boundary](security-model.md#catalog-refresh-research-boundary)
+for the isolation limits.
+
 ## The proposal bundle (`catalog-refresh.json`)
 
 One versioned, typed JSON document carries the proposal **facts and
 provenance only**:
 
 - run ID, generation time, schema/renderer/policy revision identities;
-- research identities (status `NOT_RUN` is required in this version; Codex research is not implemented);
+- research identity (measured per producing run: `NOT_RUN`, `SUCCEEDED`, `FAILED`, or `UNAVAILABLE`; a supplied bundle's research identity is a historical declaration, and every sealed research fact is re-grounded against the sealed source bytes at review time — see [Isolated Codex research fallback](#isolated-codex-research-fallback-opt-in));
 - the standard v1 profile (ordinary text Chat Completions, explicit streaming,
   local-model visibility, no hosted/multimodal/Responses/Codex capabilities);
 - provider and model selection (an include filter may select a single model;
@@ -1412,9 +1462,12 @@ for the full option and exit-code surface.
 
 - `collect` makes bounded live official-source retrieval calls and, only when
   `--refresh` is combined with `--db-url`, performs a read-only PostgreSQL
-  baseline capture of the target database; it performs no Codex research.
-  `verify` is fully offline. The other commands make no source, provider, or
-  research traffic; their only possible network contact is the permitted
+  baseline capture of the target database. By default it performs no Codex
+  research; with `--research`, the researcher's only model contact is a
+  task-owned inference relay to the operator-configured endpoint, and the
+  operator credential never reaches the researcher. `verify` is fully
+  offline. The other commands make no source, provider, or research traffic;
+  their only possible network contact is the permitted
   PostgreSQL connection to their target database: `export-baseline` and
   `status` use it, `apply` uses the reviewed target, and `review` only when
   `--db-url` reads a live baseline.

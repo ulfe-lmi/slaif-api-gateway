@@ -110,8 +110,9 @@ Bounded catalog refresh: bounded live official-source collection, one typed
 proposal bundle, one safe baseline, one sealed one-page report, and the one
 explicit atomic `apply` of a reviewed run. `collect`, `review`, `verify`,
 read-only `export-baseline`, mutating `apply`, and read-only `status` —
-Codex research remains NOT_RUN. Full semantics, the source registry, policy
-thresholds, sealing, apply ordering, and exit codes live in
+Codex research is opt-in (`--research`) and NOT_RUN by default. Full
+semantics, the source registry, policy thresholds, sealing, apply ordering,
+and exit codes live in
 [Catalog refresh (collect, review, and
 verify)](catalog-refresh.md).
 
@@ -123,6 +124,19 @@ slaif-gateway catalog-refresh collect --bootstrap
 slaif-gateway catalog-refresh collect --refresh \
   --providers openrouter --models synth/alpha,synth/beta \
   --baseline-file /path/to/baseline.json
+
+# Refresh collection with the isolated Codex semantic research fallback
+# enabled (deterministic parsing stays first; only eligible unresolved
+# facts are research candidates; the researcher's only model contact is
+# the operator-configured HTTPS endpoint through a task-owned relay)
+slaif-gateway catalog-refresh collect --refresh \
+  --baseline-file /path/to/baseline.json \
+  --research \
+  --research-cli-bin /path/to/codex \
+  --research-endpoint https://inference.example.test/v1 \
+  --research-model gpt-example \
+  --research-auth-env SLAIF_RESEARCH_UPSTREAM_KEY \
+  [--research-timeout 120]
 
 # Review a proposal bundle against an exported baseline (sealed run output)
 slaif-gateway catalog-refresh review /path/to/catalog-refresh.json \

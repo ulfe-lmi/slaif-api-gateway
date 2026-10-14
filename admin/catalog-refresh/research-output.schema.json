@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "slaif-research-output/1",
+  "title": "SLAIF catalog research bounded output (slaif-research-output/1)",
+  "description": "Strict structured transcription contract for the isolated Codex research fallback. One bounded source scope per task; every claimed cell carries a locator and the exact raw quote the parent re-resolves against the captured bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "task", "models"],
+  "properties": {
+    "schema": {"const": "slaif-research-output/1"},
+    "task": {
+      "enum": ["openrouter_models_api", "openai_pricing_docs", "openai_docs_page"]
+    },
+    "models": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/model"}
+    }
+  },
+  "$defs": {
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["locator", "quote"],
+      "properties": {
+        "locator": {"type": "string", "minLength": 1, "maxLength": 256},
+        "quote": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    },
+    "router_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "index"],
+      "properties": {
+        "model": {"type": "string", "minLength": 1, "maxLength": 200},
+        "index": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "pricing": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {"$ref": "#/$defs/cell"}
+        },
+        "context_length": {"$ref": "#/$defs/cell"},
+        "max_output_tokens": {"$ref": "#/$defs/cell"}
+      }
+    },
+    "openai_tier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["line", "cells"],
+      "properties": {
+        "line": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "cells": {
+          "type": "object",
+          "maxProperties": 32,
+          "additionalProperties": {"$ref": "#/$defs/cell"}
+        }
+      }
+    },
+    "openai_pricing_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "tiers"],
+      "properties": {
+        "model": {"type": "string", "minLength": 1, "maxLength": 200},
+        "tiers": {
+          "type": "object",
+          "maxProperties": 4,
+          "additionalProperties": {"$ref": "#/$defs/openai_tier"}
+        }
+      }
+    },
+    "docs_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": {"type": "string", "minLength": 1, "maxLength": 200},
+        "context_length": {"$ref": "#/$defs/cell"},
+        "max_output_tokens": {"$ref": "#/$defs/cell"}
+      }
+    },
+    "model": {
+      "anyOf": [
+        {"$ref": "#/$defs/router_model"},
+        {"$ref": "#/$defs/openai_pricing_model"},
+        {"$ref": "#/$defs/docs_model"}
+      ]
+    }
+  }
+}

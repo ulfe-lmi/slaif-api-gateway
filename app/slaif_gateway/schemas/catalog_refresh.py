@@ -59,18 +59,18 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 
 SCHEMA_VERSION = "1"
-# 182: the report renderer gained the reviewed apply-plan section and
-# scope-correct static wording, so the sealed artifacts of pre-182 (181.1)
-# runs are NOT byte-stable under this verifier's recomputation. The
-# authenticated execution context therefore accepts exactly the renderer
-# versions this verifier can replay byte-stably: 182.1 only. A sealed context
-# carrying 181.1 (or any other value) is refused explicitly as an unsupported
-# replay version — no historical renderer fleet, no re-derivation, no
-# re-sealing. The supported path for legacy proposal data is a fresh review
-# (or collection) under the current CLI, which produces current artifacts
-# without rewriting sealed archives or source dates.
-SUPPORTED_RENDERER_VERSIONS: tuple[str, ...] = ("182.1",)
-RENDERER_VERSION = "182.1"
+# 183: the report renderer gained the measured research identity and
+# grounding-evidence wording (plus the 182 apply-plan section), so the sealed
+# artifacts of pre-183 (182.1) runs are NOT byte-stable under this verifier's
+# recomputation. The authenticated execution context therefore accepts exactly
+# the renderer versions this verifier can replay byte-stably: 183.1 only. A
+# sealed context carrying 182.1 or 181.1 (or any other value) is refused
+# explicitly as an unsupported replay version — no historical renderer fleet,
+# no re-derivation, no re-sealing. The supported path for legacy proposal data
+# is a fresh review (or collection) under the current CLI, which produces
+# current artifacts without rewriting sealed archives or source dates.
+SUPPORTED_RENDERER_VERSIONS: tuple[str, ...] = ("183.1",)
+RENDERER_VERSION = "183.1"
 POLICY_VERSION = 1
 # 182: canonical typed apply-plan contract (bounded plan/result/version).
 # The plan is a deterministic derivation from the authenticated sealed bytes
@@ -92,6 +92,16 @@ APPLY_OPERATION_TYPES: tuple[str, ...] = (
 # RUNNER-OWNED generator version/identity constant of this code; the
 # collector re-exports it (collection.EXTRACTOR_ID) for compatibility.
 EXTRACTOR_ID = "slaif-collector/181.1"
+# 183: identity of the isolated Codex semantic-research fallback. These are
+# RUNNER-OWNED constants of this code (the checked-in instruction template
+# version, the checked-in bounded output-schema version, and the registered
+# research extractor/parser identity). They are never supplied by a bundle:
+# a supplied research identity is historical text, and the measured
+# execution identity of a collecting invocation is set by the parent runner
+# only (see ResearchIdentity).
+RESEARCH_EXTRACTOR_ID = "slaif-research/183.1"
+RESEARCH_OUTPUT_SCHEMA_VERSION = "slaif-research-output/1"
+RESEARCH_TEMPLATE_VERSION = "183.1"
 
 _RUN_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _HEX64_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -261,13 +271,177 @@ class RevisionIdentity(CatalogRefreshModel):
 
 
 class ResearchIdentity(CatalogRefreshModel):
-    """Objective 180 is offline: live research is NOT_RUN, never fabricated."""
+    """183: measured identity of the isolated Codex research fallback.
 
-    status: Literal["NOT_RUN"]
-    codex_version: Literal["N/A"] = "N/A"
-    prompt_version: Literal["N/A"] = "N/A"
+    EVERY measured field is set by the PARENT runner after (or because of
+    no) actual execution; a model or a supplied bundle can never certify an
+    execution. ``NOT_RUN`` means no Codex invocation occurred in this
+    invocation (research disabled, or no eligible unresolved fact) and every
+    measured field stays at its N/A/zero/None default. ``SUCCEEDED`` means
+    the isolated CLI completed with a schema-conformant structured result
+    (accepted facts may still be zero — grounding rejections are counted,
+    never hidden). ``FAILED`` is a measured child timeout/failure/malformed
+    result; ``UNAVAILABLE`` is a refused or absent enforcement boundary. A
+    supplied bundle's research identity is historical declaration, never
+    proof that the reviewing invocation executed research.
+    """
+
+    status: Literal["NOT_RUN", "SUCCEEDED", "FAILED", "UNAVAILABLE"] = "NOT_RUN"
+    # Actual executed CLI version (e.g. "0.162.1"); never an assumption.
+    codex_version: str = Field(default="N/A", min_length=1, max_length=32)
+    # SHA-256 of the exact binary the parent verified before mounting it.
+    cli_sha256: str | None = None
+    # Declared checked-in instruction-template version, and the SHA-256 of
+    # the template bytes actually copied as the task-local AGENTS.md.
+    prompt_version: str = Field(default="N/A", min_length=1, max_length=32)
+    template_sha256: str | None = None
+    # Checked-in bounded output-schema version actually bound via
+    # --output-schema.
+    output_schema_version: str = Field(default="N/A", min_length=1, max_length=64)
     extractor_version: str = Field(min_length=1, max_length=64)
     tool_version: str = Field(min_length=1, max_length=64)
+    # Bounded safe counts of the structured result (no raw content stored).
+    facts_requested: int = Field(default=0, ge=0, le=100000)
+    facts_returned: int = Field(default=0, ge=0, le=100000)
+    facts_accepted: int = Field(default=0, ge=0, le=100000)
+    facts_rejected: int = Field(default=0, ge=0, le=100000)
+    elapsed_ms: int | None = Field(default=None, ge=0, le=10_000_000)
+    child_exit_code: int | None = Field(default=None, ge=-255, le=255)
+    failure_code: str | None = Field(default=None, min_length=1, max_length=128)
+    # SHA-256 of the structured output file only (never raw reasoning,
+    # session transcripts, or debug output, which are not stored).
+    result_sha256: str | None = None
+    # True only when the parent wired the researcher to a QUALIFICATION
+    # mock model transport; False for an operator-configured endpoint.
+    # Mock executions are never presented as live model evidence.
+    mock_model: bool = False
+    # Parent-planned phase scope: tasks planned, and tasks that remained
+    # unattempted (bundle task bound or phase failure). A SUCCEEDED phase
+    # with unattempted tasks is NOT complete research; the unattempted
+    # models are reported explicitly in the collection inventory.
+    tasks_planned: int = Field(default=0, ge=0, le=64)
+    tasks_unattempted: int = Field(default=0, ge=0, le=64)
+
+    @model_validator(mode="after")
+    def _check(self) -> "ResearchIdentity":
+        measured_defaults = (
+            self.codex_version == "N/A",
+            self.cli_sha256 is None,
+            self.prompt_version == "N/A",
+            self.template_sha256 is None,
+            self.output_schema_version == "N/A",
+            not self.facts_requested,
+            not self.facts_returned,
+            not self.facts_accepted,
+            not self.facts_rejected,
+            self.elapsed_ms is None,
+            self.child_exit_code is None,
+            self.result_sha256 is None,
+            not self.mock_model,
+        )
+        if self.status in ("NOT_RUN", "UNAVAILABLE"):
+            # NOT_RUN: no invocation occurred. UNAVAILABLE: the enforcement
+            # boundary was refused or absent BEFORE any CLI/template/binary
+            # existed, so nothing was measured — the identity carries only
+            # the safe refusal code (UNAVAILABLE) and no fabricated fields.
+            if self.status == "NOT_RUN" and self.failure_code is not None:
+                raise ValueError("NOT_RUN research identity must not carry a failure code")
+            if self.status == "UNAVAILABLE" and self.failure_code is None:
+                raise ValueError("UNAVAILABLE research identity requires a safe refusal code")
+            if not all(measured_defaults):
+                raise ValueError(
+                    f"{self.status} research identity must not carry measured fields"
+                )
+        else:
+            # SUCCEEDED / FAILED: the CLI existed, was verified, and ran —
+            # complete measured evidence is mandatory.
+            if self.codex_version == "N/A" or self.cli_sha256 is None:
+                raise ValueError("measured research identity requires actual CLI version and binary hash")
+            if self.prompt_version == "N/A" or self.template_sha256 is None:
+                raise ValueError("measured research identity requires the task template identity")
+            if self.output_schema_version == "N/A":
+                raise ValueError("measured research identity requires the output schema version")
+            if self.elapsed_ms is None or self.child_exit_code is None:
+                raise ValueError("measured research identity requires elapsed time and child exit code")
+            if self.status == "FAILED" and self.failure_code is None:
+                raise ValueError("FAILED research identity requires a safe failure code")
+            if self.status == "FAILED":
+                if self.facts_returned or self.facts_accepted or self.facts_rejected:
+                    raise ValueError("FAILED research identity must not carry counted facts")
+                if self.result_sha256 is not None:
+                    raise ValueError("FAILED research identity must not carry a result hash")
+            if self.status == "SUCCEEDED":
+                # complete success evidence: every returned cell is exactly
+                # either accepted or rejected (no silent middle state).
+                if self.facts_accepted + self.facts_rejected != self.facts_returned:
+                    raise ValueError(
+                        "SUCCEEDED research identity must partition returned facts into accepted and rejected"
+                    )
+                if self.result_sha256 is None:
+                    raise ValueError("SUCCEEDED research identity requires the structured result hash")
+        for name in ("cli_sha256", "template_sha256", "result_sha256"):
+            value = getattr(self, name)
+            if value is not None and not _HEX64_PATTERN.fullmatch(value):
+                raise ValueError(f"{name} must be 64 lowercase hex characters")
+        if self.facts_accepted > self.facts_returned:
+            raise ValueError("accepted facts cannot exceed returned facts")
+        if self.facts_rejected > self.facts_returned:
+            raise ValueError("rejected facts cannot exceed returned facts")
+        return self
+
+
+class ResearchGroundedFact(CatalogRefreshModel):
+    """183: one parent-verified research transcription cell, sealed in the
+    bundle so an OFFLINE review/verify re-grounds it against the sealed
+    evidence bytes (trust is re-derived, never declared).
+
+    ``quote`` is the exact raw source fragment the researcher transcribed;
+    ``value`` is the PARENT-NORMALIZED canonical text (existing Decimal/int
+    grammar and unit conversion — the model's normalization is never
+    trusted). ``locator`` is the bounded locator grammar for the source kind
+    (OpenRouter: ``data[i].<path>``; OpenAI markdown: ``line[n]``).
+    """
+
+    source_key: str = Field(min_length=3, max_length=160)
+    provider: Literal["openai", "openrouter"]
+    model: str = Field(min_length=1, max_length=200)
+    # pricing:<key> | model:context_length | model:max_output_tokens |
+    # model:capability:text | model:deprecated | endpoint:chat_completions |
+    # table:columns | model:billing_tier | model:context_band
+    field: str = Field(min_length=3, max_length=64)
+    locator: str = Field(min_length=1, max_length=256)
+    quote: str = Field(min_length=1, max_length=512)
+    value: str = Field(min_length=1, max_length=128)
+    unit: str = Field(min_length=1, max_length=32)
+    currency: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> "ResearchGroundedFact":
+        # The fact binds the SOURCE RECORD that carries the sealed evidence
+        # bytes: catalog snapshot records carry model part "catalog";
+        # per-model page records carry the page's own model. The fact's own
+        # ``model`` field is the model identity the transcription claims
+        # (verified against the bytes during grounding).
+        parts = self.source_key.split("|")
+        if len(parts) != 3 or not all(parts):
+            raise ValueError("research fact source_key must be provider|model|source_kind")
+        if parts[0] != self.provider:
+            raise ValueError("research fact source_key provider mismatch")
+        if self.provider == "openrouter":
+            if parts[2] != "openrouter_models_api" or parts[1] != "catalog":
+                raise ValueError("openrouter research facts bind the catalog snapshot record")
+        elif self.provider == "openai":
+            if parts[2] in ("openai_pricing_docs", "openai_models_docs"):
+                if parts[1] != "catalog":
+                    raise ValueError("openai snapshot research facts bind the catalog record")
+            elif parts[2] == "docs_page":
+                if parts[1] != self.model:
+                    raise ValueError("docs_page research facts bind the page's model record")
+            else:
+                raise ValueError("unsupported openai research source kind")
+        if self.currency is not None and not _CURRENCY_PATTERN.fullmatch(self.currency):
+            raise ValueError("research fact currency must be a 3-letter code")
+        return self
 
 
 class SourceRetrievalRecord(CatalogRefreshModel):
@@ -450,7 +624,7 @@ class ExecutionGeneratorVersions(CatalogRefreshModel):
     """
 
     schema_version: Literal[SCHEMA_VERSION]
-    renderer_version: Literal["182.1"]
+    renderer_version: Literal[RENDERER_VERSION]
     policy_version: Literal[POLICY_VERSION]
     extractor_version: Literal[EXTRACTOR_ID]
 
@@ -815,6 +989,10 @@ class RefreshBundle(CatalogRefreshModel):
     generated_at: datetime
     revision: RevisionIdentity
     research: ResearchIdentity
+    # 183: parent-verified research transcription cells (empty when
+    # research is NOT_RUN). Offline verify re-grounds every record against
+    # the sealed evidence bytes; ungroundable records fail closed.
+    research_facts: tuple[ResearchGroundedFact, ...] = Field(default=(), max_length=640)
     # Objective 181: present for bundles built by the collect command from
     # actual retrievals; a supplied bundle may carry one as historical
     # provenance (181-i: the runner-selected execution context, not this

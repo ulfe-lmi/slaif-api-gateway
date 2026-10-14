@@ -152,6 +152,7 @@ p.sub { color: #4a5568; margin: 0 0 6px; font-size: 14px; }
 .state-blocked { background: #fff5f5; border-color: #c53030; color: #742a2a; }
 .chips { display: flex; flex-direction: row; flex-wrap: wrap; gap: 4px 6px; justify-content: center; align-items: center; }
 .chip { display: inline-block; border: 1px solid #cbd5e0; border-radius: 999px; padding: 1px 9px; font-size: 14px; font-weight: 600; white-space: nowrap; background: #f7fafc; }
+.chip-wrap { white-space: normal; }
 .chip-blocker { border-color: #c53030; color: #742a2a; background: #fff5f5; }
 .chip-review { border-color: #b7791f; color: #744210; background: #fffaf0; }
 .chip-verified { border-color: #2f855a; color: #22543d; background: #f0fff4; }
@@ -417,9 +418,11 @@ def _source_evidence_line(report: dict[str, Any]) -> str:
     )
     scope = evidence.get("scope")
     if scope == "live_collection":
+        # concise scope label only: the retrieval mechanism explanation
+        # lives in the Collection row above and the expanded eligibility
+        # note (and the sealed validation.json)
         parts.append(
-            "live collection (recorded collection identity) — bounded official retrieval, "
-            "registered deterministic parsers"
+            "live collection (recorded collection identity)"
         )
     elif scope == "supplied_collection":
         # concise first-screen scope label only: the provenance and
@@ -490,17 +493,20 @@ def _render_gate_checklist(gates: list[dict[str, Any]]) -> list[str]:
 def _plain_reason_html(report: dict[str, Any], blockers: list[dict[str, Any]]) -> str:
     """Concise plain-language banner reason (already-safe HTML).
 
-    BLOCKED states lead with the human labels of the first blocking codes
-    (exact codes stay in the findings); other states reuse the exact
-    state_reason.
+    BLOCKED states lead with the human label of the first blocking code
+    plus the full blocker count; the remaining blocking codes and their
+    labels stay visible in the findings line and the expanded findings
+    section. Other states reuse the exact state_reason.
     """
     if report["state"] != "BLOCKED":
         return esc(report["state_reason"])
     codes = sorted({w["code"] for w in blockers})
-    labels = "; ".join(_finding_label(c) for c in codes[:3])
-    text = f"{len(blockers)} blocking issue(s): {labels}"
-    if len(codes) > 3:
-        text += f" (+{len(codes) - 3} more)"
+    if not codes:
+        return esc(report["state_reason"])
+    label = _FINDING_LABELS.get(codes[0]) or codes[0]
+    text = f"{len(blockers)} blocking issue(s): {esc(label)}"
+    if len(codes) > 1:
+        text += f" (+{len(codes) - 1} more)"
     return text
 
 
@@ -811,6 +817,149 @@ def _render_findings_line(warnings: list[dict[str, Any]]) -> str:
     return "".join(lines)
 
 
+def _research_declared(report: dict[str, Any]) -> dict[str, Any]:
+    return (report.get("research", {}) or {}).get("declared", {}) or {}
+
+
+def _research_review(report: dict[str, Any]) -> dict[str, Any]:
+    return (report.get("research", {}) or {}).get("review", {}) or {}
+
+
+def _research_chip_text(report: dict[str, Any]) -> str:
+    """Concise first-screen research state (one chip; details expanded).
+
+    The re-grounded count is THIS review's own measurement (the producing
+    run's DECLARED status — historical for supplied reviews — is fully
+    visible in the expanded run-identity section; a sealed fact set can
+    only exist when that declaration is SUCCEEDED, which the validator
+    enforces). A missing failure code is never back-filled with an
+    invented one."""
+    declared = _research_declared(report)
+    review = _research_review(report)
+    status = str(declared.get("status", "NOT_RUN"))
+    sealed = int(review.get("facts_sealed", 0) or 0)
+    regrounded = int(review.get("facts_regrounded", 0) or 0)
+    if sealed:
+        return f"research {regrounded}/{sealed} re-grounded"
+    if status == "NOT_RUN":
+        return "research NOT_RUN"
+    code = declared.get("failure_code")
+    return f"research declared {status}" + (f" ({code})" if code else "")
+
+
+def _research_note(report: dict[str, Any]) -> str:
+    """State-based research wording for the expanded eligibility paragraph.
+
+    Distinguishes the producing run's DECLARED research identity from this
+    review's measured re-grounding: offline re-grounding verifies the sealed
+    facts, not the original CLI execution."""
+    declared = _research_declared(report)
+    review = _research_review(report)
+    status = str(declared.get("status", "NOT_RUN"))
+    sealed = int(review.get("facts_sealed", 0) or 0)
+    regrounded = int(review.get("facts_regrounded", 0) or 0)
+    unattempted = int(declared.get("tasks_unattempted", 0) or 0)
+    if status == "NOT_RUN":
+        return (
+            "Research identity: NOT_RUN — no Codex invocation occurred in the producing "
+            "run; the deterministic official-source collection/parsing alone produced "
+            "every fact."
+        )
+    if status == "SUCCEEDED" and sealed:
+        extra = (
+            f"; {unattempted} planned task(s) unattempted in the producing run (task "
+            "bound) with explicit inventory entries"
+            if unattempted else ""
+        )
+        return (
+            "Research identity: the producing run declares SUCCEEDED; this review "
+            f"re-grounded {regrounded} of {sealed} sealed research fact(s) against the "
+            "captured source bytes (semantic method, parent-verified, not deterministic "
+            "extraction; offline re-grounding verifies the sealed facts, not the "
+            f"original CLI execution{extra})."
+        )
+    if status == "SUCCEEDED":
+        return (
+            "Research identity: the producing run declares SUCCEEDED with no sealed "
+            "research facts; the deterministic dispositions stand."
+        )
+    code = declared.get("failure_code")
+    code_text = f" ({code})" if code else ""
+    if status == "FAILED":
+        return (
+            "Research identity: the producing run declares FAILED" + code_text + "; no "
+            "research facts are sealed and the deterministic dispositions stand."
+        )
+    return (
+        "Research identity: the producing run declares UNAVAILABLE" + code_text + "; the "
+        "deterministic dispositions stand."
+    )
+
+
+def _research_details_rows(report: dict[str, Any]) -> list[tuple[str, str]]:
+    """Expanded run-identity research rows.
+
+    The producing run's declared identity (its measured fields only when
+    genuinely measured for its status) is shown first; the final row is
+    THIS review's own re-grounding measurement."""
+    declared = _research_declared(report)
+    review = _research_review(report)
+    status = str(declared.get("status", "NOT_RUN"))
+    rows: list[tuple[str, str]] = [
+        ("Research status (declared)", status),
+        ("Declared extractor / tool", f"{declared.get('extractor_version')} / {declared.get('tool_version')}"),
+    ]
+    if status == "NOT_RUN":
+        rows.append(("Mock model (declaration)", "n/a (no invocation)"))
+    elif declared.get("mock_model"):
+        rows.append(("Mock model (declaration)", "yes (qualification mock transport)"))
+    else:
+        rows.append(("Mock model (declaration)", "no (operator endpoint)"))
+    if status in ("SUCCEEDED", "FAILED"):
+        rows.append(
+            (
+                "Declared CLI (version / sha256)",
+                f"{declared.get('codex_version')} / {declared.get('cli_sha256')}",
+            ),
+        )
+        rows.append(
+            (
+                "Declared template sha / output schema",
+                f"{declared.get('template_sha256')} / {declared.get('output_schema_version')}",
+            ),
+        )
+    if status == "SUCCEEDED":
+        rows.append(
+            (
+                "Declared facts (req/ret/acc/rej)",
+                f"{declared.get('facts_requested')} / {declared.get('facts_returned')} / "
+                f"{declared.get('facts_accepted')} / {declared.get('facts_rejected')}",
+            ),
+        )
+        if declared.get("result_sha256"):
+            rows.append(("Declared result sha256", str(declared["result_sha256"])))
+        if declared.get("tasks_unattempted"):
+            rows.append(
+                (
+                    "Tasks (declared planned/unattempted)",
+                    f"{declared.get('tasks_planned')} / {declared.get('tasks_unattempted')}",
+                ),
+            )
+    if declared.get("failure_code"):
+        rows.append(("Declared failure code", str(declared["failure_code"])))
+    sealed = int(review.get("facts_sealed", 0) or 0)
+    regrounded = int(review.get("facts_regrounded", 0) or 0)
+    rows.append(
+        (
+            "This review: re-grounded facts",
+            f"{regrounded} of {sealed}"
+            if sealed
+            else "none sealed (re-grounding not applicable)",
+        ),
+    )
+    return rows
+
+
 def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[str]:
     """Concise decision overview: banner, scope/baseline, compact checklist,
     full-width provider change summary, FX/plan/findings lines. The detailed
@@ -832,6 +981,7 @@ def _render_first_screen(bundle: RefreshBundle, report: dict[str, Any]) -> list[
         f"<span class='chip {'chip-blocker' if blockers else ''}'>BLOCKERS {len(blockers)}</span>",
         f"<span class='chip {'chip-review' if reviews else ''}'>REVIEW {len(reviews)}</span>",
         f"<span class='chip'>findings {len(warnings)}</span>",
+        f"<span class='chip chip-wrap'>{esc(_research_chip_text(report))}</span>",
         "</div>",
         "</div>",
         "<div class='grid-2'>",
@@ -1053,10 +1203,10 @@ def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) ->
         "are never declared safe by analogy) are excluded with the exact machine reason, as are "
         "published long-context standard prices, contextual override tiers, positive cache-write "
         "charges, unknown billing keys, and source sentinels on billable dims; an explicitly selected "
-        "excluded model blocks the run. Research identity: NOT_RUN — no Codex invocation occurred in "
-        "this version and the Codex researcher is not implemented in this objective. Apply of the "
-        "reviewed plan is a separate explicit CLI command over the sealed run directory; "
-        "review/verify itself remains read-only.</p>"
+        "excluded model blocks the run. "
+        + _research_note(report)
+        + " Apply of the reviewed plan is a separate explicit CLI command over the sealed run "
+        "directory; review/verify itself remains read-only.</p>"
     )
     parts.append("</details>")
     return parts
@@ -1342,7 +1492,7 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
         ("Profile", f"{bundle.profile.name} — {bundle.profile.endpoint}"
                      + (" (streaming)" if bundle.profile.supports_streaming else "")
                      + (" (local models visible)" if bundle.profile.local_models_visible else "")),
-        ("Research (bundle declaration)", f"{report.get('research', {}).get('status')} (extractor {report.get('research', {}).get('extractor_version')}, tool {report.get('research', {}).get('tool_version')})"),
+        *_research_details_rows(report),
         ("Routes artifact sha256", artifacts.get("routes_tsv_sha256")),
         ("Pricing artifact sha256", artifacts.get("pricing_tsv_sha256")),
         ("FX artifact sha256", artifacts.get("fx_json_sha256")),
@@ -1353,8 +1503,50 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
             "<p class='muted'>Execution context, generator identity, and the (generating) "
             "version rows are the RUNNER-OWNED facts of the code that generated this run, "
             "authenticated in the sealed validation.json (never re-derived here); the bundle "
-            "revision and research rows are the bundle's supplied declarations — historical "
-            "provenance, never presented as this run's own identity.</p>"
+            "revision and the research rows are the PRODUCING run's supplied declarations "
+            "(only the 'This review' row is this review's own re-grounding measurement) — "
+            "historical provenance, never presented as this run's own identity.</p>"
+        )
+    parts.append("</details>")
+
+    # 183: the sealed research facts (semantic fallback), re-grounded by
+    # this invocation against the captured source bytes.
+    facts = bundle.research_facts
+    parts.append("<details id='research-evidence'><summary>Research evidence (semantic fallback)</summary>")
+    if facts:
+        parts.append(
+            "<div class='table-scroll'><table><thead><tr><th>Model</th><th>Field</th>"
+            "<th>Locator</th><th>Quote (raw source fragment)</th><th>Value (parent-normalized)</th>"
+            "<th>Unit</th><th>Currency</th></tr></thead><tbody>"
+        )
+        for fact in facts:
+            parts.append(
+                f"<tr><td class='wrap'>{esc(fact.provider)}/{esc(fact.model)}</td>"
+                f"<td class='wrap'>{esc(fact.field)}</td>"
+                f"<td class='wrap'>{esc(fact.locator)}</td>"
+                f"<td class='wrap'>{esc(fact.quote)}</td>"
+                f"<td class='wrap'>{esc(fact.value)}</td>"
+                f"<td>{esc(fact.unit)}</td>"
+                f"<td>{esc(fact.currency or '—')}</td></tr>"
+            )
+        parts.append("</tbody></table></div>")
+        parts.append(
+            "<p class='muted'>Method: isolated Codex semantic transcription of the captured "
+            "official bytes — a semantic method, never deterministic extraction. Every cell "
+            "above is re-resolved by the parent against the sealed evidence bytes in this "
+            "review, and the same re-grounding runs for every offline verify; offline "
+            "re-grounding verifies the sealed facts, not the producing run's CLI execution. "
+            "A rejected or ungroundable cell never appears here: it stays excluded or blocks "
+            "with its machine reason.</p>"
+        )
+    else:
+        declared = _research_declared(report)
+        status = str(declared.get("status", "NOT_RUN"))
+        code = declared.get("failure_code")
+        suffix = f" (declared failure code: {esc(str(code))})" if code else ""
+        parts.append(
+            f"<p>Declared research status: {esc(status)} — no sealed research facts to "
+            f"display{suffix}.</p>"
         )
     parts.append("</details>")
 
@@ -1676,17 +1868,20 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
     footer_scope_value = report.get("source_evidence", {}).get("scope")
     footer_scope = (
         "live-collection scope: bounded official retrieval was performed by this invocation; "
-        "apply of the reviewed plan is a separate explicit CLI command; the Codex "
-        "researcher is not implemented in this version. "
+        "the isolated Codex semantic research fallback (when enabled) is part of the live "
+        "collection path, and its sealed facts are re-verified in this review; apply of the "
+        "reviewed plan is a separate explicit CLI command. "
         if footer_scope_value == "live_collection"
         else "supplied-collection scope: the recorded collection identity is historical "
-        "provenance; this invocation reviewed the supplied bytes offline; apply of the "
-        "reviewed plan is a separate explicit CLI command; the Codex researcher is not "
-        "implemented in this version. "
+        "provenance; this invocation reviewed the supplied bytes offline; the research "
+        "identity is the generating invocation's declaration and its sealed facts are "
+        "re-verified against the captured source bytes here; apply of the reviewed plan is "
+        "a separate explicit CLI command. "
         if footer_scope_value == "supplied_collection"
         else "offline scope: review/export/verify only — this invocation performed no "
-        "live retrieval; apply of the reviewed plan is a separate explicit CLI command; "
-        "the Codex researcher is not implemented in this version. "
+        "live retrieval; any sealed research facts in the supplied bundle are re-verified "
+        "against the captured source bytes by this review; apply of the reviewed plan is a "
+        "separate explicit CLI command. "
     )
     parts.append(
         "<footer>"

@@ -1,0 +1,25 @@
+{
+  "artifact": "research-openai-page-variant.md",
+  "scope": "Documented synthetic layout variant of a PRIOR OFFICIAL CAPTURE of the OpenAI model documentation page (gpt-3.5-turbo) taken during the 181-h catalog-refresh collect run. The strategic side applied the exact two-line transformation (the two limit lines re-laid from the deterministic list-item layout into the 'Context window (tokens): N' prose layout) with network denied, preserving every price, modality, endpoint and feature fact, so the deterministic parser succeeds but leaves both limits unresolved. It is NOT a live/current official-format qualification and carries no live retrieval history; any research over it runs against captured bytes only (mock qualification).",
+  "source_url": "https://developers.openai.com/api/docs/models/gpt-3.5-turbo.md",
+  "original_capture": {
+    "objective": "181-h",
+    "run_id": "collect-20261012-211145-052117ddc02d",
+    "retrieved_at": "2026-10-12T21:11:46.135021Z",
+    "capture_artifact": "/tmp/slaif-181h-agent/runs/collect-20261012-211145-052117ddc02d/catalog-refresh.json"
+  },
+  "original_sha256": "b4c0d8628e5a72d9ac94fd4a6fc26ce236ce3bda51a48d3bff042a9b8301f4e7",
+  "variant_sha256": "1167433c22fc055af0dbd2480afeff869107cf53969dbb9b7fe76478070b3f0c",
+  "transformation": "strategic synthetic two-line prose re-layout: list items '- 16,385 context window' / '- 4,096 max output' became 'Context window (tokens): 16,385' / 'Maximum output (tokens): 4,096'",
+  "model": "gpt-3.5-turbo",
+  "original_limits": {
+    "context_length": 16385,
+    "max_output_tokens": 4096
+  },
+  "variant_parse_succeeds": true,
+  "variant_missing_limits": true,
+  "original_prices_modalities_endpoint_preserved": true,
+  "network": "denied",
+  "preflight_parser_baseline": "50acd24459b9feb4277044f724a06f04720f2491",
+  "preflight_parser_baseline_note": "main at 183-a preflight/parser verification time; the original capture above predates that commit and was not taken on it"
+}

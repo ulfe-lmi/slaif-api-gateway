@@ -59,6 +59,7 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
     CHAT_CAPABILITY_TEXT,
     CHAT_COMPLETIONS_CAPABILITIES_KEY,
 )
+from slaif_gateway.services.catalog_refresh import research_grounding as rg
 from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh import sources as _source_registry
 from slaif_gateway.services.catalog_refresh.collection import (
@@ -732,6 +733,39 @@ def _fact_observations(model_facts, route_facts, pricing_facts) -> dict[str, lis
     return observations
 
 
+def _record_regrounded_research(
+    grounded: dict[tuple[str, str, str], Any],
+    *,
+    provider: str,
+    model: str,
+    field: str,
+    fact: Any,
+) -> None:
+    """Record ONE re-grounded research fact for reconciliation.
+
+    Conflict detection runs across ALL grounded observations of the same
+    (provider, model, field): two grounded facts with different
+    value/unit/currency block the run instead of silently selecting the
+    last map entry; an identical duplicate is deduplicated under the
+    explicit rule (the first grounded fact stands)."""
+    key = (provider, model, field)
+    existing = grounded.get(key)
+    if existing is None:
+        grounded[key] = fact
+        return
+    if (
+        str(existing.value) != str(fact.value)
+        or existing.unit != fact.unit
+        or existing.currency != fact.currency
+    ):
+        raise CatalogRefreshBlockedError(
+            "research_facts_conflict",
+            f"re-grounded research facts for model {model} ({field}) conflict: "
+            f"{existing.value} vs {fact.value}; grounded source observations cannot "
+            "silently select one",
+        )
+
+
 def validate_bundle(
     bundle: RefreshBundle,
     baseline: BaselineDocument | None,
@@ -995,6 +1029,83 @@ def validate_bundle(
         assessment["parse_state"] = "ok" if parsed.ok else (parsed.error or "no_registered_parser")
         assessment["parsed_models"] = len(parsed.models)
         assessment["parsed_fx_quotes"] = len(parsed.fx_quotes)
+
+    # --- 183: research facts are RE-GROUNDED at review time (trust is
+    # re-derived, never declared). A SUCCEEDED bundle may seal parent-
+    # verified semantic facts, but every sealed fact must re-derive
+    # EXACTLY from the sealed source bytes carried by this bundle; one
+    # ungroundable fact blocks the run. Non-SUCCEEDED bundles must carry
+    # no facts (partial research data is never allowed).
+    research_facts_total = len(bundle.research_facts)
+    research_facts_grounded = 0
+    # (provider, model, field) -> re-grounded fact; the re-derivation above
+    # is what makes each entry verified evidence for the source-evidence
+    # reconciliation (a bare semantic label still cannot verify a fact).
+    research_grounded: dict[tuple[str, str, str], Any] = {}
+    if research_facts_total and bundle.research.status != "SUCCEEDED":
+        raise CatalogRefreshBlockedError(
+            "research_facts_without_success",
+            f"the bundle seals {research_facts_total} research fact(s) but the research "
+            f"identity is {bundle.research.status}; partial research data is never allowed",
+        )
+    for fact in bundle.research_facts:
+        source = next(
+            (
+                src
+                for src in bundle.sources
+                if f"{src.provider}|{src.model}|{src.source_kind}" == fact.source_key
+            ),
+            None,
+        )
+        assessment = assessment_by_key.get(fact.source_key)
+        if (
+            source is None
+            or source.evidence_b64 is None
+            or source.truncated
+            or assessment is None
+            or assessment.get("evidence_state") != EVIDENCE_OK
+        ):
+            raise CatalogRefreshBlockedError(
+                "research_fact_evidence_missing",
+                f"research fact for model {fact.model} binds source {fact.source_key} "
+                "without sealed verifiable evidence; a semantic label is not evidence",
+            )
+        fact_evidence = base64.b64decode(source.evidence_b64, validate=True)
+        try:
+            rg.re_ground_fact(
+                evidence=fact_evidence,
+                source_kind=source.source_kind,
+                model=fact.model,
+                field=fact.field,
+                locator=fact.locator,
+                quote=fact.quote,
+                value=fact.value,
+                unit=fact.unit,
+                currency=fact.currency,
+            )
+        except rg.GroundingError as exc:
+            raise CatalogRefreshBlockedError(
+                "research_fact_ungroundable",
+                f"research fact for model {fact.model} ({fact.field}) does not re-derive "
+                f"from the sealed bytes of {fact.source_key}: {exc.code}",
+            ) from None
+        research_facts_grounded += 1
+        _record_regrounded_research(
+            research_grounded,
+            provider=source.provider,
+            model=fact.model,
+            field=fact.field,
+            fact=fact,
+        )
+    if research_facts_grounded:
+        add(
+            SEVERITY_REVIEW,
+            "research_semantic_method",
+            f"{research_facts_grounded} research fact(s) grounded by the isolated Codex "
+            "semantic method and re-verified against the sealed source bytes at review "
+            "time; the method is semantic (parent-verified), not deterministic "
+            "extraction",
+        )
 
     # --- 181-b: every observed official row, keyed for eligibility ----
     # The shared standard-v1 billing policy recomputes from these parsed
@@ -1785,6 +1896,11 @@ def validate_bundle(
             digests=source_digests,
             source_times=source_times,
             fx_info=fx_rate_provenance,
+            research_facts={
+                field_name: fact
+                for (prov, mdl, field_name), fact in research_grounded.items()
+                if prov == provider and mdl == upstream
+            },
         )
         # 180-e (E3): an observed official deprecation fact can never be
         # bypassed by omitting the proposal field. If an official snapshot
@@ -2853,9 +2969,44 @@ def validate_bundle(
         import_gates=import_gates,
         baseline=baseline_info,
         research={
-            "status": bundle.research.status,
-            "extractor_version": bundle.research.extractor_version,
-            "tool_version": bundle.research.tool_version,
+            # The research identity the bundle carries is the PRODUCING
+            # invocation's record - a measured declaration of that run,
+            # historical for supplied/offline reviews. It is never
+            # presented as this review's own execution.
+            "declared": {
+                key: getattr(bundle.research, key)
+                for key in sorted(
+                    (
+                        "status",
+                        "codex_version",
+                        "cli_sha256",
+                        "prompt_version",
+                        "template_sha256",
+                        "output_schema_version",
+                        "extractor_version",
+                        "tool_version",
+                        "facts_requested",
+                        "facts_returned",
+                        "facts_accepted",
+                        "facts_rejected",
+                        "elapsed_ms",
+                        "child_exit_code",
+                        "failure_code",
+                        "result_sha256",
+                        "mock_model",
+                        "tasks_planned",
+                        "tasks_unattempted",
+                    )
+                )
+            },
+            # Runner-owned measurement of THIS review: re-grounding of the
+            # sealed research facts against the sealed source bytes.
+            # Offline re-grounding verifies the facts, not the original
+            # CLI execution.
+            "review": {
+                "facts_sealed": research_facts_total,
+                "facts_regrounded": research_facts_grounded,
+            },
         },
         artifacts={
             "routes_tsv_sha256": hashlib.sha256(route_tsv).hexdigest(),

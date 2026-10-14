@@ -304,6 +304,7 @@ def _reconcile(
     digests=None,
     provider="openrouter",
     binding_model="m",
+    research_facts=None,
 ):
     """180-d contract: every field validates against the sources its own
     fact declares; conflicts are checked across ALL official observations;
@@ -320,6 +321,7 @@ def _reconcile(
         digests=digests or {},
         source_times={},
         fx_info={},
+        research_facts=research_facts,
     )
 
 
@@ -2130,3 +2132,116 @@ def test_openai_models_docs_index_bad_shapes_fail_closed() -> None:
     parsed_bad = se.parse_snapshot("openai", "openai_models_docs", bad)
     assert parsed_bad.ok is False
     assert parsed_bad.error == "openai_models_docs:invalid_model_id"
+
+
+# --- 183 research-backed reconciliation ---------------------------------------
+
+# the re-grounded fact's source key uses the real provider|model|source_kind
+# grammar (openrouter facts bind the catalog snapshot record; the
+# deterministic observation keys above stay opaque harness ids)
+RSRC = "openrouter|catalog|openrouter_models_api"
+
+
+def _research_fact(value: str, source_key: str = RSRC, *, unit: str = "none",
+                   currency: str | None = None):
+    from slaif_gateway.schemas.catalog_refresh import ResearchGroundedFact
+
+    return ResearchGroundedFact(
+        source_key=source_key,
+        provider="openrouter",
+        model="m",
+        field="model:context_length",
+        locator="data[0].context_length",
+        quote="128K",
+        value=value,
+        unit=unit,
+        currency=currency,
+    )
+
+
+def test_research_fact_completes_field_without_deterministic_observation() -> None:
+    # no official observation in the context: the re-grounded fact from an
+    # OFFICIAL, declared source completes the field
+    findings, backed, unresolved, _missing = _reconcile(
+        proposed={"model:context_length": 256000},
+        observations=(),
+        official={RSRC},
+        declared={"model:context_length": frozenset({RSRC})},
+        urls={RSRC: "https://openrouter.ai/docs"},
+        digests={RSRC: "d2"},
+        research_facts={"model:context_length": _research_fact("256000")},
+    )
+    assert "model:context_length" in backed
+    assert unresolved == set()
+    assert backed["model:context_length"].backed_by == (RSRC,)
+    assert backed["model:context_length"].independent_sources == 1
+    assert findings == []
+
+
+def test_research_fact_cannot_override_conflicting_deterministic_observation() -> None:
+    # a deterministic official observation states a different limit from
+    # the same context: the re-grounded quote cannot replace it, even
+    # though the isolated quote re-grounds; the full-context
+    # contradiction blocks
+    findings, backed, unresolved, _missing = _reconcile(
+        proposed={"model:context_length": 256000},
+        observations=(_obs("s1", "m", "model:context_length", "128000"),),
+        official={"s1"},
+        declared={"model:context_length": frozenset({"s1"})},
+        urls={"s1": "https://openrouter.ai/api/v1/models"},
+        digests={"s1": "d1"},
+        research_facts={"model:context_length": _research_fact("256000")},
+    )
+    assert "model:context_length" in unresolved
+    assert "model:context_length" not in backed
+    assert any(f.code == "source_evidence_value_mismatch" for f in findings)
+
+
+def test_research_fact_undeclared_source_blocks() -> None:
+    # the re-grounded fact cites a source the field's fact does not
+    # declare: same per-field reference binding as deterministic evidence
+    findings, backed, unresolved, _missing = _reconcile(
+        proposed={"model:context_length": 256000},
+        observations=(),
+        official={RSRC},
+        declared={"model:context_length": frozenset({"s1"})},
+        urls={"s1": "https://openrouter.ai/api/v1/models",
+              RSRC: "https://openrouter.ai/docs"},
+        digests={"s1": "d1", RSRC: "d2"},
+        research_facts={"model:context_length": _research_fact("256000")},
+    )
+    assert "model:context_length" in unresolved
+    assert "model:context_length" not in backed
+    assert any(f.code == "source_evidence_reference_mismatch" for f in findings)
+
+
+def test_research_fact_non_official_source_blocks() -> None:
+    # a declared source that is not OFFICIAL-classified cannot back a fact
+    findings, backed, unresolved, _missing = _reconcile(
+        proposed={"model:context_length": 256000},
+        observations=(),
+        official=set(),
+        declared={"model:context_length": frozenset({RSRC})},
+        urls={RSRC: "https://openrouter.ai/docs"},
+        digests={RSRC: "d2"},
+        research_facts={"model:context_length": _research_fact("256000")},
+    )
+    assert "model:context_length" in unresolved
+    assert "model:context_length" not in backed
+    assert any(f.code == "source_evidence_reference_mismatch" for f in findings)
+
+
+def test_research_fact_value_mismatch_blocks() -> None:
+    # the proposal disagrees with the re-grounded fact value
+    findings, backed, unresolved, _missing = _reconcile(
+        proposed={"model:context_length": 999000},
+        observations=(),
+        official={RSRC},
+        declared={"model:context_length": frozenset({RSRC})},
+        urls={RSRC: "https://openrouter.ai/docs"},
+        digests={RSRC: "d2"},
+        research_facts={"model:context_length": _research_fact("256000")},
+    )
+    assert "model:context_length" in unresolved
+    assert "model:context_length" not in backed
+    assert any(f.code == "source_evidence_value_mismatch" for f in findings)
