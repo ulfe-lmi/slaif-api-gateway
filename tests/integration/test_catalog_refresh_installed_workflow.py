@@ -793,3 +793,215 @@ def test_r3r4_installed_bootstrap_verify_apply(
     )
     assert apps_after[0][0] == 1, "idempotent retry must not add a second application row"
     assert apps_after[0][1] == apps_after[0][2] == app_t
+
+
+def test_r4b_installed_refresh_changed_prices_fx_and_apply(
+    installed_env: dict[str, str], installed_pg_url: str, tmp_path_factory
+) -> None:
+    """R4 (refresh leg): installed refresh against the live DB baseline over
+    the v2 controlled sources (changed OpenAI input price, changed OpenRouter
+    input price, changed ECB rate) -> READY_WITH_WARNINGS with exactly the
+    price/FX movement findings -> report shows old and new values ->
+    acknowledged apply supersedes pricing and FX at the one effective T,
+    preserves route authority, and records the second application row."""
+    env = installed_env
+    db_url = installed_pg_url
+    scratch = tmp_path_factory.mktemp("slaif184-refresh")
+    run_root = Path(_STATE["run_root_boot"])
+    seal_key = Path(_STATE["seal_key"])
+    fx_v2 = _materialize_source_set(scratch / "fx-v2", set_name="v2", rate="1.12")
+
+    proc = _run_installed(
+        env,
+        [
+            "slaif-catalog-refresh",
+            "--mode",
+            "refresh",
+            "--db-url",
+            db_url,
+            "--run-root",
+            str(run_root),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+            "--timeout",
+            "120",
+        ],
+        cwd=scratch,
+        extra={"SLAIF184_FIXTURE_DIR": str(fx_v2)},
+        timeout=300,
+    )
+    assert proc.returncode == 10, (
+        f"refresh expected READY_WITH_WARNINGS (10), got {proc.returncode}\n"
+        f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+    )
+    summary = _summary(proc)
+    assert summary["state"] == "READY_WITH_WARNINGS"
+    run_dir = Path(urlparse(summary["run_dir"]).path)
+    for artifact in ("receipt.json", "REVIEW.html", "validation.json", "catalog-refresh.json"):
+        assert (run_dir / artifact).is_file(), f"missing {artifact}"
+    _STATE["run_dir_refresh"] = str(run_dir)
+
+    validation = json.loads((run_dir / "validation.json").read_text(encoding="utf-8"))
+    codes: list[str] = []
+
+    def _walk(obj) -> None:
+        if isinstance(obj, dict):
+            if "code" in obj and "severity" in obj:
+                codes.append(obj["code"])
+            for value in obj.values():
+                _walk(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                _walk(value)
+
+    _walk(validation)
+    assert sorted(codes) == [
+        "fx_moved_review",
+        "price_moved_review",
+        "price_moved_review",
+    ], codes
+
+    # The sealed report carries BOTH old and new values for the movements.
+    html = (run_dir / "REVIEW.html").read_text(encoding="utf-8")
+    assert "0.5" in html and "0.75" in html
+    assert "1.08" in html and "1.12" in html
+
+    vproc = _run_installed(
+        env,
+        [
+            "slaif-gateway",
+            "catalog-refresh",
+            "verify",
+            "--run-dir",
+            str(run_dir),
+            "--seal-key",
+            str(seal_key),
+            "--json",
+        ],
+        cwd=scratch,
+        timeout=120,
+    )
+    assert vproc.returncode == 0, vproc.stderr
+    vsummary = json.loads([ln for ln in vproc.stdout.splitlines() if ln.strip()][-1])
+    assert vsummary.get("valid") is True, vsummary
+
+    actor = "oap-184-qualification"
+    reason = "184-a qualification: installed refresh of changed prices and FX"
+    aproc = _run_installed(
+        env,
+        [
+            "slaif-gateway",
+            "catalog-refresh",
+            "apply",
+            "--run-dir",
+            str(run_dir),
+            "--db-url",
+            db_url,
+            "--seal-key",
+            str(seal_key),
+            "--confirm",
+            "--reason",
+            reason,
+            "--actor",
+            actor,
+            "--ack-warnings",
+            "price_moved_review,fx_moved_review",
+            "--json",
+        ],
+        cwd=scratch,
+        timeout=180,
+    )
+    assert aproc.returncode == 0, (
+        f"refresh apply rc={aproc.returncode}\n{aproc.stdout}\n{aproc.stderr}"
+    )
+    asum = json.loads([ln for ln in aproc.stdout.splitlines() if ln.strip()][-1])
+    assert asum["status"] == "committed", asum
+
+    from decimal import Decimal
+
+    # --- pricing supersession at the one effective T ------------------------
+    def pricing_rows(provider: str, model: str) -> list:
+        return _sql(
+            db_url,
+            "SELECT input_price_per_1m, output_price_per_1m, cached_input_price_per_1m, "
+            "valid_from, valid_until FROM pricing_rules "
+            "WHERE provider=:provider AND upstream_model=:model ORDER BY valid_from",
+            {"provider": provider, "model": model},
+        )
+
+    gpt_rows = pricing_rows("openai", "gpt-3.5-turbo")
+    assert len(gpt_rows) == 2, gpt_rows
+    old, new = gpt_rows
+    assert old[0] == Decimal("0.5") and old[1] == Decimal("1.5") and old[4] is not None
+    assert new[0] == Decimal("0.75") and new[1] == Decimal("1.5") and new[4] is None
+    assert old[4] == new[3], "old row must close exactly where the new row opens"
+
+    orc_rows = pricing_rows("openrouter", "syn/orc-a")
+    assert len(orc_rows) == 2, orc_rows
+    old, new = orc_rows
+    assert old[0] == Decimal("5") and old[1] == Decimal("15")
+    assert new[0] == Decimal("7") and new[1] == Decimal("15") and new[2] == Decimal("0.5")
+    assert old[4] == new[3]
+
+    # unchanged model: its single row was not superseded
+    orc_b = pricing_rows("openrouter", "syn/orc-b")
+    assert len(orc_b) == 1, orc_b
+    assert orc_b[0][0] == Decimal("4") and orc_b[0][1] == Decimal("12") and orc_b[0][4] is None
+
+    # --- FX supersession ------------------------------------------------------
+    fx_rows = _sql(
+        db_url,
+        "SELECT rate, valid_from, valid_until FROM fx_rates "
+        "WHERE base_currency='USD' AND quote_currency='EUR' ORDER BY valid_from",
+    )
+    assert len(fx_rows) == 2, fx_rows
+    old, new = fx_rows
+    assert old[0] == Decimal("0.925925926") and old[2] is not None
+    assert new[0] == Decimal("0.892857143") and new[2] is None
+    assert old[2] == new[1]
+    # the T of the pricing supersessions equals the T of the FX supersession
+    assert new[1] == gpt_rows[1][3] == orc_rows[1][3]
+
+    # --- route authority preserved -------------------------------------------
+    routes = _sql(
+        db_url,
+        "SELECT id, requested_model, provider, upstream_model, enabled, created_at, updated_at "
+        "FROM model_routes ORDER BY requested_model",
+    )
+    assert [r[1] for r in routes] == ["gpt-3.5-turbo", "syn/orc-a", "syn/orc-b"]
+    assert all(r[4] for r in routes)
+    for row in routes:
+        assert row[5] == row[6], "refresh must not touch existing route rows"
+
+    # --- second durable application row ---------------------------------------
+    apps = _sql(
+        db_url,
+        "SELECT run_id, mode, outcome FROM catalog_refresh_applications "
+        "ORDER BY effective_at",
+    )
+    assert len(apps) == 2, apps
+    assert apps[0][1] == "bootstrap" and apps[0][2] == "committed"
+    assert apps[1][1] == "refresh" and apps[1][2] == "committed"
+    assert apps[1][0] == Path(run_dir).name
+
+    sproc = _run_installed(
+        env,
+        [
+            "slaif-gateway",
+            "catalog-refresh",
+            "status",
+            "--run-dir",
+            str(run_dir),
+            "--db-url",
+            db_url,
+            "--seal-key",
+            str(seal_key),
+            "--json",
+        ],
+        cwd=scratch,
+        timeout=120,
+    )
+    assert sproc.returncode == 0, sproc.stderr
+    ssum = json.loads([ln for ln in sproc.stdout.splitlines() if ln.strip()][-1])
+    assert ssum["committed"] is True
