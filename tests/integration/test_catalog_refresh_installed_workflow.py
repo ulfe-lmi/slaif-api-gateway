@@ -331,10 +331,18 @@ def installed_pg_url() -> Iterator[str]:
         host_config = attrs["HostConfig"] or {}
         tmpfs = host_config.get("Tmpfs") or {}
         assert "/var/lib/postgresql/data" in tmpfs, "owned PG tmpfs missing"
+        # Configured binding: loopback IP requested (HostPort empty string
+        # == random port in the Docker API).
         bindings = host_config.get("PortBindings") or {}
-        bound = bindings.get("5432/tcp") or []
+        configured = bindings.get("5432/tcp") or []
+        assert configured and all(
+            b.get("HostIp") == "127.0.0.1" for b in configured
+        ), f"owned PG must bind loopback, got: {configured}"
+        # Actual published mapping (measured after start).
+        network_ports = (attrs["NetworkSettings"] or {}).get("Ports") or {}
+        bound = network_ports.get("5432/tcp") or []
         assert bound and all(b.get("HostIp") == "127.0.0.1" for b in bound), (
-            f"owned PG must bind loopback, got: {bound}"
+            f"owned PG must publish on loopback, got: {bound}"
         )
         port = bound[0]["HostPort"]
         assert port, "owned PG port binding missing"
