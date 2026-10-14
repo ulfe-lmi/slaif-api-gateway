@@ -188,7 +188,7 @@ class DocsPageModelTranscription(BaseModel):
 
 
 class ResearchOutput(BaseModel):
-    """Strict typed twin of admin/catalog-refresh/research-output.schema.json
+    """Strict typed twin of the packaged research-output.schema.json
     (draft 2020-12). ``task`` selects the per-model shape; unknown extras,
     extra models, or out-of-bounds cells are validation errors."""
 
@@ -645,15 +645,24 @@ def _cli_identity(cfg: ResearchConfig) -> tuple[str, str]:
     return version, sha
 
 
+def _asset_file(name: str) -> Path:
+    # 184 (R2): canonical packaged asset resolved through
+    # importlib.resources, so it works identically in a source checkout
+    # and in a wheel installation outside the checkout. Resolved lazily
+    # at use time; a missing asset refuses the phase (UNAVAILABLE) and is
+    # never replaced by a repository-relative fallback or invented
+    # constant.
+    from importlib.resources import files
+
+    return Path(files("slaif_gateway.resources.catalog_refresh").joinpath(name))
+
+
 def _template_path() -> Path:
-    # Source-checkout layout: this file lives in
-    # app/slaif_gateway/services/catalog_refresh/, so the repository root
-    # (and the checked-in admin/ assets) is four levels up.
-    return Path(__file__).resolve().parents[4] / "admin" / "catalog-refresh" / "research-instructions.md"
+    return _asset_file("research-instructions.md")
 
 
 def _schema_path() -> Path:
-    return Path(__file__).resolve().parents[4] / "admin" / "catalog-refresh" / "research-output.schema.json"
+    return _asset_file("research-output.schema.json")
 
 
 def _identity_base(cfg: ResearchConfig, template_bytes: bytes) -> dict[str, Any]:
@@ -726,15 +735,18 @@ def run_research_phase(
     if not cfg.cli_bin or not cfg.model_name:
         return _unavailable(cfg, "research_configuration_incomplete")
 
-    # Exact checked-in asset bytes (source-checkout layout); a missing asset
-    # refuses the phase - the identity may never be an invented constant.
+    # Exact packaged asset bytes (importlib.resources resolution); a
+    # missing asset - file absent OR asset package missing (broken
+    # install) - refuses the phase as UNAVAILABLE; the identity may never
+    # be an invented constant and resolution errors never escape the
+    # phase.
     try:
         template_bytes = _template_path().read_bytes()
-    except OSError:
+    except (OSError, ModuleNotFoundError):
         return _unavailable(cfg, "research_template_missing")
     try:
         schema_bytes = _schema_path().read_bytes()
-    except OSError:
+    except (OSError, ModuleNotFoundError):
         return _unavailable(cfg, "research_schema_missing")
 
     # New private owned per-invocation workspace; placement checked BEFORE

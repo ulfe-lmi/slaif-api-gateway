@@ -49,6 +49,7 @@ dev = [
 
 [project.scripts]
 slaif-gateway = "slaif_gateway.cli.main:app"
+slaif-catalog-refresh = "slaif_gateway.cli.catalog_refresh_admin:main"
 
 [tool.setuptools]
 package-dir = {"" = "app"}
@@ -59,6 +60,7 @@ where = ["app"]
 [tool.setuptools.package-data]
 slaif_gateway = [
   "resources/*.json",
+  "resources/catalog_refresh/*",
   "web/templates/**/*.html",
   "web/static/**/*",
 ]

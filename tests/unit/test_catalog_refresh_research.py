@@ -310,6 +310,45 @@ def test_phase_refuses_missing_template_or_schema(tmp_path: Path, monkeypatch: p
     assert outcome.identity.failure_code == "research_schema_missing"
 
 
+ASSET_TEMPLATE_SHA256 = (
+    "5ba7ff44d58fa21f7d020fbb793e5611bfb416b0475e5d92e23d566a45081d18"
+)
+ASSET_SCHEMA_SHA256 = (
+    "89c57bd740aca25a60e90f304cd70b657993910d9555ac289adc875cf9564a87"
+)
+
+
+def test_packaged_assets_resolve_with_canonical_bytes() -> None:
+    """184 R2: the research template/schema are canonical PACKAGED assets
+    resolved through importlib.resources (identical in a source checkout
+    and a wheel install). The exact bytes are digest-pinned; the identity
+    binding (template_sha256) measures these same bytes per phase."""
+    template = r._template_path()
+    schema = r._schema_path()
+    assert hashlib.sha256(template.read_bytes()).hexdigest() == ASSET_TEMPLATE_SHA256
+    assert hashlib.sha256(schema.read_bytes()).hexdigest() == ASSET_SCHEMA_SHA256
+    # resolved inside the installed package, not a repository-relative path
+    assert "slaif_gateway" in template.parts and "resources" in template.parts
+
+
+def test_phase_refuses_missing_asset_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """184 R2: a broken installation can lack the packaged asset package
+    itself; importlib.resources.files then raises ModuleNotFoundError
+    (not OSError). Resolution errors must normalize to the same safe
+    UNAVAILABLE refusals instead of escaping run_research_phase."""
+    cfg = _cfg(tmp_path)
+    missing = ModuleNotFoundError("No module named 'slaif_gateway.resources.catalog_refresh'")
+    monkeypatch.setattr(r, "_template_path", lambda: (_ for _ in ()).throw(missing))
+    outcome = r.run_research_phase(cfg, _plan_one())
+    assert outcome.identity.status == "UNAVAILABLE"
+    assert outcome.identity.failure_code == "research_template_missing"
+    monkeypatch.undo()
+    monkeypatch.setattr(r, "_schema_path", lambda: (_ for _ in ()).throw(missing))
+    outcome = r.run_research_phase(cfg, _plan_one())
+    assert outcome.identity.status == "UNAVAILABLE"
+    assert outcome.identity.failure_code == "research_schema_missing"
+
+
 def test_phase_refuses_workspace_inside_repo(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
