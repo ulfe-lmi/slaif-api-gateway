@@ -161,15 +161,41 @@ def _install() -> None:
 
 
 if os.environ.get("SLAIF184_FIXTURE_DIR"):
-    # Module import == activation; an exception here terminates the
-    # interpreter at startup (site import failure), never the CLI.
-    _install()
+    # Module import == activation. Python IGNORES ordinary site-import
+    # exceptions, so an active-but-broken seam must terminate EXPLICITLY
+    # before any CLI code can run (never degrade to physical retrieval).
+    try:
+        _install()
+    except BaseException as _exc:
+        import sys
+
+        print(
+            f"slaif184 fixture seam FAILED to activate: {_exc!r} "
+            "(terminating before CLI; physical retrieval is never a fallback)",
+            file=sys.stderr,
+        )
+        os._exit(65)
 '''
 
-SITECUSTOMIZE = '''\
-# 184 test-only seam bootstrap. No ImportError swallowing: a missing or
-# broken shim must fail the interpreter at startup, before any CLI runs.
-import _slaif184_fixture_shim  # noqa: F401
+SITECUSTOMIZE = '''\\
+import os as _os
+
+# 184 test-only seam bootstrap: active only with SLAIF184_FIXTURE_DIR.
+# Python IGNORES ordinary site-import exceptions, so a missing or
+# broken shim in active mode must terminate the interpreter EXPLICITLY
+# at startup (before any CLI runs) - never degrade to physical retrieval.
+if _os.environ.get("SLAIF184_FIXTURE_DIR"):
+    try:
+        import _slaif184_fixture_shim  # noqa: F401
+    except BaseException as _exc:
+        import sys as _sys
+
+        _sys.stderr.write(
+            "slaif184 fixture seam FAILED to activate: %r "
+            "(terminating before CLI; physical retrieval is never a fallback)\\n"
+            % (_exc,)
+        )
+        _os._exit(65)
 '''
 
 
@@ -512,6 +538,33 @@ def test_r3r4_installed_bootstrap_verify_apply(
         timeout=120,
     )
     assert seam_off.stdout.strip() == "slaif_gateway.services.catalog_refresh.sources"
+    # Executed startup-failure control (print-only payload, no real
+    # network): a BROKEN shim shadowing the venv's must terminate the
+    # interpreter at startup (exit 65) BEFORE the payload runs.
+    broken = scratch / "broken-shim"
+    broken.mkdir()
+    (broken / "_slaif184_fixture_shim.py").write_text(
+        "raise RuntimeError('synthetic shim failure 184')\n", encoding="utf-8"
+    )
+    broken_proc = subprocess.run(
+        [str(Path(env["venv_bin"]) / "python"), "-c", "print('AFTER_STARTUP_EXECUTED')"],
+        cwd=str(scratch),
+        env=_installed_env_dict(
+            env,
+            {"SLAIF184_FIXTURE_DIR": str(fx_v1), "PYTHONPATH": str(broken)},
+        ),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert broken_proc.returncode == 65, (
+        f"broken shim must terminate at startup, got {broken_proc.returncode}\n"
+        f"STDOUT:\n{broken_proc.stdout}\nSTDERR:\n{broken_proc.stderr}"
+    )
+    assert "slaif184 fixture seam FAILED to activate" in broken_proc.stderr
+    assert "AFTER_STARTUP_EXECUTED" not in broken_proc.stdout
+
     _STATE["origins"] = origins
 
     # --- R4a: installed bootstrap, both providers, controlled ECB fixture --
