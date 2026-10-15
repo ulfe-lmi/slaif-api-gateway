@@ -30,6 +30,11 @@ Core invariants:
 - Redis is temporary operational state only. Redis must not become the only
   hard quota or accounting store.
 - Cost-bearing provider calls reserve quota in PostgreSQL before forwarding.
+- Lazy (wait) throttling, when explicitly stored on a key, waits at the Redis
+  operational rate-limit seam before provider work. Waiting reserves no
+  quota, writes no ledger row, and holds no PostgreSQL connection or
+  transaction; the ordinary PostgreSQL reservation/finalization runs exactly
+  once after admission. Hard quota, fence, and hold authority are unchanged.
 - Ownership-checked Responses and Conversations resource/control calls
   (retrieve/delete/input-item listing, Conversation update, and Conversation
   item create/list/retrieve/delete) do not reserve generation quota or write

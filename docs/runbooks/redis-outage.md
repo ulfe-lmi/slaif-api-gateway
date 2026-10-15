@@ -69,6 +69,21 @@ cleanup. If Redis is unavailable, concurrency enforcement is degraded according
 to fail-open/fail-closed policy. Existing durable PostgreSQL quota reservations
 are not stored in Redis and are not repaired by resetting Redis.
 
+## Lazy (waiting) throttling during an outage
+
+Waiting leases and waiting counters live in Redis. When Redis is unavailable,
+rate limiting degrades according to the existing fail-open/fail-closed policy,
+and lazy waiting does not change that:
+
+- fail-open: requests are admitted immediately with no operational throttles;
+  stored wait policies do not queue requests;
+- fail-closed: requests receive the existing Redis-unavailable 503; waiting
+  requests are refused rather than queued indefinitely.
+
+Crashed-waiter leases expire after
+`LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS` (default 300). There is no durable
+waiting queue, no fallback store, and no recovery replay of interrupted waits.
+
 ## Verification
 
 - `/readyz` is healthy.

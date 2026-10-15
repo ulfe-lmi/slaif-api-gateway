@@ -857,6 +857,29 @@ Before forwarding a request, update reservation counters in the same PostgreSQL 
 
 ---
 
+### Lazy throttling policy JSON
+
+Lazy (waiting) throttling storage is JSON only:
+`gateway_keys.metadata.lazy_throttling_policy`. No column, table, constraint,
+or migration was added for it. Canonical shape:
+
+```json
+{
+  "mode": "wait",
+  "max_wait_seconds": 30,
+  "max_waiting_requests": 2
+}
+```
+
+`mode` is `wait` or `reject`. Bounds are positive whole numbers that the
+service validates against the operator ceilings
+(`LAZY_THROTTLING_MAX_WAIT_SECONDS`, `LAZY_THROTTLING_MAX_WAITING_PER_KEY`) at
+write time. Missing metadata, absent key, `reject` mode, or malformed/unknown
+content all project to immediate rejection — a stored value can never silently
+grant waiting or bypass a ceiling. The policy is written and read only through
+the KeyService key-create/key-update paths, in the same transaction as the
+audit row.
+
 ## 5.7 `quota_reservations`
 
 Temporary reservations created before upstream forwarding and finalized/released after response handling.

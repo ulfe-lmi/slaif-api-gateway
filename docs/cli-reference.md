@@ -58,6 +58,11 @@ Plaintext key output is one-time only. Prefer `--secret-output-file` for an
 owner-only file or explicitly confirmed plaintext output. Lost keys are rotated,
 not recovered. Reserved-counter repair has additional confirmation requirements.
 
+The lazy (waiting) throttling policy is not a CLI flag. It is managed through
+the admin dashboard key create/detail forms (the same KeyService and audit
+path) and is stored in the key's validated metadata; the CLI key commands do
+not read, change, or reset it.
+
 ## Providers, routes, pricing, and FX
 
 ```text

@@ -730,6 +730,22 @@ async def _set_gateway_key_status(
         await engine.dispose()
 
 
+async def _set_owner_inactive(database_url: str, owner_id: uuid.UUID) -> int:
+    """Direct SQL owner deactivation (test-only): returns affected rowcount."""
+    from sqlalchemy import text
+
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("UPDATE owners SET is_active = false WHERE id = :id"),
+                {"id": owner_id},
+            )
+            return result.rowcount
+    finally:
+        await engine.dispose()
+
+
 def _responses_body(model: str) -> dict[str, object]:
     return {"model": model, "input": PROMPT_TEXT, "store": False}
 
@@ -2136,6 +2152,127 @@ def test_http_chat_revoked_while_waiting_refuses_403(
     assert asyncio.run(probe_zcard_check(owned_redis_url, seeded.gateway_key_id)) == 0
 
 
+def test_http_chat_owner_inactive_while_waiting_refuses_403(
+    owned_pg_url: str,
+    owned_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An owner deactivated while a request waits is refused at revalidation.
+
+    The waiter is observed holding its waiting lease (per-key ZSET member
+    {key_id}:{request_id}); the owner is then deactivated directly in
+    PostgreSQL. The waiter's revalidation after the wait must refuse with 403
+    owner_not_active instead of forwarding under its stale pre-wait
+    authorization: no provider call and no persisted accounting under the
+    waiter's opaque request ID. The already-admitted holder finalizes
+    normally (revalidation gates requests still waiting, not in-flight work).
+    """
+    _configure_lazy_environment(
+        monkeypatch, database_url=owned_pg_url, redis_url=owned_redis_url
+    )
+    model = f"lazy-http-{uuid.uuid4().hex[:12]}"
+    seeded = asyncio.run(
+        _seed_chat_key(
+            owned_pg_url,
+            model=model,
+            rate_limit_policy={"max_concurrent_requests": 1, "window_seconds": 60},
+            lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 30, "max_waiting_requests": 2},
+        )
+    )
+
+    calls: list[str] = []
+    first_entered = threading.Event()
+    first_release = threading.Event()
+    adapter = _make_holding_chat_adapter(model, calls, first_entered, first_release)
+
+    import slaif_gateway.services.chat_completion_gateway as chat_gateway
+
+    monkeypatch.setattr(
+        chat_gateway, "get_provider_adapter", lambda route, settings: adapter
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    app = create_app(get_settings())
+    port = _free_port()
+    base = f"http://127.0.0.1:{port}"
+    headers = {"Authorization": f"Bearer {seeded.plaintext_gateway_key}"}
+    probe = Redis.from_url(owned_redis_url, decode_responses=True)
+    waiter_request_ids: list[str] = []
+
+    async def _observe_waiter_then_deactivate_owner() -> None:
+        try:
+            await _wait_zcard(
+                probe, per_key_waiting_key(seeded.gateway_key_id), 1, timeout=20
+            )
+            members = await probe.zrange(
+                per_key_waiting_key(seeded.gateway_key_id), 0, -1
+            )
+            assert len(members) == 1, members
+            member = str(members[0])
+            prefix = f"{seeded.gateway_key_id}:"
+            assert member.startswith(prefix), member
+            waiter_request_ids.append(member[len(prefix):])
+            # Deactivate the owner while the waiter still holds its lease.
+            key_row = await _stored_gateway_key_row(
+                owned_pg_url, seeded.gateway_key_id
+            )
+            assert await _set_owner_inactive(owned_pg_url, key_row.owner_id) == 1
+        finally:
+            await probe.aclose()
+
+    holder = _start_holding_request(base=base, model=model, headers=headers)
+    waiter_responses: list[httpx.Response] = []
+    waiter = threading.Thread(
+        target=lambda: waiter_responses.append(
+            httpx.post(
+                f"{base}/v1/chat/completions",
+                json=_chat_body(model),
+                headers=headers,
+                timeout=60.0,
+            )
+        )
+    )
+    with _run_uvicorn_server(app, port):
+        holder.start()
+        try:
+            assert first_entered.wait(timeout=20), "first provider call did not start"
+            baseline = asyncio.run(
+                _side_effect_counts(owned_pg_url, seeded.gateway_key_id)
+            )
+            waiter.start()
+            asyncio.run(_observe_waiter_then_deactivate_owner())
+            waiter.join(timeout=30)
+            assert not waiter.is_alive(), "inactive-owner waiter did not return"
+        finally:
+            first_release.set()
+            holder.join(timeout=30)
+            assert not holder.is_alive()
+            if waiter.is_alive():
+                waiter.join(timeout=10)
+
+    assert len(waiter_request_ids) == 1
+    canceled_request_id = waiter_request_ids[0]
+    assert len(waiter_responses) == 1
+    assert waiter_responses[0].status_code == 403, waiter_responses[0].text[:300]
+    assert waiter_responses[0].json()["error"]["code"] == "owner_not_active"
+    # The refused waiter never reached the provider and never reserved.
+    assert len(calls) == 1, calls
+    assert canceled_request_id not in calls, calls
+    stored = asyncio.run(_stored_request_ids(owned_pg_url, seeded.gateway_key_id))
+    assert canceled_request_id not in stored, stored
+    # The already-admitted holder finalizes normally.
+    final = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+    # The holder's in-flight reservation is already in the baseline; the
+    # refused waiter adds nothing, and the holder finalizes exactly once.
+    assert final == (baseline[0], baseline[1] + 1), (
+        f"the admitted holder finalizes once: baseline={baseline} final={final}"
+    )
+    # No waiting lease left behind by the refused waiter.
+    assert asyncio.run(probe_zcard_check(owned_redis_url, seeded.gateway_key_id)) == 0
+
+
 # --- V3/V4: actual HTTP Responses wait -> admit --------------------------------
 
 
@@ -2479,4 +2616,45 @@ async def test_admin_lazy_throttling_policy_durable_and_audited(
         )
         refreshed = await service._get_gateway_key(key_id)
         assert service._lazy_throttling_policy_from_key(refreshed) is None
+
+    # (6) Injected audit-write failure: the metadata change and the audit
+    # write share one transaction, so the whole update rolls back and no
+    # audit row remains (same-transaction audit guarantee, R2).
+    policy_before_failure = (row.metadata_json or {}).get("lazy_throttling_policy")
+    audits_before_failure = len(
+        [
+            a
+            for a in await _audit_rows_for_key(owned_pg_url, key_id)
+            if a.action == "update_key_lazy_throttling"
+        ]
+    )
+
+    async def _raise_audit_failure(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("injected audit write failure")
+
+    monkeypatch.setattr(AuditRepository, "add_audit_log", _raise_audit_failure)
+    async with _service_session() as session:
+        service = KeyService(
+            settings=Settings(),
+            gateway_keys_repository=GatewayKeysRepository(session),
+            one_time_secrets_repository=OneTimeSecretsRepository(session),
+            audit_repository=AuditRepository(session),
+        )
+        with pytest.raises(RuntimeError, match="injected audit write failure"):
+            await service.update_gateway_key_lazy_throttling(
+                UpdateGatewayKeyLazyThrottlingInput(
+                    gateway_key_id=key_id,
+                    lazy_throttling_policy={"mode": "reject"},
+                    actor_admin_id=None,
+                    reason="focused integration: audit failure rollback",
+                )
+            )
+    row = await _stored_gateway_key_row(owned_pg_url, key_id)
+    assert (row.metadata_json or {}).get("lazy_throttling_policy") == policy_before_failure
+    lazy_audit_after_failure = [
+        a
+        for a in await _audit_rows_for_key(owned_pg_url, key_id)
+        if a.action == "update_key_lazy_throttling"
+    ]
+    assert len(lazy_audit_after_failure) == audits_before_failure
 

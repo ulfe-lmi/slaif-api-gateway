@@ -244,15 +244,21 @@ remains the hard quota and accounting source of truth.
   `RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS`, and
   `RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS` control active concurrency slot
   cleanup and stream heartbeats.
-- `LAZY_THROTTLING_MAX_WAIT_SECONDS`, `LAZY_THROTTLING_MAX_WAITING_PER_KEY`,
-  `LAZY_THROTTLING_MAX_WAITING_TOTAL`, and
-  `LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS` bound the optional per-key lazy
-  (waiting) throttling policy for Chat Completions and Responses: operator
-  ceilings for a key's maximum wait seconds and maximum waiting requests, a
-  deployment-wide waiting cap, and the Redis waiting-lease expiry. They only
-  bound key policies when Redis rate limiting is enabled; they do not enable
-  waiting for any key by themselves, and waiting is always off unless an
-  operator explicitly stores a wait policy on an individual key.
+- `LAZY_THROTTLING_MAX_WAIT_SECONDS` (default 120),
+  `LAZY_THROTTLING_MAX_WAITING_PER_KEY` (default 16),
+  `LAZY_THROTTLING_MAX_WAITING_TOTAL` (default 256), and
+  `LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS` (default 300) bound the optional
+  per-key lazy (waiting) throttling policy for Chat Completions and Responses:
+  operator ceilings for a key's maximum wait seconds and maximum waiting
+  requests, a deployment-wide waiting cap, and the Redis waiting-lease expiry
+  for crashed-waiter recovery. They only bound key policies when Redis rate
+  limiting is enabled; they do not enable waiting for any key by themselves,
+  and waiting is always off unless an operator explicitly stores a wait policy
+  on an individual key. The key-form defaults when an operator selects wait
+  mode are 30s maximum wait and 2 waiting requests. Waiting precedes provider
+  execution: a client or proxy timeout shorter than the key's configured
+  maximum wait plus normal inference time will see the connection end while
+  the request is still bounded-waiting.
 
 The checked-in `.env.example` uses the Docker Compose hostname `redis` inside
 containers and publishes the container's Redis port on host port `16379` by

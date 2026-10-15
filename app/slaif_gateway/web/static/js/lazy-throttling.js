@@ -13,6 +13,10 @@
       );
       for (const group of groups) {
         group.hidden = !waitSelected;
+        // The page stylesheet sets display on the grid class, which would
+        // override the hidden attribute; the inline style makes the
+        // hide/reveal actually apply without CSS changes.
+        group.style.display = waitSelected ? "" : "none";
       }
       for (const field of fields) {
         field.disabled = !waitSelected;

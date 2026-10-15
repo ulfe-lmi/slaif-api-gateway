@@ -692,6 +692,21 @@ Errors from `/v1` routes are OpenAI-shaped:
 
 Provider errors are normalized to safe OpenAI-shaped client errors. Raw provider response bodies are not returned to clients and are not stored. When available, bounded sanitized provider diagnostics are stored for operators in failure ledger metadata.
 
+Lazy (wait) throttling, when explicitly enabled on an individual key for Chat
+Completions and Responses, adds two OpenAI-shaped 429 `rate_limit_error` codes
+at the Redis rate-limit seam: `lazy_throttling_deadline_exceeded` (the key's
+configured maximum wait was reached without admission) and
+`lazy_throttling_waiting_capacity_full` (the per-key or deployment-wide
+waiting cap is already reached). Existing `request_rate_limit_exceeded`,
+`token_rate_limit_exceeded`, and `concurrency_rate_limit_exceeded` codes and
+the Redis-unavailable 503 behavior are unchanged. If the key's effective
+policy or route changes while a request is waiting, the request is refused
+with 409 `policy_changed_while_waiting` instead of forwarding under the stale
+policy. A client that disconnects while waiting is canceled internally: 499
+`client_disconnected` is an internal classification (no response is sent to
+the closed peer), not a public cancel protocol, and no automatic replay
+occurs. No `Retry-After` header is sent by the gateway.
+
 Unsupported endpoints and unsupported provider adapter endpoints are explicit errors; they are not silently proxied.
 
 The versioned authority contract records tool aliases, stores canonical
