@@ -257,6 +257,7 @@ async def _seed_chat_key(
     model: str,
     rate_limit_policy: dict[str, int | None] | None = None,
     lazy_throttling_policy: dict[str, object] | None = None,
+    request_limit_total: int = 100,
 ) -> _SeededKey:
     """Seed institution/owner/cohort/provider/route/pricing/key for one model."""
     from slaif_gateway.config import Settings
@@ -382,7 +383,7 @@ async def _seed_chat_key(
                 valid_until=now + timedelta(hours=1),
                 cost_limit_eur=Decimal("10.000000000"),
                 token_limit_total=100_000,
-                request_limit_total=100,
+                request_limit_total=request_limit_total,
                 allowed_models=[model],
                 allowed_endpoints=[CHAT_COMPLETIONS_ENDPOINT],
                 rate_limit_policy=rate_limit_policy,
@@ -708,14 +709,242 @@ async def probe_zcard_check(redis_url: str, key_id: uuid.UUID) -> int:
         await client.aclose()
 
 
+# --- shared test-only state helpers ------------------------------------------
+
+
+async def _set_gateway_key_status(
+    database_url: str, gateway_key_id: uuid.UUID, status: str
+) -> int:
+    """Direct SQL lifecycle change (test-only): returns affected rowcount."""
+    from sqlalchemy import text
+
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.begin() as conn:
+            result = await conn.execute(
+                text("UPDATE gateway_keys SET status = :status WHERE id = :id"),
+                {"status": status, "id": gateway_key_id},
+            )
+            return result.rowcount
+    finally:
+        await engine.dispose()
+
+
+def _responses_body(model: str) -> dict[str, object]:
+    return {"model": model, "input": PROMPT_TEXT, "store": False}
+
+
+async def _seed_responses_key(
+    database_url: str,
+    *,
+    model: str,
+    rate_limit_policy: dict[str, int | None] | None = None,
+    lazy_throttling_policy: dict[str, object] | None = None,
+) -> _SeededKey:
+    """Seed institution/owner/cohort/provider/route/pricing/key for /v1/responses."""
+    from slaif_gateway.config import Settings
+    from slaif_gateway.db.repositories.audit import AuditRepository
+    from slaif_gateway.db.repositories.cohorts import CohortsRepository
+    from slaif_gateway.db.repositories.institutions import InstitutionsRepository
+    from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+    from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
+    from slaif_gateway.db.repositories.owners import OwnersRepository
+    from slaif_gateway.db.repositories.pricing import PricingRulesRepository
+    from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
+    from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+    from slaif_gateway.schemas.keys import CreateGatewayKeyInput
+    from slaif_gateway.services.key_service import KeyService
+    from slaif_gateway.services.responses_route_capabilities import (
+        default_responses_capabilities,
+    )
+
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    unique = uuid.uuid4().hex
+    now = datetime.now(UTC)
+    responses_endpoint = "/v1/responses"
+
+    async with session_factory() as session:
+        institution = await InstitutionsRepository(session).create_institution(
+            name=f"SLAIF lazy {unique}", country="SI", notes="lazy throttling integration"
+        )
+        owner = await OwnersRepository(session).create_owner(
+            name="Lazy",
+            surname="Client",
+            email=f"lazy-client-{unique}@example.org",
+            institution_id=institution.id,
+            notes="lazy throttling integration owner",
+        )
+        cohort = await CohortsRepository(session).create_cohort(
+            name=f"lazy-{unique}",
+            description="lazy throttling integration cohort",
+            starts_at=now - timedelta(days=1),
+            ends_at=now + timedelta(days=1),
+        )
+        providers = ProviderConfigsRepository(session)
+        provider_config = await providers.get_provider_config_by_provider("openai")
+        if provider_config is None:
+            await providers.create_provider_config(
+                provider="openai",
+                display_name="OpenAI",
+                base_url="https://api.openai.com/v1",
+                api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+                notes="lazy throttling integration provider",
+            )
+        else:
+            await providers.update_provider_metadata(
+                provider_config.id,
+                display_name="OpenAI",
+                base_url="https://api.openai.com/v1",
+                api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+                notes="lazy throttling integration provider",
+            )
+            await providers.set_provider_enabled(provider_config.id, enabled=True)
+
+        routes = ModelRoutesRepository(session)
+        await routes.create_model_route(
+            requested_model=model,
+            provider="openai",
+            upstream_model=model,
+            match_type="exact",
+            endpoint=responses_endpoint,
+            priority=1,
+            visible_in_models=True,
+            supports_streaming=False,
+            capabilities={"responses": default_responses_capabilities()},
+            notes="lazy throttling integration responses route",
+        )
+        await PricingRulesRepository(session).create_pricing_rule(
+            provider="openai",
+            upstream_model=model,
+            endpoint=responses_endpoint,
+            valid_from=now - timedelta(days=1),
+            currency="EUR",
+            input_price_per_1m=Decimal("1.000000000"),
+            output_price_per_1m=Decimal("1.000000000"),
+            request_price=Decimal("0.000000000"),
+            pricing_metadata={},
+            notes="lazy throttling integration responses pricing",
+        )
+
+        key_service = KeyService(
+            settings=Settings(),
+            gateway_keys_repository=GatewayKeysRepository(session),
+            one_time_secrets_repository=OneTimeSecretsRepository(session),
+            audit_repository=AuditRepository(session),
+        )
+        created = await key_service.create_gateway_key(
+            CreateGatewayKeyInput(
+                owner_id=owner.id,
+                cohort_id=cohort.id,
+                valid_from=now - timedelta(minutes=5),
+                valid_until=now + timedelta(hours=1),
+                cost_limit_eur=Decimal("10.000000000"),
+                token_limit_total=100_000,
+                request_limit_total=100,
+                allowed_models=[model],
+                allowed_endpoints=[responses_endpoint],
+                rate_limit_policy=rate_limit_policy,
+                lazy_throttling_policy=lazy_throttling_policy,
+                note="lazy throttling integration responses key",
+            )
+        )
+        await session.commit()
+        result = _SeededKey(
+            plaintext_gateway_key=created.plaintext_key,
+            gateway_key_id=created.gateway_key_id,
+            public_key_id=created.public_key_id,
+        )
+    await engine.dispose()
+    return result
+
+
+def _make_holding_responses_adapter(model, calls, first_entered, first_release):
+    """Mocked provider: the first /v1/responses call holds the concurrency slot."""
+    from slaif_gateway.schemas.providers import ProviderResponse, ProviderUsage
+
+    class _HoldingResponsesAdapter:
+        def __init__(self) -> None:
+            self._first_held = False
+
+        async def forward_response(self, request):
+            calls.append(request.request_id)
+            if not self._first_held:
+                self._first_held = True
+                first_entered.set()
+                while not first_release.is_set():
+                    await asyncio.sleep(0.05)
+            return ProviderResponse(
+                provider="openai",
+                upstream_model=model,
+                status_code=200,
+                json_body={
+                    "id": "resp-lazy-wait",
+                    "object": "response",
+                    "model": model,
+                    "status": "completed",
+                    "output": [],
+                    "usage": {"input_tokens": 5, "output_tokens": 6, "total_tokens": 11},
+                    "store": False,
+                },
+                usage=ProviderUsage(prompt_tokens=5, completion_tokens=6, total_tokens=11),
+            )
+
+    return _HoldingResponsesAdapter()
+
+
+async def _stored_gateway_key_row(
+    database_url: str, gateway_key_id: uuid.UUID
+) -> object:
+    """Fetch the stored gateway_keys row (test-only read)."""
+    from sqlalchemy import select
+
+    from slaif_gateway.db.models import GatewayKey
+
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                select(GatewayKey).where(GatewayKey.id == gateway_key_id)
+            )
+            return result.scalar_one()
+    finally:
+        await engine.dispose()
+
+
+async def _audit_rows_for_key(
+    database_url: str, gateway_key_id: uuid.UUID
+) -> list[object]:
+    """Audit rows for one key, oldest first."""
+    from sqlalchemy import select
+
+    from slaif_gateway.db.models import AuditLog
+
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                select(AuditLog)
+                .where(AuditLog.entity_id == gateway_key_id)
+                .order_by(AuditLog.created_at.asc(), AuditLog.id.asc())
+            )
+            return list(result.scalars())
+    finally:
+        await engine.dispose()
+
+
 # --- V3/V4: actual HTTP Chat wait -> admit, real PG accounting ---------------
 
 
-def _chat_body(model: str, *, stream: bool = False) -> dict[str, object]:
+def _chat_body(
+    model: str, *, stream: bool = False, max_tokens: int = 20
+) -> dict[str, object]:
     return {
         "model": model,
         "messages": [{"role": "user", "content": PROMPT_TEXT}],
-        "max_tokens": 20,
+        "max_tokens": max_tokens,
         "stream": stream,
     }
 
@@ -1651,3 +1880,603 @@ def test_http_chat_real_socket_disconnect_before_admission(
         )
         final_stored = asyncio.run(_stored_request_ids(owned_pg_url, seeded.gateway_key_id))
         assert canceled_request_id not in final_stored, final_stored
+
+
+# --- V4: hard quota refusal is immediate, never a waiting candidate (R5) -----
+
+
+def test_http_chat_hard_quota_refuses_immediately_without_waiting(
+    owned_pg_url: str,
+    owned_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A request that cannot fit its hard quota fails immediately.
+
+    request_limit_total=1 with the holder already reserving the single
+    permitted request. The waiter is denied by the Redis concurrency limiter,
+    enters the wait branch, and the non-mutating hard-quota preflight refuses
+    it with 429 quota_limit_exceeded BEFORE any waiting lease is acquired: no
+    queue slot, no provider call, no new reservation/ledger row.
+    """
+    _configure_lazy_environment(
+        monkeypatch, database_url=owned_pg_url, redis_url=owned_redis_url
+    )
+    model = f"lazy-http-{uuid.uuid4().hex[:12]}"
+    seeded = asyncio.run(
+        _seed_chat_key(
+            owned_pg_url,
+            model=model,
+            rate_limit_policy={"max_concurrent_requests": 1, "window_seconds": 60},
+            lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 30, "max_waiting_requests": 2},
+            request_limit_total=1,
+        )
+    )
+
+    calls: list[str] = []
+    first_entered = threading.Event()
+    first_release = threading.Event()
+    adapter = _make_holding_chat_adapter(model, calls, first_entered, first_release)
+
+    import slaif_gateway.services.chat_completion_gateway as chat_gateway
+
+    monkeypatch.setattr(
+        chat_gateway, "get_provider_adapter", lambda route, settings: adapter
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    app = create_app(get_settings())
+    port = _free_port()
+    base = f"http://127.0.0.1:{port}"
+    headers = {"Authorization": f"Bearer {seeded.plaintext_gateway_key}"}
+
+    # Continuously sample the per-key waiting ZSET for the whole waiter
+    # flight: entering the wait branch holds its lease at least across the
+    # initial sleep, so any waiting would be observed.
+    max_waiting_observed = 0
+    sampler_stop = threading.Event()
+    sampled = {"done": False}
+
+    def _sample_waiting_lease() -> None:
+        nonlocal max_waiting_observed
+        import redis as redis_sync
+
+        client = redis_sync.Redis.from_url(owned_redis_url, decode_responses=True)
+        try:
+            while not sampler_stop.is_set():
+                count = int(
+                    client.zcard(per_key_waiting_key(seeded.gateway_key_id)) or 0
+                )
+                if count > max_waiting_observed:
+                    max_waiting_observed = count
+                time.sleep(0.02)
+        finally:
+            client.close()
+            sampled["done"] = True
+
+    sampler = threading.Thread(target=_sample_waiting_lease)
+    holder = _start_holding_request(base=base, model=model, headers=headers)
+    waiter_responses: list[httpx.Response] = []
+
+    def _waiter() -> None:
+        with httpx.Client(timeout=30.0) as client:
+            waiter_responses.append(
+                client.post(
+                    f"{base}/v1/chat/completions",
+                    json=_chat_body(model, max_tokens=40),
+                    headers=headers,
+                )
+            )
+
+    waiter = threading.Thread(target=_waiter)
+    with _run_uvicorn_server(app, port):
+        sampler.start()
+        holder.start()
+        try:
+            assert first_entered.wait(timeout=20), "first provider call did not start"
+            baseline = asyncio.run(
+                _side_effect_counts(owned_pg_url, seeded.gateway_key_id)
+            )
+            waiter.start()
+            waiter.join(timeout=30)
+            assert not waiter.is_alive(), "hard-quota waiter did not return"
+            # The holder still owns the slot: the waiter is already refused.
+            assert asyncio.run(
+                probe_zcard_check(owned_redis_url, seeded.gateway_key_id)
+            ) == 0
+        finally:
+            sampler_stop.set()
+            first_release.set()
+            holder.join(timeout=30)
+            assert not holder.is_alive()
+            if waiter.is_alive():
+                waiter.join(timeout=10)
+            sampler.join(timeout=10)
+            assert not sampler.is_alive()
+
+    assert max_waiting_observed == 0, (
+        "a hard-quota refusal must never hold a waiting lease"
+    )
+    assert len(waiter_responses) == 1
+    assert waiter_responses[0].status_code == 429, waiter_responses[0].text[:300]
+    assert waiter_responses[0].json()["error"]["code"] == "quota_limit_exceeded"
+    # Only the holder reached the provider; only the holder finalized.
+    assert len(calls) == 1, calls
+    final = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+    # The holder's in-flight reservation is already in the baseline; the
+    # hard-quota waiter must add NO reservation and NO finalization, while the
+    # holder's own reservation finalizes to exactly one ledger row.
+    assert final == (baseline[0], baseline[1] + 1), (
+        f"the hard-quota waiter must leave no reservation/ledger: "
+        f"baseline={baseline} final={final}"
+    )
+
+
+# --- V4: revocation while waiting prevents old-policy forwarding -------------
+
+
+def test_http_chat_revoked_while_waiting_refuses_403(
+    owned_pg_url: str,
+    owned_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key revoked while a request waits is refused at revalidation.
+
+    The waiter is observed holding its waiting lease (per-key ZSET member
+    {key_id}:{request_id}); the key is then revoked directly in PostgreSQL.
+    The waiter's revalidation after the wait must refuse with 403
+    gateway_key_revoked instead of forwarding under its stale pre-wait
+    authorization: no provider call and no persisted accounting under the
+    waiter's opaque request ID. The already-admitted holder finalizes
+    normally (revalidation gates requests still waiting, not in-flight work).
+    """
+    _configure_lazy_environment(
+        monkeypatch, database_url=owned_pg_url, redis_url=owned_redis_url
+    )
+    model = f"lazy-http-{uuid.uuid4().hex[:12]}"
+    seeded = asyncio.run(
+        _seed_chat_key(
+            owned_pg_url,
+            model=model,
+            rate_limit_policy={"max_concurrent_requests": 1, "window_seconds": 60},
+            lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 30, "max_waiting_requests": 2},
+        )
+    )
+
+    calls: list[str] = []
+    first_entered = threading.Event()
+    first_release = threading.Event()
+    adapter = _make_holding_chat_adapter(model, calls, first_entered, first_release)
+
+    import slaif_gateway.services.chat_completion_gateway as chat_gateway
+
+    monkeypatch.setattr(
+        chat_gateway, "get_provider_adapter", lambda route, settings: adapter
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    app = create_app(get_settings())
+    port = _free_port()
+    base = f"http://127.0.0.1:{port}"
+    headers = {"Authorization": f"Bearer {seeded.plaintext_gateway_key}"}
+    probe = Redis.from_url(owned_redis_url, decode_responses=True)
+    waiter_request_ids: list[str] = []
+
+    async def _observe_waiter_then_revoke() -> None:
+        try:
+            await _wait_zcard(
+                probe, per_key_waiting_key(seeded.gateway_key_id), 1, timeout=20
+            )
+            members = await probe.zrange(
+                per_key_waiting_key(seeded.gateway_key_id), 0, -1
+            )
+            assert len(members) == 1, members
+            member = str(members[0])
+            prefix = f"{seeded.gateway_key_id}:"
+            assert member.startswith(prefix), member
+            waiter_request_ids.append(member[len(prefix):])
+            # Revoke while the waiter still holds its waiting lease.
+            assert await _set_gateway_key_status(
+                owned_pg_url, seeded.gateway_key_id, "revoked"
+            ) == 1
+        finally:
+            await probe.aclose()
+
+    holder = _start_holding_request(base=base, model=model, headers=headers)
+    waiter_responses: list[httpx.Response] = []
+    waiter = threading.Thread(
+        target=lambda: waiter_responses.append(
+            httpx.post(
+                f"{base}/v1/chat/completions",
+                json=_chat_body(model),
+                headers=headers,
+                timeout=60.0,
+            )
+        )
+    )
+    with _run_uvicorn_server(app, port):
+        holder.start()
+        try:
+            assert first_entered.wait(timeout=20), "first provider call did not start"
+            baseline = asyncio.run(
+                _side_effect_counts(owned_pg_url, seeded.gateway_key_id)
+            )
+            waiter.start()
+            asyncio.run(_observe_waiter_then_revoke())
+            waiter.join(timeout=30)
+            assert not waiter.is_alive(), "revoked waiter did not return"
+        finally:
+            first_release.set()
+            holder.join(timeout=30)
+            assert not holder.is_alive()
+            if waiter.is_alive():
+                waiter.join(timeout=10)
+
+    assert len(waiter_request_ids) == 1
+    canceled_request_id = waiter_request_ids[0]
+    assert len(waiter_responses) == 1
+    assert waiter_responses[0].status_code == 403, waiter_responses[0].text[:300]
+    assert waiter_responses[0].json()["error"]["code"] == "gateway_key_revoked"
+    # The revoked waiter never reached the provider and never reserved.
+    assert len(calls) == 1, calls
+    assert canceled_request_id not in calls, calls
+    stored = asyncio.run(_stored_request_ids(owned_pg_url, seeded.gateway_key_id))
+    assert canceled_request_id not in stored, stored
+    # The already-admitted holder finalizes normally.
+    final = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+    # The holder's in-flight reservation is already in the baseline; the
+    # revoked waiter adds nothing, and the holder finalizes exactly once.
+    assert final == (baseline[0], baseline[1] + 1), (
+        f"the admitted holder finalizes once: baseline={baseline} final={final}"
+    )
+    # No waiting lease left behind by the refused waiter.
+    assert asyncio.run(probe_zcard_check(owned_redis_url, seeded.gateway_key_id)) == 0
+
+
+# --- V3/V4: actual HTTP Responses wait -> admit --------------------------------
+
+
+def test_http_responses_waits_for_capacity_then_admits(
+    owned_pg_url: str,
+    owned_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The /v1/responses seam waits before upstream and admits once.
+
+    One key with a single concurrency slot and wait mode. Request 1 holds the
+    slot in a slow (mocked) provider call; request 2 is denied by the limiter,
+    WAITS, and is admitted exactly once after request 1 finishes. While
+    request 2 waits: zero new reservation/ledger rows and zero checked-out
+    app DB connections. After admission: one normal reservation/finalization
+    per request and one provider invocation per request.
+    """
+    _configure_lazy_environment(
+        monkeypatch, database_url=owned_pg_url, redis_url=owned_redis_url
+    )
+    model = f"lazy-resp-{uuid.uuid4().hex[:12]}"
+    seeded = asyncio.run(
+        _seed_responses_key(
+            owned_pg_url,
+            model=model,
+            rate_limit_policy={"max_concurrent_requests": 1, "window_seconds": 60},
+            lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 30, "max_waiting_requests": 2},
+        )
+    )
+
+    calls: list[str] = []
+    first_entered = threading.Event()
+    first_release = threading.Event()
+    adapter = _make_holding_responses_adapter(
+        model, calls, first_entered, first_release
+    )
+
+    import slaif_gateway.services.responses_gateway as responses_gateway
+
+    monkeypatch.setattr(
+        responses_gateway, "get_provider_adapter", lambda route, settings: adapter
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    app = create_app(get_settings())
+    port = _free_port()
+    base = f"http://127.0.0.1:{port}"
+    headers = {"Authorization": f"Bearer {seeded.plaintext_gateway_key}"}
+    responses_out: list[httpx.Response] = []
+
+    def _post() -> None:
+        with httpx.Client(timeout=60.0) as client:
+            responses_out.append(
+                client.post(
+                    f"{base}/v1/responses",
+                    json=_responses_body(model),
+                    headers=headers,
+                )
+            )
+
+    # Test-only observation of the wait loop: the helper's sleep seam is
+    # wrapped so the waiting request is observed while it is actually asleep
+    # (no checked-out app DB connection), BEFORE the holder is released.
+    # (A random post-facto sample can catch a brief revalidation query.)
+    entered_wait = threading.Event()
+    sleep_counts: list[int] = []
+    real_wait = responses_gateway.wait_for_rate_limit_admission
+
+    async def _observing_sleep(seconds: float) -> None:
+        sleep_counts.append(app.state.db_engine.pool.checkedout())
+        entered_wait.set()
+        await asyncio.sleep(seconds)
+
+    def _wait_with_observation(**kwargs: object) -> object:
+        kwargs["sleep"] = _observing_sleep
+        return real_wait(**kwargs)
+
+    monkeypatch.setattr(
+        responses_gateway, "wait_for_rate_limit_admission", _wait_with_observation
+    )
+
+    probe = Redis.from_url(owned_redis_url, decode_responses=True)
+
+    async def _observe_waiting() -> None:
+        try:
+            await _wait_zcard(
+                probe, per_key_waiting_key(seeded.gateway_key_id), 1, timeout=20
+            )
+        finally:
+            await probe.aclose()
+
+    thread1 = threading.Thread(target=_post)
+    thread2 = threading.Thread(target=_post)
+    with _run_uvicorn_server(app, port):
+        thread1.start()
+        try:
+            assert first_entered.wait(timeout=20), "first provider call did not start"
+            baseline = asyncio.run(
+                _side_effect_counts(owned_pg_url, seeded.gateway_key_id)
+            )
+            thread2.start()
+            asyncio.run(_observe_waiting())
+            assert entered_wait.wait(timeout=20), (
+                "the waiter never entered the bounded wait loop"
+            )
+            # Observe at least two settled wait-loop iterations while the
+            # holder still owns the slot: at each sleep boundary the waiting
+            # request must hold no DB connection (the counts are recorded
+            # inside the sleep callback, always before first_release).
+            deadline = time.monotonic() + 15
+            while len(sleep_counts) < 2 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert len(sleep_counts) >= 2, (
+                f"expected at least two observed wait-loop sleeps, got {sleep_counts}"
+            )
+            assert all(count == 0 for count in sleep_counts), (
+                f"the waiting request must not hold a DB connection at the "
+                f"sleep boundary: {sleep_counts}"
+            )
+            # No accounting mutation while waiting.
+            mid = asyncio.run(
+                _side_effect_counts(owned_pg_url, seeded.gateway_key_id)
+            )
+            assert mid == baseline, (
+                f"waiting must not mutate accounting: baseline={baseline} mid={mid}"
+            )
+        finally:
+            first_release.set()
+            thread1.join(timeout=30)
+            thread2.join(timeout=30)
+            assert not thread1.is_alive()
+            assert not thread2.is_alive()
+
+    assert [r.status_code for r in responses_out] == [200, 200], [
+        (r.status_code, r.text[:300]) for r in responses_out
+    ]
+    assert len(calls) == 2, "each request must invoke the provider exactly once"
+    assert "response" in responses_out[1].text
+    final = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+    # The holder's in-flight reservation is already in the baseline: the
+    # waited request adds exactly ONE reservation, and both completed
+    # requests finalize exactly once.
+    assert final == (baseline[0] + 1, baseline[1] + 2), (
+        f"one normal reservation/finalization per request: "
+        f"baseline={baseline} final={final}"
+    )
+    ledger = asyncio.run(_ledger_rows(owned_pg_url, seeded.gateway_key_id))
+    assert len(ledger) == 2, ledger
+    assert {row["request_id"] for row in ledger} == set(calls), (
+        f"ledger rows must be attributed to the two provider calls: "
+        f"{ledger} vs {calls}"
+    )
+    for row in ledger:
+        assert row["total_tokens"] == 11, row
+        assert row["actual_cost_eur"] == Decimal("0.000011"), row
+    leftovers = asyncio.run(probe_zcard_check(owned_redis_url, seeded.gateway_key_id))
+    assert leftovers == 0
+
+
+# --- V4: admin durable lazy-throttling policy with safe audit -----------------
+
+
+@pytest.mark.asyncio
+async def test_admin_lazy_throttling_policy_durable_and_audited(
+    owned_pg_url: str,
+    owned_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-default wait policy is durable, audited, and safely projected.
+
+    Create with an explicit wait policy (stored in key metadata, audit new
+    values carry no plaintext key); an ordinary rate-limit update PRESERVES
+    the lazy policy (R1); an explicit update flips to reject and removes the
+    stored policy; a reject-mode round-trip stores nothing; and malformed
+    stored metadata (written directly, bypassing service validation) never
+    surfaces as a wait policy.
+    """
+    _configure_lazy_environment(
+        monkeypatch, database_url=owned_pg_url, redis_url=owned_redis_url
+    )
+    model = f"lazy-audit-{uuid.uuid4().hex[:12]}"
+    wait_policy = {"mode": "wait", "max_wait_seconds": 45, "max_waiting_requests": 4}
+    seeded = await _seed_chat_key(
+        owned_pg_url,
+        model=model,
+        rate_limit_policy={"max_concurrent_requests": 2, "window_seconds": 60},
+        lazy_throttling_policy=dict(wait_policy),
+    )
+    key_id = seeded.gateway_key_id
+
+    from slaif_gateway.config import Settings
+    from slaif_gateway.db.repositories.audit import AuditRepository
+    from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+    from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
+    from slaif_gateway.schemas.keys import (
+        UpdateGatewayKeyLazyThrottlingInput,
+        UpdateGatewayKeyRateLimitsInput,
+    )
+    from slaif_gateway.services.key_service import KeyService
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _service_session() -> object:
+        engine = create_async_engine(owned_pg_url, future=True)
+        try:
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            async with session_factory() as session:
+                yield session
+        finally:
+            await engine.dispose()
+
+
+    # (1) Creation: the wait policy is durably stored in key metadata and the
+    # creation audit carries safe values (no plaintext key, ever).
+    row = await _stored_gateway_key_row(owned_pg_url, key_id)
+    assert (row.metadata_json or {}).get("lazy_throttling_policy") == wait_policy
+    created_audit = next(
+        a for a in await _audit_rows_for_key(owned_pg_url, key_id)
+        if a.action == "gateway_key_created"
+    )
+    assert created_audit.new_values["lazy_throttling_policy"] == wait_policy
+    created_blob = str(created_audit.new_values)
+    assert seeded.plaintext_gateway_key not in created_blob
+    assert seeded.plaintext_gateway_key not in str(
+        (row.metadata_json or {}).get("lazy_throttling_policy")
+    )
+
+    # (2) Ordinary rate-limit update preserves the lazy policy (R1).
+    async with _service_session() as session:
+            service = KeyService(
+                settings=Settings(),
+                gateway_keys_repository=GatewayKeysRepository(session),
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+            await service.update_gateway_key_rate_limits(
+                UpdateGatewayKeyRateLimitsInput(
+                    gateway_key_id=key_id,
+                    rate_limit_policy={"max_concurrent_requests": 3, "window_seconds": 30},
+                    actor_admin_id=None,
+                    reason="focused integration: ordinary rate limit change",
+                )
+            )
+            await session.commit()
+    row = await _stored_gateway_key_row(owned_pg_url, key_id)
+    assert (row.metadata_json or {}).get("lazy_throttling_policy") == wait_policy
+    assert row.max_concurrent_requests == 3
+
+    # (3) Explicit lazy update to reject: policy removed, audit old/new safe.
+    async with _service_session() as session:
+            service = KeyService(
+                settings=Settings(),
+                gateway_keys_repository=GatewayKeysRepository(session),
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+            await service.update_gateway_key_lazy_throttling(
+                UpdateGatewayKeyLazyThrottlingInput(
+                    gateway_key_id=key_id,
+                    lazy_throttling_policy={"mode": "reject"},
+                    actor_admin_id=None,
+                    reason="focused integration: return to immediate rejection",
+                )
+            )
+            await session.commit()
+    row = await _stored_gateway_key_row(owned_pg_url, key_id)
+    assert "lazy_throttling_policy" not in (row.metadata_json or {})
+    lazy_audit = [
+        a
+        for a in await _audit_rows_for_key(owned_pg_url, key_id)
+        if a.action == "update_key_lazy_throttling"
+    ]
+    assert len(lazy_audit) == 1
+    assert lazy_audit[0].old_values["lazy_throttling_policy"] == wait_policy
+    assert lazy_audit[0].new_values["lazy_throttling_policy"] is None
+    assert lazy_audit[0].note == "focused integration: return to immediate rejection"
+
+    # (4) Reject-mode round-trip: storing reject leaves nothing to project.
+    async with _service_session() as session:
+            service = KeyService(
+                settings=Settings(),
+                gateway_keys_repository=GatewayKeysRepository(session),
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                audit_repository=AuditRepository(session),
+            )
+            assert service._lazy_throttling_policy_from_key(row) is None
+            await service.update_gateway_key_lazy_throttling(
+                UpdateGatewayKeyLazyThrottlingInput(
+                    gateway_key_id=key_id,
+                    lazy_throttling_policy={"mode": "wait",
+                                           "max_wait_seconds": 30,
+                                           "max_waiting_requests": 2},
+                    actor_admin_id=None,
+                    reason="focused integration: re-enable defaults",
+                )
+            )
+            await session.commit()
+    row = await _stored_gateway_key_row(owned_pg_url, key_id)
+    assert (row.metadata_json or {}).get("lazy_throttling_policy") == {
+        "mode": "wait",
+        "max_wait_seconds": 30,
+        "max_waiting_requests": 2,
+    }
+
+    # (5) Malformed stored metadata never grants wait: an unknown field
+    # written directly (bypassing service validation) parses to None.
+    malformed = dict(
+        (row.metadata_json or {}).get("lazy_throttling_policy") or {}
+    )
+    malformed["unexpected_field"] = 1
+    bad_metadata = dict(row.metadata_json or {})
+    bad_metadata["lazy_throttling_policy"] = malformed
+    async with _service_session() as session:
+            repo = GatewayKeysRepository(session)
+            updated = await repo.update_gateway_key_metadata(
+                key_id, metadata_json=bad_metadata
+            )
+            assert updated
+            await session.commit()
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.schemas.rate_limits import parse_lazy_throttling_policy_metadata
+
+    settings = get_settings()
+    row = await _stored_gateway_key_row(owned_pg_url, key_id)
+    parsed = parse_lazy_throttling_policy_metadata(
+        (row.metadata_json or {}).get("lazy_throttling_policy"),
+        max_wait_seconds_ceiling=settings.LAZY_THROTTLING_MAX_WAIT_SECONDS,
+        max_waiting_per_key_ceiling=settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY,
+    )
+    assert parsed is None, "malformed stored policy must never grant waiting"
+
+    async with _service_session() as session:
+        service = KeyService(
+            settings=Settings(),
+            gateway_keys_repository=GatewayKeysRepository(session),
+            one_time_secrets_repository=OneTimeSecretsRepository(session),
+            audit_repository=AuditRepository(session),
+        )
+        refreshed = await service._get_gateway_key(key_id)
+        assert service._lazy_throttling_policy_from_key(refreshed) is None
+
