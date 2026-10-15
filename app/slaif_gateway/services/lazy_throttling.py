@@ -10,6 +10,11 @@ The waiting lease is scoped per-key AND deployment-wide: a waiter holds a
 lease in a per-key ZSET and in the deployment-wide ZSET, both scored by
 lease expiry (bounded expiry recovers crashed-worker leases). Strict FIFO is
 not promised; reordering under contention is possible and documented.
+
+Final opaque-ID cleanup (waiting-lease/slot release awaits) runs under a
+separate small bounded bookkeeping allowance so an expired wait budget can
+never skip releasing IDs; the allowance is cleanup only, never extra
+admission eligibility or provider work.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import time
+import types
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -34,6 +40,7 @@ from slaif_gateway.schemas.rate_limits import (
     RateLimitResult,
 )
 from slaif_gateway.services.rate_limit_errors import (
+    ClientDisconnectedError,
     ConcurrencyRateLimitExceededError,
     LazyThrottlingDeadlineExceededError,
     LazyThrottlingWaitingCapacityFullError,
@@ -54,6 +61,14 @@ _MAX_SLEEP_SECONDS = 1.0
 # Crash-recovery margin added on top of the max wait so a waiting lease cannot
 # expire while its waiter is still eligible (see config validation).
 _LEASE_WAIT_MARGIN_SECONDS = 30
+
+# Separate, bounded bookkeeping allowance for the final opaque-ID cleanup
+# (waiting-lease/slot release awaits). The wait budget is exhausted by
+# definition when the loop exits at the deadline, so cleanup must not reuse it:
+# an expired admission budget must not skip releasing IDs. This allowance is
+# cleanup only, never extra admission eligibility or provider work; the bounded
+# lease/slot TTLs remain the crash/outage backstop.
+_BOOKKEEPING_TIMEOUT_SECONDS = 5.0
 
 _ACQUIRE_WAITING_SCRIPT = """
 redis.call("ZREMRANGEBYSCORE", KEYS[1], "-inf", ARGV[1])
@@ -185,6 +200,15 @@ class LazyThrottlingAdmission:
         return counts
 
 
+class _WaitBudgetExhausted(Exception):
+    """Internal: a bounded wait step produced no result within the budget.
+
+    Only the wait loop's own budget enforcement raises this. Service errors
+    (Redis/DB timeouts, auth failures, ...) are never mapped to it: they
+    propagate with their existing semantics.
+    """
+
+
 class LazyThrottlingWaitOutcome:
     """Closed outcome label set for bounded lazy-throttling metrics."""
 
@@ -241,6 +265,7 @@ async def wait_for_rate_limit_admission(
     now_fn: Callable[[], datetime] | None = None,
     monotonic_fn: Callable[[], float] | None = None,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    is_disconnected: Callable[[], Awaitable[bool]] | None = None,
 ) -> LazyAdmissionResult:
     """Wait for temporary rate-limit capacity with bounded, honest semantics.
 
@@ -263,6 +288,20 @@ async def wait_for_rate_limit_admission(
       aborts before forwarding.
     - Wall-clock UTC is used only for the shared lease timestamps; the
       elapsed deadline uses a monotonic clock.
+    - When ``is_disconnected`` is supplied (the caller's non-blocking
+      transport disconnect probe), a disconnect observed while waiting
+      aborts the wait BEFORE any provider work: the waiting lease is
+      released, an already-admitted concurrency slot is released, and the
+      dedicated ``ClientDisconnectedError`` (a typed closed-client outcome,
+      not a fabricated 200 and not a capacity/deadline 429) is raised so
+      the request path ends normally. The closed peer cannot receive the
+      resulting response. Genuine external task cancellation still
+      propagates as ``asyncio.CancelledError`` with the same cleanup.
+    - Final opaque-ID bookkeeping (the waiting-lease release, and the slot
+      release when cancellation lands after admission) runs under a separate
+      small bounded cleanup allowance, because the wait budget is exhausted
+      by definition at the deadline. That allowance is cleanup only, never
+      extra admission eligibility or provider work (bounded overhead).
     """
     now_fn = now_fn or (lambda: datetime.now(UTC))
     monotonic_fn = monotonic_fn or time.monotonic
@@ -282,27 +321,114 @@ async def wait_for_rate_limit_admission(
     lease_deadline = datetime.fromtimestamp(started_wall.timestamp() + lease_ttl, tz=UTC)
     lease_key_id = initial_context.gateway_key_id
 
-    lease_acquired = False
     context = initial_context
     outcome: str | None = None
+
+    def _remaining_budget() -> float:
+        return deadline_mono - monotonic_fn()
+
+    async def _within_budget(coro: Awaitable[Any]) -> Any:
+        """Bound one awaited step by the remaining monotonic wait budget.
+
+        Clock comparisons between awaits do not bound time spent INSIDE a
+        stalled await (a hung re-validation, a wedged limiter probe, ...). The
+        asyncio timeout context enforces the original budget across such
+        steps, and its ``expired()`` flag makes the origin provable: it is
+        True only for THIS wait's budget expiring. A client service that
+        raises its own timeout error (including a built-in TimeoutError) is
+        not the budget expiring and propagates unchanged with its existing
+        semantics.
+        """
+        remaining = _remaining_budget()
+        if remaining <= 0:
+            # The step must not run at all. If the caller already built the
+            # coroutine, close it so nothing is left unawaited.
+            if isinstance(coro, types.CoroutineType):
+                coro.close()
+            raise _WaitBudgetExhausted()
+        budget = asyncio.timeout(remaining)
+        try:
+            async with budget:
+                return await coro
+        except TimeoutError:
+            if budget.expired():
+                raise _WaitBudgetExhausted() from None
+            raise
+
+    async def _bookkeeping(coro: Awaitable[Any]) -> None:
+        """Run one final opaque-ID cleanup await under its own small bound.
+
+        The wait budget is already exhausted when the loop exits at the
+        deadline, so cleanup must not reuse it: an expired admission budget
+        must not skip releasing IDs. This allowance covers cleanup only
+        (never extra admission eligibility or provider work); bounded
+        lease/slot TTLs remain the crash/outage backstop.
+        """
+        budget = asyncio.timeout(_BOOKKEEPING_TIMEOUT_SECONDS)
+        try:
+            async with budget:
+                await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - cleanup is best-effort
+            pass
+
+    def _record_outcome_metrics() -> None:
+        if outcome is None:
+            return
+        try:
+            wait_seconds = max(monotonic_fn() - start_mono, 0.0)
+            observe_lazy_throttling_wait_seconds(wait_seconds)
+            increment_lazy_throttling_outcome(outcome)
+        except Exception:  # noqa: BLE001 - metrics must never break admission
+            pass
+
+    async def _client_gone() -> bool:
+        nonlocal outcome
+        if is_disconnected is None:
+            return False
+        try:
+            return bool(await _within_budget(is_disconnected()))
+        except _WaitBudgetExhausted:
+            outcome = LazyThrottlingWaitOutcome.DEADLINE
+            raise LazyThrottlingDeadlineExceededError(retry_after_seconds=1)
+
+    async def _release_admitted_slot_quietly() -> None:
+        # Idempotent: safe whether or not the slot was actually reserved.
+        if release_admission_slot is None:
+            return
+        await _bookkeeping(release_admission_slot())
+
     try:
-        acquired = await admission.acquire_waiting_lease(
-            gateway_key_id=lease_key_id,
-            request_id=request_id,
-            lease_deadline=lease_deadline,
-            max_waiting_per_key=lazy_policy.max_waiting_requests,
-            max_waiting_total=max_waiting_total,
-            lease_ttl_seconds=lease_ttl,
-        )
+        try:
+            acquired = await _within_budget(
+                admission.acquire_waiting_lease(
+                    gateway_key_id=lease_key_id,
+                    request_id=request_id,
+                    lease_deadline=lease_deadline,
+                    max_waiting_per_key=lazy_policy.max_waiting_requests,
+                    max_waiting_total=max_waiting_total,
+                    lease_ttl_seconds=lease_ttl,
+                )
+            )
+        except _WaitBudgetExhausted:
+            outcome = LazyThrottlingWaitOutcome.DEADLINE
+            raise LazyThrottlingDeadlineExceededError(retry_after_seconds=1)
         if not acquired:
             outcome = LazyThrottlingWaitOutcome.CAPACITY_FULL
             raise LazyThrottlingWaitingCapacityFullError(
                 retry_after_seconds=1,
             )
-        lease_acquired = True
 
         delay = _INITIAL_SLEEP_SECONDS
         while True:
+            # A disconnected client cannot receive any outcome; abort
+            # promptly before any further re-validation or provider work
+            # with the dedicated closed-client outcome (external task
+            # cancellation still propagates as asyncio.CancelledError).
+            if await _client_gone():
+                outcome = LazyThrottlingWaitOutcome.CANCELLED
+                raise ClientDisconnectedError()
             if monotonic_fn() >= deadline_mono:
                 outcome = LazyThrottlingWaitOutcome.DEADLINE
                 raise LazyThrottlingDeadlineExceededError(
@@ -310,7 +436,14 @@ async def wait_for_rate_limit_admission(
                 )
             if revalidate is not None:
                 try:
-                    context = await revalidate(context)
+                    context = await _within_budget(revalidate(context))
+                except _WaitBudgetExhausted:
+                    # A re-validation that never yields within the budget
+                    # means the bounded wait cannot make progress.
+                    outcome = LazyThrottlingWaitOutcome.DEADLINE
+                    raise LazyThrottlingDeadlineExceededError(
+                        retry_after_seconds=1,
+                    )
                 except (RateLimitError, asyncio.CancelledError):
                     raise
                 except Exception:
@@ -333,12 +466,28 @@ async def wait_for_rate_limit_admission(
                     retry_after_seconds=context.limiter_policy.window_seconds,
                 )
             try:
-                result = await check_and_reserve(
-                    gateway_key_id=context.gateway_key_id,
-                    request_id=request_id,
-                    estimated_tokens=context.estimated_tokens,
-                    policy=context.limiter_policy,
+                result = await _within_budget(
+                    check_and_reserve(
+                        gateway_key_id=context.gateway_key_id,
+                        request_id=request_id,
+                        estimated_tokens=context.estimated_tokens,
+                        policy=context.limiter_policy,
+                    )
                 )
+            except _WaitBudgetExhausted:
+                # The limiter may have committed before the stall was
+                # observed: clean up idempotently, then fail at the deadline.
+                await _release_admitted_slot_quietly()
+                outcome = LazyThrottlingWaitOutcome.DEADLINE
+                raise LazyThrottlingDeadlineExceededError(
+                    retry_after_seconds=1,
+                )
+            except asyncio.CancelledError:
+                # Cancellation may land after the atomic reservation already
+                # committed: clean up the possibly active slot before the
+                # cancellation propagates.
+                await _release_admitted_slot_quietly()
+                raise
             except (
                 TokenRateLimitExceededError,
                 RequestRateLimitExceededError,
@@ -349,12 +498,22 @@ async def wait_for_rate_limit_admission(
                 # The admission await may have advanced past the deadline;
                 # an admission granted after the deadline is not honored and
                 # its slot is cleaned up before the deadline error propagates.
-                if monotonic_fn() >= deadline_mono:
-                    if release_admission_slot is not None:
-                        try:
-                            await release_admission_slot()
-                        except Exception:  # noqa: BLE001 - TTL is the backstop
-                            pass
+                # A disconnect after admission is the same class of event:
+                # the slot is released and nothing is forwarded. If the task
+                # is cancelled while the probe itself awaits, the possibly
+                # committed slot is still released first.
+                try:
+                    client_gone = await _client_gone()
+                    past_deadline = monotonic_fn() >= deadline_mono
+                except asyncio.CancelledError:
+                    await _release_admitted_slot_quietly()
+                    raise
+                if client_gone:
+                    await _release_admitted_slot_quietly()
+                    outcome = LazyThrottlingWaitOutcome.CANCELLED
+                    raise ClientDisconnectedError()
+                if past_deadline:
+                    await _release_admitted_slot_quietly()
                     outcome = LazyThrottlingWaitOutcome.DEADLINE
                     raise LazyThrottlingDeadlineExceededError(
                         retry_after_seconds=1,
@@ -370,21 +529,32 @@ async def wait_for_rate_limit_admission(
         outcome = LazyThrottlingWaitOutcome.CANCELLED
         raise
     finally:
-        if lease_acquired:
-            try:
-                await admission.release_waiting_lease(
+        # The lease script may already have been applied to Redis even when
+        # the acquisition await is interrupted before its result is observed
+        # (task cancellation, client error). ZREM is idempotent, so always
+        # attempt the release under the separate bookkeeping allowance (the
+        # wait budget is exhausted by definition here and must not be
+        # reused); bounded lease expiry remains the last-resort crash/outage
+        # recovery path, not the normal cancellation path.
+        #
+        # This phase runs while the helper still owns the admitted slot (the
+        # caller takes ownership only when the result actually reaches it):
+        # a cancellation landing here means the admitted result never
+        # reached the caller, so the wait ends cancelled, not admitted, and
+        # the possibly active slot is still released.
+        try:
+            await _bookkeeping(
+                admission.release_waiting_lease(
                     gateway_key_id=lease_key_id,
                     request_id=request_id,
                 )
-            except Exception:  # noqa: BLE001 - lease expiry is the recovery path
-                pass
-        if outcome is not None:
-            try:
-                wait_seconds = max(monotonic_fn() - start_mono, 0.0)
-                observe_lazy_throttling_wait_seconds(wait_seconds)
-                increment_lazy_throttling_outcome(outcome)
-            except Exception:  # noqa: BLE001 - metrics must never break admission
-                pass
+            )
+        except asyncio.CancelledError:
+            outcome = LazyThrottlingWaitOutcome.CANCELLED
+            await _release_admitted_slot_quietly()
+            _record_outcome_metrics()
+            raise
+        _record_outcome_metrics()
 
 
 # Mutable usage counters and the temporary limiter configuration are never

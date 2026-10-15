@@ -710,23 +710,31 @@ async def _reserve_redis_rate_limit(
             # policy) never reach this branch; hard quota/security/fence/
             # pricing refusals are detected non-mutatingly and fail
             # immediately WITHOUT waiting (R5).
-            await _preflight_lazy_wait_hard_quota(
-                authenticated_key=authenticated_key,
-                route=route,
-                policy_result=policy_result,
-                request=request,
-            )
-            final_context = await _wait_for_lazy_admission(
-                service=service,
-                admission=LazyThrottlingAdmission(redis_client, fail_closed=fail_closed),
-                initial_context=initial_context,
-                lazy_policy=lazy_policy,
-                request_id=request_id,
-                estimated_tokens=estimated_tokens,
-                body=body,
-                request=request,
-                settings=settings,
-            )
+            try:
+                await _preflight_lazy_wait_hard_quota(
+                    authenticated_key=authenticated_key,
+                    route=route,
+                    policy_result=policy_result,
+                    request=request,
+                )
+                final_context = await _wait_for_lazy_admission(
+                    service=service,
+                    admission=LazyThrottlingAdmission(redis_client, fail_closed=fail_closed),
+                    initial_context=initial_context,
+                    lazy_policy=lazy_policy,
+                    request_id=request_id,
+                    estimated_tokens=estimated_tokens,
+                    body=body,
+                    request=request,
+                    settings=settings,
+                )
+            except RateLimitError as wait_exc:
+                # Deadline / waiting-cap exhaustion (and re-validation limiter
+                # errors) keep the honest OpenAI-shaped 429 mapping. Client
+                # disconnect cancellation is a BaseException and propagates
+                # unchanged so no response is fabricated.
+                increment_rate_limit_rejection(wait_exc.error_code)
+                raise openai_error_from_rate_limit_error(wait_exc) from wait_exc
             return _build_rate_limit_reservation(
                 service=service,
                 context=final_context,
@@ -907,6 +915,7 @@ async def _wait_for_lazy_admission(
         ),
         max_waiting_total=settings.LAZY_THROTTLING_MAX_WAITING_TOTAL,
         lease_ttl_seconds=settings.LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS,
+        is_disconnected=request.is_disconnected,
     )
     return outcome.context
 

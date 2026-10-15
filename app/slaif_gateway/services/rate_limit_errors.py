@@ -79,6 +79,21 @@ class RateLimitReleaseError(RateLimitError):
     message = "Rate limit reservation could not be released"
 
 
+class ClientDisconnectedError(RateLimitError):
+    """Raised when the client goes away while a wait-mode request waits.
+
+    The closed peer cannot receive any response: the request is aborted
+    before provider work with the waiting lease and any admitted slot
+    cleaned up. Internal reporting uses this dedicated closed-client
+    outcome; it is neither a fabricated 200 nor a capacity/deadline 429.
+    """
+
+    status_code = 499
+    error_type = "client_error"
+    error_code = "client_disconnected"
+    message = "Client disconnected while waiting for rate-limit capacity"
+
+
 class LazyThrottlingDeadlineExceededError(RateLimitError):
     """Raised when a lazy-throttling wait exhausts its max-wait deadline."""
 
