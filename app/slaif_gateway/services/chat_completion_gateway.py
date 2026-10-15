@@ -105,8 +105,9 @@ from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.lazy_throttling import (
     LazyAdmissionContext,
     LazyThrottlingAdmission,
+    make_request_disconnect_probe,
     policy_changed_while_waiting_error,
-    wait_for_rate_limit_admission,
+    wait_for_rate_limit_admission
 )
 from slaif_gateway.services.rate_limit_errors import (
     ConcurrencyRateLimitExceededError,
@@ -915,7 +916,7 @@ async def _wait_for_lazy_admission(
         ),
         max_waiting_total=settings.LAZY_THROTTLING_MAX_WAITING_TOTAL,
         lease_ttl_seconds=settings.LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS,
-        is_disconnected=request.is_disconnected,
+        is_disconnected=make_request_disconnect_probe(request),
     )
     return outcome.context
 

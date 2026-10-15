@@ -8,6 +8,7 @@ disconnect behavior is proven by the HTTP/browser qualification tests.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import uuid
 from decimal import Decimal
@@ -67,14 +68,31 @@ def _auth_wait(policy: dict[str, int | None] | None = None) -> AuthenticatedGate
 
 
 class _FakeRequest:
-    """Just enough of the transport request for the call-site pass-through."""
+    """Just enough of the transport request for the call-site pass-through.
+
+    The probe under test is the bounded public receive probe (not Starlette's
+    cancel-immediately is_disconnected): receive() returns the
+    http.disconnect message once the client has closed, and blocks (the
+    probe's own small timeout bounds the wait) while connected.
+    """
 
     def __init__(self, disconnected: bool = False) -> None:
         self.headers: dict[str, str] = {"authorization": "Bearer sk-slaif-test"}
         self._disconnected = disconnected
 
+    def set_disconnected(self) -> None:
+        self._disconnected = True
+
     async def is_disconnected(self) -> bool:
         return self._disconnected
+
+    async def receive(self):
+        if self._disconnected:
+            return {"type": "http.disconnect"}
+        # Still connected: no message is pending; the probe's own bound ends
+        # this wait (nobody ever sets this event).
+        await asyncio.Event().wait()
+        return {"type": "http.disconnect"}
 
 
 class _AdmissionDouble:
@@ -140,11 +158,13 @@ async def test_chat_wait_call_site_passes_live_disconnect_probe(monkeypatch) -> 
         settings=Settings(),
     )
     assert result is not None
-    assert captured["is_disconnected"] == request.is_disconnected
-    # The probe reflects the live transport state, not a stale flag.
-    assert await captured["is_disconnected"]() is False
-    request._disconnected = True
-    assert await captured["is_disconnected"]() is True
+    probe = captured["is_disconnected"]
+    assert callable(probe)
+    # The probe reflects the LIVE transport state (bounded public receive),
+    # not a stale flag: connected first, disconnect observed afterwards.
+    assert await probe() is False
+    request.set_disconnected()
+    assert await probe() is True
 
 
 @pytest.mark.asyncio
@@ -185,10 +205,11 @@ async def test_responses_wait_call_site_passes_live_disconnect_probe(monkeypatch
         request=request,
         settings=Settings(),
     )
-    assert captured["is_disconnected"] == request.is_disconnected
-    assert await captured["is_disconnected"]() is False
-    request._disconnected = True
-    assert await captured["is_disconnected"]() is True
+    probe = captured["is_disconnected"]
+    assert callable(probe)
+    assert await probe() is False
+    request.set_disconnected()
+    assert await probe() is True
 
 
 def _wire_wait_preflight_support(monkeypatch, auth: AuthenticatedGatewayKey) -> None:

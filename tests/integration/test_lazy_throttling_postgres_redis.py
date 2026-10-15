@@ -15,6 +15,8 @@ created container ID (a Docker NotFound means already removed).
 from __future__ import annotations
 
 import asyncio
+import json
+import socket
 import threading
 import time
 import uuid
@@ -44,6 +46,7 @@ from slaif_gateway.services.lazy_throttling import (
 )
 from slaif_gateway.services.rate_limit_errors import (
     ConcurrencyRateLimitExceededError,
+    LazyThrottlingDeadlineExceededError,
     LazyThrottlingWaitingCapacityFullError,
 )
 from slaif_gateway.services.rate_limit_service import RedisRateLimitService
@@ -432,7 +435,11 @@ async def _ledger_rows(database_url: str, gateway_key_id: uuid.UUID) -> list[dic
                 .order_by(UsageLedger.created_at)
             )
             return [
-                {"total_tokens": row.total_tokens, "actual_cost_eur": row.actual_cost_eur}
+                {
+                    "request_id": row.request_id,
+                    "total_tokens": row.total_tokens,
+                    "actual_cost_eur": row.actual_cost_eur,
+                }
                 for row in result.scalars()
             ]
     finally:
@@ -671,6 +678,28 @@ async def test_global_waiting_cap_across_keys(owned_redis_url: str) -> None:
         await client_b.aclose()
 
 
+async def _stored_request_ids(database_url: str, gateway_key_id: uuid.UUID) -> set[str]:
+    """Request IDs already persisted for one key (reservations + ledger)."""
+    engine = create_async_engine(database_url, future=True)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            reservations = await session.execute(
+                select(QuotaReservation.request_id).where(
+                    QuotaReservation.gateway_key_id == gateway_key_id
+                )
+            )
+            ledger = await session.execute(
+                select(UsageLedger.request_id).where(
+                    UsageLedger.gateway_key_id == gateway_key_id
+                )
+            )
+            return set(reservations.scalars()) | set(ledger.scalars())
+    finally:
+        await engine.dispose()
+
+
+
 async def probe_zcard_check(redis_url: str, key_id: uuid.UUID) -> int:
     client = Redis.from_url(redis_url, decode_responses=True)
     try:
@@ -703,7 +732,11 @@ async def _ledger_rows(database_url: str, gateway_key_id: uuid.UUID) -> list[dic
                 .order_by(UsageLedger.created_at)
             )
             return [
-                {"total_tokens": row.total_tokens, "actual_cost_eur": row.actual_cost_eur}
+                {
+                    "request_id": row.request_id,
+                    "total_tokens": row.total_tokens,
+                    "actual_cost_eur": row.actual_cost_eur,
+                }
                 for row in result.scalars()
             ]
     finally:
@@ -870,10 +903,19 @@ def test_http_chat_waits_for_capacity_then_admits_once(
         f"the waited request reserved exactly once: baseline={baseline} final={final}"
     )
     # One normal finalization per completed request (request 1 and the waited
-    # request 2): exactly two ledger rows with the exact per-request amounts
-    # (no double charge, no extra charge, nothing from the waiting phase).
+    # request 2): exactly two ledger rows, each attributed to its own gateway
+    # request ID (matching the two provider calls) with the exact per-request
+    # amounts (no double charge, redistribution, or extra charge, nothing
+    # from the waiting phase).
     ledger = asyncio.run(_ledger_rows(owned_pg_url, seeded.gateway_key_id))
     assert len(ledger) == 2, f"expected exactly two finalizations, got {ledger}"
+    assert {row["request_id"] for row in ledger} == set(calls), (
+        f"ledger rows must be attributed to the two provider calls: "
+        f"{ledger} vs {calls}"
+    )
+    for row in ledger:
+        assert row["total_tokens"] == 11, row
+        assert row["actual_cost_eur"] == Decimal("0.000011"), row
     assert sum(row["total_tokens"] for row in ledger) == 22, ledger
     expected_cost = Decimal("0.000011") * 2
     assert sum(
@@ -1182,3 +1224,430 @@ def _make_holding_chat_adapter(model, calls, first_entered, first_release):
             )
 
     return _HoldingAdapter()
+
+
+# --- V2: deadline / cancellation / crash-expiry lease cleanup ---------------
+
+
+@pytest.mark.asyncio
+async def test_deadline_cancel_and_crash_expiry_release_leases(
+    owned_redis_url: str,
+) -> None:
+    """Every non-admission exit path releases the waiting lease promptly.
+
+    (a) deadline exhaustion, (b) external task cancellation, and (c) crashed
+    worker leases (pre-seeded expired members) all leave the per-key and
+    global waiting ZSETs empty; the expired-member sweep happens on the next
+    acquisition.
+    """
+    client = Redis.from_url(owned_redis_url, decode_responses=True)
+    try:
+        service = RedisRateLimitService(client, fail_closed=True)
+        admission = LazyThrottlingAdmission(client, fail_closed=True)
+        policy = RateLimitPolicy(
+            concurrent_requests=1,
+            window_seconds=300,
+            concurrency_ttl_seconds=30,
+            concurrency_heartbeat_seconds=5,
+        )
+        lease_deadline = datetime.fromtimestamp(time.time() + 300, tz=UTC)
+
+        def _context(key_id: uuid.UUID) -> LazyAdmissionContext:
+            return LazyAdmissionContext(
+                gateway_key_id=key_id,
+                authenticated_key=object(),
+                limiter_policy=policy,
+                policy_result=None,
+                route=None,
+                estimated_tokens=5,
+            )
+
+        # (a) deadline: slot held longer than max_wait -> 429 deadline error,
+        # lease released on the deadline path.
+        key_a = uuid.uuid4()
+        await service.check_and_reserve(
+            gateway_key_id=key_a, request_id="blocker-a", estimated_tokens=5, policy=policy
+        )
+        with pytest.raises(LazyThrottlingDeadlineExceededError):
+            await wait_for_rate_limit_admission(
+                check_and_reserve=lambda **kw: service.check_and_reserve(**kw),
+                admission=admission,
+                initial_context=_context(key_a),
+                estimated_tokens=5,
+                lazy_policy=LazyThrottlingPolicy(mode="wait", max_wait_seconds=1, max_waiting_requests=2),
+                request_id="waiter-a",
+                max_waiting_total=256,
+                lease_ttl_seconds=300,
+            )
+        assert int(await client.zcard(per_key_waiting_key(key_a)) or 0) == 0
+        assert int(await client.zcard(global_waiting_key()) or 0) == 0
+        await service.release_concurrency(gateway_key_id=key_a, request_id="blocker-a")
+
+        # (b) cancellation: an external task cancel during the wait releases
+        # the lease (idempotent finally path) and propagates CancelledError.
+        key_b = uuid.uuid4()
+        await service.check_and_reserve(
+            gateway_key_id=key_b, request_id="blocker-b", estimated_tokens=5, policy=policy
+        )
+        task = asyncio.create_task(
+            wait_for_rate_limit_admission(
+                check_and_reserve=lambda **kw: service.check_and_reserve(**kw),
+                admission=admission,
+                initial_context=_context(key_b),
+                estimated_tokens=5,
+                lazy_policy=LazyThrottlingPolicy(mode="wait", max_wait_seconds=30, max_waiting_requests=2),
+                request_id="waiter-b",
+                max_waiting_total=256,
+                lease_ttl_seconds=300,
+            )
+        )
+        await _wait_zcard(client, per_key_waiting_key(key_b), 1, timeout=5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert int(await client.zcard(per_key_waiting_key(key_b)) or 0) == 0
+        assert int(await client.zcard(global_waiting_key()) or 0) == 0
+        await service.release_concurrency(gateway_key_id=key_b, request_id="blocker-b")
+
+        # (c) crash expiry: a crashed waiter's expired lease is swept by the
+        # next acquisition and does not count against the cap.
+        key_c = uuid.uuid4()
+        expired_ms = int((time.time() - 120) * 1000)
+        member = f"{key_c}:crashed-waiter"
+        await client.zadd(per_key_waiting_key(key_c), {member: expired_ms})
+        await client.zadd(global_waiting_key(), {member: expired_ms})
+        acquired = await admission.acquire_waiting_lease(
+            gateway_key_id=key_c,
+            request_id="waiter-c",
+            lease_deadline=lease_deadline,
+            max_waiting_per_key=1,
+            max_waiting_total=256,
+            lease_ttl_seconds=300,
+        )
+        assert acquired is True
+        # The crashed member is gone; only the live waiter remains.
+        assert await client.zscore(per_key_waiting_key(key_c), member) is None
+        assert await client.zscore(global_waiting_key(), member) is None
+        assert int(await client.zcard(per_key_waiting_key(key_c)) or 0) == 1
+        await admission.release_waiting_lease(gateway_key_id=key_c, request_id="waiter-c")
+        assert int(await client.zcard(per_key_waiting_key(key_c)) or 0) == 0
+        assert int(await client.zcard(global_waiting_key()) or 0) == 0
+    finally:
+        await client.aclose()
+
+
+# --- V3: streaming wait -> admit --------------------------------------------
+
+
+def test_http_chat_streaming_waits_for_capacity_then_admits(
+    owned_pg_url: str,
+    owned_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A streaming wait-mode request waits, then streams its normal result."""
+    _configure_lazy_environment(
+        monkeypatch, database_url=owned_pg_url, redis_url=owned_redis_url
+    )
+    model = f"lazy-http-{uuid.uuid4().hex[:12]}"
+    seeded = asyncio.run(
+        _seed_chat_key(
+            owned_pg_url,
+            model=model,
+            rate_limit_policy={"max_concurrent_requests": 1, "window_seconds": 60},
+            lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 30, "max_waiting_requests": 2},
+        )
+    )
+
+    calls: list[str] = []
+    first_entered = threading.Event()
+    first_release = threading.Event()
+
+    from slaif_gateway.schemas.providers import (
+        ProviderResponse,
+        ProviderStreamChunk,
+        ProviderUsage,
+    )
+
+    class _HoldingStreamingAdapter:
+        def __init__(self) -> None:
+            self._first_held = False
+
+        async def forward_chat_completion(self, request):
+            calls.append(request.request_id)
+            if not self._first_held:
+                self._first_held = True
+                first_entered.set()
+                while not first_release.is_set():
+                    await asyncio.sleep(0.05)
+            return ProviderResponse(
+                provider="openai",
+                upstream_model=model,
+                status_code=200,
+                json_body={
+                    "id": "chatcmpl-lazy-stream-holder",
+                    "object": "chat.completion",
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": COMPLETION_TEXT},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+                },
+                usage=ProviderUsage(prompt_tokens=5, completion_tokens=6, total_tokens=11),
+            )
+
+        async def stream_chat_completion(self, request):
+            calls.append(request.request_id)
+            yield ProviderStreamChunk(
+                provider="openai",
+                upstream_model=model,
+                data='{"id":"lazy-stream","choices":[{"delta":{"content":"ok"}}]}',
+                raw_sse_event='data: {"id":"lazy-stream","choices":[{"delta":{"content":"ok"}}]}\n\n',
+            )
+            yield ProviderStreamChunk(
+                provider="openai",
+                upstream_model=model,
+                data=(
+                    '{"id":"lazy-stream-usage","choices":[],"usage":'
+                    '{"prompt_tokens":5,"completion_tokens":6,"total_tokens":11}}'
+                ),
+                raw_sse_event=(
+                    'data: {"id":"lazy-stream-usage","choices":[],"usage":'
+                    '{"prompt_tokens":5,"completion_tokens":6,"total_tokens":11}}\n\n'
+                ),
+                json_body={
+                    "id": "lazy-stream-usage",
+                    "choices": [],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11},
+                },
+                usage=ProviderUsage(prompt_tokens=5, completion_tokens=6, total_tokens=11),
+            )
+            yield ProviderStreamChunk(
+                provider="openai",
+                upstream_model=model,
+                data="[DONE]",
+                raw_sse_event="data: [DONE]\n\n",
+                is_done=True,
+            )
+
+    import slaif_gateway.services.chat_completion_gateway as chat_gateway
+
+    monkeypatch.setattr(
+        chat_gateway, "get_provider_adapter", lambda route, settings: _HoldingStreamingAdapter()
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    app = create_app(get_settings())
+    port = _free_port()
+    base = f"http://127.0.0.1:{port}"
+    headers = {"Authorization": f"Bearer {seeded.plaintext_gateway_key}"}
+    stream_body: list[str] = []
+    stream_status: list[int] = []
+
+    probe = Redis.from_url(owned_redis_url, decode_responses=True)
+
+    async def _observe_waiting() -> None:
+        try:
+            await _wait_zcard(probe, per_key_waiting_key(seeded.gateway_key_id), 1, timeout=20)
+        finally:
+            await probe.aclose()
+
+    def _stream_post() -> None:
+        with httpx.Client(timeout=60.0) as client:
+            with client.stream(
+                "POST",
+                f"{base}/v1/chat/completions",
+                json=_chat_body(model, stream=True),
+                headers=headers,
+            ) as response:
+                stream_status.append(response.status_code)
+                stream_body.extend(response.iter_text())
+
+    holder = _start_holding_request(base=base, model=model, headers=headers)
+    waiter = threading.Thread(target=_stream_post)
+    with _run_uvicorn_server(app, port):
+        holder.start()
+        try:
+            assert first_entered.wait(timeout=20)
+            baseline = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+            waiter.start()
+            asyncio.run(_observe_waiting())
+            mid = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+            assert mid == baseline, (
+                f"streaming wait must not mutate accounting: baseline={baseline} mid={mid}"
+            )
+        finally:
+            first_release.set()
+            holder.join(timeout=30)
+            waiter.join(timeout=30)
+            assert not holder.is_alive()
+            assert not waiter.is_alive()
+
+    assert stream_status == [200]
+    body = "".join(stream_body)
+    assert "data: [DONE]" in body
+    assert len(calls) == 2, "each request must invoke the provider exactly once"
+    final = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+    assert final == (baseline[0] + 1, baseline[1] + 2), (
+        f"one reservation + one finalization per completed request: "
+        f"baseline={baseline} final={final}"
+    )
+
+
+# --- V3: actual client socket disconnect before admission -------------------
+
+
+def _send_raw_chat_request(port: int, *, model: str, key: str) -> socket.socket:
+    """Open a raw TCP socket and send one complete chat request."""
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": PROMPT_TEXT}],
+            "max_tokens": 20,
+            "stream": False,
+        }
+    ).encode("utf-8")
+    request = (
+        f"POST /v1/chat/completions HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{port}\r\n"
+        f"Authorization: Bearer {key}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        f"Connection: close\r\n"
+        f"\r\n"
+    ).encode("utf-8") + body
+    sock = socket.create_connection(("127.0.0.1", port), timeout=30.0)
+    sock.sendall(request)
+    return sock
+
+
+def test_http_chat_real_socket_disconnect_before_admission(
+    owned_pg_url: str,
+    owned_redis_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A closed client socket aborts the wait BEFORE provider work.
+
+    The waiter's TCP connection is actually closed while it holds a waiting
+    lease. The server must detect the disconnect through the transport
+    (not synthetic task cancellation): no provider call, no accounting rows,
+    no waiting lease, and the server stays healthy for the next request.
+    """
+    _configure_lazy_environment(
+        monkeypatch, database_url=owned_pg_url, redis_url=owned_redis_url
+    )
+    model = f"lazy-http-{uuid.uuid4().hex[:12]}"
+    seeded = asyncio.run(
+        _seed_chat_key(
+            owned_pg_url,
+            model=model,
+            rate_limit_policy={"max_concurrent_requests": 1, "window_seconds": 60},
+            lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 30, "max_waiting_requests": 2},
+        )
+    )
+
+    calls: list[str] = []
+    first_entered = threading.Event()
+    first_release = threading.Event()
+    adapter = _make_holding_chat_adapter(model, calls, first_entered, first_release)
+
+    import slaif_gateway.services.chat_completion_gateway as chat_gateway
+
+    monkeypatch.setattr(
+        chat_gateway, "get_provider_adapter", lambda route, settings: adapter
+    )
+
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    app = create_app(get_settings())
+    port = _free_port()
+    base = f"http://127.0.0.1:{port}"
+    headers = {"Authorization": f"Bearer {seeded.plaintext_gateway_key}"}
+    probe = Redis.from_url(owned_redis_url, decode_responses=True)
+
+    sock: socket.socket | None = None
+    waiter_request_ids: list[str] = []
+
+    async def _wait_close_and_observe_cleanup() -> None:
+        # One coroutine, one connection, one loop: observe the waiter's
+        # lease (capturing its opaque request ID), close its actual TCP
+        # socket, then observe the lease cleanup.
+        try:
+            await _wait_zcard(probe, per_key_waiting_key(seeded.gateway_key_id), 1, timeout=20)
+            members = await probe.zrange(per_key_waiting_key(seeded.gateway_key_id), 0, -1)
+            assert len(members) == 1, members
+            member = str(members[0])
+            key_prefix = f"{seeded.gateway_key_id}:"
+            assert member.startswith(key_prefix), member
+            waiter_request_ids.append(member[len(key_prefix):])
+            assert sock is not None
+            sock.close()
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if int(await probe.zcard(per_key_waiting_key(seeded.gateway_key_id)) or 0) == 0:
+                    break
+                await asyncio.sleep(0.1)
+            assert int(await probe.zcard(per_key_waiting_key(seeded.gateway_key_id)) or 0) == 0
+            assert int(await probe.zcard(global_waiting_key()) or 0) == 0
+        finally:
+            await probe.aclose()
+
+    holder = _start_holding_request(base=base, model=model, headers=headers)
+    with _run_uvicorn_server(app, port):
+        holder.start()
+        try:
+            assert first_entered.wait(timeout=20)
+            baseline = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+            sock = _send_raw_chat_request(port, model=model, key=seeded.plaintext_gateway_key)
+            asyncio.run(_wait_close_and_observe_cleanup())
+        finally:
+            if sock is not None:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            first_release.set()
+            holder.join(timeout=30)
+            assert not holder.is_alive()
+
+        # The disconnected waiter never reached the provider and never
+        # reserved: its opaque request ID (captured from the waiting lease)
+        # is absent from provider calls and from all persisted accounting.
+        # (Checked while the server is still up, before the healthy check.)
+        assert len(waiter_request_ids) == 1
+        canceled_request_id = waiter_request_ids[0]
+        assert canceled_request_id not in calls, (
+            f"a disconnected waiter must never reach the provider: {calls}"
+        )
+        assert len(calls) == 1, "only the holder may have reached the provider"
+        stored = asyncio.run(_stored_request_ids(owned_pg_url, seeded.gateway_key_id))
+        assert canceled_request_id not in stored, stored
+        mid = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+        assert mid == (baseline[0], baseline[1] + 1), (
+            f"only the holder may have finalized so far: baseline={baseline} mid={mid}"
+        )
+
+        # The server must still be healthy after the abrupt disconnect: a
+        # normal request now succeeds (itself a billable model call).
+        healthy = httpx.post(
+            f"{base}/v1/chat/completions",
+            json=_chat_body(model),
+            headers=headers,
+            timeout=30.0,
+        )
+        assert healthy.status_code == 200, healthy.text[:300]
+        assert len(calls) == 2, "holder + healthy: exactly two provider calls"
+        final = asyncio.run(_side_effect_counts(owned_pg_url, seeded.gateway_key_id))
+        assert final == (baseline[0] + 1, baseline[1] + 2), (
+            f"holder + healthy requests finalize normally after the cancel: "
+            f"baseline={baseline} final={final}"
+        )
+        final_stored = asyncio.run(_stored_request_ids(owned_pg_url, seeded.gateway_key_id))
+        assert canceled_request_id not in final_stored, final_stored

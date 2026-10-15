@@ -220,7 +220,45 @@ class LazyThrottlingWaitOutcome:
     NEVER_FIT = "never_fit"
 
 
+# Small per-probe bound for the transport disconnect probe. The probe uses
+# the public ASGI receive with its OWN timeout (distinguished from the wait
+# budget): a timeout means "no disconnect message pending yet" for this
+# probe cycle, never a deadline.
+_TRANSPORT_PROBE_TIMEOUT_SECONDS = 0.05
+
+
+def make_request_disconnect_probe(request: Any) -> Callable[[], Awaitable[bool]]:
+    """Build the transport disconnect probe for one in-flight request.
+
+    Starlette's ``Request.is_disconnected()`` cancels its receive scope
+    immediately, so through middleware receive wrappers it can return
+    False after the client has actually closed the connection. A bounded
+    public ``receive`` with its own small timeout reliably observes the
+    ``http.disconnect`` message when it has been delivered.
+
+    The probe must be used only AFTER the request body has already been
+    consumed and validated (the gateway waits only at the pre-provider
+    admission point, after body parsing): at that point the only
+    meaningful pending message is the disconnect signal, so the probe
+    never consumes request-body content.
+    """
+
+    async def _probe() -> bool:
+        try:
+            async with asyncio.timeout(_TRANSPORT_PROBE_TIMEOUT_SECONDS):
+                message = await request.receive()
+        except TimeoutError:
+            # Own probe bound expired: no disconnect pending this cycle.
+            return False
+        except asyncio.CancelledError:
+            raise
+        return bool(isinstance(message, dict) and message.get("type") == "http.disconnect")
+
+    return _probe
+
+
 @dataclass(frozen=True)
+
 class LazyAdmissionContext:
     """The admission context the wait loop currently operates under.
 
