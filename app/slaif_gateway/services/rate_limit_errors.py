@@ -77,3 +77,23 @@ class RateLimitReleaseError(RateLimitError):
     error_type = "server_error"
     error_code = "rate_limit_release_failed"
     message = "Rate limit reservation could not be released"
+
+
+class LazyThrottlingDeadlineExceededError(RateLimitError):
+    """Raised when a lazy-throttling wait exhausts its max-wait deadline."""
+
+    status_code = 429
+    error_type = "rate_limit_error"
+    error_code = "lazy_throttling_deadline_exceeded"
+    message = "Timed out waiting for rate-limit capacity"
+    retry_after_seconds = 1
+
+
+class LazyThrottlingWaitingCapacityFullError(RateLimitError):
+    """Raised when the per-key or deployment waiting cap is already full."""
+
+    status_code = 429
+    error_type = "rate_limit_error"
+    error_code = "lazy_throttling_waiting_capacity_full"
+    message = "Waiting capacity is full; retry later"
+    retry_after_seconds = 1

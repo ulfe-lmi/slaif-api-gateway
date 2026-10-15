@@ -23,6 +23,7 @@ from slaif_gateway.services.responses_streaming_live_burn import (
     responses_streaming_live_burn_policy_from_metadata,
 )
 from slaif_gateway.services.key_modes import is_trusted_calibration_key
+from slaif_gateway.schemas.rate_limits import parse_lazy_throttling_policy_metadata
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 from slaif_gateway.utils.crypto import parse_gateway_key_public_id, verify_hmac_sha256_token
 
@@ -157,6 +158,7 @@ class GatewayAuthService:
 
         allowed_providers = None
         rate_limit_metadata: dict[str, object] = {}
+        lazy_throttling_policy = None
         responses_policy: dict[str, object] | None = None
         chat_streaming_live_burn_policy = default_chat_streaming_live_burn_policy()
         responses_streaming_live_burn_policy = default_responses_streaming_live_burn_policy()
@@ -168,6 +170,18 @@ class GatewayAuthService:
             raw_rate_limit_metadata = gateway_key.metadata_json.get("rate_limit_policy")
             if isinstance(raw_rate_limit_metadata, dict):
                 rate_limit_metadata = raw_rate_limit_metadata
+            # A malformed stored lazy-throttling policy never grants waiting:
+            # the strict parser returns None and the default reject policy
+            # applies (see schemas.rate_limits).
+            lazy_throttling_policy = parse_lazy_throttling_policy_metadata(
+                gateway_key.metadata_json.get("lazy_throttling_policy"),
+                max_wait_seconds_ceiling=(
+                    self._settings.LAZY_THROTTLING_MAX_WAIT_SECONDS
+                ),
+                max_waiting_per_key_ceiling=(
+                    self._settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY
+                ),
+            )
             raw_responses_policy = gateway_key.metadata_json.get("responses_policy")
             if isinstance(raw_responses_policy, dict):
                 sanitized_policy = sanitize_metadata_mapping(
@@ -245,6 +259,7 @@ class GatewayAuthService:
                 "max_concurrent_requests": gateway_key.max_concurrent_requests,
                 "window_seconds": window_seconds,
             },
+            lazy_throttling=lazy_throttling_policy,
             responses_policy=responses_policy,
             chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
             responses_streaming_live_burn_policy=(

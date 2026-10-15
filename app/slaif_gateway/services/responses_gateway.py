@@ -23,6 +23,10 @@ from slaif_gateway.api.policy_errors import openai_error_from_request_policy_err
 from slaif_gateway.api.pricing_errors import openai_error_from_pricing_error
 from slaif_gateway.api.provider_errors import openai_error_from_provider_error
 from slaif_gateway.api.quota_errors import openai_error_from_quota_error
+from slaif_gateway.api.auth_errors import openai_error_from_auth_error
+from slaif_gateway.api.endpoint_policy_errors import (
+    openai_error_from_endpoint_policy_error,
+)
 from slaif_gateway.api.rate_limit_errors import openai_error_from_rate_limit_error
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.cache.redis import get_redis_client_from_app
@@ -33,6 +37,7 @@ from slaif_gateway.db.repositories.codex_replay import CodexReplayReferencesRepo
 from slaif_gateway.db.repositories.conversation_references import ConversationReferencesRepository
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.quota import QuotaReservationsRepository
@@ -103,9 +108,20 @@ from slaif_gateway.schemas.providers import (
     ProviderUsage,
 )
 from slaif_gateway.schemas.quota import QuotaReservationResult
-from slaif_gateway.schemas.rate_limits import RateLimitPolicy
+from slaif_gateway.schemas.rate_limits import (
+    LazyThrottlingPolicy,
+    RateLimitPolicy,
+    RateLimitResult,
+)
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
+from slaif_gateway.services.auth_service import GatewayAuthError, GatewayAuthService
+from slaif_gateway.services.endpoint_policy import (
+    RESPONSES as RESPONSES_ENDPOINT_POLICY_ID,
+    RESPONSES_COMPACT as RESPONSES_COMPACT_ENDPOINT_POLICY_ID,
+    EndpointPolicyService,
+)
+from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
 from slaif_gateway.services.accounting_errors import AccountingError
 from slaif_gateway.services.codex_replay_service import (
     CodexReplayAuthorization,
@@ -114,6 +130,7 @@ from slaif_gateway.services.codex_replay_service import (
 )
 from slaif_gateway.services.external_tool_fence import (
     ExternalToolFenceError,
+    ExternalToolFenceExhaustedError,
     ExternalToolFenceService,
 )
 from slaif_gateway.services.external_tool_hold import ExternalToolAccountingHoldService
@@ -130,10 +147,29 @@ from slaif_gateway.services.openai_web_search_contract import (
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import PricingError
-from slaif_gateway.services.quota_errors import QuotaError
+from slaif_gateway.services.quota_errors import KeyNotReservableError, QuotaError
 from slaif_gateway.services.quota_service import QuotaService
-from slaif_gateway.services.rate_limit_errors import RateLimitError, RedisRateLimitUnavailableError
-from slaif_gateway.services.rate_limit_policy import build_rate_limit_policy
+from slaif_gateway.services.lazy_throttling import (
+    LazyAdmissionContext,
+    LazyThrottlingAdmission,
+    key_admission_policy_unchanged,
+    policy_changed_while_waiting_error,
+    wait_for_rate_limit_admission,
+)
+from slaif_gateway.services.rate_limit_errors import (
+    ConcurrencyRateLimitExceededError,
+    RateLimitError,
+    RedisRateLimitUnavailableError,
+    RequestRateLimitExceededError,
+    TokenRateLimitExceededError,
+)
+from slaif_gateway.services.rate_limit_policy import (
+    build_rate_limit_policy,
+    effective_lazy_throttling_policy,
+)
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    is_fixed_request_module_billing,
+)
 from slaif_gateway.services.rate_limit_service import RedisRateLimitService
 from slaif_gateway.services.responses_external_tool_runtime import (
     ExternalToolRuntimeError,
@@ -817,13 +853,88 @@ async def handle_response_compact(
         policy_result=policy_result,
         upstream_model=route.resolved_model,
     )
+
+    async def _compact_revalidate_route(
+        key: AuthenticatedGatewayKey,
+    ) -> RouteResolutionResult:
+        return await _resolve_responses_route(
+            authenticated_key=key,
+            effective_model=policy_result.effective_body["model"],
+            endpoint=RESPONSES_COMPACT_ENDPOINT,
+            streaming_requested=False,
+            text_format_type=None,
+            function_tools_requested=False,
+            custom_tools_requested=False,
+            image_input_requested=False,
+            file_input_requested=False,
+            input_token_count_requested=False,
+            stored_responses_requested=False,
+            previous_response_id_requested=False,
+            compact_requested=True,
+            conversations_requested=False,
+            codex_request_envelope_requested=codex_compaction_requested,
+            codex_client_tools_requested=codex_compaction_requested,
+            codex_streaming_tool_events_requested=codex_compaction_requested,
+            codex_encrypted_reasoning_replay_requested=codex_compaction_requested,
+            codex_extended_limits_requested=codex_compaction_requested,
+            codex_compaction_requested=codex_compaction_requested,
+            request=request,
+        )
+
+    async def _compact_route_checks_after_wait(
+        _key: AuthenticatedGatewayKey,
+        new_route: RouteResolutionResult,
+        current_policy_result: ResponsesPolicyResult,
+    ) -> ResponsesPolicyResult:
+        _ensure_client_server_pair(client_module.module_id, new_route)
+        _reject_local_coding_auxiliary_endpoint(new_route)
+        if codex_compaction_requested:
+            try:
+                current_policy_result = apply_codex_route_limits(
+                    current_policy_result,
+                    route_capabilities=new_route.capabilities,
+                    settings=settings,
+                    include_output_field=False,
+                    reserve_route_max_output=True,
+                )
+            except RequestPolicyError as exc:
+                raise openai_error_from_request_policy_error(exc) from exc
+        _verify_codex_replay_route(
+            authorization=replay_authorization,
+            route=new_route,
+            compact_endpoint=codex_compaction_requested,
+        )
+        return current_policy_result
+
     rate_limit_reservation = await _reserve_redis_rate_limit(
         authenticated_key=authenticated_key,
         policy_result=policy_result,
+        route=route,
         request_id=request_id,
         settings=settings,
         request=request,
+        endpoint_policy_id=RESPONSES_COMPACT_ENDPOINT_POLICY_ID,
+        quota_endpoint=RESPONSES_COMPACT_ENDPOINT,
+        external_pricing_lookup=None,
+        resolve_route_for_key=_compact_revalidate_route,
+        route_checks_after_wait=_compact_route_checks_after_wait,
     )
+    refreshed_context = (
+        rate_limit_reservation.refreshed_context
+        if rate_limit_reservation is not None
+        else None
+    )
+    if refreshed_context is not None:
+        # The request genuinely waited: admission was re-validated, so
+        # forward under the CURRENT key, request policy result, and route
+        # (R4: never forward under a stale pre-wait authorization).
+        authenticated_key = refreshed_context.authenticated_key
+        policy_result = refreshed_context.policy_result
+        route = refreshed_context.route
+        upstream_body = _build_safe_responses_compact_upstream_body(
+            policy_result=policy_result,
+            upstream_model=route.resolved_model,
+        )
     try:
         quota = await _reserve_responses_quota(
             authenticated_key=authenticated_key,
@@ -1241,13 +1352,138 @@ async def handle_response_create(
             endpoint=RESPONSES_ENDPOINT,
             request=request,
         )
+    async def _create_revalidate_route(
+        key: AuthenticatedGatewayKey,
+    ) -> RouteResolutionResult:
+        return await _resolve_responses_route(
+            authenticated_key=key,
+            effective_model=policy_result.effective_body["model"],
+            endpoint=RESPONSES_ENDPOINT,
+            streaming_requested=policy_result.effective_body.get("stream") is True,
+            text_format_type=responses_text_format_type(policy_result.effective_body),
+            function_tools_requested=(
+                responses_function_tools_requested(policy_result.effective_body)
+                and not codex_client_tools_requested
+            ),
+            custom_tools_requested=(
+                responses_custom_tools_requested(policy_result.effective_body)
+                and not codex_client_tools_requested
+            ),
+            image_input_requested=responses_image_input_requested(policy_result.effective_body),
+            file_input_requested=responses_file_input_requested(policy_result.effective_body),
+            input_token_count_requested=False,
+            stored_responses_requested=policy_result.effective_body.get("store") is True,
+            previous_response_id_requested=previous_response_id_requested(
+                policy_result.effective_body
+            ),
+            compact_requested=False,
+            conversations_requested=conversation_requested(policy_result.effective_body),
+            codex_request_envelope_requested=codex_request_envelope_requested,
+            codex_client_tools_requested=codex_client_tools_requested,
+            codex_streaming_tool_events_requested=codex_streaming_tool_events_requested,
+            codex_encrypted_reasoning_replay_requested=(codex_encrypted_reasoning_event_requested),
+            codex_extended_limits_requested=codex_extended_limits_requested,
+            codex_compaction_requested=codex_compaction_replay_requested,
+            request=request,
+        )
+
+    # Hosted web-search admission and its fee snapshot are re-run on the
+    # CURRENT key/route after a real wait (R4: current hosted authority and
+    # current pricing snapshot); results land here for the post-seam swap.
+    refreshed_hosted_state: dict[str, object] = {
+        "admission": external_web_search_admission,
+        "pricing": external_pricing_lookup,
+    }
+
+    async def _create_route_checks_after_wait(
+        _key: AuthenticatedGatewayKey,
+        new_route: RouteResolutionResult,
+        current_policy_result: ResponsesPolicyResult,
+    ) -> ResponsesPolicyResult:
+        _ensure_client_server_pair(client_module.module_id, new_route)
+        try:
+            enforce_openai_compatible_request_boundary(
+                current_policy_result.effective_body,
+                route=new_route,
+                endpoint="responses",
+            )
+        except OpenAICompatibleRequestBoundaryError as exc:
+            raise OpenAICompatibleError(
+                "Remote image URLs are not enabled for generic OpenAI-compatible providers.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="openai_compatible_remote_image_not_allowed",
+                param=exc.param,
+            ) from exc
+        if codex_extended_limits_requested:
+            try:
+                current_policy_result = apply_codex_route_limits(
+                    current_policy_result,
+                    route_capabilities=new_route.capabilities,
+                    settings=settings,
+                )
+            except RequestPolicyError as exc:
+                raise openai_error_from_request_policy_error(exc) from exc
+        _verify_codex_replay_route(authorization=replay_authorization, route=new_route)
+        if external_web_search_admission is not None:
+            # Re-run the existing hosted admission decision on the current
+            # key/route (no new hosted policy machinery).
+            try:
+                refreshed_hosted_state["admission"] = admit_web_search_request(
+                    current_policy_result.effective_body,
+                    authenticated_key=_key,
+                    route_provider=new_route.provider,
+                    route_capabilities=new_route.capabilities,
+                )
+            except ExternalToolRuntimeError as exc:
+                raise OpenAICompatibleError(
+                    "The requested hosted web-search contract is not enabled for this key and route.",
+                    status_code=400,
+                    error_type="invalid_request_error",
+                    code="responses_external_tool_not_allowed",
+                ) from exc
+            refreshed_hosted_state["pricing"] = await _validate_external_tool_pricing(
+                route=new_route,
+                endpoint=RESPONSES_ENDPOINT,
+                request=request,
+            )
+        return current_policy_result
+
     rate_limit_reservation = await _reserve_redis_rate_limit(
         authenticated_key=authenticated_key,
         policy_result=policy_result,
+        route=route,
         request_id=request_id,
         settings=settings,
         request=request,
+        endpoint_policy_id=RESPONSES_ENDPOINT_POLICY_ID,
+        quota_endpoint=RESPONSES_ENDPOINT,
+        external_pricing_lookup=external_pricing_lookup,
+        resolve_route_for_key=_create_revalidate_route,
+        route_checks_after_wait=_create_route_checks_after_wait,
     )
+    refreshed_context = (
+        rate_limit_reservation.refreshed_context
+        if rate_limit_reservation is not None
+        else None
+    )
+    if refreshed_context is not None:
+        # The request genuinely waited: admission was re-validated, so
+        # forward under the CURRENT key, request policy result, and route
+        # (R4: never forward under a stale pre-wait authorization).
+        authenticated_key = refreshed_context.authenticated_key
+        policy_result = refreshed_context.policy_result
+        route = refreshed_context.route
+        external_web_search_admission = refreshed_hosted_state["admission"]
+        external_pricing_lookup = refreshed_hosted_state["pricing"]
+        upstream_body = _build_safe_responses_upstream_body(
+            policy_result=policy_result,
+            upstream_model=route.resolved_model,
+            omit_prompt_cache_key=_codex_local_pair_omits_prompt_cache_key(
+                client_module_id=client_module.module_id,
+                local_coding_server_context=local_coding_server_context,
+            ),
+        )
     try:
         quota = await _reserve_responses_quota(
             authenticated_key=authenticated_key,
@@ -3005,10 +3241,24 @@ async def _reserve_redis_rate_limit(
     *,
     authenticated_key: AuthenticatedGatewayKey,
     policy_result: ResponsesPolicyResult,
+    route: RouteResolutionResult,
     request_id: str,
     settings: Settings,
     request: Request | None,
+    endpoint_policy_id: str,
+    quota_endpoint: str,
+    external_pricing_lookup: object | None,
+    resolve_route_for_key,
+    route_checks_after_wait,
 ) -> _RateLimitReservation | None:
+    """Reserve temporary Redis rate-limit capacity for one Responses request.
+
+    On a temporary limiter denial under an explicitly enabled wait mode the
+    bounded wait-for-admission loop runs and the returned reservation carries
+    ``refreshed_context``: the revalidated (current) admission context the
+    caller must use for forwarding (R4: never forward under a stale pre-wait
+    authorization). Without a wait ``refreshed_context`` is None.
+    """
     if not settings.ENABLE_REDIS_RATE_LIMITS:
         return None
 
@@ -3028,29 +3278,397 @@ async def _reserve_redis_rate_limit(
         rate_limit_exc = RedisRateLimitUnavailableError()
         increment_rate_limit_rejection(rate_limit_exc.error_code)
         raise openai_error_from_rate_limit_error(rate_limit_exc) from exc
-    service = RedisRateLimitService(
-        redis_client,
-        fail_closed=settings.rate_limit_fail_closed(),
+    fail_closed = settings.rate_limit_fail_closed()
+    service = RedisRateLimitService(redis_client, fail_closed=fail_closed)
+    estimated_tokens = (
+        policy_result.estimated_input_tokens + policy_result.effective_output_tokens
+    )
+    initial_context = LazyAdmissionContext(
+        gateway_key_id=authenticated_key.gateway_key_id,
+        authenticated_key=authenticated_key,
+        limiter_policy=policy,
+        policy_result=policy_result,
+        route=route,
+        estimated_tokens=estimated_tokens,
     )
     try:
         await service.check_and_reserve(
             gateway_key_id=authenticated_key.gateway_key_id,
             request_id=request_id,
-            estimated_tokens=policy_result.estimated_input_tokens
-            + policy_result.effective_output_tokens,
+            estimated_tokens=estimated_tokens,
             policy=policy,
         )
-    except RateLimitError as exc:
+    except (
+        RequestRateLimitExceededError,
+        TokenRateLimitExceededError,
+        ConcurrencyRateLimitExceededError,
+    ) as exc:
+        lazy_policy = effective_lazy_throttling_policy(
+            authenticated_key=authenticated_key,
+            settings=settings,
+        )
+        if lazy_policy.is_wait_mode():
+            # Temporary denial with an explicitly enabled wait mode: bounded
+            # lazy admission (R3). Hard refusals (Redis unavailable, invalid
+            # policy) never reach this branch; hard quota/security/fence/
+            # pricing refusals are detected non-mutatingly and fail
+            # immediately WITHOUT waiting (R5).
+            await _preflight_responses_wait_hard_quota(
+                authenticated_key=authenticated_key,
+                route=route,
+                policy_result=policy_result,
+                endpoint=quota_endpoint,
+                request=request,
+                external_pricing_lookup=external_pricing_lookup,
+            )
+            final_context = await _wait_for_responses_lazy_admission(
+                service=service,
+                admission=LazyThrottlingAdmission(redis_client, fail_closed=fail_closed),
+                initial_context=initial_context,
+                lazy_policy=lazy_policy,
+                endpoint_policy_id=endpoint_policy_id,
+                resolve_route_for_key=resolve_route_for_key,
+                route_checks_after_wait=route_checks_after_wait,
+                request_id=request_id,
+                estimated_tokens=estimated_tokens,
+                request=request,
+                settings=settings,
+            )
+            return _build_responses_rate_limit_reservation(
+                service=service,
+                context=final_context,
+                request_id=request_id,
+                refreshed_context=final_context,
+            )
         increment_rate_limit_rejection(exc.error_code)
         raise openai_error_from_rate_limit_error(exc) from exc
-    return _RateLimitReservation(
+    except RateLimitError as exc:
+        # Non-transient limiter errors (Redis unavailable in fail-closed mode,
+        # invalid policy, ...) keep their existing immediate 503/400 mapping;
+        # they never enter the wait loop.
+        increment_rate_limit_rejection(exc.error_code)
+        raise openai_error_from_rate_limit_error(exc) from exc
+
+    return _build_responses_rate_limit_reservation(
         service=service,
-        policy=policy,
-        gateway_key_id=authenticated_key.gateway_key_id,
+        context=initial_context,
         request_id=request_id,
-        concurrency_reserved=policy.concurrent_requests is not None,
     )
 
+
+def _build_responses_rate_limit_reservation(
+    *,
+    service: RedisRateLimitService,
+    context: LazyAdmissionContext,
+    request_id: str,
+    refreshed_context: LazyAdmissionContext | None = None,
+) -> _RateLimitReservation:
+    return _RateLimitReservation(
+        service=service,
+        policy=context.limiter_policy,
+        gateway_key_id=context.gateway_key_id,
+        request_id=request_id,
+        concurrency_reserved=context.limiter_policy.concurrent_requests is not None,
+        refreshed_context=refreshed_context,
+    )
+
+
+async def _preflight_responses_wait_hard_quota(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    policy_result: ResponsesPolicyResult,
+    endpoint: str,
+    request: Request,
+    external_pricing_lookup: object | None = None,
+) -> None:
+    """Non-mutating preflight BEFORE a Responses request may wait (R5).
+
+    Hard refusals are not temporary waiting candidates; this detects the
+    existing hard checks that would otherwise run only after admission, using
+    the same read-only services/predicates, without reserving or mutating.
+
+    Ordinary requests: key lifecycle, external-tool fence state, and the
+    existing estimate-fit limit predicate (same projection inputs as the
+    atomic reservation), plus pricing validity.
+
+    Hosted web-search requests (existing fee snapshot present) keep the
+    approved hosted contract: a single-request overrun is permitted and the
+    fence flow instead requires a POSITIVE remaining balance, which it
+    reserves. The ordinary estimate-fit check is therefore NOT applied here
+    (it would silently tighten the contract); the preflight mirrors the fence
+    flow's remaining-balance gate and fails with the same error it would use.
+    Hosted pricing validity was already established by the existing read-only
+    fee lookup before the seam.
+    """
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+    try:
+        if external_pricing_lookup is None:
+            pricing_service = PricingService(
+                pricing_rules_repository=PricingRulesRepository(session),
+                fx_rates_repository=FxRatesRepository(session),
+            )
+            try:
+                capture = await pricing_service.capture_pricing_and_fx(
+                    provider=route.provider,
+                    model=route.resolved_model,
+                    endpoint=endpoint,
+                )
+                cost_estimate = await pricing_service.estimate_chat_completion_cost(
+                    route=route,
+                    policy=policy_result,
+                    endpoint=endpoint,
+                    pricing=capture.pricing,
+                    fx=capture.fx,
+                )
+            except PricingError as exc:
+                raise openai_error_from_pricing_error(exc) from exc
+            # Same projection inputs as the existing atomic reservation (no
+            # separate financial implementation).
+            reserved_cost_eur = cost_estimate.estimated_total_cost_eur
+            if is_fixed_request_module_billing(route.provider_kind, endpoint):
+                reserved_tokens = 0
+            else:
+                reserved_tokens = (
+                    policy_result.estimated_input_tokens
+                    + policy_result.effective_output_tokens
+                )
+        else:
+            reserved_cost_eur = None
+            reserved_tokens = None
+
+        gateway_key = await GatewayKeysRepository(session).get_gateway_key_by_id(
+            authenticated_key.gateway_key_id
+        )
+        if gateway_key is None:
+            quota_exc = KeyNotReservableError("Gateway key cannot reserve quota")
+            increment_quota_rejection(quota_exc.error_code)
+            raise openai_error_from_quota_error(quota_exc) from None
+        quota_service = QuotaService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+        )
+        try:
+            quota_service._validate_key_can_reserve(gateway_key=gateway_key, now=datetime.now(UTC))
+            quota_service._validate_external_tool_fence(gateway_key=gateway_key)
+        except QuotaError as exc:
+            increment_quota_rejection(exc.error_code)
+            raise openai_error_from_quota_error(exc) from exc
+
+        if external_pricing_lookup is not None:
+            # Hosted contract: fail only when no positive remaining balance is
+            # available to fence (the exact condition the fence flow uses);
+            # an estimate larger than the remainder is contractually allowed.
+            if _hosted_remaining_balance_exhausted(gateway_key):
+                fence_exc = ExternalToolFenceExhaustedError()
+                raise OpenAICompatibleError(
+                    fence_exc.safe_message,
+                    status_code=fence_exc.status_code,
+                    error_type=fence_exc.error_type,
+                    code=fence_exc.error_code,
+                ) from fence_exc
+            return
+
+        try:
+            quota_service._validate_limits(
+                gateway_key=gateway_key,
+                reserved_cost_eur=reserved_cost_eur,
+                reserved_tokens=reserved_tokens,
+                reserved_requests=1,
+            )
+        except QuotaError as exc:
+            increment_quota_rejection(exc.error_code)
+            raise openai_error_from_quota_error(exc) from exc
+    finally:
+        await session_iterator.aclose()
+
+
+def _hosted_remaining_balance_exhausted(gateway_key: object) -> bool:
+    """The fence flow's positive-remaining-balance gate (read-only mirror)."""
+    if gateway_key.request_limit_total is not None and (
+        gateway_key.request_limit_total
+        - gateway_key.requests_used_total
+        - gateway_key.requests_reserved_total
+    ) < 1:
+        return True
+    if gateway_key.token_limit_total is not None and (
+        gateway_key.token_limit_total
+        - gateway_key.tokens_used_total
+        - gateway_key.tokens_reserved_total
+    ) <= 0:
+        return True
+    if gateway_key.cost_limit_eur is not None and (
+        gateway_key.cost_limit_eur
+        - gateway_key.cost_used_eur
+        - gateway_key.cost_reserved_eur
+    ) <= 0:
+        return True
+    return False
+
+
+async def _wait_for_responses_lazy_admission(
+    *,
+    service: RedisRateLimitService,
+    admission: LazyThrottlingAdmission,
+    initial_context: LazyAdmissionContext,
+    lazy_policy: LazyThrottlingPolicy,
+    endpoint_policy_id: str,
+    resolve_route_for_key,
+    route_checks_after_wait,
+    request_id: str,
+    estimated_tokens: int,
+    request: Request,
+    settings: Settings,
+) -> LazyAdmissionContext:
+    """Bounded wait-for-admission loop for one denied Responses request.
+
+    Each retry runs under the revalidated context, so the CURRENT key/route
+    governs admission; the original monotonic deadline is never reset by a
+    policy update (R4).
+    """
+    initial_key_id = initial_context.gateway_key_id
+
+    async def _check_and_reserve(
+        *,
+        gateway_key_id: uuid.UUID,
+        request_id: str,
+        estimated_tokens: int,
+        policy: RateLimitPolicy,
+    ) -> RateLimitResult:
+        return await service.check_and_reserve(
+            gateway_key_id=gateway_key_id,
+            request_id=request_id,
+            estimated_tokens=estimated_tokens,
+            policy=policy,
+        )
+
+    async def _release_slot() -> None:
+        # Idempotent: safe whether or not a concurrency slot was reserved.
+        await service.release_concurrency(
+            gateway_key_id=initial_key_id,
+            request_id=request_id,
+        )
+
+    outcome = await wait_for_rate_limit_admission(
+        check_and_reserve=_check_and_reserve,
+        admission=admission,
+        initial_context=initial_context,
+        estimated_tokens=estimated_tokens,
+        lazy_policy=lazy_policy,
+        request_id=request_id,
+        release_admission_slot=_release_slot,
+        revalidate=_revalidate_responses_after_wait(
+            original=initial_context,
+            endpoint_policy_id=endpoint_policy_id,
+            resolve_route_for_key=resolve_route_for_key,
+            route_checks_after_wait=route_checks_after_wait,
+            request=request,
+            settings=settings,
+        ),
+        max_waiting_total=settings.LAZY_THROTTLING_MAX_WAITING_TOTAL,
+        lease_ttl_seconds=settings.LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS,
+    )
+    return outcome.context
+
+
+def _revalidate_responses_after_wait(
+    *,
+    original: LazyAdmissionContext,
+    endpoint_policy_id: str,
+    resolve_route_for_key,
+    route_checks_after_wait,
+    request: Request,
+    settings: Settings,
+):
+    """Rebuild the CURRENT admission context after a real wait (R4).
+
+    Re-authenticates the key (status/expiry/fence via the existing service on
+    a short session), re-checks the CURRENT endpoint allow-list (including the
+    create-vs-compact endpoint identity), re-resolves the CURRENT route, and
+    re-runs the endpoint's pure post-route checks. Any change to an
+    admission-relevant key field (including any lazy-policy change, so a
+    reduced max-wait cannot keep the original longer deadline running) or a
+    changed key identity / route resolution conservatively refuses instead of
+    forwarding under a stale pre-wait authorization. Mutable usage counters
+    are never compared as policy; the current rate-limit configuration
+    governs the retry through the rebuilt limiter policy.
+    """
+
+    async def _revalidate(_current: LazyAdmissionContext) -> LazyAdmissionContext:
+        authorization = request.headers.get("authorization")
+        session_iterator = _db_session_iterator(request)
+        try:
+            session = await anext(session_iterator)
+        except StopAsyncIteration as exc:
+            raise _database_session_unavailable_error() from exc
+        try:
+            auth_service = GatewayAuthService(
+                settings=settings,
+                gateway_keys_repository=GatewayKeysRepository(session),
+            )
+            try:
+                new_key = await auth_service.authenticate_authorization_header(
+                    authorization
+                )
+            except GatewayAuthError as exc:
+                raise openai_error_from_auth_error(exc) from exc
+            # R4 requires the owner to remain active after a real wait; reuse
+            # the existing read-only owner lookup in this same short session.
+            owner = await OwnersRepository(session).get_owner_by_id(new_key.owner_id)
+            if owner is None or not owner.is_active or owner.anonymized_at is not None:
+                raise OpenAICompatibleError(
+                    "The key owner is no longer active.",
+                    status_code=403,
+                    error_type="permission_error",
+                    code="owner_not_active",
+                )
+        finally:
+            await session_iterator.aclose()
+
+        # Current endpoint allow-list must still permit this endpoint (R4).
+        try:
+            EndpointPolicyService().ensure_endpoint_allowed(
+                new_key,
+                endpoint_policy_id,
+            )
+        except EndpointPolicyError as exc:
+            raise openai_error_from_endpoint_policy_error(exc) from exc
+
+        if not key_admission_policy_unchanged(
+            original.authenticated_key,
+            new_key,
+        ):
+            # Current key policy changed while waiting: respect it by refusing
+            # rather than continuing under the former permissions (R4).
+            raise policy_changed_while_waiting_error()
+
+        new_route = await resolve_route_for_key(new_key)
+
+        if new_key.gateway_key_id != original.gateway_key_id or (
+            new_route.resolved_model,
+            new_route.provider,
+        ) != (original.route.resolved_model, original.route.provider):
+            raise policy_changed_while_waiting_error()
+
+        new_policy_result = await route_checks_after_wait(new_key, new_route, original.policy_result)
+
+        return LazyAdmissionContext(
+            gateway_key_id=new_key.gateway_key_id,
+            authenticated_key=new_key,
+            limiter_policy=build_rate_limit_policy(authenticated_key=new_key, settings=settings),
+            policy_result=new_policy_result,
+            route=new_route,
+            estimated_tokens=(
+                new_policy_result.estimated_input_tokens
+                + new_policy_result.effective_output_tokens
+            ),
+        )
+
+    return _revalidate
 
 def _start_rate_limit_heartbeat(
     reservation: _RateLimitReservation | None,
@@ -4412,12 +5030,16 @@ class _RateLimitReservation:
         gateway_key_id: uuid.UUID,
         request_id: str,
         concurrency_reserved: bool,
+        refreshed_context: LazyAdmissionContext | None = None,
     ) -> None:
         self.service = service
         self.policy = policy
         self.gateway_key_id = gateway_key_id
         self.request_id = request_id
         self.concurrency_reserved = concurrency_reserved
+        # Populated only when the request genuinely waited: the revalidated
+        # (current) admission context that superseded the pre-wait context (R4).
+        self.refreshed_context = refreshed_context
 
 
 async def _release_rate_limit_concurrency(

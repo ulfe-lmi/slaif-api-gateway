@@ -4,7 +4,23 @@ from __future__ import annotations
 
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
-from slaif_gateway.schemas.rate_limits import RateLimitPolicy
+from slaif_gateway.schemas.rate_limits import LazyThrottlingPolicy, RateLimitPolicy
+
+
+def effective_lazy_throttling_policy(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    settings: Settings,
+) -> LazyThrottlingPolicy:
+    """Return the effective per-key lazy-throttling policy.
+
+    A missing or malformed stored policy is always the immediate-reject
+    default; wait mode is never inferred from anything other than an
+    explicitly validated stored policy.
+    """
+    if authenticated_key.lazy_throttling is not None:
+        return authenticated_key.lazy_throttling
+    return LazyThrottlingPolicy(mode="reject")
 
 
 def build_rate_limit_policy(

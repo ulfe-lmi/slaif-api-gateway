@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from datetime import UTC, datetime
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
@@ -18,6 +19,10 @@ from starlette.responses import StreamingResponse
 from slaif_gateway.cache.redis import get_redis_client_from_app
 from slaif_gateway.api import dependencies as dependencies_module
 from slaif_gateway.api.accounting_errors import openai_error_from_accounting_error
+from slaif_gateway.api.auth_errors import openai_error_from_auth_error
+from slaif_gateway.api.endpoint_policy_errors import (
+    openai_error_from_endpoint_policy_error,
+)
 from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.api.policy_errors import openai_error_from_request_policy_error
 from slaif_gateway.api.pricing_errors import openai_error_from_pricing_error
@@ -27,6 +32,7 @@ from slaif_gateway.api.rate_limit_errors import openai_error_from_rate_limit_err
 from slaif_gateway.api.routing_errors import openai_error_from_route_resolution_error
 from slaif_gateway.config import Settings
 from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
+from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
@@ -58,7 +64,11 @@ from slaif_gateway.schemas.policy import ChatCompletionPolicyResult
 from slaif_gateway.schemas.pricing import ChatCostEstimate
 from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderStreamChunk
 from slaif_gateway.schemas.quota import QuotaReservationResult
-from slaif_gateway.schemas.rate_limits import RateLimitPolicy
+from slaif_gateway.schemas.rate_limits import (
+    LazyThrottlingPolicy,
+    RateLimitPolicy,
+    RateLimitResult,
+)
 from slaif_gateway.schemas.routing import RouteResolutionResult
 from slaif_gateway.services.accounting import AccountingService
 from slaif_gateway.services.accounting_errors import AccountingError
@@ -84,11 +94,31 @@ from slaif_gateway.services.chat_streaming_live_burn import (
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import PricingError
-from slaif_gateway.services.quota_errors import QuotaError
+from slaif_gateway.services.quota_errors import KeyNotReservableError, QuotaError
 from slaif_gateway.services.quota_service import QuotaService
-from slaif_gateway.services.rate_limit_errors import RateLimitError
-from slaif_gateway.services.rate_limit_errors import RedisRateLimitUnavailableError
-from slaif_gateway.services.rate_limit_policy import build_rate_limit_policy
+from slaif_gateway.services.auth_service import GatewayAuthError, GatewayAuthService
+from slaif_gateway.services.endpoint_policy import (
+    CHAT_COMPLETIONS as CHAT_COMPLETIONS_ENDPOINT_ID,
+    EndpointPolicyService,
+)
+from slaif_gateway.services.endpoint_policy_errors import EndpointPolicyError
+from slaif_gateway.services.lazy_throttling import (
+    LazyAdmissionContext,
+    LazyThrottlingAdmission,
+    policy_changed_while_waiting_error,
+    wait_for_rate_limit_admission,
+)
+from slaif_gateway.services.rate_limit_errors import (
+    ConcurrencyRateLimitExceededError,
+    RateLimitError,
+    RedisRateLimitUnavailableError,
+    RequestRateLimitExceededError,
+    TokenRateLimitExceededError,
+)
+from slaif_gateway.services.rate_limit_policy import (
+    build_rate_limit_policy,
+    effective_lazy_throttling_policy,
+)
 from slaif_gateway.services.rate_limit_service import RedisRateLimitService
 from slaif_gateway.services.openai_compatible_request_boundary import (
     OpenAICompatibleRequestBoundaryError,
@@ -117,6 +147,9 @@ class _RateLimitReservation:
     gateway_key_id: uuid.UUID
     request_id: str
     concurrency_reserved: bool
+    # Populated only when the request genuinely waited: the revalidated
+    # (current) admission context that superseded the pre-wait context (R4).
+    refreshed_context: LazyAdmissionContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,11 +255,27 @@ async def handle_chat_completion(
     )
     rate_limit_reservation = await _reserve_redis_rate_limit(
         authenticated_key=authenticated_key,
+        body=body,
         policy_result=policy_result,
+        route=route,
         request_id=request_id,
         settings=settings,
         request=request,
     )
+    refreshed_context = (
+        rate_limit_reservation.refreshed_context if rate_limit_reservation is not None else None
+    )
+    if refreshed_context is not None:
+        # The request genuinely waited: admission was re-validated, so
+        # forward under the CURRENT key, request policy result, and route
+        # (R4: never forward under a stale pre-wait authorization).
+        authenticated_key = refreshed_context.authenticated_key
+        policy_result = refreshed_context.policy_result
+        route = refreshed_context.route
+        upstream_body = _build_safe_chat_completion_upstream_body(
+            policy_result=policy_result,
+            upstream_model=route.resolved_model,
+        )
     try:
         quota = await _reserve_chat_completion_quota(
             authenticated_key=authenticated_key,
@@ -591,11 +640,21 @@ def _streaming_chat_completion_response(
 async def _reserve_redis_rate_limit(
     *,
     authenticated_key: AuthenticatedGatewayKey,
+    body: Mapping[str, object],
     policy_result: ChatCompletionPolicyResult,
+    route: RouteResolutionResult,
     request_id: str,
     settings: Settings,
     request: Request | None,
 ) -> _RateLimitReservation | None:
+    """Reserve temporary Redis rate-limit capacity for one chat request.
+
+    On a temporary limiter denial under an explicitly enabled wait mode the
+    bounded wait-for-admission loop runs and the returned reservation carries
+    ``refreshed_context``: the REVALIDATED (current) admission context the
+    caller must use for forwarding (R4: never forward under a stale pre-wait
+    authorization). Without a wait ``refreshed_context`` is None.
+    """
     if not settings.ENABLE_REDIS_RATE_LIMITS:
         return None
 
@@ -618,11 +677,17 @@ async def _reserve_redis_rate_limit(
         rate_limit_exc = RedisRateLimitUnavailableError()
         increment_rate_limit_rejection(rate_limit_exc.error_code)
         raise openai_error_from_rate_limit_error(rate_limit_exc) from exc
-    service = RedisRateLimitService(
-        redis_client,
-        fail_closed=settings.rate_limit_fail_closed(),
-    )
+    fail_closed = settings.rate_limit_fail_closed()
+    service = RedisRateLimitService(redis_client, fail_closed=fail_closed)
     estimated_tokens = policy_result.estimated_input_tokens + policy_result.effective_output_tokens
+    initial_context = LazyAdmissionContext(
+        gateway_key_id=authenticated_key.gateway_key_id,
+        authenticated_key=authenticated_key,
+        limiter_policy=policy,
+        policy_result=policy_result,
+        route=route,
+        estimated_tokens=estimated_tokens,
+    )
     try:
         await service.check_and_reserve(
             gateway_key_id=authenticated_key.gateway_key_id,
@@ -630,18 +695,341 @@ async def _reserve_redis_rate_limit(
             estimated_tokens=estimated_tokens,
             policy=policy,
         )
+    except (
+        RequestRateLimitExceededError,
+        TokenRateLimitExceededError,
+        ConcurrencyRateLimitExceededError,
+    ) as exc:
+        lazy_policy = effective_lazy_throttling_policy(
+            authenticated_key=authenticated_key,
+            settings=settings,
+        )
+        if lazy_policy.is_wait_mode():
+            # Temporary denial with an explicitly enabled wait mode: bounded
+            # lazy admission (R3). Hard refusals (Redis unavailable, invalid
+            # policy) never reach this branch; hard quota/security/fence/
+            # pricing refusals are detected non-mutatingly and fail
+            # immediately WITHOUT waiting (R5).
+            await _preflight_lazy_wait_hard_quota(
+                authenticated_key=authenticated_key,
+                route=route,
+                policy_result=policy_result,
+                request=request,
+            )
+            final_context = await _wait_for_lazy_admission(
+                service=service,
+                admission=LazyThrottlingAdmission(redis_client, fail_closed=fail_closed),
+                initial_context=initial_context,
+                lazy_policy=lazy_policy,
+                request_id=request_id,
+                estimated_tokens=estimated_tokens,
+                body=body,
+                request=request,
+                settings=settings,
+            )
+            return _build_rate_limit_reservation(
+                service=service,
+                context=final_context,
+                request_id=request_id,
+                refreshed_context=final_context,
+            )
+        increment_rate_limit_rejection(exc.error_code)
+        raise openai_error_from_rate_limit_error(exc) from exc
     except RateLimitError as exc:
+        # Non-transient limiter errors (Redis unavailable in fail-closed mode,
+        # invalid policy, ...) keep their existing immediate 503/400 mapping;
+        # they never enter the wait loop.
         increment_rate_limit_rejection(exc.error_code)
         raise openai_error_from_rate_limit_error(exc) from exc
 
-    return _RateLimitReservation(
+    return _build_rate_limit_reservation(
         service=service,
-        policy=policy,
-        gateway_key_id=authenticated_key.gateway_key_id,
+        context=initial_context,
         request_id=request_id,
-        concurrency_reserved=policy.concurrent_requests is not None,
     )
 
+
+def _build_rate_limit_reservation(
+    *,
+    service: RedisRateLimitService,
+    context: LazyAdmissionContext,
+    request_id: str,
+    refreshed_context: LazyAdmissionContext | None = None,
+) -> _RateLimitReservation:
+    return _RateLimitReservation(
+        service=service,
+        policy=context.limiter_policy,
+        gateway_key_id=context.gateway_key_id,
+        request_id=request_id,
+        concurrency_reserved=context.limiter_policy.concurrent_requests is not None,
+        refreshed_context=refreshed_context,
+    )
+
+
+async def _preflight_lazy_wait_hard_quota(
+    *,
+    authenticated_key: AuthenticatedGatewayKey,
+    route: RouteResolutionResult,
+    policy_result: ChatCompletionPolicyResult,
+    request: Request,
+) -> None:
+    """Non-mutating preflight BEFORE a request may wait (R5).
+
+    Hard refusals (quota limits, key lifecycle, external-tool fence, invalid
+    pricing/FX) are not temporary waiting candidates. This mirrors the existing
+    hard checks that would otherwise run only after admission, using the same
+    read-only services and predicates: no reservation, no mutation, no held
+    transaction. A hard refusal fails immediately instead of waiting; the
+    final existing atomic quota reservation remains authoritative after
+    admission.
+    """
+    session_iterator = _db_session_iterator(request)
+    try:
+        session = await anext(session_iterator)
+    except StopAsyncIteration as exc:
+        raise _database_session_unavailable_error() from exc
+    try:
+        pricing_service = PricingService(
+            pricing_rules_repository=PricingRulesRepository(session),
+            fx_rates_repository=FxRatesRepository(session),
+        )
+        try:
+            capture = await pricing_service.capture_pricing_and_fx(
+                provider=route.provider,
+                model=route.resolved_model,
+                endpoint="chat.completions",
+            )
+            cost_estimate = await pricing_service.estimate_chat_completion_cost(
+                route=route,
+                policy=policy_result,
+                endpoint="chat.completions",
+                pricing=capture.pricing,
+                fx=capture.fx,
+            )
+        except PricingError as exc:
+            raise openai_error_from_pricing_error(exc) from exc
+
+        # Same projection inputs as the existing atomic reservation (no
+        # separate financial implementation).
+        reserved_cost_eur = cost_estimate.estimated_total_cost_eur
+        if is_fixed_request_module_billing(route.provider_kind, "chat.completions"):
+            reserved_tokens = 0
+        else:
+            reserved_tokens = (
+                policy_result.estimated_input_tokens + policy_result.effective_output_tokens
+            )
+
+        gateway_key = await GatewayKeysRepository(session).get_gateway_key_by_id(
+            authenticated_key.gateway_key_id
+        )
+        if gateway_key is None:
+            quota_exc = KeyNotReservableError("Gateway key cannot reserve quota")
+            increment_quota_rejection(quota_exc.error_code)
+            raise openai_error_from_quota_error(quota_exc) from None
+        quota_service = QuotaService(
+            gateway_keys_repository=GatewayKeysRepository(session),
+            quota_reservations_repository=QuotaReservationsRepository(session),
+        )
+        try:
+            quota_service._validate_key_can_reserve(gateway_key=gateway_key, now=datetime.now(UTC))
+            quota_service._validate_external_tool_fence(gateway_key=gateway_key)
+            quota_service._validate_limits(
+                gateway_key=gateway_key,
+                reserved_cost_eur=reserved_cost_eur,
+                reserved_tokens=reserved_tokens,
+                reserved_requests=1,
+            )
+        except QuotaError as exc:
+            increment_quota_rejection(exc.error_code)
+            raise openai_error_from_quota_error(exc) from exc
+    finally:
+        await session_iterator.aclose()
+
+
+async def _wait_for_lazy_admission(
+    *,
+    service: RedisRateLimitService,
+    admission: LazyThrottlingAdmission,
+    initial_context: LazyAdmissionContext,
+    lazy_policy: LazyThrottlingPolicy,
+    request_id: str,
+    estimated_tokens: int,
+    body: Mapping[str, object],
+    request: Request,
+    settings: Settings,
+) -> LazyAdmissionContext:
+    """Run the bounded wait-for-admission loop for one denied request.
+
+    The loop re-attempts the existing atomic Redis limiter (never reserving
+    quota or touching the provider) until admitted, the deadline is reached,
+    the waiting capacity is full, or re-validation (auth/route/policy after a
+    real wait) fails. Each retry runs under the revalidated context, so the
+    CURRENT key/policy/route governs admission; the original monotonic
+    deadline is never reset by a policy update (R4).
+    """
+    initial_key_id = initial_context.gateway_key_id
+
+    async def _check_and_reserve(
+        *,
+        gateway_key_id: uuid.UUID,
+        request_id: str,
+        estimated_tokens: int,
+        policy: RateLimitPolicy,
+    ) -> RateLimitResult:
+        return await service.check_and_reserve(
+            gateway_key_id=gateway_key_id,
+            request_id=request_id,
+            estimated_tokens=estimated_tokens,
+            policy=policy,
+        )
+
+    async def _release_slot() -> None:
+        # Idempotent: safe whether or not a concurrency slot was reserved.
+        await service.release_concurrency(
+            gateway_key_id=initial_key_id,
+            request_id=request_id,
+        )
+
+    outcome = await wait_for_rate_limit_admission(
+        check_and_reserve=_check_and_reserve,
+        admission=admission,
+        initial_context=initial_context,
+        estimated_tokens=estimated_tokens,
+        lazy_policy=lazy_policy,
+        request_id=request_id,
+        release_admission_slot=_release_slot,
+        revalidate=_revalidate_chat_completion_after_wait(
+            body=body,
+            original=initial_context,
+            original_lazy_policy=lazy_policy,
+            request=request,
+            settings=settings,
+        ),
+        max_waiting_total=settings.LAZY_THROTTLING_MAX_WAITING_TOTAL,
+        lease_ttl_seconds=settings.LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS,
+    )
+    return outcome.context
+
+
+def _revalidate_chat_completion_after_wait(
+    *,
+    body: Mapping[str, object],
+    original: LazyAdmissionContext,
+    original_lazy_policy: LazyThrottlingPolicy,
+    request: Request,
+    settings: Settings,
+):
+    """Rebuild the CURRENT admission context after a real wait (R4).
+
+    Re-authenticates the key (status/expiry/fence via the existing service on
+    a short session), re-checks the CURRENT endpoint allow-list, re-applies
+    the current request policy (capability mode), re-resolves the current
+    route, and re-checks the request boundary. A key whose current policy no
+    longer permits waiting, a key newly denied for this endpoint, or a changed
+    key identity or route resolution, is conservatively refused instead of
+    forwarding under a stale pre-wait authorization. Mutable usage counters
+    are never compared as policy.
+    """
+
+    async def _revalidate(_current: LazyAdmissionContext) -> LazyAdmissionContext:
+        authorization = request.headers.get("authorization")
+        session_iterator = _db_session_iterator(request)
+        try:
+            session = await anext(session_iterator)
+        except StopAsyncIteration as exc:
+            raise _database_session_unavailable_error() from exc
+        try:
+            auth_service = GatewayAuthService(
+                settings=settings,
+                gateway_keys_repository=GatewayKeysRepository(session),
+            )
+            try:
+                new_key = await auth_service.authenticate_authorization_header(
+                    authorization
+                )
+            except GatewayAuthError as exc:
+                raise openai_error_from_auth_error(exc) from exc
+            # R4 requires the owner to remain active after a real wait; reuse
+            # the existing read-only owner lookup in this same short session.
+            owner = await OwnersRepository(session).get_owner_by_id(new_key.owner_id)
+            if owner is None or not owner.is_active or owner.anonymized_at is not None:
+                raise OpenAICompatibleError(
+                    "The key owner is no longer active.",
+                    status_code=403,
+                    error_type="permission_error",
+                    code="owner_not_active",
+                )
+        finally:
+            await session_iterator.aclose()
+
+        # Current endpoint allow-list must still permit this endpoint (R4).
+        try:
+            EndpointPolicyService().ensure_endpoint_allowed(
+                new_key,
+                CHAT_COMPLETIONS_ENDPOINT_ID,
+            )
+        except EndpointPolicyError as exc:
+            raise openai_error_from_endpoint_policy_error(exc) from exc
+
+        new_lazy_policy = effective_lazy_throttling_policy(
+            authenticated_key=new_key,
+            settings=settings,
+        )
+        if new_lazy_policy != original_lazy_policy:
+            # Any change to the waiting policy (disabled, longer, or shorter
+            # max-wait / waiting cap) refuses rather than continuing under
+            # the former policy; in particular a reduced max-wait cannot let
+            # the original longer deadline keep running (R4). The original
+            # deadline is never reset by a policy update.
+            raise policy_changed_while_waiting_error()
+
+        try:
+            new_policy_result = ChatCompletionRequestPolicy(settings=settings).apply(
+                body,
+                capability_policy_mode=new_key.capability_policy_mode,
+            )
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
+
+        new_route = await _resolve_chat_completion_route(
+            authenticated_key=new_key,
+            effective_model=new_policy_result.effective_body["model"],
+            policy_result=new_policy_result,
+            request=request,
+        )
+        try:
+            enforce_openai_compatible_request_boundary(
+                new_policy_result.effective_body,
+                route=new_route,
+                endpoint="chat.completions",
+            )
+        except OpenAICompatibleRequestBoundaryError as exc:
+            raise OpenAICompatibleError(
+                "Remote image URLs are not enabled for generic OpenAI-compatible providers.",
+                status_code=400,
+                error_type="invalid_request_error",
+                code="openai_compatible_remote_image_not_allowed",
+                param=exc.param,
+            ) from exc
+
+        if new_key.gateway_key_id != original.gateway_key_id or (
+            new_route.resolved_model,
+            new_route.provider,
+        ) != (original.route.resolved_model, original.route.provider):
+            raise policy_changed_while_waiting_error()
+
+        return LazyAdmissionContext(
+            gateway_key_id=new_key.gateway_key_id,
+            authenticated_key=new_key,
+            limiter_policy=build_rate_limit_policy(authenticated_key=new_key, settings=settings),
+            policy_result=new_policy_result,
+            route=new_route,
+            estimated_tokens=(
+                new_policy_result.estimated_input_tokens + new_policy_result.effective_output_tokens
+            ),
+        )
+
+    return _revalidate
 
 def _start_rate_limit_heartbeat(
     reservation: _RateLimitReservation | None,
