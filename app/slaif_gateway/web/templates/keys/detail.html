@@ -125,6 +125,8 @@
         <dd>{{ key.allowed_providers_summary }}</dd>
         <dt>Rate limits</dt>
         <dd>{{ key.rate_limit_policy_summary }}</dd>
+        <dt>Lazy throttling</dt>
+        <dd>{{ key.lazy_throttling_policy_summary }}</dd>
         <dt>Chat streaming live-burn</dt>
         <dd>{{ key.chat_streaming_live_burn_policy_summary }}</dd>
         <dt>External-tool policy</dt>
@@ -182,6 +184,43 @@
       </label>
       <button type="submit">Update request policy</button>
     </form>
+  </section>
+
+  <section class="action-panel" aria-labelledby="key-lazy-throttling-heading" data-lazy-throttling-surface>
+    <h2 id="key-lazy-throttling-heading">Lazy Throttling (Wait for Capacity)</h2>
+    <p class="muted">Applies to Chat Completions and Responses before provider execution. Waiting itself is unbilled and does not bypass anything: normal quota and security checks still apply on admission, and hard quota, security, and hosted-tool fence refusals remain immediate. Streaming starts only after admission; queue full or deadline returns 429, and disconnected requests are canceled.</p>
+    <form method="post" action="/admin/keys/{{ key.id }}/lazy-throttling">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <label class="checkbox-row">
+          <input type="radio" name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode {% if lazy_form.lazy_throttling_mode != "wait" %}checked{% endif %}>
+          Reject immediately (default)
+        </label>
+        <label class="checkbox-row">
+          <input type="radio" name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode {% if lazy_form.lazy_throttling_mode == "wait" %}checked{% endif %}>
+          Wait for capacity (lazy throttling)
+        </label>
+      </div>
+      <div class="form-grid" data-lazy-throttling-field-group>
+        <label>
+          Maximum waiting time (seconds)
+          <input name="lazy_throttling_max_wait_seconds" value="{{ lazy_form.lazy_throttling_max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field>
+        </label>
+        <label>
+          Maximum waiting requests per key
+          <input name="lazy_throttling_max_waiting_requests" value="{{ lazy_form.lazy_throttling_max_waiting_requests }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field>
+        </label>
+      </div>
+      <p class="muted small">Operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key }} waiting per key. Waiting applies before provider execution on Chat Completions and Responses.</p>
+      <label>
+        Audit reason
+        <input name="reason" value="{{ lazy_form.reason }}" required autocomplete="off" placeholder="Required reason">
+      </label>
+      <button type="submit">Update lazy throttling</button>
+    </form>
+    {% if not redis_rate_limits_enabled %}
+    <p class="warning-text">Redis rate limiting is currently disabled (ENABLE_REDIS_RATE_LIMITS=false), so operational throttling is inactive: a stored wait policy does not enforce waiting until the operator enables it.</p>
+    {% endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="key-external-tool-policy-heading">
@@ -528,4 +567,5 @@
 </section>
 <script src="/admin/static/js/policy-selector.js"></script>
 <script src="/admin/static/js/streaming-live-burn.js"></script>
+<script src="/admin/static/js/lazy-throttling.js"></script>
 {% endblock %}

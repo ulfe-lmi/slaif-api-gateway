@@ -350,3 +350,65 @@ def test_create_result_template_marks_trusted_calibration_key(monkeypatch) -> No
     assert "broad discovery policy" in html
     assert "trusted_calibration_discovery" in html
     assert "Do not issue to participants" in html
+
+
+def _render_create_form(monkeypatch, settings: Settings) -> str:
+    _patch_options(monkeypatch)
+    client = TestClient(_app(settings))
+    _login_for_actions(monkeypatch, client)
+
+    async def refresh_csrf_token(self, **kwargs):
+        return "rendered-create-csrf"
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.refresh_csrf_token",
+        refresh_csrf_token,
+    )
+    return client.get("/admin/keys/create").text
+
+
+def test_create_form_renders_lazy_throttling_defaults_ceilings_and_inactive_note(
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="admin-session-secret-that-must-not-render",
+    )
+    html = _render_create_form(monkeypatch, settings)
+
+    # Default selection is immediate rejection with usable wait inputs.
+    assert (
+        'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode checked'
+        in html
+    )
+    assert 'value="wait" data-lazy-throttling-mode checked' not in html
+    assert 'name="lazy_throttling_max_wait_seconds" value="30"' in html
+    assert 'name="lazy_throttling_max_waiting_requests" value="2"' in html
+    assert "data-lazy-throttling-field-group" in html
+    assert "data-lazy-throttling-field disabled" not in html
+    # Operator ceilings and plain queue/deadline/disconnect help.
+    assert "Operator ceilings: 120s maximum wait, 16 waiting per key" in html
+    assert (
+        "queue full or deadline returns 429, and disconnected requests are canceled"
+        in html
+    )
+    assert "streaming starts only after admission" in html
+    assert 'src="/admin/static/js/lazy-throttling.js"' in html
+    # Default settings leave Redis rate limiting off: state that honestly.
+    assert "Redis rate limiting is currently disabled" in html
+
+
+def test_create_form_lazy_defaults_fit_lowered_operator_ceilings(monkeypatch) -> None:
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="admin-session-secret-that-must-not-render",
+        LAZY_THROTTLING_MAX_WAIT_SECONDS=20,
+        LAZY_THROTTLING_MAX_WAITING_PER_KEY=1,
+    )
+    html = _render_create_form(monkeypatch, settings)
+
+    assert 'name="lazy_throttling_max_wait_seconds" value="20"' in html
+    assert 'name="lazy_throttling_max_waiting_requests" value="1"' in html
+    assert "Operator ceilings: 20s maximum wait, 1 waiting per key" in html

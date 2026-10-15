@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 
+from slaif_gateway.schemas.admin_keys import LazyThrottlingOperatorCeilings
 from slaif_gateway.services.admin_key_dashboard import (
     AdminKeyDashboardService,
     AdminKeyNotFoundError,
@@ -286,3 +287,82 @@ async def test_lifecycle_action_flags_follow_stored_status() -> None:
     assert revoked_detail.can_activate is False
     assert revoked_detail.can_revoke is False
     assert revoked_detail.can_rotate is False
+
+
+@pytest.mark.asyncio
+async def test_detail_lazy_throttling_wait_policy_projects_and_summarizes() -> None:
+    key = _row()
+    key.metadata_json["lazy_throttling_policy"] = {
+        "mode": "wait",
+        "max_wait_seconds": 45,
+        "max_waiting_requests": 3,
+    }
+    service = AdminKeyDashboardService(gateway_keys_repository=_Repo(key))
+
+    detail = await service.get_key_detail(key.id)
+
+    assert detail.lazy_throttling_policy == {
+        "mode": "wait",
+        "max_wait_seconds": 45,
+        "max_waiting_requests": 3,
+    }
+    assert "Mode: wait" in detail.lazy_throttling_policy_summary
+    assert "45s" in detail.lazy_throttling_policy_summary
+    assert "3" in detail.lazy_throttling_policy_summary
+    assert "Chat Completions and Responses" in detail.lazy_throttling_policy_summary
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored",
+    [
+        None,
+        {"mode": "reject"},
+        {"mode": "reject", "max_wait_seconds": 5, "max_waiting_requests": 1},
+        {"mode": "wait", "synthetic_only_marker": "must-never-surface"},
+        {"mode": "wait", "max_wait_seconds": 0},
+        {"mode": "wait", "max_wait_seconds": "45"},
+        {"mode": "waiting"},
+        "not-a-dict",
+    ],
+)
+async def test_detail_lazy_throttling_non_wait_stored_values_display_reject(
+    stored: object,
+) -> None:
+    key = _row()
+    if stored is not None:
+        key.metadata_json["lazy_throttling_policy"] = stored
+    service = AdminKeyDashboardService(gateway_keys_repository=_Repo(key))
+
+    detail = await service.get_key_detail(key.id)
+
+    assert detail.lazy_throttling_policy is None
+    assert detail.lazy_throttling_policy_summary == (
+        "Mode: reject (immediate 429); no waiting configured"
+    )
+    if stored is not None:
+        assert "must-never-surface" not in str(detail.lazy_throttling_policy_summary)
+
+
+@pytest.mark.asyncio
+async def test_detail_lazy_throttling_honors_operator_ceiling() -> None:
+    key = _row()
+    key.metadata_json["lazy_throttling_policy"] = {
+        "mode": "wait",
+        "max_wait_seconds": 60,
+        "max_waiting_requests": 2,
+    }
+    service = AdminKeyDashboardService(
+        gateway_keys_repository=_Repo(key),
+        lazy_throttling_ceilings=LazyThrottlingOperatorCeilings(
+            max_wait_seconds=30,
+            max_waiting_per_key=4,
+        ),
+    )
+
+    detail = await service.get_key_detail(key.id)
+
+    assert detail.lazy_throttling_policy is None
+    assert detail.lazy_throttling_policy_summary == (
+        "Mode: reject (immediate 429); no waiting configured"
+    )

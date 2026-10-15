@@ -123,6 +123,14 @@
           Default
           {% endif %}
         </dd>
+        <dt>Lazy throttling</dt>
+        <dd>
+          {% if policy.lazy_throttling_policy %}
+          Wait for capacity: max wait {{ policy.lazy_throttling_policy.max_wait_seconds }}s, max {{ policy.lazy_throttling_policy.max_waiting_requests }} waiting per key (Chat Completions and Responses, before provider execution).
+          {% else %}
+          Reject immediately (default)
+          {% endif %}
+        </dd>
         <dt>Chat streaming live-burn</dt>
         <dd>{{ policy.chat_streaming_live_burn_policy_summary }}</dd>
         {% if policy.external_tool_policy %}

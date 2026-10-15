@@ -7,10 +7,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from slaif_gateway.config import Settings
-from slaif_gateway.schemas.keys import CreateGatewayKeyInput
+from slaif_gateway.schemas.keys import CreateGatewayKeyInput, RotateGatewayKeyInput
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.utils.crypto import hmac_sha256_token
 from slaif_gateway.utils.secrets import generate_secret_key
+from tests.unit.key_management_fakes import FakeGatewayKeyRow, make_key_service
 
 _DISALLOWED_IMPORT_TERMS = (
     "openai",
@@ -100,3 +101,97 @@ def test_hmac_digest_is_not_raw_token() -> None:
 
     assert digest != token
     assert len(digest) == 64
+
+
+@pytest.mark.asyncio
+async def test_rotation_preserves_normalized_lazy_throttling_policy() -> None:
+    old_key = FakeGatewayKeyRow(
+        status="active",
+        metadata_json={
+            "lazy_throttling_policy": {
+                "mode": "wait",
+                "max_wait_seconds": 45,
+                "max_waiting_requests": 3,
+            },
+            "rate_limit_policy": {"window_seconds": 30},
+        },
+    )
+    service, keys_repo, _, _, _ = make_key_service(old_key)
+
+    await service.rotate_gateway_key(
+        RotateGatewayKeyInput(gateway_key_id=old_key.id, reason="replacement")
+    )
+
+    create_call = keys_repo.created_calls[0]
+    assert create_call["metadata_json"]["lazy_throttling_policy"] == {
+        "mode": "wait",
+        "max_wait_seconds": 45,
+        "max_waiting_requests": 3,
+    }
+    assert create_call["rate_limit_requests_per_minute"] == old_key.rate_limit_requests_per_minute
+
+
+@pytest.mark.asyncio
+async def test_rotation_without_preserve_rate_policy_removes_lazy_throttling_policy() -> None:
+    old_key = FakeGatewayKeyRow(
+        status="active",
+        metadata_json={
+            "lazy_throttling_policy": {
+                "mode": "wait",
+                "max_wait_seconds": 45,
+                "max_waiting_requests": 3,
+            }
+        },
+    )
+    service, keys_repo, _, _, _ = make_key_service(old_key)
+
+    await service.rotate_gateway_key(
+        RotateGatewayKeyInput(
+            gateway_key_id=old_key.id,
+            reason="replacement",
+            preserve_rate_limit_policy=False,
+        )
+    )
+
+    assert "lazy_throttling_policy" not in keys_repo.created_calls[0]["metadata_json"]
+
+
+@pytest.mark.asyncio
+async def test_rotation_preserve_rate_policy_never_propagates_malformed_lazy_policy() -> None:
+    old_key = FakeGatewayKeyRow(
+        status="active",
+        metadata_json={
+            "lazy_throttling_policy": {
+                "mode": "wait",
+                "synthetic_only_marker": "never-propagated",
+            }
+        },
+    )
+    service, keys_repo, _, _, _ = make_key_service(old_key)
+
+    await service.rotate_gateway_key(
+        RotateGatewayKeyInput(gateway_key_id=old_key.id, reason="replacement")
+    )
+
+    assert "lazy_throttling_policy" not in keys_repo.created_calls[0]["metadata_json"]
+
+
+@pytest.mark.asyncio
+async def test_rotation_preserve_rate_policy_ignores_stored_reject_mode_lazy_policy() -> None:
+    old_key = FakeGatewayKeyRow(
+        status="active",
+        metadata_json={
+            "lazy_throttling_policy": {
+                "mode": "reject",
+                "max_wait_seconds": 5,
+                "max_waiting_requests": 1,
+            }
+        },
+    )
+    service, keys_repo, _, _, _ = make_key_service(old_key)
+
+    await service.rotate_gateway_key(
+        RotateGatewayKeyInput(gateway_key_id=old_key.id, reason="replacement")
+    )
+
+    assert "lazy_throttling_policy" not in keys_repo.created_calls[0]["metadata_json"]

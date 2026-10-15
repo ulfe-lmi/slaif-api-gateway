@@ -33,6 +33,7 @@ class CreateGatewayKeyInput:
     allowed_providers: list[str] | None = None
     confirm_trusted_calibration: bool = False
     rate_limit_policy: dict[str, int | None] | None = None
+    lazy_throttling_policy: dict[str, object] | None = None
     chat_streaming_live_burn_policy: dict[str, object] | None = None
     external_tool_policy: dict[str, object] | None = None
     confirm_external_tool_fenced: bool = False
@@ -52,6 +53,7 @@ class CreatedGatewayKey:
     valid_from: datetime
     valid_until: datetime
     rate_limit_policy: dict[str, int | None] | None = None
+    lazy_throttling_policy: dict[str, object] | None = None
     chat_streaming_live_burn_policy: dict[str, object] | None = None
     external_tool_policy: dict[str, object] | None = None
     key_purpose: str = "standard"
@@ -116,6 +118,19 @@ class UpdateGatewayKeyRateLimitsInput:
 
     gateway_key_id: uuid.UUID
     rate_limit_policy: dict[str, int | None] | None = None
+    actor_admin_id: uuid.UUID | None = None
+    reason: str | None = None
+
+@dataclass(slots=True)
+class UpdateGatewayKeyLazyThrottlingInput:
+    """Input payload for changing the key's bounded lazy (waiting) throttling.
+
+    ``lazy_throttling_policy`` is the explicit policy to store; ``None``
+    removes any stored policy (default immediate rejection).
+    """
+
+    gateway_key_id: uuid.UUID
+    lazy_throttling_policy: dict[str, object] | None = None
     actor_admin_id: uuid.UUID | None = None
     reason: str | None = None
 
@@ -205,6 +220,7 @@ class GatewayKeyManagementResult:
     last_quota_reset_at: datetime | None = None
     quota_reset_count: int | None = None
     rate_limit_policy: dict[str, int | None] | None = None
+    lazy_throttling_policy: dict[str, object] | None = None
     allowed_models: list[str] | None = None
     allowed_endpoints: list[str] | None = None
     allow_all_models: bool | None = None

@@ -46,13 +46,73 @@ def test_active_identifier_resolves_exactly_one_matching_order() -> None:
     assert order_text.splitlines()[0] == f"# OAP Work Order — {identifier}"
 
 
+_NEW_PR_DECLARATION_RE = re.compile(
+    r"^PR mode: (?:CREATE_NEW_PR|`CREATE_NEW_PR`)$",
+    re.MULTILINE,
+)
+
+
+def _declares_new_pr_mode(order_text: str) -> bool:
+    """Return True only for an explicit standalone new-PR declaration.
+
+    The durable protocol prescribes the declaration value, not the Markdown
+    punctuation, so both the plain and the inline-code forms satisfy the
+    initial-round gate.
+    """
+    return _NEW_PR_DECLARATION_RE.search(order_text) is not None
+
+
 def test_initial_round_declares_new_pr_and_one_objective_one_pr() -> None:
     identifier, _order_path, order_text = _active_order()
 
     if identifier.endswith("-a"):
         protocol_text = PROTOCOL_FILE.read_text(encoding="utf-8")
-        assert "PR mode: `CREATE_NEW_PR`" in order_text
+        assert _declares_new_pr_mode(order_text)
         assert "`NNN-a` creates exactly one new PR for that numeric objective." in protocol_text
+
+
+def test_new_pr_declaration_accepts_both_forms_and_rejects_informal_text() -> None:
+    # Both explicit standalone declarations satisfy the initial-round gate.
+    assert _declares_new_pr_mode(
+        """Base: main at 0123456789abcdef0123456789abcdef01234567
+PR mode: CREATE_NEW_PR
+Branch: oap/185-lazy-throttling
+"""
+    )
+    assert _declares_new_pr_mode(
+        """PR mode: `CREATE_NEW_PR`
+"""
+    )
+    # Absent, amended, unknown, merely quoted prose, and malformed
+    # declarations do not satisfy the gate.
+    assert not _declares_new_pr_mode(
+        """Base: main at 0123456789abcdef0123456789abcdef01234567
+Branch: oap/185-lazy-throttling
+"""
+    )
+    assert not _declares_new_pr_mode(
+        """PR mode: AMEND_EXISTING_PR
+"""
+    )
+    assert not _declares_new_pr_mode(
+        """PR mode: UNKNOWN_MODE
+"""
+    )
+    assert not _declares_new_pr_mode(
+        'The header should declare "PR mode: CREATE_NEW_PR" per protocol.\n'
+    )
+    assert not _declares_new_pr_mode(
+        """PR mode: CREATE_NEW_PR extra
+"""
+    )
+    assert not _declares_new_pr_mode(
+        """X PR mode: CREATE_NEW_PR
+"""
+    )
+    assert not _declares_new_pr_mode(
+        """PR-mode: CREATE_NEW_PR
+"""
+    )
 
 
 def test_coding_agent_is_never_merge_authority() -> None:

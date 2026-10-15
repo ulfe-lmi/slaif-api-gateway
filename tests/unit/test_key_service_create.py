@@ -298,19 +298,22 @@ async def test_trusted_calibration_key_creation_requires_audit_reason() -> None:
         await service.create_gateway_key(payload)
 
 
-def _make_service() -> tuple[
+def _make_service(
+    settings: Settings | None = None,
+) -> tuple[
     KeyService,
     _FakeGatewayKeysRepository,
     _FakeOneTimeSecretsRepository,
     _FakeAuditRepository,
 ]:
-    settings = Settings(
-        ACTIVE_HMAC_KEY_VERSION="1",
-        TOKEN_HMAC_SECRET_V1="h" * 48,
-        ONE_TIME_SECRET_ENCRYPTION_KEY=generate_secret_key(),
-        ONE_TIME_SECRET_KEY_VERSION="v1",
-        GATEWAY_KEY_PREFIX="sk-slaif-",
-    )
+    if settings is None:
+        settings = Settings(
+            ACTIVE_HMAC_KEY_VERSION="1",
+            TOKEN_HMAC_SECRET_V1="h" * 48,
+            ONE_TIME_SECRET_ENCRYPTION_KEY=generate_secret_key(),
+            ONE_TIME_SECRET_KEY_VERSION="v1",
+            GATEWAY_KEY_PREFIX="sk-slaif-",
+        )
     keys_repo = _FakeGatewayKeysRepository()
     one_time_repo = _FakeOneTimeSecretsRepository()
     audit_repo = _FakeAuditRepository()
@@ -417,3 +420,107 @@ async def test_create_fenced_external_tool_key_rejects_unbounded_or_calibration_
     assert keys_repo.calls == []
     assert secrets_repo.calls == []
     assert audit_repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_key_persists_wait_policy_and_audits_it() -> None:
+    service, keys_repo, _, audit_repo = _make_service()
+    payload = _base_create_payload(
+        lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 45, "max_waiting_requests": 3}
+    )
+
+    result = await service.create_gateway_key(payload)
+
+    expected = {"mode": "wait", "max_wait_seconds": 45, "max_waiting_requests": 3}
+    assert keys_repo.calls[0]["metadata_json"]["lazy_throttling_policy"] == expected
+    assert result.lazy_throttling_policy == expected
+    assert audit_repo.calls[0]["new_values"]["lazy_throttling_policy"] == expected
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_key_without_lazy_policy_defaults_to_reject() -> None:
+    service, keys_repo, _, audit_repo = _make_service()
+
+    result = await service.create_gateway_key(_base_create_payload())
+
+    assert "lazy_throttling_policy" not in keys_repo.calls[0]["metadata_json"]
+    assert result.lazy_throttling_policy is None
+    assert audit_repo.calls[0]["new_values"]["lazy_throttling_policy"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_key_reject_mode_strips_waiting_fields() -> None:
+    service, keys_repo, _, audit_repo = _make_service()
+
+    await service.create_gateway_key(
+        _base_create_payload(lazy_throttling_policy={"mode": "reject", "max_wait_seconds": 90})
+    )
+
+    assert "lazy_throttling_policy" not in keys_repo.calls[0]["metadata_json"]
+    assert audit_repo.calls[0]["new_values"]["lazy_throttling_policy"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"mode": "wait", "max_wait_seconds": 45, "max_waiting_requests": 3, "unknown_field": 1},
+        {"mode": "wait", "max_wait_seconds": 0},
+        {"mode": "wait", "max_wait_seconds": -1},
+        {"mode": "wait", "max_wait_seconds": True},
+        {"mode": "wait", "max_wait_seconds": "45"},
+        {"mode": "wait", "max_wait_seconds": 45.0},
+        {"mode": "wait", "max_wait_seconds": 121},
+        {"mode": "wait", "max_waiting_requests": 17},
+        {"max_wait_seconds": 45},
+        {"mode": "waiting"},
+    ],
+)
+async def test_create_gateway_key_refuses_invalid_lazy_throttling_policy_before_write(
+    policy: dict[str, object],
+) -> None:
+    service, keys_repo, secrets_repo, audit_repo = _make_service()
+
+    with pytest.raises(InvalidGatewayKeyLimitsError):
+        await service.create_gateway_key(_base_create_payload(lazy_throttling_policy=policy))
+
+    assert keys_repo.calls == []
+    assert secrets_repo.calls == []
+    assert audit_repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_create_gateway_key_lazy_policy_honors_operator_ceilings() -> None:
+    settings = Settings(
+        ACTIVE_HMAC_KEY_VERSION="1",
+        TOKEN_HMAC_SECRET_V1="h" * 48,
+        ONE_TIME_SECRET_ENCRYPTION_KEY=generate_secret_key(),
+        ONE_TIME_SECRET_KEY_VERSION="v1",
+        GATEWAY_KEY_PREFIX="sk-slaif-",
+        LAZY_THROTTLING_MAX_WAIT_SECONDS=30,
+        LAZY_THROTTLING_MAX_WAITING_PER_KEY=2,
+    )
+    service, keys_repo, _, _ = _make_service(settings)
+
+    await service.create_gateway_key(
+        _base_create_payload(lazy_throttling_policy={"mode": "wait"})
+    )
+    assert keys_repo.calls[0]["metadata_json"]["lazy_throttling_policy"] == {
+        "mode": "wait",
+        "max_wait_seconds": 30,
+        "max_waiting_requests": 2,
+    }
+
+    with pytest.raises(InvalidGatewayKeyLimitsError, match="ceiling"):
+        await service.create_gateway_key(
+            _base_create_payload(
+                lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 31}
+            )
+        )
+    with pytest.raises(InvalidGatewayKeyLimitsError, match="ceiling"):
+        await service.create_gateway_key(
+            _base_create_payload(
+                lazy_throttling_policy={"mode": "wait", "max_waiting_requests": 3}
+            )
+        )
+    assert len(keys_repo.calls) == 1

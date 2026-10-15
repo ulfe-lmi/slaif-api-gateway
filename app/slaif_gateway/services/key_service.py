@@ -12,6 +12,7 @@ from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
+from slaif_gateway.schemas.rate_limits import parse_lazy_throttling_policy_metadata
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     CreateGatewayKeyInput,
@@ -25,6 +26,7 @@ from slaif_gateway.schemas.keys import (
     UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyLimitsInput,
+    UpdateGatewayKeyLazyThrottlingInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
@@ -150,6 +152,9 @@ class KeyService:
             require_reason=True,
         )
         rate_limit_policy = self._validate_rate_limit_policy(payload.rate_limit_policy)
+        lazy_throttling_policy = self._validate_lazy_throttling_policy(
+            payload.lazy_throttling_policy
+        )
         chat_live_burn_policy = self._validate_chat_streaming_live_burn_policy(
             payload.chat_streaming_live_burn_policy
         )
@@ -172,18 +177,21 @@ class KeyService:
             allow_all_models=allow_all_models,
             allow_all_endpoints=allow_all_endpoints,
         )
-        metadata_json = self._metadata_with_rate_limit_window(
-            self._metadata_with_responses_streaming_live_burn_policy(
-                self._metadata_with_chat_streaming_live_burn_policy(
-                    self._metadata_with_responses_policy(
-                        self._metadata_with_provider_policy({}, payload.allowed_providers),
-                        payload.responses_policy,
+        metadata_json = self._metadata_with_lazy_throttling_policy(
+            self._metadata_with_rate_limit_window(
+                self._metadata_with_responses_streaming_live_burn_policy(
+                    self._metadata_with_chat_streaming_live_burn_policy(
+                        self._metadata_with_responses_policy(
+                            self._metadata_with_provider_policy({}, payload.allowed_providers),
+                            payload.responses_policy,
+                        ),
+                        chat_live_burn_policy,
                     ),
-                    chat_live_burn_policy,
+                    default_responses_streaming_live_burn_policy(),
                 ),
-                default_responses_streaming_live_burn_policy(),
+                rate_limit_policy,
             ),
-            rate_limit_policy,
+            lazy_throttling_policy,
         )
         if external_tool_policy.mode == EXTERNAL_TOOL_FENCED:
             metadata_json = self._metadata_with_external_tool_policy(
@@ -285,6 +293,7 @@ class KeyService:
                 "responses_policy": self._safe_responses_policy(payload.responses_policy),
                 "chat_streaming_live_burn_policy": chat_live_burn_policy.to_metadata(),
                 "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
+                "lazy_throttling_policy": lazy_throttling_policy,
                 "external_tool_policy": external_tool_policy.to_metadata(),
             },
         )
@@ -299,6 +308,7 @@ class KeyService:
             valid_from=payload.valid_from,
             valid_until=payload.valid_until,
             rate_limit_policy=self._rate_limit_policy_from_key(gateway_key),
+            lazy_throttling_policy=lazy_throttling_policy,
             chat_streaming_live_burn_policy=chat_live_burn_policy.to_metadata(),
             key_purpose=key_purpose,
             capability_policy_mode=capability_policy_mode,
@@ -649,6 +659,53 @@ class KeyService:
         )
         return self._management_result(gateway_key, updated_at=now)
 
+    async def update_gateway_key_lazy_throttling(
+        self,
+        payload: UpdateGatewayKeyLazyThrottlingInput,
+    ) -> GatewayKeyManagementResult:
+        """Update the key's bounded lazy (waiting) throttling policy.
+
+        Persists the strictly validated policy in the existing key metadata
+        (same transaction as the audit, safe old/new values). ``None`` removes
+        the stored policy (default immediate rejection). An audit reason is
+        required.
+        """
+        cleaned_reason = payload.reason.strip() if payload.reason else ""
+        if not cleaned_reason:
+            raise InvalidGatewayKeyLimitsError(
+                "Enter an audit reason before updating lazy throttling policy.",
+                param="reason",
+            )
+
+        gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        policy = self._validate_lazy_throttling_policy(payload.lazy_throttling_policy)
+        old_values = self._lazy_throttling_audit_values(gateway_key)
+        now = self._now()
+        updated = await self._gateway_keys_repository.update_gateway_key_metadata(
+            gateway_key.id,
+            metadata_json=self._metadata_with_lazy_throttling_policy(
+                gateway_key.metadata_json,
+                policy,
+            ),
+        )
+        if not updated:
+            raise GatewayKeyNotFoundError()
+        gateway_key.metadata_json = self._metadata_with_lazy_throttling_policy(
+            gateway_key.metadata_json,
+            policy,
+        )
+        self._set_updated_at(gateway_key, now)
+
+        await self._audit_gateway_key_change(
+            action="update_key_lazy_throttling",
+            gateway_key=gateway_key,
+            actor_admin_id=payload.actor_admin_id,
+            reason=cleaned_reason,
+            old_values=old_values,
+            new_values=self._lazy_throttling_audit_values(gateway_key),
+        )
+        return self._management_result(gateway_key, updated_at=now)
+
     async def update_gateway_key_chat_streaming_live_burn(
         self,
         payload: UpdateGatewayKeyChatStreamingLiveBurnInput,
@@ -797,25 +854,32 @@ class KeyService:
             metadata_json=self._metadata_with_external_tool_policy(
                 self._metadata_with_chat_streaming_live_burn_policy(
                     self._metadata_with_responses_streaming_live_burn_policy(
-                        (
-                            self._metadata_with_rate_limit_window(
-                                self._metadata_with_provider_policy(
+                        self._metadata_with_lazy_throttling_policy(
+                            (
+                                self._metadata_with_rate_limit_window(
+                                    self._metadata_with_provider_policy(
+                                        self._metadata_with_responses_policy(
+                                            {},
+                                            self._responses_policy_from_key(old_key),
+                                        ),
+                                        self._allowed_providers_from_key(old_key),
+                                    ),
+                                    self._rate_limit_policy_from_key(old_key) or {},
+                                )
+                                if payload.preserve_rate_limit_policy
+                                else self._metadata_with_provider_policy(
                                     self._metadata_with_responses_policy(
                                         {},
                                         self._responses_policy_from_key(old_key),
                                     ),
                                     self._allowed_providers_from_key(old_key),
-                                ),
-                                self._rate_limit_policy_from_key(old_key) or {},
-                            )
-                            if payload.preserve_rate_limit_policy
-                            else self._metadata_with_provider_policy(
-                                self._metadata_with_responses_policy(
-                                    {},
-                                    self._responses_policy_from_key(old_key),
-                                ),
-                                self._allowed_providers_from_key(old_key),
-                            )
+                                )
+                            ),
+                            (
+                                self._lazy_throttling_policy_from_key(old_key)
+                                if payload.preserve_rate_limit_policy
+                                else None
+                            ),
                         ),
                         default_responses_streaming_live_burn_policy(),
                     ),
@@ -1043,6 +1107,89 @@ class KeyService:
             normalized[key] = value
         return normalized
 
+    def _validate_lazy_throttling_policy(
+        self,
+        policy: dict[str, object] | None,
+    ) -> dict[str, object] | None:
+        """Strictly validate an explicit lazy (waiting) throttling policy.
+
+        Returns the normalized metadata dict, or ``None`` for the default
+        immediate-rejection policy. Unknown keys, booleans, zero/negative,
+        non-integer, or ceiling-exceeding values are refused. ``mode`` must
+        be exactly ``reject`` or ``wait``; ``reject`` (or absent policy)
+        never stores waiting fields.
+        """
+        if policy is None:
+            return None
+        if not isinstance(policy, dict):
+            raise InvalidGatewayKeyLimitsError(
+                "Lazy throttling policy must be an object.",
+                param="lazy_throttling_policy",
+            )
+        allowed = {"mode", "max_wait_seconds", "max_waiting_requests"}
+        unknown = sorted(str(k) for k in set(policy) - allowed)
+        if unknown:
+            raise InvalidGatewayKeyLimitsError(
+                f"Unknown lazy throttling policy field: {unknown[0]}",
+                param=unknown[0],
+            )
+        if not all(isinstance(k, str) for k in policy):
+            raise InvalidGatewayKeyLimitsError(
+                "Lazy throttling policy fields must be named.",
+                param="lazy_throttling_policy",
+            )
+        mode = policy.get("mode")
+        if mode is None:
+            if "max_wait_seconds" in policy or "max_waiting_requests" in policy:
+                raise InvalidGatewayKeyLimitsError(
+                    "Waiting fields require lazy throttling mode wait.",
+                    param="mode",
+                )
+            return None
+        if not isinstance(mode, str) or mode not in ("reject", "wait"):
+            raise InvalidGatewayKeyLimitsError(
+                "Lazy throttling mode must be reject or wait.",
+                param="mode",
+            )
+        if mode == "reject":
+            # Deterministic default; any waiting fields are stripped so a
+            # disabled policy can never silently grant waiting.
+            return None
+
+        def _strict_bounded_int(value: object, *, param: str, ceiling: int) -> int:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise InvalidGatewayKeyLimitsError(
+                    f"Lazy throttling {param} must be an integer.",
+                    param=param,
+                )
+            if value <= 0:
+                raise InvalidGatewayKeyLimitsError(
+                    f"Lazy throttling {param} must be positive.",
+                    param=param,
+                )
+            if value > ceiling:
+                raise InvalidGatewayKeyLimitsError(
+                    f"Lazy throttling {param} exceeds the operator ceiling.",
+                    param=param,
+                )
+            return value
+
+        max_wait = policy.get("max_wait_seconds", 30)
+        max_waiting = policy.get("max_waiting_requests", 2)
+        return {
+            "mode": "wait",
+            "max_wait_seconds": _strict_bounded_int(
+                max_wait,
+                param="max_wait_seconds",
+                ceiling=self._settings.LAZY_THROTTLING_MAX_WAIT_SECONDS,
+            ),
+            "max_waiting_requests": _strict_bounded_int(
+                max_waiting,
+                param="max_waiting_requests",
+                ceiling=self._settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY,
+            ),
+        }
+
     def _validate_chat_streaming_live_burn_policy(
         self,
         policy: dict[str, object] | ChatStreamingLiveBurnPolicy | None,
@@ -1183,6 +1330,19 @@ class KeyService:
             metadata["rate_limit_policy"] = rate_policy
         else:
             metadata.pop("rate_limit_policy", None)
+        return metadata
+
+
+    @staticmethod
+    def _metadata_with_lazy_throttling_policy(
+        metadata_json: dict[str, object] | None,
+        policy: dict[str, object] | None,
+    ) -> dict[str, object]:
+        metadata = dict(metadata_json or {})
+        if policy:
+            metadata["lazy_throttling_policy"] = dict(policy)
+        else:
+            metadata.pop("lazy_throttling_policy", None)
         return metadata
 
     def _metadata_with_chat_streaming_live_burn_policy(
@@ -1397,6 +1557,36 @@ class KeyService:
             "rate_limit_policy": cls._rate_limit_policy_from_key(gateway_key),
         }
 
+    def _lazy_throttling_policy_from_key(
+        self,
+        gateway_key: GatewayKey,
+    ) -> dict[str, object] | None:
+        """Strictly project the key's stored lazy-throttling policy.
+
+        Malformed, unknown, or ceiling-exceeding stored values never surface
+        as policy: they parse to the safe default (immediate rejection)
+        instead of being copied into DTOs, audit values, or rotated keys.
+        """
+        metadata = getattr(gateway_key, "metadata_json", None) or {}
+        raw = metadata.get("lazy_throttling_policy")
+        policy = parse_lazy_throttling_policy_metadata(
+            raw,
+            max_wait_seconds_ceiling=self._settings.LAZY_THROTTLING_MAX_WAIT_SECONDS,
+            max_waiting_per_key_ceiling=self._settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY,
+        )
+        # A stored reject-mode policy means "no waiting", exactly like a
+        # missing one; only an explicit wait policy projects through.
+        if policy is None or not policy.is_wait_mode():
+            return None
+        return policy.to_metadata()
+
+    def _lazy_throttling_audit_values(self, gateway_key: GatewayKey) -> dict[str, object]:
+        return {
+            "gateway_key_id": str(gateway_key.id),
+            "public_key_id": gateway_key.public_key_id,
+            "lazy_throttling_policy": self._lazy_throttling_policy_from_key(gateway_key),
+        }
+
     def _chat_streaming_live_burn_audit_values(self, gateway_key: GatewayKey) -> dict[str, object]:
         return {
             "gateway_key_id": str(gateway_key.id),
@@ -1469,6 +1659,7 @@ class KeyService:
             last_quota_reset_at=gateway_key.last_quota_reset_at,
             quota_reset_count=gateway_key.quota_reset_count,
             rate_limit_policy=self._rate_limit_policy_from_key(gateway_key),
+            lazy_throttling_policy=self._lazy_throttling_policy_from_key(gateway_key),
             allowed_models=list(gateway_key.allowed_models or []),
             allowed_endpoints=list(gateway_key.allowed_endpoints or []),
             allow_all_models=gateway_key.allow_all_models,

@@ -1,5 +1,6 @@
 import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -1334,3 +1335,159 @@ def test_create_service_failure_logs_diagnostic_context_and_renders_reference(mo
     assert "session-token-secret" not in serialized_event
     assert fake_encrypted_payload not in serialized_event
     assert fake_nonce not in serialized_event
+
+
+def test_create_with_wait_mode_stores_lazy_policy_and_renders_result(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+    seen = {}
+
+    async def get_owner_by_id(self, requested_owner_id):
+        assert requested_owner_id == owner_id
+        return owner
+
+    async def create_gateway_key(self, payload):
+        seen["payload"] = payload
+        return replace(
+            _created_key(owner_id=owner_id),
+            lazy_throttling_policy=payload.lazy_throttling_policy,
+        )
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id",
+        get_owner_by_id,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "30",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
+            "lazy_throttling_mode": "wait",
+            "lazy_throttling_max_wait_seconds": "45",
+            "lazy_throttling_max_waiting_requests": "3",
+            "reason": "workshop key with bounded waiting",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Wait for capacity: max wait 45s, max 3 waiting per key" in response.text
+    payload = seen["payload"]
+    assert payload.lazy_throttling_policy == {
+        "mode": "wait",
+        "max_wait_seconds": 45,
+        "max_waiting_requests": 3,
+    }
+
+
+def test_create_default_mode_stores_no_lazy_policy(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+    seen = {}
+
+    async def get_owner_by_id(self, requested_owner_id):
+        assert requested_owner_id == owner_id
+        return owner
+
+    async def create_gateway_key(self, payload):
+        seen["payload"] = payload
+        return _created_key(owner_id=owner_id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id",
+        get_owner_by_id,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        "/admin/keys/create",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "owner_id": str(owner_id),
+            "valid_days": "30",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
+            "reason": "standard workshop key",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "Reject immediately (default)" in response.text
+    assert seen["payload"].lazy_throttling_policy is None
+
+
+def test_create_wait_mode_refuses_ceiling_exceeding_or_invalid_bounds(monkeypatch) -> None:
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    owner = _owner(owner_id)
+    called = False
+
+    async def get_owner_by_id(self, requested_owner_id):
+        assert requested_owner_id == owner_id
+        return owner
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+        return _created_key(owner_id=owner_id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id",
+        get_owner_by_id,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    base = {
+        "csrf_token": "dashboard-csrf",
+        "owner_id": str(owner_id),
+        "valid_days": "30",
+        "allow_all_models": "true",
+        "allow_all_endpoints": "true",
+        "lazy_throttling_mode": "wait",
+        "reason": "workshop key with bounded waiting",
+    }
+
+    # The create form reports quota/rate-limits parsing failures with the
+    # established generic message; the precise ceiling wording is covered by
+    # the detail update route and the key service tests.
+    for bad in (
+        {"lazy_throttling_max_wait_seconds": "121"},
+        {"lazy_throttling_max_waiting_requests": "17"},
+        {"lazy_throttling_max_wait_seconds": "12.5"},
+    ):
+        response = client.post("/admin/keys/create", data={**base, **bad})
+        assert response.status_code == 400
+        assert "Enter valid positive quota and rate-limit values." in response.text
+
+    # Escaped redisplay: the rejected value round-trips safely.
+    marker = "<script>alert(185)</script>"
+    response = client.post(
+        "/admin/keys/create",
+        data={**base, "lazy_throttling_max_wait_seconds": marker},
+    )
+    assert response.status_code == 400
+    assert marker not in response.text
+    assert "&lt;script&gt;alert(185)&lt;/script&gt;" in response.text
+
+    assert called is False

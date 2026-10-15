@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -11,10 +12,14 @@ from slaif_gateway.schemas.keys import (
     SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyExternalToolPolicyInput,
+    UpdateGatewayKeyLazyThrottlingInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyValidityInput,
 )
-from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
+from slaif_gateway.services.key_errors import (
+    InvalidGatewayKeyLimitsError,
+    InvalidGatewayKeyPolicyError,
+)
 from slaif_gateway.services.key_service import GatewayKeyExternalToolFenceActiveError
 
 from tests.unit.key_management_fakes import FakeGatewayKeyRow, make_key_service
@@ -409,3 +414,204 @@ async def test_revoke_on_fenced_row_succeeds_and_preserves_fence_and_counters() 
     assert row.cost_reserved_eur == Decimal("0.500000000")
     assert row.tokens_reserved_total == 50
     assert audit_repo.calls[0]["action"] == "revoke_key"
+
+
+@pytest.mark.asyncio
+async def test_update_gateway_key_lazy_throttling_persists_and_audits() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "allowed_providers": ["openai"],
+            "rate_limit_policy": {"window_seconds": 30},
+        }
+    )
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+    actor_id = uuid.uuid4()
+
+    result = await service.update_gateway_key_lazy_throttling(
+        UpdateGatewayKeyLazyThrottlingInput(
+            gateway_key_id=row.id,
+            lazy_throttling_policy={
+                "mode": "wait",
+                "max_wait_seconds": 60,
+                "max_waiting_requests": 4,
+            },
+            actor_admin_id=actor_id,
+            reason="allow bounded waiting during peak load",
+        )
+    )
+
+    assert keys_repo.metadata_calls == [
+        {
+            "gateway_key_id": row.id,
+            "metadata_json": {
+                "allowed_providers": ["openai"],
+                "rate_limit_policy": {"window_seconds": 30},
+                "lazy_throttling_policy": {
+                    "mode": "wait",
+                    "max_wait_seconds": 60,
+                    "max_waiting_requests": 4,
+                },
+            },
+        }
+    ]
+    assert result.lazy_throttling_policy == {
+        "mode": "wait",
+        "max_wait_seconds": 60,
+        "max_waiting_requests": 4,
+    }
+
+    audit = audit_repo.calls[-1]
+    assert audit["action"] == "update_key_lazy_throttling"
+    assert audit["entity_id"] == row.id
+    assert audit["admin_user_id"] == actor_id
+    assert audit["note"] == "allow bounded waiting during peak load"
+    assert audit["old_values"]["lazy_throttling_policy"] is None
+    assert audit["new_values"]["lazy_throttling_policy"] == result.lazy_throttling_policy
+    assert "token_hash" not in str(audit)
+
+
+@pytest.mark.asyncio
+async def test_update_gateway_key_lazy_throttling_requires_reason() -> None:
+    row = FakeGatewayKeyRow()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(InvalidGatewayKeyLimitsError, match="reason"):
+        await service.update_gateway_key_lazy_throttling(
+            UpdateGatewayKeyLazyThrottlingInput(
+                gateway_key_id=row.id,
+                lazy_throttling_policy={"mode": "wait"},
+                reason="   ",
+            )
+        )
+
+    assert keys_repo.metadata_calls == []
+    assert audit_repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_gateway_key_lazy_throttling_can_remove_stored_policy() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "lazy_throttling_policy": {
+                "mode": "wait",
+                "max_wait_seconds": 60,
+                "max_waiting_requests": 4,
+            },
+            "rate_limit_policy": {"window_seconds": 30},
+        }
+    )
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.update_gateway_key_lazy_throttling(
+        UpdateGatewayKeyLazyThrottlingInput(
+            gateway_key_id=row.id,
+            lazy_throttling_policy=None,
+            reason="return to immediate rejection",
+        )
+    )
+
+    assert keys_repo.metadata_calls[0]["metadata_json"] == {
+        "rate_limit_policy": {"window_seconds": 30},
+    }
+    assert result.lazy_throttling_policy is None
+    audit = audit_repo.calls[-1]
+    assert audit["old_values"]["lazy_throttling_policy"] == {
+        "mode": "wait",
+        "max_wait_seconds": 60,
+        "max_waiting_requests": 4,
+    }
+    assert audit["new_values"]["lazy_throttling_policy"] is None
+
+
+@pytest.mark.asyncio
+async def test_update_gateway_key_lazy_throttling_refuses_ceiling_exceeding() -> None:
+    row = FakeGatewayKeyRow()
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    with pytest.raises(InvalidGatewayKeyLimitsError, match="ceiling"):
+        await service.update_gateway_key_lazy_throttling(
+            UpdateGatewayKeyLazyThrottlingInput(
+                gateway_key_id=row.id,
+                lazy_throttling_policy={"mode": "wait", "max_wait_seconds": 121},
+                reason="waiting too long",
+            )
+        )
+
+    assert keys_repo.metadata_calls == []
+    assert audit_repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_malformed_stored_lazy_policy_projects_to_safe_reject() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "lazy_throttling_policy": {
+                "mode": "wait",
+                "max_wait_seconds": 5,
+                "synthetic_only_marker": "must-never-surface",
+            }
+        }
+    )
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.update_gateway_key_lazy_throttling(
+        UpdateGatewayKeyLazyThrottlingInput(
+            gateway_key_id=row.id,
+            lazy_throttling_policy={
+                "mode": "wait",
+                "max_wait_seconds": 10,
+                "max_waiting_requests": 1,
+            },
+            reason="repair malformed stored policy",
+        )
+    )
+
+    # The malformed stored policy is treated as the safe reject default and
+    # must never surface unknown values in the DTO or the audit.
+    assert result.lazy_throttling_policy == {
+        "mode": "wait",
+        "max_wait_seconds": 10,
+        "max_waiting_requests": 1,
+    }
+    audit = audit_repo.calls[-1]
+    assert audit["old_values"]["lazy_throttling_policy"] is None
+    serialized = json.dumps(audit, default=str)
+    assert "must-never-surface" not in serialized
+    assert "synthetic_only_marker" not in serialized
+
+
+@pytest.mark.asyncio
+async def test_stored_reject_mode_lazy_policy_projects_as_reject() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "lazy_throttling_policy": {
+                "mode": "reject",
+                "max_wait_seconds": 5,
+                "max_waiting_requests": 1,
+            }
+        }
+    )
+    service, keys_repo, _, audit_repo, _ = make_key_service(row)
+
+    result = await service.update_gateway_key_lazy_throttling(
+        UpdateGatewayKeyLazyThrottlingInput(
+            gateway_key_id=row.id,
+            lazy_throttling_policy={
+                "mode": "wait",
+                "max_wait_seconds": 15,
+                "max_waiting_requests": 1,
+            },
+            reason="switch to bounded waiting",
+        )
+    )
+
+    assert result.lazy_throttling_policy == {
+        "mode": "wait",
+        "max_wait_seconds": 15,
+        "max_waiting_requests": 1,
+    }
+    audit = audit_repo.calls[-1]
+    # An explicit stored reject mode is exactly the default: it never
+    # projects as a policy into audit values or DTOs.
+    assert audit["old_values"]["lazy_throttling_policy"] is None
+    assert audit["new_values"]["lazy_throttling_policy"] == result.lazy_throttling_policy

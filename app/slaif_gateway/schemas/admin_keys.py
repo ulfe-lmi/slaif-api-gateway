@@ -9,6 +9,14 @@ from decimal import Decimal
 
 
 @dataclass(frozen=True, slots=True)
+class LazyThrottlingOperatorCeilings:
+    """Operator ceilings bounding per-key lazy (waiting) throttling policies."""
+
+    max_wait_seconds: int = 120
+    max_waiting_per_key: int = 16
+
+
+@dataclass(frozen=True, slots=True)
 class AdminKeyListRow:
     """Safe key metadata for the admin key list."""
 
@@ -73,6 +81,14 @@ class AdminKeyListRow:
     )
     external_tool_policy_summary: str = field(
         default="Mode: strict_bounded; capabilities: none; destinations: none; max calls: 0; overrun acknowledged: false; runtime: denied",
+        kw_only=True,
+    )
+    lazy_throttling_policy: dict[str, object] | None = field(
+        default=None,
+        kw_only=True,
+    )
+    lazy_throttling_policy_summary: str = field(
+        default="Mode: reject (immediate 429); no waiting configured",
         kw_only=True,
     )
 
