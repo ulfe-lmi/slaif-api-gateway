@@ -1,6 +1,6 @@
 <div align="center">
   <a href="https://www.slaif.si">
-    <img src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg" width="320" alt="SLAIF">
+    <img src="https://slaif.si/assets/slaif-logo.svg" width="320" alt="SLAIF">
   </a>
 </div>
 
