@@ -480,8 +480,13 @@ route before any provider work; a key or owner that is revoked, suspended,
 expired, deactivated, or otherwise restricted while waiting is refused rather
 than forwarded under its former permissions. Disconnected or canceled requests
 release their waiting lease and leave no reservation, ledger row, or active
-slot behind. There is no durable queue, no FIFO promise, and no automatic
-replay of a canceled or already-forwarded request.
+slot behind. The configured maximum wait is the admission budget for all
+pre-admission wait steps; once the wait loop ends (admission or deadline),
+final opaque-ID bookkeeping is best-effort and separately bounded (5 seconds
+per cleanup action), granting no extra admission eligibility or provider
+work, with the bounded Redis lease/slot TTLs as the crash backstop. There is
+no durable queue, no FIFO promise, and no automatic replay of a canceled or
+already-forwarded request.
 
 For supported `/v1/chat/completions` requests, the gateway authenticates the key,
 checks policy, estimates input/output/cost, reserves PostgreSQL quota before

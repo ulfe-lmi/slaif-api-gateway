@@ -114,3 +114,10 @@ on record. They are dated, commit-specific evidence, not certifications.
   `RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY`. Dated evidence for the
   named candidate commit only; identity derivation, not a second full
   clean-room qualification, and not a release decision.
+
+- [`2026-10-15 objective 185-a lazy (waiting) throttling verification`](lazy-throttling.md)
+  - focused objective record for per-key lazy throttling (PR #323): 14
+  real owned-PostgreSQL/owned-Redis integration cases, 24 helper/route unit
+  cases, and 3 actual-browser cases with exact new-versus-inherited test
+  mapping. Mocked-upstream provider evidence only; not a release decision,
+  production approval, or broad-matrix claim.

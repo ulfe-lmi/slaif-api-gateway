@@ -695,7 +695,9 @@ Provider errors are normalized to safe OpenAI-shaped client errors. Raw provider
 Lazy (wait) throttling, when explicitly enabled on an individual key for Chat
 Completions and Responses, adds two OpenAI-shaped 429 `rate_limit_error` codes
 at the Redis rate-limit seam: `lazy_throttling_deadline_exceeded` (the key's
-configured maximum wait was reached without admission) and
+configured maximum wait — the admission budget for all pre-admission wait
+steps — was reached without admission; the separately bounded final ID
+cleanup afterward grants no extra eligibility) and
 `lazy_throttling_waiting_capacity_full` (the per-key or deployment-wide
 waiting cap is already reached). Existing `request_rate_limit_exceeded`,
 `token_rate_limit_exceeded`, and `concurrency_rate_limit_exceeded` codes and

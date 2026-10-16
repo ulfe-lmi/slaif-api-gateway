@@ -31,6 +31,10 @@ from slaif_gateway.services.lazy_throttling import (
     LazyAdmissionContext,
     LazyAdmissionResult,
 )
+from slaif_gateway.services.pricing_errors import (
+    FxRateNotFoundError,
+    PricingRuleNotFoundError,
+)
 from slaif_gateway.services.rate_limit_errors import (
     ClientDisconnectedError,
     RequestRateLimitExceededError,
@@ -413,3 +417,67 @@ def test_chat_default_reject_mode_keeps_immediate_429(monkeypatch) -> None:
     assert response.json()["error"]["code"] == "request_rate_limit_exceeded"
     assert called["wait"] == 0
     assert state["provider_calls"] == []
+@pytest.mark.parametrize(
+    ("pricing_error", "expected_code"),
+    [
+        (PricingRuleNotFoundError(), "pricing_rule_not_found"),
+        (FxRateNotFoundError(), "fx_rate_not_found"),
+    ],
+)
+def test_chat_wait_mode_preflight_missing_pricing_fx_refuses_without_waiting(
+    monkeypatch, pricing_error, expected_code
+) -> None:
+    """Contended-wait preflight: a missing pricing rule or FX rate is an
+    immediate hard refusal, never a waiting candidate. The wait helper is
+    never reached: no waiting lease, no provider call, no financial
+    reservation."""
+    import slaif_gateway.services.chat_completion_gateway as chat_module
+
+    app = create_app(
+        Settings(
+            OPENAI_UPSTREAM_API_KEY="unused",
+            ENABLE_REDIS_RATE_LIMITS=True,
+            REDIS_URL="redis://localhost:6379/0",
+        )
+    )
+    auth = _auth_wait({"requests_per_minute": 1})
+    state = _wire_pipeline(monkeypatch, app, auth=auth)
+    _wire_rate_service(
+        monkeypatch, error=RequestRateLimitExceededError(retry_after_seconds=60)
+    )
+    _wire_wait_preflight_support(monkeypatch, auth)
+
+    async def _missing_capture(self, **kwargs: Any):
+        _ = (self, kwargs)
+        raise pricing_error
+
+    monkeypatch.setattr(
+        chat_module.PricingService, "capture_pricing_and_fx", _missing_capture
+    )
+
+    admission_double = _AdmissionDouble()
+    monkeypatch.setattr(
+        chat_module, "LazyThrottlingAdmission", lambda *a, **k: admission_double
+    )
+    wait_calls = {"n": 0}
+    original_wait = chat_module.wait_for_rate_limit_admission
+
+    async def _count_wait(**kwargs: Any) -> LazyAdmissionResult:
+        wait_calls["n"] += 1
+        return await original_wait(**kwargs)
+
+    monkeypatch.setattr(chat_module, "wait_for_rate_limit_admission", _count_wait)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            headers={"authorization": f"Bearer {auth.public_key_id}"},
+            json={"model": "classroom-cheap", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == expected_code
+    # The hard pricing refusal precedes the wait loop entirely.
+    assert wait_calls["n"] == 0
+    assert admission_double.acquired == 0
+    assert state["provider_calls"] == []
+    assert state["reserve_calls"] == []

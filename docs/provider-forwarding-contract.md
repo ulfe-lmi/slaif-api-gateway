@@ -833,7 +833,11 @@ provider 429 retries. After a real wait, the gateway re-authenticates the
 key, re-checks owner active state, endpoint and request policy, and
 re-resolves the current route before forwarding. Hard quota, security,
 hosted-tool fence/hold, unknown pricing/FX, and Redis-unavailable refusals are
-immediate and never converted into waits.
+immediate and never converted into waits. The key's maximum wait is the
+admission budget covering all pre-admission wait steps; once the wait loop
+ends (admission or deadline), final opaque-ID bookkeeping runs under its own
+separate per-ID 5-second bound (cleanup only, never extra eligibility), with
+the bounded Redis lease/slot TTLs as the crash/outage backstop.
 
 This is an admission-time budget check plus post-call spend accounting model,
 not hard real-time spend interruption inside one upstream call. If finalization

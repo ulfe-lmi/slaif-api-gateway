@@ -255,10 +255,21 @@ remains the hard quota and accounting source of truth.
   limiting is enabled; they do not enable waiting for any key by themselves,
   and waiting is always off unless an operator explicitly stores a wait policy
   on an individual key. The key-form defaults when an operator selects wait
-  mode are 30s maximum wait and 2 waiting requests. Waiting precedes provider
-  execution: a client or proxy timeout shorter than the key's configured
-  maximum wait plus normal inference time will see the connection end while
-  the request is still bounded-waiting.
+  mode are 30s maximum wait and 2 waiting requests. The configured maximum
+  wait is the ADMISSION budget: it bounds every pre-admission wait step
+  (disconnect probes, deadline checks, revalidation, limiter re-attempts, and
+  sleeps). Once the wait loop ends (admission or deadline), final opaque-ID
+  bookkeeping (lease and slot release) runs under its own small per-ID bound
+  (5 seconds each), cleanup only — it grants no extra admission eligibility
+  or provider work, and the bounded Redis lease/slot TTLs remain the
+  crash/outage backstop. Waiting precedes provider execution. To avoid
+  disconnecting before completion, clients and proxies should allow for
+  request validation, the admission wait (up to the key's configured maximum
+  wait), provider inference, and the bounded final cleanup. Only a disconnect
+  while waiting is canceled before any provider call; once admitted, the
+  request runs to completion under the existing post-call accounting. A
+  shorter client or proxy timeout may end the connection before completion,
+  including while the request is already executing.
 
 The checked-in `.env.example` uses the Docker Compose hostname `redis` inside
 containers and publishes the container's Redis port on host port `16379` by
