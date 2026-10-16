@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from slaif_gateway import metrics as metrics_module
 from slaif_gateway.api.admin import router as admin_router
+from slaif_gateway.api.branding import router as branding_router
 from slaif_gateway.api.errors import (
     OpenAICompatibleError,
     http_exception_handler,
@@ -37,8 +38,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             async with build_lifespan(app_settings)(app):
                 yield
         finally:
-            # UvicornWorker graceful shutdown exits via the re-raised
-            # captured SIGTERM, so atexit/worker-exit never run there.
             metrics_module.cleanup_multiproc_metrics()
 
     app = FastAPI(title="SLAIF API Gateway", lifespan=app_lifespan)
@@ -59,10 +58,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(metrics_router)
+    # Registered before admin so the fixed literals win over dynamic paths.
+    app.include_router(branding_router)
     app.include_router(admin_router)
     app.include_router(openai_compat_router)
 
     return app
-
 
 app = create_app()

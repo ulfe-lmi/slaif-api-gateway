@@ -121,3 +121,10 @@ on record. They are dated, commit-specific evidence, not certifications.
   cases, and 3 actual-browser cases with exact new-versus-inherited test
   mapping. Mocked-upstream provider evidence only; not a release decision,
   production approval, or broad-matrix claim.
+- [`2026-10-16 objective 187-a operator branding verification`](operator-branding.md)
+  - focused objective record for optional operator branding (PR #187):
+  62 new/affected unit cases (reader FD I/O, PNG framing, render,
+  config, compose contract, docs gates), 3 actual-browser cases against
+  a real owned PostgreSQL, and 4 owned-container cases with the read-only
+  branding mount; test-only container bootstrap, no provider/model/email
+  access; final-head CI, strategic review, and guarded merge pending.

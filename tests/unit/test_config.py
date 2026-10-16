@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR, get_settings
+from slaif_gateway.web.branding import branding_enabled, branding_root
 from slaif_gateway.utils.secrets import generate_secret_key
 
 _VALID_OPENAI_PROVIDER_KEY = "sk-live-openai-provider-aaaaaaaaaaaa"
@@ -1117,3 +1118,29 @@ def test_production_allows_gateway_key_in_openai_api_key_boundary(monkeypatch) -
     settings = get_settings()
 
     assert settings.APP_ENV == "production"
+
+
+def test_slaiF_branding_dir_defaults_blank_and_disabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    get_settings.cache_clear()
+
+    settings = get_settings()
+
+    assert settings.SLAIF_BRANDING_DIR == ""
+    assert branding_root(settings.SLAIF_BRANDING_DIR) is None
+    assert not branding_enabled(settings.SLAIF_BRANDING_DIR)
+
+
+def test_slaiF_branding_dir_env_loading_and_blank_mean_disabled(monkeypatch) -> None:
+    _clear_env(monkeypatch)
+    get_settings.cache_clear()
+    monkeypatch.setenv("SLAIF_BRANDING_DIR", "/branding")
+
+    assert get_settings().SLAIF_BRANDING_DIR == "/branding"
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("SLAIF_BRANDING_DIR", "   ")
+    settings = get_settings()
+
+    assert branding_root(settings.SLAIF_BRANDING_DIR) is None
+    assert not branding_enabled(settings.SLAIF_BRANDING_DIR)

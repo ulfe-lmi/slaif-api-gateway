@@ -1,0 +1,4 @@
+/* 187-a synthetic operator override: visibly changes login surface. */
+body { background-color: #1f2d3d; }
+.auth-panel h1 { color: #d7f26e; }
+@media (max-width: 480px) { .auth-panel { padding: 12px; } }

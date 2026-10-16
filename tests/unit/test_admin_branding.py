@@ -81,3 +81,111 @@ def test_slaif_logo_svg_contains_no_unsafe_svg_content() -> None:
     assert "href=" not in svg_lower
     assert "xlink:href=" not in svg_lower
     assert not re.search(r"<image\b[^>]+(?:https?:|//|data:)", svg, flags=re.IGNORECASE)
+
+
+# --- 187-a operator-branding render contract ---------------------------------
+
+from tests.unit.test_admin_routes import _settings  # noqa: E402
+
+CUSTOM = REPO_ROOT / "tests" / "fixtures" / "branding" / "custom"
+FALLBACK = REPO_ROOT / "tests" / "fixtures" / "branding" / "fallback"
+PACKAGED_ICON_LINK = f'<link rel="icon" type="image/svg+xml" href="{LOGO_SRC}">'
+
+
+def _branded_client(branding_dir):
+    return TestClient(_app(_settings(SLAIF_BRANDING_DIR=str(branding_dir))))
+
+
+def test_login_render_disabled_is_packaged_default() -> None:
+    html = TestClient(_app()).get("/admin/login").text
+
+    assert f'src="{LOGO_SRC}"' in html
+    assert PACKAGED_ICON_LINK in html
+    assert "branding-active" not in html
+    assert "brand-logo-compact" not in html
+    assert "/admin/branding/style.css" not in html
+    assert "auth-hero" not in html
+    assert not re.search(r"<img[^>]+src=\"\"", html)
+
+
+def test_login_render_enabled_uses_all_overrides() -> None:
+    html = _branded_client(CUSTOM).get("/admin/login").text
+
+    assert 'src="/admin/branding/logo"' in html
+    assert 'src="/admin/branding/logo-compact"' in html
+    assert "brand-lockup auth-brand branding-active" in html
+    assert '<link rel="stylesheet" href="/admin/branding/style.css">' in html
+    assert '<img class="auth-hero" src="/admin/branding/hero" alt="">' in html
+    assert '<link rel="icon" type="image/png" href="/admin/branding/favicon">' in html
+    # Operator CSS is loaded AFTER the packaged admin stylesheet.
+    assert html.index("/admin/static/css/admin.css") < html.index("/admin/branding/style.css")
+    assert not re.search(r"<img[^>]+src=\"\"", html)
+
+
+def test_login_render_invalid_slot_falls_back_per_slot() -> None:
+    html = _branded_client(FALLBACK).get("/admin/login").text
+
+    assert "brand-lockup auth-brand branding-active" in html
+    assert f'src="{LOGO_SRC}"' in html
+    assert "brand-logo-compact" in html
+    assert '/admin/branding/logo' not in html
+    assert "/admin/branding/style.css" not in html
+    assert "auth-hero" not in html
+    assert PACKAGED_ICON_LINK in html
+
+
+def test_login_render_compact_slot_falls_back_independently(tmp_path) -> None:
+    target = tmp_path / "branding"
+    target.mkdir()
+    (target / "logo-compact.png").write_bytes((CUSTOM / "logo-compact.png").read_bytes())
+
+    html = _branded_client(target).get("/admin/login").text
+
+    assert f'src="{LOGO_SRC}"' in html
+    assert 'src="/admin/branding/logo-compact"' in html
+    assert PACKAGED_ICON_LINK in html
+
+
+def test_dashboard_render_enabled_uses_overrides(monkeypatch) -> None:
+    admin_user = _admin_user()
+    admin_session = _admin_session(admin_user)
+
+    async def validate_admin_session(self, **kwargs):
+        return AdminSessionContext(admin_user=admin_user, admin_session=admin_session)
+
+    async def refresh_csrf_token(self, **kwargs):
+        return "dashboard-csrf"
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.validate_admin_session",
+        validate_admin_session,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.refresh_csrf_token",
+        refresh_csrf_token,
+    )
+    client = _branded_client(CUSTOM)
+    client.cookies.set("slaif_admin_session", "session-plaintext")
+
+    response = client.get("/admin")
+
+    assert response.status_code == 200
+    assert 'src="/admin/branding/logo"' in response.text
+    assert "branding-active" in response.text
+    assert PACKAGED_ICON_LINK not in response.text
+
+
+def test_login_csrf_error_page_renders_with_branding() -> None:
+    client = _branded_client(CUSTOM)
+    login = client.get("/admin/login")
+
+    assert login.status_code == 200
+    response = client.post(
+        "/admin/login",
+        data={"email": "admin@example.org", "password": "wrong", "csrf_token": "invalid"},
+    )
+
+    assert response.status_code == 400
+    assert "Your login form expired. Try again." in response.text
+    assert 'src="/admin/branding/logo"' in response.text
+    assert f'src="{LOGO_SRC}"' not in response.text

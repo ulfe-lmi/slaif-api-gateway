@@ -58,6 +58,8 @@ and do not override current contracts or merged code.
 - [Incident response](incident-response.md) — response overview.
 - [SME sizing guidance](sizing.md) — capacity planning boundary.
 - [Observability boundaries](observability.md) — metrics and SLO foundation.
+- [Operator branding](branding.md) — the optional read-only appearance
+  overlay: slots, formats, refresh, fallback, and security boundaries.
 - [Support policy](support-policy.md) — the support boundary.
 - [Clean-clone qualification journey](demo-journey.md) — the disposable
   production-appliance harness wrapper.

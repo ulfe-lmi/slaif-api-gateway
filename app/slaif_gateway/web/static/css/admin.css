@@ -673,3 +673,34 @@ dd {
     min-width: 0;
   }
 }
+
+/* Operator branding slots (187-a): the compact logo replaces the primary
+   only on narrow viewports, matching the existing 480px step; the operator
+   stylesheet (loaded after this file) may restyle both. The switch is scoped
+   to `.branding-active` lockups (which always carry a compact replacement),
+   so the packaged default keeps its primary logo at every width. The login
+   hero is presentation-only and keeps the panel layout intact. */
+.brand-logo-compact {
+  display: none;
+  height: 1.4rem;
+  width: auto;
+}
+
+@media (max-width: 480px) {
+  .branding-active .brand-logo,
+  .branding-active .auth-logo {
+    display: none;
+  }
+
+  .branding-active .brand-logo-compact {
+    display: inline;
+  }
+}
+
+.auth-hero {
+  display: block;
+  width: 100%;
+  max-width: 18rem;
+  height: auto;
+  margin: 0 auto 18px;
+}

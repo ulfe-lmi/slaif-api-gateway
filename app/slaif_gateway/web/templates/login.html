@@ -1,9 +1,12 @@
 {% extends "base.html" %}
-{% from "_brand.html" import slaif_brand %}
+{% from "_brand.html" import slaif_brand with context %}
 
 {% block title %}Admin Login{% endblock %}
 
 {% block body %}
+{%- if branding_hero_src %}
+<img class="auth-hero" src="{{ branding_hero_src }}" alt="">
+{%- endif %}
 <section class="auth-panel" aria-labelledby="login-heading">
   <div class="auth-header">
     {{ slaif_brand(lockup_class="brand-lockup auth-brand", logo_class="brand-logo auth-logo") }}

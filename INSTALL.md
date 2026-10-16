@@ -122,6 +122,21 @@ If readiness still fails, read the `/readyz` body and the API logs: a schema
 or migration message means re-run
 `docker compose run --rm api slaif-gateway db upgrade`.
 
+### Optional operator branding
+
+To override the admin UI appearance (CSS, logo, favicon, login hero) without
+rebuilding the image, precreate a public-assets-only directory and start the
+stack with the bundled overlay:
+
+```bash
+install -d -m 755 deploy/branding   # at most one file per slot
+docker compose -f docker-compose.yml -f docker-compose.branding.yml up -d
+```
+
+Unset or blank `SLAIF_BRANDING_DIR` disables overrides. Slots, formats,
+limits, refresh, fallback, and the production merge command are documented
+in [Operator branding](docs/branding.md).
+
 ## Production-style installation
 
 The production appliance is a separate Compose project
