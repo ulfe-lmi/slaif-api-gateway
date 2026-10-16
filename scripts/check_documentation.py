@@ -156,6 +156,46 @@ def _asof_errors(path: Path, root: Path) -> list[str]:
     return errors
 
 
+# The README brand block references the tracked logo by repository-relative
+# path so that GitHub rendering and cloned checkouts never depend on an
+# external image host.
+LOGO_SRC = "app/slaif_gateway/web/static/img/slaif-logo.svg"
+
+
+def brand_block_errors(readme_text: str, root: Path) -> list[str]:
+    """Validate the README brand block: top position, SLAIF homepage link,
+    the tracked local logo asset, and front-door navigation references.
+
+    The logo must be the repository-tracked SVG resolved from ``root``; a
+    missing, empty, or non-SVG asset fails clearly.
+    """
+    errors: list[str] = []
+    if not readme_text.startswith('<div align="center">'):
+        errors.append("README.md: brand block must remain first")
+    for fragment in (
+        'href="https://www.slaif.si"',
+        f'src="{LOGO_SRC}"',
+        'alt="SLAIF"',
+        "docs/product-scope.md",
+        "docs/README.md",
+    ):
+        if fragment not in readme_text:
+            errors.append(f"README.md: missing required brand/navigation fragment {fragment}")
+    logo_path = root / LOGO_SRC
+    if not logo_path.is_file():
+        errors.append(f"README.md: brand logo file missing at {LOGO_SRC}")
+    else:
+        try:
+            logo_text = logo_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            logo_text = ""
+        if not logo_text.strip():
+            errors.append(f"README.md: brand logo file is empty at {LOGO_SRC}")
+        elif "<svg" not in logo_text:
+            errors.append(f"README.md: brand logo file is not an SVG document at {LOGO_SRC}")
+    return errors
+
+
 def check(root: Path | None = None) -> list[str]:
     root = (root if root is not None else ROOT).resolve()
     files = markdown_files(root)
@@ -214,17 +254,7 @@ def check(root: Path | None = None) -> list[str]:
             errors.append(f"{_relative(path, root)}: orphaned from README/docs navigation")
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    if not readme.startswith('<div align="center">'):
-        errors.append("README.md: brand block must remain first")
-    for fragment in (
-        'href="https://www.slaif.si"',
-        'src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg"',
-        'alt="SLAIF"',
-        "docs/product-scope.md",
-        "docs/README.md",
-    ):
-        if fragment not in readme:
-            errors.append(f"README.md: missing required brand/navigation fragment {fragment}")
+    errors.extend(brand_block_errors(readme, ROOT))
 
     # Front-door navigation for the public entry points. These rules are
     # conditional on the entry points existing in the checked tree so that

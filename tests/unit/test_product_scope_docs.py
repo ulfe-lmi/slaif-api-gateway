@@ -9,7 +9,7 @@ def test_product_scope_exists_and_readme_preserves_brand_and_link() -> None:
     readme = README_FILE.read_text(encoding="utf-8")
     assert readme.startswith('<div align="center">')
     assert 'href="https://www.slaif.si"' in readme
-    assert 'src="https://slaif.si/img/logos/SLAIF_logo_ANG_barve.svg"' in readme
+    assert 'src="app/slaif_gateway/web/static/img/slaif-logo.svg"' in readme
     assert 'alt="SLAIF"' in readme
     assert "docs/product-scope.md" in readme
 
