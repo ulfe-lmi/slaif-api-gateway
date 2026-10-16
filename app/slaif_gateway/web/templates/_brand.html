@@ -1,3 +1,8 @@
+{#- Operator branding (187-a): when the optional slot directory is enabled,
+    the wide and compact logo slots are rendered and the packaged 480px CSS
+    step selects between them; each slot falls back to the packaged asset
+    independently. When disabled, the markup is exactly the packaged
+    single-image lockup. -#}
 {% macro slaif_brand(link=false, lockup_class="brand-lockup", logo_class="brand-logo") -%}
 {% if link %}
 <a class="{{ lockup_class }}" href="/admin">
@@ -6,9 +11,16 @@
 {% endif %}
   <img
     class="{{ logo_class }}"
-    src="/admin/static/img/slaif-logo.svg"
+    src="{{ branding_logo_src }}"
     alt="SLAIF Slovenian AI Factory"
   >
+  {%- if branding_enabled %}
+  <img
+    class="brand-logo-compact"
+    src="{{ branding_logo_compact_src }}"
+    alt="SLAIF Slovenian AI Factory"
+  >
+  {%- endif %}
 {% if link %}
 </a>
 {% else %}

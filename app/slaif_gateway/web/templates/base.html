@@ -4,7 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}SLAIF Gateway Admin{% endblock %}</title>
+    {{ branding_icon_link | safe }}
     <link rel="stylesheet" href="/admin/static/css/admin.css">
+    {{ branding_css_link | safe }}
   </head>
   <body>
     <main class="page-shell">

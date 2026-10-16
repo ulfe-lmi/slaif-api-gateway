@@ -166,6 +166,11 @@ class Settings(BaseSettings):
     ENABLE_OPENAI_PROVIDER: bool = True
     ENABLE_OPENROUTER_PROVIDER: bool = True
     ENABLE_ADMIN_DASHBOARD: bool = True
+    # Optional operator appearance overrides (187-a). Unset or blank means
+    # disabled: the packaged identity stands on every browser surface. When
+    # set, this read-only directory supplies the fixed branding slots
+    # (style.css, logo, logo-compact, favicon, hero); see docs/branding.md.
+    SLAIF_BRANDING_DIR: str = ""
     ADMIN_SESSION_COOKIE_NAME: str = "slaif_admin_session"
     ADMIN_SESSION_COOKIE_SECURE: bool | None = None
     ADMIN_SESSION_COOKIE_HTTPONLY: bool = True

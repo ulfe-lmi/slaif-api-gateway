@@ -228,11 +228,40 @@ from slaif_gateway.services.streaming_live_burn_surface import (
     streaming_live_burn_surface_policy_summary,
 )
 from slaif_gateway.utils.redaction import redact_text
+from slaif_gateway.web.branding import (
+    branding_css_link_html,
+    branding_enabled,
+    branding_hero_src,
+    branding_icon_link_html,
+    branding_src,
+)
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 router = APIRouter(prefix="/admin", include_in_schema=False)
+
+
+def _branding_context(request: Request) -> dict[str, object]:
+    """Presentation-only operator branding values, revalidated per render.
+
+    The slot directory is read from this application instance's settings so
+    separately created apps stay isolated; operator assets are never cached,
+    and these values grant no access rights or state.
+    """
+    value = getattr(request.app.state.settings, "SLAIF_BRANDING_DIR", None)
+    branding_dir = value if isinstance(value, str) else None
+    return {
+        "branding_enabled": branding_enabled(branding_dir),
+        "branding_css_link": branding_css_link_html(branding_dir),
+        "branding_icon_link": branding_icon_link_html(branding_dir),
+        "branding_logo_src": branding_src("logo", branding_dir),
+        "branding_logo_compact_src": branding_src("logo-compact", branding_dir),
+        "branding_hero_src": branding_hero_src(branding_dir),
+    }
+
+
 templates = Jinja2Templates(
-    directory=str(Path(__file__).resolve().parents[1] / "web" / "templates")
+    directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"),
+    context_processors=[_branding_context],
 )
 logger = structlog.get_logger(__name__)
 
