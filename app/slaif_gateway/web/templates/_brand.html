@@ -4,10 +4,11 @@
     independently. When disabled, the markup is exactly the packaged
     single-image lockup. -#}
 {% macro slaif_brand(link=false, lockup_class="brand-lockup", logo_class="brand-logo") -%}
+{%- set active = lockup_class + " branding-active" if branding_enabled else lockup_class %}
 {% if link %}
-<a class="{{ lockup_class }}" href="/admin">
+<a class="{{ active }}" href="/admin">
 {% else %}
-<div class="{{ lockup_class }}">
+<div class="{{ active }}">
 {% endif %}
   <img
     class="{{ logo_class }}"

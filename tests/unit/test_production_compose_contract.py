@@ -424,3 +424,20 @@ def test_secret_loader_rejects_direct_and_file_conflict(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "ambiguous configuration" in result.stderr
+
+
+def test_branding_overlay_adds_only_api_env_and_readonly_volume() -> None:
+    text = (ROOT / "docker-compose.branding.yml").read_text(encoding="utf-8")
+    lines = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+
+    assert [line for line in lines if not line.startswith(" ")] == ["services:"]
+    assert [line.strip() for line in lines if line.startswith("  ") and not line.startswith("    ")] == ["api:"]
+
+    api_body = text[text.index("  api:") :].splitlines()
+    api_body = [line for line in api_body[1:] if line.strip() and not line.lstrip().startswith("#")]
+    keys = [line.strip() for line in api_body if line.startswith("    ") and not line.startswith("      ")]
+    assert keys == ["environment:", "volumes:"]
+    env_lines = [line.strip() for line in api_body if line.startswith("      ") and not line.lstrip().startswith("- ")]
+    assert env_lines == ["SLAIF_BRANDING_DIR: /branding"]
+    volume_lines = [line.strip() for line in api_body if line.lstrip().startswith("- ")]
+    assert volume_lines == ["- ./deploy/branding:/branding:ro"]

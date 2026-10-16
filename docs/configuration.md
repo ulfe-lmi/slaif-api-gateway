@@ -1102,6 +1102,10 @@ API process and use the Docker/Compose process-level controls described above.
 ## Admin Web
 
 - `ENABLE_ADMIN_DASHBOARD` enables the server-rendered admin web foundation.
+- `SLAIF_BRANDING_DIR` (optional, default blank) points at the read-only
+  operator branding directory; unset or blank disables overrides and the
+  packaged identity is used. See [Operator branding](branding.md) for
+  slots, formats, the compose overlay, refresh, and fallback behavior.
 - `ADMIN_SESSION_SECRET` signs/HMACs admin session and CSRF tokens.
 - `ADMIN_SESSION_COOKIE_NAME` controls the browser session cookie name.
 - `ADMIN_SESSION_COOKIE_SECURE` can override cookie `Secure`; when unset it is

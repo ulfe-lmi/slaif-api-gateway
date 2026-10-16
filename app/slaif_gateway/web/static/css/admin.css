@@ -676,8 +676,10 @@ dd {
 
 /* Operator branding slots (187-a): the compact logo replaces the primary
    only on narrow viewports, matching the existing 480px step; the operator
-   stylesheet (loaded after this file) may restyle both. The login hero is
-   presentation-only and keeps the panel layout intact. */
+   stylesheet (loaded after this file) may restyle both. The switch is scoped
+   to `.branding-active` lockups (which always carry a compact replacement),
+   so the packaged default keeps its primary logo at every width. The login
+   hero is presentation-only and keeps the panel layout intact. */
 .brand-logo-compact {
   display: none;
   height: 1.4rem;
@@ -685,12 +687,12 @@ dd {
 }
 
 @media (max-width: 480px) {
-  .brand-logo,
-  .auth-logo {
+  .branding-active .brand-logo,
+  .branding-active .auth-logo {
     display: none;
   }
 
-  .brand-logo-compact {
+  .branding-active .brand-logo-compact {
     display: inline;
   }
 }

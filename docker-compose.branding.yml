@@ -1,0 +1,29 @@
+# Optional operator branding overlay (187-a).
+#
+# Same application image, no rebuild: this overlay adds ONLY a bounded
+# read-only appearance directory to the existing `api` service. No new
+# service, network, published port, database, proxy, privilege, user or
+# runtime change. Create ./deploy/branding next to the compose file with at
+# most one file per fixed slot (see docs/branding.md for the exact slots,
+# limits and fallback behavior). The directory must already exist and be
+# readable by the application user (the `slaif` user in the image); keep
+# only public appearance assets in it — never credentials or private data.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.branding.yml up -d
+#
+#   docker compose -f docker-compose.production.yml -f docker-compose.branding.yml up -d
+#
+# If your existing stack was started with an explicit Compose project name
+# (-p / COMPOSE_PROJECT_NAME), profiles, or an env file, pass the SAME
+# -p / profiles / --env-file values when adding this overlay so the
+# overlay joins the existing project instead of launching a different
+# one.
+#
+# The operator directory is mounted read-only; the application cannot write
+# to it, and the host directory is never created or replaced by the app.
+services:
+  api:
+    environment:
+      SLAIF_BRANDING_DIR: /branding
+    volumes:
+      - ./deploy/branding:/branding:ro

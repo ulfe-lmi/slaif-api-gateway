@@ -1420,6 +1420,38 @@ reserved-counter reset requires a second explicit confirmation because it is an
 admin repair action for stale in-flight reservations. These key detail actions
 never recover or send old plaintext keys.
 
+## Operator Branding
+
+The optional `SLAIF_BRANDING_DIR` override (see [Operator branding](branding.md))
+is trusted-operator presentation input only:
+
+- **Pre-login public assets, no rights:** the five fixed
+  `/admin/branding/{style.css,logo,logo-compact,favicon,hero}` routes are
+  registered literals (never request-selected paths), are readable before
+  login, grant no authentication, write no session, and are not audited.
+  Requesting them cannot create state or escalate access.
+- **Bounded reader:** the directory must be a real (non-symlinked)
+  directory; every component is opened no-follow from the filesystem root;
+  slot files are opened relative to the verified directory descriptor with
+  `O_NOFOLLOW` and non-blocking mode; only regular files within 256 KiB are
+  read with before/after identity checks. Symlink, ancestor-swap, FIFO, and
+  I/O-failure cases fall back to the packaged default and cannot block a
+  worker. The application never creates, writes, or deletes directory
+  entries.
+- **Content validation:** CSS, SVG, and PNG are validated by strict
+  stdlib-only checks (inert SVG allowlist, bounded noninterlaced 8-bit
+  RGB/RGBA PNG with complete chunk CRCs, escape-free CSS without imports or
+  remote/data resources) before any bytes are served; invalid slots fall
+  back independently.
+- **Response safety:** each branding response carries the correct
+  `Content-Type`, `Cache-Control: no-cache`, and
+  `X-Content-Type-Options: nosniff`; rejections are silent (no paths or
+  content in logs or errors).
+- **Unchanged boundaries:** authentication, CSRF, quota, accounting, audit,
+  provider-credential isolation, and all `/v1` JSON/error semantics are
+  untouched by branding; the operator directory must contain public assets
+  only.
+
 ## Current Limitations
 
 ### Static module trust boundary

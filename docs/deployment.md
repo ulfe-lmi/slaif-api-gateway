@@ -101,6 +101,32 @@ recreates runtime services, shows Compose status, and checks `/healthz` and
 `/readyz`. It never removes Docker volumes or overwrites `.env`. It is a
 local convenience, not a production upgrade tool.
 
+## Optional Operator Branding
+
+A read-only appearance directory can be mounted onto the existing `api`
+service with the bundled overlay — same image, no rebuild, no new service:
+
+```bash
+install -d -m 755 deploy/branding   # add at most one file per slot
+
+# local:
+docker compose -f docker-compose.yml -f docker-compose.branding.yml up -d
+
+# production-shaped:
+docker compose -f docker-compose.production.yml -f docker-compose.branding.yml up -d
+```
+
+The overlay adds only `SLAIF_BRANDING_DIR=/branding` and the
+`./deploy/branding:/branding:ro` bind to the `api` service. Precreate the
+directory readable by the application user (`slaif` in the image) and keep
+only public appearance assets in it. If your stack uses an explicit
+Compose project name (`-p`), profiles, or an env file, pass the same
+values with the overlay so it joins the existing project rather than
+launching a different one. Asset changes are picked up on the next
+request without a restart; invalid files fall back to the packaged default
+per slot. Slots, formats, limits, refresh, and fallback semantics are
+documented in [Operator branding](branding.md).
+
 ## Optional Browser Smoke Tests
 
 The Playwright admin dashboard smoke tests are optional and are not part of the

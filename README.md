@@ -116,6 +116,7 @@ explicitly deferred / unsupported-by-policy classification is the
 | Configure it | [configuration reference](docs/configuration.md) |
 | Integrate a client | [compatibility matrix](docs/compatibility-matrix.md) → [OpenAI compatibility](docs/openai-compatibility.md) → [provider forwarding contract](docs/provider-forwarding-contract.md) |
 | Operate it | [operator runbooks](docs/runbooks/README.md) → [backup and restore](docs/backup-restore.md) → [upgrade runbook](docs/upgrade-runbook.md) |
+| Brand the admin UI | [operator branding](docs/branding.md) |
 | Review security and accounting | [security model](docs/security-model.md) → [accounting](docs/accounting.md) → [database schema](docs/database-schema.md) |
 | Contribute | [CONTRIBUTING](CONTRIBUTING.md) |
 | Read everything | [documentation home](docs/README.md) |
