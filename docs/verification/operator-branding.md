@@ -155,8 +155,9 @@ The exact executed command (and the production-base equivalent with
 `docker-compose.production.yml`) is:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.branding.yml \
-    --env-file /dev/null --no-env-resolution --no-interpolate config
+docker compose --env-file /dev/null -p slaif187-review \
+    -f docker-compose.yml -f docker-compose.branding.yml \
+    config --no-env-resolution --no-interpolate --format json
 ```
 
 The merged output shows only the `api` service gaining
@@ -185,6 +186,34 @@ unchanged (independent artifact:
   this objective.
 - No skip was treated as a pass; no live provider, model, or email call
   was made.
+
+## 187-b structural CI closure (same PR, continuation round)
+
+The 187-a final-head unit CI failed exactly two root-authored structural
+checks (see the 187-a report, §5), both closed by the 187-b continuation
+on the same PR without any executable change:
+
+- `app/slaif_gateway/main.py` is trimmed from 72 to 68 lines by removing
+  only explanatory comments and one redundant blank line; router
+  registration order, settings, lifespan, middleware, and error-handler
+  wiring are untouched. Proof of equivalence against the 187-a
+  implementation head `2f86d78` bytes: the normalized AST dump
+  (`ast.dump(..., annotate_fields=True, include_attributes=False)`) is
+  byte-identical, and for every code object (3 total) the raw instruction
+  stream (`co_code`), non-code constants, `co_names`, `co_varnames`, and
+  `co_freevars` are identical — only line-number tables moved. The
+  focused pair `pytest tests/unit/test_oap_governance.py
+  tests/unit/test_main_app_structure.py -o addopts= -q` passes 14/14
+  with the existing exact-header and <70 assertions unchanged.
+- The activated 187-a order's descriptive header suffix was preserved as
+  immutable history (strategic authoring deviation); the 187-b order
+  carries the exact canonical first line required by the governance
+  check. No governance or structure test was edited or weakened.
+
+All other qualified runtime/browser/container source hashes match
+`qualified-source-hashes.json` byte-for-byte (main.py is the only
+changed file); the packaged SVG blob, the 187-a order and report, and
+all prior evidence remain unchanged.
 
 ## Code provenance
 
