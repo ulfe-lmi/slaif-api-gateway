@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 
 from fastapi import Header, Request
 
@@ -10,7 +10,11 @@ from slaif_gateway.api.auth_errors import openai_error_from_auth_error
 from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.config import get_settings
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
-from slaif_gateway.db.session import get_db_session, get_db_session_from_app_state
+from slaif_gateway.db.session import (
+    AsyncSession,
+    get_db_session,
+    get_db_session_from_app_state,
+)
 from slaif_gateway.schemas.auth import AuthenticatedGatewayKey
 from slaif_gateway.services.auth_service import (
     GatewayAuthError,
@@ -32,18 +36,28 @@ def _database_session_unavailable_error() -> OpenAICompatibleError:
 async def get_db_session_after_auth_header_check(
     request: Request | None = None,
 ) -> AsyncIterator:
-    """Yield a DB session after cheap Authorization header validation has succeeded."""
+    """Yield a DB session after cheap Authorization header validation has succeeded.
+
+    The inner session generator is held explicitly and closed in ``finally``
+    so that closing (or exhausting) this wrapper deterministically returns the
+    DB connection to the pool. A bare ``async for`` over the inner generator
+    would only release the connection when the inner async generator's GC
+    finalizer later runs, leaving the connection checked out between the
+    consumer's ``aclose()`` and that finalizer.
+    """
+    inner: AsyncGenerator[AsyncSession, None] | None = None
     try:
         if request is not None:
-            async for session in get_db_session_from_app_state(request):
-                yield session
-            return
-
-        settings = get_settings()
-        async for session in get_db_session(settings=settings):
+            inner = get_db_session_from_app_state(request)
+        else:
+            inner = get_db_session(settings=get_settings())
+        async for session in inner:
             yield session
     except RuntimeError as exc:
         raise _database_session_unavailable_error() from exc
+    finally:
+        if inner is not None:
+            await inner.aclose()
 
 
 _get_db_session_after_auth_header_check = get_db_session_after_auth_header_check

@@ -2,6 +2,7 @@ import uuid
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -364,3 +365,121 @@ def test_key_detail_action_panel_does_not_render_sensitive_values(monkeypatch) -
     assert "session_hash_must_not_render" not in html
     assert "resend" not in html.lower()
     assert "resend" not in html.lower()
+
+
+def test_key_detail_renders_lazy_throttling_wait_values_and_usable_inputs(monkeypatch) -> None:
+    key = replace(
+        _detail(),
+        lazy_throttling_policy={
+            "mode": "wait",
+            "max_wait_seconds": 45,
+            "max_waiting_requests": 3,
+        },
+        lazy_throttling_policy_summary=(
+            "Mode: wait; max wait: 45s; max waiting per key: 3; "
+            "applies to Chat Completions and Responses before provider execution"
+        ),
+    )
+    client = TestClient(
+        _app(
+            _settings(
+                ENABLE_REDIS_RATE_LIMITS=True,
+                REDIS_URL="redis://localhost:16379/0",
+            )
+        )
+    )
+    _login_and_detail(monkeypatch, client, key)
+
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    assert "Mode: wait; max wait: 45s; max waiting per key: 3" in html
+    assert f'action="/admin/keys/{key.id}/lazy-throttling"' in html
+    assert 'name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode checked' in html
+    assert 'value="reject" data-lazy-throttling-mode checked' not in html
+    assert 'name="lazy_throttling_max_wait_seconds" value="45"' in html
+    assert 'name="lazy_throttling_max_waiting_requests" value="3"' in html
+    # Server-rendered inputs stay usable with JS disabled (no disabled attr).
+    assert "data-lazy-throttling-field disabled" not in html
+    assert "data-lazy-throttling-field disabled>" not in html
+    assert "data-lazy-throttling-field>" in html
+    assert 'name="reason" value="" required' in html
+    assert "Redis rate limiting is currently disabled" not in html
+
+
+def test_key_detail_renders_lazy_throttling_reject_defaults_and_inactive_warning(
+    monkeypatch,
+) -> None:
+    key = _detail()
+    client = TestClient(_app())
+    _login_and_detail(monkeypatch, client, key)
+
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    assert "Mode: reject (immediate 429); no waiting configured" in html
+    assert 'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode checked' in html
+    assert 'value="wait" data-lazy-throttling-mode checked' not in html
+    assert 'name="lazy_throttling_max_wait_seconds" value="30"' in html
+    assert 'name="lazy_throttling_max_waiting_requests" value="2"' in html
+    # Default settings leave Redis rate limiting off: state that honestly.
+    assert "Redis rate limiting is currently disabled" in html
+
+
+def test_lazy_throttling_error_redisplay_escapes_invalid_value(monkeypatch) -> None:
+    called = False
+    key = _detail()
+
+    async def update_gateway_key_lazy_throttling(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_lazy_throttling",
+        update_gateway_key_lazy_throttling,
+    )
+    client = TestClient(_app())
+
+    async def validate_admin_session(self, **kwargs):
+        return AdminSessionContext(
+            admin_user=SimpleNamespace(id=uuid.uuid4(), email="a@b.c"),
+            admin_session=SimpleNamespace(id=uuid.uuid4()),
+        )
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.validate_admin_session",
+        validate_admin_session,
+    )
+
+    def verify_session_csrf_token(self, admin_session, csrf_token):
+        return csrf_token == "rendered-csrf-token"
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.verify_session_csrf_token",
+        verify_session_csrf_token,
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    client.cookies.set("slaif_admin_session", "session-token")
+
+    marker = "<script>alert(185)</script>"
+    response = client.post(
+        f"/admin/keys/{key.id}/lazy-throttling",
+        data={
+            "csrf_token": "rendered-csrf-token",
+            "lazy_throttling_mode": "wait",
+            "lazy_throttling_max_wait_seconds": marker,
+            "lazy_throttling_max_waiting_requests": "2",
+            "reason": "invalid value",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "positive whole number" in response.text
+    assert marker not in response.text
+    assert "&lt;script&gt;alert(185)&lt;/script&gt;" in response.text
+    assert called is False

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from slaif_gateway.schemas.rate_limits import LazyThrottlingPolicy
+
 
 @dataclass(frozen=True, slots=True)
 class AuthenticatedGatewayKey:
@@ -28,6 +30,7 @@ class AuthenticatedGatewayKey:
     token_limit_total: int | None
     request_limit_total: int | None
     rate_limit_policy: dict[str, int | None]
+    lazy_throttling: LazyThrottlingPolicy | None = None
     cost_used_eur: Decimal = Decimal("0")
     tokens_used_total: int = 0
     cost_reserved_eur: Decimal = Decimal("0")

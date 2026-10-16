@@ -822,6 +822,23 @@ For `POST /v1/chat/completions`:
 9. Failed provider responses release the pending reservation and create a failed usage ledger row when a reservation exists.
 10. Successful accounting increments used counters, clears reserved counters, finalizes the reservation, writes/finalizes a ledger row, and records token/cost metrics.
 
+When a key has an explicitly stored lazy (wait) throttling policy and the
+Redis operational limiter (step 3) returns a temporary request/token/
+concurrency denial, the request may stay open in a bounded asynchronous wait
+and re-attempt the same atomic limiter until admitted, refused, disconnected,
+or the key's maximum wait is exhausted. Waiting is not provider work: no route
+re-resolution, pricing lookup, PostgreSQL reservation, or provider call
+happens while waiting; streaming starts only after admission; and there are no
+provider 429 retries. After a real wait, the gateway re-authenticates the
+key, re-checks owner active state, endpoint and request policy, and
+re-resolves the current route before forwarding. Hard quota, security,
+hosted-tool fence/hold, unknown pricing/FX, and Redis-unavailable refusals are
+immediate and never converted into waits. The key's maximum wait is the
+admission budget covering all pre-admission wait steps; once the wait loop
+ends (admission or deadline), final opaque-ID bookkeeping runs under its own
+separate per-ID 5-second bound (cleanup only, never extra eligibility), with
+the bounded Redis lease/slot TTLs as the crash/outage backstop.
+
 This is an admission-time budget check plus post-call spend accounting model,
 not hard real-time spend interruption inside one upstream call. If finalization
 puts the key above local token or cost limits, subsequent calls are blocked by

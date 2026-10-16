@@ -904,7 +904,7 @@ def _install_compact_handler_mocks(
         return route
 
     async def reserve_rate_limit(**_kwargs):
-        return SimpleNamespace(concurrency_reserved=True)
+        return SimpleNamespace(concurrency_reserved=True, refreshed_context=None)
 
     async def reserve_quota(**kwargs):
         captured["policy_result"] = kwargs["policy_result"]

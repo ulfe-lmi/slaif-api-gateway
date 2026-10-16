@@ -136,6 +136,14 @@ class Settings(BaseSettings):
     RATE_LIMIT_CONCURRENCY_TTL_SECONDS: int = 300
     RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS: int = 30
     RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS: int = 30
+    # Lazy (waiting) throttling: opt-in per-key delayed admission for
+    # temporary rate-limit denials on Chat Completions and Responses.
+    # Operator ceilings for per-key policies; the deployment-wide cap bounds
+    # total simultaneous waiting requests across all keys.
+    LAZY_THROTTLING_MAX_WAIT_SECONDS: int = 120
+    LAZY_THROTTLING_MAX_WAITING_PER_KEY: int = 16
+    LAZY_THROTTLING_MAX_WAITING_TOTAL: int = 256
+    LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS: int = 300
 
     ACTIVE_HMAC_KEY_VERSION: str = "1"
     TOKEN_HMAC_SECRET_V1: str | None = None
@@ -537,6 +545,29 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS must be less than "
                 "RATE_LIMIT_CONCURRENCY_TTL_SECONDS"
+            )
+
+        for name in (
+            "LAZY_THROTTLING_MAX_WAIT_SECONDS",
+            "LAZY_THROTTLING_MAX_WAITING_PER_KEY",
+            "LAZY_THROTTLING_MAX_WAITING_TOTAL",
+            "LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+
+        # A waiting lease must not expire while its waiter is still eligible:
+        # the lease lifetime must outlive the max-wait ceiling (plus margin).
+        if (
+            self.LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS
+            <= self.LAZY_THROTTLING_MAX_WAIT_SECONDS + 30
+        ):
+            raise ValueError(
+                "LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS must exceed "
+                "LAZY_THROTTLING_MAX_WAIT_SECONDS by at least 30 seconds so a "
+                "waiting lease cannot expire while its waiter is still "
+                "eligible"
             )
 
     def _validate_email_settings(self) -> None:

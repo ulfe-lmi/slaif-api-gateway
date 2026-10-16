@@ -468,6 +468,26 @@ duplicate, conflict, unsupported-row, or update-classification checks.
 PostgreSQL is the hard quota source of truth. Redis rate limiting is operational
 throttling only.
 
+Lazy (wait) throttling, when explicitly stored on an individual key, adds a
+bounded asynchronous wait at the existing Redis rate-limit seam for Chat
+Completions and Responses. Operational waiting state contains only opaque
+key/request IDs and timestamps — never request or response content, messages,
+tools, authorization headers, or provider credentials. Waiting holds no
+PostgreSQL connection or transaction, reserves no quota, and writes no ledger
+rows. After a real wait, the gateway re-authenticates the key, re-checks
+owner active state, endpoint and request policy, and re-resolves the current
+route before any provider work; a key or owner that is revoked, suspended,
+expired, deactivated, or otherwise restricted while waiting is refused rather
+than forwarded under its former permissions. Disconnected or canceled requests
+release their waiting lease and leave no reservation, ledger row, or active
+slot behind. The configured maximum wait is the admission budget for all
+pre-admission wait steps; once the wait loop ends (admission or deadline),
+final opaque-ID bookkeeping is best-effort and separately bounded (5 seconds
+per cleanup action), granting no extra admission eligibility or provider
+work, with the bounded Redis lease/slot TTLs as the crash backstop. There is
+no durable queue, no FIFO promise, and no automatic replay of a canceled or
+already-forwarded request.
+
 For supported `/v1/chat/completions` requests, the gateway authenticates the key,
 checks policy, estimates input/output/cost, reserves PostgreSQL quota before
 forwarding, forwards the request, then finalizes or releases the reservation

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -54,6 +55,7 @@ from slaif_gateway.services.codex_qualification import (
     validate_codex_pilot_key_input,
 )
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
+from slaif_gateway.schemas.admin_keys import LazyThrottlingOperatorCeilings
 from slaif_gateway.services.admin_key_dashboard import (
     AdminKeyDashboardService,
     AdminKeyNotFoundError,
@@ -211,6 +213,7 @@ from slaif_gateway.schemas.keys import (
     SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyExternalToolPolicyInput,
+    UpdateGatewayKeyLazyThrottlingInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyValidityInput,
@@ -286,6 +289,10 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_validity_updated": ("success", "Gateway key validity updated."),
     "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
     "key_policy_updated": ("success", "Gateway key request policy updated."),
+    "key_lazy_throttling_updated": (
+        "success",
+        "Gateway key lazy throttling policy updated.",
+    ),
     "key_external_tool_policy_updated": (
         "success",
         "External-tool policy updated; only exact fenced OpenAI Responses web_search can run.",
@@ -309,6 +316,10 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_policy_reason_required": (
         "error",
         "Enter an audit reason before updating request policy.",
+    ),
+    "key_lazy_throttling_reason_required": (
+        "error",
+        "Enter an audit reason before updating lazy throttling policy.",
     ),
     "chat_streaming_live_burn_reason_required": (
         "error",
@@ -694,6 +705,9 @@ async def create_admin_key(
     rate_limit_tokens_per_minute: str = Form(""),
     rate_limit_concurrent_requests: str = Form(""),
     rate_limit_window_seconds: str = Form(""),
+    lazy_throttling_mode: str = Form("reject"),
+    lazy_throttling_max_wait_seconds: str = Form(""),
+    lazy_throttling_max_waiting_requests: str = Form(""),
     chat_streaming_live_burn_enabled: str = Form(""),
     chat_streaming_live_burn_cost_margin_eur: str = Form("0"),
     chat_streaming_live_burn_token_margin: str = Form("0"),
@@ -737,6 +751,9 @@ async def create_admin_key(
         "rate_limit_tokens_per_minute": rate_limit_tokens_per_minute,
         "rate_limit_concurrent_requests": rate_limit_concurrent_requests,
         "rate_limit_window_seconds": rate_limit_window_seconds,
+        "lazy_throttling_mode": lazy_throttling_mode,
+        "lazy_throttling_max_wait_seconds": lazy_throttling_max_wait_seconds,
+        "lazy_throttling_max_waiting_requests": lazy_throttling_max_waiting_requests,
         "chat_streaming_live_burn_enabled": chat_streaming_live_burn_enabled,
         "chat_streaming_live_burn_cost_margin_eur": chat_streaming_live_burn_cost_margin_eur,
         "chat_streaming_live_burn_token_margin": chat_streaming_live_burn_token_margin,
@@ -1001,6 +1018,7 @@ async def create_admin_key(
                 "allow_all_models": parsed_input.allow_all_models,
                 "allow_all_endpoints": parsed_input.allow_all_endpoints,
                 "rate_limit_policy": parsed_input.rate_limit_policy,
+                "lazy_throttling_policy": created.lazy_throttling_policy,
                 "chat_streaming_live_burn_policy": created.chat_streaming_live_burn_policy,
                 "chat_streaming_live_burn_policy_summary": (
                     streaming_live_burn_surface_policy_summary(
@@ -1253,6 +1271,7 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
         key=key,
         policy_catalog=policy_catalog,
         policy_form=_default_key_policy_form_for_key(key),
+        lazy_form=_default_key_lazy_throttling_form_for_key(key, settings),
     )
 
 
@@ -1775,6 +1794,7 @@ async def create_admin_key_from_template_revision(
                 "allow_all_models": False,
                 "allow_all_endpoints": False,
                 "rate_limit_policy": result.revision.rate_limit_policy,
+                "lazy_throttling_policy": result.created_key.lazy_throttling_policy,
                 "chat_streaming_live_burn_policy": result.created_key.chat_streaming_live_burn_policy,
                 "chat_streaming_live_burn_policy_summary": (
                     streaming_live_burn_surface_policy_summary(
@@ -1899,6 +1919,87 @@ async def update_admin_key_policy(
         )
 
     return _redirect_to_admin_key(parsed_key_id, message="key_policy_updated")
+
+
+@router.post("/keys/{gateway_key_id}/lazy-throttling", response_class=HTMLResponse)
+async def update_admin_key_lazy_throttling(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    lazy_throttling_mode: str = Form("reject"),
+    lazy_throttling_max_wait_seconds: str = Form(""),
+    lazy_throttling_max_waiting_requests: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found()
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    lazy_form = {
+        "lazy_throttling_mode": lazy_throttling_mode,
+        "lazy_throttling_max_wait_seconds": lazy_throttling_max_wait_seconds,
+        "lazy_throttling_max_waiting_requests": lazy_throttling_max_waiting_requests,
+        "reason": reason,
+    }
+    try:
+        lazy_policy = _parse_admin_lazy_throttling_policy(lazy_form, settings)
+    except ValueError as exc:
+        return await _render_key_lazy_throttling_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            gateway_key_id=parsed_key_id,
+            error=str(exc),
+            lazy_form=lazy_form,
+        )
+
+    cleaned_reason = _clean_admin_reason(reason)
+    if cleaned_reason is None:
+        return await _render_key_lazy_throttling_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            gateway_key_id=parsed_key_id,
+            error=_ADMIN_STATUS_MESSAGES["key_lazy_throttling_reason_required"][1],
+            lazy_form=lazy_form,
+        )
+
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            await service.update_gateway_key_lazy_throttling(
+                UpdateGatewayKeyLazyThrottlingInput(
+                    gateway_key_id=parsed_key_id,
+                    lazy_throttling_policy=lazy_policy,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except (KeyManagementError, ValueError) as exc:
+        _log_admin_key_policy_failure(
+            request,
+            exc=exc,
+            admin_id=action_context.admin_user.id,
+            gateway_key_id=parsed_key_id,
+        )
+        return await _render_key_lazy_throttling_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            gateway_key_id=parsed_key_id,
+            error=exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+            lazy_form=lazy_form,
+            diagnostic_id=_admin_diagnostic_id(request),
+        )
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_lazy_throttling_updated")
 
 
 @router.post("/keys/{gateway_key_id}/external-tool-policy", response_class=HTMLResponse)
@@ -6675,9 +6776,14 @@ async def _admin_key_dashboard_service_scope(
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
+            settings = _settings(request)
             yield AdminKeyDashboardService(
                 gateway_keys_repository=GatewayKeysRepository(session),
-                external_tool_ceilings=_settings(request).get_external_tool_operator_ceilings(),
+                external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+                lazy_throttling_ceilings=LazyThrottlingOperatorCeilings(
+                    max_wait_seconds=settings.LAZY_THROTTLING_MAX_WAIT_SECONDS,
+                    max_waiting_per_key=settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY,
+                ),
             )
 
 
@@ -7375,6 +7481,32 @@ def _default_key_policy_form_for_key(key: object) -> dict[str, str]:
     }
 
 
+def _default_key_lazy_throttling_form_for_key(
+    key: object,
+    settings: Settings,
+) -> dict[str, str]:
+    policy = getattr(key, "lazy_throttling_policy", None)
+    if isinstance(policy, dict) and policy.get("mode") == "wait":
+        return {
+            "lazy_throttling_mode": "wait",
+            "lazy_throttling_max_wait_seconds": str(policy.get("max_wait_seconds", 30)),
+            "lazy_throttling_max_waiting_requests": str(
+                policy.get("max_waiting_requests", 2)
+            ),
+            "reason": "",
+        }
+    return {
+        "lazy_throttling_mode": "reject",
+        "lazy_throttling_max_wait_seconds": str(
+            min(30, settings.LAZY_THROTTLING_MAX_WAIT_SECONDS)
+        ),
+        "lazy_throttling_max_waiting_requests": str(
+            min(2, settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY)
+        ),
+        "reason": "",
+    }
+
+
 def _default_external_tool_policy_form_for_key(key: object) -> dict[str, str]:
     policy = getattr(key, "external_tool_policy", None)
     if not isinstance(policy, dict):
@@ -7459,6 +7591,7 @@ def _render_key_detail(
     policy_catalog: dict[str, object],
     policy_form: dict[str, str],
     external_policy_form: dict[str, str] | None = None,
+    lazy_form: dict[str, str] | None = None,
     error: str | None = None,
     diagnostic_id: str | None = None,
     status_code: int = 200,
@@ -7481,6 +7614,16 @@ def _render_key_detail(
             or _default_external_tool_policy_form_for_key(key),
             "external_tool_capabilities": sorted(KNOWN_EXTERNAL_CAPABILITIES),
             "external_tool_ceilings": _settings(request).get_external_tool_operator_ceilings(),
+            "lazy_form": lazy_form
+            or _default_key_lazy_throttling_form_for_key(
+                key,
+                _settings(request),
+            ),
+            "lazy_throttling_ceilings": {
+                "max_wait_seconds": _settings(request).LAZY_THROTTLING_MAX_WAIT_SECONDS,
+                "max_waiting_per_key": _settings(request).LAZY_THROTTLING_MAX_WAITING_PER_KEY,
+            },
+            "redis_rate_limits_enabled": _settings(request).ENABLE_REDIS_RATE_LIMITS,
             "models_endpoint": MODELS_ENDPOINT,
             "chat_completions_endpoint": CHAT_COMPLETIONS_ENDPOINT,
             "chat_live_burn_surface": CHAT_STREAMING_LIVE_BURN_SURFACE,
@@ -7624,6 +7767,35 @@ async def _render_key_policy_error(
     )
 
 
+async def _render_key_lazy_throttling_error(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    gateway_key_id: uuid.UUID,
+    error: str,
+    lazy_form: dict[str, str] | None = None,
+    diagnostic_id: str | None = None,
+) -> Response:
+    try:
+        async with _admin_key_dashboard_service_scope(request) as service:
+            key = await service.get_key_detail(gateway_key_id)
+    except AdminKeyNotFoundError:
+        return HTMLResponse("Gateway key not found.", status_code=404)
+    return _render_key_detail(
+        request,
+        admin=admin,
+        csrf_token=csrf_token,
+        key=key,
+        policy_catalog=await _load_key_policy_catalog(request),
+        policy_form=_default_key_policy_form_for_key(key),
+        lazy_form=lazy_form,
+        error=error,
+        diagnostic_id=diagnostic_id,
+        status_code=400,
+    )
+
+
 async def _load_record_form_institutions(request: Request) -> list[object]:
     async with _admin_records_dashboard_service_scope(request) as service:
         return await service.list_institutions(limit=200)
@@ -7737,6 +7909,19 @@ def _render_key_create_form(
             "chat_live_burn_surface": CHAT_STREAMING_LIVE_BURN_SURFACE,
             "external_tool_capabilities": sorted(KNOWN_EXTERNAL_CAPABILITIES),
             "external_tool_ceilings": settings.get_external_tool_operator_ceilings(),
+            "lazy_throttling_ceilings": {
+                "max_wait_seconds": settings.LAZY_THROTTLING_MAX_WAIT_SECONDS,
+                "max_waiting_per_key": settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY,
+            },
+            "lazy_throttling_defaults": {
+                "max_wait_seconds": min(
+                    30, settings.LAZY_THROTTLING_MAX_WAIT_SECONDS
+                ),
+                "max_waiting_per_key": min(
+                    2, settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY
+                ),
+            },
+            "redis_rate_limits_enabled": settings.ENABLE_REDIS_RATE_LIMITS,
             "trusted_calibration_settings": {
                 "enabled": settings.CALIBRATION_KEYS_ENABLED,
                 "max_requests": settings.TRUSTED_CALIBRATION_MAX_REQUESTS,
@@ -7819,6 +8004,9 @@ def _default_key_create_form() -> dict[str, str]:
         "rate_limit_tokens_per_minute": "",
         "rate_limit_concurrent_requests": "",
         "rate_limit_window_seconds": "",
+        "lazy_throttling_mode": "reject",
+        "lazy_throttling_max_wait_seconds": "",
+        "lazy_throttling_max_waiting_requests": "",
         "chat_streaming_live_burn_enabled": "true",
         "chat_streaming_live_burn_cost_margin_eur": "0",
         "chat_streaming_live_burn_token_margin": "0",
@@ -9471,6 +9659,7 @@ def _parse_key_create_form(
         _, token_limit_total = _parse_optional_admin_int(form.get("token_limit_total"))
         _, request_limit_total = _parse_optional_admin_int(form.get("request_limit_total"))
         rate_limit_policy = _parse_admin_rate_limit_policy(form)
+        lazy_throttling_policy = _parse_admin_lazy_throttling_policy(form, settings)
         chat_streaming_live_burn_policy = parse_streaming_live_burn_surface_form_policy(
             CHAT_STREAMING_LIVE_BURN_SURFACE,
             enabled=_is_checked(form.get("chat_streaming_live_burn_enabled", "")),
@@ -9548,6 +9737,7 @@ def _parse_key_create_form(
         calibration_metadata=calibration_metadata,
         confirm_trusted_calibration=_is_checked(form.get("confirm_trusted_calibration")),
         rate_limit_policy=rate_limit_policy,
+        lazy_throttling_policy=lazy_throttling_policy,
         chat_streaming_live_burn_policy=chat_streaming_live_burn_policy.to_metadata(),
         external_tool_policy=_parse_external_tool_policy_form(form),
         confirm_external_tool_fenced=_is_checked(form.get("confirm_external_tool_fenced")),
@@ -9770,6 +9960,62 @@ def _parse_admin_rate_limit_policy(form: dict[str, str]) -> dict[str, int] | Non
         if provided and value is not None:
             policy[policy_name] = value
     return policy or None
+
+
+def _parse_admin_lazy_throttling_bound(
+    value: str | None,
+    *,
+    label: str,
+    default: int,
+    ceiling: int,
+) -> int:
+    """Explicitly parse a positive digit-string form value against a ceiling.
+
+    Empty values fall back to the configured default clamped to the operator
+    ceiling; anything else must be a canonical positive whole number.
+    """
+    if value is None or not value.strip():
+        return min(default, ceiling)
+    normalized = value.strip()
+    if not re.fullmatch(r"[1-9][0-9]*", normalized):
+        raise ValueError(f"{label} must be a positive whole number.")
+    parsed = int(normalized, 10)
+    if parsed > ceiling:
+        raise ValueError(f"{label} must not exceed the operator ceiling of {ceiling}.")
+    return parsed
+
+
+def _parse_admin_lazy_throttling_policy(
+    form: Mapping[str, str],
+    settings: Settings | None,
+) -> dict[str, object] | None:
+    """Parse the explicit lazy (waiting) throttling choice from key forms."""
+    mode = (form.get("lazy_throttling_mode") or "reject").strip()
+    if mode == "reject":
+        return None
+    if mode != "wait":
+        raise ValueError("Select a valid lazy throttling mode.")
+    if settings is not None:
+        max_wait_ceiling = settings.LAZY_THROTTLING_MAX_WAIT_SECONDS
+        max_waiting_ceiling = settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY
+    else:
+        max_wait_ceiling = 120
+        max_waiting_ceiling = 16
+    return {
+        "mode": "wait",
+        "max_wait_seconds": _parse_admin_lazy_throttling_bound(
+            form.get("lazy_throttling_max_wait_seconds"),
+            label="Maximum waiting time",
+            default=30,
+            ceiling=max_wait_ceiling,
+        ),
+        "max_waiting_requests": _parse_admin_lazy_throttling_bound(
+            form.get("lazy_throttling_max_waiting_requests"),
+            label="Maximum waiting requests",
+            default=2,
+            ceiling=max_waiting_ceiling,
+        ),
+    }
 
 
 def _parse_admin_text_list(value: str | None) -> list[str]:

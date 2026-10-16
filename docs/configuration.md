@@ -244,6 +244,32 @@ remains the hard quota and accounting source of truth.
   `RATE_LIMIT_CONCURRENCY_HEARTBEAT_SECONDS`, and
   `RATE_LIMIT_CONCURRENCY_TTL_GRACE_SECONDS` control active concurrency slot
   cleanup and stream heartbeats.
+- `LAZY_THROTTLING_MAX_WAIT_SECONDS` (default 120),
+  `LAZY_THROTTLING_MAX_WAITING_PER_KEY` (default 16),
+  `LAZY_THROTTLING_MAX_WAITING_TOTAL` (default 256), and
+  `LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS` (default 300) bound the optional
+  per-key lazy (waiting) throttling policy for Chat Completions and Responses:
+  operator ceilings for a key's maximum wait seconds and maximum waiting
+  requests, a deployment-wide waiting cap, and the Redis waiting-lease expiry
+  for crashed-waiter recovery. They only bound key policies when Redis rate
+  limiting is enabled; they do not enable waiting for any key by themselves,
+  and waiting is always off unless an operator explicitly stores a wait policy
+  on an individual key. The key-form defaults when an operator selects wait
+  mode are 30s maximum wait and 2 waiting requests. The configured maximum
+  wait is the ADMISSION budget: it bounds every pre-admission wait step
+  (disconnect probes, deadline checks, revalidation, limiter re-attempts, and
+  sleeps). Once the wait loop ends (admission or deadline), final opaque-ID
+  bookkeeping (lease and slot release) runs under its own small per-ID bound
+  (5 seconds each), cleanup only — it grants no extra admission eligibility
+  or provider work, and the bounded Redis lease/slot TTLs remain the
+  crash/outage backstop. Waiting precedes provider execution. To avoid
+  disconnecting before completion, clients and proxies should allow for
+  request validation, the admission wait (up to the key's configured maximum
+  wait), provider inference, and the bounded final cleanup. Only a disconnect
+  while waiting is canceled before any provider call; once admitted, the
+  request runs to completion under the existing post-call accounting. A
+  shorter client or proxy timeout may end the connection before completion,
+  including while the request is already executing.
 
 The checked-in `.env.example` uses the Docker Compose hostname `redis` inside
 containers and publishes the container's Redis port on host port `16379` by

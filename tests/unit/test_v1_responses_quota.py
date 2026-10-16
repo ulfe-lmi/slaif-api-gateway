@@ -3926,7 +3926,7 @@ def _wire_streaming_gateway(
         "rate_release_calls": [],
     }
     completed_record_id = uuid.uuid4()
-    rate_reservation = SimpleNamespace(concurrency_reserved=False)
+    rate_reservation = SimpleNamespace(concurrency_reserved=False, refreshed_context=None)
 
     async def _fake_reserve_rate_limit(**kwargs):
         _ = kwargs
@@ -4097,7 +4097,7 @@ def test_streaming_provider_adapter_construction_failure_releases_reservation_an
     _wire_streaming_route(monkeypatch)
     failure_calls: list[dict[str, object]] = []
     rate_release_calls: list[tuple[object, bool]] = []
-    rate_reservation = SimpleNamespace(concurrency_reserved=False)
+    rate_reservation = SimpleNamespace(concurrency_reserved=False, refreshed_context=None)
 
     async def _fake_reserve_rate_limit(**kwargs):
         _ = kwargs

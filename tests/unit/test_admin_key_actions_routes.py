@@ -525,3 +525,233 @@ def test_no_get_mutation_routes_exist(monkeypatch) -> None:
     for action in ("suspend", "activate", "revoke"):
         response = client.get(f"/admin/keys/{gateway_key_id}/{action}")
         assert response.status_code == 405
+
+
+def test_update_lazy_throttling_calls_service_with_wait_policy_and_reason(monkeypatch) -> None:
+    seen = {}
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_lazy_throttling(self, payload):
+        seen["payload"] = payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_lazy_throttling",
+        update_gateway_key_lazy_throttling,
+    )
+    client = TestClient(_app())
+    admin_user = _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/lazy-throttling",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "lazy_throttling_mode": "wait",
+            "lazy_throttling_max_wait_seconds": "45",
+            "lazy_throttling_max_waiting_requests": "3",
+            "reason": "allow bounded waiting",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert (
+        response.headers["location"]
+        == f"/admin/keys/{gateway_key_id}?message=key_lazy_throttling_updated"
+    )
+    payload = seen["payload"]
+    assert payload.gateway_key_id == gateway_key_id
+    assert payload.actor_admin_id == admin_user.id
+    assert payload.reason == "allow bounded waiting"
+    assert payload.lazy_throttling_policy == {
+        "mode": "wait",
+        "max_wait_seconds": 45,
+        "max_waiting_requests": 3,
+    }
+
+
+def test_update_lazy_throttling_reject_mode_sends_no_policy_even_with_bounds(monkeypatch) -> None:
+    seen = {}
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_lazy_throttling(self, payload):
+        seen["payload"] = payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_lazy_throttling",
+        update_gateway_key_lazy_throttling,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/lazy-throttling",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "lazy_throttling_mode": "reject",
+            "lazy_throttling_max_wait_seconds": "45",
+            "lazy_throttling_max_waiting_requests": "3",
+            "reason": "return to immediate rejection",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert seen["payload"].lazy_throttling_policy is None
+
+
+def test_update_lazy_throttling_requires_reason_before_service_call(monkeypatch) -> None:
+    called = False
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_lazy_throttling(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_lazy_throttling",
+        update_gateway_key_lazy_throttling,
+    )
+
+    async def render_key_lazy_throttling_error(*args, **kwargs):
+        return HTMLResponse(kwargs["error"], status_code=400)
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._render_key_lazy_throttling_error",
+        render_key_lazy_throttling_error,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/lazy-throttling",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "lazy_throttling_mode": "wait",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Enter an audit reason before updating lazy throttling policy" in response.text
+    assert called is False
+
+
+def test_update_lazy_throttling_refuses_ceiling_exceeding_bounds(monkeypatch) -> None:
+    called = False
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_lazy_throttling(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_lazy_throttling",
+        update_gateway_key_lazy_throttling,
+    )
+
+    async def render_key_lazy_throttling_error(*args, **kwargs):
+        return HTMLResponse(kwargs["error"], status_code=400)
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._render_key_lazy_throttling_error",
+        render_key_lazy_throttling_error,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/lazy-throttling",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "lazy_throttling_mode": "wait",
+            "lazy_throttling_max_wait_seconds": "121",
+            "lazy_throttling_max_waiting_requests": "2",
+            "reason": "waiting too long",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "operator ceiling of 120" in response.text
+    assert called is False
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/lazy-throttling",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "lazy_throttling_mode": "wait",
+            "lazy_throttling_max_wait_seconds": "30",
+            "lazy_throttling_max_waiting_requests": "17",
+            "reason": "too many waiting",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "operator ceiling of 16" in response.text
+    assert called is False
+
+
+def test_update_lazy_throttling_refuses_invalid_numeric_values(monkeypatch) -> None:
+    called = False
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_lazy_throttling(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_lazy_throttling",
+        update_gateway_key_lazy_throttling,
+    )
+
+    async def render_key_lazy_throttling_error(*args, **kwargs):
+        return HTMLResponse(kwargs["error"], status_code=400)
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._render_key_lazy_throttling_error",
+        render_key_lazy_throttling_error,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    for bad_value in ("0", "-5", "30.5", "1e3", "<script>alert(185)</script>"):
+        response = client.post(
+            f"/admin/keys/{gateway_key_id}/lazy-throttling",
+            data={
+                "csrf_token": "dashboard-csrf",
+                "lazy_throttling_mode": "wait",
+                "lazy_throttling_max_wait_seconds": bad_value,
+                "lazy_throttling_max_waiting_requests": "2",
+                "reason": "invalid value",
+            },
+        )
+        assert response.status_code == 400
+        assert "positive whole number" in response.text
+    assert called is False
+
+
+def test_update_lazy_throttling_invalid_csrf_refuses_before_service_call(monkeypatch) -> None:
+    called = False
+    gateway_key_id = uuid.uuid4()
+
+    async def update_gateway_key_lazy_throttling(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_lazy_throttling",
+        update_gateway_key_lazy_throttling,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    response = client.post(
+        f"/admin/keys/{gateway_key_id}/lazy-throttling",
+        data={
+            "csrf_token": "wrong-csrf",
+            "lazy_throttling_mode": "wait",
+            "reason": "forged attempt",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Invalid CSRF token" in response.text
+    assert called is False

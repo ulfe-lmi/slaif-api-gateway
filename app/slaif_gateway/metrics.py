@@ -120,6 +120,16 @@ RATE_LIMIT_HEARTBEAT_FAILURES = _counter(
     "Redis-backed concurrency heartbeat failures.",
     ("error_code",),
 )
+LAZY_THROTTLING_OUTCOMES = _counter(
+    "gateway_lazy_throttling_outcomes_total",
+    "Bounded lazy-throttling wait outcomes (closed low-cardinality label set).",
+    ("outcome",),
+)
+LAZY_THROTTLING_WAIT_DURATION = _histogram(
+    "gateway_lazy_throttling_wait_seconds",
+    "Bounded lazy-throttling wait duration in seconds.",
+    (),
+)
 RECONCILIATION_BACKLOG = _counter(
     "gateway_reconciliation_backlog_total",
     "Reconciliation backlog items observed by type.",
@@ -302,6 +312,24 @@ def increment_rate_limit_release_failure(error_code: str | None) -> None:
 def increment_rate_limit_heartbeat_failure(error_code: str | None) -> None:
     """Record a concurrency heartbeat failure with a low-cardinality error code."""
     RATE_LIMIT_HEARTBEAT_FAILURES.labels(error_code=error_code or "unknown").inc()
+
+
+_LAZY_THROTTLING_OUTCOME_LABELS = frozenset(
+    {"admitted", "deadline", "capacity_full", "cancelled", "revalidation_failed", "never_fit"}
+)
+
+
+def increment_lazy_throttling_outcome(outcome: str | None) -> None:
+    """Record a lazy-throttling wait outcome using the closed label set."""
+    label = outcome if outcome in _LAZY_THROTTLING_OUTCOME_LABELS else "other"
+    LAZY_THROTTLING_OUTCOMES.labels(outcome=label).inc()
+
+
+def observe_lazy_throttling_wait_seconds(seconds: float) -> None:
+    """Record a bounded lazy-throttling wait duration (no per-key labels)."""
+    if seconds < 0:
+        return
+    LAZY_THROTTLING_WAIT_DURATION.observe(seconds)
 
 
 def observe_reconciliation_backlog(*, reconciliation_type: str, count: int) -> None:

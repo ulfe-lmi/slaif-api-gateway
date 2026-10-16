@@ -9,7 +9,12 @@ from decimal import Decimal
 from typing import Protocol
 
 from slaif_gateway.db.models import GatewayKey
-from slaif_gateway.schemas.admin_keys import AdminKeyDetail, AdminKeyListRow
+from slaif_gateway.schemas.admin_keys import (
+    AdminKeyDetail,
+    AdminKeyListRow,
+    LazyThrottlingOperatorCeilings,
+)
+from slaif_gateway.schemas.rate_limits import parse_lazy_throttling_policy_metadata
 from slaif_gateway.services.chat_streaming_live_burn import (
     ChatStreamingLiveBurnPolicyError,
     chat_streaming_live_burn_policy_from_metadata,
@@ -60,9 +65,13 @@ class AdminKeyDashboardService:
         external_tool_ceilings: ExternalToolOperatorCeilings = (
             DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
         ),
+        lazy_throttling_ceilings: LazyThrottlingOperatorCeilings | None = None,
     ) -> None:
         self._gateway_keys = gateway_keys_repository
         self._external_tool_ceilings = external_tool_ceilings
+        self._lazy_throttling_ceilings = (
+            lazy_throttling_ceilings or LazyThrottlingOperatorCeilings()
+        )
 
     async def list_keys(
         self,
@@ -90,7 +99,12 @@ class AdminKeyDashboardService:
             offset=offset,
         )
         return [
-            _to_list_row(row, now=timestamp, external_tool_ceilings=self._external_tool_ceilings)
+            _to_list_row(
+                row,
+                now=timestamp,
+                external_tool_ceilings=self._external_tool_ceilings,
+                lazy_throttling_ceilings=self._lazy_throttling_ceilings,
+            )
             for row in rows
         ]
 
@@ -108,6 +122,7 @@ class AdminKeyDashboardService:
             row,
             now=timestamp,
             external_tool_ceilings=self._external_tool_ceilings,
+            lazy_throttling_ceilings=self._lazy_throttling_ceilings,
         )
 
 
@@ -116,11 +131,14 @@ def _to_detail(
     *,
     now: datetime,
     external_tool_ceilings: ExternalToolOperatorCeilings,
+    lazy_throttling_ceilings: LazyThrottlingOperatorCeilings | None = None,
 ) -> AdminKeyDetail:
     list_row = _to_list_row(
         row,
         now=now,
         external_tool_ceilings=external_tool_ceilings,
+        lazy_throttling_ceilings=lazy_throttling_ceilings
+        or LazyThrottlingOperatorCeilings(),
     )
     return AdminKeyDetail(
         **asdict(list_row),
@@ -138,7 +156,9 @@ def _to_list_row(
     *,
     now: datetime,
     external_tool_ceilings: ExternalToolOperatorCeilings,
+    lazy_throttling_ceilings: LazyThrottlingOperatorCeilings | None = None,
 ) -> AdminKeyListRow:
+    lazy_ceilings = lazy_throttling_ceilings or LazyThrottlingOperatorCeilings()
     owner = getattr(row, "owner", None)
     institution = getattr(owner, "institution", None) if owner is not None else None
     cohort = getattr(row, "cohort", None)
@@ -203,6 +223,14 @@ def _to_list_row(
         external_tool_policy_summary=_external_tool_policy_summary(
             row.metadata_json,
             ceilings=external_tool_ceilings,
+        ),
+        lazy_throttling_policy=_lazy_throttling_policy(
+            row.metadata_json,
+            ceilings=lazy_ceilings,
+        ),
+        lazy_throttling_policy_summary=_lazy_throttling_policy_summary(
+            row.metadata_json,
+            ceilings=lazy_ceilings,
         ),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -364,6 +392,44 @@ def _external_tool_policy_summary(
         f"{policy['max_provider_tool_calls_per_request']}; overrun acknowledged: "
         f"{str(policy['single_request_overrun_acknowledged']).lower()}; runtime: "
         "exact OpenAI web-search fenced contract only; other hosted families denied"
+    )
+
+
+def _lazy_throttling_policy(
+    metadata_json: dict[str, object] | None,
+    *,
+    ceilings: LazyThrottlingOperatorCeilings,
+) -> dict[str, object] | None:
+    """Strictly project the stored lazy-throttling policy for the dashboard.
+
+    Malformed or ceiling-exceeding stored values never surface as policy:
+    they project to the safe default (immediate rejection).
+    """
+    raw = metadata_json.get("lazy_throttling_policy") if isinstance(metadata_json, dict) else None
+    parsed = parse_lazy_throttling_policy_metadata(
+        raw,
+        max_wait_seconds_ceiling=ceilings.max_wait_seconds,
+        max_waiting_per_key_ceiling=ceilings.max_waiting_per_key,
+    )
+    # A stored reject-mode policy means "no waiting", exactly like a missing
+    # one; only an explicit wait policy projects through to the dashboard.
+    if parsed is None or not parsed.is_wait_mode():
+        return None
+    return parsed.to_metadata()
+
+
+def _lazy_throttling_policy_summary(
+    metadata_json: dict[str, object] | None,
+    *,
+    ceilings: LazyThrottlingOperatorCeilings,
+) -> str:
+    policy = _lazy_throttling_policy(metadata_json, ceilings=ceilings)
+    if policy is None:
+        return "Mode: reject (immediate 429); no waiting configured"
+    return (
+        f"Mode: wait; max wait: {policy['max_wait_seconds']}s; "
+        f"max waiting per key: {policy['max_waiting_requests']}; "
+        "applies to Chat Completions and Responses before provider execution"
     )
 
 
