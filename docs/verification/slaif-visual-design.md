@@ -140,21 +140,23 @@ before form fill; no key-result screens are captured).
 Source coverage (structural audit of the checked-in tree, root
 `template-parity-audit.json`): all 68 admin HTML files comprise 65 full
 pages that inherit the shared `base.html`, plus the `_brand` and
-`_policy_selector` partials; every page loads the packaged stylesheet
-last, the shared head icon link, the branding macro with context, and
-the nav script. The five operator slots therefore reach every surface
-through the same head pipeline. Per-slot browser qualification below
-cites the actual measured cases; cells marked "shared head" rest on that
-template inheritance plus the measured header behavior, not on a
-per-page screenshot.
+`_policy_selector` partials. The shared base head loads the packaged
+stylesheet and then the operator `style.css` **last**, the shared icon
+link (favicon slot), and the branding macro with context that renders
+the shared header lockup (logo / logo-compact slots) on every page; the
+nav script loads in the body. The `hero` slot is the one exception to
+that inheritance: it renders in the login page body only. Cells below
+cite the actually measured cases; "shared base" cells rest on that
+template inheritance plus the measured header behavior, not on per-page
+screenshots.
 
 | Slot | Login | Dashboard | Signed-in section pages | Admin error surface |
 |------|-------|-----------|-------------------------|---------------------|
-| `style.css` | Measured (alt-theme login 1440/375: stylesheet order, computed body/heading) | Measured (alt-theme keys 1440/768/375) | Shared head (measured through the keys pages) | Shared head (default theme measured in the 404 case) |
-| `logo` | Measured (alt case: override src) | Measured (same header) | Shared head (alt 768/375 measured) | Default packaged fallback measured (404 case) |
-| `logo-compact` | Measured (alt 375: display + visibility) | Shared head | Shared head (alt 375 keys measured) | Shared head |
-| `favicon` | 187 record (DOM link + HTTP MIME/bytes/fallback) | Shared head | Shared head | Shared head |
-| `hero` | 187 record (login-only, live refresh, fallback) | Not rendered (by design) | Not rendered | Not rendered |
+| `style.css` (operator override loaded last) | Measured (alt login 1440/375: operator CSS after the packaged CSS, computed body/heading) | Shared base (not measured on this page) | Measured through the keys pages (alt 1440/768/375) | Shared base (default theme measured in the 404 case) |
+| `logo` | Measured (alt login 1440: override src) | Shared base (same header macro; not measured on this page) | Measured (alt keys 768/375; default keys 1440/768/375) | Default packaged fallback measured (404 case) |
+| `logo-compact` | Shared base (alt 375 login captured; display asserted on the alt keys page) | Shared base | Measured (alt keys 375: src, display, visibility) | Shared base |
+| `favicon` | 187 record (DOM link + HTTP MIME/bytes/fallback) | Shared base | Shared base | Shared base |
+| `hero` | 187 record (login-body slot: DOM/bytes, live refresh, fallback; shared reader) | Not rendered (login-body slot) | Not rendered | Not rendered |
 
 Viewports 375/768/1440 are covered per case above for both themes.
 Deployment parity: development and production Compose serve the same
