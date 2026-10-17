@@ -70,9 +70,9 @@ PACKAGED_LOGO_URL = "/admin/static/img/slaif-logo.svg"
 PACKAGED_CSS_URL = "/admin/static/css/admin.css"
 
 ADMIN_PASSWORD = "correct horse battery staple"
-DEFAULT_BODY_BG = "rgb(247, 248, 250)"
-CUSTOM_BODY_BG = "rgb(31, 45, 61)"
-CUSTOM_H1_COLOR = "rgb(215, 242, 110)"
+DEFAULT_BODY_BG = "rgb(251, 251, 249)"  # 188-a packaged cream --bg
+CUSTOM_BODY_BG = "rgb(16, 28, 44)"  # 188-a alternate navy theme
+CUSTOM_H1_COLOR = "rgb(244, 211, 94)"  # 188-a alternate gold heading
 LOGIN_FORM = 'form[action="/admin/login"]'
 OWNER_FORM = 'form[action="/admin/owners/new"]'
 
@@ -243,15 +243,15 @@ def test_admin_branding_disabled_defaults_and_public_assets(owned_pg_url: str) -
         page = context.new_page()
         try:
             page.goto("/admin/login")
-            assert page.locator("img.auth-logo").count() == 1
-            assert page.locator("img.auth-logo").get_attribute("src") == PACKAGED_LOGO_URL
+            assert page.locator("img.admin-header-logo").count() == 1
+            assert page.locator("img.admin-header-logo").get_attribute("src") == PACKAGED_LOGO_URL
             assert page.locator("img.brand-logo-compact").count() == 0
             assert page.locator("img.auth-hero").count() == 0
             assert page.locator('link[href="/admin/branding/style.css"]').count() == 0
             assert page.locator('link[rel="icon"]').get_attribute("href") == PACKAGED_LOGO_URL
             assert "branding-active" not in page.content()
             assert _computed(page, "body", "backgroundColor") == DEFAULT_BODY_BG
-            assert page.locator("img.auth-logo").is_visible()
+            assert page.locator("img.admin-header-logo").is_visible()
 
             # Public asset routes are total when disabled: fallback bytes,
             # correct MIME, no cookies, no protected content.
@@ -264,8 +264,8 @@ def test_admin_branding_disabled_defaults_and_public_assets(owned_pg_url: str) -
             # Mobile breakpoint: the packaged logo must stay visible.
             page.set_viewport_size({"width": 375, "height": 812})
             page.reload()
-            assert _computed(page, "img.auth-logo", "display") != "none"
-            assert page.locator("img.auth-logo").is_visible()
+            assert _computed(page, "img.admin-header-logo", "display") != "none"
+            assert page.locator("img.admin-header-logo").is_visible()
 
             # CSRF-protected login and the authenticated dashboard still work.
             _login(page, data)
@@ -303,8 +303,8 @@ def test_admin_branding_enabled_all_slots_desktop_and_mobile(
             assert _computed(page, ".auth-panel h1", "color") == CUSTOM_H1_COLOR
 
             # Wide visible / compact hidden on desktop, each at its slot.
-            assert page.locator("img.auth-logo").get_attribute("src") == "/admin/branding/logo"
-            assert page.locator("img.auth-logo").is_visible()
+            assert page.locator("img.admin-header-logo").get_attribute("src") == "/admin/branding/logo"
+            assert page.locator("img.admin-header-logo").is_visible()
             compact = "img.brand-logo-compact"
             assert page.locator(compact).get_attribute("src") == "/admin/branding/logo-compact"
             assert _computed(page, compact, "display") == "none"
@@ -349,7 +349,7 @@ def test_admin_branding_enabled_all_slots_desktop_and_mobile(
             # Mobile breakpoint: compact shown, wide hidden, CSS still applied.
             page.set_viewport_size({"width": 375, "height": 812})
             page.reload()
-            assert _computed(page, "img.auth-logo", "display") == "none"
+            assert _computed(page, "img.admin-header-logo", "display") == "none"
             assert _computed(page, compact, "display") != "none"
             assert page.locator(compact).is_visible()
             assert _computed(page, "body", "backgroundColor") == CUSTOM_BODY_BG
@@ -362,7 +362,7 @@ def test_admin_branding_enabled_all_slots_desktop_and_mobile(
             owner_email = f"owner-{uuid.uuid4().hex[:12]}@example.org"
             assert _run_in_thread(_owner_rows(owned_pg_url, owner_email)) == []
             page.goto("/admin/owners/new")
-            # This page carries branding in <head> (favicon + CSS), not a logo lockup.
+            # This page carries branding in <head> (favicon + CSS) and the shared header lockup.
             assert 'href="/admin/branding/style.css"' in page.content()
             assert 'href="/admin/branding/favicon"' in page.content()
             page.fill(f'{OWNER_FORM} input[name="name"]', "Branding")
@@ -438,7 +438,7 @@ def test_admin_branding_live_refresh_and_fallback(owned_pg_url: str, tmp_path: P
                 '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
             )
             page.reload()
-            assert page.locator("img.auth-logo").get_attribute("src") == PACKAGED_LOGO_URL
+            assert page.locator("img.admin-header-logo").get_attribute("src") == PACKAGED_LOGO_URL
             assert page.locator("img.brand-logo-compact").get_attribute("src") == (
                 "/admin/branding/logo-compact"
             )

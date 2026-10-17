@@ -1,34 +1,263 @@
+/* SLAIF API Gateway operator console — packaged visual design (188-a).
+   Visual language follows the SLAIF family contract: cream background,
+   dark teal headings, blue actions, lime highlights, pale blue selection.
+   Local Roboto / Roboto Condensed fonts (SIL OFL 1.1, notices packaged in
+   web/static/fonts/). The operator branding stylesheet (187-a) is loaded
+   after this file and may override any token or rule below. */
+
+/* --- Packaged local fonts (no external font service) --------------------- */
+@font-face {
+  font-family: Roboto;
+  src: url("/admin/static/fonts/Roboto.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Roboto Condensed";
+  src: url("/admin/static/fonts/RobotoCondensed.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* --- Design tokens --------------------------------------------------------
+   Contract tokens define the SLAIF palette. The pre-188 alias names (--bg,
+   --panel) are retained and are the names the rules below actually consume,
+   so an operator override of either the old alias or the contract token
+   takes effect (the aliases track the contract tokens at :root). */
 :root {
   color-scheme: light;
-  --bg: #f7f8fa;
-  --panel: #ffffff;
-  --text: #18202a;
-  --muted: #5e6a78;
-  --border: #d8dee6;
-  --accent: #116149;
-  --accent-dark: #0b4936;
-  --error-bg: #fff1f1;
-  --error-text: #9f1d1d;
+  --background: #fbfbf9;
+  --surface: #ffffff;
+  --text: #23312f;
+  --heading: #16302e;
+  --muted: #52625e;
+  --accent: #086c86;
+  --accent-dark: #07576b;
+  --border: #d5e0d8;
+  --lime: #a3cc32;
+  --pale-blue: #c8e1e8;
+  --footer-background: #edf4ef;
+  --danger: #a32a30;
+  --danger-dark: #801d23;
+  --error-bg: #fff2ef;
+  --error-text: #8f1b1b;
+  --font-body: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-heading: "Roboto Condensed", Roboto, system-ui, sans-serif;
+  --radius: 0.75rem;
+  --shadow: 0 5px 22px rgb(22 48 46 / 5%);
+  /* Foreground/background pair tokens: an operator theme that changes the
+     action/surface colors sets these together so controls stay readable. */
+  --button-fg: #ffffff;
+  --secondary-bg: var(--surface);
+  --secondary-fg: var(--accent);
+  --control-bg: var(--surface);
+  --button-disabled-bg: #edf1ee;
+  --button-disabled-fg: var(--muted);
+  --table-head-bg: #e8f1ed;
+  --tint-bg: #edf6dc;
+  --tint-fg: #3f5c14;
+  --pill-danger-bg: #fff2ef;
+  --pill-danger-fg: #8f1b1b;
+  --pill-warn-bg: #fdf3dd;
+  --pill-warn-fg: #74520c;
+
+  /* Pre-188 aliases (kept for operator override compatibility). */
+  --bg: var(--background);
+  --panel: var(--surface);
 }
 
 * {
   box-sizing: border-box;
 }
 
-body {
-  margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+html {
+  scrollbar-gutter: stable;
 }
 
-.page-shell {
+body {
+  margin: 0;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--heading);
+  font-family: var(--font-heading);
+  line-height: 1.2;
+  margin-top: 0;
+}
+
+h1 {
+  font-size: clamp(1.7rem, 2.4vw, 2.1rem);
+  margin-bottom: 8px;
+}
+
+h2 {
+  font-size: 1.3rem;
+  margin-bottom: 8px;
+}
+
+p {
+  margin-top: 0;
+}
+
+a {
+  color: var(--accent);
+  text-underline-offset: 0.2em;
+}
+
+a:hover {
+  color: var(--accent-dark);
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -4rem;
+  z-index: 30;
+  background: var(--heading);
+  color: var(--bg);
+  padding: 0.5rem 0.9rem;
+  border-radius: 0.4rem;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+}
+
+/* --- Shared admin header (brand + navigation) ---------------------------- */
+.admin-header {
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.admin-header-inner {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
+  gap: 0.6rem 1.25rem;
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: 0.7rem 1.25rem;
+  min-height: 4.25rem;
+}
+
+.admin-brand {
+  font-family: var(--font-heading);
+}
+
+.admin-brand .brand-logo {
+  width: 132px;
+}
+
+.admin-brand .brand-logo-compact {
+  height: 1.5rem;
+}
+
+.admin-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.admin-nav a {
+  display: inline-block;
+  padding: 0.4rem 0.65rem;
+  border-radius: 0.5rem;
+  color: var(--accent);
+  font-size: 0.92rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.admin-nav a:hover {
+  background: var(--pale-blue);
+  color: var(--heading);
+}
+
+.admin-nav a[aria-current="page"] {
+  background: var(--pale-blue);
+  color: var(--heading);
+}
+
+.nav-toggle {
+  display: none;
+  margin-left: auto;
+  min-height: 2.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--panel);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 700;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+
+.nav-toggle:hover {
+  background: var(--pale-blue);
+  color: var(--heading);
+}
+
+/* Compact menu (JavaScript present): collapses below 768px. Without
+   JavaScript the .nav-ready class is never added, so the wrapping nav
+   stays visible and usable. */
+@media (max-width: 767px) {
+  .admin-header.nav-ready .nav-toggle {
+    display: inline-block;
+  }
+
+  .admin-header.nav-ready .admin-nav {
+    display: none;
+    width: 100%;
+    margin-left: 0;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding-bottom: 0.5rem;
+  }
+
+  .admin-header.nav-ready.is-open .admin-nav {
+    display: flex;
+  }
+
+  .admin-header.nav-ready.is-open .nav-toggle {
+    background: var(--pale-blue);
+    color: var(--heading);
+  }
+
+  .admin-header.nav-ready .admin-nav a {
+    padding: 0.6rem 0.75rem;
+  }
+}
+
+/* --- Page shell ------------------------------------------------------------ */
+.page-shell {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  justify-content: safe center;
   gap: 16px;
   padding: 32px 16px;
 }
@@ -38,17 +267,17 @@ body {
   width: min(100%, 920px);
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 18px 40px rgb(24 32 42 / 8%);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
 }
 
 .auth-panel {
   max-width: 420px;
   padding: 28px;
+  margin: 4vh auto 0;
 }
 
-.auth-header,
-.dashboard-header {
+.auth-header {
   margin-bottom: 24px;
 }
 
@@ -60,19 +289,15 @@ body {
   text-decoration: none;
 }
 
+.brand-lockup:hover {
+  color: inherit;
+}
+
 .brand-logo {
   display: block;
   width: 145px;
   max-width: 100%;
   height: auto;
-}
-
-.auth-brand {
-  margin-bottom: 18px;
-}
-
-.auth-logo {
-  width: 170px;
 }
 
 .dashboard-brand {
@@ -97,6 +322,16 @@ body {
   padding: 28px 28px 0;
 }
 
+/* Long identity text (e.g. an admin email) must wrap instead of forcing
+   horizontal overflow at narrow viewports (188-a R3). */
+.dashboard-header > * {
+  min-width: 0;
+}
+
+.brand-copy {
+  overflow-wrap: anywhere;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: var(--accent);
@@ -106,27 +341,15 @@ body {
   text-transform: uppercase;
 }
 
-h1,
-h2,
-p {
-  margin-top: 0;
-}
-
-h1 {
-  margin-bottom: 8px;
-  font-size: 1.75rem;
-  line-height: 1.2;
-}
-
-h2 {
-  margin-bottom: 8px;
-  font-size: 1.15rem;
-}
-
 .muted {
   color: var(--muted);
 }
 
+.small {
+  font-size: 0.84rem;
+}
+
+/* --- Forms ------------------------------------------------------------------ */
 .form-stack {
   display: grid;
   gap: 10px;
@@ -139,38 +362,54 @@ label {
 input {
   width: 100%;
   min-height: 42px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid #6b8a7c;
+  border-radius: 0.55rem;
   padding: 9px 11px;
   font: inherit;
+  background: var(--control-bg);
+  color: var(--text);
+}
+
+input::placeholder {
+  color: var(--muted);
 }
 
 textarea {
   width: 100%;
   min-height: 96px;
   resize: vertical;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid #6b8a7c;
+  border-radius: 0.55rem;
   padding: 9px 11px;
   font: inherit;
+  background: var(--control-bg);
+  color: var(--text);
 }
 
 select {
   width: 100%;
   min-height: 42px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: 1px solid #6b8a7c;
+  border-radius: 0.55rem;
   padding: 9px 11px;
-  background: #ffffff;
+  background: var(--control-bg);
   font: inherit;
+  color: var(--text);
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
 }
 
 button {
   min-height: 42px;
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: 2rem;
   background: var(--accent);
-  color: #ffffff;
+  color: var(--button-fg);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
@@ -178,31 +417,33 @@ button {
 
 button:hover {
   background: var(--accent-dark);
+  color: var(--button-fg);
 }
 
 button.secondary {
-  background: #ffffff;
-  color: var(--accent);
+  background: var(--secondary-bg);
+  color: var(--secondary-fg);
 }
 
 button.secondary:hover {
-  background: #f0f6f3;
+  background: var(--pale-blue);
+  color: var(--heading);
 }
 
 button.danger {
-  border-color: #9f1d1d;
-  background: #9f1d1d;
+  border-color: var(--danger);
+  background: var(--danger);
 }
 
 button.danger:hover {
-  background: #7f1717;
+  background: var(--danger-dark);
 }
 
 button:disabled,
 button:disabled:hover {
   border-color: var(--border);
-  background: #eef1f4;
-  color: var(--muted);
+  background: var(--button-disabled-bg);
+  color: var(--button-disabled-fg);
   cursor: not-allowed;
 }
 
@@ -212,29 +453,35 @@ button:disabled:hover {
   align-items: center;
   justify-content: center;
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: 2rem;
   background: var(--accent);
-  color: #ffffff;
+  color: var(--button-fg);
   padding: 9px 13px;
   font-weight: 700;
   text-decoration: none;
 }
 
 .button-link.secondary {
-  background: #ffffff;
-  color: var(--accent);
+  background: var(--secondary-bg);
+  color: var(--secondary-fg);
 }
 
 .button-link:hover,
 .button-link.secondary:hover {
   background: var(--accent-dark);
-  color: #ffffff;
+  color: var(--button-fg);
+}
+
+.button-link.secondary:hover {
+  background: var(--pale-blue);
+  color: var(--heading);
 }
 
 .form-error {
   margin-bottom: 16px;
-  border: 1px solid #f1c0c0;
-  border-radius: 6px;
+  border: 1px solid #efc4bd;
+  border-left: 4px solid var(--danger);
+  border-radius: 0.4rem;
   background: var(--error-bg);
   color: var(--error-text);
   padding: 10px 12px;
@@ -243,24 +490,28 @@ button:disabled:hover {
 .admin-flash {
   width: min(100%, 1180px);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-left: 4px solid var(--border);
+  border-radius: 0.5rem;
   padding: 10px 12px;
-  background: #ffffff;
+  background: var(--panel);
   font-weight: 700;
 }
 
 .admin-flash-success {
-  border-color: #a5d6c7;
-  background: #eaf7f2;
-  color: #0b5a41;
+  border-color: #c9dcae;
+  border-left-color: var(--lime);
+  background: var(--tint-bg);
+  color: var(--tint-fg);
 }
 
 .admin-flash-error {
-  border-color: #f1c0c0;
+  border-color: #efc4bd;
+  border-left-color: var(--danger);
   background: var(--error-bg);
   color: var(--error-text);
 }
 
+/* --- Policy selector --------------------------------------------------------- */
 .policy-selector-surface {
   display: grid;
   gap: 18px;
@@ -268,8 +519,9 @@ button:disabled:hover {
 
 .policy-selector-intro {
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #f9fbfc;
+  border-left: 4px solid var(--lime);
+  border-radius: var(--radius);
+  background: var(--panel);
   padding: 14px 16px;
 }
 
@@ -277,8 +529,8 @@ button:disabled:hover {
   display: grid;
   gap: 12px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #ffffff;
+  border-radius: var(--radius);
+  background: var(--panel);
   padding: 16px;
 }
 
@@ -310,8 +562,8 @@ button:disabled:hover {
   display: grid;
   gap: 8px;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  background: #fbfcfe;
+  border-radius: var(--radius);
+  background: var(--bg);
   padding: 12px;
 }
 
@@ -341,8 +593,8 @@ button:disabled:hover {
 .policy-selector-empty {
   margin: 0;
   border: 1px dashed var(--border);
-  border-radius: 6px;
-  background: #f7f9fb;
+  border-radius: 0.55rem;
+  background: var(--bg);
   padding: 10px 12px;
 }
 
@@ -360,6 +612,7 @@ button:disabled:hover {
   font-weight: 700;
 }
 
+/* --- Dashboard / pages -------------------------------------------------------- */
 .placeholder {
   margin: 28px;
   border-top: 1px solid var(--border);
@@ -378,6 +631,7 @@ button:disabled:hover {
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 10px;
 }
@@ -395,9 +649,18 @@ button:disabled:hover {
   grid-template-columns: repeat(3, minmax(150px, 1fr)) auto;
 }
 
+/* Labeled, keyboard-focusable table scroll region: the wrapper carries
+   tabindex/aria-label in the templates; native table semantics remain. */
 .table-wrap {
+  max-width: 100%;
   overflow-x: auto;
   border-top: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+
+.table-wrap:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: -3px;
 }
 
 table {
@@ -412,22 +675,25 @@ td {
   padding: 14px 16px;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
 }
 
 th {
-  color: var(--muted);
+  background: var(--table-head-bg);
+  color: var(--heading);
   font-size: 0.78rem;
   font-weight: 800;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 td a {
   color: var(--accent);
   font-weight: 700;
-}
-
-.small {
-  font-size: 0.84rem;
 }
 
 .empty-state {
@@ -442,30 +708,30 @@ td a {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 9px;
-  background: #f7f8fa;
+  background: var(--bg);
   font-size: 0.78rem;
   font-weight: 800;
   text-transform: uppercase;
 }
 
 .status-active {
-  border-color: #a5d6c7;
-  background: #eaf7f2;
-  color: #0b5a41;
+  border-color: #bcd6a4;
+  background: var(--tint-bg);
+  color: var(--tint-fg);
 }
 
 .status-expired,
 .status-revoked {
-  border-color: #efc1c1;
-  background: #fff1f1;
-  color: #8f1b1b;
+  border-color: #efc4bd;
+  background: var(--pill-danger-bg);
+  color: var(--pill-danger-fg);
 }
 
 .status-suspended,
 .status-not_yet_valid {
-  border-color: #e8d5a8;
-  background: #fff8e8;
-  color: #74520c;
+  border-color: #f0d9a8;
+  background: var(--pill-warn-bg);
+  color: var(--pill-warn-fg);
 }
 
 .detail-grid {
@@ -478,7 +744,7 @@ td a {
 
 .detail-section {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
   padding: 18px;
 }
 
@@ -498,7 +764,9 @@ td a {
 
 .summary-card {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-top: 4px solid var(--lime);
+  border-radius: var(--radius);
+  background: var(--panel);
   padding: 14px;
 }
 
@@ -513,6 +781,7 @@ td a {
   display: block;
   margin-top: 6px;
   font-size: 1.45rem;
+  color: var(--heading);
 }
 
 .action-grid {
@@ -529,7 +798,14 @@ td a {
 
 .create-form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
+}
+
+/* Long select options must not push action panels past the card edge
+   at narrow viewports (188-a R3); content stays, boxes contain it. */
+.create-form > * {
+  min-width: 0;
 }
 
 .form-grid {
@@ -545,13 +821,14 @@ td a {
 
 .live-burn-fields-disabled input {
   cursor: not-allowed;
-  background: #f2f4f7;
+  background: #edf1ee;
   color: var(--muted);
 }
 
 .action-card {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
+  background: var(--panel);
   padding: 16px;
 }
 
@@ -561,21 +838,27 @@ td a {
 }
 
 .warning-text {
-  color: #8f1b1b;
+  color: var(--error-text);
   font-weight: 700;
 }
 
 .secret-display {
   overflow-wrap: anywhere;
-  border: 1px solid #a5d6c7;
-  border-radius: 6px;
-  background: #eaf7f2;
+  border: 1px solid #bcd6a4;
+  border-radius: 0.55rem;
+  background: var(--tint-bg);
+  color: var(--tint-fg);
   padding: 14px;
   font-size: 1rem;
 }
 
 .secret-display code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
 }
 
 .compact-list {
@@ -593,6 +876,12 @@ td a {
   width: auto;
   min-height: auto;
   margin-top: 4px;
+  accent-color: var(--accent);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
 }
 
 .related-section {
@@ -621,14 +910,82 @@ dd {
   overflow-wrap: anywhere;
 }
 
+/* --- Standalone branded error pages ------------------------------------------ */
+.error-page {
+  width: min(100%, 40rem);
+  margin: 4vh auto 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--danger);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 2.25rem 2.5rem;
+  text-align: center;
+}
+
+.error-status {
+  margin: 0 0 0.5rem;
+  color: var(--error-text);
+  font-size: 0.9rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.error-page p {
+  color: var(--muted);
+  margin: 0 0 1.5rem;
+}
+
+/* --- Footer --------------------------------------------------------------------- */
+.admin-footer {
+  background: var(--footer-background);
+  border-top: 1px solid var(--border);
+  padding: 1rem 1.25rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.admin-footer-inner {
+  max-width: 76rem;
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.admin-footer-identity {
+  color: var(--heading);
+  font-family: var(--font-heading);
+  font-weight: 700;
+}
+
+/* --- Responsive -------------------------------------------------------------------- */
+@media (max-width: 960px) {
+  /* The 5-field filter bars (keys/pricing/routes) must not keep their
+     130px column minimums below 960px: at 768px that overflows the page. */
+  .filter-bar {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+  }
+
+  .policy-selector-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .policy-selector-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 0;
+  }
+}
+
 @media (max-width: 640px) {
   .dashboard-brand {
     flex-direction: column;
     gap: 10px;
   }
 
-  .brand-logo,
-  .auth-logo {
+  .brand-logo {
     width: min(170px, 70vw);
   }
 
@@ -647,6 +1004,12 @@ dd {
     grid-template-columns: 1fr;
   }
 
+  .filter-bar,
+  .filter-bar.compact {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
   .header-actions {
     width: 100%;
     flex-direction: column;
@@ -661,25 +1024,45 @@ dd {
   dl {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 960px) {
-  .policy-selector-grid {
-    grid-template-columns: 1fr;
+  .admin-header-inner {
+    padding: 0.6rem 1rem;
   }
 
-  .policy-selector-buttons {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    min-width: 0;
+  .admin-brand .brand-logo {
+    width: 112px;
+  }
+
+  .page-shell {
+    padding: 20px 12px;
+  }
+
+  .dashboard-header,
+  .filter-bar,
+  .filter-bar.compact,
+  .detail-grid,
+  .summary-grid,
+  .action-panel,
+  .related-section {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .detail-grid,
+  .summary-grid,
+  .action-panel,
+  .related-section {
+    margin-left: 16px;
+    margin-right: 16px;
+    width: auto;
   }
 }
 
-/* Operator branding slots (187-a): the compact logo replaces the primary
-   only on narrow viewports, matching the existing 480px step; the operator
-   stylesheet (loaded after this file) may restyle both. The switch is scoped
-   to `.branding-active` lockups (which always carry a compact replacement),
-   so the packaged default keeps its primary logo at every width. The login
-   hero is presentation-only and keeps the panel layout intact. */
+/* --- Operator branding slots (187-a) -------------------------------------------------
+   The compact logo replaces the primary only on narrow viewports, and only
+   for lockups that actually carry a compact replacement (.branding-active);
+   the packaged default keeps its primary logo at every width. The operator
+   stylesheet loads after this file and wins ties. */
 .brand-logo-compact {
   display: none;
   height: 1.4rem;
@@ -687,8 +1070,7 @@ dd {
 }
 
 @media (max-width: 480px) {
-  .branding-active .brand-logo,
-  .branding-active .auth-logo {
+  .branding-active .brand-logo {
     display: none;
   }
 

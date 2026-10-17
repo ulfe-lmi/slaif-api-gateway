@@ -32,6 +32,11 @@ on record. They are dated, commit-specific evidence, not certifications.
 
 ## Records
 
+- [`2026-10-17 SLAIF visual design`](slaif-visual-design.md) —
+  Objective 188-a: packaged admin theme, shared shell, named table
+  regions, and branded error surfaces; twelve unit design tests plus
+  four native-browser cases (owned PostgreSQL, no provider
+  invocation) and inherited 187/185 browser regressions.
 - [`2026-08-17 current-main baseline`](2026-08-17-current-main-baseline.md) —
   one 24-worker full current-machine matrix, classified `RESULT=FAIL` because
   one of 2,534 tests failed. The separate post-PR-220 128-worker HPC

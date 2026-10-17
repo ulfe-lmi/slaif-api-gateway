@@ -30,7 +30,7 @@
   <section class="action-panel" aria-labelledby="fx-import-details-heading">
     <h2 id="fx-import-details-heading">Preview Details</h2>
     <p class="muted small">Format: {{ import_format }}{% if source_label %}; source label: {{ source_label }}{% endif %}. External FX APIs and providers were not called. Uploaded content was not stored.</p>
-    <div class="table-wrap">
+    <div class="table-wrap" tabindex="0" role="region" aria-label="FX import preview">
       <table>
         <thead>
           <tr>
