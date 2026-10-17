@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block title %}{{ error_status }} — SLAIF Gateway Admin{% endblock %}
+
+{% block body %}
+{#- Shared branded admin error surface (188-a). The original bare-HTML
+    responses kept their exact status code and message; this template adds
+    the shared shell presentation only. The message is Jinja-escaped. -#}
+<section class="error-page" aria-labelledby="error-heading">
+  <p class="error-status">HTTP {{ error_status }}</p>
+  <h1 id="error-heading">{{ error_status_text }}</h1>
+  <p>{{ error_message }}</p>
+  <a class="button-link secondary" href="/admin">Go to admin</a>
+</section>
+{% endblock %}

@@ -140,7 +140,7 @@ def test_login_references_overrides_with_css_after_packaged() -> None:
         assert '<link rel="icon" type="image/png" href="/admin/branding/favicon">' in html
         assert 'src="/admin/branding/logo"' in html
         assert 'src="/admin/branding/logo-compact"' in html
-        assert "class=\"brand-lockup auth-brand branding-active\"" in html
+        assert "class=\"brand-lockup admin-brand branding-active\"" in html
         assert "src=\"/admin/branding/hero\"" in html
         assert "alt=\"SLAIF Slovenian AI Factory\"" in html
 

@@ -1,4 +1,5 @@
 <!doctype html>
+{% from "_brand.html" import slaif_brand with context %}
 <html lang="en">
   <head>
     <meta charset="utf-8">
@@ -9,7 +10,48 @@
     {{ branding_css_link | safe }}
   </head>
   <body>
-    <main class="page-shell">
+    <a class="skip-link" href="#admin-main">Skip to content</a>
+    {#- Shared SLAIF identity header (188-a): the lockup honors the wide/
+        compact operator slots with packaged fallback; section navigation
+        is shown for signed-in sessions and collapses to a keyboard menu
+        on narrow screens (usable without JavaScript). -#}
+    <header class="admin-header">
+      <div class="admin-header-inner">
+        {{ slaif_brand(link=true, lockup_class="brand-lockup admin-brand", logo_class="brand-logo admin-header-logo") }}
+        {%- if admin %}
+        <button
+          class="nav-toggle"
+          type="button"
+          hidden
+          aria-expanded="false"
+          aria-controls="admin-nav"
+          data-nav-toggle
+        >Menu</button>
+        <nav id="admin-nav" class="admin-nav" aria-label="Admin sections">
+          {%- set nav_path = request.url.path %}
+          {%- for href, label, is_current in [
+            ("/admin", "Dashboard", nav_path in ("/admin", "/admin/")),
+            ("/admin/keys", "Keys", nav_path == "/admin/keys" or nav_path.startswith("/admin/keys/")),
+            ("/admin/owners", "Owners", nav_path == "/admin/owners" or nav_path.startswith("/admin/owners/")),
+            ("/admin/institutions", "Institutions", nav_path == "/admin/institutions" or nav_path.startswith("/admin/institutions/")),
+            ("/admin/cohorts", "Cohorts", nav_path == "/admin/cohorts" or nav_path.startswith("/admin/cohorts/")),
+            ("/admin/providers", "Providers", nav_path == "/admin/providers" or nav_path.startswith("/admin/providers/")),
+            ("/admin/routes", "Routes", nav_path == "/admin/routes" or nav_path.startswith("/admin/routes/")),
+            ("/admin/pricing", "Pricing", nav_path == "/admin/pricing" or nav_path.startswith("/admin/pricing/")),
+            ("/admin/templates", "Templates", nav_path == "/admin/templates" or nav_path.startswith("/admin/templates/")),
+            ("/admin/fx", "FX", nav_path == "/admin/fx" or nav_path.startswith("/admin/fx/")),
+            ("/admin/usage", "Usage", nav_path == "/admin/usage" or nav_path.startswith("/admin/usage/")),
+            ("/admin/audit", "Audit", nav_path == "/admin/audit" or nav_path.startswith("/admin/audit/")),
+            ("/admin/email-deliveries", "Email", nav_path == "/admin/email-deliveries" or nav_path.startswith("/admin/email-deliveries/")),
+            ("/admin/openai-assisted", "OpenAI", nav_path == "/admin/openai-assisted" or nav_path.startswith("/admin/openai-assisted/")),
+          ] -%}
+          <a href="{{ href }}"{% if is_current %} aria-current="page"{% endif %}>{{ label }}</a>
+          {%- endfor %}
+        </nav>
+        {%- endif %}
+      </div>
+    </header>
+    <main id="admin-main" class="page-shell">
       {% if admin_status_message %}
       <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">
         {{ admin_status_message.text }}
@@ -17,5 +59,12 @@
       {% endif %}
       {% block body %}{% endblock %}
     </main>
+    <footer class="admin-footer">
+      <div class="admin-footer-inner">
+        <span class="admin-footer-identity">SLAIF API Gateway</span>
+        <span>Operator console: keys, policy, accounting</span>
+      </div>
+    </footer>
+    <script src="/admin/static/js/navigation.js" defer></script>
   </body>
 </html>

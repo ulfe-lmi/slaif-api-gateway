@@ -488,7 +488,7 @@ _OPENAI_ASSISTED_ENDPOINT_SCOPES = {"chat_completions": "chat.completions"}
 async def login_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     context = await _get_current_admin_context(request)
     if context is not None:
@@ -497,7 +497,7 @@ async def login_form(request: Request) -> Response:
     try:
         csrf_token = create_login_csrf_token(settings)
     except CsrfError:
-        return _admin_unavailable()
+        return _admin_unavailable(request)
     response = _render_login(request, csrf_token=csrf_token)
     _set_login_csrf_cookie(response, settings, csrf_token)
     return response
@@ -512,7 +512,7 @@ async def login(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         verify_login_csrf_token(
@@ -524,7 +524,7 @@ async def login(
         try:
             replacement = create_login_csrf_token(settings)
         except CsrfError:
-            return _admin_unavailable()
+            return _admin_unavailable(request)
         response = _render_login(
             request,
             csrf_token=replacement,
@@ -562,7 +562,7 @@ async def login(
         try:
             replacement = create_login_csrf_token(settings)
         except CsrfError:
-            return _admin_unavailable()
+            return _admin_unavailable(request)
         response = _render_login(
             request,
             csrf_token=replacement,
@@ -576,7 +576,7 @@ async def login(
         try:
             replacement = create_login_csrf_token(settings)
         except CsrfError:
-            return _admin_unavailable()
+            return _admin_unavailable(request)
         message, status_code = login_failure
         response = _render_login(
             request,
@@ -606,7 +606,7 @@ async def login(
 async def dashboard(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
     if not session_token:
@@ -645,7 +645,7 @@ async def list_admin_keys(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -655,7 +655,7 @@ async def list_admin_keys(
     parsed_institution_id = _parse_optional_uuid(institution_id)
     parsed_cohort_id = _parse_optional_uuid(cohort_id)
     if parsed_institution_id is False or parsed_cohort_id is False:
-        return HTMLResponse("Invalid filter.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Invalid filter.")
 
     async with _admin_key_dashboard_service_scope(request) as service:
         rows = await service.list_keys(
@@ -695,7 +695,7 @@ async def list_admin_keys(
 async def create_admin_key_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -755,7 +755,7 @@ async def create_admin_key(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -1076,7 +1076,7 @@ async def create_admin_key(
 async def bulk_import_admin_keys_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -1102,7 +1102,7 @@ async def preview_bulk_import_admin_keys(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -1171,7 +1171,7 @@ async def execute_bulk_import_admin_keys(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -1274,12 +1274,12 @@ async def execute_bulk_import_admin_keys(
 async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_key_id = uuid.UUID(gateway_key_id)
     except ValueError:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -1290,7 +1290,7 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
         async with _admin_key_dashboard_service_scope(request) as service:
             key = await service.get_key_detail(parsed_key_id)
     except AdminKeyNotFoundError:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     policy_catalog = await _load_key_policy_catalog(request)
     return _render_key_detail(
@@ -1308,11 +1308,11 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
 async def admin_key_calibration_form(request: Request, gateway_key_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -1323,11 +1323,12 @@ async def admin_key_calibration_form(request: Request, gateway_key_id: str) -> R
         async with _admin_key_dashboard_service_scope(request) as service:
             key = await service.get_key_detail(parsed_key_id)
     except AdminKeyNotFoundError:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
     if key.key_purpose != KEY_PURPOSE_TRUSTED_CALIBRATION:
-        return HTMLResponse(
-            "Calibration summaries are available only for trusted calibration keys.",
+        return _admin_error_page(
+            request,
             status_code=400,
+            message="Calibration summaries are available only for trusted calibration keys.",
         )
 
     return _render_key_calibration_form(
@@ -1350,11 +1351,11 @@ async def preview_admin_key_calibration(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -1385,11 +1386,12 @@ async def preview_admin_key_calibration(
             async with _admin_key_dashboard_service_scope(request) as service:
                 key = await service.get_key_detail(parsed_key_id)
         except AdminKeyNotFoundError:
-            return HTMLResponse("Gateway key not found.", status_code=404)
+            return _admin_error_page(request, status_code=404, message="Gateway key not found.")
         if key.key_purpose != KEY_PURPOSE_TRUSTED_CALIBRATION:
-            return HTMLResponse(
-                "Calibration summaries are available only for trusted calibration keys.",
+            return _admin_error_page(
+                request,
                 status_code=400,
+                message="Calibration summaries are available only for trusted calibration keys.",
             )
         return _render_key_calibration_form(
             request,
@@ -1441,11 +1443,11 @@ async def create_template_from_admin_key_calibration(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -1503,7 +1505,7 @@ async def create_template_from_admin_key_calibration(
             async with _admin_key_dashboard_service_scope(request) as service:
                 key = await service.get_key_detail(parsed_key_id)
         except AdminKeyNotFoundError:
-            return HTMLResponse("Gateway key not found.", status_code=404)
+            return _admin_error_page(request, status_code=404, message="Gateway key not found.")
         return _render_key_calibration_form(
             request,
             admin=action_context.admin_user,
@@ -1525,7 +1527,7 @@ async def create_template_from_admin_key_calibration(
 async def admin_key_templates_list(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -1559,11 +1561,11 @@ async def admin_key_templates_list(request: Request) -> Response:
 async def admin_key_template_detail(request: Request, template_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_template_id = _parse_gateway_key_id(template_id)
     if parsed_template_id is None:
-        return HTMLResponse("Key template not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Key template not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -1577,7 +1579,7 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
                 parsed_template_id
             )
     if template is None:
-        return HTMLResponse("Key template not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Key template not found.")
 
     current_revision = _current_template_revision(template)
     options = await _load_key_create_form_options_or_empty(request)
@@ -1625,12 +1627,12 @@ async def create_admin_key_from_template_revision(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_template_id = _parse_gateway_key_id(template_id)
     parsed_revision_id = _parse_gateway_key_id(revision_id)
     if parsed_template_id is None or parsed_revision_id is None:
-        return HTMLResponse("Key template not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Key template not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -1649,7 +1651,7 @@ async def create_admin_key_from_template_revision(
     options = await _load_key_create_form_options_or_empty(request)
     template = await _load_template_for_render(request, parsed_template_id)
     if template is None:
-        return HTMLResponse("Key template not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Key template not found.")
     current_revision = _current_template_revision(template)
     if current_revision is None or current_revision.id != parsed_revision_id:
         return _render_template_detail_error(
@@ -1866,11 +1868,11 @@ async def update_admin_key_policy(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -1962,11 +1964,11 @@ async def update_admin_key_lazy_throttling(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2046,10 +2048,10 @@ async def update_admin_key_external_tool_policy(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
         return action_context
@@ -2079,7 +2081,7 @@ async def update_admin_key_external_tool_policy(
             try:
                 key = await dashboard_service.get_key_detail(parsed_key_id)
             except AdminKeyNotFoundError:
-                return HTMLResponse("Gateway key not found.", status_code=404)
+                return _admin_error_page(request, status_code=404, message="Gateway key not found.")
         return _render_key_detail(
             request,
             admin=action_context.admin_user,
@@ -2110,11 +2112,11 @@ async def update_admin_key_chat_streaming_live_burn(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2131,7 +2133,7 @@ async def update_admin_key_chat_streaming_live_burn(
         async with _admin_key_management_runtime_scope(request) as (keys_repository, service):
             gateway_key = await keys_repository.get_gateway_key_by_id(parsed_key_id)
             if gateway_key is None:
-                return HTMLResponse("Gateway key not found.", status_code=404)
+                return _admin_error_page(request, status_code=404, message="Gateway key not found.")
             existing_policy = chat_streaming_live_burn_policy_from_metadata(
                 gateway_key.metadata_json,
                 max_abs_cost_margin_eur=settings.CHAT_STREAMING_LIVE_BURN_MAX_ABS_COST_MARGIN_EUR,
@@ -2182,11 +2184,11 @@ async def suspend_admin_key(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2202,7 +2204,7 @@ async def suspend_admin_key(
                 )
             )
     except KeyManagementError as exc:
-        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+        return _key_management_error_response(request, exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_suspended")
 
@@ -2216,11 +2218,11 @@ async def activate_admin_key(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2236,7 +2238,7 @@ async def activate_admin_key(
                 )
             )
     except KeyManagementError as exc:
-        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+        return _key_management_error_response(request, exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_activated")
 
@@ -2251,11 +2253,11 @@ async def revoke_admin_key(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2278,7 +2280,7 @@ async def revoke_admin_key(
                 )
             )
     except KeyManagementError as exc:
-        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+        return _key_management_error_response(request, exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_revoked")
 
@@ -2294,11 +2296,11 @@ async def update_admin_key_validity(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2321,7 +2323,7 @@ async def update_admin_key_validity(
         async with _admin_key_management_runtime_scope(request) as (keys_repository, service):
             gateway_key = await keys_repository.get_gateway_key_by_id(parsed_key_id)
             if gateway_key is None:
-                return HTMLResponse("Gateway key not found.", status_code=404)
+                return _admin_error_page(request, status_code=404, message="Gateway key not found.")
             await service.update_gateway_key_validity(
                 UpdateGatewayKeyValidityInput(
                     gateway_key_id=parsed_key_id,
@@ -2332,7 +2334,7 @@ async def update_admin_key_validity(
                 )
             )
     except KeyManagementError as exc:
-        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+        return _key_management_error_response(request, exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_validity_updated")
 
@@ -2352,11 +2354,11 @@ async def update_admin_key_limits(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2392,7 +2394,7 @@ async def update_admin_key_limits(
         async with _admin_key_management_runtime_scope(request) as (keys_repository, service):
             gateway_key = await keys_repository.get_gateway_key_by_id(parsed_key_id)
             if gateway_key is None:
-                return HTMLResponse("Gateway key not found.", status_code=404)
+                return _admin_error_page(request, status_code=404, message="Gateway key not found.")
             await service.update_gateway_key_limits(
                 UpdateGatewayKeyLimitsInput(
                     gateway_key_id=parsed_key_id,
@@ -2422,7 +2424,7 @@ async def update_admin_key_limits(
                 )
             )
     except KeyManagementError as exc:
-        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+        return _key_management_error_response(request, exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_limits_updated")
 
@@ -2439,11 +2441,11 @@ async def reset_admin_key_usage(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2472,7 +2474,7 @@ async def reset_admin_key_usage(
                 )
             )
     except KeyManagementError as exc:
-        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+        return _key_management_error_response(request, exc, gateway_key_id=parsed_key_id)
 
     return _redirect_to_admin_key(parsed_key_id, message="key_usage_reset")
 
@@ -2489,11 +2491,11 @@ async def rotate_admin_key(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2543,7 +2545,7 @@ async def rotate_admin_key(
                 reason=cleaned_reason,
             )
     except KeyManagementError as exc:
-        return _key_management_error_response(exc, gateway_key_id=parsed_key_id)
+        return _key_management_error_response(request, exc, gateway_key_id=parsed_key_id)
     except (EmailError, ValueError):
         return _redirect_to_admin_key(parsed_key_id, message="gateway_key_rotation_failed")
 
@@ -2639,7 +2641,7 @@ async def list_admin_owners(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -2649,7 +2651,7 @@ async def list_admin_owners(
     parsed_institution_id = _parse_optional_uuid(institution_id)
     parsed_cohort_id = _parse_optional_uuid(cohort_id)
     if parsed_institution_id is False or parsed_cohort_id is False:
-        return HTMLResponse("Invalid filter.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Invalid filter.")
 
     async with _admin_records_dashboard_service_scope(request) as service:
         rows = await service.list_owners(
@@ -2683,7 +2685,7 @@ async def list_admin_owners(
 async def new_admin_owner_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -2716,7 +2718,7 @@ async def create_admin_owner(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2778,12 +2780,12 @@ async def create_admin_owner(
 async def admin_owner_detail(request: Request, owner_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_owner_id = uuid.UUID(owner_id)
     except ValueError:
-        return HTMLResponse("Owner not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Owner not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -2794,7 +2796,7 @@ async def admin_owner_detail(request: Request, owner_id: str) -> Response:
         async with _admin_records_dashboard_service_scope(request) as service:
             owner = await service.get_owner_detail(parsed_owner_id)
     except AdminRecordNotFoundError:
-        return HTMLResponse("Owner not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Owner not found.")
 
     return templates.TemplateResponse(
         request,
@@ -2812,12 +2814,12 @@ async def admin_owner_detail(request: Request, owner_id: str) -> Response:
 async def edit_admin_owner_form(request: Request, owner_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_owner_id = uuid.UUID(owner_id)
     except ValueError:
-        return HTMLResponse("Owner not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Owner not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -2828,7 +2830,7 @@ async def edit_admin_owner_form(request: Request, owner_id: str) -> Response:
         async with _admin_records_dashboard_service_scope(request) as service:
             owner = await service.get_owner_detail(parsed_owner_id)
     except AdminRecordNotFoundError:
-        return HTMLResponse("Owner not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Owner not found.")
 
     return _render_owner_form(
         request,
@@ -2857,12 +2859,12 @@ async def update_admin_owner(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_owner_id = uuid.UUID(owner_id)
     except ValueError:
-        return HTMLResponse("Owner not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Owner not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -2909,7 +2911,7 @@ async def update_admin_owner(
             )
     except RecordNotFoundError as exc:
         if getattr(exc, "entity", "") == "Owner":
-            return HTMLResponse("Owner not found.", status_code=404)
+            return _admin_error_page(request, status_code=404, message="Owner not found.")
         return _render_owner_form(
             request,
             template_name="owners/edit.html",
@@ -2946,7 +2948,7 @@ async def list_admin_institutions(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -2977,7 +2979,7 @@ async def list_admin_institutions(
 async def new_admin_institution_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3004,7 +3006,7 @@ async def create_admin_institution(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -3051,12 +3053,12 @@ async def create_admin_institution(
 async def admin_institution_detail(request: Request, institution_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_institution_id = uuid.UUID(institution_id)
     except ValueError:
-        return HTMLResponse("Institution not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Institution not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3067,7 +3069,7 @@ async def admin_institution_detail(request: Request, institution_id: str) -> Res
         async with _admin_records_dashboard_service_scope(request) as service:
             institution = await service.get_institution_detail(parsed_institution_id)
     except AdminRecordNotFoundError:
-        return HTMLResponse("Institution not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Institution not found.")
 
     return templates.TemplateResponse(
         request,
@@ -3085,12 +3087,12 @@ async def admin_institution_detail(request: Request, institution_id: str) -> Res
 async def edit_admin_institution_form(request: Request, institution_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_institution_id = uuid.UUID(institution_id)
     except ValueError:
-        return HTMLResponse("Institution not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Institution not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3101,7 +3103,7 @@ async def edit_admin_institution_form(request: Request, institution_id: str) -> 
         async with _admin_records_dashboard_service_scope(request) as service:
             institution = await service.get_institution_detail(parsed_institution_id)
     except AdminRecordNotFoundError:
-        return HTMLResponse("Institution not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Institution not found.")
 
     return _render_institution_form(
         request,
@@ -3125,12 +3127,12 @@ async def update_admin_institution(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_institution_id = uuid.UUID(institution_id)
     except ValueError:
-        return HTMLResponse("Institution not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Institution not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -3162,7 +3164,7 @@ async def update_admin_institution(
                 reason=parsed.reason,
             )
     except RecordNotFoundError:
-        return HTMLResponse("Institution not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Institution not found.")
     except (DuplicateRecordError, ValueError):
         return _render_institution_form(
             request,
@@ -3188,7 +3190,7 @@ async def list_admin_cohorts(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3220,7 +3222,7 @@ async def list_admin_cohorts(
 async def new_admin_cohort_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3248,7 +3250,7 @@ async def create_admin_cohort(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -3302,12 +3304,12 @@ async def create_admin_cohort(
 async def admin_cohort_detail(request: Request, cohort_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_cohort_id = uuid.UUID(cohort_id)
     except ValueError:
-        return HTMLResponse("Cohort not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Cohort not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3318,7 +3320,7 @@ async def admin_cohort_detail(request: Request, cohort_id: str) -> Response:
         async with _admin_records_dashboard_service_scope(request) as service:
             cohort = await service.get_cohort_detail(parsed_cohort_id)
     except AdminRecordNotFoundError:
-        return HTMLResponse("Cohort not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Cohort not found.")
 
     return templates.TemplateResponse(
         request,
@@ -3336,12 +3338,12 @@ async def admin_cohort_detail(request: Request, cohort_id: str) -> Response:
 async def edit_admin_cohort_form(request: Request, cohort_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_cohort_id = uuid.UUID(cohort_id)
     except ValueError:
-        return HTMLResponse("Cohort not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Cohort not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3352,7 +3354,7 @@ async def edit_admin_cohort_form(request: Request, cohort_id: str) -> Response:
         async with _admin_records_dashboard_service_scope(request) as service:
             cohort = await service.get_cohort_detail(parsed_cohort_id)
     except AdminRecordNotFoundError:
-        return HTMLResponse("Cohort not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Cohort not found.")
 
     return _render_cohort_form(
         request,
@@ -3377,12 +3379,12 @@ async def update_admin_cohort(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_cohort_id = uuid.UUID(cohort_id)
     except ValueError:
-        return HTMLResponse("Cohort not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Cohort not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -3421,7 +3423,7 @@ async def update_admin_cohort(
                 reason=parsed.reason,
             )
     except RecordNotFoundError:
-        return HTMLResponse("Cohort not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Cohort not found.")
     except (DuplicateRecordError, ValueError, UnsupportedRecordOperationError):
         return _render_cohort_form(
             request,
@@ -3447,7 +3449,7 @@ async def list_admin_providers(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3481,7 +3483,7 @@ async def list_admin_providers(
 async def new_admin_provider_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3515,7 +3517,7 @@ async def create_admin_provider(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -3581,12 +3583,12 @@ async def create_admin_provider(
 async def edit_admin_provider_form(request: Request, provider_config_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_provider_config_id = uuid.UUID(provider_config_id)
     except ValueError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3597,7 +3599,7 @@ async def edit_admin_provider_form(request: Request, provider_config_id: str) ->
         async with _admin_catalog_dashboard_service_scope(request) as service:
             provider_row = await service.get_provider_detail(parsed_provider_config_id)
     except AdminCatalogNotFoundError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
 
     return _render_provider_config_form(
         request,
@@ -3628,12 +3630,12 @@ async def update_admin_provider(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_provider_config_id = uuid.UUID(provider_config_id)
     except ValueError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -3684,7 +3686,7 @@ async def update_admin_provider(
                 confirm_insecure_http=parsed["confirm_insecure_http"],
             )
     except RecordNotFoundError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
     except (DuplicateRecordError, ValueError):
         return _render_provider_config_form(
             request,
@@ -3726,12 +3728,12 @@ async def disable_admin_provider(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_provider_config_id = uuid.UUID(provider_config_id)
     except ValueError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -3758,7 +3760,7 @@ async def disable_admin_provider(
                 reason=cleaned_reason,
             )
     except RecordNotFoundError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
     except ValueError:
         return _redirect_to_admin_provider(
             parsed_provider_config_id, message="provider_config_failed"
@@ -3779,12 +3781,12 @@ async def _set_admin_provider_enabled(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_provider_config_id = uuid.UUID(provider_config_id)
     except ValueError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -3805,7 +3807,7 @@ async def _set_admin_provider_enabled(
                 reason=cleaned_reason,
             )
     except RecordNotFoundError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
     except ValueError:
         return _redirect_to_admin_provider(
             parsed_provider_config_id, message="provider_config_failed"
@@ -3821,12 +3823,12 @@ async def _set_admin_provider_enabled(
 async def admin_provider_detail(request: Request, provider_config_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_provider_config_id = uuid.UUID(provider_config_id)
     except ValueError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -3837,7 +3839,7 @@ async def admin_provider_detail(request: Request, provider_config_id: str) -> Re
         async with _admin_catalog_dashboard_service_scope(request) as service:
             provider_row = await service.get_provider_detail(parsed_provider_config_id)
     except AdminCatalogNotFoundError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
 
     return templates.TemplateResponse(
         request,
@@ -3856,11 +3858,11 @@ async def admin_provider_discover_form(request: Request, provider_config_id: str
     """Render the explicit, read-only generic provider discovery form."""
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
     try:
         parsed_id = uuid.UUID(provider_config_id)
     except ValueError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
         return page_context
@@ -3869,7 +3871,7 @@ async def admin_provider_discover_form(request: Request, provider_config_id: str
     async with session_factory() as session:
         provider = await ProviderConfigsRepository(session).get_provider_config_by_id(parsed_id)
     if provider is None:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
     return templates.TemplateResponse(
         request,
         "providers/discover.html",
@@ -3892,11 +3894,11 @@ async def admin_provider_discover_preview(
     """Perform exactly one bounded discovery call and render safe model IDs."""
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
     try:
         parsed_id = uuid.UUID(provider_config_id)
     except ValueError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
         return action_context
@@ -3904,7 +3906,7 @@ async def admin_provider_discover_preview(
     async with session_factory() as session:
         provider = await ProviderConfigsRepository(session).get_provider_config_by_id(parsed_id)
         if provider is None:
-            return HTMLResponse("Provider config not found.", status_code=404)
+            return _admin_error_page(request, status_code=404, message="Provider config not found.")
         if not _is_checked(confirm_discovery):
             return _render_discovery_form(
                 request,
@@ -3959,11 +3961,11 @@ async def admin_provider_discover_execute(
     """Re-probe and atomically execute the reviewed setup choices."""
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
     try:
         parsed_id = uuid.UUID(provider_config_id)
     except ValueError:
-        return HTMLResponse("Provider config not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Provider config not found.")
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
         return action_context
@@ -3971,7 +3973,7 @@ async def admin_provider_discover_execute(
     async with session_factory() as session:
         provider = await ProviderConfigsRepository(session).get_provider_config_by_id(parsed_id)
         if provider is None:
-            return HTMLResponse("Provider config not found.", status_code=404)
+            return _admin_error_page(request, status_code=404, message="Provider config not found.")
         if not _is_checked(confirm_execute):
             return _render_discovery_form(
                 request, provider=provider, admin=action_context.admin_user,
@@ -4050,7 +4052,7 @@ async def list_admin_routes(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -4100,7 +4102,7 @@ async def list_admin_routes(
 async def admin_openai_assisted_index(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -4126,7 +4128,7 @@ async def admin_openai_assisted_index(request: Request) -> Response:
 async def admin_openai_assisted_pricing_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -4156,7 +4158,7 @@ async def admin_openai_assisted_pricing_propose(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -4235,7 +4237,7 @@ async def admin_openai_assisted_pricing_propose(
 async def admin_openai_assisted_routes_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -4262,7 +4264,7 @@ async def admin_openai_assisted_routes_propose(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -4335,7 +4337,7 @@ async def admin_openai_assisted_routes_propose(
 async def admin_route_import_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -4360,7 +4362,7 @@ async def admin_route_import_preview(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -4426,7 +4428,7 @@ async def admin_route_import_execute(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -4541,7 +4543,7 @@ async def admin_route_import_execute(
 async def create_admin_route_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -4577,7 +4579,7 @@ async def create_admin_route(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -4650,12 +4652,12 @@ async def create_admin_route(
 async def edit_admin_route_form(request: Request, route_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_route_id = uuid.UUID(route_id)
     except ValueError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -4666,7 +4668,7 @@ async def edit_admin_route_form(request: Request, route_id: str) -> Response:
         async with _admin_catalog_dashboard_service_scope(request) as service:
             route = await service.get_route_detail(parsed_route_id)
     except AdminCatalogNotFoundError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
 
     return _render_route_form(
         request,
@@ -4699,12 +4701,12 @@ async def update_admin_route(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_route_id = uuid.UUID(route_id)
     except ValueError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -4761,7 +4763,7 @@ async def update_admin_route(
                 reason=parsed["reason"],
             )
     except RecordNotFoundError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
     except ValueError:
         return _render_route_form(
             request,
@@ -4804,12 +4806,12 @@ async def disable_admin_route(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_route_id = uuid.UUID(route_id)
     except ValueError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -4833,7 +4835,7 @@ async def disable_admin_route(
                 reason=cleaned_reason,
             )
     except RecordNotFoundError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
     except ValueError:
         return _redirect_to_admin_route(parsed_route_id, message="model_route_failed")
 
@@ -4850,12 +4852,12 @@ async def _set_admin_route_enabled(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_route_id = uuid.UUID(route_id)
     except ValueError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -4874,7 +4876,7 @@ async def _set_admin_route_enabled(
                 reason=cleaned_reason,
             )
     except RecordNotFoundError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
     except ValueError:
         return _redirect_to_admin_route(parsed_route_id, message="model_route_failed")
 
@@ -4894,11 +4896,11 @@ async def admin_codex_profile_artifact(
 
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
     try:
         parsed_route_id = uuid.UUID(route_id)
     except ValueError:
-        return HTMLResponse("Codex profile artifact not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
         return page_context
@@ -4906,32 +4908,32 @@ async def admin_codex_profile_artifact(
         try:
             route = await service.get_route_detail(parsed_route_id)
         except AdminCatalogNotFoundError:
-            return HTMLResponse("Codex profile artifact not found.", status_code=404)
+            return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
     if not route.codex_protocol_ready or not route.codex_profile_id:
-        return HTMLResponse("Codex profile artifact not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
     try:
         artifacts = render_codex_profile(settings.PUBLIC_BASE_URL, route.codex_profile_id)
     except ValueError:
-        return HTMLResponse("Codex profile artifact not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
     if artifact_name == "base":
         return Response(artifacts.base_config_toml, media_type="text/plain")
     if artifact_name == "profile":
         return Response(artifacts.profile_config_toml, media_type="text/plain")
     if artifact_name == "catalog" and artifacts.model_catalog_json is not None:
         return Response(artifacts.model_catalog_json, media_type="application/json")
-    return HTMLResponse("Codex profile artifact not found.", status_code=404)
+    return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
 
 
 @router.get("/routes/{route_id}", response_class=HTMLResponse)
 async def admin_route_detail(request: Request, route_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_route_id = uuid.UUID(route_id)
     except ValueError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -4942,7 +4944,7 @@ async def admin_route_detail(request: Request, route_id: str) -> Response:
         async with _admin_catalog_dashboard_service_scope(request) as service:
             route = await service.get_route_detail(parsed_route_id)
     except AdminCatalogNotFoundError:
-        return HTMLResponse("Model route not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Model route not found.")
 
     codex_profile_artifacts = None
     if route.codex_protocol_ready and route.codex_profile_id:
@@ -4985,7 +4987,7 @@ async def list_admin_pricing_rules(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -5030,7 +5032,7 @@ async def list_admin_pricing_rules(
 async def admin_pricing_import_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -5055,7 +5057,7 @@ async def admin_pricing_import_preview(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5121,7 +5123,7 @@ async def admin_pricing_import_execute(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5236,7 +5238,7 @@ async def admin_pricing_import_execute(
 async def create_admin_pricing_rule_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -5276,7 +5278,7 @@ async def create_admin_pricing_rule(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5357,12 +5359,12 @@ async def create_admin_pricing_rule(
 async def edit_admin_pricing_rule_form(request: Request, pricing_rule_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
     except ValueError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -5373,7 +5375,7 @@ async def edit_admin_pricing_rule_form(request: Request, pricing_rule_id: str) -
         async with _admin_catalog_dashboard_service_scope(request) as service:
             pricing_rule = await service.get_pricing_rule_detail(parsed_pricing_rule_id)
     except AdminCatalogNotFoundError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
 
     return _render_pricing_rule_form(
         request,
@@ -5410,12 +5412,12 @@ async def update_admin_pricing_rule(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
     except ValueError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5480,7 +5482,7 @@ async def update_admin_pricing_rule(
                 reason=parsed["reason"],
             )
     except RecordNotFoundError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
     except ValueError:
         return _render_pricing_rule_form(
             request,
@@ -5523,12 +5525,12 @@ async def disable_admin_pricing_rule(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
     except ValueError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5554,7 +5556,7 @@ async def disable_admin_pricing_rule(
                 reason=cleaned_reason,
             )
     except RecordNotFoundError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
     except ValueError:
         return _redirect_to_admin_pricing_rule(
             parsed_pricing_rule_id, message="pricing_rule_failed"
@@ -5573,12 +5575,12 @@ async def _set_admin_pricing_rule_enabled(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
     except ValueError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5599,7 +5601,7 @@ async def _set_admin_pricing_rule_enabled(
                 reason=cleaned_reason,
             )
     except RecordNotFoundError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
     except ValueError:
         return _redirect_to_admin_pricing_rule(
             parsed_pricing_rule_id, message="pricing_rule_failed"
@@ -5615,12 +5617,12 @@ async def _set_admin_pricing_rule_enabled(
 async def admin_pricing_rule_detail(request: Request, pricing_rule_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_pricing_rule_id = uuid.UUID(pricing_rule_id)
     except ValueError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -5631,7 +5633,7 @@ async def admin_pricing_rule_detail(request: Request, pricing_rule_id: str) -> R
         async with _admin_catalog_dashboard_service_scope(request) as service:
             pricing_rule = await service.get_pricing_rule_detail(parsed_pricing_rule_id)
     except AdminCatalogNotFoundError:
-        return HTMLResponse("Pricing rule not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
 
     return templates.TemplateResponse(
         request,
@@ -5657,7 +5659,7 @@ async def list_admin_fx_rates(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -5698,7 +5700,7 @@ async def list_admin_fx_rates(
 async def create_admin_fx_rate_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -5718,7 +5720,7 @@ async def create_admin_fx_rate_form(request: Request) -> Response:
 async def admin_fx_import_form(request: Request) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -5743,7 +5745,7 @@ async def admin_fx_import_preview(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5811,7 +5813,7 @@ async def admin_fx_import_execute(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5938,7 +5940,7 @@ async def create_admin_fx_rate(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -5996,12 +5998,12 @@ async def create_admin_fx_rate(
 async def edit_admin_fx_rate_form(request: Request, fx_rate_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_fx_rate_id = uuid.UUID(fx_rate_id)
     except ValueError:
-        return HTMLResponse("FX rate not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="FX rate not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -6012,7 +6014,7 @@ async def edit_admin_fx_rate_form(request: Request, fx_rate_id: str) -> Response
         async with _admin_catalog_dashboard_service_scope(request) as service:
             fx_rate = await service.get_fx_rate_detail(parsed_fx_rate_id)
     except AdminCatalogNotFoundError:
-        return HTMLResponse("FX rate not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="FX rate not found.")
 
     return _render_fx_rate_form(
         request,
@@ -6039,12 +6041,12 @@ async def update_admin_fx_rate(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_fx_rate_id = uuid.UUID(fx_rate_id)
     except ValueError:
-        return HTMLResponse("FX rate not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="FX rate not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -6087,7 +6089,7 @@ async def update_admin_fx_rate(
                 reason=parsed["reason"],
             )
     except RecordNotFoundError:
-        return HTMLResponse("FX rate not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="FX rate not found.")
     except ValueError:
         return _render_fx_rate_form(
             request,
@@ -6107,12 +6109,12 @@ async def update_admin_fx_rate(
 async def admin_fx_rate_detail(request: Request, fx_rate_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_fx_rate_id = uuid.UUID(fx_rate_id)
     except ValueError:
-        return HTMLResponse("FX rate not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="FX rate not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -6123,7 +6125,7 @@ async def admin_fx_rate_detail(request: Request, fx_rate_id: str) -> Response:
         async with _admin_catalog_dashboard_service_scope(request) as service:
             fx_rate = await service.get_fx_rate_detail(parsed_fx_rate_id)
     except AdminCatalogNotFoundError:
-        return HTMLResponse("FX rate not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="FX rate not found.")
 
     return templates.TemplateResponse(
         request,
@@ -6157,7 +6159,7 @@ async def list_admin_usage(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -6169,7 +6171,7 @@ async def list_admin_usage(
     parsed_institution_id = _parse_optional_uuid(institution_id)
     parsed_cohort_id = _parse_optional_uuid(cohort_id)
     if False in {parsed_gateway_key_id, parsed_owner_id, parsed_institution_id, parsed_cohort_id}:
-        return HTMLResponse("Invalid filter.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Invalid filter.")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_usage(
@@ -6221,12 +6223,12 @@ async def list_admin_usage(
 async def admin_usage_detail(request: Request, usage_ledger_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_usage_ledger_id = uuid.UUID(usage_ledger_id)
     except ValueError:
-        return HTMLResponse("Usage ledger row not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Usage ledger row not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -6237,7 +6239,7 @@ async def admin_usage_detail(request: Request, usage_ledger_id: str) -> Response
         async with _admin_activity_dashboard_service_scope(request) as service:
             usage = await service.get_usage_detail(parsed_usage_ledger_id)
     except AdminActivityNotFoundError:
-        return HTMLResponse("Usage ledger row not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Usage ledger row not found.")
 
     return templates.TemplateResponse(
         request,
@@ -6272,16 +6274,16 @@ async def export_admin_usage_csv(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
         return action_context
     if not _is_checked(confirm_export):
-        return HTMLResponse("Confirm the CSV export before continuing.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Confirm the CSV export before continuing.")
     cleaned_reason = _clean_admin_reason(reason)
     if cleaned_reason is None:
-        return HTMLResponse("Enter an audit reason before exporting usage rows.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Enter an audit reason before exporting usage rows.")
 
     try:
         parsed_gateway_key_id = _parse_optional_admin_uuid(
@@ -6307,7 +6309,7 @@ async def export_admin_usage_csv(
             maximum=settings.ADMIN_USAGE_EXPORT_MAX_ROWS,
         )
     except ValueError as exc:
-        return HTMLResponse(str(exc), status_code=400)
+        return _admin_error_page(request, status_code=400, message=str(exc))
 
     async with _admin_csv_export_service_scope(request) as service:
         result = await service.export_usage_csv(
@@ -6348,7 +6350,7 @@ async def list_admin_audit_logs(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -6358,7 +6360,7 @@ async def list_admin_audit_logs(
     parsed_actor_admin_id = _parse_optional_uuid(actor_admin_id)
     parsed_target_id = _parse_optional_uuid(target_id)
     if parsed_actor_admin_id is False or parsed_target_id is False:
-        return HTMLResponse("Invalid filter.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Invalid filter.")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_audit_logs(
@@ -6413,16 +6415,16 @@ async def export_admin_audit_csv(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
         return action_context
     if not _is_checked(confirm_export):
-        return HTMLResponse("Confirm the CSV export before continuing.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Confirm the CSV export before continuing.")
     cleaned_reason = _clean_admin_reason(reason)
     if cleaned_reason is None:
-        return HTMLResponse("Enter an audit reason before exporting audit rows.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Enter an audit reason before exporting audit rows.")
 
     try:
         parsed_actor_admin_id = _parse_optional_admin_uuid(
@@ -6443,7 +6445,7 @@ async def export_admin_audit_csv(
             maximum=settings.ADMIN_AUDIT_EXPORT_MAX_ROWS,
         )
     except ValueError as exc:
-        return HTMLResponse(str(exc), status_code=400)
+        return _admin_error_page(request, status_code=400, message=str(exc))
 
     async with _admin_csv_export_service_scope(request) as service:
         result = await service.export_audit_csv(
@@ -6468,12 +6470,12 @@ async def export_admin_audit_csv(
 async def admin_audit_detail(request: Request, audit_log_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_audit_log_id = uuid.UUID(audit_log_id)
     except ValueError:
-        return HTMLResponse("Audit log row not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Audit log row not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -6484,7 +6486,7 @@ async def admin_audit_detail(request: Request, audit_log_id: str) -> Response:
         async with _admin_activity_dashboard_service_scope(request) as service:
             audit_log = await service.get_audit_detail(parsed_audit_log_id)
     except AdminActivityNotFoundError:
-        return HTMLResponse("Audit log row not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Audit log row not found.")
 
     return templates.TemplateResponse(
         request,
@@ -6511,7 +6513,7 @@ async def list_admin_email_deliveries(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -6521,7 +6523,7 @@ async def list_admin_email_deliveries(
     parsed_gateway_key_id = _parse_optional_uuid(gateway_key_id)
     parsed_one_time_secret_id = _parse_optional_uuid(one_time_secret_id)
     if parsed_gateway_key_id is False or parsed_one_time_secret_id is False:
-        return HTMLResponse("Invalid filter.", status_code=400)
+        return _admin_error_page(request, status_code=400, message="Invalid filter.")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_email_deliveries(
@@ -6560,12 +6562,12 @@ async def list_admin_email_deliveries(
 async def admin_email_delivery_detail(request: Request, email_delivery_id: str) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_email_delivery_id = uuid.UUID(email_delivery_id)
     except ValueError:
-        return HTMLResponse("Email delivery row not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Email delivery row not found.")
 
     page_context = await _admin_page_context(request)
     if isinstance(page_context, Response):
@@ -6576,7 +6578,7 @@ async def admin_email_delivery_detail(request: Request, email_delivery_id: str) 
         async with _admin_activity_dashboard_service_scope(request) as service:
             delivery = await service.get_email_delivery_detail(parsed_email_delivery_id)
     except AdminActivityNotFoundError:
-        return HTMLResponse("Email delivery row not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Email delivery row not found.")
 
     return templates.TemplateResponse(
         request,
@@ -6600,12 +6602,12 @@ async def send_admin_email_delivery_now(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_email_delivery_id = uuid.UUID(email_delivery_id)
     except ValueError:
-        return HTMLResponse("Email delivery row not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Email delivery row not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -6659,12 +6661,12 @@ async def enqueue_admin_email_delivery(
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     try:
         parsed_email_delivery_id = uuid.UUID(email_delivery_id)
     except ValueError:
-        return HTMLResponse("Email delivery row not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Email delivery row not found.")
 
     action_context = await _admin_action_context(request, csrf_token=csrf_token)
     if isinstance(action_context, Response):
@@ -6715,7 +6717,7 @@ async def enqueue_admin_email_delivery(
 async def logout(request: Request, csrf_token: str = Form("")) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found()
+        return _admin_not_found(request)
 
     session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
     if not session_token:
@@ -6727,7 +6729,7 @@ async def logout(request: Request, csrf_token: str = Form("")) -> Response:
         async with _admin_service_scope(request) as service:
             context = await service.validate_admin_session(session_token=session_token, touch=False)
             if not service.verify_session_csrf_token(context.admin_session, csrf_token):
-                return HTMLResponse("Invalid CSRF token.", status_code=400)
+                return _admin_error_page(request, status_code=400, message="Invalid CSRF token.")
             await service.revoke_admin_session(
                 session_token=session_token,
                 ip_address=_client_host(request),
@@ -6782,7 +6784,7 @@ async def _admin_action_context(
         async with _admin_service_scope(request) as service:
             context = await service.validate_admin_session(session_token=session_token)
             if not service.verify_session_csrf_token(context.admin_session, csrf_token):
-                return HTMLResponse("Invalid CSRF token.", status_code=400)
+                return _admin_error_page(request, status_code=400, message="Invalid CSRF token.")
             return context
     except (AdminSessionError, RuntimeError):
         response = RedirectResponse("/admin/login", status_code=303)
@@ -7782,7 +7784,7 @@ async def _render_key_policy_error(
         async with _admin_key_dashboard_service_scope(request) as service:
             key = await service.get_key_detail(gateway_key_id)
     except AdminKeyNotFoundError:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
     return _render_key_detail(
         request,
         admin=admin,
@@ -7810,7 +7812,7 @@ async def _render_key_lazy_throttling_error(
         async with _admin_key_dashboard_service_scope(request) as service:
             key = await service.get_key_detail(gateway_key_id)
     except AdminKeyNotFoundError:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
     return _render_key_detail(
         request,
         admin=admin,
@@ -10178,10 +10180,13 @@ def _parse_optional_admin_uuid(value: str | None, *, field_name: str) -> uuid.UU
 
 
 def _key_management_error_response(
-    exc: KeyManagementError, *, gateway_key_id: uuid.UUID
+    request: Request,
+    exc: KeyManagementError,
+    *,
+    gateway_key_id: uuid.UUID,
 ) -> Response:
     if exc.status_code == 404:
-        return HTMLResponse("Gateway key not found.", status_code=404)
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
     message = exc.error_code if exc.error_code in _ADMIN_STATUS_MESSAGES else "key_action_failed"
     return _redirect_to_admin_key(gateway_key_id, message=message)
 
@@ -10494,9 +10499,34 @@ def _parse_optional_uuid(value: str | None) -> uuid.UUID | None | bool:
         return False
 
 
-def _admin_not_found() -> HTMLResponse:
-    return HTMLResponse("Not found.", status_code=404)
+def _admin_error_page(request: Request, *, status_code: int, message: str) -> Response:
+    """Shared branded admin error surface (188-a presentation only).
+
+    Replaces the pre-188 bare HTML error bodies. The original status code
+    and message are preserved exactly; the shared shell adds branding
+    presentation only. The message is Jinja-escaped, and no state, header,
+    authorization, or authentication behavior changes.
+    """
+    status_text = {
+        400: "Bad request",
+        404: "Not found",
+        503: "Service unavailable",
+    }
+    return templates.TemplateResponse(
+        request,
+        "error.html",
+        {
+            "error_status": status_code,
+            "error_status_text": status_text.get(status_code, "Error"),
+            "error_message": message,
+        },
+        status_code=status_code,
+    )
 
 
-def _admin_unavailable() -> HTMLResponse:
-    return HTMLResponse("Admin login is not available.", status_code=503)
+def _admin_not_found(request: Request) -> Response:
+    return _admin_error_page(request, status_code=404, message="Not found.")
+
+
+def _admin_unavailable(request: Request) -> Response:
+    return _admin_error_page(request, status_code=503, message="Admin login is not available.")

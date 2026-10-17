@@ -60,6 +60,9 @@ and do not override current contracts or merged code.
 - [Observability boundaries](observability.md) — metrics and SLO foundation.
 - [Operator branding](branding.md) — the optional read-only appearance
   overlay: slots, formats, refresh, fallback, and security boundaries.
+- [SLAIF visual design](visual-design.md) — the packaged admin theme:
+  palette, local typography, shared shell, named table regions, and
+  error surfaces.
 - [Support policy](support-policy.md) — the support boundary.
 - [Clean-clone qualification journey](demo-journey.md) — the disposable
   production-appliance harness wrapper.
@@ -114,6 +117,9 @@ feature is wired into every Gateway entrypoint):
   implemented/deferred/unsupported classification.
 - [Verification index](verification/README.md) — dated verification and
   identity records, newest first.
+- [SLAIF visual design verification](verification/slaif-visual-design.md)
+  — 2026-10-17 unit and native-browser evidence for the packaged admin
+  theme.
 - [Release archive](releases/README.md) — published release notes and
   verification evidence references.
 - [Beta readiness record (dated 2026-08-24)](beta-readiness.md) — historical

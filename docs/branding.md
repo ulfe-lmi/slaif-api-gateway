@@ -35,15 +35,20 @@ branding changes imagery and presentation only.
 
 ### Current logo-bearing surfaces
 
-The visible logo lockup is currently rendered on the admin **login** page
-and the **dashboard** (`/admin`). All other admin pages (keys, owners,
-institutions, cohorts, providers, routes, pricing, FX, usage, audit, email
-delivery) share the head-level styling and favicon from the same templates
-but do not yet render a logo lockup; a consistent shared header across all
-admin templates is planned as a later visual-design objective. The login
-hero slot applies to the admin login page only; when branding is disabled
-or the hero slot is invalid, the login page keeps its current packaged
-layout (no hero element is rendered).
+Since Objective 188, every admin browser template renders the shared
+header lockup: the admin **login** page and all signed-in pages
+(dashboard, keys, owners, institutions, cohorts, providers, routes,
+pricing, templates, FX, usage, audit, email delivery, and
+OpenAI-assisted) carry the same header with the brand lockup and section
+navigation. The wide/compact logo slots and the packaged fallback apply
+on those surfaces; on narrow viewports (≤ 480 px) a valid
+`logo-compact` slot replaces the wide lockup. The login hero slot
+applies to the admin login page only; when branding is disabled or the
+hero slot is invalid, the login page keeps its packaged layout (no hero
+element is rendered).
+
+See [SLAIF visual design](visual-design.md) for the packaged theme these
+surfaces render when no valid operator overlay is supplied.
 
 ## Enabling it
 

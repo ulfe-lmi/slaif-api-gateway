@@ -20,9 +20,10 @@ def test_admin_login_page_includes_local_slaif_logo() -> None:
     response = TestClient(_app()).get("/admin/login")
 
     assert response.status_code == 200
+    # 188-a: the packaged identity lives in the shared header lockup.
+    assert "admin-brand" in response.text
     assert f'src="{LOGO_SRC}"' in response.text
     assert f'alt="{LOGO_ALT}"' in response.text
-    assert "auth-logo" in response.text
 
 
 def test_admin_dashboard_page_includes_linked_local_slaif_logo(monkeypatch) -> None:
@@ -49,9 +50,10 @@ def test_admin_dashboard_page_includes_linked_local_slaif_logo(monkeypatch) -> N
     response = client.get("/admin")
 
     assert response.status_code == 200
+    # 188-a: the shared header lockup is the linked local logo surface.
     assert f'src="{LOGO_SRC}"' in response.text
     assert f'alt="{LOGO_ALT}"' in response.text
-    assert 'class="brand-lockup dashboard-brand-link" href="/admin"' in response.text
+    assert 'class="brand-lockup admin-brand" href="/admin"' in response.text
 
 
 def test_admin_static_logo_asset_is_served() -> None:
@@ -113,7 +115,7 @@ def test_login_render_enabled_uses_all_overrides() -> None:
 
     assert 'src="/admin/branding/logo"' in html
     assert 'src="/admin/branding/logo-compact"' in html
-    assert "brand-lockup auth-brand branding-active" in html
+    assert "brand-lockup admin-brand branding-active" in html
     assert '<link rel="stylesheet" href="/admin/branding/style.css">' in html
     assert '<img class="auth-hero" src="/admin/branding/hero" alt="">' in html
     assert '<link rel="icon" type="image/png" href="/admin/branding/favicon">' in html
@@ -125,7 +127,7 @@ def test_login_render_enabled_uses_all_overrides() -> None:
 def test_login_render_invalid_slot_falls_back_per_slot() -> None:
     html = _branded_client(FALLBACK).get("/admin/login").text
 
-    assert "brand-lockup auth-brand branding-active" in html
+    assert "brand-lockup admin-brand branding-active" in html
     assert f'src="{LOGO_SRC}"' in html
     assert "brand-logo-compact" in html
     assert '/admin/branding/logo' not in html

@@ -1,5 +1,4 @@
 {% extends "base.html" %}
-{% from "_brand.html" import slaif_brand with context %}
 
 {% block title %}Admin Login{% endblock %}
 
@@ -9,7 +8,6 @@
 {%- endif %}
 <section class="auth-panel" aria-labelledby="login-heading">
   <div class="auth-header">
-    {{ slaif_brand(lockup_class="brand-lockup auth-brand", logo_class="brand-logo auth-logo") }}
     <h1 id="login-heading">Admin Login</h1>
   </div>
 
