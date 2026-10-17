@@ -17,8 +17,8 @@ that replaces the corresponding default:
 | Slot | File names (one per slot) | Formats | Max size | Where it appears |
 |------|---------------------------|---------|----------|------------------|
 | `style.css` | `style.css` | CSS (strict UTF-8) | 256 KiB | Loaded AFTER the built-in admin stylesheet on every admin browser template |
-| `logo` | `logo.svg` / `logo.png` | inert image | 256 KiB | Wide-viewport lockup on the admin login and dashboard pages |
-| `logo-compact` | `logo-compact.svg` / `logo-compact.png` | inert image | 256 KiB | Same two pages on narrow viewports (≤ 480 px), replacing the wide lockup |
+| `logo` | `logo.svg` / `logo.png` | inert image | 256 KiB | Wide-viewport lockup in the shared header on all admin browser pages |
+| `logo-compact` | `logo-compact.svg` / `logo-compact.png` | inert image | 256 KiB | Shared header on all admin browser pages on narrow viewports (≤ 480 px), replacing the wide lockup |
 | `favicon` | `favicon.svg` / `favicon.png` | inert image | 256 KiB | Browser tab icon on all admin browser templates |
 | `hero` | `hero.svg` / `hero.png` | inert image | 256 KiB | Top of the admin login page only |
 

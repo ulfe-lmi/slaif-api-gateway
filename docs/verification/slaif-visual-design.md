@@ -138,9 +138,9 @@ before form fill; no key-result screens are captured).
 ## Slot × surface parity (closed in this objective)
 
 Source coverage (structural audit of the checked-in tree, root
-`template-parity-audit.json`): all 68 admin HTML files comprise 65 full
-pages that inherit the shared `base.html`, plus the `_brand` and
-`_policy_selector` partials. The shared base head loads the packaged
+`template-parity-audit.json`): the 68 admin HTML files are the 65 full
+pages that inherit the shared `base.html`, plus `base.html` itself and
+the `_brand` and `_policy_selector` partials (65 + 1 + 2 = 68). The shared base head loads the packaged
 stylesheet and then the operator `style.css` **last**, the shared icon
 link (favicon slot), and the branding macro with context that renders
 the shared header lockup (logo / logo-compact slots) on every page; the
