@@ -1050,7 +1050,7 @@ async def test_profile_migration_dry_run_apply_repeat_and_legacy_rollback(
         repeat = await _mutate_profile(
             migrated_postgres_url,
             key_id=key_id,
-            from_version="3",
+            from_version=CODEX_0162_CLIENT_MODULE_VERSION,
             from_digest=CODEX_0162_FIXTURE_SHA256,
             target="active",
             action="codex_key_profile_migrated",
@@ -1063,7 +1063,7 @@ async def test_profile_migration_dry_run_apply_repeat_and_legacy_rollback(
         rolled = await _mutate_profile(
             migrated_postgres_url,
             key_id=key_id,
-            from_version="3",
+            from_version=CODEX_0162_CLIENT_MODULE_VERSION,
             from_digest=CODEX_0162_FIXTURE_SHA256,
             target="0162-v1",
             action="codex_key_profile_migrated",
@@ -1093,7 +1093,7 @@ async def test_profile_migration_dry_run_apply_repeat_and_legacy_rollback(
         # Same revision, different digest: a profile change requires a
         # revision change, never a silent digest migration.
         (
-            "3",
+            CODEX_0162_CLIENT_MODULE_VERSION,
             "0" * 64,
             "active",
             "codex_profile_migration_revision_unchanged",
