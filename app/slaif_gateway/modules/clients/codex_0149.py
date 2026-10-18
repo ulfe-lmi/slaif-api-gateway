@@ -1,4 +1,20 @@
-"""Default-denied Codex CLI 0.149 Responses client dialect."""
+"""Default-denied Codex CLI 0.149 Responses client dialect.
+
+Version 5 adds the optional ``additional_tools`` item ``id`` field to the
+request-field vocabulary.  Upstream the field is a serde-transparent
+optional nullable identifier: serde default/skip-none omits ``None`` but
+preserves a ``Some(id)`` value, so a 0.149 client can carry a set
+identifier even though the first captured/constructed 0.149 declaration
+uses ``None``.  The gateway therefore accepts omitted, null, and bounded
+opaque identifier values instead of rejecting a present field; the
+128-byte cap, ASCII character set, and secret-shape rejections are the
+gateway's own bounded subset and do not describe upstream behavior.
+Identifier preservation is the only wire-contract change, so the module
+keeps its identity and bumps its version per the client-module versioning
+contract; the pinned session fixture digest intentionally remains valid
+and a separately pinned supplementary fixture records the ID field
+vocabulary.
+"""
 
 from __future__ import annotations
 
@@ -15,12 +31,18 @@ from slaif_gateway.modules.contracts import (
 )
 
 CODEX_0149_CLIENT_MODULE_ID = "codex-0.149-responses-v1"
-CODEX_0149_CLIENT_MODULE_VERSION = "4"
+CODEX_0149_CLIENT_MODULE_VERSION = "5"
 CODEX_0149_REASONING_DIALECT_VERSION = "4"
 CODEX_0149_CLI_VERSION = "0.149.0"
 CODEX_0149_FIXTURE_SHA256 = "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec"
 CODEX_0149_FIXTURE_RELATIVE_PATH = (
     "tests/fixtures/codex/0.149.0/responses-session-relationship-v3.json"
+)
+CODEX_0149_ADDITIONAL_TOOLS_ID_FIXTURE_SHA256 = (
+    "1a39db9dcc573dba2d0a10f33b4c333f27c774da2f72a4d09982d584238c00d1"
+)
+CODEX_0149_ADDITIONAL_TOOLS_ID_FIXTURE_RELATIVE_PATH = (
+    "tests/fixtures/codex/0.149.0/additional-tools-id-v1.json"
 )
 CODEX_0149_PROFILE_ID = "responses-session-relationship-v3"
 CODEX_0149_SOURCE_CONTRACT_TAG = "rust-v0.149.0"
@@ -240,7 +262,7 @@ CODEX_0149_POLICY_SPEC = ResponsesClientPolicySpec(
     reasoning_replay_fields=frozenset({"type", "id", "summary", "encrypted_content", "content"}),
     compaction_replay_fields=frozenset({"type", "id", "encrypted_content"}),
     reasoning_summary_fields=frozenset({"type", "text"}),
-    additional_tools_fields=frozenset({"type", "role", "tools"}),
+    additional_tools_fields=frozenset({"type", "id", "role", "tools"}),
     namespace_fields=_NAMESPACE_FIELDS,
     include_value=_CODEX_0149_INCLUDE_VALUE,
     reasoning_efforts=_CODEX_0149_REASONING_EFFORTS,

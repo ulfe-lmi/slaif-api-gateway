@@ -102,12 +102,27 @@ PostgreSQL evidence and do not call providers to reconstruct an outcome.
 
 ```text
 slaif-gateway codex inspect|profile
+slaif-gateway codex upgrade-key-module
+slaif-gateway codex rollback-key-module
 slaif-gateway secrets generate hmac|admin-session|one-time
 slaif-gateway secrets validate-env
 ```
 
 Codex commands apply only to explicitly registered qualification profiles.
 Configuration validation reports bounded names/status, never secret values.
+
+`codex upgrade-key-module <key-uuid> --target {0149-v5,0162-v1} --reason
+... [--actor-admin-id <uuid>] [--apply] [--json]` and `codex
+rollback-key-module <key-uuid> --from-target {0149-v5,0162-v1} --reason
+... [--actor-admin-id <uuid>] [--apply] [--json]` are the bounded audited
+client-module migration pair for pinned 0.149-v4 Codex keys. Only the four
+legal edges (0.149-v4 → 0149-v5, 0.149-v4 → 0162-v1, and the two reverse
+edges) are accepted; any other current module identity or unsupported
+selector fails closed with a fixed safe error. The default is a dry run;
+`--apply` writes the `client_module` compatibility metadata and one audit
+record in one atomic PostgreSQL transaction. The commands change no schema,
+no quota, no key policy, and no route or pricing data. Unexpected failures
+render a fixed generic safe error and never echo exception details.
 
 ## Catalog refresh (collect, review, verify, apply)
 
@@ -316,6 +331,8 @@ slaif-gateway catalog-refresh verify
 slaif-gateway catalog-refresh export-baseline
 slaif-gateway codex inspect
 slaif-gateway codex profile
+slaif-gateway codex upgrade-key-module
+slaif-gateway codex rollback-key-module
 slaif-gateway cohorts create
 slaif-gateway cohorts list
 slaif-gateway cohorts show

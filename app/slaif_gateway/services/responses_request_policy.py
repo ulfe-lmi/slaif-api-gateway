@@ -1264,6 +1264,20 @@ class ResponsesRequestPolicy:
                 "responses_codex_client_tools_invalid",
                 "This Codex additional_tools field is not enabled by this gateway.",
             )
+        # The optional item ID is version-owned vocabulary: only specs whose
+        # additional_tools_fields include "id" reach this branch; every other
+        # module still rejects a present ID at the unknown-field check above.
+        # A present non-null ID must satisfy the bounded opaque item-ID
+        # convention before any canonicalization; null canonicalizes to an
+        # omitted field.  The value never gains identity, replay, or audit
+        # authority and is never echoed in safe error text.
+        canonical_id: str | None = None
+        if "id" in item:
+            id_value = item.get("id")
+            if id_value is not None:
+                canonical_id = self._validate_codex_message_id(
+                    id_value, param=f"{param}.id"
+                )
         if item.get("role") != "developer":
             _raise(
                 f"{param}.role",
@@ -1464,13 +1478,13 @@ class ResponsesRequestPolicy:
                 "responses_codex_client_tools_too_large",
                 "The total Codex client tool description size exceeds the gateway limit.",
             )
-        canonical_item = {
-            "type": "additional_tools",
-            "role": "developer",
-            "tools": [
-                canonical_by_namespace[namespace_name] for namespace_name, _tools in taxonomy
-            ],
-        }
+        canonical_item: dict[str, Any] = {"type": "additional_tools"}
+        if canonical_id is not None:
+            canonical_item["id"] = canonical_id
+        canonical_item["role"] = "developer"
+        canonical_item["tools"] = [
+            canonical_by_namespace[namespace_name] for namespace_name, _tools in taxonomy
+        ]
         if (
             len(canonical_json_bytes(canonical_item))
             > self._codex_spec.max_client_tool_declaration_bytes

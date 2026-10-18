@@ -32,9 +32,12 @@ public Gateway bearer.
 The initial default client module is the immutable `openai-default` module for
 ordinary Chat Completions and Responses create traffic. Versioned Codex client
 modules are separate static entries: `codex-0.147-responses-v1` owns the
-qualified legacy profile, while `codex-0.149-responses-v1` owns only its
-bounded structural request facts and is default-denied except for the one
-reviewed `codex-0.149-responses-v1` → `local-coding-v1` pair. Pair metadata is
+qualified legacy profile; `codex-0.149-responses-v1` owns its bounded
+structural request facts (version `5` adds the optional bounded
+`additional_tools` declaration item ID); and `codex-0.162-responses-v1`
+owns its bounded 0.162.1 additional-tools profile. Both newer modules are
+default-denied except for their one reviewed `local-coding-v1` pair each.
+Pair metadata is
 finite compatibility data; it does not grant an endpoint, model, route,
 provider, capability, pricing mode, hosted tool, or key permission.
 
@@ -105,6 +108,11 @@ ID. The second-turn adjacent call/output contract remains pair-local and
 default-denied for every other client or server.
 
 Client-module profile facts are limited to the reviewed module ID, version,
-and fixture digest. Identity hints from Codex metadata are transient
+and fixture digest. One bounded operator migration path exists for pinned
+0.149-v4 keys: the `codex` CLI upgrade/rollback commands move the
+`client_module` compatibility metadata between the frozen 0.149-v4 tuple and
+either 0.149-v5 or 0.162-v1, with only those four transition edges legal,
+dry-run by default, and no schema or quota change. Identity hints from Codex
+metadata are transient
 untrusted input and are never stored, logged, audited, exported, hashed, or
 forwarded.

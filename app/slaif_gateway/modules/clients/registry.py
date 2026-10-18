@@ -14,6 +14,10 @@ from slaif_gateway.modules.clients.codex_0149 import (
     CODEX_0149_CLIENT_MODULE_ID,
     Codex0149ResponsesClientModule,
 )
+from slaif_gateway.modules.clients.codex_0162 import (
+    CODEX_0162_CLIENT_MODULE,
+    CODEX_0162_CLIENT_MODULE_ID,
+)
 from slaif_gateway.modules.clients.openai_default import OpenAIDefaultClientModule
 from slaif_gateway.modules.contracts import (
     DEFAULT_CLIENT_MODULE_ID,
@@ -24,11 +28,13 @@ from slaif_gateway.modules.contracts import (
 DEFAULT_CLIENT_MODULE = OpenAIDefaultClientModule()
 CODEX_0147_CLIENT_MODULE = Codex0147ResponsesClientModule()
 CODEX_0149_CLIENT_MODULE = Codex0149ResponsesClientModule()
+CODEX_0162_CLIENT_MODULE_INSTANCE = CODEX_0162_CLIENT_MODULE
 CLIENT_MODULE_REGISTRY: Mapping[str, ClientModule] = MappingProxyType(
     {
         DEFAULT_CLIENT_MODULE_ID: DEFAULT_CLIENT_MODULE,
         CODEX_0147_CLIENT_MODULE_ID: CODEX_0147_CLIENT_MODULE,
         CODEX_0149_CLIENT_MODULE_ID: CODEX_0149_CLIENT_MODULE,
+        CODEX_0162_CLIENT_MODULE_ID: CODEX_0162_CLIENT_MODULE_INSTANCE,
     }
 )
 

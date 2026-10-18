@@ -16,7 +16,9 @@ This document describes implemented forwarding behavior only.
 Responses client modules are selected from reviewed server-side key/profile
 metadata before provider construction. `codex-0.147-responses-v1` has one
 explicit OpenAI server pair. `codex-0.149-responses-v1` has exactly one
-explicit `local-coding-v1` pair. That pair reaches this forwarding contract
+explicit `local-coding-v1` pair. `codex-0.162-responses-v1` is registered
+the same way, default-denied except for its one explicit `local-coding-v1`
+pair. Those pairs reach this forwarding contract
 only after the independent endpoint, key, model, route, capability, pricing,
 quota, accounting, and identity gates pass. The observed adapter-managed
 `tool_search` and `web_search` candidates are never converted into hosted-tool
@@ -115,6 +117,36 @@ present progress `output` must be exactly `[]` and present progress `usage`
 must be exactly `null`; completed output/usage continue through their separate
 strict validators. The source emission fact is pinned in
 `tests/fixtures/codex/0.149.0/vllm-0.27.1-responses-progress-emission.json`.
+
+### Codex 0.162 Local initial declaration lowering
+
+On the exact `codex-0.162-responses-v1 -> local-coding-v1` pair only, the
+Gateway performs one bounded upstream-body normalization. When the validated
+canonical request carries an `input[0]` item of type `additional_tools`, its
+validated namespace declarations are lowered into the existing top-level
+`tools` array as one `{"type": "namespace"}` entry per declared namespace,
+in declared order, with namespace/tool names, types, descriptions, and
+schemas preserved exactly. The declaration item and its protocol ID are then
+removed from `input`, and all remaining input is preserved in order. A
+request without an initial declaration passes through unchanged. A
+declaration at any later input position, a repeated declaration, a mixed
+top-level `tools` array, a wrong item role, or any other malformed shape
+fails closed with a safe gateway error before any provider body is built.
+
+The request-policy gates canonicalize the declaration before body
+construction, and admission and the conservative token/byte estimation
+consume that canonical policy result, so lowering does not alter what was
+admitted or estimated; the declaration bytes remain part of the conservative
+estimate. Lowering runs during pure upstream-body construction, before the
+exact forwarded bytes are serialized and HMAC-signed, so the signature always
+covers the final bytes. The refreshed body rebuilt after a lazy quota wait
+applies the same lowering and revalidation.
+
+Privacy: the 0.162 client derives its prompt-cache key from session
+metadata, so the exact Local pair omits `prompt_cache_key` and client
+metadata for 0.162 requests exactly as it already does for 0.149. The signed
+opaque identity, service Bearer substitution, and all other pair behavior
+remain unchanged, and no other profile or server pair is affected.
 
 ## Provider Adapters
 

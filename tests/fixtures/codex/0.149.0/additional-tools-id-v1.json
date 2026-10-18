@@ -1,0 +1,83 @@
+{
+  "contract": {
+    "client_family": "codex-cli",
+    "client_version": "0.149.0",
+    "field": "input[].id on the additional_tools item",
+    "field_states": {
+      "absent": "accepted_historical_default",
+      "null": "accepted_canonicalizes_to_absent",
+      "present_valid": "accepted_preserved_in_canonical_item",
+      "present_invalid": "rejected_bounded_opaque_identifier_convention"
+    },
+    "gateway_subset": {
+      "description": "The gateway accepts an ASCII bounded nonempty opaque identifier consistent with its existing Codex message item ID convention.",
+      "max_bytes": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "rejected_classes": [
+        "bool",
+        "number",
+        "array",
+        "object",
+        "empty_string",
+        "whitespace_only",
+        "control_characters",
+        "non_ascii",
+        "oversized",
+        "url_like",
+        "secret_like"
+      ],
+      "authority": "none",
+      "persistence": "none",
+      "replay_or_audit_derivation": "none"
+    },
+    "item_fields": {
+      "id": "optional_nullable_string",
+      "role": "developer",
+      "tools": "array",
+      "type": "additional_tools"
+    }
+  },
+  "schema_version": "codex_additional_tools_id_v1",
+  "source": {
+    "commit": "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0",
+    "notes": [
+      "AdditionalTools.id is an optional nullable ResponseItemId with serde default and skip-none: None is omitted from the wire and a Some(id) value is preserved, so a 0.149 client can carry a set identifier.",
+      "ResponseItemId is a serde-transparent string without an upstream byte bound. The first captured/constructed 0.149 declaration uses None, but the upstream 0.149 models.rs test sets an at_ prefixed identifier (at_test), so absence in one capture is not a wire-level prohibition.",
+      "The 128-byte cap, ASCII character set, and secret-shape rejections are the gateway's own bounded subset consistent with its existing Codex item-ID convention; they do not describe upstream behavior.",
+      "The gateway does not treat the identifier as identity, replay, or audit authority."
+    ],
+    "paths": {
+      "input_type": "codex-rs/protocol/src/models.rs",
+      "item_id": "codex-rs/protocol/src/response_item_id.rs",
+      "request_preparation": "codex-rs/core/src/client.rs"
+    },
+    "repository": "openai/codex",
+    "tag": "rust-v0.149.0"
+  },
+  "synthetic_vectors": [
+    {
+      "expected": "id_gate_passed_namespace_taxonomy_gate_reached",
+      "id": "absent",
+      "item_type": "additional_tools",
+      "role": "developer"
+    },
+    {
+      "expected": "id_gate_passed_canonicalizes_to_absent",
+      "id": "null",
+      "item_type": "additional_tools",
+      "role": "developer"
+    },
+    {
+      "expected": "id_gate_passed_preserved_when_namespace_set_approved",
+      "id": "at_123e4567-e89b-12d3-a456-426614174000",
+      "item_type": "additional_tools",
+      "role": "developer"
+    },
+    {
+      "expected": "rejected_responses_codex_envelope_invalid_input_id",
+      "id": "at_123e4567-e89b-12d3-a456-426614174000 extra",
+      "item_type": "additional_tools",
+      "role": "developer"
+    }
+  ]
+}

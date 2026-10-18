@@ -21,7 +21,10 @@ Responses client selection is versioned and server-side: ordinary traffic
 uses `openai-default`, the qualified legacy Codex profile uses
 `codex-0.147-responses-v1`, and the structurally captured Codex 0.149 module is
 registered default-denied except for exactly one
-`codex-0.149-responses-v1 -> local-coding-v1` pair. Codex 0.149's observed
+`codex-0.149-responses-v1 -> local-coding-v1` pair. The structurally
+captured Codex 0.162 module (`codex-0.162-responses-v1`, version `1`,
+captured from CLI 0.162.1) is registered the same way with exactly one
+`codex-0.162-responses-v1 -> local-coding-v1` pair. Codex 0.149's observed
 `tool_search` and `web_search` declarations are transient adapter-managed
 candidate facts only. They never set hosted web-search admission, external-tool
 fence, pricing, or accounting state. No raw Codex identity/session/workspace
@@ -168,7 +171,24 @@ ID. If `max_output_tokens` is omitted, ordinary Responses injects the existing
 strict route numeric default instead (32,768 for the qualification profile),
 bounded by route/operator maximums and the route context window. The
 1,050,000/128,000 qualification limits and pricing multipliers are configured
-model data, not universal hardcoded facts. Streaming uses typed Responses SSE events such as
+model data, not universal hardcoded facts. The route-side requirement is
+fail-closed: a key holding all four Codex grants requires the resolved route
+to set all four Codex route flags, including
+`capabilities.responses.codex_encrypted_reasoning_replay=true`, plus a valid
+top-level route `codex_limits` object (`context_window_tokens`,
+`default_max_output_tokens`, and `max_output_tokens` with default ≤ max <
+context), or route resolution denies with
+`responses_route_capability_not_supported` or
+`responses_codex_limits_invalid` before Redis, pricing, quota, or provider
+work. Codex pricing is complete only when the resolved pricing row also
+provides `cached_input_price_per_1m`, `reasoning_price_per_1m`, and
+`pricing_metadata.codex_accounting` holding a positive integer
+`long_context_threshold_tokens`, positive decimal-string
+`long_context_input_multiplier` and `long_context_output_multiplier`, and
+exactly one of `cache_write_input_price_per_1m` (non-negative decimal
+string) or `cache_write_input_multiplier` (positive decimal string); partial
+or unknown metadata fails closed with `invalid_pricing_data` before backend
+work. Streaming uses typed Responses SSE events such as
 `response.created`, `response.output_text.delta`, `response.completed`, and
 `error`; SLAIF does not translate Responses streams into Chat Completions
 chunks.
@@ -394,6 +414,34 @@ and choice
 bytes increase the conservative admission estimate; safe estimation evidence
 contains only approved categories and aggregate bytes/tokens, never private
 values. Dropped client metadata is size-capped but is not provider-billed input.
+
+The 0.149 module version `5` additionally accepts an optional bounded `id`
+on the `additional_tools` declaration item itself. A present non-null ID
+must pass the existing bounded ASCII Codex item-ID pattern before
+canonicalization; omitted or null IDs retain the prior canonical shape, and
+unknown fields remain rejected with every existing gate unchanged.
+
+The Codex 0.162 module accepts the same gated `additional_tools` slice under
+a wider finite taxonomy: strict built-in namespaces `functions` and
+`multi_agent_v1`, dynamic namespaces matching
+`^mcp__codex_apps__[a-z][a-z0-9_.-]{0,63}$`, at most 16 namespaces, 256
+tools total, 256 tools per namespace, 20,000 bytes per tool description,
+262,144 bytes of total namespace/tool description bytes, 4,096 schema
+properties per tool, and the existing schema, depth, byte, and recursive
+authority checks. Tool names are pattern-validated
+(`^[a-z][a-z0-9_.-]{0,63}$`, function-only, unique per namespace); the
+official isolated 0.162.1 capture observed 7 `functions` tools and 5
+`multi_agent_v1` tools as a sample of a larger built-in vocabulary (the
+operator profile reports 11 functions), so no exact built-in tool list or
+count is pinned or required. On the exact
+`codex-0.162-responses-v1 -> local-coding-v1` pair only, one bounded
+normalization lowers the validated initial `additional_tools` prefix into
+the existing top-level namespace `tools` array before final serialization
+and HMAC signing, then discards the declaration item and its protocol ID
+while preserving the remaining input, as described in
+[`provider-forwarding-contract.md`](provider-forwarding-contract.md). It
+changes no tool-availability semantics, applies to no other profile or
+server pair, and a declaration at any later input position fails closed.
 
 Streaming call events and replay require a third capability,
 `codex_streaming_tool_events`, on both the key and route in addition to the two

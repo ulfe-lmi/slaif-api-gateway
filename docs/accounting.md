@@ -125,6 +125,13 @@ Core invariants:
   this ownership check completes before reservation/provider work. Each
   admitted continuation still has its own ordinary reservation and ledger row,
   and failed continuations leave zero pending state.
+- Codex `additional_tools` declaration bytes are counted in the conservative
+  admission estimate for both the 0.149 and 0.162 modules, including the
+  optional bounded declaration item ID on 0.149-v5. On the exact
+  `codex-0.162-responses-v1 -> local-coding-v1` pair, the bounded upstream
+  lowering removes the validated initial declaration prefix from the forwarded
+  provider body but changes no admission, estimation, quota reservation,
+  ledger, or cost accounting; provider final usage/cost remains authoritative.
 - Provider-encrypted Codex reasoning generation/replay requires the independent
   default-off `codex_encrypted_reasoning_replay` key and route capability.
   Encrypted and summary bytes are bounded and counted conservatively as model
