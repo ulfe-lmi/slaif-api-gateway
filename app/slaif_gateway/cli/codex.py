@@ -198,7 +198,10 @@ def upgrade_key_module(
     key_id: Annotated[uuid.UUID, typer.Argument(help="Exact gateway key UUID to upgrade")],
     target: Annotated[
         str,
-        typer.Option("--target", help="Target selector: 0149-v5 or 0162-v1"),
+        typer.Option(
+            "--target",
+            help="Target selector: 0149-v5, 0162-v1, or 0162-v2",
+        ),
     ],
     reason: Annotated[
         str,
@@ -214,10 +217,13 @@ def upgrade_key_module(
     ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Output stable safe JSON")] = False,
 ) -> None:
-    """Upgrade one pinned 0.149-v4 Codex key to an explicit finite target.
+    """Upgrade one pinned Codex key to an explicit finite target.
 
-    Default is a dry run; --apply writes the client_module compatibility
-    metadata and the audit record in one atomic transaction.
+    0149-v5 and 0162-v1 upgrade a key on the frozen 0149-v4 tuple. 0162-v2
+    upgrades a key on the exact historical 0162-v1 tuple (a 0.149-v4 key
+    reaches it only through the documented explicit two-hop sequence while
+    quiesced). Default is a dry run; --apply writes the client_module
+    compatibility metadata and the audit record in one atomic transaction.
     """
 
     if target not in UPGRADE_TARGET_CLIENT_MODULES:
@@ -229,7 +235,7 @@ def upgrade_key_module(
     try:
         payload = _run_module_mutation(
             key_id,
-            "0149-v4",
+            "0162-v1" if target == "0162-v2" else "0149-v4",
             target,
             "codex_client_module_upgraded",
             actor_admin_id,
@@ -257,7 +263,10 @@ def rollback_key_module(
     key_id: Annotated[uuid.UUID, typer.Argument(help="Exact gateway key UUID to roll back")],
     from_target: Annotated[
         str,
-        typer.Option("--from-target", help="Current target selector: 0149-v5 or 0162-v1"),
+        typer.Option(
+            "--from-target",
+            help="Current target selector: 0149-v5, 0162-v1, or 0162-v2",
+        ),
     ],
     reason: Annotated[
         str,
@@ -273,10 +282,12 @@ def rollback_key_module(
     ] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Output stable safe JSON")] = False,
 ) -> None:
-    """Roll one upgraded Codex key back to the exact frozen 0.149-v4 tuple.
+    """Roll one upgraded Codex key back to its exact frozen predecessor.
 
-    Default is a dry run; --apply writes the client_module compatibility
-    metadata and the audit record in one atomic transaction.
+    0149-v5 and 0162-v1 roll back to the exact frozen 0.149-v4 tuple;
+    0162-v2 rolls back to the exact historical 0162-v1 tuple. Default is a
+    dry run; --apply writes the client_module compatibility metadata and the
+    audit record in one atomic transaction.
     """
 
     if from_target not in UPGRADE_TARGET_CLIENT_MODULES:
@@ -289,7 +300,7 @@ def rollback_key_module(
         payload = _run_module_mutation(
             key_id,
             from_target,
-            "0149-v4",
+            "0162-v1" if from_target == "0162-v2" else "0149-v4",
             "codex_client_module_rolled_back",
             actor_admin_id,
             reason,

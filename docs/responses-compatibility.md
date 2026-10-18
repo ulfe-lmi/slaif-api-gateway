@@ -22,7 +22,7 @@ uses `openai-default`, the qualified legacy Codex profile uses
 `codex-0.147-responses-v1`, and the structurally captured Codex 0.149 module is
 registered default-denied except for exactly one
 `codex-0.149-responses-v1 -> local-coding-v1` pair. The structurally
-captured Codex 0.162 module (`codex-0.162-responses-v1`, version `1`,
+captured Codex 0.162 module (`codex-0.162-responses-v1`, version `2`,
 captured from CLI 0.162.1) is registered the same way with exactly one
 `codex-0.162-responses-v1 -> local-coding-v1` pair. Codex 0.149's observed
 `tool_search` and `web_search` declarations are transient adapter-managed
@@ -428,8 +428,15 @@ a wider finite taxonomy: strict built-in namespaces `functions` and
 tools total, 256 tools per namespace, 20,000 bytes per tool description,
 262,144 bytes of total namespace/tool description bytes, 4,096 schema
 properties per tool, and the existing schema, depth, byte, and recursive
-authority checks. Tool names are pattern-validated
-(`^[a-z][a-z0-9_.-]{0,63}$`, function-only, unique per namespace); the
+authority checks. Tool names are pattern-validated, function-only, and unique per
+namespace; from version `2` the strict built-in namespaces keep
+`^[a-z][a-z0-9_.-]{0,63}$` while dynamic `mcp__codex_apps__*` connector
+namespaces additionally accept the bounded leading-underscore form
+`^(?:[a-z][a-z0-9_.-]{0,63}|_[a-z][a-z0-9_.-]{0,62})$` (64 characters
+total), with exact names preserved to the provider and in replay and the
+shared downstream function-name intersection unchanged (hyphen permitted,
+dot not). The full operator-supplied 197-name/type artifact is still
+pending. The
 official isolated 0.162.1 capture observed 7 `functions` tools and 5
 `multi_agent_v1` tools as a sample of a larger built-in vocabulary (the
 operator profile reports 11 functions), so no exact built-in tool list or

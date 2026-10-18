@@ -29,17 +29,30 @@ from slaif_gateway.services.record_errors import RecordServiceError
 _UPGRADE_SOURCE_TARGET = "0149-v4"
 _UPGRADE_TARGET_0149_V5 = "0149-v5"
 _UPGRADE_TARGET_0162_V1 = "0162-v1"
-_UPGRADE_TARGETS = frozenset({_UPGRADE_TARGET_0149_V5, _UPGRADE_TARGET_0162_V1})
+_UPGRADE_TARGET_0162_V2 = "0162-v2"
+_UPGRADE_TARGETS = frozenset(
+    {_UPGRADE_TARGET_0149_V5, _UPGRADE_TARGET_0162_V1, _UPGRADE_TARGET_0162_V2}
+)
 
 # The exact legacy tuple of the pinned 0.149 deployment.  Its fixture digest
 # is frozen as a literal historical value (not imported from the current
 # module) so future registry changes cannot silently retarget the historical
-# selector.  It is the only upgrade source and the only rollback target.
+# selector.  It is the only legacy upgrade source and the rollback target of
+# the original four 0.149-v4 edges.
 CODEX_0149_V4_CLIENT_MODULE = MappingProxyType(
     {
         "id": "codex-0.149-responses-v1",
         "version": "4",
         "fixture_sha256": "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec",
+    }
+)
+# The exact historical 0.162-v1 tuple, frozen as literal values: it is the
+# only source for the 0162-v2 hop and the rollback target back to v1.
+CODEX_0162_V1_CLIENT_MODULE = MappingProxyType(
+    {
+        "id": "codex-0.162-responses-v1",
+        "version": "1",
+        "fixture_sha256": "724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e",
     }
 )
 UPGRADE_TARGET_CLIENT_MODULES = MappingProxyType(
@@ -51,24 +64,30 @@ UPGRADE_TARGET_CLIENT_MODULES = MappingProxyType(
                 "fixture_sha256": "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec",
             }
         ),
-        _UPGRADE_TARGET_0162_V1: MappingProxyType(
+        _UPGRADE_TARGET_0162_V1: CODEX_0162_V1_CLIENT_MODULE,
+        _UPGRADE_TARGET_0162_V2: MappingProxyType(
             {
                 "id": "codex-0.162-responses-v1",
-                "version": "1",
-                "fixture_sha256": "724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e",
+                "version": "2",
+                "fixture_sha256": "b7b257ed9338969a4482fd19434adb6b4a6d96c10037d69899298e643d303f85",
             }
         ),
     }
 )
 
-# The complete set of legal transitions.  Upgrades leave the frozen 0.149-v4
-# source; rollbacks return to it.  No cross-target transition is legal.
+# The complete set of legal transitions.  The original four 0.149-v4 edges
+# are unchanged; the 0162-v1 -> 0162-v2 hop and its reverse are the only new
+# edges.  No cross-target move (for example 0149-v4 -> 0162-v2 or
+# 0162-v2 -> 0149-v4) is legal: 0.149-v4 keys reach 0162-v2 only through an
+# explicit documented two-hop sequence while quiesced.
 _LEGAL_TRANSITIONS = frozenset(
     {
         (_UPGRADE_SOURCE_TARGET, _UPGRADE_TARGET_0149_V5),
         (_UPGRADE_SOURCE_TARGET, _UPGRADE_TARGET_0162_V1),
         (_UPGRADE_TARGET_0149_V5, _UPGRADE_SOURCE_TARGET),
         (_UPGRADE_TARGET_0162_V1, _UPGRADE_SOURCE_TARGET),
+        (_UPGRADE_TARGET_0162_V1, _UPGRADE_TARGET_0162_V2),
+        (_UPGRADE_TARGET_0162_V2, _UPGRADE_TARGET_0162_V1),
     }
 )
 
@@ -161,9 +180,10 @@ async def mutate_codex_client_module(
     """Apply or dry-run one exact-tuple client-module transition.
 
     ``expected_source`` and ``target`` are the literal target selectors from
-    ``UPGRADE_TARGET_CLIENT_MODULES`` plus ``0149-v4``.  Only the
-    0149-v4 -> (0149-v5 | 0162-v1) upgrade and the reverse rollbacks are
-    legal; any other pairing raises before the row is read.
+    ``UPGRADE_TARGET_CLIENT_MODULES`` plus ``0149-v4``.  Only the original
+    0149-v4 -> (0149-v5 | 0162-v1) upgrade and reverse rollbacks, plus the
+    0162-v1 -> 0162-v2 hop and its reverse, are legal; any other pairing
+    raises before the row is read.
     """
     _validate_reason(reason)
     source_module = (

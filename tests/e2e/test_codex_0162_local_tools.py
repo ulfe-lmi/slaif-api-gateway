@@ -58,6 +58,7 @@ from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_CLIENT_MODULE_VERSION,
     CODEX_0162_FIXTURE_SHA256,
 )
+from slaif_gateway.modules.clients.registry import get_client_module
 from slaif_gateway.modules.servers.local_coding.identity import (
     LocalCodingRequestIdentity,
     canonical_identity_bytes,
@@ -647,6 +648,314 @@ def test_codex_0149_v5_key_rejects_the_197_profile_without_accounting(
             assert local_route.call_count == 0
 
     # A rejected request creates no reservation, ledger row, or key usage.
+    assert asyncio.run(
+        _load_gateway_key_counters(database_url, created.gateway_key_id)
+    ) == (0, 0)
+    assert asyncio.run(
+        _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
+    ) == (0, 0)
+
+def _connector_declaration() -> dict[str, object]:
+    return {
+        "type": "additional_tools",
+        "id": "at_190_connector",
+        "role": "developer",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "mcp__codex_apps__chatgpt_space",
+                "tools": [_function_tool("_read_page"), _function_tool("read_page")],
+            }
+        ],
+    }
+
+
+def _connector_stream_sse() -> tuple[str, dict[str, object]]:
+    """Generic admitted 0.162 stream grammar for a declared function call.
+
+    The 0.162 profile streams output_item.added, function_call_arguments.
+    delta, output_item.done and completed; the stricter 0.149
+    function_call_arguments.done event is a different branch and is not
+    part of this profile.
+    """
+    call = {
+        "type": "function_call",
+        "id": "fc_190_provider",
+        "call_id": "call_190_provider",
+        "namespace": "mcp__codex_apps__chatgpt_space",
+        "name": "_read_page",
+        "arguments": '{"value": "synthetic"}',
+        "status": "completed",
+    }
+    completed = _completed_response()
+    completed["id"] = "resp_190_provider"
+    completed["output"] = [dict(call)]
+    added = dict(call, status="in_progress", arguments="")
+    events = [
+        {"type": "response.created", "response": {"id": completed["id"], "status": "in_progress"}},
+        {"type": "response.output_item.added", "output_index": 0, "item": dict(added)},
+        {
+            "type": "response.function_call_arguments.delta",
+            "output_index": 0,
+            "item_id": call["id"],
+            "delta": call["arguments"],
+        },
+        {"type": "response.output_item.done", "output_index": 0, "item": dict(call)},
+        {"type": "response.completed", "response": completed},
+    ]
+    for index, event in enumerate(events):
+        event["sequence_number"] = index
+    sse = "".join(
+        "event: " + event["type"] + "\ndata: " + json.dumps(event) + "\n\n" for event in events
+    )
+    return sse, call
+
+
+@pytest.mark.e2e
+def test_codex_0162_v2_connector_name_stream_and_replay(
+    monkeypatch: pytest.MonkeyPatch,
+    owned_pg_url: str,  # noqa: F811
+) -> None:
+    """Pinned 0162-v2 key: leading-underscore connector names end to end.
+
+    Real gateway (auth, v2 module resolution, policy, admission, signed
+    Local Coding) to an owned HTTP mock backend: a streaming request
+    declaring a connector namespace with _read_page/read_page, then an
+    owned replay carrying the streamed function call.  Both provider legs
+    preserve the exact namespace and names, the signature is valid over
+    the final bytes, and accounting finalizes per request.
+    """
+    module = get_client_module(CODEX_0162_CLIENT_MODULE_ID)
+    assert module.module_version == "2"
+    database_url = owned_pg_url
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    _local_coding_environment(monkeypatch)
+    local_model = "codex-0162-connector-name-test"
+    local_port = _free_port()
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            model=local_model,
+            base_url=f"http://127.0.0.1:{local_port}/v1",
+            **_local_coding_test_data_kwargs(
+                {
+                    "id": module.module_id,
+                    "version": module.module_version,
+                    "fixture_sha256": module.fixture_sha256,
+                }
+            ),
+        )
+    )
+
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    get_settings.cache_clear()
+    gateway_port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{gateway_port}/v1")
+    app = create_app(get_settings())
+    sse, call = _connector_stream_sse()
+    observed: list[list[dict[str, object]]] = []
+
+    def mock_backend(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        _verify_local_coding_signature(request)
+        assert request.headers["authorization"] == "Bearer synthetic-local-coding-service-bearer"
+        assert body["tools"][0]["name"] == "mcp__codex_apps__chatgpt_space"
+        assert [t["name"] for t in body["tools"][0]["tools"]] == [
+            "_read_page",
+            "read_page",
+        ]
+        assert "client_metadata" not in body and "prompt_cache_key" not in body
+        observed.append([dict(item) for item in body["input"]])
+        if len(observed) == 1:
+            return httpx.Response(
+                200, content=sse.encode(), headers={"content-type": "text/event-stream"}
+            )
+        # Replay leg: the streamed call is followed by its function_call_output.
+        assert observed[1][1] == {
+            "type": "function_call",
+            "id": call["id"],
+            "call_id": call["call_id"],
+            "namespace": call["namespace"],
+            "name": call["name"],
+            "arguments": call["arguments"],
+            "status": "completed",
+        }
+        assert observed[1][2]["type"] == "function_call_output"
+        assert observed[1][2]["call_id"] == call["call_id"]
+        return httpx.Response(200, json=_completed_response())
+
+    with _run_uvicorn_server(app, gateway_port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            local_route = router.post(
+                f"http://127.0.0.1:{local_port}/v1/responses"
+            ).mock(side_effect=mock_backend)
+            router.route(host="127.0.0.1").pass_through()
+            client = OpenAI()
+            streaming = client.responses.create(
+                model=local_model,
+                input=[
+                    _connector_declaration(),
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "connector stream"}],
+                    },
+                ],
+                stream=True,
+                prompt_cache_key=SESSION,
+                extra_body={"client_metadata": _metadata()},
+            )
+            events = list(streaming)
+            returned_call = next(
+                event.item
+                for event in events
+                if event.type == "response.output_item.done"
+                and getattr(event.item, "type", None) == "function_call"
+            )
+            replay = client.responses.create(
+                model=local_model,
+                input=[
+                    _connector_declaration(),
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "connector replay"}],
+                    },
+                    returned_call.model_dump(exclude_none=True),
+                    {
+                        "type": "function_call_output",
+                        "id": "fo_190_provider",
+                        "call_id": call["call_id"],
+                        "output": "synthetic output",
+                    },
+                ],
+                prompt_cache_key=SESSION,
+                extra_body={"client_metadata": _metadata()},
+            )
+
+    # The gateway's strict typed-SSE validator admitted exactly the
+    # generic 0.162 grammar, with the exact namespace and name preserved.
+    assert [event.type for event in events] == [
+        "response.created",
+        "response.output_item.added",
+        "response.function_call_arguments.delta",
+        "response.output_item.done",
+        "response.completed",
+    ]
+    assert returned_call.name == "_read_page"
+    assert returned_call.namespace == "mcp__codex_apps__chatgpt_space"
+    assert replay.id == "codex-0162-e2e-response"
+    assert len(local_route.calls) == 2
+    for request in (call.request for call in local_route.calls):
+        _verify_local_coding_signature(request)
+
+    state = asyncio.run(
+        _load_accounting_state(database_url, created.gateway_key_id, provider="local-coding")
+    )
+    assert state.gateway_key.requests_used_total == 2
+    assert state.gateway_key.tokens_used_total == 10
+    assert asyncio.run(_load_ledger_rows(database_url, created.gateway_key_id)) == [
+        (5, "finalized"),
+        (5, "finalized"),
+    ]
+    assert asyncio.run(
+        _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
+    ) == (2, 2)
+
+
+@pytest.mark.e2e
+def test_codex_0162_v2_invalid_connector_names_rejected_before_admission(
+    monkeypatch: pytest.MonkeyPatch,
+    owned_pg_url: str,  # noqa: F811
+) -> None:
+    """Zero admission: invalid connector names never reach the backend."""
+    database_url = owned_pg_url
+    run_alembic_upgrade_head(database_url)
+    _configure_runtime_environment(monkeypatch, database_url)
+    _local_coding_environment(monkeypatch)
+    local_model = "codex-0162-connector-negative-test"
+    local_port = _free_port()
+    module = get_client_module(CODEX_0162_CLIENT_MODULE_ID)
+    assert module.module_version == "2"
+    created = asyncio.run(
+        _create_responses_test_data(
+            database_url,
+            model=local_model,
+            base_url=f"http://127.0.0.1:{local_port}/v1",
+            **_local_coding_test_data_kwargs(
+                {
+                    "id": module.module_id,
+                    "version": module.module_version,
+                    "fixture_sha256": module.fixture_sha256,
+                }
+            ),
+        )
+    )
+
+    from openai import BadRequestError
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.main import create_app
+
+    get_settings.cache_clear()
+    gateway_port = _free_port()
+    monkeypatch.setenv("OPENAI_API_KEY", created.plaintext_key)
+    monkeypatch.setenv("OPENAI_BASE_URL", f"http://127.0.0.1:{gateway_port}/v1")
+    app = create_app(get_settings())
+
+    bad_declarations = [
+        # Invalid character class in a connector namespace.
+        {
+            "type": "additional_tools",
+            "id": "at_190_negative_a",
+            "role": "developer",
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "mcp__codex_apps__chatgpt_space",
+                    "tools": [_function_tool("_Read")],
+                }
+            ],
+        },
+        # Leading underscore stays rejected in a builtin namespace.
+        {
+            "type": "additional_tools",
+            "id": "at_190_negative_b",
+            "role": "developer",
+            "tools": [
+                {"type": "namespace", "name": "functions", "tools": [_function_tool("_read_page")]},
+            ],
+        },
+    ]
+    with _run_uvicorn_server(app, gateway_port):
+        with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
+            local_route = router.post(
+                f"http://127.0.0.1:{local_port}/v1/responses"
+            ).mock(return_value=httpx.Response(200, json=_completed_response()))
+            router.route(host="127.0.0.1").pass_through()
+            client = OpenAI()
+            for declaration in bad_declarations:
+                with pytest.raises(BadRequestError) as exc_info:
+                    client.responses.create(
+                        model=local_model,
+                        input=[
+                            declaration,
+                            {
+                                "type": "message",
+                                "role": "user",
+                                "content": [{"type": "input_text", "text": "negative"}],
+                            },
+                        ],
+                        extra_body={"client_metadata": _metadata()},
+                    )
+                assert exc_info.value.status_code == 400
+                assert exc_info.value.code == "responses_codex_client_tools_invalid"
+                assert exc_info.value.param == "input[0].tools"
+                assert local_route.call_count == 0
+
     assert asyncio.run(
         _load_gateway_key_counters(database_url, created.gateway_key_id)
     ) == (0, 0)

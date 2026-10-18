@@ -32,6 +32,14 @@ on record. They are dated, commit-specific evidence, not certifications.
 
 ## Records
 
+- [`2026-10-18 Codex 0.162 version-2 connector tool names`](codex-0162-connector-names.md) —
+  Objective 190-a: registered `codex-0.162-responses-v1` v2 profile
+  (namespace-scoped leading-underscore connector tool names, exact
+  preservation), frozen 0162-v1 historical selector with the
+  0162-v1 ↔ 0162-v2 audited migration hop (six legal edges), unit,
+  real-PostgreSQL migration, and real-Gateway stream/replay E2E
+  evidence; the full operator-supplied 197-name artifact remains
+  pending.
 - [`2026-10-18 Codex 0.162.1 additional-tools profile and Local-pair lowering`](codex-0162-local-tools.md) —
   Objective 189-a: registered `codex-0.162-responses-v1` v1 profile
   (finite 16/256/256/20,000/262,144/4,096 taxonomy), approved initial-prefix

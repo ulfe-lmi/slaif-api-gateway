@@ -243,3 +243,57 @@ def test_no_duplicate_additional_tools_item_with_id() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         _apply_0149(body)
     assert exc_info.value.error_code == "responses_codex_client_tools_invalid"
+
+def test_0162_v2_upgrade_identity_facts_are_frozen_and_edges_closed() -> None:
+    """Service-level identity facts for the v1 -> v2 hop (no DB).
+
+    The historical 0162-v1 selector is a frozen literal (not derived from
+    the live registry), so future registry changes cannot silently
+    retarget the historical selector; the six legal edges are exactly the
+    original four 0.149-v4 edges plus the 0162-v1 <-> 0162-v2 hop.
+    """
+    from slaif_gateway.services.codex_module_upgrade import (
+        CODEX_0149_V4_CLIENT_MODULE,
+        CODEX_0162_V1_CLIENT_MODULE,
+        UPGRADE_TARGET_CLIENT_MODULES,
+        _LEGAL_TRANSITIONS,
+    )
+
+    assert dict(CODEX_0149_V4_CLIENT_MODULE) == {
+        "id": "codex-0.149-responses-v1",
+        "version": "4",
+        "fixture_sha256": "ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec",
+    }
+    assert dict(CODEX_0162_V1_CLIENT_MODULE) == {
+        "id": "codex-0.162-responses-v1",
+        "version": "1",
+        "fixture_sha256": "724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e",
+    }
+    assert dict(UPGRADE_TARGET_CLIENT_MODULES["0162-v2"]) == {
+        "id": "codex-0.162-responses-v1",
+        "version": "2",
+        "fixture_sha256": "b7b257ed9338969a4482fd19434adb6b4a6d96c10037d69899298e643d303f85",
+    }
+    # The v1 selector is the same frozen object, not re-derived from v2.
+    assert UPGRADE_TARGET_CLIENT_MODULES["0162-v1"] is CODEX_0162_V1_CLIENT_MODULE
+
+    assert set(_LEGAL_TRANSITIONS) == {
+        ("0149-v4", "0149-v5"),
+        ("0149-v4", "0162-v1"),
+        ("0149-v5", "0149-v4"),
+        ("0162-v1", "0149-v4"),
+        ("0162-v1", "0162-v2"),
+        ("0162-v2", "0162-v1"),
+    }
+    # No cross-target edge and no self-loop is legal.
+    for source, target in (
+        ("0149-v4", "0162-v2"),
+        ("0162-v2", "0149-v4"),
+        ("0149-v5", "0162-v1"),
+        ("0162-v2", "0149-v5"),
+        ("0162-v1", "0149-v5"),
+        ("0149-v4", "0149-v4"),
+        ("0162-v1", "0162-v1"),
+        ("0162-v2", "0162-v2"),
+    ):
+        assert (source, target) not in _LEGAL_TRANSITIONS

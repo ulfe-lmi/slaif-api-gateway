@@ -41,14 +41,14 @@ from slaif_gateway.modules.contracts import (
 )
 
 CODEX_0162_CLIENT_MODULE_ID = "codex-0.162-responses-v1"
-CODEX_0162_CLIENT_MODULE_VERSION = "1"
+CODEX_0162_CLIENT_MODULE_VERSION = "2"
 CODEX_0162_CLI_VERSION = "0.162.1"
-CODEX_0162_PROFILE_ID = "additional-tools-profile-v1"
+CODEX_0162_PROFILE_ID = "additional-tools-profile-v2"
 CODEX_0162_FIXTURE_SHA256 = (
-    "724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e"
+    "b7b257ed9338969a4482fd19434adb6b4a6d96c10037d69899298e643d303f85"
 )
 CODEX_0162_FIXTURE_RELATIVE_PATH = (
-    "tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json"
+    "tests/fixtures/codex/0.162.1/additional-tools-profile-v2.json"
 )
 CODEX_0162_SOURCE_CONTRACT_TAG = "rust-v0.162.1"
 CODEX_0162_SOURCE_CONTRACT_COMMIT = "092d3acd6bec3e3a14bdc7e7a2810ab628ab759d"
@@ -69,6 +69,17 @@ CODEX_0162_BUILTIN_NAMESPACES = frozenset({"functions", "multi_agent_v1"})
 
 _CODEX_0162_MCP_NAMESPACE_PATTERN = re.compile(r"^mcp__codex_apps__[a-z][a-z0-9_.-]{0,63}$")
 _CODEX_0162_TOOL_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+# Version-2 connector rule: approved mcp__codex_apps__ connector namespaces
+# additionally accept a bounded single leading underscore preceding a
+# lowercase-letter-led name.  The character vocabulary and the 64-character
+# total name cap are unchanged; builtin namespaces keep the
+# lowercase-letter-first rule.  Empty, all-underscore, doubled-underscore,
+# uppercase/number-first after the underscore, and non-vocabulary names are
+# rejected.  Accepted names are preserved exactly; nothing is stripped,
+# renamed, or normalized.
+_CODEX_0162_CONNECTOR_TOOL_NAME_PATTERN = re.compile(
+    r"^(?:[a-z][a-z0-9_.-]{0,63}|_[a-z][a-z0-9_.-]{0,62})$"
+)
 
 # Finite 0.162 profile ceilings supporting the observed 197-tool / 11-namespace
 # operator summary.  The older modules keep their smaller limits.
@@ -132,6 +143,11 @@ def codex_0162_additional_tools_taxonomy_for(
             return None
         declared_names: set[str] = set()
         declared_tools: list[tuple[str, str]] = []
+        name_pattern = (
+            _CODEX_0162_CONNECTOR_TOOL_NAME_PATTERN
+            if is_dynamic
+            else _CODEX_0162_TOOL_NAME_PATTERN
+        )
         for tool in tools:
             if not isinstance(tool, Mapping):
                 return None
@@ -139,7 +155,7 @@ def codex_0162_additional_tools_taxonomy_for(
             tool_type = tool.get("type")
             if (
                 not isinstance(name, str)
-                or not _CODEX_0162_TOOL_NAME_PATTERN.fullmatch(name)
+                or name_pattern.fullmatch(name) is None
                 or tool_type != "function"
                 or name in declared_names
             ):
@@ -257,6 +273,14 @@ class Codex0162ResponsesClientModule(Codex0149ResponsesClientModule):
     the additional_tools input item; a non-empty top-level tools field is a
     dialect mismatch for this module and is rejected before the shared
     validator runs.
+
+    Version 2 is namespace-scoped name compatibility only: approved
+    ``mcp__codex_apps__`` connector namespaces additionally accept a bounded
+    single leading underscore preceding a lowercase-letter-led name (same
+    character vocabulary and 64-character total cap), while builtin
+    namespaces keep the lowercase-letter-first rule.  No downstream shared
+    validator was widened; accepted names pass through canonicalization,
+    provider translation, tool-call events, and replay unchanged.
     """
 
     module_id = CODEX_0162_CLIENT_MODULE_ID

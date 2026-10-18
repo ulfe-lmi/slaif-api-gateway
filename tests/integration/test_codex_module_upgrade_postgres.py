@@ -29,6 +29,7 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.services.codex_module_upgrade import (
     CODEX_0149_V4_CLIENT_MODULE,
+    CODEX_0162_V1_CLIENT_MODULE,
     UPGRADE_TARGET_CLIENT_MODULES,
     CodexModuleUpgradeError,
     mutate_codex_client_module,
@@ -199,6 +200,17 @@ async def _set_client_module(
             policy["client_module"] = client_module
             metadata["responses_policy"] = policy
             row.metadata_json = metadata
+
+
+async def _stored_client_module(
+    migrated_postgres_url: str, key_id: uuid.UUID
+) -> dict[str, str]:
+    """Exact responses_policy.client_module tuple currently stored."""
+    async with _committed_session(migrated_postgres_url) as session:
+        row = (
+            await session.execute(select(GatewayKey).where(GatewayKey.id == key_id))
+        ).scalar_one()
+        return dict(row.metadata_json["responses_policy"]["client_module"])
 
 
 async def _audit_count(migrated_postgres_url: str, key_id: uuid.UUID) -> int:
@@ -675,3 +687,296 @@ async def test_missing_key_and_whitespace_reason_fail_closed(
                     apply=True,
                 )
     assert exc_info.value.error_code == "codex_module_upgrade_reason_invalid"
+
+
+# --- 0162-v1 <-> 0162-v2 hop (Objective 190-a) ---
+
+
+@pytest.mark.asyncio
+async def test_0162_v1_to_v2_dry_run_apply_repeat_and_rollback(
+    migrated_postgres_url: str,
+) -> None:
+    key_id, owner_id, institution_id, cohort_id, _before = await _seed_key(
+        migrated_postgres_url
+    )
+    try:
+        # Re-pin the key onto the exact historical 0162-v1 tuple first.
+        await _set_client_module(
+            migrated_postgres_url, key_id, dict(CODEX_0162_V1_CLIENT_MODULE)
+        )
+        before_v1 = await _row_digest(migrated_postgres_url, key_id)
+
+        dry = await _mutate(
+            migrated_postgres_url,
+            key_id=key_id,
+            expected_source="0162-v1",
+            target="0162-v2",
+            action="codex_client_module_upgraded",
+            apply=False,
+        )
+        assert dry.status == "dry_run"
+        assert dry.changed is False
+        # Dry run writes nothing: row and audit untouched.
+        assert await _row_digest(migrated_postgres_url, key_id) == before_v1
+        assert await _audit_count(migrated_postgres_url, key_id) == 0
+
+        applied = await _mutate(
+            migrated_postgres_url,
+            key_id=key_id,
+            expected_source="0162-v1",
+            target="0162-v2",
+            action="codex_client_module_upgraded",
+            apply=True,
+        )
+        assert applied.status == "applied"
+        assert applied.changed is True
+        assert dict(applied.source_module) == dict(CODEX_0162_V1_CLIENT_MODULE)
+        assert dict(applied.target_module) == dict(
+            UPGRADE_TARGET_CLIENT_MODULES["0162-v2"]
+        )
+        # Whole-row digest unchanged: key material, restrictions, dates,
+        # status, quotas, and counters all preserved.
+        assert await _row_digest(migrated_postgres_url, key_id) == before_v1
+        assert await _audit_count(migrated_postgres_url, key_id) == 1
+        async with _committed_session(migrated_postgres_url) as session:
+            audit = (
+                await session.execute(
+                    select(AuditLog).where(AuditLog.entity_id == key_id)
+                )
+            ).scalar_one()
+            assert audit.action == "codex_client_module_upgraded"
+            assert audit.old_values["client_module"] == dict(CODEX_0162_V1_CLIENT_MODULE)
+            assert audit.new_values["client_module"] == dict(
+                UPGRADE_TARGET_CLIENT_MODULES["0162-v2"]
+            )
+        # row_digest deliberately excludes the audited JSON path; verify the
+        # actual stored tuple independently.
+        assert await _stored_client_module(migrated_postgres_url, key_id) == dict(
+            UPGRADE_TARGET_CLIENT_MODULES["0162-v2"]
+        )
+
+        repeat = await _mutate(
+            migrated_postgres_url,
+            key_id=key_id,
+            expected_source="0162-v1",
+            target="0162-v2",
+            action="codex_client_module_upgraded",
+            apply=True,
+        )
+        assert repeat.status == "already_at_target"
+        assert repeat.changed is False
+        assert await _audit_count(migrated_postgres_url, key_id) == 1
+
+        rolled = await _mutate(
+            migrated_postgres_url,
+            key_id=key_id,
+            expected_source="0162-v2",
+            target="0162-v1",
+            action="codex_client_module_rolled_back",
+            apply=True,
+        )
+        assert rolled.status == "applied"
+        assert dict(rolled.target_module) == dict(CODEX_0162_V1_CLIENT_MODULE)
+        assert await _audit_count(migrated_postgres_url, key_id) == 2
+        assert await _row_digest(migrated_postgres_url, key_id) == before_v1
+        assert await _stored_client_module(migrated_postgres_url, key_id) == dict(
+            CODEX_0162_V1_CLIENT_MODULE
+        )
+    finally:
+        await _cleanup_key(
+            migrated_postgres_url,
+            key_id=key_id,
+            owner_id=owner_id,
+            institution_id=institution_id,
+            cohort_id=cohort_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_0162_v2_cross_target_and_drift_edges_fail_closed(
+    migrated_postgres_url: str,
+) -> None:
+    key_id, owner_id, institution_id, cohort_id, _before = await _seed_key(
+        migrated_postgres_url
+    )
+    try:
+        # Direct cross-target pairings are not legal edges at all.
+        with pytest.raises(CodexModuleUpgradeError) as cross:
+            await _mutate(
+                migrated_postgres_url,
+                key_id=key_id,
+                expected_source="0149-v4",
+                target="0162-v2",
+                action="codex_client_module_upgraded",
+                apply=True,
+            )
+        assert cross.value.error_code == "codex_module_upgrade_transition_invalid"
+        with pytest.raises(CodexModuleUpgradeError) as cross_back:
+            await _mutate(
+                migrated_postgres_url,
+                key_id=key_id,
+                expected_source="0162-v2",
+                target="0149-v4",
+                action="codex_client_module_rolled_back",
+                apply=True,
+            )
+        assert cross_back.value.error_code == "codex_module_upgrade_transition_invalid"
+
+        # The 0162-v2 hop from a key NOT on 0162-v1 fails at identity.
+        with pytest.raises(CodexModuleUpgradeError) as mismatch_v4:
+            await _mutate(
+                migrated_postgres_url,
+                key_id=key_id,
+                expected_source="0162-v1",
+                target="0162-v2",
+                action="codex_client_module_upgraded",
+                apply=True,
+            )
+        assert mismatch_v4.value.error_code == "codex_module_upgrade_identity_mismatch"
+        await _set_client_module(
+            migrated_postgres_url,
+            key_id,
+            dict(UPGRADE_TARGET_CLIENT_MODULES["0149-v5"]),
+        )
+        with pytest.raises(CodexModuleUpgradeError) as mismatch_v5:
+            await _mutate(
+                migrated_postgres_url,
+                key_id=key_id,
+                expected_source="0162-v1",
+                target="0162-v2",
+                action="codex_client_module_upgraded",
+                apply=True,
+            )
+        assert mismatch_v5.value.error_code == "codex_module_upgrade_identity_mismatch"
+
+        # No mutation and no audit anywhere in this sequence.
+        assert await _audit_count(migrated_postgres_url, key_id) == 0
+    finally:
+        await _cleanup_key(
+            migrated_postgres_url,
+            key_id=key_id,
+            owner_id=owner_id,
+            institution_id=institution_id,
+            cohort_id=cohort_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_0162_v2_audit_failure_rolls_back_atomically(
+    migrated_postgres_url: str,
+) -> None:
+    class _FailingAudit:
+        async def add_audit_log(self, **_: object) -> None:
+            raise RuntimeError("audit storage failure")
+
+    key_id, owner_id, institution_id, cohort_id, _before = await _seed_key(
+        migrated_postgres_url
+    )
+    try:
+        await _set_client_module(
+            migrated_postgres_url, key_id, dict(CODEX_0162_V1_CLIENT_MODULE)
+        )
+        before_v1 = await _row_digest(migrated_postgres_url, key_id)
+        engine = create_async_engine(migrated_postgres_url, future=True)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        async with session_factory() as session:
+            with pytest.raises(RuntimeError, match="audit storage failure"):
+                async with session.begin():
+                    await mutate_codex_client_module(
+                        session=session,
+                        keys_repository=GatewayKeysRepository(session),
+                        audit_repository=_FailingAudit(),
+                        gateway_key_id=key_id,
+                        expected_source="0162-v1",
+                        target="0162-v2",
+                        action="codex_client_module_upgraded",
+                        actor_admin_id=None,
+                        reason=_REASON,
+                        apply=True,
+                    )
+        await engine.dispose()
+        assert await _row_digest(migrated_postgres_url, key_id) == before_v1
+        assert await _audit_count(migrated_postgres_url, key_id) == 0
+    finally:
+        await _cleanup_key(
+            migrated_postgres_url,
+            key_id=key_id,
+            owner_id=owner_id,
+            institution_id=institution_id,
+            cohort_id=cohort_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_duplicate_0162_v2_apply_yields_one_mutation_and_one_noop(
+    migrated_postgres_url: str,
+) -> None:
+    key_id, owner_id, institution_id, cohort_id, _before = await _seed_key(
+        migrated_postgres_url
+    )
+    try:
+        await _set_client_module(
+            migrated_postgres_url, key_id, dict(CODEX_0162_V1_CLIENT_MODULE)
+        )
+        first, second = await asyncio.gather(
+            _mutate(
+                migrated_postgres_url,
+                key_id=key_id,
+                expected_source="0162-v1",
+                target="0162-v2",
+                action="codex_client_module_upgraded",
+                apply=True,
+            ),
+            _mutate(
+                migrated_postgres_url,
+                key_id=key_id,
+                expected_source="0162-v1",
+                target="0162-v2",
+                action="codex_client_module_upgraded",
+                apply=True,
+            ),
+        )
+        statuses = sorted([first.status, second.status])
+        assert statuses == ["already_at_target", "applied"]
+        assert await _audit_count(migrated_postgres_url, key_id) == 1
+    finally:
+        await _cleanup_key(
+            migrated_postgres_url,
+            key_id=key_id,
+            owner_id=owner_id,
+            institution_id=institution_id,
+            cohort_id=cohort_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_corrupt_v1_module_digest_fails_closed(migrated_postgres_url: str) -> None:
+    key_id, owner_id, institution_id, cohort_id, _before = await _seed_key(
+        migrated_postgres_url
+    )
+    try:
+        corrupt = dict(CODEX_0162_V1_CLIENT_MODULE)
+        digest = corrupt["fixture_sha256"]
+        corrupt["fixture_sha256"] = ("0" if digest[0] != "0" else "1") + digest[1:]
+        await _set_client_module(migrated_postgres_url, key_id, corrupt)
+        with pytest.raises(CodexModuleUpgradeError) as exc_info:
+            await _mutate(
+                migrated_postgres_url,
+                key_id=key_id,
+                expected_source="0162-v1",
+                target="0162-v2",
+                action="codex_client_module_upgraded",
+                apply=True,
+            )
+        assert exc_info.value.error_code == "codex_module_upgrade_identity_mismatch"
+        # No write occurred: the stored identity is still the corrupt tuple.
+        assert await _stored_client_module(migrated_postgres_url, key_id) == corrupt
+        assert await _audit_count(migrated_postgres_url, key_id) == 0
+    finally:
+        await _cleanup_key(
+            migrated_postgres_url,
+            key_id=key_id,
+            owner_id=owner_id,
+            institution_id=institution_id,
+            cohort_id=cohort_id,
+        )

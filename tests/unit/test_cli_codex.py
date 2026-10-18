@@ -350,3 +350,146 @@ def test_module_mutation_unexpected_exception_never_echoes_details(
     assert canary not in stderr
     assert "Traceback" not in output
     assert exc_type.__name__ not in output
+
+@pytest.mark.parametrize(
+    ("command", "selector_args", "expected_source", "target", "action", "apply"),
+    [
+        (
+            "upgrade-key-module",
+            ("--target", "0162-v2"),
+            "0162-v1",
+            "0162-v2",
+            "codex_client_module_upgraded",
+            False,
+        ),
+        (
+            "upgrade-key-module",
+            ("--target", "0162-v2", "--apply"),
+            "0162-v1",
+            "0162-v2",
+            "codex_client_module_upgraded",
+            True,
+        ),
+        (
+            "upgrade-key-module",
+            ("--target", "0162-v1"),
+            "0149-v4",
+            "0162-v1",
+            "codex_client_module_upgraded",
+            False,
+        ),
+        (
+            "upgrade-key-module",
+            ("--target", "0149-v5"),
+            "0149-v4",
+            "0149-v5",
+            "codex_client_module_upgraded",
+            False,
+        ),
+        (
+            "rollback-key-module",
+            ("--from-target", "0162-v2"),
+            "0162-v2",
+            "0162-v1",
+            "codex_client_module_rolled_back",
+            False,
+        ),
+        (
+            "rollback-key-module",
+            ("--from-target", "0162-v2", "--apply"),
+            "0162-v2",
+            "0162-v1",
+            "codex_client_module_rolled_back",
+            True,
+        ),
+        (
+            "rollback-key-module",
+            ("--from-target", "0162-v1"),
+            "0162-v1",
+            "0149-v4",
+            "codex_client_module_rolled_back",
+            False,
+        ),
+        (
+            "rollback-key-module",
+            ("--from-target", "0149-v5"),
+            "0149-v5",
+            "0149-v4",
+            "codex_client_module_rolled_back",
+            False,
+        ),
+    ],
+)
+def test_module_mutation_selector_wiring_reaches_the_service(
+    monkeypatch,
+    command: str,
+    selector_args: tuple[str, ...],
+    expected_source: str,
+    target: str,
+    action: str,
+    apply: bool,
+) -> None:
+    """CLI argument wiring: exact source/target/action/apply reach the service.
+
+    The mutation runner is captured rather than executed, so this proves the
+    selector routing (0162-v2 upgrades from 0162-v1 and rolls back to
+    0162-v1; legacy selectors unchanged) without a database.
+    """
+    calls: list[dict[str, object]] = []
+
+    def _capture(
+        key_id: uuid.UUID,
+        expected_source: str,
+        target: str,
+        action: str,
+        actor_admin_id: uuid.UUID | None,
+        reason: str,
+        apply: bool,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "key_id": key_id,
+                "expected_source": expected_source,
+                "target": target,
+                "action": action,
+                "actor_admin_id": actor_admin_id,
+                "reason": reason,
+                "apply": apply,
+            }
+        )
+        module = {"id": "fixture", "version": "1", "fixture_sha256": "0" * 64}
+        return {
+            "gateway_key_id": str(key_id),
+            "status": "dry_run",
+            "action": action,
+            "changed": False,
+            "source_module": module,
+            "target_module": dict(module),
+        }
+
+    monkeypatch.setattr(codex_cli, "_run_module_mutation", _capture)
+    key_id = uuid.uuid4()
+    result = runner.invoke(
+        app,
+        [
+            "codex",
+            command,
+            str(key_id),
+            *selector_args,
+            "--reason",
+            "operator wiring check",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [
+        {
+            "key_id": key_id,
+            "expected_source": expected_source,
+            "target": target,
+            "action": action,
+            "actor_admin_id": None,
+            "reason": "operator wiring check",
+            "apply": apply,
+        }
+    ]

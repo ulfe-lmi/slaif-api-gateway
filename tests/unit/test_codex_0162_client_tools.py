@@ -24,6 +24,7 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_POLICY_SPEC
 from slaif_gateway.modules.clients.codex_0162 import (
+    codex_0162_additional_tools_taxonomy_for,
     CODEX_0162_BUILTIN_NAMESPACES,
     CODEX_0162_CLIENT_MODULE_ID,
     CODEX_0162_CLIENT_MODULE_VERSION,
@@ -253,13 +254,35 @@ def test_stale_or_mismatched_0162_metadata_is_rejected() -> None:
             }
         )
     assert wrong_digest.value.error_code == "client_module_fixture_mismatch"
+    # The complete historical 0162-v1 tuple is deliberately stale once the
+    # module moves to version 2: version OR digest mismatch both reject.
+    with pytest.raises(ModuleSelectionError) as stale_v1:
+        resolve_responses_client_module(
+            {
+                "version": 1,
+                "client_module": {
+                    "id": CODEX_0162_CLIENT_MODULE_ID,
+                    "version": "1",
+                    "fixture_sha256": CODEX_0162_V1_FIXTURE_SHA256,
+                },
+            }
+        )
+    assert stale_v1.value.error_code == "client_module_fixture_mismatch"
+
+
+# The frozen historical 0162-v1 fixture digest (literal, not imported from
+# the module): the v1 file must remain byte-for-byte immutable.
+V1_FIXTURE = Path("tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json")
+CODEX_0162_V1_FIXTURE_SHA256 = (
+    "724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e"
+)
 
 
 def test_canonical_0162_fixture_is_pinned_and_honest() -> None:
     raw = FIXTURE.read_bytes()
     assert hashlib.sha256(raw).hexdigest() == CODEX_0162_FIXTURE_SHA256
     fixture = json.loads(raw)
-    assert fixture["schema_version"] == "codex_0162_additional_tools_profile_v1"
+    assert fixture["schema_version"] == "codex_0162_additional_tools_profile_v2"
     contract = fixture["contract"]
     assert contract["client_version"] == CODEX_0162_CLI_VERSION
     assert fixture["source"]["commit"] == CODEX_0162_SOURCE_CONTRACT_COMMIT
@@ -269,6 +292,16 @@ def test_canonical_0162_fixture_is_pinned_and_honest() -> None:
     assert profile["label"].endswith("NOT a capture of actually installed plugins.")
     capture = fixture["official_isolated_capture"]
     assert "mock" in str(capture["backend"]) or "fake" in str(capture["backend"])
+    # Version-2 honesty: the real 197 names/types summary is a
+    # human-supplied dependency, not content of this fixture.
+    change = fixture["version2_change"]
+    assert "86ae51c" in change["reason"]
+    assert "_read_page" in change["reason"]
+    assert "NOT available at authoring" in change["real_197_names"]
+
+
+def test_0162_v1_fixture_remains_byte_for_byte_immutable() -> None:
+    assert hashlib.sha256(V1_FIXTURE.read_bytes()).hexdigest() == CODEX_0162_V1_FIXTURE_SHA256
 
 
 # --- exact 197 counts through the real module + policy ---
@@ -640,3 +673,119 @@ def test_schema_depth_ceiling_16_shared() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         _apply(_body(_item([_namespace("functions", [_deep_tool(8)])])))
     assert exc_info.value.error_code == "responses_codex_client_tools_schema_too_deep"
+
+
+# --- version-2 connector name compatibility (appended regression block) ---
+#
+# Two layers are tested separately and labeled:
+#   * module layer: the namespace-scoped 0.162 classifier (the v2 change);
+#   * full pipeline: registered module + shared request policy.  The shared
+#     function-name pattern (responses_support) permits hyphen but NOT dot;
+#     that preexisting intersection is unchanged by v2 and is never widened.
+
+
+def test_connector_namespace_accepts_leading_underscore_names_preserved() -> None:
+    namespace = _namespace(
+        "mcp__codex_apps__chatgpt_space",
+        [_function_tool("read_page"), _function_tool("_read_page")],
+    )
+    module, result = _apply(_body(_item([namespace])))
+    canonical = _canonical_item(module, result)
+    tools = [tool for tool in canonical["tools"][0]["tools"]]
+    assert [tool["name"] for tool in tools] == ["read_page", "_read_page"]
+    # Exact preservation: no strip/rename/normalization, no collision.
+    assert tools[1]["name"] == "_read_page"
+    assert tools[0]["name"] == "read_page"
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "__read",
+        "_Read",
+        "_1read",
+        "_",
+        "____",
+        "_" + "a" * 64,  # 65 total: over the 64-character cap
+        "a" * 65,
+        "_read page",
+        "_read\x00page",
+        "_r\u00e9ad",
+    ],
+)
+def test_connector_namespace_rejects_invalid_names(bad_name: str) -> None:
+    namespace = _namespace(
+        "mcp__codex_apps__chatgpt_space",
+        [_function_tool(bad_name)],
+    )
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(_body(_item([namespace])))
+    assert exc_info.value.error_code == "responses_codex_client_tools_invalid"
+    assert exc_info.value.param == "input[0].tools"
+
+
+@pytest.mark.parametrize(
+    ("name", "accepted"),
+    [
+        ("a" * 64, True),  # 64 total: boundary
+        ("_" + "a" * 62, True),  # 63 total
+        ("_" + "a" * 63, True),  # 64 total: underscore boundary
+        ("read-page", True),
+        ("read.page", True),  # classifier keeps its unchanged dot vocabulary
+        ("a" * 65, False),  # over the 64-character cap
+        ("_" + "a" * 64, False),  # 65 total: over the cap
+    ],
+)
+def test_connector_classifier_keeps_character_vocabulary_and_cap(
+    name: str, accepted: bool
+) -> None:
+    # Module layer only: the namespace-scoped 0.162 classifier, called
+    # directly (normalize_responses does not run the taxonomy classifier).
+    namespace = {
+        "type": "namespace",
+        "name": "mcp__codex_apps__chatgpt_space",
+        "tools": [_function_tool(name)],
+    }
+    result = codex_0162_additional_tools_taxonomy_for([namespace])
+    if accepted:
+        assert result == (("mcp__codex_apps__chatgpt_space", ((name, "function"),)),)
+    else:
+        assert result is None
+
+
+def test_full_pipeline_keeps_shared_function_name_intersection() -> None:
+    # Full pipeline (module + shared request policy): the shared
+    # function-name pattern permits hyphen but NOT dot.  That preexisting
+    # intersection is unchanged by v2; the classifier alone accepts the dot.
+    namespace = _namespace(
+        "mcp__codex_apps__chatgpt_space",
+        [_function_tool("read-page")],
+    )
+    module, result = _apply(_body(_item([namespace])))
+    canonical = _canonical_item(module, result)
+    assert canonical["tools"][0]["tools"][0]["name"] == "read-page"
+
+    dotted = _namespace(
+        "mcp__codex_apps__chatgpt_space",
+        [_function_tool("read.page")],
+    )
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(_body(_item([dotted])))
+    assert exc_info.value.error_code == "responses_tool_invalid_shape"
+
+
+@pytest.mark.parametrize("builtin", ["functions", "multi_agent_v1"])
+def test_builtin_namespaces_still_reject_leading_underscore(builtin: str) -> None:
+    namespace = _namespace(builtin, [_function_tool("_read_page")])
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(_body(_item([namespace])))
+    assert exc_info.value.error_code == "responses_codex_client_tools_invalid"
+    assert exc_info.value.param == "input[0].tools"
+
+
+def test_unapproved_namespaces_still_reject_leading_underscore() -> None:
+    for bad_namespace in ("web_tools", "mcp__other__demo"):
+        namespace = _namespace(bad_namespace, [_function_tool("_read_page")])
+        with pytest.raises(RequestPolicyError) as exc_info:
+            _apply(_body(_item([namespace])))
+        assert exc_info.value.error_code == "responses_codex_client_tools_invalid"

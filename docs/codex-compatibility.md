@@ -111,20 +111,33 @@ Codex CLI 0.162.1 is a separate structural-capture module:
 
 | Property | Pinned value |
 | --- | --- |
-| Client module | `codex-0.162-responses-v1` / version `1` |
-| Profile fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json` |
-| Profile fixture SHA-256 | `724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e` |
+| Client module | `codex-0.162-responses-v1` / version `2` |
+| Profile fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v2.json` |
+| Profile fixture SHA-256 | `b7b257ed9338969a4482fd19434adb6b4a6d96c10037d69899298e643d303f85` |
+| Historical version-1 fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json` / `724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e` (byte-immutable; pinned as the `0162-v1` migration selector) |
 | Runtime status | registered, default-denied; exact `local-coding-v1` pair only |
 
-The version-1 profile accepts the gated `additional_tools` declaration under
-a wider finite taxonomy: strict built-in namespaces `functions` and
+The profile accepts the gated `additional_tools` declaration under a wider
+finite taxonomy; the current version-2 profile retains these original
+finite limits and adds only the namespace-scoped name rule. Strict
+built-in namespaces `functions` and
 `multi_agent_v1`, dynamic namespaces matching
 `^mcp__codex_apps__[a-z][a-z0-9_.-]{0,63}$`, at most 16 namespaces, 256 tools
 total, 256 tools per namespace, 20,000 bytes per tool description, 262,144
 bytes of total namespace/tool description bytes, 4,096 schema properties per
-tool, function-only tools with pattern-validated names
-(`^[a-z][a-z0-9_.-]{0,63}$`, unique per namespace), and the existing schema,
-depth, byte, and recursive authority checks. The official isolated capture
+tool, function-only tools with pattern-validated names, unique per
+namespace, and the existing schema, depth, byte, and recursive authority
+checks. The strict
+built-in namespaces `functions` and `multi_agent_v1` keep
+`^[a-z][a-z0-9_.-]{0,63}$`, while dynamic `mcp__codex_apps__*` connector
+namespaces additionally accept the bounded leading-underscore form
+`^(?:[a-z][a-z0-9_.-]{0,63}|_[a-z][a-z0-9_.-]{0,62})$` (64 characters total
+including the underscore); exact names are preserved unmodified in the
+provider body and in replay. The shared downstream function-name
+intersection is unchanged (hyphen permitted, dot not). Version `2` adds
+that connector-name rule and nothing else; the full operator-supplied
+197-name/type artifact is still pending, so the rule is validated against
+the representative supplied name, not an exact 197-name capture. The official isolated capture
 observed 7 `functions` tools and 5 `multi_agent_v1` tools as a sample of a
 larger built-in vocabulary (the operator profile reports 11 functions), so no
 exact built-in tool list or count is pinned. On the exact
@@ -137,9 +150,12 @@ other profile or server pair is altered.
 
 Pinned 0.149-v4 keys may be upgraded to `0149-v5` or `0162-v1` with
 `slaif-gateway codex upgrade-key-module` (dry-run by default; `--apply`
-mutates) and returned with `slaif-gateway codex rollback-key-module`. Only
-the four edges 0.149-v4 → 0149-v5, 0.149-v4 → 0162-v1, and the two reverse
-edges are legal; each `--apply` writes the `client_module` compatibility
+mutates), keys on the exact historical 0162-v1 tuple may hop to `0162-v2`
+(and back), and every hop is returned with `slaif-gateway codex
+rollback-key-module`. Only the six edges 0.149-v4 → 0149-v5, 0.149-v4 →
+0162-v1, 0162-v1 → 0162-v2, and the three reverse edges are legal (a
+0.149-v4 key reaches 0162-v2 only through the explicit two-hop sequence
+while quiesced); each `--apply` writes the `client_module` compatibility
 metadata and one audit record in one atomic transaction, with no schema or
 quota change.
 
