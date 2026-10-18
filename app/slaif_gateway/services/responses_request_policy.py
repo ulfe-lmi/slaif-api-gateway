@@ -189,6 +189,7 @@ class ResponsesRequestPolicy:
     ) -> None:
         self._settings = settings
         self._codex_spec = client_spec
+        self._active_scope: Mapping[str, Any] | None = None
 
     def apply(
         self,
@@ -206,7 +207,9 @@ class ResponsesRequestPolicy:
         adapter_managed_declaration_candidates: frozenset[str] = frozenset(),
         adapter_managed_declaration_shapes: Mapping[str, frozenset[str]] | None = None,
         codex_top_level_tool_taxonomy: frozenset[tuple[str, str, str]] | None = None,
+        scope: Mapping[str, Any] | None = None,
     ) -> ResponsesPolicyResult:
+        self._active_scope = scope
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
         if codex_client_tools_requested and not (
@@ -1250,6 +1253,37 @@ class ResponsesRequestPolicy:
         del copied_item[self._codex_spec.internal_chat_message_metadata_field]
         return copied_item
 
+    def _record_taxonomy_rejection(self, param: str, result: object) -> None:
+        """Attach a structured additional_tools taxonomy failure to the diagnostic.
+
+        Purely observational and best-effort: it never changes the acceptance
+        decision, the public error code/param/message, or the response.  It is a
+        no-op when no request scope is bound (e.g. offline/tooling callers).
+        """
+        scope = self._active_scope
+        if scope is None or result is None:
+            return
+        try:
+            from slaif_gateway.services.request_capture import (
+                record_scope_capture_rejection,
+            )
+
+            record_scope_capture_rejection(
+                scope,
+                {
+                    "source": "codex_additional_tools_taxonomy",
+                    "reason_code": getattr(result, "reason_code", None) or "taxonomy_rejected",
+                    "param": f"{param}.tools",
+                    "namespace_index": getattr(result, "namespace_index", None),
+                    "tool_index": getattr(result, "tool_index", None),
+                    "field": getattr(result, "field", None),
+                    "observed": getattr(result, "observed", None),
+                    "limit": getattr(result, "limit", None),
+                },
+            )
+        except Exception:  # noqa: BLE001 - observability must never affect the request
+            pass
+
     def _validate_codex_additional_tools_item(
         self,
         item: Mapping[str, Any],
@@ -1285,12 +1319,18 @@ class ResponsesRequestPolicy:
                 "Codex additional_tools items require the developer role.",
             )
         namespaces = item.get("tools")
-        taxonomy = (
-            self._codex_spec.taxonomy_0148
-            if codex_client_tool_taxonomy == self._codex_spec.taxonomy_id_0148
-            else self._codex_spec.taxonomy_for(namespaces)
-        )
+        taxonomy_result = None
+        if codex_client_tool_taxonomy == self._codex_spec.taxonomy_id_0148:
+            taxonomy = self._codex_spec.taxonomy_0148
+        else:
+            classifier = self._codex_spec.taxonomy_classifier
+            if classifier is not None:
+                taxonomy_result = classifier(namespaces)
+                taxonomy = taxonomy_result.taxonomy
+            else:
+                taxonomy = self._codex_spec.taxonomy_for(namespaces)
         if taxonomy is None:
+            self._record_taxonomy_rejection(param, taxonomy_result)
             _raise(
                 f"{param}.tools",
                 "responses_codex_client_tools_invalid",

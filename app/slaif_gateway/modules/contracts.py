@@ -20,6 +20,32 @@ class ModuleSelectionError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
+class CodexTaxonomyResult:
+    """Immutable outcome of structurally classifying Codex additional_tools.
+
+    ``accepted`` is ``True`` only when the declared namespace/tool set exactly
+    matches an approved set for the profile; ``taxonomy`` then carries the
+    canonical ordered ``(namespace, ((tool, "function"), ...), ...)`` tuple.
+    On rejection, ``reason_code`` is a stable, content-free marker and the
+    offending ``namespace_index`` / ``tool_index`` / ``field`` name the first
+    failing check (original check order); ``observed`` and ``limit`` carry the
+    observed count and the relevant cap for cardinality failures.  This type
+    carries no raw request content and grants no execution, replay, or
+    authority.  It is the single shared classifier result consumed by the
+    request policy, so the historical acceptance surface is preserved exactly.
+    """
+
+    accepted: bool
+    taxonomy: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None = None
+    reason_code: str | None = None
+    namespace_index: int | None = None
+    tool_index: int | None = None
+    field: str | None = None
+    observed: int | None = None
+    limit: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ResponsesClientPolicySpec:
     """Pure, module-selected Responses dialect facts consumed by core policy."""
 
@@ -67,6 +93,7 @@ class ResponsesClientPolicySpec:
     taxonomy_for: Callable[[object], tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None]
     taxonomy_0148: tuple[tuple[str, tuple[tuple[str, str], ...]], ...]
     taxonomy_id_0148: str
+    taxonomy_classifier: Callable[[object], CodexTaxonomyResult] | None = None
     function_call_item_id_optional: bool = False
     custom_tool_call_item_id_optional: bool = False
     allow_idless_tool_call_replay: bool = False

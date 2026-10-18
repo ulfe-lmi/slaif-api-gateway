@@ -10,6 +10,11 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`Incoming request capture bounded verification`](incoming-request-capture.md)
+  (recorded 2026-10-18) — objective 191: unit/multiprocess-store/
+  fresh-HTTP-owned-PG-mock-backend results for the default-OFF operator
+  request-capture facility; synthetic request data only, no real
+  client/model/provider claim.
 - [`2026-09-20 post-documentation release-identity record (candidate 71092fef)`](2026-09-20-post-documentation-release-identity-71092fef.md)
   — `RESULT=QUALIFIED-RC-POSTURE-BY-IDENTITY` for exact `main`
   `71092fefee74649bad71dbb5b7a7106115e9f545` (PR #315 merge): identity

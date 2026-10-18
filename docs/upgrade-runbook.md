@@ -143,6 +143,31 @@ not-a-capture); independent official-CLI probes are external manual
 evidence, not CI. No production deployment, backend-version, or plugin
 claim follows from the migration steps.
 
+## Operator request capture (binary-only, default OFF)
+
+The operator request-capture facility (Objective 191) is **binary-only**: it
+adds no database migration, no schema change, and no environment requirement.
+
+- **Upgrade.** Deploying a build that includes the facility changes nothing
+  by default: `REQUEST_CAPTURE_ENABLED=false` means no capture middleware
+  behavior difference beyond a no-op observer gate, no new files are created,
+  and no configuration is required. If you adopt it, follow
+  [runbooks/incoming-request-capture.md](runbooks/incoming-request-capture.md)
+  (dedicated `0700` writable mount shared by all API workers, restart all
+  workers, arm a finite window).
+- **Rollback.** Rolling back to a binary without the facility is safe: no
+  database state references the capture root, and the retained files remain
+  private (`0700`/`0600`) and inert under the old binary. Note that armed
+  windows live in the **shared filesystem manifest**, not in worker memory;
+  only the enable/dir/revision *settings* are per-process startup snapshots.
+  Before downgrading, `request-capture stop` (and `cleanup` if the artifacts
+  are no longer needed) is recommended; if you do not, an unexpired and
+  unexhausted window in the manifest can resume collection as soon as a build
+  with the facility is enabled again.
+- **Restart matrix.** `REQUEST_CAPTURE_ENABLED`, `REQUEST_CAPTURE_DIR`, and
+  the revision-provenance settings take effect only after all API workers
+  restart; `arm`/`status`/`stop`/`cleanup`/`inspect` need no restart.
+
 ## Codex 0.162 file-backed profile DATA (data-only upgrade)
 
 The one Gateway upgrade that installs the data-revision 0162 engine is a

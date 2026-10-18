@@ -86,8 +86,33 @@ async def get_authenticated_gateway_key(
         repository = GatewayKeysRepository(session)
         service = GatewayAuthService(settings=settings, gateway_keys_repository=repository)
         try:
-            return await service.authenticate_authorization_header(authorization)
+            authenticated_key = await service.authenticate_authorization_header(authorization)
         except GatewayAuthError as exc:
             raise openai_error_from_auth_error(exc) from exc
+        _observe_normal_auth_provenance(request, authenticated_key)
+        return authenticated_key
 
     raise openai_error_from_auth_error(GatewayAuthError())
+
+
+def _observe_normal_auth_provenance(
+    request: Request, authenticated_key: AuthenticatedGatewayKey
+) -> None:
+    """Record normal-auth provenance for the capture record sidecar.
+
+    Observation-only: bounded, content-free, and best-effort. It never changes
+    authentication, admission, or the returned key.  A no-op when the capture
+    channel is unavailable.
+    """
+    try:
+        from slaif_gateway.services.request_capture import (
+            record_scope_capture_provenance,
+        )
+
+        record_scope_capture_provenance(
+            request.scope,
+            verified_key_uuid=str(authenticated_key.gateway_key_id),
+            auth_provenance="normal_auth",
+        )
+    except Exception:  # noqa: BLE001 - observability must never affect the request
+        pass

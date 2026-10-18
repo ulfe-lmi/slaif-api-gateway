@@ -1437,6 +1437,75 @@ change quota/accounting state. The first supported sink is a generic JSON
 webhook; Slack, PagerDuty, and other product-specific integrations can be wired
 through an operator-managed bridge.
 
+## Operator Request Capture
+
+Operator-controlled, default-OFF full incoming-request capture for bounded
+incident diagnostics. It is a local filesystem facility, not a log, and it
+adds no database schema, admin UI, remote export, or dependency.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `REQUEST_CAPTURE_ENABLED` | `false` | Master switch. Must be enabled, the directory valid, and **all API workers restarted** before any window can be armed. |
+| `REQUEST_CAPTURE_DIR` | empty | Absolute, operator-owned `0700` directory shared by every API worker (dedicated writable mount). Symlinked roots, non-owned or non-regular control files, and paths outside the operator's control refuse safely and keep the facility off. |
+| `REQUEST_CAPTURE_BODY_BUDGET_BYTES` | `10485760` (10 MiB) | Per-capture budget for **original request body bytes** (hard cap 64 MiB). The stored base64 body plus metadata form a derived per-capture envelope (a positive reservation computed from this budget) that is counted against the total storage budget, not against this original-byte ceiling. |
+| `REQUEST_CAPTURE_TOTAL_STORAGE_BYTES` | `20971520` (20 MiB) | Total on-disk budget for all sessions in the root; claims and actual publications are both bounded by it under one lock. |
+| `REQUEST_CAPTURE_MAX_COUNT` | `100` | Maximum finite request count per armed window. |
+| `REQUEST_CAPTURE_MAX_TTL_SECONDS` | `3600` | Maximum absolute expiry (seconds) per armed window. |
+| `REQUEST_CAPTURE_DEPLOYED_REVISION` | empty | Operator-declared deployed revision recorded in every capture record; empty records as `unknown` and is never inferred from a checkout. |
+| `REQUEST_CAPTURE_REVISION_PROVENANCE` | `operator-unspecified` | Free-text provenance label recorded with the revision. |
+| `REQUEST_CAPTURE_APP_VERSION` | empty | Overrides the app version recorded in capture records; empty resolves the installed package version. |
+
+Behavioral guarantees:
+
+- **Default OFF, finite, expiring.** A capture window exists only after an
+  operator arms one with an exact endpoint path, optional verified-key UUID
+  filter, finite count, and finite TTL. Exhaustion and expiry survive worker
+  restarts and never re-arm.
+- **Restart matrix.** `REQUEST_CAPTURE_ENABLED`, `REQUEST_CAPTURE_DIR`, and
+  the revision provenance take effect only after **all** API workers restart
+  (and the process actually reloaded them). `arm` / `status` / `stop` /
+  `cleanup` / `inspect` operate on the shared manifest and need **no**
+  restart. A running worker keeps the settings it started with.
+- **No impact on the request.** The observer is a pure ASGI tee: the
+  application is called exactly once, request bytes are forwarded unchanged,
+  and any capture failure (masking, storage, locking, permission) skips or
+  marks the capture safely without changing auth, validation, admission,
+  accounting, or forwarding.
+- **Masking.** Known incoming authentication values (gateway Bearer token,
+  `Cookie` secret values, `Proxy-Authorization` decoded credentials, explicit
+  credential query/body fields) are replaced in every stored
+  path/query/header/body byte; a recognized gateway key is replaced with its
+  public hint (`prefix + public-id[:8] + ...***`) instead of `[REDACTED]`.
+  Identifier-looking fields (`session`, `session_id`, `nonce`, `signature`)
+  are preserved.
+- **Incomplete bodies are not persisted.** When the body was not fully
+  captured (budget truncation, client disconnect, application never consumed
+  it, or a buffer failure), **no body bytes are stored**; the record carries
+  `body_complete=false`, the precise `incomplete_reason`
+  (`not_consumed` / `body_limit` / `client_disconnected` / `buffer_failure`),
+  and the observed/buffered/stored byte counts. This is the safe path for a
+  truncated prefix that could carry a near-complete credential in raw,
+  percent-encoded, or JSON-escaped form.
+- **Storage.** `0700` directory, `0600` files, atomic publication, no-follow
+  regular-file checks on control and artifact paths, bounded non-blocking
+  lock acquisition, and only-recognized-name cleanup. Each claim reserves a
+  positive derived envelope (base64 body plus metadata) up front and the
+  actual combined footprint is re-checked against both the per-capture
+  envelope and the global total at publication; a failed write consumes the
+  claim and leaves no partial artifact. Artifacts persist until explicit
+  `cleanup`; expiry and exhaustion stop collection only.
+- **Local-only diagnostics.** Rejection facts (structured additional-tools
+  taxonomy failures, bounded JSON parser/schema facts, public error
+  code/param/message/status, generic local errors) are recorded on the
+  request scope and land in the record sidecar only. They change no public
+  response. No request content is written to logs, metrics, the database, or
+  the admin UI; inspecting artifacts is always an explicit local action (the
+  bounded CLI `inspect` command, or direct file access under the
+  `0700`/`0600` boundary).
+
+See [Operator runbook: incoming request capture](runbooks/incoming-request-capture.md)
+and [Verification: incoming request capture](verification/incoming-request-capture.md).
+
 ## Production Notes
 
 - Never commit `.env`.

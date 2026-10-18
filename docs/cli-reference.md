@@ -149,6 +149,41 @@ transaction, a repeated exact target is a no-op with no extra audit, and
 same-revision/different-digest drift or a missing configured active profile
 fails closed with a safe error.
 
+## Operator request capture
+
+```text
+slaif-gateway request-capture arm|status|stop|cleanup|inspect
+```
+
+The operator request-capture facility (default OFF; see
+[configuration.md](configuration.md#operator-request-capture) and
+[runbooks/incoming-request-capture.md](runbooks/incoming-request-capture.md))
+exposes five bounded commands. They operate on the shared local capture
+manifest and never construct the HTTP app or touch the database; they fail
+with a fixed safe error when the facility is not enabled in this process's
+settings.
+
+- `request-capture arm --endpoint /v1/responses [--key-uuid <uuid>]
+  [--count <n>] [--ttl-seconds <s>]` arms one finite, expiring capture
+  window. `--key-uuid` filters on the verified gateway key UUID; omitted
+  options fall back to the configured defaults (count 1, TTL 300 s, capped by
+  `REQUEST_CAPTURE_MAX_COUNT` / `REQUEST_CAPTURE_MAX_TTL_SECONDS`).
+- `request-capture status` lists sessions with remaining count, state
+  (active / exhausted / expired / stopped), and total reserved storage.
+- `request-capture stop [--session-id cap-<hex32>]` stops one session (or
+  all), ending collection without deleting artifacts.
+- `request-capture cleanup [--session-id cap-<hex32>]` deletes a session's
+  owned capture/record artifacts and releases its storage quota. It removes
+  only recognized owned artifact names and preserves anything else.
+- `request-capture inspect --request-id gw-... [--decode]` locates and prints
+  one specific capture + record pair by the `X-SLAIF-Diagnostic-ID`. Reads
+  are bounded (no-follow regular owned files, size-capped); `--decode`
+  renders the base64 fields as text while retaining the original base64, and
+  labels non-UTF-8 values as a lossy view.
+
+Unexpected failures render a fixed generic `command_failed` error and never
+echo exception details; known facility errors keep their fixed reason codes.
+
 ## Catalog refresh (collect, review, verify, apply)
 
 Bounded catalog refresh: bounded live official-source collection, one typed
@@ -425,6 +460,11 @@ slaif-gateway routes show
 slaif-gateway routes enable
 slaif-gateway routes disable
 slaif-gateway routes import
+slaif-gateway request-capture arm
+slaif-gateway request-capture status
+slaif-gateway request-capture stop
+slaif-gateway request-capture cleanup
+slaif-gateway request-capture inspect
 slaif-gateway secrets generate hmac
 slaif-gateway secrets generate admin-session
 slaif-gateway secrets generate one-time

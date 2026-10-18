@@ -1064,6 +1064,30 @@ async def handle_response_compact(
     return response
 
 
+def _observe_capture_module_provenance(request, client_module) -> None:
+    """Record the selected client-module identity for the capture record sidecar.
+
+    Observation-only: bounded, content-free, best-effort, and never affects
+    routing, admission, or accounting.  A no-op when no request scope is bound
+    or the capture channel is unavailable.
+    """
+    if request is None:
+        return
+    try:
+        from slaif_gateway.services.request_capture import (
+            record_scope_capture_provenance,
+        )
+
+        record_scope_capture_provenance(
+            request.scope,
+            module_id=getattr(client_module, "module_id", None),
+            module_version=getattr(client_module, "module_version", None),
+            module_fixture_sha256=getattr(client_module, "fixture_sha256", None),
+        )
+    except Exception:  # noqa: BLE001 - observability must never affect the request
+        pass
+
+
 async def handle_response_create(
     *,
     payload: ResponsesCreateRequest,
@@ -1072,6 +1096,7 @@ async def handle_response_create(
     request: Request | None = None,
 ):
     client_module = _resolve_responses_client_module(authenticated_key)
+    _observe_capture_module_provenance(request, client_module)
     try:
         raw_body = payload.model_dump(mode="python", exclude_none=True, exclude_unset=True)
         normalized_client_request = (
@@ -1184,6 +1209,7 @@ async def handle_response_create(
                 normalized_client_request.adapter_managed_declaration_shapes
             ),
             codex_top_level_tool_taxonomy=codex_0149_continuation_taxonomy,
+            scope=request.scope if request is not None else None,
         )
     except RequestPolicyError as exc:
         raise openai_error_from_request_policy_error(exc) from exc
