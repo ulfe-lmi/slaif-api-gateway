@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -351,6 +353,7 @@ def test_module_mutation_unexpected_exception_never_echoes_details(
     assert "Traceback" not in output
     assert exc_type.__name__ not in output
 
+
 @pytest.mark.parametrize(
     ("command", "selector_args", "expected_source", "target", "action", "apply"),
     [
@@ -493,3 +496,93 @@ def test_module_mutation_selector_wiring_reaches_the_service(
             "apply": apply,
         }
     ]
+
+
+def test_importing_codex_cli_does_not_import_http_app_module(monkeypatch) -> None:
+    monkeypatch.delitem(__import__("sys").modules, "slaif_gateway.main", raising=False)
+    monkeypatch.delitem(__import__("sys").modules, "slaif_gateway.cli.codex", raising=False)
+    __import__("slaif_gateway.cli.codex")
+    assert "slaif_gateway.main" not in __import__("sys").modules
+
+
+_FakeSettings = SimpleNamespace
+
+
+def test_inspect_profile_file_offline_with_invalid_configured_file(tmp_path, monkeypatch) -> None:
+    bad_file = tmp_path / "bad-profile.json"
+    bad_file.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(
+        codex_cli,
+        "get_settings",
+        lambda: _FakeSettings(CODEX_COMPATIBILITY_PROFILE_FILE=str(bad_file)),
+    )
+    default_file = (
+        Path("app") / "slaif_gateway" / "modules" / "clients" / "profiles" / "codex_0162.json"
+    )
+    result = runner.invoke(app, ["codex", "inspect-profile-file", str(default_file), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is True
+    assert payload["revision"] == "3"
+
+    shown = runner.invoke(app, ["codex", "show-profile"])
+    assert shown.exit_code == 1
+    assert str(bad_file) not in shown.stdout
+    assert "not valid JSON" in shown.stdout
+
+
+_CANARY = "SYNTHETIC-PRIVATE-CANARY-7f3a9c21"
+
+
+def test_inspect_profile_file_unexpected_error_is_safe(monkeypatch) -> None:
+    def _boom(_path: object) -> None:
+        raise RuntimeError(_CANARY)
+
+    monkeypatch.setattr(codex_cli, "load_codex_profile_file", _boom)
+    result = runner.invoke(app, ["codex", "inspect-profile-file", "candidate.json", "--json"])
+    assert result.exit_code == 1
+    output = result.stdout + result.stderr
+    assert _CANARY not in output
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "command_failed"
+    assert _CANARY not in payload["error"]["message"]
+
+
+def test_show_profile_unexpected_error_is_safe(monkeypatch) -> None:
+    def _boom(_module_id: str = "codex-0.162-responses-v1") -> None:
+        raise ValueError(_CANARY)
+
+    monkeypatch.setattr(codex_cli, "get_client_module", _boom)
+    result = runner.invoke(app, ["codex", "show-profile", "--json"])
+    assert result.exit_code == 1
+    output = result.stdout + result.stderr
+    assert _CANARY not in output
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "command_failed"
+
+
+def test_migrate_key_profile_unexpected_bootstrap_error_is_safe(monkeypatch) -> None:
+    def _boom(_profile_path: str = "") -> None:
+        raise RuntimeError(_CANARY)
+
+    monkeypatch.setattr(codex_cli, "bootstrap_codex_compatibility_profile", _boom)
+    result = runner.invoke(
+        app,
+        [
+            "codex",
+            "migrate-key-profile",
+            "11111111-1111-4111-8111-111111111111",
+            "--from-version",
+            "3",
+            "--from-digest",
+            "aa3de5376819022191e11935ee311acd4b59bf590324daaa0e3ebc448daf90bd",
+            "--reason",
+            "probe",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 1
+    output = result.stdout + result.stderr
+    assert _CANARY not in output
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "command_failed"

@@ -32,6 +32,14 @@ on record. They are dated, commit-specific evidence, not certifications.
 
 ## Records
 
+- [`2026-10-18 Codex 0.162 file-backed compatibility profile DATA`](codex-file-compatibility-profiles.md) —
+  Objective 190-b: shipped default profile DATA (revision 3, canonical
+  digest `aa3de537...daf90bd`), bounded parser/immutable loader,
+  data-revision module identity with frozen v1/v2 migration selectors,
+  operator file override with no-silent-fallback bootstrap, audited
+  `migrate-key-profile`, real 197-name regression fixture, fresh-process
+  real-HTTP Gateway and owned-PostgreSQL evidence, and wheel packaging
+  proof.
 - [`2026-10-18 Codex 0.162 version-2 connector tool names`](codex-0162-connector-names.md) —
   Objective 190-a: registered `codex-0.162-responses-v1` v2 profile
   (namespace-scoped leading-underscore connector tool names, exact

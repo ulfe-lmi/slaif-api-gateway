@@ -79,3 +79,37 @@ actual official-CLI run with the new connector names occurred for this
 objective; the official-CLI proofs on record are dated Objective 189
 historical evidence (the 12-builtin lowering), and they do not qualify
 the new connector names.
+
+## 190-b continuation (2026-10-18) — file-backed compatibility profile DATA
+
+This dated continuation records what Objective 190-b (PR #328, same branch
+and PR as this record) changed on top of the 190-a evidence above. The
+190-a facts above remain historical and are not rewritten.
+
+- The pending real 197-name criterion is resolved: the full
+  operator-supplied 197 name/type diagnostic capture now ships as the
+  supplemental SYNTHETIC-wrapped regression fixture
+  `tests/fixtures/codex/0.162.1/connector-tool-names-197-v1.json`
+  (SHA-256 `a32bbf25de4e0be15690feaf3a86a4f453aac2d281b9b67d2cd21daa1bd1c8c4`)
+  with its bounded provenance sidecar, and the registered module plus the
+  shared request policy accepts all 197 names through it. It is evidence,
+  never a runtime name inventory or selected policy identity.
+- The 0162 module is now a data-revision module: the effective module
+  version is the validated profile DATA revision (packaged default
+  revision `3`, canonical DATA digest
+  `aa3de5376819022191e11935ee311acd4b59bf590324daaa0e3ebc448daf90bd`),
+  and the shipped DATA
+  (`slaif_gateway/modules/clients/profiles/codex_0162.json`) defines the
+  namespace literals/prefixes, bounded grammar traits, and ceilings,
+  including the DATA-defined leading-underscore connector rule. The
+  historical v1/v2 fixtures remain byte-immutable frozen migration
+  selectors only; they are not live decoders and stale/legacy pins fail
+  closed until an explicit audited `migrate-key-profile`.
+- A validated operator profile file
+  (`CODEX_COMPATIBILITY_PROFILE_FILE`, data revision >= 3) loads with the
+  same installed engine and no rebuild; a future data revision (e.g. 4)
+  changes the effective version/digest with no source change.
+- The dedicated file-backed verification record is
+  [`codex-file-compatibility-profiles.md`](codex-file-compatibility-profiles.md)
+  (dated 2026-10-18): focused unit, owned-PostgreSQL, fresh-process
+  real-HTTP Gateway, wheel, and CLI error-boundary evidence.

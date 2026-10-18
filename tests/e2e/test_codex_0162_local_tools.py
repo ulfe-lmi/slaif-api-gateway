@@ -197,9 +197,7 @@ def _assert_forwarded_197_lowered(
     tools = body["tools"]
     assert isinstance(tools, list)
     assert len(tools) == 11
-    counts = {
-        str(namespace["name"]): len(namespace["tools"]) for namespace in tools
-    }
+    counts = {str(namespace["name"]): len(namespace["tools"]) for namespace in tools}
     assert counts["functions"] == 11
     assert counts["multi_agent_v1"] == 5
     for namespace, count in MCP_NAMESPACE_COUNTS.items():
@@ -210,9 +208,7 @@ def _assert_forwarded_197_lowered(
         assert namespace["name"] in counts
         for tool in namespace["tools"]:
             assert tool["type"] == "function"
-            assert tool["description"] == (
-                f"synthetic bounded description for {tool['name']}"
-            )
+            assert tool["description"] == (f"synthetic bounded description for {tool['name']}")
             assert tool["parameters"] == {
                 "type": "object",
                 "properties": {"value": {"type": "string"}},
@@ -222,9 +218,7 @@ def _assert_forwarded_197_lowered(
             assert tool["strict"] is True
     by_name = {str(namespace["name"]): namespace for namespace in tools}
     assert by_name["functions"]["description"] == "bounded local function namespace"
-    assert by_name["multi_agent_v1"]["description"] == (
-        "bounded local multi-agent namespace"
-    )
+    assert by_name["multi_agent_v1"]["description"] == ("bounded local multi-agent namespace")
     assert [str(namespace["name"]) for namespace in tools] == [
         "functions",
         "multi_agent_v1",
@@ -279,9 +273,7 @@ def _verify_local_coding_signature(request: httpx.Request) -> None:
     assert SESSION not in request.content.decode("utf-8")
 
 
-async def _load_ledger_rows(
-    database_url: str, gateway_key_id: uuid.UUID
-) -> list[tuple[int, str]]:
+async def _load_ledger_rows(database_url: str, gateway_key_id: uuid.UUID) -> list[tuple[int, str]]:
     from slaif_gateway.db.models import UsageLedger
 
     engine = create_async_engine(database_url, future=True)
@@ -573,9 +565,7 @@ def test_codex_0162_four_key_grants_require_the_fourth_route_grant(
             assert AT_UUID not in str(exc_info.value)
             assert local_route.call_count == 0
 
-    assert asyncio.run(
-        _load_gateway_key_counters(database_url, created.gateway_key_id)
-    ) == (0, 0)
+    assert asyncio.run(_load_gateway_key_counters(database_url, created.gateway_key_id)) == (0, 0)
     assert asyncio.run(
         _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
     ) == (0, 0)
@@ -648,12 +638,11 @@ def test_codex_0149_v5_key_rejects_the_197_profile_without_accounting(
             assert local_route.call_count == 0
 
     # A rejected request creates no reservation, ledger row, or key usage.
-    assert asyncio.run(
-        _load_gateway_key_counters(database_url, created.gateway_key_id)
-    ) == (0, 0)
+    assert asyncio.run(_load_gateway_key_counters(database_url, created.gateway_key_id)) == (0, 0)
     assert asyncio.run(
         _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
     ) == (0, 0)
+
 
 def _connector_declaration() -> dict[str, object]:
     return {
@@ -718,15 +707,17 @@ def test_codex_0162_v2_connector_name_stream_and_replay(
 ) -> None:
     """Pinned 0162-v2 key: leading-underscore connector names end to end.
 
-    Real gateway (auth, v2 module resolution, policy, admission, signed
-    Local Coding) to an owned HTTP mock backend: a streaming request
+    Real gateway (auth, data-revision module resolution, policy, admission,
+    signed Local Coding) to an owned HTTP mock backend: a streaming request
     declaring a connector namespace with _read_page/read_page, then an
     owned replay carrying the streamed function call.  Both provider legs
     preserve the exact namespace and names, the signature is valid over
     the final bytes, and accounting finalizes per request.
     """
     module = get_client_module(CODEX_0162_CLIENT_MODULE_ID)
-    assert module.module_version == "2"
+    # Data-revision module: the packaged default identity is revision 3.
+    assert module.module_version == CODEX_0162_CLIENT_MODULE_VERSION
+    assert module.fixture_sha256 == CODEX_0162_FIXTURE_SHA256
     database_url = owned_pg_url
     run_alembic_upgrade_head(database_url)
     _configure_runtime_environment(monkeypatch, database_url)
@@ -790,9 +781,9 @@ def test_codex_0162_v2_connector_name_stream_and_replay(
 
     with _run_uvicorn_server(app, gateway_port):
         with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
-            local_route = router.post(
-                f"http://127.0.0.1:{local_port}/v1/responses"
-            ).mock(side_effect=mock_backend)
+            local_route = router.post(f"http://127.0.0.1:{local_port}/v1/responses").mock(
+                side_effect=mock_backend
+            )
             router.route(host="127.0.0.1").pass_through()
             client = OpenAI()
             streaming = client.responses.create(
@@ -880,7 +871,9 @@ def test_codex_0162_v2_invalid_connector_names_rejected_before_admission(
     local_model = "codex-0162-connector-negative-test"
     local_port = _free_port()
     module = get_client_module(CODEX_0162_CLIENT_MODULE_ID)
-    assert module.module_version == "2"
+    # Data-revision module: the packaged default identity is revision 3.
+    assert module.module_version == CODEX_0162_CLIENT_MODULE_VERSION
+    assert module.fixture_sha256 == CODEX_0162_FIXTURE_SHA256
     created = asyncio.run(
         _create_responses_test_data(
             database_url,
@@ -932,9 +925,9 @@ def test_codex_0162_v2_invalid_connector_names_rejected_before_admission(
     ]
     with _run_uvicorn_server(app, gateway_port):
         with respx.mock(assert_all_mocked=True, assert_all_called=False) as router:
-            local_route = router.post(
-                f"http://127.0.0.1:{local_port}/v1/responses"
-            ).mock(return_value=httpx.Response(200, json=_completed_response()))
+            local_route = router.post(f"http://127.0.0.1:{local_port}/v1/responses").mock(
+                return_value=httpx.Response(200, json=_completed_response())
+            )
             router.route(host="127.0.0.1").pass_through()
             client = OpenAI()
             for declaration in bad_declarations:
@@ -956,9 +949,7 @@ def test_codex_0162_v2_invalid_connector_names_rejected_before_admission(
                 assert exc_info.value.param == "input[0].tools"
                 assert local_route.call_count == 0
 
-    assert asyncio.run(
-        _load_gateway_key_counters(database_url, created.gateway_key_id)
-    ) == (0, 0)
+    assert asyncio.run(_load_gateway_key_counters(database_url, created.gateway_key_id)) == (0, 0)
     assert asyncio.run(
         _load_accounting_side_effect_counts(database_url, created.gateway_key_id)
     ) == (0, 0)

@@ -24,6 +24,7 @@ from slaif_gateway.api.openai_compat import router as openai_compat_router
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.lifespan import build_lifespan
 from slaif_gateway.logging import configure_logging
+from slaif_gateway.modules.clients.codex_0162 import bootstrap_codex_compatibility_profile
 from slaif_gateway.startup_warnings import emit_startup_configuration_warnings
 
 
@@ -32,6 +33,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     configure_logging(app_settings)
     emit_startup_configuration_warnings(app_settings)
+    codex_profile = bootstrap_codex_compatibility_profile(
+        app_settings.CODEX_COMPATIBILITY_PROFILE_FILE
+    )
+
     @asynccontextmanager
     async def app_lifespan(app: FastAPI):
         try:
@@ -42,6 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="SLAIF API Gateway", lifespan=app_lifespan)
     app.state.settings = app_settings
+    app.state.codex_0162_profile = codex_profile
     app.state.db_engine = None
     app.state.db_sessionmaker = None
     app.state.redis_client = None
@@ -64,5 +70,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(openai_compat_router)
 
     return app
+
 
 app = create_app()

@@ -22,9 +22,15 @@ uses `openai-default`, the qualified legacy Codex profile uses
 `codex-0.147-responses-v1`, and the structurally captured Codex 0.149 module is
 registered default-denied except for exactly one
 `codex-0.149-responses-v1 -> local-coding-v1` pair. The structurally
-captured Codex 0.162 module (`codex-0.162-responses-v1`, version `2`,
-captured from CLI 0.162.1) is registered the same way with exactly one
-`codex-0.162-responses-v1 -> local-coding-v1` pair. Codex 0.149's observed
+captured Codex 0.162 module (`codex-0.162-responses-v1`, a data-revision
+module captured from CLI 0.162.1 whose effective version is the validated
+profile DATA revision — packaged default revision `3` — and whose fixture
+digest binds the canonical digest of the shipped compatibility policy DATA)
+is registered the same way with exactly one
+`codex-0.162-responses-v1 -> local-coding-v1` pair. A validated operator
+profile file (`CODEX_COMPATIBILITY_PROFILE_FILE`, data revision >= 3) loads
+with the same installed engine and no rebuild; stale legacy pins fail
+closed until an explicit audited migration. Codex 0.149's observed
 `tool_search` and `web_search` declarations are transient adapter-managed
 candidate facts only. They never set hosted web-search admission, external-tool
 fence, pricing, or accounting state. No raw Codex identity/session/workspace
@@ -429,14 +435,21 @@ tools total, 256 tools per namespace, 20,000 bytes per tool description,
 262,144 bytes of total namespace/tool description bytes, 4,096 schema
 properties per tool, and the existing schema, depth, byte, and recursive
 authority checks. Tool names are pattern-validated, function-only, and unique per
-namespace; from version `2` the strict built-in namespaces keep
-`^[a-z][a-z0-9_.-]{0,63}$` while dynamic `mcp__codex_apps__*` connector
-namespaces additionally accept the bounded leading-underscore form
+namespace; the default profile DATA (revision 3) keeps
+`^[a-z][a-z0-9_.-]{0,63}$` for the strict built-in namespaces while dynamic
+`mcp__codex_apps__*` connector namespaces additionally accept the bounded
+leading-underscore form
 `^(?:[a-z][a-z0-9_.-]{0,63}|_[a-z][a-z0-9_.-]{0,62})$` (64 characters
-total), with exact names preserved to the provider and in replay and the
+total) — a DATA-defined rule with a file-updatable leading-underscore
+ceiling — with exact names preserved to the provider and in replay and the
 shared downstream function-name intersection unchanged (hyphen permitted,
-dot not). The full operator-supplied 197-name/type artifact is still
-pending. The
+dot not). The full operator-supplied 197-name/type diagnostic capture
+qualifies the shipped regression fixture
+(`tests/fixtures/codex/0.162.1/connector-tool-names-197-v1.json`,
+SYNTHETIC-wrapped supplemental evidence, not a runtime inventory or
+selected policy identity); all 197 names pass the registered module plus
+the shared request policy with exact order, names, and types preserved.
+The
 official isolated 0.162.1 capture observed 7 `functions` tools and 5
 `multi_agent_v1` tools as a sample of a larger built-in vocabulary (the
 operator profile reports 11 functions), so no exact built-in tool list or

@@ -1,0 +1,884 @@
+{
+  "input_index": 0,
+  "tools_container_type": "list",
+  "namespace_count": 11,
+  "total_tool_count": 197,
+  "namespaces": [
+    {
+      "name": "functions",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 11,
+      "tools": [
+        {
+          "name": "exec_command",
+          "type": "function"
+        },
+        {
+          "name": "write_stdin",
+          "type": "function"
+        },
+        {
+          "name": "list_mcp_resources",
+          "type": "function"
+        },
+        {
+          "name": "list_mcp_resource_templates",
+          "type": "function"
+        },
+        {
+          "name": "read_mcp_resource",
+          "type": "function"
+        },
+        {
+          "name": "request_user_input",
+          "type": "function"
+        },
+        {
+          "name": "request_plugin_install",
+          "type": "function"
+        },
+        {
+          "name": "view_image",
+          "type": "function"
+        },
+        {
+          "name": "get_goal",
+          "type": "function"
+        },
+        {
+          "name": "create_goal",
+          "type": "function"
+        },
+        {
+          "name": "update_goal",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "multi_agent_v1",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 5,
+      "tools": [
+        {
+          "name": "close_agent",
+          "type": "function"
+        },
+        {
+          "name": "resume_agent",
+          "type": "function"
+        },
+        {
+          "name": "send_input",
+          "type": "function"
+        },
+        {
+          "name": "spawn_agent",
+          "type": "function"
+        },
+        {
+          "name": "wait_agent",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__chatgpt_space",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 40,
+      "tools": [
+        {
+          "name": "_attach_automation_to_page",
+          "type": "function"
+        },
+        {
+          "name": "_create_canvas",
+          "type": "function"
+        },
+        {
+          "name": "_create_controller_automation",
+          "type": "function"
+        },
+        {
+          "name": "_create_page",
+          "type": "function"
+        },
+        {
+          "name": "_create_page_visualization",
+          "type": "function"
+        },
+        {
+          "name": "_create_presentation",
+          "type": "function"
+        },
+        {
+          "name": "_create_space",
+          "type": "function"
+        },
+        {
+          "name": "_create_spreadsheet",
+          "type": "function"
+        },
+        {
+          "name": "_edit_page",
+          "type": "function"
+        },
+        {
+          "name": "_execute_artifact_code",
+          "type": "function"
+        },
+        {
+          "name": "_find_pages",
+          "type": "function"
+        },
+        {
+          "name": "_get_artifact_execution_status",
+          "type": "function"
+        },
+        {
+          "name": "_get_page_auto_update",
+          "type": "function"
+        },
+        {
+          "name": "_get_page_sharing",
+          "type": "function"
+        },
+        {
+          "name": "_get_sharing_availability",
+          "type": "function"
+        },
+        {
+          "name": "_get_space",
+          "type": "function"
+        },
+        {
+          "name": "_get_space_sharing",
+          "type": "function"
+        },
+        {
+          "name": "_inspect_artifact",
+          "type": "function"
+        },
+        {
+          "name": "_inspect_page_reference",
+          "type": "function"
+        },
+        {
+          "name": "_list_page_automations",
+          "type": "function"
+        },
+        {
+          "name": "_list_page_comments",
+          "type": "function"
+        },
+        {
+          "name": "_list_pages",
+          "type": "function"
+        },
+        {
+          "name": "_list_spaces",
+          "type": "function"
+        },
+        {
+          "name": "_manage_page_comment",
+          "type": "function"
+        },
+        {
+          "name": "_move_page",
+          "type": "function"
+        },
+        {
+          "name": "_patch_page",
+          "type": "function"
+        },
+        {
+          "name": "_progress_update",
+          "type": "function"
+        },
+        {
+          "name": "_read_page",
+          "type": "function"
+        },
+        {
+          "name": "_read_page_changes",
+          "type": "function"
+        },
+        {
+          "name": "_read_page_reference",
+          "type": "function"
+        },
+        {
+          "name": "_read_page_transcript",
+          "type": "function"
+        },
+        {
+          "name": "_reply_page_comment",
+          "type": "function"
+        },
+        {
+          "name": "_run_page_auto_update",
+          "type": "function"
+        },
+        {
+          "name": "_search_sharing_recipients",
+          "type": "function"
+        },
+        {
+          "name": "_set_page_auto_update",
+          "type": "function"
+        },
+        {
+          "name": "_trash_page",
+          "type": "function"
+        },
+        {
+          "name": "_update_page_sharing",
+          "type": "function"
+        },
+        {
+          "name": "_update_space_sharing",
+          "type": "function"
+        },
+        {
+          "name": "_upload_artifact_images",
+          "type": "function"
+        },
+        {
+          "name": "_write_page_reference",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__codex_document_control",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 3,
+      "tools": [
+        {
+          "name": "_execute_document_command",
+          "type": "function"
+        },
+        {
+          "name": "_get_document_tool_schemas",
+          "type": "function"
+        },
+        {
+          "name": "_list_document_sessions",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__github",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 89,
+      "tools": [
+        {
+          "name": "_add_comment_to_issue",
+          "type": "function"
+        },
+        {
+          "name": "_add_issue_assignees",
+          "type": "function"
+        },
+        {
+          "name": "_add_issue_labels",
+          "type": "function"
+        },
+        {
+          "name": "_add_reaction_to_issue_comment",
+          "type": "function"
+        },
+        {
+          "name": "_add_reaction_to_pr",
+          "type": "function"
+        },
+        {
+          "name": "_add_reaction_to_pr_review_comment",
+          "type": "function"
+        },
+        {
+          "name": "_add_review_to_pr",
+          "type": "function"
+        },
+        {
+          "name": "_compare_commits",
+          "type": "function"
+        },
+        {
+          "name": "_convert_pull_request_to_draft",
+          "type": "function"
+        },
+        {
+          "name": "_create_blob",
+          "type": "function"
+        },
+        {
+          "name": "_create_branch",
+          "type": "function"
+        },
+        {
+          "name": "_create_commit",
+          "type": "function"
+        },
+        {
+          "name": "_create_file",
+          "type": "function"
+        },
+        {
+          "name": "_create_issue",
+          "type": "function"
+        },
+        {
+          "name": "_create_pull_request",
+          "type": "function"
+        },
+        {
+          "name": "_create_tree",
+          "type": "function"
+        },
+        {
+          "name": "_delete_file",
+          "type": "function"
+        },
+        {
+          "name": "_dismiss_pull_request_review",
+          "type": "function"
+        },
+        {
+          "name": "_download_user_content",
+          "type": "function"
+        },
+        {
+          "name": "_download_workflow_artifact",
+          "type": "function"
+        },
+        {
+          "name": "_enable_auto_merge",
+          "type": "function"
+        },
+        {
+          "name": "_fetch",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_blob",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_commit",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_commit_workflow_runs",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_file",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_issue",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_issue_comments",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_pr",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_pr_comments",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_pr_file_patch",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_pr_patch",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_workflow_job_logs",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_workflow_job_steps",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_workflow_run_artifacts",
+          "type": "function"
+        },
+        {
+          "name": "_fetch_workflow_run_jobs",
+          "type": "function"
+        },
+        {
+          "name": "_get_commit_combined_status",
+          "type": "function"
+        },
+        {
+          "name": "_get_issue_comment_reactions",
+          "type": "function"
+        },
+        {
+          "name": "_get_pr_diff",
+          "type": "function"
+        },
+        {
+          "name": "_get_pr_info",
+          "type": "function"
+        },
+        {
+          "name": "_get_pr_reactions",
+          "type": "function"
+        },
+        {
+          "name": "_get_pr_review_comment_reactions",
+          "type": "function"
+        },
+        {
+          "name": "_get_profile",
+          "type": "function"
+        },
+        {
+          "name": "_get_repo",
+          "type": "function"
+        },
+        {
+          "name": "_get_repo_collaborator_permission",
+          "type": "function"
+        },
+        {
+          "name": "_get_user_login",
+          "type": "function"
+        },
+        {
+          "name": "_get_users_recent_prs_in_repo",
+          "type": "function"
+        },
+        {
+          "name": "_label_pr",
+          "type": "function"
+        },
+        {
+          "name": "_list_installations",
+          "type": "function"
+        },
+        {
+          "name": "_list_installed_accounts",
+          "type": "function"
+        },
+        {
+          "name": "_list_pr_changed_filenames",
+          "type": "function"
+        },
+        {
+          "name": "_list_pull_request_review_threads",
+          "type": "function"
+        },
+        {
+          "name": "_list_pull_request_reviews",
+          "type": "function"
+        },
+        {
+          "name": "_list_recent_issues",
+          "type": "function"
+        },
+        {
+          "name": "_list_repositories",
+          "type": "function"
+        },
+        {
+          "name": "_list_repositories_by_affiliation",
+          "type": "function"
+        },
+        {
+          "name": "_list_repositories_by_installation",
+          "type": "function"
+        },
+        {
+          "name": "_list_user_org_memberships",
+          "type": "function"
+        },
+        {
+          "name": "_list_user_orgs",
+          "type": "function"
+        },
+        {
+          "name": "_lock_issue_conversation",
+          "type": "function"
+        },
+        {
+          "name": "_mark_pull_request_ready_for_review",
+          "type": "function"
+        },
+        {
+          "name": "_merge_pull_request",
+          "type": "function"
+        },
+        {
+          "name": "_remove_issue_assignees",
+          "type": "function"
+        },
+        {
+          "name": "_remove_issue_label",
+          "type": "function"
+        },
+        {
+          "name": "_remove_pull_request_reviewers",
+          "type": "function"
+        },
+        {
+          "name": "_remove_reaction_from_issue_comment",
+          "type": "function"
+        },
+        {
+          "name": "_remove_reaction_from_pr",
+          "type": "function"
+        },
+        {
+          "name": "_remove_reaction_from_pr_review_comment",
+          "type": "function"
+        },
+        {
+          "name": "_reply_to_review_comment",
+          "type": "function"
+        },
+        {
+          "name": "_request_pull_request_reviewers",
+          "type": "function"
+        },
+        {
+          "name": "_rerun_failed_workflow_run_jobs",
+          "type": "function"
+        },
+        {
+          "name": "_rerun_workflow_job",
+          "type": "function"
+        },
+        {
+          "name": "_resolve_review_thread",
+          "type": "function"
+        },
+        {
+          "name": "_search",
+          "type": "function"
+        },
+        {
+          "name": "_search_branches",
+          "type": "function"
+        },
+        {
+          "name": "_search_commits",
+          "type": "function"
+        },
+        {
+          "name": "_search_installed_repositories_streaming",
+          "type": "function"
+        },
+        {
+          "name": "_search_installed_repositories_v2",
+          "type": "function"
+        },
+        {
+          "name": "_search_issues",
+          "type": "function"
+        },
+        {
+          "name": "_search_prs",
+          "type": "function"
+        },
+        {
+          "name": "_search_repositories",
+          "type": "function"
+        },
+        {
+          "name": "_unlock_issue_conversation",
+          "type": "function"
+        },
+        {
+          "name": "_unresolve_review_thread",
+          "type": "function"
+        },
+        {
+          "name": "_update_file",
+          "type": "function"
+        },
+        {
+          "name": "_update_issue",
+          "type": "function"
+        },
+        {
+          "name": "_update_issue_comment",
+          "type": "function"
+        },
+        {
+          "name": "_update_pull_request",
+          "type": "function"
+        },
+        {
+          "name": "_update_ref",
+          "type": "function"
+        },
+        {
+          "name": "_update_review_comment",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__hotline",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 1,
+      "tools": [
+        {
+          "name": "_get_local_hotline",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__pets",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 11,
+      "tools": [
+        {
+          "name": "_adopt",
+          "type": "function"
+        },
+        {
+          "name": "_create_pet",
+          "type": "function"
+        },
+        {
+          "name": "_delete_pet",
+          "type": "function"
+        },
+        {
+          "name": "_get_pet_download_link",
+          "type": "function"
+        },
+        {
+          "name": "_list_pets",
+          "type": "function"
+        },
+        {
+          "name": "_prepare_pet_upload",
+          "type": "function"
+        },
+        {
+          "name": "_select_pet",
+          "type": "function"
+        },
+        {
+          "name": "_share_pet",
+          "type": "function"
+        },
+        {
+          "name": "_unshare_pet",
+          "type": "function"
+        },
+        {
+          "name": "_update_pet",
+          "type": "function"
+        },
+        {
+          "name": "_validate_pet_spritesheet",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__plugin_management",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 6,
+      "tools": [
+        {
+          "name": "_get_app_permissions",
+          "type": "function"
+        },
+        {
+          "name": "_get_plugin_dependencies",
+          "type": "function"
+        },
+        {
+          "name": "_search_plugins",
+          "type": "function"
+        },
+        {
+          "name": "_suggest_plugins",
+          "type": "function"
+        },
+        {
+          "name": "_uninstall_app",
+          "type": "function"
+        },
+        {
+          "name": "_update_app_permissions",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__safety_settings",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 5,
+      "tools": [
+        {
+          "name": "_get_family_info",
+          "type": "function"
+        },
+        {
+          "name": "_get_parental_controls",
+          "type": "function"
+        },
+        {
+          "name": "_get_trusted_contact",
+          "type": "function"
+        },
+        {
+          "name": "_prepare_parental_control_update",
+          "type": "function"
+        },
+        {
+          "name": "_update_parental_control",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__search_service",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 1,
+      "tools": [
+        {
+          "name": "_web_run",
+          "type": "function"
+        }
+      ]
+    },
+    {
+      "name": "mcp__codex_apps__sites",
+      "type": "namespace",
+      "tools_container_type": "list",
+      "tool_count": 25,
+      "tools": [
+        {
+          "name": "_add_custom_domain",
+          "type": "function"
+        },
+        {
+          "name": "_change_site_slug",
+          "type": "function"
+        },
+        {
+          "name": "_create_schedule",
+          "type": "function"
+        },
+        {
+          "name": "_create_site",
+          "type": "function"
+        },
+        {
+          "name": "_create_source_repository_write_credential",
+          "type": "function"
+        },
+        {
+          "name": "_deploy_private_site_version",
+          "type": "function"
+        },
+        {
+          "name": "_deploy_site_version",
+          "type": "function"
+        },
+        {
+          "name": "_generate_siwc_bypass_token",
+          "type": "function"
+        },
+        {
+          "name": "_get_deployment_status",
+          "type": "function"
+        },
+        {
+          "name": "_get_environment_variables",
+          "type": "function"
+        },
+        {
+          "name": "_get_site",
+          "type": "function"
+        },
+        {
+          "name": "_get_site_version",
+          "type": "function"
+        },
+        {
+          "name": "_get_site_worker_logs",
+          "type": "function"
+        },
+        {
+          "name": "_list_custom_domains",
+          "type": "function"
+        },
+        {
+          "name": "_list_site_versions",
+          "type": "function"
+        },
+        {
+          "name": "_list_sites",
+          "type": "function"
+        },
+        {
+          "name": "_read_database_overview",
+          "type": "function"
+        },
+        {
+          "name": "_read_database_table_rows",
+          "type": "function"
+        },
+        {
+          "name": "_refresh_custom_domain_status",
+          "type": "function"
+        },
+        {
+          "name": "_remove_custom_domain",
+          "type": "function"
+        },
+        {
+          "name": "_save_site_version",
+          "type": "function"
+        },
+        {
+          "name": "_save_version_and_deploy_private",
+          "type": "function"
+        },
+        {
+          "name": "_update_environment_variables",
+          "type": "function"
+        },
+        {
+          "name": "_update_site_access",
+          "type": "function"
+        },
+        {
+          "name": "_update_site_metadata",
+          "type": "function"
+        }
+      ]
+    }
+  ]
+}

@@ -104,6 +104,9 @@ PostgreSQL evidence and do not call providers to reconstruct an outcome.
 slaif-gateway codex inspect|profile
 slaif-gateway codex upgrade-key-module
 slaif-gateway codex rollback-key-module
+slaif-gateway codex inspect-profile-file
+slaif-gateway codex show-profile
+slaif-gateway codex migrate-key-profile
 slaif-gateway secrets generate hmac|admin-session|one-time
 slaif-gateway secrets validate-env
 ```
@@ -125,6 +128,26 @@ error. The default is a dry run;
 record in one atomic PostgreSQL transaction. The commands change no schema,
 no quota, no key policy, and no route or pricing data. Unexpected failures
 render a fixed generic safe error and never echo exception details.
+
+`codex inspect-profile-file <path> [--json]` validates a candidate Codex
+0.162 compatibility profile DATA file completely offline (bounded regular
+UTF-8 JSON, data revision >= 3, finite validated vocabulary, hard ceilings)
+and prints safe facts or a fixed safe rejection with a code; it never
+touches the database, network, or the active process profile, so it works
+even when a configured active profile file is invalid. `codex
+show-profile [--json]` shows the active profile snapshot of this CLI
+process bound at bootstrap; a running HTTP server keeps its own bootstrap
+snapshot until restart, so the output describes this CLI process only.
+`codex migrate-key-profile <key-uuid> --from-version <rev> --from-digest
+<hex> --reason ... --target {active,0162-v1,0162-v2}
+[--actor-admin-id <uuid>] [--apply] [--json]` moves one exact key between
+the active bootstrap profile snapshot and the frozen 0162-v1/0162-v2
+legacy tuples: the explicit source must equal the key's current pin (legacy
+1/2 sources require the frozen literal digests), the default is a dry run,
+`--apply` writes the metadata and one audit record in one row-locked
+transaction, a repeated exact target is a no-op with no extra audit, and
+same-revision/different-digest drift or a missing configured active profile
+fails closed with a safe error.
 
 ## Catalog refresh (collect, review, verify, apply)
 
@@ -335,6 +358,9 @@ slaif-gateway codex inspect
 slaif-gateway codex profile
 slaif-gateway codex upgrade-key-module
 slaif-gateway codex rollback-key-module
+slaif-gateway codex inspect-profile-file
+slaif-gateway codex show-profile
+slaif-gateway codex migrate-key-profile
 slaif-gateway cohorts create
 slaif-gateway cohorts list
 slaif-gateway cohorts show

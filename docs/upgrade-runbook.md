@@ -66,10 +66,12 @@ preservation). Legacy 0.149-v4 keys need the explicit two-hop sequence
 `0149-v4 → 0162-v1 → 0162-v2`, performed while quiesced. `0149-v5` is the
 minimal fix for the old client: it adds the bounded declaration-item ID
 vocabulary but retains the closed 0.149 namespace profile; it is not a
-path to the wider profile. The full operator-supplied 197 name/type
-artifact is still pending; the v2 rule is validated against the
-representative supplied name (`_read_page`), not an exact 197-name
-capture.
+path to the wider profile. The full
+operator-supplied 197 name/type diagnostic capture now ships as the
+supplemental SYNTHETIC-wrapped regression fixture
+(`tests/fixtures/codex/0.162.1/connector-tool-names-197-v1.json`); the
+connector-name rule is validated against all 197 supplied names in that
+fixture as well as the representative supplied name.
 
 Migration sequence:
 
@@ -140,3 +142,50 @@ mock loopback backend (the synthetic 197-tool declaration is labeled
 not-a-capture); independent official-CLI probes are external manual
 evidence, not CI. No production deployment, backend-version, or plugin
 claim follows from the migration steps.
+
+## Codex 0.162 file-backed profile DATA (data-only upgrade)
+
+The one Gateway upgrade that installs the data-revision 0162 engine is a
+normal binary upgrade; after it, future compatibility-policy updates are
+DATA file operations with the same installed engine:
+
+1. **Mount the profile directory read-only.** Point
+   `CODEX_COMPATIBILITY_PROFILE_FILE` at a file inside a trusted directory
+   bind-mounted read-only into the API, worker, and scheduler containers.
+   Atomic host-side file replacement (write temp file, rename over) stays
+   visible to running hosts; only process bootstrap consumes it.
+2. **Validate the candidate offline first:**
+   `slaif-gateway codex inspect-profile-file <candidate> --json` (bounded
+   regular UTF-8 JSON, revision >= 3, finite vocabulary, ceilings within the
+   installed hard caps). A profile describes namespace literals/prefixes,
+   grammar traits, and ceilings only; it cannot grant permissions,
+   endpoints, providers, hosted authority, or executable behavior.
+3. **Record provenance** (source, digest via `inspect-profile-file`,
+   revision) in the deployment record before rollout.
+4. **Restart/drain every process** (all API workers and any CLI usage
+   against the same configuration). There is no hot reload; all workers
+   and the CLI must use one profile snapshot — never serve traffic with
+   mixed profile revisions. A missing or invalid configured file refuses
+   startup; there is no silent fallback.
+5. **Verify:** `slaif-gateway codex show-profile` (this CLI process
+   snapshot) matches the candidate facts, and the running HTTP process
+   reports the same active identity for its pinned keys.
+6. **Migrate pinned keys explicitly**, dry run first:
+   `slaif-gateway codex migrate-key-profile <key-uuid> --from-version
+   <rev> --from-digest <hex> --reason "..." --json`, then `--apply`
+   (target `active` by default). Legacy/stale pins are denied by the
+   registry until their explicit migration; a same-revision/
+   different-digest source fails closed.
+
+**Data-only rollback** uses the previous trusted file (or the packaged
+default by clearing the setting) with the new engine: validate,
+restart/drain, verify, then migrate any key that must return to the
+previous pin. **Binary rollback** down to an old image requires first
+restoring the literal old tuple with the new engine —
+`migrate-key-profile --target 0162-v1` (or `0162-v2`) — because the old
+image's registry does not know data-revision pins; rolling back to
+`86ae51c` requires `0162-v1` and leaves `0149-v5` keys unchanged.
+
+Do not claim that all future Codex protocol semantics fit in profile
+DATA: new execution, stream, or item behavior outside the engine
+validators may still require a code change.

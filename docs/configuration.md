@@ -973,6 +973,31 @@ provider-side file upload/lifecycle, file search/retrieval tools, server-side
 fetching, parsing, OCR, indexing, audio input/output, or Office/spreadsheet
 formats outside the configured allowlist.
 
+### Codex 0.162 file-backed compatibility profile
+
+`CODEX_COMPATIBILITY_PROFILE_FILE` is an operator-only override for the
+Codex 0.162 data-revision compatibility profile. Empty (the default) uses
+the packaged default profile DATA shipped inside the installed package
+(`slaif_gateway/modules/clients/profiles/codex_0162.json`, revision 3,
+canonical digest `aa3de5376819022191e11935ee311acd4b59bf590324daaa0e3ebc448daf90bd`).
+
+A configured path must name a bounded regular UTF-8 JSON file describing
+data revision >= 3, schema version 1, the finite namespace/prefix/grammar
+traits, ceilings not above the installed hard caps, and exact provenance.
+The file is read once at process bootstrap (HTTP app factory and the CLI
+commands that need the active profile); a missing, malformed, duplicate-key,
+nonfinite, unknown-field, above-cap, or unsafe-grammar file fails closed
+with a fixed safe error — no silent fallback to the packaged default.
+Client request metadata, headers, model names, and user agents cannot
+select a profile file. There is no hot reload: running processes keep their
+bootstrap snapshot until restart/drain, so operators validate a candidate
+with `slaif-gateway codex inspect-profile-file`, deploy it, restart all
+workers, verify `show-profile` matches the HTTP snapshot, and then migrate
+pinned keys with `slaif-gateway codex migrate-key-profile`. A profile can
+describe namespace names, prefixes, grammar traits, and ceilings only; it
+cannot grant permissions, endpoints, providers, hosted authority, or
+executable behavior.
+
 ## External-tool policy configuration
 
 Objective 012 defines the `strict_bounded` / `external_tool_fenced` contract
