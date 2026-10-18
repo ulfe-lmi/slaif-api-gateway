@@ -24,7 +24,7 @@ registered default-denied except for exactly one
 `codex-0.149-responses-v1 -> local-coding-v1` pair. The structurally
 captured Codex 0.162 module (`codex-0.162-responses-v1`, a data-revision
 module captured from CLI 0.162.1 whose effective version is the validated
-profile DATA revision — packaged default revision `3` — and whose fixture
+profile DATA revision — packaged default revision `8` — and whose fixture
 digest binds the canonical digest of the shipped compatibility policy DATA)
 is registered the same way with exactly one
 `codex-0.162-responses-v1 -> local-coding-v1` pair. A validated operator
@@ -434,8 +434,8 @@ a wider finite taxonomy: strict built-in namespaces `functions` and
 tools total, 256 tools per namespace, 20,000 bytes per tool description,
 262,144 bytes of total namespace/tool description bytes, 4,096 schema
 properties per tool, and the existing schema, depth, byte, and recursive
-authority checks. Tool names are pattern-validated, function-only, and unique per
-namespace; the default profile DATA (revision 3) keeps
+authority checks. Tool names are pattern-validated and unique per
+namespace; the default profile DATA (revision 8) keeps
 `^[a-z][a-z0-9_.-]{0,63}$` for the strict built-in namespaces while dynamic
 `mcp__codex_apps__*` connector namespaces additionally accept the bounded
 leading-underscore form
@@ -1068,3 +1068,25 @@ green:
 Responses provider-hosted external-tool forwarding is not enabled by the
 accounting hold foundation. Missing or ambiguous final cost remains held and
 reserved for explicit operator reconciliation.
+
+## Qwen Local coding compatibility continuation
+
+The packaged 0.162 profile is now revision **8**. Engine changes are version
+owned: revision 4 permits schema property-map labels such as `secret` while
+still recursively checking their values for provider authority; revision 5
+adds only the custom grammar tool `functions.apply_patch` through declaration,
+streaming, and replay; revision 6 accepts bounded Local visible reasoning SSE
+with omitted `output_index` and empty encrypted content; revision 7 permits
+that same empty-ciphertext visible reasoning in continuation input. An empty
+ciphertext never creates an encrypted-replay reference or authorization.
+Revision 8 accepts sparse Local function-argument deltas and bounded argument
+done events tied to the active declared call, with exact argument matching and
+duplicate/late-event rejection. Existing visible-text shape, size, capability,
+and opaque replay checks remain.
+Ordinary Responses and older client modules keep their own policies.
+
+These semantics require the updated engine; editing profile DATA alone cannot
+install them. No database migration is needed. Upgrade key pins explicitly;
+see the [Qwen runbook](runbooks/codex-qwen38.md),
+[clean client examples](../examples/codex/qwen38-27b/README.md), and
+[bounded verification record](verification/codex-qwen38-live-smoke.md).

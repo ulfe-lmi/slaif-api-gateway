@@ -4,6 +4,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from fastapi.testclient import TestClient
 
 from slaif_gateway.api.dependencies import get_authenticated_gateway_key
@@ -271,19 +272,25 @@ def test_valid_path_reserves_finalizes_then_returns_provider_response(monkeypatc
     assert finalize_calls == ["classroom-cheap"]
 
 
-def test_quota_exceeded_returns_openai_error_before_501(monkeypatch) -> None:
+@pytest.mark.parametrize("param,label", [
+    ("cost_limit_eur", "Cost"), ("token_limit_total", "Token"),
+    ("request_limit_total", "Request"),
+])
+def test_quota_exceeded_returns_openai_error_before_501(monkeypatch, param, label) -> None:
     app = create_app()
     _wire_auth_and_db(monkeypatch, app)
     reserve_calls, release_calls = _wire_successful_route_pricing_quota(
         monkeypatch,
-        quota_error=QuotaLimitExceededError("Token quota limit exceeded", param="token_limit_total"),
+        quota_error=QuotaLimitExceededError(f"{label} quota limit exceeded", param=param),
     )
 
     response = TestClient(app).post("/v1/chat/completions", json=_chat_request())
 
     assert response.status_code == 429
-    assert response.json()["error"]["type"] == "rate_limit_error"
+    assert response.json()["error"]["type"] == "insufficient_quota"
     assert response.json()["error"]["code"] == "quota_limit_exceeded"
+    assert response.json()["error"]["param"] == param
+    assert response.json()["error"]["message"] == f"{label} quota limit exceeded"
     assert reserve_calls == ["classroom-cheap"]
     assert release_calls == []
 

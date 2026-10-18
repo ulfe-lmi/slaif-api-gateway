@@ -811,3 +811,19 @@ operator-selected `/v1/score` origin. Text is validation-only and is never
 sent, logged, or persisted. The module credential is read only from
 `FACIAL_SCORING_API_KEY`; the client gateway credential is never reused. No
 live score request or production route activation is implied by this contract.
+
+
+## Hard quota exhaustion errors
+
+Exceeding a key's configured cost, token, or total request quota returns HTTP
+429 with `error.type = "insufficient_quota"` and the existing stable
+`error.code = "quota_limit_exceeded"`. The safe message identifies the limit;
+`error.param` is respectively `cost_limit_eur`, `token_limit_total`, or
+`request_limit_total`. This also covers a reservation that would exceed the
+remaining quota; it does not imply that the used counter already equals the
+limit. Accounting, reservations, and enforcement are unchanged.
+
+Temporary per-window request/token limits and concurrent-request limits retain
+`rate_limit_error` and their specific codes. Waiting for a rate window does
+not replenish a total quota; an operator must extend or reset it. Client
+retry and presentation behavior remains client-specific.

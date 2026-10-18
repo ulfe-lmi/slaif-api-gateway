@@ -27,7 +27,7 @@ from slaif_gateway.modules.codex_profile_data import (
 )
 
 PACKAGED_PROFILE = Path("app/slaif_gateway/modules/clients/profiles/codex_0162.json")
-PACKAGED_PROFILE_DIGEST = "aa3de5376819022191e11935ee311acd4b59bf590324daaa0e3ebc448daf90bd"
+PACKAGED_PROFILE_DIGEST = "1d1e5b05587d1a8bf1f90057e43e357b7b3627dc3268ec09108e5fafa52e6d11"
 DEFAULT_BASE = PACKAGED_PROFILE.read_text()
 
 
@@ -44,12 +44,12 @@ def _expect_code(text: str, code: str) -> None:
     assert "evil" not in excinfo.value.safe_message
 
 
-def test_packaged_default_profile_is_revision3_with_stable_digest() -> None:
+def test_packaged_default_profile_is_revision8_with_stable_digest() -> None:
     profile = load_default_codex_profile()
     assert isinstance(profile, CodexProfileData)
     assert profile.schema_version == 1
     assert profile.module_id == "codex-0.162-responses-v1"
-    assert profile.revision == "3"
+    assert profile.revision == "8"
     assert profile.digest == PACKAGED_PROFILE_DIGEST
     assert profile.builtin_names == frozenset({"functions", "multi_agent_v1"})
     assert profile.connector_prefixes == ("mcp__codex_apps__",)
@@ -102,11 +102,11 @@ def test_revisions_are_bounded_decimal_at_least_three() -> None:
         assert profile.revision == revision
     for bad in ("1", "2", "0", "03", "010", "", "3.0", "-3", "1e1", "10000000000"):
         _expect_code(
-            DEFAULT_BASE.replace('"revision": "3"', f'"revision": "{bad}"'),
+            DEFAULT_BASE.replace('"revision": "8"', f'"revision": "{bad}"'),
             "revision_reserved_or_invalid",
         )
     _expect_code(
-        DEFAULT_BASE.replace('"revision": "3"', '"revision": 3'),
+        DEFAULT_BASE.replace('"revision": "8"', '"revision": 3'),
         "revision_reserved_or_invalid",
     )
 
@@ -415,6 +415,6 @@ def test_loaded_profile_never_reads_at_request_time() -> None:
     profile = load_default_codex_profile()
     facts = profile.to_facts()
     assert facts["module_id"] == "codex-0.162-responses-v1"
-    assert facts["revision"] == "3"
+    assert facts["revision"] == "8"
     assert facts["digest"] == PACKAGED_PROFILE_DIGEST
     assert facts["builtin_names"] == "functions,multi_agent_v1"

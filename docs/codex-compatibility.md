@@ -111,9 +111,9 @@ Codex CLI 0.162.1 is a separate structural-capture module:
 
 | Property | Pinned value |
 | --- | --- |
-| Client module | `codex-0.162-responses-v1` / data-revision module (packaged default data revision `3`) |
+| Client module | `codex-0.162-responses-v1` / data-revision module (packaged default data revision `8`) |
 | Compatibility policy DATA | `slaif_gateway/modules/clients/profiles/codex_0162.json` (shipped in the installed package) |
-| Canonical profile DATA digest | `aa3de5376819022191e11935ee311acd4b59bf590324daaa0e3ebc448daf90bd` (bound as `fixture_sha256`) |
+| Canonical profile DATA digest | `1d1e5b05587d1a8bf1f90057e43e357b7b3627dc3268ec09108e5fafa52e6d11` (bound as `fixture_sha256`) |
 | Operator override | `CODEX_COMPATIBILITY_PROFILE_FILE` (data revision >= 3, read once at bootstrap; no silent fallback) |
 | Historical version-2 fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v2.json` / `b7b257ed9338969a4482fd19434adb6b4a6d96c10037d69899298e643d303f85` (byte-immutable; pinned as the `0162-v2` migration selector) |
 | Historical version-1 fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json` / `724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e` (byte-immutable; pinned as the `0162-v1` migration selector) |
@@ -121,8 +121,8 @@ Codex CLI 0.162.1 is a separate structural-capture module:
 | Runtime status | registered, default-denied; exact `local-coding-v1` pair only |
 
 The profile accepts the gated `additional_tools` declaration under a wider
-finite taxonomy. The shipped default profile DATA (revision 3) retains the
-original finite limits and adds only the namespace-scoped name rule, which
+finite taxonomy. The shipped default profile DATA (revision 8) retains the
+original finite limits and namespace-scoped name rule, which
 is itself DATA-defined (one bounded leading underscore by default, with a
 file-updatable ceiling derived from the total name cap). Strict
 built-in namespaces `functions` and
@@ -130,7 +130,7 @@ built-in namespaces `functions` and
 `^mcp__codex_apps__[a-z][a-z0-9_.-]{0,63}$`, at most 16 namespaces, 256 tools
 total, 256 tools per namespace, 20,000 bytes per tool description, 262,144
 bytes of total namespace/tool description bytes, 4,096 schema properties per
-tool, function-only tools with pattern-validated names, unique per
+tool, function tools plus the exact custom `functions.apply_patch` grammar tool, with pattern-validated names, unique per
 namespace, and the existing schema, depth, byte, and recursive authority
 checks. The strict
 built-in namespaces `functions` and `multi_agent_v1` keep
@@ -802,3 +802,25 @@ scope, tests, privacy review, human authorization where applicable, and GitHub
 acceptance.
 Until then, SLAIF makes no Codex production, provider, or release compatibility
 claim.
+
+## Qwen Local coding compatibility continuation
+
+The packaged 0.162 profile is now revision **8**. Engine changes are version
+owned: revision 4 permits schema property-map labels such as `secret` while
+still recursively checking their values for provider authority; revision 5
+adds only the custom grammar tool `functions.apply_patch` through declaration,
+streaming, and replay; revision 6 accepts bounded Local visible reasoning SSE
+with omitted `output_index` and empty encrypted content; revision 7 permits
+that same empty-ciphertext visible reasoning in continuation input. An empty
+ciphertext never creates an encrypted-replay reference or authorization.
+Revision 8 accepts sparse Local function-argument deltas and bounded argument
+done events tied to the active declared call, with exact argument matching and
+duplicate/late-event rejection. Existing visible-text shape, size, capability,
+and opaque replay checks remain.
+Ordinary Responses and older client modules keep their own policies.
+
+These semantics require the updated engine; editing profile DATA alone cannot
+install them. No database migration is needed. Upgrade key pins explicitly;
+see the [Qwen runbook](runbooks/codex-qwen38.md),
+[clean client examples](../examples/codex/qwen38-27b/README.md), and
+[bounded verification record](verification/codex-qwen38-live-smoke.md).

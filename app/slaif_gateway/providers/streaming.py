@@ -122,6 +122,9 @@ class ResponsesStreamValidationProfile:
     web_search: bool = False
     web_search_max_tool_calls: int | None = None
     codex_reasoning_events: bool = False
+    custom_client_tools: frozenset[tuple[str, str, str]] = frozenset({("functions", "exec", "custom")})
+    allow_sparse_visible_reasoning: bool = False
+    allow_sparse_function_events: bool = False
 
 
 @dataclass(slots=True)
@@ -131,6 +134,7 @@ class _StreamItemState:
     name: str | None
     call_id: str | None
     delta_text: str = ""
+    encrypted_reasoning: bool = False
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -410,6 +414,9 @@ class ResponsesStreamEventValidator:
             "response.custom_tool_call_input.delta",
         }:
             return self._validate_tool_delta(payload, event_type)
+        if (event_type == "response.function_call_arguments.done"
+                and self._profile.allow_sparse_function_events):
+            return self._validate_sparse_function_arguments_done(payload)
         if event_type in {
             "response.reasoning_summary_part.added",
             "response.reasoning_summary_text.delta",
@@ -460,6 +467,14 @@ class ResponsesStreamEventValidator:
 
         if isinstance(item_id, str):
             active = self._active_items.get(item_id)
+            if (
+                event_type == "response.output_item.done"
+                and self._profile.allow_sparse_visible_reasoning
+                and state.item_type == "reasoning"
+                and not state.encrypted_reasoning
+                and active is None
+            ):
+                return False
             if event_type == "response.output_item.added":
                 if item_id in self._seen_item_ids:
                     return False
@@ -469,11 +484,14 @@ class ResponsesStreamEventValidator:
                 if state.call_id is not None:
                     self._seen_call_ids.add(state.call_id)
                 self._active_items[item_id] = state
+                if (self._profile.allow_sparse_function_events
+                        and state.item_type == "function_call" and "output_index" in payload):
+                    self._function_output_indices[item_id] = payload["output_index"]
                 return True
             if active is not None:
                 if not _same_stream_item(active, state):
                     return False
-                if active.delta_text and state.item_type in {"function_call", "custom_tool_call"}:
+                if (active.delta_text or item_id in self._function_arguments_done) and state.item_type in {"function_call", "custom_tool_call"}:
                     final_text = item.get(
                         "arguments" if state.item_type == "function_call" else "input"
                     )
@@ -536,6 +554,7 @@ class ResponsesStreamEventValidator:
                 item,
                 event_type=event_type,
                 encrypted_replay=self._profile.codex_encrypted_reasoning_replay,
+                allow_visible_reasoning=self._profile.allow_sparse_visible_reasoning,
             )
             if encrypted_bytes is None:
                 return None
@@ -546,7 +565,9 @@ class ResponsesStreamEventValidator:
                 ):
                     return None
                 self._encrypted_reasoning_bytes += encrypted_bytes
-            return _StreamItemState("reasoning", None, None, None)
+            return _StreamItemState(
+                "reasoning", None, None, None, encrypted_reasoning=bool(encrypted_bytes)
+            )
         else:
             return None
 
@@ -574,7 +595,7 @@ class ResponsesStreamEventValidator:
         if resolved is None:
             return None
         resolved_namespace, resolved_name, _resolved_type = resolved
-        if expected_type == "custom" and resolved != ("functions", "exec", "custom"):
+        if expected_type == "custom" and resolved not in self._profile.custom_client_tools:
             return None
         return _StreamItemState(
             str(item_type),
@@ -585,7 +606,7 @@ class ResponsesStreamEventValidator:
 
     def _capture_replay_candidate(self, *, item_id: str, state: _StreamItemState) -> None:
         if state.item_type == "reasoning":
-            if not self._profile.codex_encrypted_reasoning_replay:
+            if not self._profile.codex_encrypted_reasoning_replay or not state.encrypted_reasoning:
                 return
             kind = "reasoning"
         elif state.item_type in {"function_call", "custom_tool_call"}:
@@ -623,7 +644,10 @@ class ResponsesStreamEventValidator:
         if event_type == "response.custom_tool_call_input.delta":
             allowed.add("call_id")
         if not _only_fields(payload, allowed) or not _validate_delta_event(
-            payload, require_item=True
+            payload, require_item=not (
+                self._profile.allow_sparse_function_events
+                and event_type == "response.function_call_arguments.delta"
+            )
         ):
             return False
         item_id = payload.get("item_id")
@@ -637,6 +661,13 @@ class ResponsesStreamEventValidator:
         )
         if state is None or state.item_type != expected_item_type:
             return False
+        if item_id in self._function_arguments_done:
+            return False
+        if (self._profile.allow_sparse_function_events
+                and "output_index" in payload
+                and item_id in self._function_output_indices
+                and payload["output_index"] != self._function_output_indices[item_id]):
+            return False
         call_id = payload.get("call_id")
         if call_id is not None and (
             not _bounded_identifier(call_id, required=True) or call_id != state.call_id
@@ -647,6 +678,31 @@ class ResponsesStreamEventValidator:
         if len((state.delta_text + delta).encode("utf-8")) > _MAX_STREAM_CUMULATIVE_ITEM_BYTES:
             return False
         state.delta_text += delta
+        return True
+
+    def _validate_sparse_function_arguments_done(self, payload: Mapping[str, Any]) -> bool:
+        allowed = {"type", "item_id", "output_index", "sequence_number", "name", "arguments"}
+        if not _only_fields(payload, allowed):
+            return False
+        item_id = payload.get("item_id")
+        arguments = payload.get("arguments")
+        if (not _bounded_identifier(item_id, required=True)
+                or not _optional_index(payload, "output_index")
+                or not _optional_index(payload, "sequence_number")
+                or not isinstance(arguments, str)
+                or not _bounded_utf8(arguments, _MAX_STREAM_CUMULATIVE_ITEM_BYTES)):
+            return False
+        state = self._active_items.get(item_id)
+        if (state is None or state.item_type != "function_call"
+                or item_id in self._function_arguments_done
+                or arguments != state.delta_text):
+            return False
+        if "name" in payload and payload["name"] != state.name:
+            return False
+        if ("output_index" in payload and item_id in self._function_output_indices
+                and payload["output_index"] != self._function_output_indices[item_id]):
+            return False
+        self._function_arguments_done.add(item_id)
         return True
 
     def _validate_codex_function_event(self, payload: Mapping[str, Any], event_type: str) -> bool:
@@ -845,8 +901,14 @@ class ResponsesStreamEventValidator:
         item_id = payload.get("item_id")
         if not _bounded_identifier(item_id, required=True):
             return False
-        if not _required_index(payload, "output_index"):
-            return False
+        sparse_visible = (
+            self._profile.allow_sparse_visible_reasoning
+            and not strict_codex
+            and event_type in {"response.reasoning_text.delta", "response.reasoning_text.done"}
+        )
+        if "output_index" in payload or not sparse_visible:
+            if not _required_index(payload, "output_index"):
+                return False
         if strict_codex:
             if not self._accept_strict_sequence(payload):
                 return False
@@ -1682,7 +1744,22 @@ def _validate_reasoning_item(
     *,
     event_type: str,
     encrypted_replay: bool,
+    allow_visible_reasoning: bool = False,
 ) -> int | None:
+    if (
+        allow_visible_reasoning
+        and encrypted_replay
+        and event_type == "response.output_item.done"
+        and item.get("encrypted_content") == ""
+    ):
+        fields = {"type", "id", "summary", "content", "encrypted_content"}
+        if set(item) not in (fields, fields | {"status"}):
+            return None
+        if "status" in item and item["status"] != "completed":
+            return None
+        # Empty ciphertext is visible text, never an authenticated encrypted
+        # replay candidate. Reuse the bounded visible-content validator.
+        return _validate_reasoning_item(item, event_type=event_type, encrypted_replay=False)
     if encrypted_replay:
         if event_type == "response.output_item.done":
             if set(item) != {"type", "id", "summary", "encrypted_content"}:

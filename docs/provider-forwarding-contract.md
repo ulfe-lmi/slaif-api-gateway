@@ -1020,3 +1020,22 @@ failed-attempt controls active.
 The external-tool accounting hold/reconciliation foundation is implemented, but
 provider forwarding is not enabled by this capability. Unknown or ambiguous
 provider cost remains held and reserved; it is never silently forgiven.
+
+## Qwen Local coding compatibility continuation
+
+The packaged 0.162 profile is now revision **7**. Engine changes are version
+owned: revision 4 permits schema property-map labels such as `secret` while
+still recursively checking their values for provider authority; revision 5
+adds only the custom grammar tool `functions.apply_patch` through declaration,
+streaming, and replay; revision 6 accepts bounded Local visible reasoning SSE
+with omitted `output_index` and empty encrypted content; revision 7 permits
+that same empty-ciphertext visible reasoning in continuation input. An empty
+ciphertext never creates an encrypted-replay reference or authorization.
+Existing visible-text shape, size, capability, and opaque replay checks remain.
+Ordinary Responses and older client modules keep their own policies.
+
+These semantics require the updated engine; editing profile DATA alone cannot
+install them. No database migration is needed. Upgrade key pins explicitly;
+see the [Qwen runbook](runbooks/codex-qwen38.md),
+[clean client examples](../examples/codex/qwen38-27b/README.md), and
+[bounded verification record](verification/codex-qwen38-live-smoke.md).

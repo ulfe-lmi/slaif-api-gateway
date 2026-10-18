@@ -523,7 +523,7 @@ def test_inspect_profile_file_offline_with_invalid_configured_file(tmp_path, mon
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["valid"] is True
-    assert payload["revision"] == "3"
+    assert payload["revision"] == "8"
 
     shown = runner.invoke(app, ["codex", "show-profile"])
     assert shown.exit_code == 1

@@ -1,0 +1,25 @@
+# User-level named profile: ~/.codex/qwen38-coding.config.toml
+model = "qwen38-27b"
+model_provider = "slaif_qwen"
+model_catalog_json = "/ABSOLUTE/PATH/TO/.codex/qwen38-models.json"
+model_context_window = 131072
+model_auto_compact_token_limit = 100000
+model_reasoning_effort = "xhigh"
+show_raw_agent_reasoning = true
+web_search = "disabled"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[model_providers.slaif_qwen]
+name = "Qwen 3.8 27B via SLAIF"
+base_url = "https://gateway.example.org/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+
+[features]
+apps = false
+enable_mcp_apps = false
+plugins = false
+remote_compaction_v2 = false

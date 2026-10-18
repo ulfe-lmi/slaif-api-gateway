@@ -169,3 +169,6 @@ Faculty of Electrical Engineering, University of Ljubljana.
 
 We acknowledge support from the EC/EuroHPC JU and the Slovenian Ministry of
 Higher Education, Science and Innovation through SLAIF (grant 101254461).
+
+For a Local Qwen Responses deployment, see the [clean Codex profiles](examples/codex/qwen38-27b/README.md)
+and [setup and troubleshooting runbook](docs/runbooks/codex-qwen38.md).

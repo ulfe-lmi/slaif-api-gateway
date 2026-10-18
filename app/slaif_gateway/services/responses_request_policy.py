@@ -1079,7 +1079,12 @@ class ResponsesRequestPolicy:
             item_type == "reasoning"
             and self._codex_spec is not None
             and self._codex_spec.reasoning_visible_id_optional
-            and ("encrypted_content" not in item or item.get("encrypted_content") is None)
+            and (
+                "encrypted_content" not in item
+                or item.get("encrypted_content") is None
+                or (self._codex_spec.allow_empty_visible_reasoning
+                    and item.get("encrypted_content") == "")
+            )
         ):
             return self._validate_codex_visible_reasoning_item(item, param=param)
         if item_type == "reasoning" and (
@@ -1440,7 +1445,8 @@ class ResponsesRequestPolicy:
                 else:
                     allowed_authority_key_paths = frozenset()
                 if _contains_recursive_codex_authority_marker(
-                    tool, allowed_key_paths=allowed_authority_key_paths
+                    tool, allowed_key_paths=allowed_authority_key_paths,
+                    allow_schema_property_names=self._codex_spec.allow_schema_property_names,
                 ):
                     _raise(
                         tool_param,
@@ -1468,7 +1474,8 @@ class ResponsesRequestPolicy:
                 else:
                     format_value = canonical_tool.get("format")
                     if (
-                        tool_name != "exec"
+                        (str(namespace_name), str(tool_name), "custom")
+                        not in self._codex_spec.custom_client_tools
                         or not isinstance(format_value, Mapping)
                         or format_value.get("type") != "grammar"
                         or format_value.get("syntax") not in _CUSTOM_TOOL_GRAMMAR_SYNTAXES
@@ -1476,7 +1483,7 @@ class ResponsesRequestPolicy:
                         _raise(
                             f"{tool_param}.format",
                             "responses_codex_client_tools_invalid",
-                            "The Codex exec tool requires an approved bounded grammar format.",
+                            "The Codex custom tool requires an approved bounded grammar format.",
                         )
                     total_custom_format_bytes += format_bytes
                 tool_description = canonical_tool.get("description")
@@ -1772,13 +1779,16 @@ class ResponsesRequestPolicy:
                     canonical_content.append({"type": part["type"], "text": text_value})
                 canonical["content"] = canonical_content
         if "encrypted_content" in item:
-            if item["encrypted_content"] is not None:
+            if item["encrypted_content"] is not None and not (
+                self._codex_spec.allow_empty_visible_reasoning
+                and item["encrypted_content"] == ""
+            ):
                 _raise(
                     f"{param}.encrypted_content",
                     "responses_codex_reasoning_visible_invalid",
                     "Visible Codex reasoning permits only null encrypted content.",
                 )
-            canonical["encrypted_content"] = None
+            canonical["encrypted_content"] = item["encrypted_content"]
         if visible_bytes > self._codex_spec.max_reasoning_visible_bytes:
             _raise(
                 param,
@@ -2017,7 +2027,7 @@ class ResponsesRequestPolicy:
                     and (namespace is None or declaration[0] == namespace)
                 ]
                 if len(matches) != 1 or (
-                    tool_type == "custom" and matches[0] != ("functions", "exec", "custom")
+                    tool_type == "custom" and matches[0] not in self._codex_spec.custom_client_tools
                 ):
                     _raise(
                         f"input[{index}].name",
@@ -4368,6 +4378,9 @@ def codex_replay_request_candidates(
                 )
             continue
         if item_type == "reasoning":
+            # Empty ciphertext is visible context, never an opaque replay reference.
+            if item.get("encrypted_content") == "":
+                continue
             item_id = item.get("id")
             if isinstance(item_id, str):
                 candidates.append(
@@ -4961,6 +4974,7 @@ def _contains_recursive_codex_authority_marker(
     value: Any,
     *,
     allowed_key_paths: frozenset[tuple[str, ...]] = frozenset(),
+    allow_schema_property_names: bool = False,
     _path: tuple[str, ...] = (),
 ) -> bool:
     forbidden_fields = {
@@ -4999,6 +5013,18 @@ def _contains_recursive_codex_authority_marker(
         "tool_search",
     }
     if isinstance(value, Mapping):
+        # Only keys in schema-name maps beneath the function's parameters
+        # are labels. Continue scanning their schema VALUES, so a nested
+        # server_url/authorization/hosted type is still rejected. Do not
+        # grant the exemption to tool-level properties.
+        schema_name_map = (
+            allow_schema_property_names
+            and len(_path) >= 2
+            and _path[0] == "parameters"
+            and _path[-1] in {
+                "properties", "patternproperties", "$defs", "definitions", "dependentschemas"
+            }
+        )
         for key, nested in value.items():
             normalized_key = str(key).strip().lower().replace("-", "_")
             key_path = (*_path, normalized_key)
@@ -5013,7 +5039,7 @@ def _contains_recursive_codex_authority_marker(
                     "secret",
                 )
             )
-            if authority_key and key_path not in allowed_key_paths:
+            if authority_key and not schema_name_map and key_path not in allowed_key_paths:
                 return True
             if normalized_key == "type" and isinstance(nested, str):
                 normalized_type = nested.strip().lower().replace("-", "_")
@@ -5022,6 +5048,7 @@ def _contains_recursive_codex_authority_marker(
             if _contains_recursive_codex_authority_marker(
                 nested,
                 allowed_key_paths=allowed_key_paths,
+                allow_schema_property_names=allow_schema_property_names,
                 _path=key_path,
             ):
                 return True
@@ -5031,6 +5058,7 @@ def _contains_recursive_codex_authority_marker(
             _contains_recursive_codex_authority_marker(
                 item,
                 allowed_key_paths=allowed_key_paths,
+                allow_schema_property_names=allow_schema_property_names,
                 _path=_path,
             )
             for item in value

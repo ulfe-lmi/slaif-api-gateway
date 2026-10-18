@@ -165,3 +165,5 @@ specific domain. Merged code remains implementation truth.
   as current implementation status.
 - Unsupported or unknown input fails closed unless a current contract
   explicitly states otherwise.
+
+- [Qwen Codex profiles and deployment](runbooks/codex-qwen38.md)

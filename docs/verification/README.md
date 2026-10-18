@@ -166,3 +166,5 @@ on record. They are dated, commit-specific evidence, not certifications.
   a real owned PostgreSQL, and 4 owned-container cases with the read-only
   branding mount; test-only container bootstrap, no provider/model/email
   access; final-head CI, strategic review, and guarded merge pending.
+
+- [Qwen Codex live smoke and regression evidence](codex-qwen38-live-smoke.md)
