@@ -64,8 +64,8 @@
       <section class="action-panel" aria-labelledby="codex-artifacts-heading">
         <h2 id="codex-artifacts-heading">Credential-free Codex artifacts</h2>
         <p class="muted small">Generated from the resolved registered profile and validated gateway URL only.</p>
-        <p><a href="/admin/routes/{{ route.id }}/codex-profile/base">Download base fragment</a> · <a href="/admin/routes/{{ route.id }}/codex-profile/profile">Download named profile</a>{% if codex_profile_artifacts.model_catalog_json %} · <a href="/admin/routes/{{ route.id }}/codex-profile/catalog">Download model catalog</a>{% endif %}</p>
-        <pre><code>{{ codex_profile_artifacts.base_config_toml }}</code></pre>
+        <p>{% if not codex_profile_artifacts.profile_config_self_contained %}<a href="/admin/routes/{{ route.id }}/codex-profile/base">Download base fragment</a> · {% endif %}<a href="/admin/routes/{{ route.id }}/codex-profile/profile">Download Codex config</a>{% if codex_profile_artifacts.model_catalog_json %} · <a href="/admin/routes/{{ route.id }}/codex-profile/catalog">Download model catalog</a>{% endif %}</p>
+        {% if not codex_profile_artifacts.profile_config_self_contained %}<pre><code>{{ codex_profile_artifacts.base_config_toml }}</code></pre>{% endif %}
         <pre><code>{{ codex_profile_artifacts.profile_config_toml }}</code></pre>
       </section>
       {% endif %}

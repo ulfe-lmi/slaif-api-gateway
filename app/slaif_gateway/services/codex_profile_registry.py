@@ -24,10 +24,15 @@ from slaif_gateway.modules.clients.codex_0147 import (
 PROFILE_ID = "openai-gpt-5.6-sol-codex-0.147-v1"
 PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
+QWEN38_CODEX_PROFILE_ID = "qwen38-27b-codex-0.162-v1"
 QWEN38_TEXT_PROFILE_ID = "qwen3.8-27b-text-codex-0.148-v1"
-QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = "96a05bf2f0ddd88b0f2b048589e71005aea120f7cd74c06ced4c7c4bf20f4f89"
+QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = (
+    "96a05bf2f0ddd88b0f2b048589e71005aea120f7cd74c06ced4c7c4bf20f4f89"
+)
 QWEN38_VISION_PROFILE_ID = "qwen3.8-27b-vision-codex-0.148-v1"
-QWEN38_VISION_PROFILE_FIXTURE_SHA256 = "f1f7d744af4cbae0f2e3556e793258a6be5144006ef20f3b3d36ddba6f91f461"
+QWEN38_VISION_PROFILE_FIXTURE_SHA256 = (
+    "f1f7d744af4cbae0f2e3556e793258a6be5144006ef20f3b3d36ddba6f91f461"
+)
 
 _SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{2,95}$")
 _SAFE_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -91,7 +96,9 @@ _CATALOG_MODEL_FIELDS = frozenset(
     }
 )
 _CATALOG_ENUMS = {
-    "default_reasoning_level": frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}),
+    "default_reasoning_level": frozenset(
+        {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+    ),
     "default_reasoning_summary": frozenset({"none"}),
     "shell_type": frozenset({"default", "disabled", "local", "shell_command", "unified_exec"}),
     "tool_mode": frozenset({"code_mode", "code_mode_only", "direct"}),
@@ -116,7 +123,10 @@ _CATALOG_BOOLEAN_FIELDS = frozenset(
 )
 _CATALOG_INTEGER_FIELDS = frozenset(
     {
-        "context_window", "max_context_window", "auto_compact_token_limit", "priority",
+        "context_window",
+        "max_context_window",
+        "auto_compact_token_limit",
+        "priority",
         "effective_context_window_percent",
     }
 )
@@ -124,8 +134,15 @@ _CATALOG_ARRAY_FIELDS = frozenset(
     {"additional_speed_tiers", "service_tiers", "experimental_supported_tools"}
 )
 _CATALOG_NULLABLE_FIELDS = frozenset(
-    {"default_service_tier", "availability_nux", "upgrade", "base_instructions", "model_messages", "default_verbosity",
-     "apply_patch_tool_type"}
+    {
+        "default_service_tier",
+        "availability_nux",
+        "upgrade",
+        "base_instructions",
+        "model_messages",
+        "default_verbosity",
+        "apply_patch_tool_type",
+    }
 )
 _SECRET_MARKERS = ("sk-", "api_key", "authorization", "bearer ", "password", "secret", "token")
 
@@ -202,10 +219,14 @@ class CodexQualificationProfile:
             raise ValueError("Codex profile provider kind is unsupported.")
         if self.provider_slug is not None and not _SAFE_ID.fullmatch(self.provider_slug):
             raise ValueError("Codex profile provider slug is unsafe.")
-        if not self.required_endpoints or any(
-            not isinstance(endpoint, str) or not _SAFE_ENDPOINT.fullmatch(endpoint)
-            for endpoint in self.required_endpoints
-        ) or len(set(self.required_endpoints)) != len(self.required_endpoints):
+        if (
+            not self.required_endpoints
+            or any(
+                not isinstance(endpoint, str) or not _SAFE_ENDPOINT.fullmatch(endpoint)
+                for endpoint in self.required_endpoints
+            )
+            or len(set(self.required_endpoints)) != len(self.required_endpoints)
+        ):
             raise ValueError("Codex profile endpoint set must be non-empty and unique.")
         if any(
             not isinstance(gate, str)
@@ -231,7 +252,11 @@ class CodexQualificationProfile:
             or any(modality not in _SUPPORTED_MODALITIES for modality in self.input_modalities)
         ):
             raise ValueError("Codex profile input modalities are invalid.")
-        for value in (self.context_window_tokens, self.default_max_output_tokens, self.max_output_tokens):
+        for value in (
+            self.context_window_tokens,
+            self.default_max_output_tokens,
+            self.max_output_tokens,
+        ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError("Codex profile numeric limits are invalid.")
         if self.default_max_output_tokens > self.max_output_tokens:
@@ -248,10 +273,15 @@ class CodexQualificationProfile:
             if self.auto_compaction_token_threshold is not None:
                 raise ValueError("Remote compaction cannot declare a client-local threshold.")
         elif self.compaction_mode == "client_local":
-            if len(self.required_endpoints) != 1 or "/v1/responses/compact" in self.required_endpoints:
+            if (
+                len(self.required_endpoints) != 1
+                or "/v1/responses/compact" in self.required_endpoints
+            ):
                 raise ValueError("Client-local compaction requires one non-compact endpoint.")
             if "codex_compaction" in self.required_route_gates:
-                raise ValueError("Client-local compaction cannot require the remote compaction gate.")
+                raise ValueError(
+                    "Client-local compaction cannot require the remote compaction gate."
+                )
             if (
                 isinstance(self.auto_compaction_token_threshold, bool)
                 or not isinstance(self.auto_compaction_token_threshold, int)
@@ -262,7 +292,10 @@ class CodexQualificationProfile:
         else:
             if self.auto_compaction_token_threshold is not None:
                 raise ValueError("No compaction mode cannot declare a threshold.")
-            if "/v1/responses/compact" in self.required_endpoints or "codex_compaction" in self.required_route_gates:
+            if (
+                "/v1/responses/compact" in self.required_endpoints
+                or "codex_compaction" in self.required_route_gates
+            ):
                 raise ValueError("No compaction mode cannot require remote compaction.")
         if "image_input" in self.required_route_gates and "image" not in self.input_modalities:
             raise ValueError("Image input gate requires image modality.")
@@ -270,15 +303,32 @@ class CodexQualificationProfile:
             raise ValueError("Image modality requires the image-input gate.")
         if "codex_client_tools" in self.required_route_gates and not self.local_tools:
             raise ValueError("Client-tool gate requires local tools.")
-        if "codex_streaming_tool_events" in self.required_route_gates and "codex_client_tools" not in self.required_route_gates:
+        if (
+            "codex_streaming_tool_events" in self.required_route_gates
+            and "codex_client_tools" not in self.required_route_gates
+        ):
             raise ValueError("Streaming tool events require client tools.")
-        if "codex_encrypted_reasoning_replay" in self.required_route_gates and not self.reasoning_replay:
+        if (
+            "codex_encrypted_reasoning_replay" in self.required_route_gates
+            and not self.reasoning_replay
+        ):
             raise ValueError("Encrypted reasoning replay requires reasoning replay.")
-        if self.reasoning_replay and "codex_encrypted_reasoning_replay" not in self.required_route_gates:
+        if (
+            self.reasoning_replay
+            and "codex_encrypted_reasoning_replay" not in self.required_route_gates
+        ):
             raise ValueError("Reasoning replay requires its route gate.")
-        if self.streaming_tool_events and "codex_streaming_tool_events" not in self.required_route_gates:
+        if (
+            self.streaming_tool_events
+            and "codex_streaming_tool_events" not in self.required_route_gates
+        ):
             raise ValueError("Streaming tool events require their route gate.")
-        for field in ("reasoning_replay", "streaming_tool_events", "mocked_qualification", "live_qualification"):
+        for field in (
+            "reasoning_replay",
+            "streaming_tool_events",
+            "mocked_qualification",
+            "live_qualification",
+        ):
             if type(getattr(self, field)) is not bool:
                 raise ValueError(f"Codex profile {field} must be a strict boolean.")
         if len(self.fixture_sha256) != 64 or any(
@@ -295,7 +345,12 @@ class CodexQualificationProfile:
         }:
             raise ValueError("Codex provider fields contain an unsupported value.")
         provider_fields = self.credential_free_provider_fields
-        if set(provider_fields) != {"name", "wire_api", "requires_openai_auth", "supports_websockets"}:
+        if set(provider_fields) != {
+            "name",
+            "wire_api",
+            "requires_openai_auth",
+            "supports_websockets",
+        }:
             raise ValueError("Codex provider fields are incomplete.")
         if (
             type(provider_fields["name"]) is not str
@@ -319,7 +374,11 @@ class CodexQualificationProfile:
             canonical = json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
             if canonical != self.model_catalog_artifact:
                 raise ValueError("Codex model catalog artifact is not deterministic.")
-            if not self.model_catalog_target or not _SAFE_TOKEN.fullmatch(self.model_catalog_target) or not self.model_catalog_target.endswith(".json"):
+            if (
+                not self.model_catalog_target
+                or not _SAFE_TOKEN.fullmatch(self.model_catalog_target)
+                or not self.model_catalog_target.endswith(".json")
+            ):
                 raise ValueError("Codex model catalog target is unsafe.")
             _validate_catalog_artifact(
                 parsed,
@@ -327,6 +386,12 @@ class CodexQualificationProfile:
                 context_window_tokens=self.context_window_tokens,
                 auto_compaction_token_threshold=self.auto_compaction_token_threshold,
                 input_modalities=self.input_modalities,
+                allow_coding_metadata=(
+                    self.profile_id == QWEN38_CODEX_PROFILE_ID
+                    and self.client_module_id == "codex-0.162-responses-v1"
+                    and self.client_module_version == "8"
+                    and self.cli_version == "0.162.1"
+                ),
             )
         elif self.model_catalog_target is not None:
             raise ValueError("Codex model catalog target requires an artifact.")
@@ -415,12 +480,6 @@ def validate_codex_profile_registry(
     _validate_registry(registry)
 
 
-CODEX_PROFILE_REGISTRY: Mapping[str, CodexQualificationProfile] = MappingProxyType(
-    {OPENAI_CODEX_PROFILE.profile_id: OPENAI_CODEX_PROFILE}
-)
-_validate_registry(CODEX_PROFILE_REGISTRY)
-
-
 def get_codex_profile(profile_id: str) -> CodexQualificationProfile | None:
     """Return a registered immutable profile, or ``None`` for unknown IDs."""
 
@@ -462,27 +521,74 @@ def validate_codex_profile_declaration(value: object) -> tuple[str, str | None]:
 
 
 _FORBIDDEN_FIXTURE_KEYS = {
-    "prompt", "output", "text", "description", "schema", "arguments", "result",
-    "reasoning", "encrypted", "body", "request", "response", "url", "headers",
-    "key", "cookie", "authorization", "environment", "workspace", "path", "metadata",
+    "prompt",
+    "output",
+    "text",
+    "description",
+    "schema",
+    "arguments",
+    "result",
+    "reasoning",
+    "encrypted",
+    "body",
+    "request",
+    "response",
+    "url",
+    "headers",
+    "key",
+    "cookie",
+    "authorization",
+    "environment",
+    "workspace",
+    "path",
+    "metadata",
 }
 _STRUCTURAL_CONTAINER_KEYS = frozenset(
     {
-        "event_sequence", "request_facts", "catalog_facts", "route_facts", "credential_facts",
-        "accounting_facts", "phases", "relationships", "gates", "facts", "reservations",
-        "ledgers", "text_only", "no_search", "no_parallel",
+        "event_sequence",
+        "request_facts",
+        "catalog_facts",
+        "route_facts",
+        "credential_facts",
+        "accounting_facts",
+        "phases",
+        "relationships",
+        "gates",
+        "facts",
+        "reservations",
+        "ledgers",
+        "text_only",
+        "no_search",
+        "no_parallel",
     }
 )
 _STRUCTURAL_STRING_KEYS = frozenset(
     {
-        "phase", "relation", "taxonomy_id", "endpoint", "provider_kind", "model_rewrite",
-        "gate", "status", "catalog_source", "ledger_status", "reservation_status",
+        "phase",
+        "relation",
+        "taxonomy_id",
+        "endpoint",
+        "provider_kind",
+        "model_rewrite",
+        "gate",
+        "status",
+        "catalog_source",
+        "ledger_status",
+        "reservation_status",
     }
 )
 _STRUCTURAL_INTEGER_KEYS = frozenset(
     {
-        "event_count", "request_index", "event_index", "input_tokens", "cached_tokens",
-        "output_tokens", "reasoning_tokens", "total_tokens", "cost_nano_eur", "requests_used",
+        "event_count",
+        "request_index",
+        "event_index",
+        "input_tokens",
+        "cached_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "total_tokens",
+        "cost_nano_eur",
+        "requests_used",
         "tokens_used",
     }
 )
@@ -499,9 +605,7 @@ def sanitize_codex_fixture(
         not isinstance(allowed_types, frozenset)
         or not allowed_types
         or any(
-            not isinstance(item, str)
-            or not _SAFE_TOKEN.fullmatch(item)
-            or len(item) > 64
+            not isinstance(item, str) or not _SAFE_TOKEN.fullmatch(item) or len(item) > 64
             for item in allowed_types
         )
     ):
@@ -523,8 +627,17 @@ def sanitize_codex_fixture(
                 if not isinstance(raw_key, str) or raw_key.lower() in _FORBIDDEN_FIXTURE_KEYS:
                     raise ValueError("Codex fixture contains prohibited content.")
                 if raw_key not in {
-                    "event_type", "field_type", "tool_type", "id", "count", "index", "enabled", "digest",
-                    *_STRUCTURAL_CONTAINER_KEYS, *_STRUCTURAL_STRING_KEYS, *_STRUCTURAL_INTEGER_KEYS,
+                    "event_type",
+                    "field_type",
+                    "tool_type",
+                    "id",
+                    "count",
+                    "index",
+                    "enabled",
+                    "digest",
+                    *_STRUCTURAL_CONTAINER_KEYS,
+                    *_STRUCTURAL_STRING_KEYS,
+                    *_STRUCTURAL_INTEGER_KEYS,
                 }:
                     raise ValueError("Codex fixture contains arbitrary metadata.")
                 if raw_key == "digest":
@@ -598,7 +711,9 @@ def _safe_catalog_string(value: object, *, field: str) -> None:
         raise ValueError("Codex model catalog enum is not allowlisted.")
 
 
-def _safe_catalog_model(entry: object, *, public_model: str) -> None:
+def _safe_catalog_model(
+    entry: object, *, public_model: str, allow_coding_metadata: bool = False
+) -> None:
     required_fields = {"slug", "context_window", "auto_compact_token_limit", "input_modalities"}
     if (
         not isinstance(entry, Mapping)
@@ -620,11 +735,7 @@ def _safe_catalog_model(entry: object, *, public_model: str) -> None:
             ):
                 raise ValueError("Codex model catalog modalities are invalid.")
         elif key == "supported_reasoning_levels":
-            if (
-                not isinstance(value, list)
-                or not value
-                or len(value) > 8
-            ):
+            if not isinstance(value, list) or not value or len(value) > 8:
                 raise ValueError("Codex model catalog reasoning levels are invalid.")
             efforts = [
                 item.get("effort")
@@ -637,26 +748,32 @@ def _safe_catalog_model(entry: object, *, public_model: str) -> None:
                         isinstance(item.get("description"), str)
                         and len(item["description"].encode("utf-8")) <= 128
                         and not any(
-                            ord(char) < 32 or ord(char) == 127
-                            for char in item["description"]
+                            ord(char) < 32 or ord(char) == 127 for char in item["description"]
                         )
                         and not any(
-                            marker in item["description"].lower()
-                            for marker in _SECRET_MARKERS
+                            marker in item["description"].lower() for marker in _SECRET_MARKERS
                         )
                         and "://" not in item["description"]
                         and "/" not in item["description"]
                     )
                 )
             ]
-            if len(efforts) != len(value) or len(set(efforts)) != len(efforts) or any(
-                effort not in _CATALOG_ENUMS["default_reasoning_level"] for effort in efforts
+            if (
+                len(efforts) != len(value)
+                or len(set(efforts)) != len(efforts)
+                or any(
+                    effort not in _CATALOG_ENUMS["default_reasoning_level"] for effort in efforts
+                )
             ):
                 raise ValueError("Codex model catalog reasoning levels are invalid.")
         elif key == "truncation_policy":
             if not isinstance(value, Mapping) or set(value) != {"mode", "limit"}:
                 raise ValueError("Codex model catalog truncation policy is invalid.")
-            if value["mode"] not in {"bytes", "tokens"} or type(value["limit"]) is not int or value["limit"] < 0:
+            if (
+                value["mode"] not in {"bytes", "tokens"}
+                or type(value["limit"]) is not int
+                or value["limit"] < 0
+            ):
                 raise ValueError("Codex model catalog truncation policy is invalid.")
         elif key in _CATALOG_ARRAY_FIELDS:
             if (
@@ -674,6 +791,20 @@ def _safe_catalog_model(entry: object, *, public_model: str) -> None:
             elif key == "apply_patch_tool_type":
                 if value not in _CATALOG_ENUMS["apply_patch_tool_type"]:
                     raise ValueError("Codex model catalog patch metadata is invalid.")
+            elif key == "model_messages" and allow_coding_metadata:
+                if (
+                    not isinstance(value, Mapping)
+                    or set(value) != {"instructions_template"}
+                    or not isinstance(value["instructions_template"], str)
+                    or not 1 <= len(value["instructions_template"]) <= 1024
+                    or any(ord(c) < 32 or ord(c) == 127 for c in value["instructions_template"])
+                    or any(
+                        marker in value["instructions_template"].lower()
+                        for marker in _SECRET_MARKERS
+                    )
+                    or "://" in value["instructions_template"]
+                ):
+                    raise ValueError("Codex coding instructions are invalid.")
             elif key in {"availability_nux", "upgrade", "model_messages"}:
                 raise ValueError("Codex model catalog nullable metadata is invalid.")
             else:
@@ -695,13 +826,16 @@ def _validate_catalog_artifact(
     context_window_tokens: int,
     auto_compaction_token_threshold: int | None,
     input_modalities: tuple[str, ...],
+    allow_coding_metadata: bool = False,
 ) -> None:
     if not isinstance(catalog, Mapping) or set(catalog) != _CATALOG_TOP_LEVEL_FIELDS:
         raise ValueError("Codex model catalog top-level shape is invalid.")
     models = catalog["models"]
     if not isinstance(models, list) or len(models) != 1:
         raise ValueError("Codex model catalog must contain exactly one model.")
-    _safe_catalog_model(models[0], public_model=public_model)
+    _safe_catalog_model(
+        models[0], public_model=public_model, allow_coding_metadata=allow_coding_metadata
+    )
     entry = models[0]
     if not isinstance(entry, Mapping):
         raise ValueError("Codex model catalog model entry is invalid.")
@@ -718,12 +852,23 @@ def _validate_catalog_artifact(
             raise ValueError("Codex text catalog parallel calls are unsafe.")
         if entry.get("supports_reasoning_summaries") is not False:
             raise ValueError("Codex text catalog reasoning replay is unsafe.")
-        if entry.get("apply_patch_tool_type") is not None:
+        if entry.get("apply_patch_tool_type") is not None and not (
+            allow_coding_metadata and entry["apply_patch_tool_type"] == "freeform"
+        ):
             raise ValueError("Codex text catalog patch authority is unsafe.")
-    _validate_catalog_size(catalog)
+    size_catalog = catalog
+    if allow_coding_metadata and entry.get("model_messages") is not None:
+        # Instructions have their own exact-shape/1024-character check above.
+        # Keep the historical 128-character structural cap on every other leaf.
+        size_entry = dict(entry)
+        size_entry["model_messages"] = {"instructions_template": ""}
+        size_catalog = {"models": [size_entry]}
+    _validate_catalog_size(size_catalog)
 
 
-def _validate_catalog_size(node: object, *, depth: int = 0, budget: list[int] | None = None) -> None:
+def _validate_catalog_size(
+    node: object, *, depth: int = 0, budget: list[int] | None = None
+) -> None:
     if budget is None:
         budget = [0]
     budget[0] += 1
@@ -865,3 +1010,105 @@ QWEN38_VISION_CODEX_CANDIDATE = _profile(
     provider_display_name="Qwen3.8 vision OpenAI-compatible",
     catalog_source="replacement",
 )
+
+
+# Text/tool protocol configuration verified with the exact 0.162.1 client.
+# Live smoke is bounded evidence, not full live qualification or vision support.
+QWEN38_CODEX_PROFILE = _profile(
+    profile_id=QWEN38_CODEX_PROFILE_ID,
+    metadata_version=PROFILE_METADATA_VERSION,
+    cli_version="0.162.1",
+    public_model="qwen38-27b",
+    upstream_model="qwen38-27b",
+    wire_api="responses",
+    provider_kind="openai_compatible",
+    provider_slug=None,
+    required_endpoints=("/v1/responses",),
+    required_route_gates=(
+        "codex_request_envelope",
+        "codex_client_tools",
+        "codex_streaming_tool_events",
+        "codex_encrypted_reasoning_replay",
+    ),
+    context_window_tokens=131072,
+    default_max_output_tokens=8192,
+    max_output_tokens=16384,
+    compaction_mode="client_local",
+    reasoning_replay=True,
+    streaming_tool_events=True,
+    local_tools=("function", "custom"),
+    input_modalities=("text",),
+    auto_compaction_token_threshold=100000,
+    credential_free_provider_fields={
+        "name": "Qwen38SLAIF",
+        "wire_api": "responses",
+        "requires_openai_auth": False,
+        "supports_websockets": False,
+    },
+    model_catalog_artifact=json.dumps(
+        {
+            "models": [
+                {
+                    "slug": "qwen38-27b",
+                    "display_name": "Qwen 3.8 27B",
+                    "description": "Qwen 3.8 27B through an operator-configured SLAIF gateway",
+                    "model_messages": {
+                        "instructions_template": "You are a coding assistant. Follow the user's instructions and applicable AGENTS.md files. Use the available tools when requested to inspect files, make changes, and verify results. Keep communication concise and report changes, checks, and remaining limitations."
+                    },
+                    "default_reasoning_level": "medium",
+                    "supported_reasoning_levels": [
+                        {"effort": "none", "description": "Direct answers"},
+                        {"effort": "low", "description": "Light reasoning"},
+                        {"effort": "medium", "description": "Balanced reasoning"},
+                        {"effort": "xhigh", "description": "Extended reasoning"},
+                    ],
+                    "shell_type": "unified_exec",
+                    "visibility": "list",
+                    "supported_in_api": True,
+                    "priority": 1,
+                    "availability_nux": None,
+                    "upgrade": None,
+                    "support_verbosity": False,
+                    "default_verbosity": None,
+                    "apply_patch_tool_type": "freeform",
+                    "supports_reasoning_summary_parameter": False,
+                    "default_reasoning_summary": "none",
+                    "truncation_policy": {"mode": "tokens", "limit": 10000},
+                    "context_window": 131072,
+                    "max_context_window": 131072,
+                    "auto_compact_token_limit": 100000,
+                    "experimental_supported_tools": [],
+                    "input_modalities": ["text"],
+                    "include_skills_usage_instructions": False,
+                    "include_plugin_usage_instructions": False,
+                    "include_apps_usage_instructions": False,
+                    "use_responses_lite": True,
+                    "supports_search_tool": False,
+                    "supports_parallel_tool_calls": False,
+                    "supports_reasoning_summaries": False,
+                }
+            ]
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ),
+    model_catalog_target="qwen38-models.json",
+    fixture_sha256="1d1e5b05587d1a8bf1f90057e43e357b7b3627dc3268ec09108e5fafa52e6d11",
+    evidence_date="2026-10-18",
+    mocked_qualification=True,
+    live_qualification=False,
+    profile_name="qwen38",
+    provider_display_name="Qwen 3.8 27B via SLAIF",
+    catalog_source="replacement",
+    client_module_id="codex-0.162-responses-v1",
+    client_module_version="8",
+)
+
+CODEX_PROFILE_REGISTRY: Mapping[str, CodexQualificationProfile] = MappingProxyType(
+    {
+        OPENAI_CODEX_PROFILE.profile_id: OPENAI_CODEX_PROFILE,
+        QWEN38_CODEX_PROFILE.profile_id: QWEN38_CODEX_PROFILE,
+    }
+)
+_validate_registry(CODEX_PROFILE_REGISTRY)

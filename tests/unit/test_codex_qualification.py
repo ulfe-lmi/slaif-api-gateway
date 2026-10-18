@@ -947,3 +947,51 @@ def test_pilot_key_validation_rejects_unbounded_or_widened_policy(
 ) -> None:
     with pytest.raises(ValueError):
         validate_codex_pilot_key_input(_pilot_payload(**overrides), confirmed=confirmed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "missing_gate",
+    [None, "codex_client_tools", "codex_streaming_tool_events", "codex_encrypted_reasoning_replay"],
+)
+async def test_registered_qwen_route_requires_exact_download_prerequisites(missing_gate):
+    from slaif_gateway.services.codex_profile_registry import QWEN38_CODEX_PROFILE as profile
+
+    route, _ = _pair()
+    route.provider = "synthetic"
+    route.requested_model = route.upstream_model = profile.public_model
+    route.capabilities = {
+        "responses": {
+            "text": True,
+            "stateless": True,
+            "streaming": True,
+            **{gate: True for gate in profile.required_route_gates},
+        },
+        "codex_limits": {
+            "context_window_tokens": profile.context_window_tokens,
+            "default_max_output_tokens": profile.default_max_output_tokens,
+            "max_output_tokens": profile.max_output_tokens,
+        },
+        "codex_profile": {
+            "version": 2,
+            "profile_id": profile.profile_id,
+            "fixture_sha256": profile.fixture_sha256,
+        },
+    }
+    if missing_gate:
+        route.capabilities["responses"][missing_gate] = False
+    service = _service(
+        [route],
+        provider="synthetic",
+        provider_kind="openai_compatible",
+        upstream_model=profile.upstream_model,
+    )
+    result = (await service.inspect(now=NOW))[0]
+    assert result.ready is (missing_gate is None)
+    assert result.real_provider_e2e is False
+    if missing_gate is None:
+        assert (
+            await service.ready_responses_profile(qualification_profile=profile.profile_id, now=NOW)
+        ).profile_id == profile.profile_id
+        route.capabilities["codex_limits"]["context_window_tokens"] += 1
+        assert not (await service.inspect(now=NOW))[0].ready

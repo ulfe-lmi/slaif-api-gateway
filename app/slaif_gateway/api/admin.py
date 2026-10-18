@@ -4916,11 +4916,11 @@ async def admin_codex_profile_artifact(
     except ValueError:
         return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
     if artifact_name == "base":
-        return Response(artifacts.base_config_toml, media_type="text/plain")
+        return Response(artifacts.base_config_toml, media_type="text/plain", headers={"Content-Disposition": 'attachment; filename="codex-provider.config.toml"'})
     if artifact_name == "profile":
-        return Response(artifacts.profile_config_toml, media_type="text/plain")
+        return Response(artifacts.profile_config_toml, media_type="text/plain", headers={"Content-Disposition": f'attachment; filename="{artifacts.profile}.config.toml"'})
     if artifact_name == "catalog" and artifacts.model_catalog_json is not None:
-        return Response(artifacts.model_catalog_json, media_type="application/json")
+        return Response(artifacts.model_catalog_json, media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{artifacts.model_catalog_target}"'})
     return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
 
 
