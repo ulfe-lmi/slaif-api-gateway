@@ -396,6 +396,30 @@ class Settings(BaseSettings):
     OIDC_SCOPES: str = "openid profile email"
     LOCAL_ADMIN_FALLBACK: bool = True
 
+    # --- Operator-controlled full incoming-request capture (default OFF) ----
+    # An explicit, opt-in, finite, expiring diagnostic facility. Enable +
+    # directory + revision provenance are process-restart settings; arm/status/
+    # stop operate on a shared local manifest and need no restart. Reading a
+    # setting alone never creates a capture window. Requires an absolute
+    # operator-owned 0700 directory outside the repo/DB; see the runbook.
+    REQUEST_CAPTURE_ENABLED: bool = False
+    REQUEST_CAPTURE_DIR: str = ""
+    # Body capture budget. Default 10 MiB so a full request within the shipped
+    # NGINX client_max_body_size (10m) is capturable; base64/metadata overhead
+    # is accounted separately in the store.
+    REQUEST_CAPTURE_BODY_BUDGET_BYTES: int = 10485760
+    # Total on-disk storage budget for the whole capture root (all sessions).
+    # Must be at least the per-capture budget to allow one full-body capture.
+    REQUEST_CAPTURE_TOTAL_STORAGE_BYTES: int = 20971520
+    REQUEST_CAPTURE_MAX_COUNT: int = 100
+    REQUEST_CAPTURE_MAX_TTL_SECONDS: int = 3600
+    # Honest deployed-revision provenance: operator-declared (never guessed
+    # from a checkout/main). Empty revision records as "unknown".
+    REQUEST_CAPTURE_DEPLOYED_REVISION: str = ""
+    REQUEST_CAPTURE_REVISION_PROVENANCE: str = "operator-unspecified"
+    # Empty resolves the installed package version; set to override.
+    REQUEST_CAPTURE_APP_VERSION: str = ""
+
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
     @model_validator(mode="after")

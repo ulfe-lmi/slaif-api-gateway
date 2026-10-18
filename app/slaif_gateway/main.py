@@ -20,6 +20,7 @@ from slaif_gateway.api.errors import (
 from slaif_gateway.api.health import router as health_router
 from slaif_gateway.api.metrics import router as metrics_router
 from slaif_gateway.api.middleware import MetricsMiddleware, RequestIdMiddleware
+from slaif_gateway.api.request_capture import install_request_capture
 from slaif_gateway.api.openai_compat import router as openai_compat_router
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.lifespan import build_lifespan
@@ -57,6 +58,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestIdMiddleware, settings=app_settings)
+    # Outermost default-OFF capture observer; added last so it reads the diagnostic ID.
+    install_request_capture(app, app_settings)
 
     app.add_exception_handler(OpenAICompatibleError, openai_compatible_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)

@@ -47,6 +47,10 @@ Runbooks:
 - [Codex 0.147.0 bounded OpenAI pilot](codex-openai-pilot.md) is a
   separately authorized, non-production human procedure. It is prepared but
   was not executed; `real_provider_e2e=false` remains authoritative.
+- [Incoming request capture](incoming-request-capture.md) is the exact
+  operator procedure for the default-OFF, finite, local full-request
+  diagnostic facility (mount, restart matrix, arm/inspect/cleanup, and
+  access-log safety).
 - [HPC verification and local tool bootstrap](../testing-hpc.md)
   documents the Codex-inside-HPC workflow, user-local PostgreSQL/Redis/Compose
   provisioning, and the two-table validation/test-suite summary format.

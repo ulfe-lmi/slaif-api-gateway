@@ -1153,6 +1153,57 @@ command line):
   again at review/verify time. Raw reasoning, session transcripts, and
   model debug output are never stored.
 
+## Operator Request Capture Privacy Boundary
+
+The operator request-capture facility is a default-OFF, finite, local
+diagnostic store. It is the only path in the gateway that persists incoming
+request content, and it is bounded as follows:
+
+- **Explicit consent and finite scope.** Full incoming-request capture is
+  human-authorized only for a finite, operator-armed window: an exact
+  endpoint path, optional verified-key UUID filter, a finite request count,
+  and an absolute TTL. Reading configuration never creates a window;
+  exhaustion and expiry never re-arm, even across restarts.
+- **Masking of authentication material.** Every stored path/query/header/
+  body byte is masked for the known incoming authentication values: the
+  gateway Bearer token (replaced by its public hint), `Cookie` secret values,
+  `Proxy-Authorization` decoded credentials, and explicit credential
+  query/body fields — in raw, percent-encoded, and JSON-escaped copies.
+  Ordinary prompt text is never masked except where it equals a known
+  secret value.
+- **Incomplete capture stores nothing.** If the body was truncated by the
+  budget, the client disconnected, the application never consumed the body,
+  or buffering failed, **zero body bytes are persisted**; the record stores
+  the precise reason and byte counts. This prevents a truncated prefix that
+  could carry a near-complete credential (raw, percent-encoded, or
+  JSON-escaped) from being written to disk.
+- **Local-only, permissioned storage.** Artifacts live only in the
+  operator-owned `0700` capture directory with `0600` files, bounded
+  non-blocking locking, no-follow regular-file checks, atomic publication,
+  and only-recognized-name cleanup. There is no database schema, no admin
+  UI surface, and no remote export; captured content is never written to the
+  structured logs or metrics. The file permissions are the access boundary
+  (the owning OS user and root can read the files directly), and the
+  size-capped `slaif-gateway request-capture inspect --request-id` CLI
+  command is the bounded operator convenience path.
+- **Zero impact on the request.** The observer is a pure ASGI tee: the
+  application is called exactly once, forwarded request bytes are unchanged,
+  and every capture failure degrades to a safe skip. Authentication,
+  validation, admission, accounting, and provider forwarding are unaffected.
+- **Reverse-proxy caveat.** The gateway can capture only what reaches it:
+  bytes rejected upstream by the reverse proxy (for example Nginx's
+  `client_max_body_size` 10 m limit) are not visible to the gateway, and
+  reverse-proxy/server access logs may independently record credential
+  querystrings. The runbook requires safe-formatting or disabling access
+  logs during capture; the gateway does not claim control over arbitrary
+  external operator logs.
+- **Trust model.** The facility assumes a trusted, operator-owned local
+  directory. It is not a hostile same-UID filesystem jail: symlink/FIFO/
+  ownership checks protect against accidents and path confusion, not against
+  a same-UID attacker.
+
+Operator procedure: [runbooks/incoming-request-capture.md](runbooks/incoming-request-capture.md).
+
 ## Redis Rate Limiting
 
 When enabled, Redis enforces request, estimated-token, and active-concurrency

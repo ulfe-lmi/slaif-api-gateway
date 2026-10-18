@@ -26,6 +26,7 @@ from slaif_gateway.cli.pricing import app as pricing_app
 from slaif_gateway.cli.provider_catalog import app as provider_catalog_app
 from slaif_gateway.cli.quota import app as quota_app
 from slaif_gateway.cli.providers import app as providers_app
+from slaif_gateway.cli.request_capture import app as request_capture_app
 from slaif_gateway.cli.routes import app as routes_app
 from slaif_gateway.cli.secrets import app as secrets_app
 from slaif_gateway.cli.templates import app as templates_app
@@ -46,6 +47,7 @@ app.add_typer(db_app, name="db")
 app.add_typer(email_app, name="email")
 app.add_typer(keys_app, name="keys")
 app.add_typer(providers_app, name="providers")
+app.add_typer(request_capture_app, name="request-capture")
 app.add_typer(routes_app, name="routes")
 app.add_typer(pricing_app, name="pricing")
 app.add_typer(provider_catalog_app, name="provider-catalog")

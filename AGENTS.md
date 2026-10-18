@@ -389,6 +389,16 @@ Purpose:
 - Metrics should track request volume, errors, quota rejections, provider latency, token use, and cost.
 - OpenTelemetry is useful but may be implemented after the core gateway is stable.
 
+Narrow, human-authorized exception: the operator-controlled request-capture
+facility (`REQUEST_CAPTURE_ENABLED`, default OFF) may persist full incoming
+request bytes **only** inside a finite, operator-armed, expiring window,
+with known incoming authentication values masked and incomplete bodies never
+persisted. It is local-file-only (no logs, metrics, database schema, admin
+UI, or remote export), bounded by explicit byte/count/TTL budgets, and must
+never alter auth, validation, admission, accounting, or forwarding. See
+`docs/runbooks/incoming-request-capture.md` and
+`docs/security-model.md` (Operator Request Capture Privacy Boundary).
+
 ### 2.11 Tests
 
 - pytest

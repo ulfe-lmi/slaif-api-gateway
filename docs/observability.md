@@ -54,3 +54,41 @@ that boundary is pre-existing and out of scope for the API metrics surface.
 No prompt, completion, tool result, credential, or raw request/provider body is
 intended for logs or metrics. That privacy boundary remains mandatory for any
 future telemetry integration.
+
+## Operator request capture (default OFF)
+
+The optional operator request-capture facility is the single explicit,
+human-authorized exception to the no-request-content rule above, and it is
+bounded in every other respect:
+
+- **Off unless armed.** No request content is ever written unless
+  `REQUEST_CAPTURE_ENABLED=true` was loaded by the worker at start **and** an
+  operator has armed a finite, expiring window for an exact endpoint.
+- **Masked.** Known incoming authentication values are substituted in every
+  stored byte; the full prompt/tool material itself is the
+  operator-authorized consent for the finite armed window.
+- **Collection is bounded; retention is explicit.** The armed window bounds
+  how many requests are *collected* (finite count and absolute TTL).
+  Collected artifacts persist on disk until the operator explicitly
+  stops/cleans the session; expiry and exhaustion end collection only, they
+  never delete retained artifacts.
+- **Incomplete never persisted.** A body that was not fully captured stores
+  zero body bytes plus precise counts and a stable
+  `body_omitted_for_secret_safety` note.
+- **Correlated and inspectable.** Each artifact pair (capture + record) is
+  keyed by the `X-SLAIF-Diagnostic-ID` gateway request ID. The `0700`/`0600`
+  file permissions are the access boundary (the owning OS user and root can
+  read the files directly); the explicit
+  `slaif-gateway request-capture inspect --request-id` command is the bounded,
+  size-capped convenience path for operators. The record carries the public
+  error code/param/message/status and, where the gateway selected one, the
+  client-module id/version/digest.
+- **No new telemetry channels.** No database schema, admin UI surface, remote
+  export, or metric is introduced, and captured content is never written to
+  logs (only safe, fixed, content-free startup/facility warnings exist).
+  Storage is the operator's local directory with `0700`/`0600` modes and
+  finite budgets.
+
+Configuration and operator procedure: [configuration.md](configuration.md)
+(Operator Request Capture) and
+[runbooks/incoming-request-capture.md](runbooks/incoming-request-capture.md).

@@ -60,6 +60,7 @@ from slaif_gateway.modules.codex_profile_data import (
 )
 from slaif_gateway.modules.contracts import (
     CanonicalClientRequest,
+    CodexTaxonomyResult,
     ModuleSelectionError,
     ResponsesClientPolicySpec,
 )
@@ -111,66 +112,179 @@ def _error(message: str, code: str = "codex_0162_request_invalid") -> ModuleSele
     return ModuleSelectionError(message, error_code=code)
 
 
+# Stable, content-free rejection reason codes for additional_tools taxonomy
+# classification.  They are observability markers only: the structured
+# classifier below both decides acceptance and names the first failure, and the
+# historical tuple acceptance surface is preserved through the compatibility
+# wrapper.
+TAXONOMY_REASON_NOT_LIST = "additional_tools_not_a_nonempty_list"
+TAXONOMY_REASON_TOO_MANY_NAMESPACES = "too_many_namespaces"
+TAXONOMY_REASON_NAMESPACE_NOT_OBJECT = "namespace_not_object"
+TAXONOMY_REASON_NAMESPACE_NAME_INVALID = "namespace_name_invalid"
+TAXONOMY_REASON_NAMESPACE_NAME_UNAPPROVED = "namespace_name_unapproved"
+TAXONOMY_REASON_TOOLS_NOT_LIST = "tools_not_a_nonempty_list"
+TAXONOMY_REASON_TOO_MANY_TOOLS_PER_NAMESPACE = "too_many_tools_per_namespace"
+TAXONOMY_REASON_TOOL_NOT_OBJECT = "tool_not_object"
+TAXONOMY_REASON_TOOL_NAME_NOT_ALLOWED = "tool_name_not_allowed"
+TAXONOMY_REASON_TOOL_TYPE_INVALID = "tool_type_invalid"
+TAXONOMY_REASON_TOOL_NAME_DUPLICATE = "tool_name_duplicate"
+TAXONOMY_REASON_TOO_MANY_TOTAL_TOOLS = "too_many_total_tools"
+TAXONOMY_REASON_UNAPPROVED_SET = "unapproved_namespace_set"
+
+
+def classify_additional_tools(
+    namespaces: object, profile: CodexProfileData
+) -> CodexTaxonomyResult:
+    """Classify a declared Codex additional_tools set in a single pass.
+
+    On acceptance, returns the canonical ordered
+    ``(namespace, ((tool, "function"), ...), ...)`` tuple in ``taxonomy``.
+    On rejection, returns the first failing check (original check order) with
+    stable, content-free facts: ``reason_code``, the offending
+    ``namespace_index`` / ``tool_index`` / ``field``, and the observed count
+    plus relevant limit for cardinality checks.  This is the single shared
+    classifier: the request policy consumes this result directly.  It carries
+    no raw request content, grants no authority, performs no I/O, and does not
+    mutate the input.
+    """
+    if not isinstance(namespaces, list) or not namespaces:
+        return CodexTaxonomyResult(
+            accepted=False, reason_code=TAXONOMY_REASON_NOT_LIST
+        )
+    if len(namespaces) > profile.max_namespaces:
+        return CodexTaxonomyResult(
+            accepted=False,
+            reason_code=TAXONOMY_REASON_TOO_MANY_NAMESPACES,
+            field="tools",
+            observed=len(namespaces),
+            limit=profile.max_namespaces,
+        )
+    seen_namespaces: set[str] = set()
+    total_tools = 0
+    ordered: list[tuple[str, tuple[tuple[str, str], ...]]] = []
+    for namespace_index, namespace in enumerate(namespaces):
+        if not isinstance(namespace, Mapping):
+            return CodexTaxonomyResult(
+                accepted=False,
+                reason_code=TAXONOMY_REASON_NAMESPACE_NOT_OBJECT,
+                namespace_index=namespace_index,
+                field="tools",
+            )
+        namespace_name = namespace.get("name")
+        if (
+            not isinstance(namespace_name, str)
+            or not namespace_name
+            or namespace_name in seen_namespaces
+        ):
+            return CodexTaxonomyResult(
+                accepted=False,
+                reason_code=TAXONOMY_REASON_NAMESPACE_NAME_INVALID,
+                namespace_index=namespace_index,
+                field="name",
+            )
+        kind = profile.classify_namespace_name(namespace_name)
+        if kind is None:
+            return CodexTaxonomyResult(
+                accepted=False,
+                reason_code=TAXONOMY_REASON_NAMESPACE_NAME_UNAPPROVED,
+                namespace_index=namespace_index,
+                field="name",
+            )
+        tools = namespace.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return CodexTaxonomyResult(
+                accepted=False,
+                reason_code=TAXONOMY_REASON_TOOLS_NOT_LIST,
+                namespace_index=namespace_index,
+                field="tools",
+            )
+        if len(tools) > profile.max_tools_per_namespace:
+            return CodexTaxonomyResult(
+                accepted=False,
+                reason_code=TAXONOMY_REASON_TOO_MANY_TOOLS_PER_NAMESPACE,
+                namespace_index=namespace_index,
+                field="tools",
+                observed=len(tools),
+                limit=profile.max_tools_per_namespace,
+            )
+        declared_names: set[str] = set()
+        declared_tools: list[tuple[str, str]] = []
+        for tool_index, tool in enumerate(tools):
+            if not isinstance(tool, Mapping):
+                return CodexTaxonomyResult(
+                    accepted=False,
+                    reason_code=TAXONOMY_REASON_TOOL_NOT_OBJECT,
+                    namespace_index=namespace_index,
+                    tool_index=tool_index,
+                    field="tools",
+                )
+            name = tool.get("name")
+            tool_type = tool.get("type")
+            if not profile.is_tool_name_allowed(kind, name):
+                return CodexTaxonomyResult(
+                    accepted=False,
+                    reason_code=TAXONOMY_REASON_TOOL_NAME_NOT_ALLOWED,
+                    namespace_index=namespace_index,
+                    tool_index=tool_index,
+                    field="name",
+                )
+            if tool_type != "function":
+                return CodexTaxonomyResult(
+                    accepted=False,
+                    reason_code=TAXONOMY_REASON_TOOL_TYPE_INVALID,
+                    namespace_index=namespace_index,
+                    tool_index=tool_index,
+                    field="type",
+                )
+            if name in declared_names:
+                return CodexTaxonomyResult(
+                    accepted=False,
+                    reason_code=TAXONOMY_REASON_TOOL_NAME_DUPLICATE,
+                    namespace_index=namespace_index,
+                    tool_index=tool_index,
+                    field="name",
+                )
+            declared_names.add(name)
+            declared_tools.append((name, "function"))
+        seen_namespaces.add(namespace_name)
+        total_tools += len(declared_tools)
+        ordered.append((namespace_name, tuple(declared_tools)))
+    if total_tools > profile.max_total_tools:
+        return CodexTaxonomyResult(
+            accepted=False,
+            reason_code=TAXONOMY_REASON_TOO_MANY_TOTAL_TOOLS,
+            field="tools",
+            observed=total_tools,
+            limit=profile.max_total_tools,
+        )
+    return CodexTaxonomyResult(accepted=True, taxonomy=tuple(ordered))
+
+
 def _taxonomy_for_profile(profile: CodexProfileData):
-    """Build the bounded taxonomy validator for one immutable profile snapshot."""
+    """Compatibility wrapper: the tuple form of :func:`classify_additional_tools`.
+
+    Returns a ``taxonomy_for(namespaces)`` callable whose output is exactly
+    ``classify_additional_tools(namespaces, profile).taxonomy`` (the canonical
+    tuple, or ``None`` when rejected).  The structured classifier above is the
+    single source of truth; this wrapper keeps the historical tuple API for
+    pre-observability consumers unchanged.
+    """
 
     def taxonomy_for(
         namespaces: object,
     ) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...] | None:
-        if not isinstance(namespaces, list) or not namespaces:
-            return None
-        if len(namespaces) > profile.max_namespaces:
-            return None
-        seen_namespaces: set[str] = set()
-        total_tools = 0
-        ordered: list[tuple[str, tuple[tuple[str, str], ...]]] = []
-        for namespace in namespaces:
-            if not isinstance(namespace, Mapping):
-                return None
-            namespace_name = namespace.get("name")
-            if (
-                not isinstance(namespace_name, str)
-                or not namespace_name
-                or namespace_name in seen_namespaces
-            ):
-                return None
-            kind = profile.classify_namespace_name(namespace_name)
-            if kind is None:
-                return None
-            tools = namespace.get("tools")
-            if not isinstance(tools, list) or not tools:
-                return None
-            if len(tools) > profile.max_tools_per_namespace:
-                return None
-            declared_names: set[str] = set()
-            declared_tools: list[tuple[str, str]] = []
-            for tool in tools:
-                if not isinstance(tool, Mapping):
-                    return None
-                name = tool.get("name")
-                tool_type = tool.get("type")
-                if (
-                    not profile.is_tool_name_allowed(kind, name)
-                    or tool_type != "function"
-                    or name in declared_names
-                ):
-                    return None
-                declared_names.add(name)
-                declared_tools.append((name, "function"))
-            seen_namespaces.add(namespace_name)
-            total_tools += len(declared_tools)
-            ordered.append((namespace_name, tuple(declared_tools)))
-        if total_tools > profile.max_total_tools:
-            return None
-        return tuple(ordered)
+        return classify_additional_tools(namespaces, profile).taxonomy
 
     return taxonomy_for
+
+
 
 
 def _build_policy_spec(profile: CodexProfileData) -> ResponsesClientPolicySpec:
     return replace(
         CODEX_0149_POLICY_SPEC,
         taxonomy_for=_taxonomy_for_profile(profile),
+        taxonomy_classifier=lambda namespaces: classify_additional_tools(namespaces, profile),
         taxonomy_id_0148="codex_0_162",
         max_client_tool_schema_depth=profile.max_schema_depth,
         max_client_tool_schema_properties=profile.max_schema_properties,
@@ -428,6 +542,7 @@ def codex_0162_additional_tools_taxonomy_for(
 
 __all__ = [
     "bootstrap_codex_compatibility_profile",
+    "classify_additional_tools",
     "CODEX_0162_BUILTIN_NAMESPACES",
     "CODEX_0162_CLIENT_MODULE",
     "CODEX_0162_CLIENT_MODULE_ID",
