@@ -51,9 +51,12 @@ Exact identities:
 | `0149-v5` | `codex-0.149-responses-v1` | `5` | `ca1e03a35de1eaeceb894cec9895af0c154e0d2fa0aa8da87f98716e1567f9ec` |
 | `0162-v1` | `codex-0.162-responses-v1` | `1` | `724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e` |
 
-The only legal transitions are `0149-v4 → 0149-v5`, `0149-v4 → 0162-v1`,
-`0149-v5 → 0149-v4`, and `0162-v1 → 0149-v4`. Any other current module
-identity, repeated or cross-target move fails closed.
+Only the four listed transitions are supported: `0149-v4 → 0149-v5`,
+`0149-v4 → 0162-v1`, `0149-v5 → 0149-v4`, and `0162-v1 → 0149-v4`. An
+exact repeat of an already-at-target key (dry run or `--apply`) is a
+successful no-op that performs no additional audit mutation, while
+drifted or unexpected module identities and cross-target moves fail
+closed.
 
 Target selection: a Codex 0.162.1 client with the wider 197-tool operator
 profile needs `--target 0162-v1`. `0149-v5` is the minimal fix for the old

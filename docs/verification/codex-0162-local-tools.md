@@ -47,11 +47,14 @@ provider lowering for that pair only.
 - No prefix → unchanged body. Later position, repeated item, mixed top-level
   `tools`, wrong role, or malformed shape fail closed with a safe error
   before any provider body is built.
-- Policy/admission run first and estimation consumes the canonical policy
-  result, so declaration bytes remain in the conservative estimate; lowering
-  is pure body construction before final serialization and HMAC signing, and
-  the same lowering plus revalidation applies to the refreshed body after a
-  lazy quota wait. The signature always covers the final forwarded bytes.
+- Request-policy validation/canonicalization precedes the pure lowering,
+  and the original validated declaration remains the estimation input, so
+  declaration bytes stay in the conservative estimate. Pure body
+  construction may precede quota reservation in the existing pipeline;
+  actual forwarding requires successful admission. The final HMAC covers
+  the final bytes, and the same lowering plus revalidation applies to both
+  the initial and the refreshed after-wait body builds. This record makes
+  no claim that any accounting step was moved.
 - Privacy: the exact Local pair omits `prompt_cache_key` and client metadata
   for 0.162 requests (the 0.162 client derives its prompt-cache key from
   session metadata), exactly as for 0.149; the signed opaque identity and
