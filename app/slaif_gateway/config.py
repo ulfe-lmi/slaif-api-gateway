@@ -234,6 +234,11 @@ class Settings(BaseSettings):
     HARD_MAX_INPUT_TOKENS: int = 128000
     CODEX_ABSOLUTE_MAX_INPUT_TOKENS: int = 1050000
     CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS: int = 128000
+    # Operator-only Codex 0.162 compatibility profile DATA file override.
+    # Empty uses the packaged default profile.  When set, the file is
+    # validated exactly once at process bootstrap and any failure refuses
+    # startup (no silent fallback).  Requests can never select a profile.
+    CODEX_COMPATIBILITY_PROFILE_FILE: str = ""
     CHAT_MAX_CHOICES_PER_REQUEST: int = 4
     CHAT_MAX_MESSAGES_PER_REQUEST: int = 128
     CHAT_MAX_MESSAGE_CONTENT_BYTES: int = 262144

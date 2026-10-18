@@ -24,10 +24,12 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.clients.codex_0149 import CODEX_0149_POLICY_SPEC
 from slaif_gateway.modules.clients.codex_0162 import (
+    codex_0162_additional_tools_taxonomy_for,
     CODEX_0162_BUILTIN_NAMESPACES,
     CODEX_0162_CLIENT_MODULE_ID,
     CODEX_0162_CLIENT_MODULE_VERSION,
     CODEX_0162_CLI_VERSION,
+    CODEX_0162_CONNECTOR_NAMESPACE_PREFIX,
     CODEX_0162_FIXTURE_RELATIVE_PATH,
     CODEX_0162_FIXTURE_SHA256,
     CODEX_0162_MAX_NAMESPACES,
@@ -36,6 +38,14 @@ from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_POLICY_SPEC,
     CODEX_0162_SOURCE_CONTRACT_COMMIT,
     CODEX_0162_SOURCE_CONTRACT_TAG,
+    CODEX_0162_V1_CLIENT_MODULE,
+    CODEX_0162_V1_FIXTURE_RELATIVE_PATH,
+    CODEX_0162_V2_CLIENT_MODULE,
+    CODEX_0162_V2_FIXTURE_RELATIVE_PATH,
+)
+from slaif_gateway.modules.codex_profile_data import (
+    canonical_profile_digest,
+    load_codex_profile_file,
 )
 from slaif_gateway.modules.clients.registry import (
     CLIENT_MODULE_REGISTRY,
@@ -155,7 +165,9 @@ def _namespace(name: str, tools: list[dict[str, object]], **overrides: object) -
     return namespace
 
 
-def _item(namespaces: list[dict[str, object]], *, id_value: object = "omitted") -> dict[str, object]:
+def _item(
+    namespaces: list[dict[str, object]], *, id_value: object = "omitted"
+) -> dict[str, object]:
     item: dict[str, object] = {"type": "additional_tools", "role": "developer", "tools": namespaces}
     if id_value != "omitted":
         item["id"] = id_value
@@ -182,9 +194,7 @@ def _body(item: dict[str, object], *, stream: bool = False) -> dict[str, object]
 def _synthetic_197_namespaces() -> list[dict[str, object]]:
     namespaces = [
         _namespace("functions", [_function_tool(name) for name in FUNCTION_TOOL_NAMES]),
-        _namespace(
-            "multi_agent_v1", [_function_tool(name) for name in MULTI_AGENT_TOOL_NAMES]
-        ),
+        _namespace("multi_agent_v1", [_function_tool(name) for name in MULTI_AGENT_TOOL_NAMES]),
     ]
     for namespace_name, count in MCP_NAMESPACE_COUNTS.items():
         prefix = namespace_name.split("__")[-1][:6]
@@ -253,22 +263,102 @@ def test_stale_or_mismatched_0162_metadata_is_rejected() -> None:
             }
         )
     assert wrong_digest.value.error_code == "client_module_fixture_mismatch"
+    # The complete historical 0162-v1 tuple is deliberately stale once the
+    # module moves to version 2: version OR digest mismatch both reject.
+    with pytest.raises(ModuleSelectionError) as stale_v1:
+        resolve_responses_client_module(
+            {
+                "version": 1,
+                "client_module": {
+                    "id": CODEX_0162_CLIENT_MODULE_ID,
+                    "version": "1",
+                    "fixture_sha256": CODEX_0162_V1_FIXTURE_SHA256,
+                },
+            }
+        )
+    assert stale_v1.value.error_code == "client_module_fixture_mismatch"
+
+
+# The frozen historical fixture paths and digests come from the legacy
+# tuple constants: both historical fixture files must remain
+# byte-for-byte immutable.
+V1_FIXTURE = Path(CODEX_0162_V1_FIXTURE_RELATIVE_PATH)
+CODEX_0162_V1_FIXTURE_SHA256 = CODEX_0162_V1_CLIENT_MODULE["fixture_sha256"]
+V2_FIXTURE = Path(CODEX_0162_V2_FIXTURE_RELATIVE_PATH)
+CODEX_0162_V2_FIXTURE_SHA256 = CODEX_0162_V2_CLIENT_MODULE["fixture_sha256"]
 
 
 def test_canonical_0162_fixture_is_pinned_and_honest() -> None:
+    # Packaged default profile DATA: the runtime identity is the canonical
+    # digest of the validated data, not the raw file bytes.
     raw = FIXTURE.read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == CODEX_0162_FIXTURE_SHA256
-    fixture = json.loads(raw)
-    assert fixture["schema_version"] == "codex_0162_additional_tools_profile_v1"
+    document = json.loads(raw)
+    profile = load_codex_profile_file(FIXTURE)
+    assert profile.digest == CODEX_0162_FIXTURE_SHA256
+    assert profile.revision == CODEX_0162_CLIENT_MODULE_VERSION
+    assert canonical_profile_digest(document) == CODEX_0162_FIXTURE_SHA256
+    assert document["schema_version"] == 1
+    assert document["module_id"] == CODEX_0162_CLIENT_MODULE_ID
+    assert document["provenance"]["cli_version"] == CODEX_0162_CLI_VERSION
+    assert document["provenance"]["source_tag"] == CODEX_0162_SOURCE_CONTRACT_TAG
+    assert document["provenance"]["source_commit"] == CODEX_0162_SOURCE_CONTRACT_COMMIT
+    assert set(document["namespace_rules"]["builtin_names"]) == set(CODEX_0162_BUILTIN_NAMESPACES)
+    assert document["namespace_rules"]["connector_prefixes"] == [
+        CODEX_0162_CONNECTOR_NAMESPACE_PREFIX
+    ]
+    limits = document["limits"]
+    assert limits["max_namespaces"] == CODEX_0162_MAX_NAMESPACES
+    assert limits["max_total_tools"] == CODEX_0162_MAX_TOTAL_TOOLS
+    assert limits["max_tools_per_namespace"] == CODEX_0162_MAX_NAMESPACE_TOOLS
+    assert limits["max_declaration_bytes"] == 589_824
+    # The data is policy, not an inventory: no tool names are shipped.
+    assert "tools" not in document
+    # Historical v2 fixture: byte-for-byte immutable under the frozen tuple.
+    v2_raw = V2_FIXTURE.read_bytes()
+    assert hashlib.sha256(v2_raw).hexdigest() == CODEX_0162_V2_FIXTURE_SHA256
+    fixture = json.loads(v2_raw)
+    assert fixture["schema_version"] == "codex_0162_additional_tools_profile_v2"
     contract = fixture["contract"]
     assert contract["client_version"] == CODEX_0162_CLI_VERSION
     assert fixture["source"]["commit"] == CODEX_0162_SOURCE_CONTRACT_COMMIT
-    profile = fixture["synthetic_197_profile"]
-    assert profile["totalChildTools"] == 197
-    assert sum(profile["namespaceCounts"].values()) == 197
-    assert profile["label"].endswith("NOT a capture of actually installed plugins.")
+    synth = fixture["synthetic_197_profile"]
+    assert synth["totalChildTools"] == 197
+    assert sum(synth["namespaceCounts"].values()) == 197
+    assert synth["label"].endswith("NOT a capture of actually installed plugins.")
     capture = fixture["official_isolated_capture"]
     assert "mock" in str(capture["backend"]) or "fake" in str(capture["backend"])
+    # Version-2 honesty: the real 197 names/types summary is a
+    # human-supplied dependency, not content of this fixture.
+    change = fixture["version2_change"]
+    assert "86ae51c" in change["reason"]
+    assert "_read_page" in change["reason"]
+    assert "NOT available at authoring" in change["real_197_names"]
+
+
+def test_0162_v1_fixture_remains_byte_for_byte_immutable() -> None:
+    assert hashlib.sha256(V1_FIXTURE.read_bytes()).hexdigest() == CODEX_0162_V1_FIXTURE_SHA256
+
+
+def test_0162_legacy_tuples_are_migration_only_identities() -> None:
+    # The frozen historical tuples are exact literals and are NOT live
+    # runtime pins: a key pinned to either one fails closed at resolution.
+    for legacy in (CODEX_0162_V1_CLIENT_MODULE, CODEX_0162_V2_CLIENT_MODULE):
+        assert set(legacy) == {"id", "version", "fixture_sha256"}
+        assert legacy["id"] == CODEX_0162_CLIENT_MODULE_ID
+        assert legacy["version"] != CODEX_0162_CLIENT_MODULE_VERSION
+        assert legacy["fixture_sha256"] != CODEX_0162_FIXTURE_SHA256
+        with pytest.raises(ModuleSelectionError) as excinfo:
+            resolve_responses_client_module(
+                {
+                    "version": 1,
+                    "client_module": {
+                        "id": legacy["id"],
+                        "version": legacy["version"],
+                        "fixture_sha256": legacy["fixture_sha256"],
+                    },
+                }
+            )
+        assert excinfo.value.error_code == "client_module_fixture_mismatch"
 
 
 # --- exact 197 counts through the real module + policy ---
@@ -378,7 +468,12 @@ def test_non_function_tool_types_and_duplicates_are_rejected() -> None:
             _namespace("functions", [_function_tool("a_tool")]),
             _namespace("functions", [_function_tool("b_tool")]),
         ],
-        [_namespace("mcp__codex_apps__demo", [_function_tool("t", type="custom", format={"type": "grammar"})])],
+        [
+            _namespace(
+                "mcp__codex_apps__demo",
+                [_function_tool("t", type="custom", format={"type": "grammar"})],
+            )
+        ],
     ):
         with pytest.raises(RequestPolicyError) as exc_info:
             _apply(_body(_item(namespaces)))
@@ -453,15 +548,21 @@ def test_spec_boundaries_are_version_owned_and_shared_limits_intact() -> None:
     assert CODEX_0162_MAX_NAMESPACE_TOOLS == 256
     assert CODEX_0162_BUILTIN_NAMESPACES == frozenset({"functions", "multi_agent_v1"})
     # Shared ceilings were not widened for the new profile.
-    assert CODEX_0162_POLICY_SPEC.max_client_tool_schema_depth == (
-        CODEX_0149_POLICY_SPEC.max_client_tool_schema_depth
-    ) == 16
-    assert CODEX_0162_POLICY_SPEC.max_client_tool_declaration_bytes == (
-        CODEX_0149_POLICY_SPEC.max_client_tool_declaration_bytes
-    ) == 589_824
-    assert CODEX_0162_POLICY_SPEC.max_client_tool_description_bytes == (
-        CODEX_0149_POLICY_SPEC.max_client_tool_description_bytes
-    ) == 20_000
+    assert (
+        CODEX_0162_POLICY_SPEC.max_client_tool_schema_depth
+        == (CODEX_0149_POLICY_SPEC.max_client_tool_schema_depth)
+        == 16
+    )
+    assert (
+        CODEX_0162_POLICY_SPEC.max_client_tool_declaration_bytes
+        == (CODEX_0149_POLICY_SPEC.max_client_tool_declaration_bytes)
+        == 589_824
+    )
+    assert (
+        CODEX_0162_POLICY_SPEC.max_client_tool_description_bytes
+        == (CODEX_0149_POLICY_SPEC.max_client_tool_description_bytes)
+        == 20_000
+    )
     # The historical 0.149 profile keeps its own smaller profile ceilings.
     assert CODEX_0149_POLICY_SPEC.max_client_tool_schema_properties == 256
     assert CODEX_0149_POLICY_SPEC.max_client_tool_total_description_bytes == 32_768
@@ -531,13 +632,9 @@ def test_per_namespace_tool_boundary_256_pass_257_fail() -> None:
 
 
 def test_per_tool_description_ceiling_20k_pass_20k1_fail() -> None:
-    passing = _item(
-        [_namespace("functions", [_function_tool("t", description="d" * 20_000)])]
-    )
+    passing = _item([_namespace("functions", [_function_tool("t", description="d" * 20_000)])])
     _apply(_body(passing))
-    failing = _item(
-        [_namespace("functions", [_function_tool("t", description="d" * 20_001)])]
-    )
+    failing = _item([_namespace("functions", [_function_tool("t", description="d" * 20_001)])])
     with pytest.raises(RequestPolicyError) as exc_info:
         _apply(_body(failing))
     assert exc_info.value.error_code == "responses_tool_invalid_shape"
@@ -556,8 +653,10 @@ def test_total_description_ceiling_262k_162_profile() -> None:
                 [
                     _namespace(
                         "functions",
-                        [_function_tool(f"d_tool_{index:02d}", description="d" * 20_000)
-                         for index in range(13)],
+                        [
+                            _function_tool(f"d_tool_{index:02d}", description="d" * 20_000)
+                            for index in range(13)
+                        ],
                     )
                 ]
             )
@@ -571,8 +670,10 @@ def test_total_description_ceiling_262k_162_profile() -> None:
                     [
                         _namespace(
                             "functions",
-                            [_function_tool(f"d_tool_{index:02d}", description="d" * 20_000)
-                             for index in range(14)],
+                            [
+                                _function_tool(f"d_tool_{index:02d}", description="d" * 20_000)
+                                for index in range(14)
+                            ],
                         )
                     ]
                 )
@@ -640,3 +741,117 @@ def test_schema_depth_ceiling_16_shared() -> None:
     with pytest.raises(RequestPolicyError) as exc_info:
         _apply(_body(_item([_namespace("functions", [_deep_tool(8)])])))
     assert exc_info.value.error_code == "responses_codex_client_tools_schema_too_deep"
+
+
+# --- version-2 connector name compatibility (appended regression block) ---
+#
+# Two layers are tested separately and labeled:
+#   * module layer: the namespace-scoped 0.162 classifier (the v2 change);
+#   * full pipeline: registered module + shared request policy.  The shared
+#     function-name pattern (responses_support) permits hyphen but NOT dot;
+#     that preexisting intersection is unchanged by v2 and is never widened.
+
+
+def test_connector_namespace_accepts_leading_underscore_names_preserved() -> None:
+    namespace = _namespace(
+        "mcp__codex_apps__chatgpt_space",
+        [_function_tool("read_page"), _function_tool("_read_page")],
+    )
+    module, result = _apply(_body(_item([namespace])))
+    canonical = _canonical_item(module, result)
+    tools = [tool for tool in canonical["tools"][0]["tools"]]
+    assert [tool["name"] for tool in tools] == ["read_page", "_read_page"]
+    # Exact preservation: no strip/rename/normalization, no collision.
+    assert tools[1]["name"] == "_read_page"
+    assert tools[0]["name"] == "read_page"
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "__read",
+        "_Read",
+        "_1read",
+        "_",
+        "____",
+        "_" + "a" * 64,  # 65 total: over the 64-character cap
+        "a" * 65,
+        "_read page",
+        "_read\x00page",
+        "_r\u00e9ad",
+    ],
+)
+def test_connector_namespace_rejects_invalid_names(bad_name: str) -> None:
+    namespace = _namespace(
+        "mcp__codex_apps__chatgpt_space",
+        [_function_tool(bad_name)],
+    )
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(_body(_item([namespace])))
+    assert exc_info.value.error_code == "responses_codex_client_tools_invalid"
+    assert exc_info.value.param == "input[0].tools"
+
+
+@pytest.mark.parametrize(
+    ("name", "accepted"),
+    [
+        ("a" * 64, True),  # 64 total: boundary
+        ("_" + "a" * 62, True),  # 63 total
+        ("_" + "a" * 63, True),  # 64 total: underscore boundary
+        ("read-page", True),
+        ("read.page", True),  # classifier keeps its unchanged dot vocabulary
+        ("a" * 65, False),  # over the 64-character cap
+        ("_" + "a" * 64, False),  # 65 total: over the cap
+    ],
+)
+def test_connector_classifier_keeps_character_vocabulary_and_cap(name: str, accepted: bool) -> None:
+    # Module layer only: the namespace-scoped 0.162 classifier, called
+    # directly (normalize_responses does not run the taxonomy classifier).
+    namespace = {
+        "type": "namespace",
+        "name": "mcp__codex_apps__chatgpt_space",
+        "tools": [_function_tool(name)],
+    }
+    result = codex_0162_additional_tools_taxonomy_for([namespace])
+    if accepted:
+        assert result == (("mcp__codex_apps__chatgpt_space", ((name, "function"),)),)
+    else:
+        assert result is None
+
+
+def test_full_pipeline_keeps_shared_function_name_intersection() -> None:
+    # Full pipeline (module + shared request policy): the shared
+    # function-name pattern permits hyphen but NOT dot.  That preexisting
+    # intersection is unchanged by v2; the classifier alone accepts the dot.
+    namespace = _namespace(
+        "mcp__codex_apps__chatgpt_space",
+        [_function_tool("read-page")],
+    )
+    module, result = _apply(_body(_item([namespace])))
+    canonical = _canonical_item(module, result)
+    assert canonical["tools"][0]["tools"][0]["name"] == "read-page"
+
+    dotted = _namespace(
+        "mcp__codex_apps__chatgpt_space",
+        [_function_tool("read.page")],
+    )
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(_body(_item([dotted])))
+    assert exc_info.value.error_code == "responses_tool_invalid_shape"
+
+
+@pytest.mark.parametrize("builtin", ["functions", "multi_agent_v1"])
+def test_builtin_namespaces_still_reject_leading_underscore(builtin: str) -> None:
+    namespace = _namespace(builtin, [_function_tool("_read_page")])
+    with pytest.raises(RequestPolicyError) as exc_info:
+        _apply(_body(_item([namespace])))
+    assert exc_info.value.error_code == "responses_codex_client_tools_invalid"
+    assert exc_info.value.param == "input[0].tools"
+
+
+def test_unapproved_namespaces_still_reject_leading_underscore() -> None:
+    for bad_namespace in ("web_tools", "mcp__other__demo"):
+        namespace = _namespace(bad_namespace, [_function_tool("_read_page")])
+        with pytest.raises(RequestPolicyError) as exc_info:
+            _apply(_body(_item([namespace])))
+        assert exc_info.value.error_code == "responses_codex_client_tools_invalid"

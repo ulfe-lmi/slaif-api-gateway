@@ -111,20 +111,43 @@ Codex CLI 0.162.1 is a separate structural-capture module:
 
 | Property | Pinned value |
 | --- | --- |
-| Client module | `codex-0.162-responses-v1` / version `1` |
-| Profile fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json` |
-| Profile fixture SHA-256 | `724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e` |
+| Client module | `codex-0.162-responses-v1` / data-revision module (packaged default data revision `3`) |
+| Compatibility policy DATA | `slaif_gateway/modules/clients/profiles/codex_0162.json` (shipped in the installed package) |
+| Canonical profile DATA digest | `aa3de5376819022191e11935ee311acd4b59bf590324daaa0e3ebc448daf90bd` (bound as `fixture_sha256`) |
+| Operator override | `CODEX_COMPATIBILITY_PROFILE_FILE` (data revision >= 3, read once at bootstrap; no silent fallback) |
+| Historical version-2 fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v2.json` / `b7b257ed9338969a4482fd19434adb6b4a6d96c10037d69899298e643d303f85` (byte-immutable; pinned as the `0162-v2` migration selector) |
+| Historical version-1 fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json` / `724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e` (byte-immutable; pinned as the `0162-v1` migration selector) |
+| Real 197-name regression fixture | `tests/fixtures/codex/0.162.1/connector-tool-names-197-v1.json` / `a32bbf25de4e0be15690feaf3a86a4f453aac2d281b9b67d2cd21daa1bd1c8c4` (supplemental evidence, SYNTHETIC-wrapped, not a runtime inventory) |
 | Runtime status | registered, default-denied; exact `local-coding-v1` pair only |
 
-The version-1 profile accepts the gated `additional_tools` declaration under
-a wider finite taxonomy: strict built-in namespaces `functions` and
+The profile accepts the gated `additional_tools` declaration under a wider
+finite taxonomy. The shipped default profile DATA (revision 3) retains the
+original finite limits and adds only the namespace-scoped name rule, which
+is itself DATA-defined (one bounded leading underscore by default, with a
+file-updatable ceiling derived from the total name cap). Strict
+built-in namespaces `functions` and
 `multi_agent_v1`, dynamic namespaces matching
 `^mcp__codex_apps__[a-z][a-z0-9_.-]{0,63}$`, at most 16 namespaces, 256 tools
 total, 256 tools per namespace, 20,000 bytes per tool description, 262,144
 bytes of total namespace/tool description bytes, 4,096 schema properties per
-tool, function-only tools with pattern-validated names
-(`^[a-z][a-z0-9_.-]{0,63}$`, unique per namespace), and the existing schema,
-depth, byte, and recursive authority checks. The official isolated capture
+tool, function-only tools with pattern-validated names, unique per
+namespace, and the existing schema, depth, byte, and recursive authority
+checks. The strict
+built-in namespaces `functions` and `multi_agent_v1` keep
+`^[a-z][a-z0-9_.-]{0,63}$`, while dynamic `mcp__codex_apps__*` connector
+namespaces additionally accept the bounded leading-underscore form
+`^(?:[a-z][a-z0-9_.-]{0,63}|_[a-z][a-z0-9_.-]{0,62})$` (64 characters total
+including the underscore); exact names are preserved unmodified in the
+provider body and in replay. The shared downstream function-name
+intersection is unchanged (hyphen permitted, dot not). The revision-3 DATA adds
+that connector-name rule and nothing else. The full operator-supplied
+197-name/type diagnostic capture now ships as the supplemental
+SYNTHETIC-wrapped regression fixture above (counts 11/5/40/3/89/1/11/6/5/
+1/25, all `function`, 181 single-underscore connector names, longest 42
+characters); the registered module plus the shared request policy accepts
+all 197 names through that fixture, preserving exact order, names, and
+types, while built-ins remain strict and no runtime name inventory exists.
+The official isolated capture
 observed 7 `functions` tools and 5 `multi_agent_v1` tools as a sample of a
 larger built-in vocabulary (the operator profile reports 11 functions), so no
 exact built-in tool list or count is pinned. On the exact
@@ -137,11 +160,25 @@ other profile or server pair is altered.
 
 Pinned 0.149-v4 keys may be upgraded to `0149-v5` or `0162-v1` with
 `slaif-gateway codex upgrade-key-module` (dry-run by default; `--apply`
-mutates) and returned with `slaif-gateway codex rollback-key-module`. Only
-the four edges 0.149-v4 → 0149-v5, 0.149-v4 → 0162-v1, and the two reverse
-edges are legal; each `--apply` writes the `client_module` compatibility
+mutates), keys on the exact historical 0162-v1 tuple may hop to `0162-v2`
+(and back), and every hop is returned with `slaif-gateway codex
+rollback-key-module`. Only the six edges 0.149-v4 → 0149-v5, 0.149-v4 →
+0162-v1, 0162-v1 → 0162-v2, and the three reverse edges are legal (a
+0.149-v4 key reaches 0162-v2 only through the explicit two-hop sequence
+while quiesced); each `--apply` writes the `client_module` compatibility
 metadata and one audit record in one atomic transaction, with no schema or
 quota change.
+
+For the 0162 data profile, `slaif-gateway codex migrate-key-profile` moves
+one exact key between the active bootstrap profile snapshot (`--target
+active`, the default) and the frozen `0162-v1`/`0162-v2` legacy tuples,
+with an explicit `--from-version`/`--from-digest` source that must equal
+the key's current pin (legacy 1/2 sources require the frozen literal
+digests).  Dry-run is the default; `--apply` writes the metadata and one
+audit record in one row-locked transaction.  A same-revision/
+different-digest source fails closed, a repeated exact target is a no-op,
+and legacy/stale pins are denied by the registry until an explicit
+migration.
 
 ## Protocol qualification and profile-v2 configuration
 

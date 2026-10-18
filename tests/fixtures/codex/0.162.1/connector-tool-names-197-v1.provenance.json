@@ -1,0 +1,21 @@
+{
+  "recordedAt": "2026-10-18T13:45:30.734238+00:00",
+  "source": "Complete human-supplied diagnostic JSON in this conversation, 2026-10-18; whitespace reformatted, data fields/order retained",
+  "evidenceClass": "actual operator-reported namespace/name/type summary, not raw request, descriptors, schemas, plugin execution, provider qualification or newly captured CLI",
+  "sha256": "a32bbf25de4e0be15690feaf3a86a4f453aac2d281b9b67d2cd21daa1bd1c8c4",
+  "counts": [
+    11,
+    5,
+    40,
+    3,
+    89,
+    1,
+    11,
+    6,
+    5,
+    1,
+    25
+  ],
+  "leadingUnderscoreConnectorTools": 181,
+  "maxToolNameLength": 42
+}

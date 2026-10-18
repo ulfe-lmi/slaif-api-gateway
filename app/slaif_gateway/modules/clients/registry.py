@@ -17,6 +17,7 @@ from slaif_gateway.modules.clients.codex_0149 import (
 from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_CLIENT_MODULE,
     CODEX_0162_CLIENT_MODULE_ID,
+    Codex0162ResponsesClientModule,
 )
 from slaif_gateway.modules.clients.openai_default import OpenAIDefaultClientModule
 from slaif_gateway.modules.contracts import (
@@ -28,15 +29,59 @@ from slaif_gateway.modules.contracts import (
 DEFAULT_CLIENT_MODULE = OpenAIDefaultClientModule()
 CODEX_0147_CLIENT_MODULE = Codex0147ResponsesClientModule()
 CODEX_0149_CLIENT_MODULE = Codex0149ResponsesClientModule()
+# The 0.162 registry entry is the concrete module bound to the loaded data
+# profile.  It is rebuilt exactly once at process bootstrap when an operator
+# profile file is configured; the historical v1/v2 tuples are not live
+# runtime pins and resolve to nothing here.
 CODEX_0162_CLIENT_MODULE_INSTANCE = CODEX_0162_CLIENT_MODULE
+_CLIENT_MODULE_REGISTRY_ENTRIES: dict[str, ClientModule] = {
+    DEFAULT_CLIENT_MODULE_ID: DEFAULT_CLIENT_MODULE,
+    CODEX_0147_CLIENT_MODULE_ID: CODEX_0147_CLIENT_MODULE,
+    CODEX_0149_CLIENT_MODULE_ID: CODEX_0149_CLIENT_MODULE,
+    CODEX_0162_CLIENT_MODULE_ID: CODEX_0162_CLIENT_MODULE_INSTANCE,
+}
 CLIENT_MODULE_REGISTRY: Mapping[str, ClientModule] = MappingProxyType(
-    {
-        DEFAULT_CLIENT_MODULE_ID: DEFAULT_CLIENT_MODULE,
-        CODEX_0147_CLIENT_MODULE_ID: CODEX_0147_CLIENT_MODULE,
-        CODEX_0149_CLIENT_MODULE_ID: CODEX_0149_CLIENT_MODULE,
-        CODEX_0162_CLIENT_MODULE_ID: CODEX_0162_CLIENT_MODULE_INSTANCE,
-    }
+    _CLIENT_MODULE_REGISTRY_ENTRIES
 )
+
+
+_CODEX_0162_BOOTSTRAP_BOUND = False
+
+
+def bind_codex_0162_client_module(module: Codex0162ResponsesClientModule) -> None:
+    """Bind the registry's 0.162 entry to one concrete data-profile module.
+
+    The one-shot guard lives on this actual registry binding.  The
+    import-time entry is the packaged default; re-binding that same
+    identity (repeated same-config app/CLI initialization) is an
+    idempotent no-op that does not consume the binding.  The first bind to
+    a different profile identity completes the bootstrap; any later bind to
+    a different identity (a reconfiguration) fails closed.  The registry
+    mapping object stays stable for every importer; the guarded bootstrap
+    write happens on the private backing dict under the immutable proxy.
+    """
+    global _CODEX_0162_BOOTSTRAP_BOUND
+    global CODEX_0162_CLIENT_MODULE_INSTANCE
+    if not isinstance(module, Codex0162ResponsesClientModule):
+        raise ModuleSelectionError(
+            "Client module is not registered", error_code="unsupported_client_module"
+        )
+    current = _CLIENT_MODULE_REGISTRY_ENTRIES[CODEX_0162_CLIENT_MODULE_ID]
+    if current.module_version == module.module_version and (
+        current.fixture_sha256 == module.fixture_sha256
+    ):
+        # Repeated same-config initialization: keep the existing binding.
+        CODEX_0162_CLIENT_MODULE_INSTANCE = current
+        return
+    if _CODEX_0162_BOOTSTRAP_BOUND:
+        raise ModuleSelectionError(
+            "The Codex 0162 client module bootstrap has already completed",
+            error_code="codex_0162_bootstrap_locked",
+        )
+    _CODEX_0162_BOOTSTRAP_BOUND = True
+    CODEX_0162_CLIENT_MODULE_INSTANCE = module
+    _CLIENT_MODULE_REGISTRY_ENTRIES[CODEX_0162_CLIENT_MODULE_ID] = module
+
 
 _LEGACY_CODEX_GATES = frozenset(
     {
@@ -113,6 +158,8 @@ def resolve_responses_client_module(policy: object) -> ClientModule:
         )
     module = get_client_module(module_id)
     if module.module_version != module_version or module.fixture_sha256 != fixture_sha256:
+        # Legacy and stale pins fail closed; the 0.162 historical v1/v2
+        # tuples are audited migration destinations, not live runtime pins.
         raise ModuleSelectionError(
             "Responses client-module fixture metadata does not match",
             error_code="client_module_fixture_mismatch",

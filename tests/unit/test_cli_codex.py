@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -350,3 +352,237 @@ def test_module_mutation_unexpected_exception_never_echoes_details(
     assert canary not in stderr
     assert "Traceback" not in output
     assert exc_type.__name__ not in output
+
+
+@pytest.mark.parametrize(
+    ("command", "selector_args", "expected_source", "target", "action", "apply"),
+    [
+        (
+            "upgrade-key-module",
+            ("--target", "0162-v2"),
+            "0162-v1",
+            "0162-v2",
+            "codex_client_module_upgraded",
+            False,
+        ),
+        (
+            "upgrade-key-module",
+            ("--target", "0162-v2", "--apply"),
+            "0162-v1",
+            "0162-v2",
+            "codex_client_module_upgraded",
+            True,
+        ),
+        (
+            "upgrade-key-module",
+            ("--target", "0162-v1"),
+            "0149-v4",
+            "0162-v1",
+            "codex_client_module_upgraded",
+            False,
+        ),
+        (
+            "upgrade-key-module",
+            ("--target", "0149-v5"),
+            "0149-v4",
+            "0149-v5",
+            "codex_client_module_upgraded",
+            False,
+        ),
+        (
+            "rollback-key-module",
+            ("--from-target", "0162-v2"),
+            "0162-v2",
+            "0162-v1",
+            "codex_client_module_rolled_back",
+            False,
+        ),
+        (
+            "rollback-key-module",
+            ("--from-target", "0162-v2", "--apply"),
+            "0162-v2",
+            "0162-v1",
+            "codex_client_module_rolled_back",
+            True,
+        ),
+        (
+            "rollback-key-module",
+            ("--from-target", "0162-v1"),
+            "0162-v1",
+            "0149-v4",
+            "codex_client_module_rolled_back",
+            False,
+        ),
+        (
+            "rollback-key-module",
+            ("--from-target", "0149-v5"),
+            "0149-v5",
+            "0149-v4",
+            "codex_client_module_rolled_back",
+            False,
+        ),
+    ],
+)
+def test_module_mutation_selector_wiring_reaches_the_service(
+    monkeypatch,
+    command: str,
+    selector_args: tuple[str, ...],
+    expected_source: str,
+    target: str,
+    action: str,
+    apply: bool,
+) -> None:
+    """CLI argument wiring: exact source/target/action/apply reach the service.
+
+    The mutation runner is captured rather than executed, so this proves the
+    selector routing (0162-v2 upgrades from 0162-v1 and rolls back to
+    0162-v1; legacy selectors unchanged) without a database.
+    """
+    calls: list[dict[str, object]] = []
+
+    def _capture(
+        key_id: uuid.UUID,
+        expected_source: str,
+        target: str,
+        action: str,
+        actor_admin_id: uuid.UUID | None,
+        reason: str,
+        apply: bool,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "key_id": key_id,
+                "expected_source": expected_source,
+                "target": target,
+                "action": action,
+                "actor_admin_id": actor_admin_id,
+                "reason": reason,
+                "apply": apply,
+            }
+        )
+        module = {"id": "fixture", "version": "1", "fixture_sha256": "0" * 64}
+        return {
+            "gateway_key_id": str(key_id),
+            "status": "dry_run",
+            "action": action,
+            "changed": False,
+            "source_module": module,
+            "target_module": dict(module),
+        }
+
+    monkeypatch.setattr(codex_cli, "_run_module_mutation", _capture)
+    key_id = uuid.uuid4()
+    result = runner.invoke(
+        app,
+        [
+            "codex",
+            command,
+            str(key_id),
+            *selector_args,
+            "--reason",
+            "operator wiring check",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [
+        {
+            "key_id": key_id,
+            "expected_source": expected_source,
+            "target": target,
+            "action": action,
+            "actor_admin_id": None,
+            "reason": "operator wiring check",
+            "apply": apply,
+        }
+    ]
+
+
+def test_importing_codex_cli_does_not_import_http_app_module(monkeypatch) -> None:
+    monkeypatch.delitem(__import__("sys").modules, "slaif_gateway.main", raising=False)
+    monkeypatch.delitem(__import__("sys").modules, "slaif_gateway.cli.codex", raising=False)
+    __import__("slaif_gateway.cli.codex")
+    assert "slaif_gateway.main" not in __import__("sys").modules
+
+
+_FakeSettings = SimpleNamespace
+
+
+def test_inspect_profile_file_offline_with_invalid_configured_file(tmp_path, monkeypatch) -> None:
+    bad_file = tmp_path / "bad-profile.json"
+    bad_file.write_text("{not json", encoding="utf-8")
+    monkeypatch.setattr(
+        codex_cli,
+        "get_settings",
+        lambda: _FakeSettings(CODEX_COMPATIBILITY_PROFILE_FILE=str(bad_file)),
+    )
+    default_file = (
+        Path("app") / "slaif_gateway" / "modules" / "clients" / "profiles" / "codex_0162.json"
+    )
+    result = runner.invoke(app, ["codex", "inspect-profile-file", str(default_file), "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["valid"] is True
+    assert payload["revision"] == "3"
+
+    shown = runner.invoke(app, ["codex", "show-profile"])
+    assert shown.exit_code == 1
+    assert str(bad_file) not in shown.stdout
+    assert "not valid JSON" in shown.stdout
+
+
+_CANARY = "SYNTHETIC-PRIVATE-CANARY-7f3a9c21"
+
+
+def test_inspect_profile_file_unexpected_error_is_safe(monkeypatch) -> None:
+    def _boom(_path: object) -> None:
+        raise RuntimeError(_CANARY)
+
+    monkeypatch.setattr(codex_cli, "load_codex_profile_file", _boom)
+    result = runner.invoke(app, ["codex", "inspect-profile-file", "candidate.json", "--json"])
+    assert result.exit_code == 1
+    output = result.stdout + result.stderr
+    assert _CANARY not in output
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "command_failed"
+    assert _CANARY not in payload["error"]["message"]
+
+
+def test_show_profile_unexpected_error_is_safe(monkeypatch) -> None:
+    def _boom(_module_id: str = "codex-0.162-responses-v1") -> None:
+        raise ValueError(_CANARY)
+
+    monkeypatch.setattr(codex_cli, "get_client_module", _boom)
+    result = runner.invoke(app, ["codex", "show-profile", "--json"])
+    assert result.exit_code == 1
+    output = result.stdout + result.stderr
+    assert _CANARY not in output
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "command_failed"
+
+
+def test_migrate_key_profile_unexpected_bootstrap_error_is_safe(monkeypatch) -> None:
+    def _boom(_profile_path: str = "") -> None:
+        raise RuntimeError(_CANARY)
+
+    monkeypatch.setattr(codex_cli, "bootstrap_codex_compatibility_profile", _boom)
+    result = runner.invoke(
+        app,
+        [
+            "codex",
+            "migrate-key-profile",
+            "11111111-1111-4111-8111-111111111111",
+            "--from-version",
+            "3",
+            "--from-digest",
+            "aa3de5376819022191e11935ee311acd4b59bf590324daaa0e3ebc448daf90bd",
+            "--reason",
+            "probe",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 1
+    output = result.stdout + result.stderr
+    assert _CANARY not in output
+    payload = json.loads(result.stdout)
+    assert payload["error"]["code"] == "command_failed"

@@ -26,9 +26,27 @@ canonicalization; omitted or null IDs retain the prior canonical shape and
 unknown fields remain rejected. Version `4` metadata remains stale and fails
 closed. The version-4 zero-argument function fact, its exact-pair stream
 consumption, and the provider's empty-string added/completed lifecycle are
-unchanged. `codex-0.162-responses-v1` (version `1`, CLI 0.162.1) is a
+unchanged. `codex-0.162-responses-v1` (CLI 0.162.1) is a
 separate default-denied module with one exact `local-coding-v1` pair and a
-wider finite additional-tools taxonomy; on that pair only, the validated
+wider finite additional-tools taxonomy. Its accepted namespace literals,
+prefixes, identifier-grammar traits, and cardinality/schema/description/
+declaration ceilings are shipped compatibility policy DATA
+(`slaif_gateway/modules/clients/profiles/codex_0162.json`), not source
+constants: the module's effective version is the validated data revision
+(packaged default revision `3`) and its fixture digest binds the canonical
+profile DATA digest, not a caller-declared hash. The bounded
+leading-underscore connector tool name for dynamic `mcp__codex_apps__*`
+namespaces is DATA-defined (exact names preserved). Data revisions `1`/`2`
+remain frozen historical migration selectors only and are not live decoders.
+A configured operator profile file
+(`CODEX_COMPATIBILITY_PROFILE_FILE`, data revision >= `3`) loads with the same
+installed engine and no source change or rebuild; keys pinned to a stale
+revision/digest fail closed until an explicit audited key-profile migration.
+A real 197-name/type diagnostic capture now ships as a supplemental
+SYNTHETIC-wrapped regression fixture qualifying the bounded connector-name
+grammar (it is evidence, not a runtime inventory or selected policy
+identity). On that
+pair only, the validated
 initial declaration prefix is lowered into the top-level namespace `tools`
 array before final serialization and HMAC signing and then discarded with its
 protocol ID, preserving the remaining input.
@@ -331,6 +349,17 @@ The production architecture MUST NOT use:
 
 A future client module is a reviewed part of the Gateway release.
 
+The executable decoder module and its exact server pairing stay statically
+registered and are never loaded from operator files. The bounded
+compatibility policy DATA consumed by a data-revision module (namespace
+literals/prefixes, finite grammar traits, cardinality/schema/description/
+declaration ceilings, revision and provenance) is a separate shipped JSON
+document: an operator may replace that trusted data file and restart
+processes without a source change or rebuild. That distinction is narrow:
+the data vocabulary is finite, validated at bootstrap, and cannot grant
+permissions, endpoints, providers, hosted authority, executable code,
+import paths, or unbounded regexes.
+
 ### 3.3 Server-side selection only
 
 Client-module selection MUST come from complete server-side key/policy metadata, including the expected module ID, module version, and fixture digest.
@@ -571,6 +600,14 @@ Create a new module ID or version when any of the following changes the accepted
 - required downstream pairing.
 
 A patch release MAY reuse a module only if a source/capture differential proves the relevant protocol profile is unchanged and the fixture identity remains intentionally valid.
+
+Data-revision modules separate the executable dialect generation from the
+validated policy DATA revision: loading a new data revision (>= 3) with the
+same installed engine changes the effective module version and the canonical
+profile DATA digest without a new module ID, source change, or rebuild.
+Frozen legacy revisions (1/2) remain available only as explicit migration
+selectors for audited binary rollback; a same-revision/different-digest pin
+cannot be silently migrated and requires an explicit revision change.
 
 A convenient naming pattern is:
 

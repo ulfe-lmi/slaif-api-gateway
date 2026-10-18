@@ -34,7 +34,11 @@ def test_main_app_only_wires_app_and_routes() -> None:
     assert "include_router(openai_compat_router)" in source
     assert "forward_chat_completion" not in source
     assert "reserve_for_chat_completion" not in source
-    assert len(source.splitlines()) < 70
+    # Thin wiring file: the modest ceiling explicitly accounts for the
+    # one legitimate Codex profile bootstrap call and its app.state
+    # binding (file-backed 0.162 profile DATA); business orchestration
+    # must remain in the services layer, never in this module.
+    assert len(source.splitlines()) < 80
 
 
 def test_openai_compat_module_exposes_v1_routes() -> None:

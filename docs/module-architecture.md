@@ -35,7 +35,18 @@ modules are separate static entries: `codex-0.147-responses-v1` owns the
 qualified legacy profile; `codex-0.149-responses-v1` owns its bounded
 structural request facts (version `5` adds the optional bounded
 `additional_tools` declaration item ID); and `codex-0.162-responses-v1`
-owns its bounded 0.162.1 additional-tools profile. Both newer modules are
+owns its bounded 0.162.1 additional-tools profile as a data-revision module:
+the effective module version is the validated profile DATA revision
+(packaged default revision `3`) and the fixture digest binds the canonical
+digest of the shipped compatibility policy DATA
+(`slaif_gateway/modules/clients/profiles/codex_0162.json`), which defines the
+namespace literals/prefixes, bounded identifier grammar, and ceilings
+(including the namespace-scoped leading-underscore connector tool names).
+The operator-only `CODEX_COMPATIBILITY_PROFILE_FILE` override loads a
+validated data revision >= 3 once at bootstrap with the same installed
+engine and no rebuild; data revisions `1`/`2` remain frozen migration
+selectors only. Both newer
+modules are
 default-denied except for their one reviewed `local-coding-v1` pair each.
 Pair metadata is
 finite compatibility data; it does not grant an endpoint, model, route,
@@ -111,8 +122,15 @@ Client-module profile facts are limited to the reviewed module ID, version,
 and fixture digest. One bounded operator migration path exists for pinned
 0.149-v4 keys: the `codex` CLI upgrade/rollback commands move the
 `client_module` compatibility metadata between the frozen 0.149-v4 tuple and
-either 0.149-v5 or 0.162-v1, with only those four transition edges legal,
-dry-run by default, and no schema or quota change. Identity hints from Codex
+either 0.149-v5 or 0162-v1, and keys on the exact 0162-v1 tuple may hop
+to 0162-v2 (and back), with only those six transition edges legal,
+dry-run by default, and no schema or quota change. For the 0162 data
+profile, `codex migrate-key-profile` moves one exact key between the active
+bootstrap profile snapshot and the frozen 0162-v1/v2 legacy tuples using an
+explicit `--from-version`/`--from-digest` source (dry-run by default,
+single-transaction row-locked metadata + audit); same-revision/different-
+digest drift fails closed, and legacy/stale pins are denied until an
+explicit migration. Identity hints from Codex
 metadata are transient
 untrusted input and are never stored, logged, audited, exported, hashed, or
 forwarded.

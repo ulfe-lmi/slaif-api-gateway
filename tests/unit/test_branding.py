@@ -313,11 +313,15 @@ def test_fifo_swap_finishes_in_real_bounded_child(tmp_path: Path) -> None:
 def test_read_error_does_not_break_login_or_errors(tmp_path: Path, monkeypatch) -> None:
     (tmp_path / "style.css").write_bytes(VALID_CSS)
 
+    # Build the genuine app first: startup performs the Codex profile
+    # bootstrap read of the packaged DATA. Only the subsequent branding
+    # request reads get the synthetic os.read failure injected.
+    app = _app(str(tmp_path))
+
     def failed_read(*args):
         raise OSError("synthetic read failure")
 
     monkeypatch.setattr(branding.os, "read", failed_read)
-    app = _app(str(tmp_path))
     with TestClient(app) as client:
         assert client.get("/admin/branding/style.css").content == b""
         assert client.get("/admin/login").status_code == 200
