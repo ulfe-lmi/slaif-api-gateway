@@ -105,6 +105,11 @@ class ResponsesClientPolicySpec:
     max_reasoning_visible_bytes: int = 0
     allow_idless_encrypted_reasoning: bool = False
     assistant_history_content_types: frozenset[str] = frozenset()
+    allow_schema_property_names: bool = False
+    custom_client_tools: frozenset[tuple[str, str, str]] = frozenset({("functions", "exec", "custom")})
+    allow_sparse_visible_reasoning: bool = False
+    allow_empty_visible_reasoning: bool = False
+    allow_sparse_function_events: bool = False
 
 
 @dataclass(frozen=True, slots=True)

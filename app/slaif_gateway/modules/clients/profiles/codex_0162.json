@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "module_id": "codex-0.162-responses-v1",
-  "revision": "3",
+  "revision": "8",
   "provenance": {
     "cli_version": "0.162.1",
     "source_tag": "rust-v0.162.1",

@@ -214,3 +214,21 @@ image's registry does not know data-revision pins; rolling back to
 Do not claim that all future Codex protocol semantics fit in profile
 DATA: new execution, stream, or item behavior outside the engine
 validators may still require a code change.
+
+
+## Qwen executable compatibility update (packaged profile 8)
+
+The Qwen schema-label, custom `functions.apply_patch`, sparse Local visible
+reasoning stream, and empty-ciphertext continuation fixes require the new
+binary. Profile DATA alone cannot add executable validators. The packaged
+revision changes from 3 to 8; existing pins require the explicit
+`migrate-key-profile` dry run and `--apply` flow above. Record the prior
+revision/digest instead of assuming every deployment starts at revision 3.
+There is no schema migration in this change.
+
+For a rollback to an earlier data-revision binary, save its exact packaged or
+operator profile file first. While still using the new binary, configure that
+old file as the active snapshot, migrate the key from its new revision/digest
+to that old active profile, and then downgrade the image. Do not use a frozen
+`0162-v1` selector to stand for revision 3, 4, 5, or 6. Reopen traffic only after
+all workers and key pins agree. See [the Qwen runbook](runbooks/codex-qwen38.md).

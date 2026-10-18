@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from slaif_gateway.api.quota_errors import openai_error_from_quota_error
 from slaif_gateway.services.quota_errors import (
     InvalidQuotaEstimateError,
@@ -10,15 +12,20 @@ from slaif_gateway.services.quota_errors import (
 )
 
 
-def test_quota_limit_exceeded_maps_to_openai_rate_limit_error() -> None:
+@pytest.mark.parametrize("param,label", [
+    ("cost_limit_eur", "Cost"), ("token_limit_total", "Token"),
+    ("request_limit_total", "Request"),
+])
+def test_quota_limit_exceeded_maps_to_insufficient_quota(param, label) -> None:
     error = openai_error_from_quota_error(
-        QuotaLimitExceededError("Cost quota limit exceeded", param="cost_limit_eur")
+        QuotaLimitExceededError(f"{label} quota limit exceeded", param=param)
     )
 
     assert error.status_code == 429
-    assert error.error_type == "rate_limit_error"
+    assert error.error_type == "insufficient_quota"
     assert error.code == "quota_limit_exceeded"
-    assert error.param == "cost_limit_eur"
+    assert error.param == param
+    assert error.message == f"{label} quota limit exceeded"
 
 
 def test_invalid_quota_estimate_maps_to_invalid_request_error() -> None:

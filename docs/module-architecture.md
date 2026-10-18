@@ -37,7 +37,7 @@ structural request facts (version `5` adds the optional bounded
 `additional_tools` declaration item ID); and `codex-0.162-responses-v1`
 owns its bounded 0.162.1 additional-tools profile as a data-revision module:
 the effective module version is the validated profile DATA revision
-(packaged default revision `3`) and the fixture digest binds the canonical
+(packaged default revision `8`) and the fixture digest binds the canonical
 digest of the shipped compatibility policy DATA
 (`slaif_gateway/modules/clients/profiles/codex_0162.json`), which defines the
 namespace literals/prefixes, bounded identifier grammar, and ceilings
@@ -134,3 +134,25 @@ explicit migration. Identity hints from Codex
 metadata are transient
 untrusted input and are never stored, logged, audited, exported, hashed, or
 forwarded.
+
+## Qwen Local coding compatibility continuation
+
+The packaged 0.162 profile is now revision **8**. Engine changes are version
+owned: revision 4 permits schema property-map labels such as `secret` while
+still recursively checking their values for provider authority; revision 5
+adds only the custom grammar tool `functions.apply_patch` through declaration,
+streaming, and replay; revision 6 accepts bounded Local visible reasoning SSE
+with omitted `output_index` and empty encrypted content; revision 7 permits
+that same empty-ciphertext visible reasoning in continuation input. An empty
+ciphertext never creates an encrypted-replay reference or authorization.
+Revision 8 accepts sparse Local function-argument deltas and bounded argument
+done events tied to the active declared call, with exact argument matching and
+duplicate/late-event rejection. Existing visible-text shape, size, capability,
+and opaque replay checks remain.
+Ordinary Responses and older client modules keep their own policies.
+
+These semantics require the updated engine; editing profile DATA alone cannot
+install them. No database migration is needed. Upgrade key pins explicitly;
+see the [Qwen runbook](runbooks/codex-qwen38.md),
+[clean client examples](../examples/codex/qwen38-27b/README.md), and
+[bounded verification record](verification/codex-qwen38-live-smoke.md).

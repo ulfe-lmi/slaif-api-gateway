@@ -978,8 +978,8 @@ formats outside the configured allowlist.
 `CODEX_COMPATIBILITY_PROFILE_FILE` is an operator-only override for the
 Codex 0.162 data-revision compatibility profile. Empty (the default) uses
 the packaged default profile DATA shipped inside the installed package
-(`slaif_gateway/modules/clients/profiles/codex_0162.json`, revision 3,
-canonical digest `aa3de5376819022191e11935ee311acd4b59bf590324daaa0e3ebc448daf90bd`).
+(`slaif_gateway/modules/clients/profiles/codex_0162.json`, revision 8,
+canonical digest `1d1e5b05587d1a8bf1f90057e43e357b7b3627dc3268ec09108e5fafa52e6d11`).
 
 A configured path must name a bounded regular UTF-8 JSON file describing
 data revision >= 3, schema version 1, the finite namespace/prefix/grammar

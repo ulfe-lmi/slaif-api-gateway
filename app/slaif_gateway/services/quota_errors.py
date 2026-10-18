@@ -21,7 +21,7 @@ class QuotaLimitExceededError(QuotaError):
     """Raised when a reservation would exceed a configured hard limit."""
 
     status_code = 429
-    error_type = "rate_limit_error"
+    error_type = "insufficient_quota"
     error_code = "quota_limit_exceeded"
     message = "Quota limit exceeded"
 

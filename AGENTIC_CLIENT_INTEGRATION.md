@@ -33,7 +33,7 @@ prefixes, identifier-grammar traits, and cardinality/schema/description/
 declaration ceilings are shipped compatibility policy DATA
 (`slaif_gateway/modules/clients/profiles/codex_0162.json`), not source
 constants: the module's effective version is the validated data revision
-(packaged default revision `3`) and its fixture digest binds the canonical
+(packaged default revision `8`) and its fixture digest binds the canonical
 profile DATA digest, not a caller-declared hash. The bounded
 leading-underscore connector tool name for dynamic `mcp__codex_apps__*`
 namespaces is DATA-defined (exact names preserved). Data revisions `1`/`2`
@@ -3143,3 +3143,8 @@ review
 ```
 
 That is the reusable product of Objective 155.
+
+Clean, credential-free Qwen client profiles and a live-test procedure are in
+[the Qwen examples](examples/codex/qwen38-27b/README.md). The packaged revision-8
+engine includes bounded schema-label, custom apply_patch, and visible Local
+reasoning compatibility; see [the operational runbook](docs/runbooks/codex-qwen38.md).

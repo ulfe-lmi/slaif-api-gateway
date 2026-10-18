@@ -54,3 +54,5 @@ Runbooks:
 - [HPC verification and local tool bootstrap](../testing-hpc.md)
   documents the Codex-inside-HPC workflow, user-local PostgreSQL/Redis/Compose
   provisioning, and the two-table validation/test-suite summary format.
+
+- [Qwen 3.8 27B through Codex](codex-qwen38.md)

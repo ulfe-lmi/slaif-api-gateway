@@ -1625,6 +1625,20 @@ async def handle_response_create(
                     upstream_body=upstream_body,
                     live_burn_budget=quota.live_burn_budget,
                     stream_validation_profile=ResponsesStreamValidationProfile(
+                        allow_sparse_function_events=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_sparse_function_events
+                            and local_coding_server_context is not None
+                        ),
+                        allow_sparse_visible_reasoning=(
+                            client_module.policy_spec is not None
+                            and client_module.policy_spec.allow_sparse_visible_reasoning
+                            and local_coding_server_context is not None
+                        ),
+                        custom_client_tools=(
+                            client_module.policy_spec.custom_client_tools
+                            if client_module.policy_spec is not None else frozenset()
+                        ),
                         codex_streaming_tool_events=(
                             codex_streaming_tool_events_requested
                             or pair_local_codex_streaming_tools

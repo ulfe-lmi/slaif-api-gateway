@@ -228,7 +228,12 @@ def classify_additional_tools(
                     tool_index=tool_index,
                     field="name",
                 )
-            if tool_type != "function":
+            if tool_type != "function" and not (
+                int(profile.revision) >= 5
+                and namespace_name == "functions"
+                and name == "apply_patch"
+                and tool_type == "custom"
+            ):
                 return CodexTaxonomyResult(
                     accepted=False,
                     reason_code=TAXONOMY_REASON_TOOL_TYPE_INVALID,
@@ -245,7 +250,7 @@ def classify_additional_tools(
                     field="name",
                 )
             declared_names.add(name)
-            declared_tools.append((name, "function"))
+            declared_tools.append((name, tool_type))
         seen_namespaces.add(namespace_name)
         total_tools += len(declared_tools)
         ordered.append((namespace_name, tuple(declared_tools)))
@@ -291,6 +296,16 @@ def _build_policy_spec(profile: CodexProfileData) -> ResponsesClientPolicySpec:
         max_client_tool_description_bytes=profile.max_tool_description_bytes,
         max_client_tool_total_description_bytes=profile.max_total_description_bytes,
         max_client_tool_declaration_bytes=profile.max_declaration_bytes,
+        # Revision 3 and historical modules retain their frozen authority scan.
+        # JSON Schema property labels are data, not provider authority.
+        allow_schema_property_names=int(profile.revision) >= 4,
+        allow_sparse_visible_reasoning=int(profile.revision) >= 6,
+        allow_empty_visible_reasoning=int(profile.revision) >= 7,
+        allow_sparse_function_events=int(profile.revision) >= 8,
+        custom_client_tools=(
+            frozenset({("functions", "apply_patch", "custom")})
+            if int(profile.revision) >= 5 else frozenset()
+        ),
     )
 
 
