@@ -17,6 +17,7 @@ from slaif_gateway.modules.clients.registry import CODEX_0147_CLIENT_MODULE, cli
 from slaif_gateway.services.codex_profile_registry import (
     CODEX_PROFILE_REGISTRY,
     OPENAI_CODEX_PROFILE,
+    QWEN38_CODEX_PROFILE_ID,
     PROFILE_ID,
     PROFILE_METADATA_VERSION,
     CodexQualificationProfile,
@@ -200,6 +201,7 @@ class CodexProfileArtifacts:
     client_module_id: str | None = None
     client_module_version: str | None = None
     client_module_fixture_sha256: str | None = None
+    profile_config_self_contained: bool = False
 
     def to_safe_dict(self) -> dict[str, object]:
         return {
@@ -307,10 +309,8 @@ class CodexQualificationService:
         requested_model = str(getattr(route, "requested_model", "") or "")
         provider = str(getattr(route, "provider", "") or "")
         endpoint = str(getattr(route, "endpoint", "") or "")
-        metadata_state, declaration_profile_id, declaration_version = (
-            parse_codex_profile_metadata(
-                getattr(route, "capabilities", None), profile_registry=self._profiles
-            )
+        metadata_state, declaration_profile_id, declaration_version = parse_codex_profile_metadata(
+            getattr(route, "capabilities", None), profile_registry=self._profiles
         )
         if metadata_state == "not_declared":
             return _result(
@@ -324,8 +324,7 @@ class CodexQualificationService:
         if metadata_state in {"invalid", "not_ready"}:
             declaration_reason = (
                 declaration_profile_id
-                if CODEX_PROFILE_DECLARATION_KEY
-                in (getattr(route, "capabilities", None) or {})
+                if CODEX_PROFILE_DECLARATION_KEY in (getattr(route, "capabilities", None) or {})
                 and declaration_profile_id
                 else "codex_qualification_invalid"
             )
@@ -401,7 +400,9 @@ class CodexQualificationService:
                         profile_registry=self._profiles,
                     )
                 )
-                if not _is_runtime_selected_route(paired_route, all_routes=all_routes, profile=profile):
+                if not _is_runtime_selected_route(
+                    paired_route, all_routes=all_routes, profile=profile
+                ):
                     reasons.append("paired_route_not_selected")
 
         provider_row = provider_by_name.get(provider)
@@ -489,7 +490,9 @@ def parse_codex_profile_metadata(
         if CODEX_QUALIFICATION_KEY in capabilities:
             return "invalid", "codex_profile_declaration_mixed", CODEX_PROFILE_METADATA_VERSION
         declaration = capabilities.get(CODEX_PROFILE_DECLARATION_KEY)
-        state, reason = _validate_profile_declaration(declaration, profile_registry=profile_registry)
+        state, reason = _validate_profile_declaration(
+            declaration, profile_registry=profile_registry
+        )
         if state != "ready":
             return state, reason, CODEX_PROFILE_METADATA_VERSION
         declaration = capabilities[CODEX_PROFILE_DECLARATION_KEY]
@@ -497,7 +500,11 @@ def parse_codex_profile_metadata(
         return "protocol_qualified", str(declaration["profile_id"]), CODEX_PROFILE_METADATA_VERSION
     if CODEX_QUALIFICATION_KEY in capabilities:
         state = parse_codex_qualification_metadata(capabilities)
-        return state, CODEX_PROFILE_ID if state == "protocol_qualified" else None, CODEX_PROFILE_VERSION
+        return (
+            state,
+            CODEX_PROFILE_ID if state == "protocol_qualified" else None,
+            CODEX_PROFILE_VERSION,
+        )
     return "not_declared", None, None
 
 
@@ -560,7 +567,9 @@ def render_codex_profile(
     """Render two independent profile-v2 TOML documents without credentials."""
 
     profile = _selected_profile(qualification_profile)
-    return render_codex_profile_artifacts(base_url, profile, legacy_default=qualification_profile is None)
+    return render_codex_profile_artifacts(
+        base_url, profile, legacy_default=qualification_profile is None
+    )
 
 
 def render_codex_profile_artifacts(
@@ -577,22 +586,40 @@ def render_codex_profile_artifacts(
     provider_alias = profile.profile_name
     base_config = (
         f"[model_providers.{provider_alias}]\n"
-        f'name = {json.dumps(str(provider_fields["name"]), ensure_ascii=True)}\n'
+        f"name = {json.dumps(str(provider_fields['name']), ensure_ascii=True)}\n"
         f"base_url = {encoded_url}\n"
         'env_key = "OPENAI_API_KEY"\n'
-        f'wire_api = {json.dumps(profile.wire_api, ensure_ascii=True)}\n'
+        f"wire_api = {json.dumps(profile.wire_api, ensure_ascii=True)}\n"
         f"requires_openai_auth = {str(bool(provider_fields['requires_openai_auth'])).lower()}\n"
         f"supports_websockets = {str(bool(provider_fields['supports_websockets'])).lower()}\n"
     )
     profile_config = (
         f"model = {json.dumps(profile.public_model, ensure_ascii=True)}\n"
-        f'model_provider = {json.dumps(provider_alias, ensure_ascii=True)}\n'
+        f"model_provider = {json.dumps(provider_alias, ensure_ascii=True)}\n"
     )
     if not legacy_default and profile.model_catalog_target is not None:
-        profile_config += f"model_catalog_json = {json.dumps(profile.model_catalog_target, ensure_ascii=True)}\n"
+        profile_config += (
+            f"model_catalog_json = {json.dumps(profile.model_catalog_target, ensure_ascii=True)}\n"
+        )
     profile_config += "\n[features]\nremote_compaction_v2 = false\n"
+    self_contained = profile.profile_id == QWEN38_CODEX_PROFILE_ID
+    if self_contained:
+        profile_config = (
+            f"model = {json.dumps(profile.public_model)}\n"
+            f"model_provider = {json.dumps(provider_alias)}\n"
+            f"model_catalog_json = {json.dumps(profile.model_catalog_target)}\n"
+            f"model_context_window = {profile.context_window_tokens}\n"
+            f"model_auto_compact_token_limit = {profile.auto_compaction_token_threshold}\n"
+            'model_reasoning_effort = "xhigh"\nshow_raw_agent_reasoning = true\n'
+            'web_search = "disabled"\napproval_policy = "on-request"\n'
+            'sandbox_mode = "workspace-write"\n\n'
+            + base_config
+            + "\n[features]\napps = false\nenable_mcp_apps = false\n"
+            "plugins = false\nremote_compaction_v2 = false\n"
+        )
     return CodexProfileArtifacts(
         base_config_toml=base_config,
+        profile_config_self_contained=self_contained,
         profile_config_toml=profile_config,
         profile=profile.profile_name if not legacy_default else CODEX_PROFILE_NAME,
         profile_config_target=f"$CODEX_HOME/{profile.profile_name if not legacy_default else CODEX_PROFILE_NAME}.config.toml",
@@ -740,10 +767,13 @@ def _enforce_codex_runtime_operation(
             route_capabilities=capabilities,
             streaming_requested=True,
             route_supports_streaming=bool(getattr(route, "supports_streaming", False)),
-            codex_request_envelope_requested="codex_request_envelope" in profile.required_route_gates,
+            codex_request_envelope_requested="codex_request_envelope"
+            in profile.required_route_gates,
             codex_client_tools_requested="codex_client_tools" in profile.required_route_gates,
-            codex_streaming_tool_events_requested="codex_streaming_tool_events" in profile.required_route_gates,
-            codex_encrypted_reasoning_replay_requested="codex_encrypted_reasoning_replay" in profile.required_route_gates,
+            codex_streaming_tool_events_requested="codex_streaming_tool_events"
+            in profile.required_route_gates,
+            codex_encrypted_reasoning_replay_requested="codex_encrypted_reasoning_replay"
+            in profile.required_route_gates,
             codex_extended_limits_requested={
                 "codex_client_tools",
                 "codex_streaming_tool_events",
@@ -756,10 +786,13 @@ def _enforce_codex_runtime_operation(
         enforce_responses_route_capabilities(
             route_capabilities=capabilities,
             compact_requested=True,
-            codex_request_envelope_requested="codex_request_envelope" in profile.required_route_gates,
+            codex_request_envelope_requested="codex_request_envelope"
+            in profile.required_route_gates,
             codex_client_tools_requested="codex_client_tools" in profile.required_route_gates,
-            codex_streaming_tool_events_requested="codex_streaming_tool_events" in profile.required_route_gates,
-            codex_encrypted_reasoning_replay_requested="codex_encrypted_reasoning_replay" in profile.required_route_gates,
+            codex_streaming_tool_events_requested="codex_streaming_tool_events"
+            in profile.required_route_gates,
+            codex_encrypted_reasoning_replay_requested="codex_encrypted_reasoning_replay"
+            in profile.required_route_gates,
             codex_extended_limits_requested={
                 "codex_client_tools",
                 "codex_streaming_tool_events",
@@ -843,9 +876,11 @@ def _paired_route_reasons(
         reasons.append("paired_qualification_invalid")
     if declaration_version != paired_version:
         reasons.append("paired_profile_version_mismatch")
-    reasons.extend(_route_capability_reasons(
-        paired, capabilities=getattr(paired, "capabilities", None), profile=profile
-    ))
+    reasons.extend(
+        _route_capability_reasons(
+            paired, capabilities=getattr(paired, "capabilities", None), profile=profile
+        )
+    )
     try:
         reciprocal = parse_codex_compaction_compatible_route_ids(
             getattr(paired, "capabilities", None)
@@ -956,14 +991,22 @@ def _result(
         paired_route_id=paired_route_id,
         reason_codes=reasons,
         profile_version=metadata_version if resolved_profile else None,
-        cli_version=(CODEX_CLI_VERSION if legacy else resolved_profile.cli_version) if resolved_profile else None,
-        profile=(CODEX_EVIDENCE_PROFILE if legacy else resolved_profile.profile_name) if resolved_profile else None,
+        cli_version=(CODEX_CLI_VERSION if legacy else resolved_profile.cli_version)
+        if resolved_profile
+        else None,
+        profile=(CODEX_EVIDENCE_PROFILE if legacy else resolved_profile.profile_name)
+        if resolved_profile
+        else None,
         catalog_source=resolved_profile.catalog_source if resolved_profile else None,
         wire_api=resolved_profile.wire_api if resolved_profile else None,
         real_provider_e2e=resolved_profile.live_qualification if resolved_profile else None,
-        profile_id=profile_id if profile_id is not None else (CODEX_PROFILE_ID if include_profile else None),
+        profile_id=profile_id
+        if profile_id is not None
+        else (CODEX_PROFILE_ID if include_profile else None),
         metadata_version=(
-            metadata_version if metadata_version is not None else (CODEX_PROFILE_VERSION if include_profile else None)
+            metadata_version
+            if metadata_version is not None
+            else (CODEX_PROFILE_VERSION if include_profile else None)
         ),
         provider_kind=resolved_profile.provider_kind if resolved_profile else None,
         provider_display_name=resolved_profile.provider_display_name if resolved_profile else None,

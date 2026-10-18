@@ -3,8 +3,8 @@
 > **Status:** Bounded operator procedure; Codex CLI 0.162.1
 > **Scope:** Exact Codex 0.162 client module with a Local Coding Responses backend
 
-Use the [two clean client profiles](../../examples/codex/qwen38-27b/README.md).
-Their names describe behavior, not hardware, institutions, or host names.
+Use the [clean two-file client configuration](../../examples/codex/qwen38-27b/README.md).
+It contains no hardware, institution, or private host names.
 The [verification record](../verification/codex-qwen38-live-smoke.md) separates
 real gateway/model tests from synthetic fixtures and operator reports.
 
@@ -42,12 +42,44 @@ Test backend reachability from the API container's network context; a host-only
 probe does not prove the container can reach a VPN backend. Configure the VPN
 and firewall deliberately, rather than exposing every backend port publicly.
 
+## Register the route for downloads
+
+The registry includes `qwen38-27b-codex-0.162-v1` for CLI 0.162.1 and client
+module `codex-0.162-responses-v1`, revision 8. Registration does not change key
+permissions or automatically qualify existing routes. Through the audited
+route editor/service, set the route's top-level capabilities declaration to:
+
+```json
+"codex_profile": {
+  "version": 2,
+  "profile_id": "qwen38-27b-codex-0.162-v1",
+  "fixture_sha256": "1d1e5b05587d1a8bf1f90057e43e357b7b3627dc3268ec09108e5fafa52e6d11"
+}
+```
+
+Preserve the other capability fields. This profile requires upstream and
+public model `qwen38-27b`, provider kind `openai_compatible`, a streaming
+Responses route, all four Codex flags above, and exact context/default-output/
+maximum-output limits of 131072/8192/16384, with complete pricing.
+Run `slaif-gateway codex inspect --json` and resolve any readiness reasons.
+A ready route's Administration detail page then offers **Download Codex
+config** and **Download model catalog**. These are authenticated admin
+downloads, contain no key, and do not grant a client access by themselves.
+The existing OpenAI profile keeps its separate base-fragment workflow.
+
+This profile retains `live_qualification=false`: bounded real text/tool tests
+are evidence, not a complete provider, long-context or compaction qualification.
+To roll back the route declaration, restore its saved prior capabilities
+through the audited editor/service before downgrading the executable. This
+changes neither key-module pins nor quotas.
+
 ## Client configuration and smoke
 
 Use an HTTPS gateway URL ending in `/v1`, including the port if it differs
 from 443. The examples use `env_key = "OPENAI_API_KEY"`; no embedded token or
-`auth.json` edit is needed. Replace only the placeholder URL and absolute
-catalog path in the TOML files. Start a new Codex process after edits.
+`auth.json` edit is needed. For the repository example, replace the placeholder URL. The downloaded
+TOML already contains the public gateway URL; its catalog path is relative to
+Codex home. Save both files there. Start a new Codex process after edits.
 
 The example catalog sets `use_responses_lite=true`. This makes Codex declare
 tools in an initial `additional_tools` input item; the selected gateway module
@@ -55,8 +87,8 @@ validates and lowers that prefix to the backend's namespace `tools` field.
 Nonempty top-level client `tools` are outside this profile. Disabling apps and
 plugins reduces declarations but does not remove built-in local tools.
 
-First run the minimal profile with: “Reply exactly CLEAN_PROFILE_OK. Do not
-use tools.” Then run the coding profile in a disposable directory: ask it to
+First run `codex --profile qwen38` with: “Reply exactly CLEAN_PROFILE_OK. Do not
+use tools.” Then run the same profile in a disposable directory: ask it to
 create `smoke.txt` with `apply_patch`, read it using `exec_command`, and report
 its exact content. Check both tool results and the final response. A text-only
 pass does not establish multi-turn tool compatibility.

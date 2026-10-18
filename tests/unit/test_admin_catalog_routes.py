@@ -234,7 +234,9 @@ def test_admin_provider_routes_return_html_and_accept_filters(monkeypatch) -> No
     client = TestClient(_app())
     _login(monkeypatch, client)
 
-    response = client.get("/admin/providers", params={"provider": "openai", "enabled": "true", "limit": "20"})
+    response = client.get(
+        "/admin/providers", params={"provider": "openai", "enabled": "true", "limit": "20"}
+    )
     detail = client.get(f"/admin/providers/{provider.id}")
 
     assert response.status_code == 200
@@ -271,7 +273,12 @@ def test_admin_route_routes_return_html_and_accept_filters(monkeypatch) -> None:
 
     response = client.get(
         "/admin/routes",
-        params={"provider": "openai", "requested_model": "gpt", "match_type": "exact", "visible": "true"},
+        params={
+            "provider": "openai",
+            "requested_model": "gpt",
+            "match_type": "exact",
+            "visible": "true",
+        },
     )
     detail = client.get(f"/admin/routes/{route.id}")
 
@@ -292,9 +299,7 @@ def test_admin_route_views_label_protocol_qualification_without_e2e_claim(monkey
     route = replace(
         _route(),
         codex_qualification_state="protocol_qualified",
-        codex_qualification_badge=(
-            "Protocol-qualified: Codex 0.147.0 / gpt-5.6-sol / profile v1"
-        ),
+        codex_qualification_badge=("Protocol-qualified: Codex 0.147.0 / gpt-5.6-sol / profile v1"),
         codex_qualification_reason_codes=(),
         codex_paired_route_id=paired_route_id,
         codex_protocol_ready=True,
@@ -323,7 +328,7 @@ def test_admin_route_views_label_protocol_qualification_without_e2e_claim(monkey
     assert "Protocol-qualified: Codex 0.147.0 / gpt-5.6-sol / profile v1" in response.text
     assert "real provider-through-gateway E2E not yet run" in response.text
     assert "Real provider-through-gateway E2E has not yet run" in detail.text
-    assert f'/admin/routes/{paired_route_id}' in detail.text
+    assert f"/admin/routes/{paired_route_id}" in detail.text
 
 
 def test_admin_v2_ready_route_shows_profile_facts_and_artifact_links(monkeypatch) -> None:
@@ -465,3 +470,45 @@ def test_admin_catalog_missing_records_are_safe(monkeypatch) -> None:
     assert client.get(f"/admin/pricing/{uuid.uuid4()}").status_code == 404
     assert client.get("/admin/fx/not-a-uuid").status_code == 404
     assert client.get(f"/admin/fx/{uuid.uuid4()}").status_code == 404
+
+
+def test_qwen_download_is_self_contained_and_requires_ready_admin_route(monkeypatch):
+    import json
+    import tomllib
+    from slaif_gateway.services.codex_profile_registry import QWEN38_CODEX_PROFILE
+
+    profile = QWEN38_CODEX_PROFILE
+    route = replace(
+        _route(),
+        codex_protocol_ready=True,
+        codex_profile_id=profile.profile_id,
+        codex_metadata_version=2,
+        codex_cli_version=profile.cli_version,
+        codex_profile_name=profile.profile_name,
+    )
+
+    async def get_route_detail(self, route_id):
+        return route
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.get_route_detail",
+        get_route_detail,
+    )
+    client = TestClient(_app(_settings(PUBLIC_BASE_URL="https://gateway.example.org/v1")))
+    endpoint = f"/admin/routes/{route.id}/codex-profile"
+    assert client.get(endpoint + "/profile", follow_redirects=False).status_code == 303
+    _login(monkeypatch, client)
+    detail = client.get(f"/admin/routes/{route.id}")
+    assert "Download Codex config" in detail.text
+    assert "Download base fragment" not in detail.text
+    config = client.get(endpoint + "/profile")
+    catalog = client.get(endpoint + "/catalog")
+    assert config.status_code == catalog.status_code == 200
+    assert config.headers["content-disposition"] == 'attachment; filename="qwen38.config.toml"'
+    assert catalog.headers["content-disposition"] == 'attachment; filename="qwen38-models.json"'
+    parsed = tomllib.loads(config.text)
+    assert parsed["model_providers"]["qwen38"]["base_url"] == "https://gateway.example.org/v1"
+    assert json.loads(catalog.text)["models"][0]["use_responses_lite"] is True
+    route = replace(route, codex_protocol_ready=False)
+    assert client.get(endpoint + "/profile").status_code == 404
+    assert client.get(endpoint + "/catalog").status_code == 404

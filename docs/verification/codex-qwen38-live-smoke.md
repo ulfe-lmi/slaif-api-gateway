@@ -81,3 +81,21 @@ record request correlation and final ledger outcome privately.
 The namespace inventory in earlier 197-tool diagnostics is different evidence
 from these clean profiles: apps and plugins are disabled here. No conclusion
 about the complete 197-tool interactive workflow follows from these tests.
+
+## Registered two-file configuration follow-up
+
+The earlier minimal/coding names above describe historical tests. They are now
+replaced by one `qwen38` profile: `qwen38.config.toml` plus `qwen38-models.json`.
+On 2026-10-18, the exact registry-rendered files passed a real HTTPS gateway
+test using pinned Codex CLI 0.162.1 in 36.0 seconds: successful `apply_patch`,
+`exec_command` readback, exact file content and final marker, exit 0. The
+relative catalog path resolved successfully from isolated Codex home. The
+test used the previously documented disposable-container sandbox override;
+it does not establish host sandbox compatibility or full live qualification.
+
+After deployment, the live route was assigned the registered declaration through
+the audited route service. Runtime readiness passed with full live qualification
+still false. The files rendered from the live deployment settings passed the
+same real gateway tool round trip in 33.4 seconds, exit 0. Authenticated download
+responses, attachment filenames, unauthenticated redirects and not-ready 404s
+are covered by focused HTTP tests; no production admin session was impersonated.
