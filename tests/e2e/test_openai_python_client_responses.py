@@ -271,6 +271,8 @@ async def _create_responses_test_data(
     codex_request_envelope: bool = False,
     codex_client_tools: bool = False,
     codex_streaming_tool_events: bool = False,
+    codex_encrypted_reasoning_replay: bool = False,
+    codex_route_limits: dict[str, int] | None = None,
     endpoint: str = RESPONSES_ENDPOINT,
     allowed_endpoints: list[str] | None = None,
 ):
@@ -406,6 +408,7 @@ async def _create_responses_test_data(
             capabilities["codex_request_envelope"] = codex_request_envelope
             capabilities["codex_client_tools"] = codex_client_tools
             capabilities["codex_streaming_tool_events"] = codex_streaming_tool_events
+            capabilities["codex_encrypted_reasoning_replay"] = codex_encrypted_reasoning_replay
             external_tool_route_policy = {
                 "version": 1,
                 "supported_capabilities": ["provider_web_search"],
@@ -428,6 +431,7 @@ async def _create_responses_test_data(
                 capabilities={
                     "responses": capabilities,
                     **({"local_coding": local_coding_contract} if local_coding_contract else {}),
+                    **({"codex_limits": codex_route_limits} if codex_route_limits else {}),
                     **(
                         {"external_tools": external_tool_route_policy}
                         if external_web_search
@@ -436,6 +440,37 @@ async def _create_responses_test_data(
                 },
                 notes="Responses E2E route",
             )
+            # Fully gated Codex routes (codex_route_limits) derive Codex
+            # accounting, which fails closed without the complete
+            # cache/reasoning/long-context pricing dimensions; seed the
+            # synthetic EUR dimensions only for that owned route data.
+            codex_pricing_metadata = (
+                {
+                    "codex_accounting": {
+                        "long_context_threshold_tokens": codex_route_limits[
+                            "context_window_tokens"
+                        ],
+                        "long_context_input_multiplier": "1.75",
+                        "long_context_output_multiplier": "2.0",
+                        "cache_write_input_price_per_1m": "1.750000000",
+                    }
+                }
+                if codex_route_limits
+                else None
+            )
+            pricing_metadata: dict[str, object] | None = None
+            if external_web_search:
+                pricing_metadata = {
+                    "external_tool_pricing": {
+                        "openai_web_search_call_price_native": "0.050000000",
+                        "source": "openai_published_per_call",
+                    }
+                }
+            if codex_pricing_metadata is not None:
+                pricing_metadata = {
+                    **(pricing_metadata or {}),
+                    **codex_pricing_metadata,
+                }
             await pricing.create_pricing_rule(
                 provider=provider,
                 upstream_model=upstream_model or model,
@@ -443,18 +478,15 @@ async def _create_responses_test_data(
                 valid_from=now - timedelta(days=1),
                 currency="EUR",
                 input_price_per_1m=Decimal("1.000000000"),
-                output_price_per_1m=Decimal("1.000000000"),
-                request_price=Decimal("0.000000000"),
-                pricing_metadata=(
-                    {
-                        "external_tool_pricing": {
-                            "openai_web_search_call_price_native": "0.050000000",
-                            "source": "openai_published_per_call",
-                        }
-                    }
-                    if external_web_search
-                    else None
+                cached_input_price_per_1m=(
+                    Decimal("0.500000000") if codex_route_limits else None
                 ),
+                output_price_per_1m=Decimal("1.000000000"),
+                reasoning_price_per_1m=(
+                    Decimal("2.000000000") if codex_route_limits else None
+                ),
+                request_price=Decimal("0.000000000"),
+                pricing_metadata=pricing_metadata,
                 notes="Responses E2E pricing",
             )
 

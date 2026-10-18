@@ -1,0 +1,232 @@
+{
+  "contract": {
+    "client_family": "codex-cli",
+    "client_version": "0.162.1",
+    "profile": "responses-lite additional_tools local declarations",
+    "additional_tools_item_fields": {
+      "id": "optional_nullable_string",
+      "role": "developer",
+      "tools": "array",
+      "type": "additional_tools"
+    },
+    "namespace_vocabulary": {
+      "strict_builtin_namespaces": [
+        "functions",
+        "multi_agent_v1"
+      ],
+      "dynamic_namespace_pattern": "^mcp__codex_apps__[a-z][a-z0-9_.-]{0,63}$",
+      "builtin_observed_sample": {
+        "note": "Observed by the official isolated 0.162.1 capture; a sample of a larger built-in vocabulary (the operator profile reports 11 functions), not an exact tool list.",
+        "functions": [
+          "exec_command",
+          "write_stdin",
+          "request_user_input",
+          "view_image",
+          "get_goal",
+          "create_goal",
+          "update_goal"
+        ],
+        "multi_agent_v1": [
+          "close_agent",
+          "resume_agent",
+          "send_input",
+          "spawn_agent",
+          "wait_agent"
+        ]
+      },
+      "tool_validation": {
+        "name_pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+        "type": "function_only",
+        "uniqueness": "per namespace",
+        "schema_and_authority": "existing request-policy schema, description, depth, byte, and recursive authority checks"
+      }
+    },
+    "cardinality_limits": {
+      "max_namespaces": 16,
+      "max_total_tools": 256,
+      "max_tools_per_namespace": 256
+    },
+    "byte_limits": {
+      "max_client_tool_description_bytes": 20000,
+      "max_client_tool_total_description_bytes": 262144,
+      "max_client_tool_schema_properties": 4096,
+      "max_client_tool_declaration_bytes": 589824
+    },
+    "id_gateway_subset": {
+      "max_bytes": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+      "observed_client_shape": "at_ followed by UUID-form suffix",
+      "authority": "none",
+      "persistence": "none"
+    }
+  },
+  "schema_version": "codex_0162_additional_tools_profile_v1",
+  "source": {
+    "commit": "092d3acd6bec3e3a14bdc7e7a2810ab628ab759d",
+    "notes": [
+      "models.rs AdditionalTools.id remains an optional nullable ResponseItemId with serde default/skip-none; a Some(id) value is preserved on the wire.",
+      "client.rs builds the responses-lite AdditionalTools declaration with a Some(at_UUIDv5) identifier derived from the thread namespace plus serialized tool definitions; top-level tools are None in this profile.",
+      "Namespace and tool JSON grouping is produced upstream by codex_tools::create_tools_json_for_responses_lite; the isolated capture's built-in tool list is a sample of the built-in vocabulary, and plugin tool names vary with installed plugins, so tool names are bounded-validated rather than exactly pinned.",
+      "The synthetic 197-tool profile keeps exactly the operator-supplied namespace counts (11 functions + 5 multi_agent_v1 + 181 mcp__codex_apps__ tools); it is a sanitized structural summary, not a capture of actually installed plugins."
+    ],
+    "paths": {
+      "input_type": "codex-rs/protocol/src/models.rs",
+      "item_id": "codex-rs/protocol/src/response_item_id.rs",
+      "request_preparation": "codex-rs/core/src/client.rs"
+    },
+    "repository": "openai/codex",
+    "tag": "rust-v0.162.1"
+  },
+  "official_isolated_capture": {
+    "backend": "owned loopback fake Responses; no Gateway/model/provider call",
+    "bodyBytes": 21485,
+    "binarySHA256": "628e35487d888a28f0427fc37501da529dd3d81fcbad7a2c3421c1e8670d92e1",
+    "archiveSHA256": "a676f5722aae0d86cbe3764332f08eab1fdd89dc0a300b3ad4ffbf48611fa3e3",
+    "additionalToolsBytes": 16701,
+    "clientMetadataKeys": [
+      "root_turn_id",
+      "session_id",
+      "thread_id",
+      "turn_id",
+      "x-codex-installation-id",
+      "x-codex-turn-metadata",
+      "x-codex-window-id"
+    ],
+    "idMatchesAtUuid": true,
+    "idNull": false,
+    "idPresent": true,
+    "namespaces": {
+      "functions": {
+        "toolCount": 7,
+        "tools": {
+          "create_goal": {
+            "bytes": 760,
+            "descriptionBytes": 265,
+            "type": "function"
+          },
+          "exec_command": {
+            "bytes": 1564,
+            "descriptionBytes": 82,
+            "type": "function"
+          },
+          "get_goal": {
+            "bytes": 281,
+            "descriptionBytes": 122,
+            "type": "function"
+          },
+          "request_user_input": {
+            "bytes": 1355,
+            "descriptionBytes": 120,
+            "type": "function"
+          },
+          "update_goal": {
+            "bytes": 2172,
+            "descriptionBytes": 1541,
+            "type": "function"
+          },
+          "view_image": {
+            "bytes": 371,
+            "descriptionBytes": 124,
+            "type": "function"
+          },
+          "write_stdin": {
+            "bytes": 784,
+            "descriptionBytes": 80,
+            "type": "function"
+          }
+        }
+      },
+      "multi_agent_v1": {
+        "toolCount": 5,
+        "tools": {
+          "close_agent": {
+            "bytes": 548,
+            "descriptionBytes": 298,
+            "type": "function"
+          },
+          "resume_agent": {
+            "bytes": 314,
+            "descriptionBytes": 89,
+            "type": "function"
+          },
+          "send_input": {
+            "bytes": 1594,
+            "descriptionBytes": 215,
+            "type": "function"
+          },
+          "spawn_agent": {
+            "bytes": 5925,
+            "descriptionBytes": 4348,
+            "type": "function"
+          },
+          "wait_agent": {
+            "bytes": 736,
+            "descriptionBytes": 252,
+            "type": "function"
+          }
+        }
+      }
+    },
+    "reasoningKeys": [
+      "context",
+      "effort"
+    ],
+    "requestCount": 1,
+    "role": "developer",
+    "syntheticKeyOnly": true
+  },
+  "synthetic_197_profile": {
+    "label": "Sanitized operator-supplied structural summary; NOT a capture of actually installed plugins.",
+    "namespaceCounts": {
+      "functions": 11,
+      "multi_agent_v1": 5,
+      "mcp__codex_apps__chatgpt_space": 40,
+      "mcp__codex_apps__codex_document_control": 3,
+      "mcp__codex_apps__github": 89,
+      "mcp__codex_apps__hotline": 1,
+      "mcp__codex_apps__pets": 11,
+      "mcp__codex_apps__plugin_management": 6,
+      "mcp__codex_apps__safety_settings": 5,
+      "mcp__codex_apps__search_service": 1,
+      "mcp__codex_apps__sites": 25
+    },
+    "totalChildTools": 197
+  },
+  "synthetic_vectors": [
+    {
+      "expected": "accepted_id_preserved",
+      "id": "at_123e4567-e89b-12d3-a456-426614174000",
+      "namespaces": "builtin_functions_plus_one_dynamic"
+    },
+    {
+      "expected": "accepted_id_absent",
+      "id": "absent",
+      "namespaces": "builtin_functions_only"
+    },
+    {
+      "expected": "accepted_id_null_canonicalizes_to_absent",
+      "id": "null",
+      "namespaces": "builtin_functions_only"
+    },
+    {
+      "expected": "accepted_full_synthetic_197_profile",
+      "id": "at_123e4567-e89b-12d3-a456-426614174000",
+      "namespaces": "full_synthetic_197_profile_counts_11_5_181"
+    },
+    {
+      "expected": "rejected_unknown_namespace",
+      "id": "absent",
+      "namespaces": "builtin_functions_plus_unknown_remote"
+    },
+    {
+      "expected": "rejected_dynamic_custom_tool_type",
+      "id": "absent",
+      "namespaces": "builtin_functions_plus_dynamic_custom_tool"
+    },
+    {
+      "expected": "rejected_cardinality_exceeded",
+      "id": "absent",
+      "namespaces": "more_than_16_namespaces"
+    }
+  ]
+}

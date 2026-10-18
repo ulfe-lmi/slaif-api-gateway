@@ -65,6 +65,10 @@ from slaif_gateway.modules.clients.codex_0149 import (
     codex_0149_declared_tool_taxonomy,
     codex_0149_streaming_tool_events_requested,
 )
+from slaif_gateway.modules.clients.codex_0162 import (
+    CODEX_0162_CLIENT_MODULE_ID,
+    codex_0162_lower_initial_additional_tools,
+)
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
 from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_SERVER_MODULE_ID,
@@ -322,10 +326,23 @@ def _build_safe_responses_upstream_body(
     policy_result: ResponsesPolicyResult,
     upstream_model: str,
     omit_prompt_cache_key: bool = False,
+    lower_codex_0162_initial_declaration: bool = False,
 ) -> dict[str, object]:
     try:
+        effective_body = policy_result.effective_body
+        if lower_codex_0162_initial_declaration:
+            # Approved 0.162 x Local pair only: the request-policy gates
+            # (key, route, tool, field, schema, description, depth, count,
+            # byte) already canonicalized the declaration in the policy
+            # result, and that policy result - still carrying the complete
+            # validated declaration - is what quota admission and cost
+            # estimation consume; this pure body build does not alter it.
+            # The lowering happens before final provider serialization and
+            # HMAC signing, never afterward, and forwarding still waits for
+            # quota admission.
+            effective_body = codex_0162_lower_initial_additional_tools(effective_body)
         normalized_request = normalize_responses_upstream_request(
-            policy_result.effective_body,
+            effective_body,
             requested_model=policy_result.effective_body["model"],
             upstream_model=upstream_model,
         )
@@ -445,8 +462,25 @@ def _codex_local_pair_omits_prompt_cache_key(
     client_module_id: str,
     local_coding_server_context: Mapping[str, object] | None,
 ) -> bool:
+    # The 0.162.1 CLI derives prompt_cache_key from the session affinity
+    # metadata as well (client.rs 581-590); the Local pair keeps the same
+    # privacy behavior for both versioned dialects.
     return (
-        client_module_id == CODEX_0149_CLIENT_MODULE_ID and local_coding_server_context is not None
+        client_module_id
+        in {CODEX_0149_CLIENT_MODULE_ID, CODEX_0162_CLIENT_MODULE_ID}
+        and local_coding_server_context is not None
+    )
+
+
+def _codex_0162_local_pair_lowers_declaration(
+    *,
+    client_module_id: str,
+    local_coding_server_context: Mapping[str, object] | None,
+) -> bool:
+    """Only the approved 0.162 x Local pair lowers the initial prefix."""
+    return (
+        client_module_id == CODEX_0162_CLIENT_MODULE_ID
+        and local_coding_server_context is not None
     )
 
 
@@ -1345,6 +1379,10 @@ async def handle_response_create(
             client_module_id=client_module.module_id,
             local_coding_server_context=local_coding_server_context,
         ),
+        lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
+            client_module_id=client_module.module_id,
+            local_coding_server_context=local_coding_server_context,
+        ),
     )
     external_pricing_lookup = None
     if external_web_search_admission is not None:
@@ -1481,6 +1519,10 @@ async def handle_response_create(
             policy_result=policy_result,
             upstream_model=route.resolved_model,
             omit_prompt_cache_key=_codex_local_pair_omits_prompt_cache_key(
+                client_module_id=client_module.module_id,
+                local_coding_server_context=local_coding_server_context,
+            ),
+            lower_codex_0162_initial_declaration=_codex_0162_local_pair_lowers_declaration(
                 client_module_id=client_module.module_id,
                 local_coding_server_context=local_coding_server_context,
             ),

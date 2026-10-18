@@ -4,7 +4,20 @@ import copy
 
 import pytest
 
+from slaif_gateway.api.errors import OpenAICompatibleError
 from slaif_gateway.config import Settings
+from slaif_gateway.modules.clients.codex_0162 import (
+    CODEX_0162_CLIENT_MODULE,
+    CODEX_0162_CLIENT_MODULE_ID,
+    CODEX_0162_POLICY_SPEC,
+    codex_0162_lower_initial_additional_tools,
+)
+from slaif_gateway.modules.contracts import ModuleSelectionError
+from slaif_gateway.services.responses_gateway import (
+    _build_safe_responses_upstream_body,
+    _codex_0162_local_pair_lowers_declaration,
+    _codex_local_pair_omits_prompt_cache_key,
+)
 from slaif_gateway.services.upstream_request_contracts import (
     normalize_audio_speech_upstream_request,
     normalize_audio_transcription_upstream_request,
@@ -1823,3 +1836,260 @@ def test_conversation_update_reconstructs_exact_body_and_deep_copies() -> None:
 def test_conversation_update_builder_rejects_raw_mappings() -> None:
     with pytest.raises(TypeError, match="normalized request contract"):
         build_conversation_update_upstream_body({"metadata": {"safe": "value"}})
+
+
+# --- 0.162 x Local initial-prefix lowering (provider declaration translation) ---
+
+
+def _codex_0162_body() -> dict[str, object]:
+    return {
+        "model": "classroom-codex",
+        "prompt_cache_key": "affinity-123e4567",
+        "input": [
+            {
+                "type": "additional_tools",
+                "id": "at_123e4567-e89b-12d3-a456-426614174000",
+                "role": "developer",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "functions",
+                        "description": "bounded local function namespace",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "exec_command",
+                                "description": "run a command",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"cmd": {"type": "string"}},
+                                    "required": ["cmd"],
+                                    "additionalProperties": False,
+                                },
+                                "strict": True,
+                            }
+                        ],
+                    },
+                    {
+                        "type": "namespace",
+                        "name": "mcp__codex_apps__demo",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "demo_tool_001",
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    },
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            },
+        ],
+    }
+
+
+def _codex_0162_policy_result(body: dict[str, object]):
+    normalized = CODEX_0162_CLIENT_MODULE.normalize_responses(body)
+    return ResponsesRequestPolicy(_settings(), client_spec=CODEX_0162_POLICY_SPEC).apply(
+        normalized.body,
+        allow_store=True,
+        allow_codex_request_envelope=True,
+        allow_codex_client_tools=True,
+    )
+
+
+def test_codex_0162_initial_prefix_lowering_reconstructs_exact_provider_body() -> None:
+    body = _codex_0162_body()
+    policy_result = _codex_0162_policy_result(body)
+    policy_before = copy.deepcopy(policy_result)
+
+    outbound = _build_safe_responses_upstream_body(
+        policy_result=policy_result,
+        upstream_model="qwen3.8-27b",
+        omit_prompt_cache_key=True,
+        lower_codex_0162_initial_declaration=True,
+    )
+
+    assert outbound["tools"] == [
+        {
+            "type": "namespace",
+            "name": "functions",
+            "description": "bounded local function namespace",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "exec_command",
+                    "description": "run a command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"],
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                }
+            ],
+        },
+        {
+            "type": "namespace",
+            "name": "mcp__codex_apps__demo",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "demo_tool_001",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        },
+    ]
+    assert outbound["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hi"}],
+        }
+    ]
+    serialized = str(outbound)
+    assert "additional_tools" not in serialized
+    assert "at_123e4567" not in serialized
+    assert "prompt_cache_key" not in outbound
+    assert "client_metadata" not in outbound
+    # The policy representation still owns the validated declaration and ID,
+    # and the estimator-facing policy result is byte-identical after the
+    # pure body build: the conservative declaration material is retained.
+    effective_input = policy_result.effective_body["input"]
+    assert effective_input[0]["id"] == "at_123e4567-e89b-12d3-a456-426614174000"
+    assert policy_result == policy_before
+    declaration_bytes = len(str(policy_result.effective_body["input"][0]).encode("utf-8"))
+    assert declaration_bytes >= 256
+
+
+def test_codex_0162_lowering_without_prefix_keeps_body_unchanged() -> None:
+    body = _codex_0162_body()
+    body["input"] = body["input"][1:]
+    policy_result = _codex_0162_policy_result(body)
+
+    outbound = _build_safe_responses_upstream_body(
+        policy_result=policy_result,
+        upstream_model="qwen3.8-27b",
+        omit_prompt_cache_key=True,
+        lower_codex_0162_initial_declaration=True,
+    )
+
+    assert "tools" not in outbound
+    assert outbound["input"] == body["input"]
+
+
+def test_codex_0162_later_declaration_fails_closed_before_any_provider_body() -> None:
+    body = _codex_0162_body()
+    body["input"] = [body["input"][1], body["input"][0]]
+    policy_result = _codex_0162_policy_result(body)
+
+    with pytest.raises(OpenAICompatibleError) as exc_info:
+        _build_safe_responses_upstream_body(
+            policy_result=policy_result,
+            upstream_model="qwen3.8-27b",
+            omit_prompt_cache_key=True,
+            lower_codex_0162_initial_declaration=True,
+        )
+    error = exc_info.value
+    assert error.status_code == 400
+    assert error.code == "upstream_payload_not_approved"
+    # The safe error never echoes declaration material.
+    assert "exec_command" not in str(error)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    ["duplicate", "mixed_top_level", "bad_role", "empty_namespace"],
+)
+def test_codex_0162_lowering_helper_fails_closed_on_invalid_shapes(mutate: str) -> None:
+    prefix = _codex_0162_body()["input"][0]
+    message = _codex_0162_body()["input"][1]
+    if mutate == "duplicate":
+        body: dict[str, object] = {
+            "model": "m",
+            "input": [copy.deepcopy(prefix), copy.deepcopy(prefix), message],
+        }
+    elif mutate == "mixed_top_level":
+        body = {
+            "model": "m",
+            "tools": [{"type": "function", "name": "top_level"}],
+            "input": [copy.deepcopy(prefix), message],
+        }
+    elif mutate == "bad_role":
+        broken = copy.deepcopy(prefix)
+        broken["role"] = "user"
+        body = {"model": "m", "input": [broken, message]}
+    else:
+        broken = copy.deepcopy(prefix)
+        broken["tools"][0]["tools"] = []
+        body = {"model": "m", "input": [broken, message]}
+
+    with pytest.raises(ModuleSelectionError) as exc_info:
+        codex_0162_lower_initial_additional_tools(body)
+    assert exc_info.value.error_code == "codex_0162_tool_declaration"
+
+
+def test_codex_0162_lowering_helper_preserves_input_and_drops_only_prefix() -> None:
+    body = _codex_0162_body()
+    body["input"] = [
+        body["input"][0],
+        {"type": "message", "role": "system", "content": "instructions"},
+        body["input"][1],
+    ]
+    lowered = codex_0162_lower_initial_additional_tools(body)
+    assert lowered["input"] == [
+        {"type": "message", "role": "system", "content": "instructions"},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    ]
+    assert lowered["input"] is not body["input"]
+    assert "id" not in str(lowered["tools"])
+
+
+def test_codex_0162_lowering_flag_is_version_and_pair_owned() -> None:
+    local_context = {"identity_mode": "signed_identity_v1"}
+    assert (
+        _codex_0162_local_pair_lowers_declaration(
+            client_module_id=CODEX_0162_CLIENT_MODULE_ID, local_coding_server_context=local_context
+        )
+        is True
+    )
+    assert (
+        _codex_0162_local_pair_lowers_declaration(
+            client_module_id="codex-0.149-responses-v1", local_coding_server_context=local_context
+        )
+        is False
+    )
+    assert (
+        _codex_0162_local_pair_lowers_declaration(
+            client_module_id=CODEX_0162_CLIENT_MODULE_ID, local_coding_server_context=None
+        )
+        is False
+    )
+    # The Local privacy omission follows the same pair ownership for both
+    # versioned dialects; the generic pair keeps prompt_cache_key behavior.
+    assert (
+        _codex_local_pair_omits_prompt_cache_key(
+            client_module_id=CODEX_0162_CLIENT_MODULE_ID,
+            local_coding_server_context=local_context,
+        )
+        is True
+    )
+    assert (
+        _codex_local_pair_omits_prompt_cache_key(
+            client_module_id="codex-0.149-responses-v1",
+            local_coding_server_context=local_context,
+        )
+        is True
+    )
+    assert (
+        _codex_local_pair_omits_prompt_cache_key(
+            client_module_id=CODEX_0162_CLIENT_MODULE_ID, local_coding_server_context=None
+        )
+        is False
+    )

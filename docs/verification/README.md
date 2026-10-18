@@ -32,6 +32,18 @@ on record. They are dated, commit-specific evidence, not certifications.
 
 ## Records
 
+- [`2026-10-18 Codex 0.162.1 additional-tools profile and Local-pair lowering`](codex-0162-local-tools.md) —
+  Objective 189-a: registered `codex-0.162-responses-v1` v1 profile
+  (finite 16/256/256/20,000/262,144/4,096 taxonomy), approved initial-prefix
+  provider lowering for the exact Local pair, prompt-cache-key omission,
+  and documented route/pricing prerequisites; unit, mocked, real-PostgreSQL
+  E2E, and independent official-CLI evidence.
+- [`2026-10-18 Codex 0.149-v5 additional-tools ID and audited module migration`](codex-additional-tools-id.md) —
+  Objective 189-a: bounded optional declaration item ID on 0.149 (v4 → v5)
+  with unknown-field rejection and existing gates preserved, and the
+  audited four-edge key-module upgrade/rollback (frozen 0.149-v4 tuple,
+  dry-run default, no schema change).
+
 - [`2026-10-17 SLAIF visual design`](slaif-visual-design.md) —
   Objective 188-a: packaged admin theme, shared shell, named table
   regions, and branded error surfaces; twelve unit design tests plus

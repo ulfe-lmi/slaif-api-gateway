@@ -18,14 +18,20 @@ Agentic clients are not ordinary SDK callers. They often maintain multi-turn sta
 
 The contract therefore treats each supported agentic client profile as a **versioned protocol dialect**, not as a brand name and not as a broad relaxation of the OpenAI API.
 
-Current profile note: `codex-0.149-responses-v1` is module version `4`. The
-version retains the existing module ID and fixture identity while adding one
-default-empty, request-derived fact for exact top-level zero-argument function
-declarations. Only the exact `codex-0.149-responses-v1 -> local-coding-v1`
-pair may consume that fact in its strict stream state machine. Version `3`
-metadata remains stale and fails closed. The exception preserves the provider's
-empty-string added/completed lifecycle without synthesizing argument events;
-ordinary/default clients and other pairs retain their existing lifecycle.
+Current profile note: `codex-0.149-responses-v1` is module version `5`. The
+version retains the existing module ID and fixture identity while adding an
+optional bounded `id` on the `additional_tools` declaration item, validated
+against the existing bounded ASCII Codex item-ID pattern before
+canonicalization; omitted or null IDs retain the prior canonical shape and
+unknown fields remain rejected. Version `4` metadata remains stale and fails
+closed. The version-4 zero-argument function fact, its exact-pair stream
+consumption, and the provider's empty-string added/completed lifecycle are
+unchanged. `codex-0.162-responses-v1` (version `1`, CLI 0.162.1) is a
+separate default-denied module with one exact `local-coding-v1` pair and a
+wider finite additional-tools taxonomy; on that pair only, the validated
+initial declaration prefix is lowered into the top-level namespace `tools`
+array before final serialization and HMAC signing and then discarded with its
+protocol ID, preserving the remaining input.
 
 ### 0.1 Normative language
 

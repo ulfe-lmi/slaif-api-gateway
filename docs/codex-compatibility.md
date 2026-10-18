@@ -62,7 +62,7 @@ profile:
 | Official source distribution | npm `@openai/codex@0.149.0` |
 | Verified raw version | `codex-cli 0.149.0` |
 | Tarball SHA-512 | `8b876bca3d98d63fb4d0c6f99fed27ef51189d32bdfca0dcd9c745a3f7570f4775a13a20d9b854b2c2831083a72a69c47f9d4fd19fc72535af4cac3f507c8ebd` |
-| Client module | `codex-0.149-responses-v1` / version `4` |
+| Client module | `codex-0.149-responses-v1` / version `5` |
 | Structural fixture | `tests/fixtures/codex/0.149.0/responses-structural.json` |
 | Fixture SHA-256 | `0a0b62bc7fec7b4da2c504f7db67d260ebe3e2d9fe6be64548c82207a787061d` |
 | Runtime status | default-denied; exact `local-coding-v1` pair has bounded mocked stream conformance; no protected or provider/model E2E qualification |
@@ -96,6 +96,52 @@ added event is followed directly by the matching completed output item without
 argument delta or `arguments.done`; it does not synthesize events or accept
 the canonical `{}` lifecycle through this branch. This is bounded mocked
 conformance only, not protected or real-provider qualification.
+
+Module version `5` retains the same module ID, structural capture fixture,
+and fixture digest while adding one request fact: the `additional_tools`
+declaration item may carry an optional bounded `id` that must pass the
+existing bounded ASCII Codex item-ID pattern before canonicalization.
+Omitted or null IDs retain the prior canonical shape, unknown fields remain
+rejected, and every existing gate is unchanged. Version `4` metadata remains
+stale and is rejected.
+
+### Codex CLI 0.162.1 structural client module
+
+Codex CLI 0.162.1 is a separate structural-capture module:
+
+| Property | Pinned value |
+| --- | --- |
+| Client module | `codex-0.162-responses-v1` / version `1` |
+| Profile fixture | `tests/fixtures/codex/0.162.1/additional-tools-profile-v1.json` |
+| Profile fixture SHA-256 | `724ec7358a95e8820f02f7dd2d2b1b4ad1276d4065af2ecd329cc2ca52b5892e` |
+| Runtime status | registered, default-denied; exact `local-coding-v1` pair only |
+
+The version-1 profile accepts the gated `additional_tools` declaration under
+a wider finite taxonomy: strict built-in namespaces `functions` and
+`multi_agent_v1`, dynamic namespaces matching
+`^mcp__codex_apps__[a-z][a-z0-9_.-]{0,63}$`, at most 16 namespaces, 256 tools
+total, 256 tools per namespace, 20,000 bytes per tool description, 262,144
+bytes of total namespace/tool description bytes, 4,096 schema properties per
+tool, function-only tools with pattern-validated names
+(`^[a-z][a-z0-9_.-]{0,63}$`, unique per namespace), and the existing schema,
+depth, byte, and recursive authority checks. The official isolated capture
+observed 7 `functions` tools and 5 `multi_agent_v1` tools as a sample of a
+larger built-in vocabulary (the operator profile reports 11 functions), so no
+exact built-in tool list or count is pinned. On the exact
+`codex-0.162-responses-v1 -> local-coding-v1` pair only, the validated
+initial `additional_tools` prefix is lowered into the existing top-level
+namespace `tools` array before final serialization and HMAC signing, then
+discarded with its protocol ID while the remaining input is preserved; see
+[`provider-forwarding-contract.md`](provider-forwarding-contract.md). No
+other profile or server pair is altered.
+
+Pinned 0.149-v4 keys may be upgraded to `0149-v5` or `0162-v1` with
+`slaif-gateway codex upgrade-key-module` (dry-run by default; `--apply`
+mutates) and returned with `slaif-gateway codex rollback-key-module`. Only
+the four edges 0.149-v4 → 0149-v5, 0.149-v4 → 0162-v1, and the two reverse
+edges are legal; each `--apply` writes the `client_module` compatibility
+metadata and one audit record in one atomic transaction, with no schema or
+quota change.
 
 ## Protocol qualification and profile-v2 configuration
 
