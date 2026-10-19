@@ -187,3 +187,41 @@ async def test_local_coding_route_row_roundtrips_new_mode_and_resolves_version_t
         ),
     )
     assert isinstance(adapter, LocalCodingAdapter)
+
+
+@pytest.mark.asyncio
+async def test_native_vllm_audited_route_survives_reload_and_selects_separate_adapter(
+    async_test_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from slaif_gateway.db.models import AuditLog
+    from slaif_gateway.db.repositories.audit import AuditRepository
+    from slaif_gateway.modules.servers.local_coding_vllm.adapter import LocalCodingVLLMAdapter
+    from slaif_gateway.services.model_route_service import ModelRouteService
+
+    capabilities = {'local_coding_vllm': {
+        'contract_version': 'local-coding-vLLM', 'route_name': 'synthetic_gpu',
+        'tool_policy_version': 'responses-tool-policy-v1', 'identity_mode': 'static',
+        'replay_mode': 'process_local_inclusive_horizon_fail_closed', 'deployment_mode': 'single_worker',
+    }}
+    repository = ModelRoutesRepository(async_test_session)
+    row = await ModelRouteService(model_routes_repository=repository,
+        audit_repository=AuditRepository(async_test_session)).create_model_route(
+            requested_model='synthetic-native-model', provider='synthetic-native',
+            upstream_model='synthetic-upstream', match_type='exact', priority=10,
+            visible_in_models=True, enabled=True, supports_streaming=True,
+            notes=None, endpoint='/v1/responses', capabilities=capabilities,
+            reason='Synthetic native-vLLM integration coverage')
+    route_id=row.id
+    await async_test_session.flush()
+    async_test_session.expire_all()
+    reloaded=await repository.get_model_route_by_id(route_id)
+    assert reloaded is not None
+    assert resolve_server_module('any-provider','openai_compatible',reloaded.capabilities).module_id=='local-coding-vLLM'
+    audit=(await async_test_session.execute(select(AuditLog).where(AuditLog.entity_id==route_id))).scalar_one()
+    assert audit.action=='model_route_created'
+    monkeypatch.setenv('SYNTHETIC_NATIVE_TOKEN','synthetic-native-provider-bearer-0123456789')
+    adapter=get_provider_adapter(SimpleNamespace(provider='any-provider',provider_kind='openai_compatible',
+        provider_base_url='http://127.0.0.1:18031/v1',provider_api_key_env_var='SYNTHETIC_NATIVE_TOKEN',
+        capabilities=reloaded.capabilities),Settings())
+    assert isinstance(adapter,LocalCodingVLLMAdapter)
+    assert resolve_server_module('any-provider','openai_compatible').module_id=='openai-compatible'

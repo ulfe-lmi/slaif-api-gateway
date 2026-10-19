@@ -70,6 +70,9 @@ from slaif_gateway.modules.clients.codex_0162 import (
     codex_0162_lower_initial_additional_tools,
 )
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
+from slaif_gateway.modules.servers.local_coding_vllm.contract import (
+    VLLM_SERVER_MODULE_ID, parse_vllm_route_contract,
+)
 from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_SERVER_MODULE_ID,
     parse_local_coding_route_contract,
@@ -393,9 +396,9 @@ def _build_local_coding_server_context(
             getattr(route, "provider_kind", None),
             getattr(route, "capabilities", None),
         )
-        if descriptor.module_id != LOCAL_CODING_SERVER_MODULE_ID:
+        if descriptor.module_id not in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID}:
             return None
-        contract = parse_local_coding_route_contract(route.capabilities)
+        contract = (parse_vllm_route_contract(route.capabilities) if descriptor.module_id == VLLM_SERVER_MODULE_ID else parse_local_coding_route_contract(route.capabilities))
         if contract is None:
             raise ValueError("Local Coding route contract is unavailable")
         policy = authenticated_key.responses_policy
@@ -2488,7 +2491,7 @@ def _reject_local_coding_auxiliary_endpoint(route: RouteResolutionResult) -> Non
             error_type="invalid_request_error",
             code="local_coding_endpoint_not_supported",
         ) from exc
-    if descriptor.module_id == LOCAL_CODING_SERVER_MODULE_ID:
+    if descriptor.module_id in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID}:
         raise OpenAICompatibleError(
             "The Local Coding server module supports Responses create only.",
             status_code=400,

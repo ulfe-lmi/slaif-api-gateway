@@ -19,6 +19,10 @@ from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_SERVER_MODULE_VERSION,
     parse_local_coding_route_contract,
 )
+from slaif_gateway.modules.servers.local_coding_vllm.adapter import LocalCodingVLLMAdapter
+from slaif_gateway.modules.servers.local_coding_vllm.contract import (
+    VLLM_SERVER_MODULE_ID, VLLM_ROUTE_CAPABILITY_KEY, parse_vllm_route_contract,
+)
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
 from slaif_gateway.providers.openai_compatible import OpenAICompatibleProviderAdapter
@@ -50,6 +54,10 @@ def _facial_scoring_factory(settings: object, **kwargs: object) -> object:
 
 def _local_coding_factory(settings: object, **kwargs: object) -> object:
     return LocalCodingAdapter(settings, **kwargs)
+
+
+def _vllm_factory(settings: object, **kwargs: object) -> object:
+    return LocalCodingVLLMAdapter(settings, **kwargs)
 
 
 SERVER_MODULE_REGISTRY: Mapping[str, tuple[ServerModuleDescriptor, Callable[..., object]]] = MappingProxyType(
@@ -90,6 +98,11 @@ SERVER_MODULE_REGISTRY: Mapping[str, tuple[ServerModuleDescriptor, Callable[...,
             ),
             _facial_scoring_factory,
         ),
+        VLLM_SERVER_MODULE_ID: (
+            ServerModuleDescriptor(module_id=VLLM_SERVER_MODULE_ID, module_version="1",
+                                   provider_slugs=frozenset(), provider_kinds=frozenset({"openai_compatible"})),
+            _vllm_factory,
+        ),
         LOCAL_CODING_SERVER_MODULE_ID: (
             ServerModuleDescriptor(
                 module_id=LOCAL_CODING_SERVER_MODULE_ID,
@@ -112,6 +125,7 @@ CLIENT_SERVER_COMPATIBILITY = frozenset(
         ClientServerPair(DEFAULT_CLIENT_MODULE_ID, LOCAL_CODING_SERVER_MODULE_ID),
         ClientServerPair("codex-0.149-responses-v1", LOCAL_CODING_SERVER_MODULE_ID),
         ClientServerPair("codex-0.162-responses-v1", LOCAL_CODING_SERVER_MODULE_ID),
+        ClientServerPair("codex-0.162-responses-v1", VLLM_SERVER_MODULE_ID),
     }
 )
 
@@ -132,6 +146,15 @@ def resolve_server_module(
     """Resolve provider configuration to one static server descriptor."""
     normalized_provider = provider.strip().lower() if isinstance(provider, str) else ""
     normalized_kind = provider_kind.strip() if isinstance(provider_kind, str) else ""
+    if isinstance(route_capabilities, Mapping) and VLLM_ROUTE_CAPABILITY_KEY in route_capabilities:
+        try:
+            if normalized_kind != "openai_compatible":
+                raise ValueError("Native vLLM requires openai_compatible provider kind")
+            parse_vllm_route_contract(route_capabilities)
+        except ValueError as exc:
+            raise ProviderConfigurationError(provider=normalized_provider or None,
+                error_code="vllm_route_contract_invalid") from exc
+        return SERVER_MODULE_REGISTRY[VLLM_SERVER_MODULE_ID][0]
     local_contract_present = (
         isinstance(route_capabilities, Mapping)
         and LOCAL_CODING_ROUTE_CAPABILITY_KEY in route_capabilities
@@ -159,7 +182,7 @@ def resolve_server_module(
             normalized_kind in descriptor.provider_kinds or built_in_provider
         ):
             return descriptor
-        if not descriptor.provider_slugs and normalized_kind in descriptor.provider_kinds:
+        if descriptor.module_id != VLLM_SERVER_MODULE_ID and not descriptor.provider_slugs and normalized_kind in descriptor.provider_kinds:
             return descriptor
     if normalized_kind == "module":
         raise ProviderConfigurationError(
@@ -222,6 +245,6 @@ def build_server_adapter(
     }
     if base_url is not None:
         kwargs["base_url"] = base_url
-    if descriptor.module_id == LOCAL_CODING_SERVER_MODULE_ID:
+    if descriptor.module_id in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID}:
         kwargs["route_capabilities"] = route_capabilities
     return factory(settings, **kwargs)

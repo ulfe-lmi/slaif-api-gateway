@@ -122,3 +122,32 @@ separate synthetic custom-tool probe identified an `output_item.added` with
 `caller=null` fields. This is an unresolved backend protocol compatibility
 failure; neither route readiness nor advertised context establishes full Codex
 tool compatibility. No stream acceptance rules were changed in this work.
+
+## Native vLLM adapter follow-up (2026-10-19)
+
+The separate `local-coding-vLLM` backend adapter resolves the native backend
+limitation recorded above. The live route was explicitly switched through the
+audited route service; full 262144-token context, zero prices, client-module pin
+and quota limits were preserved. The other route still selects `local-coding-v1`.
+
+An actual pinned Codex CLI 0.162.1 process passed custom `apply_patch`, function
+`exec_command`, replay and final completion through the real HTTPS gateway to
+the native backend in **11.3 seconds**, exit 0, with exact file/readback/final
+`TOOL_ROUNDTRIP_OK`. The wrapper-backend regression passed in **32.7 seconds**
+with its 245760-token profile. Both used the previously documented disposable
+container and test-only sandbox override, with no stream/request retries.
+
+Earlier native-adapter attempts failed while discovering that terminal native
+Responses regenerate both tool identifiers. Synthetic backend probes confirmed
+that output position, declared name and complete arguments remain stable. The
+adapter now restores closed-stream linkage only under those exact checks and
+rejects changed/missing calls. This mapping covers normal functions as well as
+custom patches. Native JSON custom arguments are buffered to their done event
+and decoded into the existing custom-input stream, without changing client
+validation or granting tools. Provider-only fields `async`/`caller` are accepted
+only when null. Focused synthetic tests are separate from this live evidence.
+
+These are bounded text/tool/replay tests; full-context inference, compaction,
+images, connectors, host sandbox behavior and other native server versions
+remain unqualified. The registered configuration profiles retain
+`live_qualification=false`. See the [native vLLM runbook](../runbooks/native-vllm-responses.md).

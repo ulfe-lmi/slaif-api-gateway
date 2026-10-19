@@ -186,3 +186,10 @@ These limits are explicit operator/backend configuration, not a universal Qwen
 capacity claim. A successful short tool test does not qualify full-context
 inference or compaction. Both retain `live_qualification=false`; no new tool
 authority, image support, key quota, or provider qualification follows.
+
+## Native vLLM backends
+
+For a native vLLM Responses endpoint rather than a compatible wrapper, explicitly
+select the separate [local-coding-vLLM adapter](native-vllm-responses.md). Keep
+the same independent key/route grants, zero-price dimensions and context/profile
+limits. A native `/models` or text pass alone does not qualify Codex tool calls.

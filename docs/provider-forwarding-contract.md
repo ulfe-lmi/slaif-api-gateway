@@ -17,8 +17,8 @@ Responses client modules are selected from reviewed server-side key/profile
 metadata before provider construction. `codex-0.147-responses-v1` has one
 explicit OpenAI server pair. `codex-0.149-responses-v1` has exactly one
 explicit `local-coding-v1` pair. `codex-0.162-responses-v1` is registered
-the same way, default-denied except for its one explicit `local-coding-v1`
-pair. Those pairs reach this forwarding contract
+with explicit `local-coding-v1` and `local-coding-vLLM` server pairs; all
+other server pairs remain denied. Those pairs reach this forwarding contract
 only after the independent endpoint, key, model, route, capability, pricing,
 quota, accounting, and identity gates pass. The observed adapter-managed
 `tool_search` and `web_search` candidates are never converted into hosted-tool
@@ -30,6 +30,17 @@ server-side bearer secret, with redirects and retries disabled, and retains
 only safe unique model IDs. It does not forward discovery content, persist the
 raw response, infer capabilities, or grant hosted-tool authority. Confirmed
 setup metadata is re-probed and written atomically through PostgreSQL.
+
+## Native vLLM server module
+
+The explicit `local-coding-vLLM` adapter translates approved namespace function
+and custom patch declarations, response events, terminal tool linkage and replay
+for a static-bearer native vLLM Responses backend. Selection uses the strict
+`local_coding_vllm` route contract, never a provider name or address. Its complete
+bounds, supported shapes, setup and rollback are in the
+[native vLLM runbook](runbooks/native-vllm-responses.md). Canonical events still
+pass the unchanged gateway validator; this adapter does not change the existing
+wrapper transport or grant any tool, identity, quota or provider authority.
 
 ## Local Coding server module
 
