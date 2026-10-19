@@ -1,3 +1,4 @@
+# Illustrative operator configuration; see README.md before adapting it.
 # Copy both files into your Codex home. Replace the gateway URL and bearer key.
 # The default model is A100; select another with -m qwen3.8-27b-V100 or
 # -m qwen3.8-27b-rtx3090 (or use /model in an interactive session).

@@ -1125,7 +1125,7 @@ def _qwen_capacity_profile(
     upstream_model: str | None = None,
     image_input: bool = False,
 ) -> CodexQualificationProfile:
-    """Static capacity and modality variants; preserve the original profile."""
+    """Build an opt-in example profile with exact, server-owned limits and gates."""
     catalog = json.loads(QWEN38_CODEX_PROFILE.model_catalog_artifact)
     entry = catalog["models"][0]
     entry.update(
@@ -1158,6 +1158,9 @@ def _qwen_capacity_profile(
     )
 
 
+# These illustrative deployment profiles are real registry entries, but they
+# activate only when an operator explicitly configures matching route metadata.
+# Hardware labels and limits describe these examples, not a universal Qwen claim.
 QWEN38_240K_CODEX_PROFILE = _qwen_capacity_profile(
     profile_id=QWEN38_240K_CODEX_PROFILE_ID,
     model="qwen3.8-27b-V100",

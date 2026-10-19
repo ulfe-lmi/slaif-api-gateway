@@ -165,10 +165,14 @@ DEBUG alone does not capture the actual declaration. Keep captures outside
 source control and share only the authorized evidence. Capture settings do not
 change validation, quota, or forwarding policy.
 
-## Explicit larger-context profiles
+## Opt-in deployment examples with larger contexts
 
 Keep the original 131072-token profile available for existing deployments.
-Separate static profiles express each backend's context and modalities:
+The following server-owned profiles are examples of three explicitly configured
+backends. Their hardware labels, model aliases, upstream IDs, context limits,
+and image declarations are specific to those examples. Registry membership
+alone creates no provider, route, price, or key permission, and does not make
+these models available on other installations.
 
 | Profile ID | Public model | Upstream model | Context | Local compaction | Modalities | Named client profile |
 | --- | --- | --- | ---: | ---: | --- | --- |
@@ -185,17 +189,12 @@ compaction values. Each backend has a distinct public name to prevent route
 collision; its upstream model is the backend's actual model ID. Image requests
 need `responses.image_input=true` on the route and `image_input` on the key.
 
-For one local Codex configuration containing all three models, copy the
-[combined config](../../examples/codex/qwen38-three-backends/config.toml) and
-[combined catalog](../../examples/codex/qwen38-three-backends/qwen38-models.json)
-into your Codex home as `config.toml` and `qwen38-models.json`. Set the gateway
-URL and replace the bearer-key placeholder in the TOML, keeping the real key
-out of source control. A single provider serves all three public models;
-`-m qwen3.8-27b-V100`, `-m qwen3.8-27b`, and
-`-m qwen3.8-27b-rtx3090` select them with model-specific context limits from
-the catalog. Codex 0.162.1 does not accept context-limit overrides inside the
-same TOML's `[profiles.*]` sections, so this two-file example uses model
-selection instead of three named profiles.
+The [combined two-file example](../../examples/codex/qwen38-three-backends/README.md)
+shows how one Codex provider can select among the three routes. Copying its
+client files alone cannot register the server profiles or authorize a key.
+Codex 0.162.1 does not accept context-limit overrides inside the same TOML's
+`[profiles.*]` sections, so the example uses model selection with limits in
+the catalog instead of three named client profiles.
 
 These limits are explicit operator/backend configuration, not a universal Qwen
 capacity claim. A successful short tool test does not qualify full-context
