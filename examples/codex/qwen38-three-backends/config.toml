@@ -23,4 +23,3 @@ apps = false
 enable_mcp_apps = false
 plugins = false
 remote_compaction_v2 = false
-
