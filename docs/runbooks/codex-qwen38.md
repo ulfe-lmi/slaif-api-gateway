@@ -164,3 +164,25 @@ classifier diagnostics. Follow that runbook's enable/arm/read/disarm procedure;
 DEBUG alone does not capture the actual declaration. Keep captures outside
 source control and share only the authorized evidence. Capture settings do not
 change validation, quota, or forwarding policy.
+
+## Explicit larger-context profiles
+
+Keep the original 131072-token profile available for existing deployments. Two
+separate static profiles provide larger contexts without changing its identity:
+
+| Profile ID | Public/upstream model | Context | Local compaction | Named client profile |
+| --- | --- | ---: | ---: | --- |
+| `qwen38-27b-240k-codex-0.162-v1` | `qwen38-27b` | 245760 | 208125 | `qwen38_240k` |
+| `qwen3.8-27b-256k-codex-0.162-v1` | `qwen3.8-27b` | 262144 | 221184 | `qwen38_256k` |
+
+Both require the same Codex revision 8, flags, pricing prerequisites and
+8192/16384 default/maximum output limits. Select the exact profile declaration
+and matching route context together through the audited route service. Download
+both files again after changing the route profile, then start a fresh client
+with the named profile above. Generated TOML and JSON use identical context and
+compaction values. Model spellings are intentional and must match the backend.
+
+These limits are explicit operator/backend configuration, not a universal Qwen
+capacity claim. A successful short tool test does not qualify full-context
+inference or compaction. Both retain `live_qualification=false`; no new tool
+authority, image support, key quota, or provider qualification follows.

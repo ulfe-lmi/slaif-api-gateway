@@ -99,3 +99,26 @@ still false. The files rendered from the live deployment settings passed the
 same real gateway tool round trip in 33.4 seconds, exit 0. Authenticated download
 responses, attachment filenames, unauthenticated redirects and not-ready 404s
 are covered by focused HTTP tests; no production admin session was impersonated.
+
+## Full-context deployment follow-up (2026-10-19)
+
+Separate static download profiles now configure 245760 context / 208125 local
+compaction for `qwen38-27b`, and 262144 / 221184 for `qwen3.8-27b`. The original
+131072-token registry entry is unchanged. Both live route readiness checks pass;
+route/pricing metadata changes and test-key model access were applied through
+audited services. These are configured capacities, not completed long-context
+or compaction qualification.
+
+The 245760-token configuration passed the actual pinned CLI 0.162.1 tool round
+trip through HTTPS in 29.5 seconds (exit 0, successful custom patch and command
+readback, exact file content and final marker), using the previously documented
+disposable-container sandbox override.
+
+The second backend advertises `max_model_len=262144`, and a direct synthetic
+text stream completed successfully against the current strict validator. Its
+actual CLI tool test failed with `responses_stream_event_not_supported`. A
+separate synthetic custom-tool probe identified an `output_item.added` with
+`type=function_call` for a custom declaration, and additional `async=null` and
+`caller=null` fields. This is an unresolved backend protocol compatibility
+failure; neither route readiness nor advertised context establishes full Codex
+tool compatibility. No stream acceptance rules were changed in this work.

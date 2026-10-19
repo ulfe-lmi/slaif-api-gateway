@@ -57,3 +57,8 @@ In a disposable workspace, first request an exact marker without tools. Then
 ask it to create a small file using `apply_patch`, read it using `exec_command`,
 and return its content. The [verification record](../../../docs/verification/codex-qwen38-live-smoke.md)
 records actual gateway tests separately from synthetic tests and qualification.
+
+For an explicitly configured larger backend, use the route's generated downloads
+for the separate [240K/256K profiles](../../../docs/runbooks/codex-qwen38.md#explicit-larger-context-profiles).
+The repository example above remains the original conservative 131072-token
+profile; do not overwrite a downloaded larger-context file with it.
