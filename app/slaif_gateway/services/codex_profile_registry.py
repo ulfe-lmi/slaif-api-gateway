@@ -25,9 +25,9 @@ PROFILE_ID = "openai-gpt-5.6-sol-codex-0.147-v1"
 PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
 QWEN38_CODEX_PROFILE_ID = "qwen38-27b-codex-0.162-v1"
-QWEN38_240K_CODEX_PROFILE_ID = "qwen38-27b-240k-codex-0.162-v1"
-QWEN38_256K_CODEX_PROFILE_ID = "qwen3.8-27b-256k-codex-0.162-v1"
-QWEN38_100K_VISION_CODEX_PROFILE_ID = "qwen3.8-27b-100k-vision-codex-0.162-v1"
+QWEN38_240K_CODEX_PROFILE_ID = "qwen3.8-27b-v100-codex-0.162-v1"
+QWEN38_256K_CODEX_PROFILE_ID = "qwen3.8-27b-a100-codex-0.162-v1"
+QWEN38_100K_VISION_CODEX_PROFILE_ID = "qwen3.8-27b-rtx3090-codex-0.162-v1"
 QWEN38_TEXT_PROFILE_ID = "qwen3.8-27b-text-codex-0.148-v1"
 QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = (
     "96a05bf2f0ddd88b0f2b048589e71005aea120f7cd74c06ced4c7c4bf20f4f89"
@@ -1159,25 +1159,28 @@ def _qwen_capacity_profile(
 
 QWEN38_240K_CODEX_PROFILE = _qwen_capacity_profile(
     profile_id=QWEN38_240K_CODEX_PROFILE_ID,
-    model="qwen38-27b",
+    model="qwen3.8-27b-V100",
+    upstream_model="qwen38-27b",
     context=245760,
     compact=208125,
-    name="qwen38_240k",
+    name="qwen38_v100",
+    image_input=True,
 )
 QWEN38_256K_CODEX_PROFILE = _qwen_capacity_profile(
     profile_id=QWEN38_256K_CODEX_PROFILE_ID,
     model="qwen3.8-27b",
     context=262144,
     compact=221184,
-    name="qwen38_256k",
+    name="qwen38_a100",
+    image_input=True,
 )
 QWEN38_100K_VISION_CODEX_PROFILE = _qwen_capacity_profile(
     profile_id=QWEN38_100K_VISION_CODEX_PROFILE_ID,
-    model="qwen3.8-27b-100k-vision",
+    model="qwen3.8-27b-rtx3090",
     upstream_model="qwen3.8-27b",
     context=100000,
     compact=80000,
-    name="qwen38_100k_vision",
+    name="qwen38_rtx3090",
     image_input=True,
 )
 

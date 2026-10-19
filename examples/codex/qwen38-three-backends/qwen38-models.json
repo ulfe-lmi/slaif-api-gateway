@@ -1,0 +1,175 @@
+{
+  "models": [
+    {
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": 208125,
+      "availability_nux": null,
+      "context_window": 245760,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_verbosity": null,
+      "description": "Qwen 3.8 27B through an operator-configured SLAIF gateway",
+      "display_name": "Qwen 3.8 27B",
+      "experimental_supported_tools": [],
+      "include_apps_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 245760,
+      "model_messages": {
+        "instructions_template": "You are a coding assistant. Follow the user's instructions and applicable AGENTS.md files. Use the available tools when requested to inspect files, make changes, and verify results. Keep communication concise and report changes, checks, and remaining limitations."
+      },
+      "priority": 1,
+      "shell_type": "unified_exec",
+      "slug": "qwen3.8-27b-V100",
+      "support_verbosity": false,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Direct answers",
+          "effort": "none"
+        },
+        {
+          "description": "Light reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balanced reasoning",
+          "effort": "medium"
+        },
+        {
+          "description": "Extended reasoning",
+          "effort": "xhigh"
+        }
+      ],
+      "supports_parallel_tool_calls": false,
+      "supports_reasoning_summaries": false,
+      "supports_reasoning_summary_parameter": false,
+      "supports_search_tool": false,
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list"
+    },
+    {
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": 221184,
+      "availability_nux": null,
+      "context_window": 262144,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_verbosity": null,
+      "description": "Qwen 3.8 27B through an operator-configured SLAIF gateway",
+      "display_name": "Qwen 3.8 27B",
+      "experimental_supported_tools": [],
+      "include_apps_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 262144,
+      "model_messages": {
+        "instructions_template": "You are a coding assistant. Follow the user's instructions and applicable AGENTS.md files. Use the available tools when requested to inspect files, make changes, and verify results. Keep communication concise and report changes, checks, and remaining limitations."
+      },
+      "priority": 1,
+      "shell_type": "unified_exec",
+      "slug": "qwen3.8-27b",
+      "support_verbosity": false,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Direct answers",
+          "effort": "none"
+        },
+        {
+          "description": "Light reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balanced reasoning",
+          "effort": "medium"
+        },
+        {
+          "description": "Extended reasoning",
+          "effort": "xhigh"
+        }
+      ],
+      "supports_parallel_tool_calls": false,
+      "supports_reasoning_summaries": false,
+      "supports_reasoning_summary_parameter": false,
+      "supports_search_tool": false,
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list"
+    },
+    {
+      "apply_patch_tool_type": "freeform",
+      "auto_compact_token_limit": 80000,
+      "availability_nux": null,
+      "context_window": 100000,
+      "default_reasoning_level": "medium",
+      "default_reasoning_summary": "none",
+      "default_verbosity": null,
+      "description": "Qwen 3.8 27B through an operator-configured SLAIF gateway",
+      "display_name": "Qwen 3.8 27B",
+      "experimental_supported_tools": [],
+      "include_apps_usage_instructions": false,
+      "include_plugin_usage_instructions": false,
+      "include_skills_usage_instructions": false,
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "max_context_window": 100000,
+      "model_messages": {
+        "instructions_template": "You are a coding assistant. Follow the user's instructions and applicable AGENTS.md files. Use the available tools when requested to inspect files, make changes, and verify results. Keep communication concise and report changes, checks, and remaining limitations."
+      },
+      "priority": 1,
+      "shell_type": "unified_exec",
+      "slug": "qwen3.8-27b-rtx3090",
+      "support_verbosity": false,
+      "supported_in_api": true,
+      "supported_reasoning_levels": [
+        {
+          "description": "Direct answers",
+          "effort": "none"
+        },
+        {
+          "description": "Light reasoning",
+          "effort": "low"
+        },
+        {
+          "description": "Balanced reasoning",
+          "effort": "medium"
+        },
+        {
+          "description": "Extended reasoning",
+          "effort": "xhigh"
+        }
+      ],
+      "supports_parallel_tool_calls": false,
+      "supports_reasoning_summaries": false,
+      "supports_reasoning_summary_parameter": false,
+      "supports_search_tool": false,
+      "truncation_policy": {
+        "limit": 10000,
+        "mode": "tokens"
+      },
+      "upgrade": null,
+      "use_responses_lite": true,
+      "visibility": "list"
+    }
+  ]
+}

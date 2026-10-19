@@ -172,24 +172,36 @@ Separate static profiles express each backend's context and modalities:
 
 | Profile ID | Public model | Upstream model | Context | Local compaction | Modalities | Named client profile |
 | --- | --- | --- | ---: | ---: | --- | --- |
-| `qwen38-27b-240k-codex-0.162-v1` | `qwen38-27b` | `qwen38-27b` | 245760 | 208125 | text | `qwen38_240k` |
-| `qwen3.8-27b-256k-codex-0.162-v1` | `qwen3.8-27b` | `qwen3.8-27b` | 262144 | 221184 | text | `qwen38_256k` |
-| `qwen3.8-27b-100k-vision-codex-0.162-v1` | `qwen3.8-27b-100k-vision` | `qwen3.8-27b` | 100000 | 80000 | text, image | `qwen38_100k_vision` |
+| `qwen3.8-27b-v100-codex-0.162-v1` | `qwen3.8-27b-V100` | `qwen38-27b` | 245760 | 208125 | text, image | `qwen38_v100` |
+| `qwen3.8-27b-a100-codex-0.162-v1` | `qwen3.8-27b` | `qwen3.8-27b` | 262144 | 221184 | text, image | `qwen38_a100` |
+| `qwen3.8-27b-rtx3090-codex-0.162-v1` | `qwen3.8-27b-rtx3090` | `qwen3.8-27b` | 100000 | 80000 | text, image | `qwen38_rtx3090` |
 
 All three require the same Codex revision 8, tool flags, pricing prerequisites and
 8192/16384 default/maximum output limits. Select the exact profile declaration
 and matching route context together through the audited route service. Download
 the two files again after changing the route profile, then start a fresh client
 with the named profile above. Generated TOML and JSON use identical context and
-compaction values. The vision profile uses a distinct public name to prevent
-route collision; its upstream model is the backend's actual model ID. It needs
-`responses.image_input=true` on the route and `image_input` on the key.
+compaction values. Each backend has a distinct public name to prevent route
+collision; its upstream model is the backend's actual model ID. Image requests
+need `responses.image_input=true` on the route and `image_input` on the key.
+
+For one local Codex configuration containing all three models, copy the
+[combined config](../../examples/codex/qwen38-three-backends/config.toml) and
+[combined catalog](../../examples/codex/qwen38-three-backends/qwen38-models.json)
+into your Codex home as `config.toml` and `qwen38-models.json`. Set the gateway
+URL and replace the bearer-key placeholder in the TOML, keeping the real key
+out of source control. A single provider serves all three public models;
+`-m qwen3.8-27b-V100`, `-m qwen3.8-27b`, and
+`-m qwen3.8-27b-rtx3090` select them with model-specific context limits from
+the catalog. Codex 0.162.1 does not accept context-limit overrides inside the
+same TOML's `[profiles.*]` sections, so this two-file example uses model
+selection instead of three named profiles.
 
 These limits are explicit operator/backend configuration, not a universal Qwen
 capacity claim. A successful short tool test does not qualify full-context
-inference or compaction. All retain `live_qualification=false`; the vision
-profile declares image support only for routes and keys that separately grant
-it. No new tool authority, key quota, or provider qualification follows.
+inference or compaction. All retain `live_qualification=false` and declare
+image support only for routes and keys that separately grant it. No new tool
+authority, key quota, or provider qualification follows.
 
 ## Native vLLM backends
 
