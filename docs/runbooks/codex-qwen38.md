@@ -167,25 +167,29 @@ change validation, quota, or forwarding policy.
 
 ## Explicit larger-context profiles
 
-Keep the original 131072-token profile available for existing deployments. Two
-separate static profiles provide larger contexts without changing its identity:
+Keep the original 131072-token profile available for existing deployments.
+Separate static profiles express each backend's context and modalities:
 
-| Profile ID | Public/upstream model | Context | Local compaction | Named client profile |
-| --- | --- | ---: | ---: | --- |
-| `qwen38-27b-240k-codex-0.162-v1` | `qwen38-27b` | 245760 | 208125 | `qwen38_240k` |
-| `qwen3.8-27b-256k-codex-0.162-v1` | `qwen3.8-27b` | 262144 | 221184 | `qwen38_256k` |
+| Profile ID | Public model | Upstream model | Context | Local compaction | Modalities | Named client profile |
+| --- | --- | --- | ---: | ---: | --- | --- |
+| `qwen38-27b-240k-codex-0.162-v1` | `qwen38-27b` | `qwen38-27b` | 245760 | 208125 | text | `qwen38_240k` |
+| `qwen3.8-27b-256k-codex-0.162-v1` | `qwen3.8-27b` | `qwen3.8-27b` | 262144 | 221184 | text | `qwen38_256k` |
+| `qwen3.8-27b-100k-vision-codex-0.162-v1` | `qwen3.8-27b-100k-vision` | `qwen3.8-27b` | 100000 | 80000 | text, image | `qwen38_100k_vision` |
 
-Both require the same Codex revision 8, flags, pricing prerequisites and
+All three require the same Codex revision 8, tool flags, pricing prerequisites and
 8192/16384 default/maximum output limits. Select the exact profile declaration
 and matching route context together through the audited route service. Download
-both files again after changing the route profile, then start a fresh client
+the two files again after changing the route profile, then start a fresh client
 with the named profile above. Generated TOML and JSON use identical context and
-compaction values. Model spellings are intentional and must match the backend.
+compaction values. The vision profile uses a distinct public name to prevent
+route collision; its upstream model is the backend's actual model ID. It needs
+`responses.image_input=true` on the route and `image_input` on the key.
 
 These limits are explicit operator/backend configuration, not a universal Qwen
 capacity claim. A successful short tool test does not qualify full-context
-inference or compaction. Both retain `live_qualification=false`; no new tool
-authority, image support, key quota, or provider qualification follows.
+inference or compaction. All retain `live_qualification=false`; the vision
+profile declares image support only for routes and keys that separately grant
+it. No new tool authority, key quota, or provider qualification follows.
 
 ## Native vLLM backends
 

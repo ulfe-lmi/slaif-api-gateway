@@ -49,6 +49,10 @@ declaration is lowered to a native function with one required string property,
 `input`, containing raw patch text. Its grammar is not enforced by native vLLM;
 the client patch parser still validates the patch. Original declarations remain
 in the gateway's canonical request for admission, accounting and replay checks.
+For a validated user `input_image`, the adapter supplies `detail="auto"` when
+the client omits that optional field. Native vLLM 0.27.1 requires the field;
+an explicit client detail value is preserved. Image URL and data bytes are
+unchanged. Route and key image grants remain separate.
 
 On return, exact declared names restore namespace and function/custom type.
 The adapter accepts `async` and `caller` only when absent or null. Custom JSON

@@ -186,6 +186,21 @@ def test_request_translation_preserves_original_and_replays_both_tool_kinds():
     assert codec.body["input"][3]["name"] == "functions.exec_command"
 
 
+def test_native_vllm_image_default_is_explicit_without_changing_client_input():
+    original = body()
+    original["input"] = [
+        {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "Which color?"},
+            {"type": "input_image", "image_url": "data:image/png;base64,synthetic"},
+        ]}
+    ]
+    codec = VLLMToolCodec(original)
+    assert "detail" not in original["input"][0]["content"][1]
+    assert codec.body["input"][0]["content"][1]["detail"] == "auto"
+    original["input"][0]["content"][1]["detail"] = "high"
+    assert VLLMToolCodec(original).body["input"][0]["content"][1]["detail"] == "high"
+
+
 def test_custom_stream_roundtrip_passes_existing_validator_and_keeps_call_identity():
     codec = VLLMToolCodec(body())
     arguments = json.dumps({"input": "*** Begin Patch\nUnicode: č\n*** End Patch\n"})

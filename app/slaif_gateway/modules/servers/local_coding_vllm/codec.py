@@ -123,6 +123,12 @@ class VLLMToolCodec:
         for item in self.body.get("input", []):
             if not isinstance(item, dict):
                 continue
+            if item.get("role") == "user" and isinstance(item.get("content"), list):
+                for part in item["content"]:
+                    if isinstance(part, dict) and part.get("type") == "input_image":
+                        # Native vLLM 0.27 requires the optional OpenAI detail
+                        # field, even when the client chooses the default.
+                        part.setdefault("detail", "auto")
             kind = item.get("type")
             if kind == "custom_tool_call_output":
                 item["type"] = "function_call_output"
