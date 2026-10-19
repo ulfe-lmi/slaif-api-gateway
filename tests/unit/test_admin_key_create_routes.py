@@ -1,5 +1,6 @@
 import json
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -13,6 +14,13 @@ from slaif_gateway.db.models import Cohort, Owner
 from slaif_gateway.schemas.admin_records import AdminCohortListRow, AdminOwnerListRow
 from slaif_gateway.schemas.keys import CreatedGatewayKey
 from slaif_gateway.services.codex_qualification import CODEX_RESPONSES_POLICY
+from slaif_gateway.services.codex_profile_registry import (
+    CODEX_PROFILE_REGISTRY,
+    QWEN38_CODEX_PROFILE_ID,
+    QWEN38_240K_CODEX_PROFILE_ID,
+    QWEN38_256K_CODEX_PROFILE_ID,
+    QWEN38_100K_VISION_CODEX_PROFILE_ID,
+)
 from slaif_gateway.services.email_delivery_service import PendingKeyEmailResult
 from slaif_gateway.services.email_errors import EmailError
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
@@ -256,6 +264,8 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'name="owner_id"' in response.text
     assert "Ada Lovelace / ada@example.org" in response.text
     assert 'name="valid_until"' in response.text
+    assert 'type="datetime-local" name="valid_until"' in response.text
+    assert "Valid until (UTC)" in response.text
     assert 'name="valid_days"' in response.text
     assert 'name="cost_limit_eur"' in response.text
     assert 'data-policy-selector-surface' in response.text
@@ -278,6 +288,8 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'name="rate_limit_requests_per_minute"' in response.text
     assert 'name="codex_protocol_pilot"' in response.text
     assert 'name="confirm_codex_protocol_pilot"' in response.text
+    assert 'name="qwen_codex"' in response.text
+    assert 'name="confirm_qwen_codex"' in response.text
     assert "real-provider E2E has not run" in response.text
     assert 'data-codex-qualification-state="not_declared"' in response.text
     assert 'data-codex-protocol-ready="false"' in response.text
@@ -966,6 +978,207 @@ def test_create_codex_protocol_pilot_rejects_stale_readiness_before_mutation(mon
     assert response.status_code == 400
     assert "Exactly one ready Codex protocol route pair is required" in response.text
     assert called is False
+
+
+@pytest.mark.asyncio
+async def test_qwen_codex_policy_uses_selected_ready_profiles_and_active_module(monkeypatch) -> None:
+    from slaif_gateway.api.admin import _validated_admin_qwen_codex_policy
+    from slaif_gateway.modules.clients.codex_0162 import CODEX_0162_CLIENT_MODULE_ID
+    from slaif_gateway.modules.clients.registry import (
+        client_module_metadata,
+        get_client_module,
+        resolve_responses_client_module,
+    )
+    from slaif_gateway.services.responses_request_policy import (
+        responses_codex_client_tools_allowed,
+    )
+
+    profile_ids = (
+        QWEN38_240K_CODEX_PROFILE_ID,
+        QWEN38_256K_CODEX_PROFILE_ID,
+        QWEN38_100K_VISION_CODEX_PROFILE_ID,
+    )
+    providers = ("v100", "a100", "rtx3090")
+    profiles = [CODEX_PROFILE_REGISTRY[profile_id] for profile_id in profile_ids]
+    results = [
+        SimpleNamespace(
+            ready=True,
+            profile_id=profile.profile_id,
+            requested_model=profile.public_model,
+            endpoint="/v1/responses",
+            provider=provider,
+        )
+        for profile, provider in zip(profiles, providers, strict=True)
+    ]
+
+    @asynccontextmanager
+    async def fake_session():
+        yield object()
+
+    class FakeQualificationService:
+        def __init__(self, **kwargs):
+            pass
+
+        async def inspect(self):
+            return results
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin.get_sessionmaker_from_app", lambda request: fake_session
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin.CodexQualificationService", FakeQualificationService
+    )
+    key_input = SimpleNamespace(
+        key_purpose="standard",
+        allow_all_models=False,
+        allow_all_endpoints=False,
+        allowed_models=[profile.public_model for profile in profiles],
+        allowed_providers=list(providers),
+        allowed_endpoints=["/v1/models", "/v1/responses"],
+    )
+
+    policy = await _validated_admin_qwen_codex_policy(SimpleNamespace(), key_input)
+
+    assert policy == {
+        "version": 1,
+        "allowed_capabilities": [
+            "codex_request_envelope",
+            "codex_client_tools",
+            "codex_streaming_tool_events",
+            "codex_encrypted_reasoning_replay",
+            "image_input",
+        ],
+        "allowed_local_tool_types": ["function", "custom"],
+        "client_module": client_module_metadata(get_client_module(CODEX_0162_CLIENT_MODULE_ID)),
+    }
+    assert responses_codex_client_tools_allowed(policy)
+    assert resolve_responses_client_module(policy).module_id == CODEX_0162_CLIENT_MODULE_ID
+
+    removed = results.pop()
+    with pytest.raises(ValueError, match="exactly one ready Codex route"):
+        await _validated_admin_qwen_codex_policy(SimpleNamespace(), key_input)
+
+    results.append(removed)
+    results.append(results[0])
+    with pytest.raises(ValueError, match="exactly one ready Codex route"):
+        await _validated_admin_qwen_codex_policy(SimpleNamespace(), key_input)
+
+    text_profile = CODEX_PROFILE_REGISTRY[QWEN38_CODEX_PROFILE_ID]
+    results[:] = [
+        SimpleNamespace(
+            ready=True,
+            profile_id=text_profile.profile_id,
+            requested_model=text_profile.public_model,
+            endpoint="/v1/responses",
+            provider="wrapper",
+        )
+    ]
+    key_input.allowed_models = [text_profile.public_model]
+    key_input.allowed_providers = ["wrapper"]
+    text_policy = await _validated_admin_qwen_codex_policy(SimpleNamespace(), key_input)
+    assert "image_input" not in text_policy["allowed_capabilities"]
+
+
+def test_key_validity_picker_preserves_utc_instants_and_reports_bad_dates() -> None:
+    from datetime import timezone
+
+    from slaif_gateway.api.admin import _utc_datetime_local
+
+    assert _utc_datetime_local("2026-10-19T09:30:00+02:00") == "2026-10-19T07:30"
+    assert _utc_datetime_local(datetime(2026, 10, 19, 9, 30, tzinfo=timezone(timedelta(hours=2)))) == "2026-10-19T07:30"
+    assert _utc_datetime_local("2026-19-10") == ""
+
+
+@pytest.mark.asyncio
+async def test_qwen_codex_policy_rejects_broad_or_unrelated_selections(monkeypatch) -> None:
+    from slaif_gateway.api.admin import _validated_admin_qwen_codex_policy
+
+    key_input = SimpleNamespace(
+        key_purpose="standard",
+        allow_all_models=False,
+        allow_all_endpoints=False,
+        allowed_models=["qwen3.8-27b-V100"],
+        allowed_providers=["v100"],
+        allowed_endpoints=["/v1/models", "/v1/responses"],
+    )
+    for change in (
+        {"allow_all_models": True},
+        {"allow_all_endpoints": True},
+        {"allowed_models": ["other-model"]},
+        {"allowed_providers": []},
+        {"allowed_endpoints": ["/v1/models", "/v1/responses", "/v1/chat/completions"]},
+        {"key_purpose": "trusted_calibration"},
+    ):
+        invalid = SimpleNamespace(**{**vars(key_input), **change})
+        with pytest.raises(ValueError, match="Qwen Codex requires explicit"):
+            await _validated_admin_qwen_codex_policy(SimpleNamespace(), invalid)
+
+
+def test_create_qwen_codex_wires_selected_policy_without_changing_pilot(monkeypatch) -> None:
+    from slaif_gateway.modules.clients.codex_0162 import CODEX_0162_CLIENT_MODULE_ID
+    from slaif_gateway.modules.clients.registry import client_module_metadata, get_client_module
+
+    _patch_options(monkeypatch)
+    owner_id = uuid.uuid4()
+    seen = {}
+
+    async def get_owner_by_id(self, requested_owner_id):
+        assert requested_owner_id == owner_id
+        return _owner(owner_id)
+
+    async def validated_policy(request, key_input):
+        seen["selection"] = key_input
+        return {
+            "version": 1,
+            "allowed_capabilities": [
+                "codex_request_envelope",
+                "codex_client_tools",
+                "codex_streaming_tool_events",
+                "codex_encrypted_reasoning_replay",
+                "image_input",
+            ],
+            "allowed_local_tool_types": ["function", "custom"],
+            "client_module": client_module_metadata(get_client_module(CODEX_0162_CLIENT_MODULE_ID)),
+        }
+
+    async def create_gateway_key(self, payload):
+        seen["created"] = payload
+        return _created_key(owner_id=owner_id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.owners.OwnersRepository.get_owner_by_id",
+        get_owner_by_id,
+    )
+    monkeypatch.setattr("slaif_gateway.api.admin._validated_admin_qwen_codex_policy", validated_policy)
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key", create_gateway_key
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+    data = {
+        "csrf_token": "dashboard-csrf",
+        "owner_id": str(owner_id),
+        "valid_days": "2400",
+        "allowed_providers": "openai",
+        "allowed_models": "qwen3.8-27b-V100",
+        "allowed_endpoints": "/v1/models\n/v1/responses",
+        "qwen_codex": "true",
+        "confirm_qwen_codex": "true",
+        "reason": "Qwen Codex key",
+    }
+
+    response = client.post("/admin/keys/create", data=data)
+
+    assert response.status_code == 200
+    assert seen["selection"].allowed_models == ["qwen3.8-27b-V100"]
+    assert seen["created"].responses_policy["client_module"]["id"] == "codex-0.162-responses-v1"
+    assert seen["created"].valid_until - seen["created"].valid_from == timedelta(days=2400)
+    assert "<code>codex_client_tools</code>" in response.text
+    assert "<code>image_input</code>" in response.text
+
+    response = client.post("/admin/keys/create", data={**data, "confirm_qwen_codex": ""})
+    assert response.status_code == 400
+    assert "Confirm Qwen Codex mode" in response.text
 
 
 def test_create_trusted_calibration_calls_key_service_and_renders_warning(monkeypatch) -> None:

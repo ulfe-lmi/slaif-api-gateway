@@ -62,15 +62,15 @@
 
     <section class="action-panel" aria-labelledby="create-validity-heading">
       <h2 id="create-validity-heading">Validity</h2>
-      <p class="muted">Use either an absolute valid-until datetime or a positive valid-days value. Blank valid-from starts now.</p>
+      <p class="muted">Times are UTC. Use the date/time picker for Valid until or enter a positive Valid days value, not both. Blank Valid from starts now.</p>
       <div class="form-grid">
         <label>
-          Valid from
-          <input name="valid_from" value="{{ form.valid_from }}" autocomplete="off" placeholder="2026-05-01T09:00:00+00:00">
+          Valid from (UTC)
+          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60" autocomplete="off">
         </label>
         <label>
-          Valid until
-          <input name="valid_until" value="{{ form.valid_until }}" autocomplete="off" placeholder="2026-06-01T09:00:00+00:00">
+          Valid until (UTC)
+          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60" autocomplete="off">
         </label>
         <label>
           Valid days
@@ -117,6 +117,20 @@
       </label>
       <p class="muted small">Select exactly one qualified provider, model <code>gpt-5.6-sol</code>, and endpoints <code>/v1/models</code>, <code>/v1/responses</code>, and <code>/v1/responses/compact</code>. Do not select any allow-all option. Positive finite request, token, and EUR cost limits plus an audit reason are required.</p>
       <p class="muted small">The preset enables only the five canonical Codex Responses capabilities and local <code>function</code>/<code>custom</code> tools. It does not enable hosted tools, MCP, background work, provider state, or trusted-calibration behavior.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="create-qwen-codex-heading">
+      <h2 id="create-qwen-codex-heading">Qwen Codex 0.162</h2>
+      <p class="muted">For routes already qualified against the installed Codex 0.162 module. Select explicit Qwen models and their providers above, plus exactly <code>/v1/models</code> and <code>/v1/responses</code>. This grants only the Codex capabilities required by those selected profiles; image input is included only for profiles that declare it.</p>
+      <label class="checkbox-row">
+        <input type="checkbox" name="qwen_codex" value="true" {% if form.qwen_codex %}checked{% endif %}>
+        Enable Codex for the selected Qwen models
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_qwen_codex" value="true" {% if form.confirm_qwen_codex %}checked{% endif %}>
+        I confirm that these models and providers are intended for Codex access
+      </label>
+      <p class="muted small">Do not select the older Codex Protocol Pilot above. Ordinary key validity and quota settings still apply. The server checks route qualification again before issuing the key.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="create-external-tools-heading">

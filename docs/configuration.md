@@ -1155,7 +1155,15 @@ FX list/detail/create/edit pages under `/admin/fx`, and read-only usage, audit,
 and email delivery list/detail pages. The key pages
 show safe metadata only: public key ID, prefix, hint, owner, status, validity,
 quota counters, policy summaries, and rate-limit policy. `/admin/keys/create`
-creates one key for an existing owner/cohort. Key creation and key rotation
+creates one key for an existing owner/cohort. Key creation and validity-edit
+forms use UTC date/time pickers; key creation accepts either Valid
+until or positive Valid days, with blank Valid from meaning now. For selected
+ready Qwen 0.162 Codex routes, the key-creation form offers a separate
+confirmed Codex option that pins the active module and grants only required
+capabilities. It requires explicit providers, models, `/v1/models`, and
+`/v1/responses`; it does not change an already issued key. The older Codex
+Protocol Pilot control remains specific to its OpenAI 0.147 profile. See the
+[Qwen Codex runbook](runbooks/codex-qwen38.md). Key creation and key rotation
 support explicit email-delivery modes: `none`, `pending`, `send-now`, and
 `enqueue`. `none` renders a no-cache result page that shows the plaintext
 gateway key exactly once. `pending` creates a pending `email_deliveries` row

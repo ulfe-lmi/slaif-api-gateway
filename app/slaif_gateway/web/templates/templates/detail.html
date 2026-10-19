@@ -170,12 +170,12 @@
       </div>
       <div class="form-grid">
         <label>
-          Valid from
-          <input name="valid_from" value="{{ form.valid_from }}" autocomplete="off" placeholder="Defaults to now">
+          Valid from (UTC)
+          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60" autocomplete="off">
         </label>
         <label>
-          Valid until
-          <input name="valid_until" value="{{ form.valid_until }}" autocomplete="off" placeholder="Optional override">
+          Valid until (UTC)
+          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60" autocomplete="off">
         </label>
         <label>
           Valid days
