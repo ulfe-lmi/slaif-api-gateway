@@ -10,7 +10,7 @@ import hashlib
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from types import MappingProxyType
 from typing import Mapping
@@ -25,6 +25,8 @@ PROFILE_ID = "openai-gpt-5.6-sol-codex-0.147-v1"
 PROFILE_METADATA_VERSION = 2
 PROFILE_FIXTURE_SHA256 = "436ea530b9f984807dfc73ccce0b5233d0a3047ceb10ef942fbc8d12cac47432"
 QWEN38_CODEX_PROFILE_ID = "qwen38-27b-codex-0.162-v1"
+QWEN38_240K_CODEX_PROFILE_ID = "qwen38-27b-240k-codex-0.162-v1"
+QWEN38_256K_CODEX_PROFILE_ID = "qwen3.8-27b-256k-codex-0.162-v1"
 QWEN38_TEXT_PROFILE_ID = "qwen3.8-27b-text-codex-0.148-v1"
 QWEN38_TEXT_PROFILE_FIXTURE_SHA256 = (
     "96a05bf2f0ddd88b0f2b048589e71005aea120f7cd74c06ced4c7c4bf20f4f89"
@@ -387,7 +389,12 @@ class CodexQualificationProfile:
                 auto_compaction_token_threshold=self.auto_compaction_token_threshold,
                 input_modalities=self.input_modalities,
                 allow_coding_metadata=(
-                    self.profile_id == QWEN38_CODEX_PROFILE_ID
+                    self.profile_id
+                    in {
+                        QWEN38_CODEX_PROFILE_ID,
+                        QWEN38_240K_CODEX_PROFILE_ID,
+                        QWEN38_256K_CODEX_PROFILE_ID,
+                    }
                     and self.client_module_id == "codex-0.162-responses-v1"
                     and self.client_module_version == "8"
                     and self.cli_version == "0.162.1"
@@ -1105,10 +1112,56 @@ QWEN38_CODEX_PROFILE = _profile(
     client_module_version="8",
 )
 
+
+def _qwen_capacity_profile(
+    *, profile_id: str, model: str, context: int, compact: int, name: str
+) -> CodexQualificationProfile:
+    """Static capacity variants; preserve the original 128K profile identity."""
+    catalog = json.loads(QWEN38_CODEX_PROFILE.model_catalog_artifact)
+    entry = catalog["models"][0]
+    entry.update(
+        slug=model,
+        context_window=context,
+        max_context_window=context,
+        auto_compact_token_limit=compact,
+    )
+    return replace(
+        QWEN38_CODEX_PROFILE,
+        profile_id=profile_id,
+        public_model=model,
+        upstream_model=model,
+        context_window_tokens=context,
+        auto_compaction_token_threshold=compact,
+        profile_name=name,
+        model_catalog_target=name + "-models.json",
+        model_catalog_artifact=json.dumps(catalog, sort_keys=True, separators=(",", ":")),
+        provider_display_name="Qwen 3.8 27B via SLAIF",
+        evidence_date="2026-10-19",
+    )
+
+
+QWEN38_240K_CODEX_PROFILE = _qwen_capacity_profile(
+    profile_id=QWEN38_240K_CODEX_PROFILE_ID,
+    model="qwen38-27b",
+    context=245760,
+    compact=208125,
+    name="qwen38_240k",
+)
+QWEN38_256K_CODEX_PROFILE = _qwen_capacity_profile(
+    profile_id=QWEN38_256K_CODEX_PROFILE_ID,
+    model="qwen3.8-27b",
+    context=262144,
+    compact=221184,
+    name="qwen38_256k",
+)
+
+
 CODEX_PROFILE_REGISTRY: Mapping[str, CodexQualificationProfile] = MappingProxyType(
     {
         OPENAI_CODEX_PROFILE.profile_id: OPENAI_CODEX_PROFILE,
         QWEN38_CODEX_PROFILE.profile_id: QWEN38_CODEX_PROFILE,
+        QWEN38_240K_CODEX_PROFILE.profile_id: QWEN38_240K_CODEX_PROFILE,
+        QWEN38_256K_CODEX_PROFILE.profile_id: QWEN38_256K_CODEX_PROFILE,
     }
 )
 _validate_registry(CODEX_PROFILE_REGISTRY)

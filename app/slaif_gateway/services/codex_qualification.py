@@ -18,6 +18,8 @@ from slaif_gateway.services.codex_profile_registry import (
     CODEX_PROFILE_REGISTRY,
     OPENAI_CODEX_PROFILE,
     QWEN38_CODEX_PROFILE_ID,
+    QWEN38_240K_CODEX_PROFILE_ID,
+    QWEN38_256K_CODEX_PROFILE_ID,
     PROFILE_ID,
     PROFILE_METADATA_VERSION,
     CodexQualificationProfile,
@@ -602,7 +604,11 @@ def render_codex_profile_artifacts(
             f"model_catalog_json = {json.dumps(profile.model_catalog_target, ensure_ascii=True)}\n"
         )
     profile_config += "\n[features]\nremote_compaction_v2 = false\n"
-    self_contained = profile.profile_id == QWEN38_CODEX_PROFILE_ID
+    self_contained = profile.profile_id in {
+        QWEN38_CODEX_PROFILE_ID,
+        QWEN38_240K_CODEX_PROFILE_ID,
+        QWEN38_256K_CODEX_PROFILE_ID,
+    }
     if self_contained:
         profile_config = (
             f"model = {json.dumps(profile.public_model)}\n"
