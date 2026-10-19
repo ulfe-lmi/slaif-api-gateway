@@ -165,27 +165,42 @@ DEBUG alone does not capture the actual declaration. Keep captures outside
 source control and share only the authorized evidence. Capture settings do not
 change validation, quota, or forwarding policy.
 
-## Explicit larger-context profiles
+## Opt-in deployment examples with larger contexts
 
-Keep the original 131072-token profile available for existing deployments. Two
-separate static profiles provide larger contexts without changing its identity:
+Keep the original 131072-token profile available for existing deployments.
+The following server-owned profiles are examples of three explicitly configured
+backends. Their hardware labels, model aliases, upstream IDs, context limits,
+and image declarations are specific to those examples. Registry membership
+alone creates no provider, route, price, or key permission, and does not make
+these models available on other installations.
 
-| Profile ID | Public/upstream model | Context | Local compaction | Named client profile |
-| --- | --- | ---: | ---: | --- |
-| `qwen38-27b-240k-codex-0.162-v1` | `qwen38-27b` | 245760 | 208125 | `qwen38_240k` |
-| `qwen3.8-27b-256k-codex-0.162-v1` | `qwen3.8-27b` | 262144 | 221184 | `qwen38_256k` |
+| Profile ID | Public model | Upstream model | Context | Local compaction | Modalities | Named client profile |
+| --- | --- | --- | ---: | ---: | --- | --- |
+| `qwen3.8-27b-v100-codex-0.162-v1` | `qwen3.8-27b-V100` | `qwen38-27b` | 245760 | 208125 | text, image | `qwen38_v100` |
+| `qwen3.8-27b-a100-codex-0.162-v1` | `qwen3.8-27b` | `qwen3.8-27b` | 262144 | 221184 | text, image | `qwen38_a100` |
+| `qwen3.8-27b-rtx3090-codex-0.162-v1` | `qwen3.8-27b-rtx3090` | `qwen3.8-27b` | 100000 | 80000 | text, image | `qwen38_rtx3090` |
 
-Both require the same Codex revision 8, flags, pricing prerequisites and
+All three require the same Codex revision 8, tool flags, pricing prerequisites and
 8192/16384 default/maximum output limits. Select the exact profile declaration
 and matching route context together through the audited route service. Download
-both files again after changing the route profile, then start a fresh client
+the two files again after changing the route profile, then start a fresh client
 with the named profile above. Generated TOML and JSON use identical context and
-compaction values. Model spellings are intentional and must match the backend.
+compaction values. Each backend has a distinct public name to prevent route
+collision; its upstream model is the backend's actual model ID. Image requests
+need `responses.image_input=true` on the route and `image_input` on the key.
+
+The [combined two-file example](../../examples/codex/qwen38-three-backends/README.md)
+shows how one Codex provider can select among the three routes. Copying its
+client files alone cannot register the server profiles or authorize a key.
+Codex 0.162.1 does not accept context-limit overrides inside the same TOML's
+`[profiles.*]` sections, so the example uses model selection with limits in
+the catalog instead of three named client profiles.
 
 These limits are explicit operator/backend configuration, not a universal Qwen
 capacity claim. A successful short tool test does not qualify full-context
-inference or compaction. Both retain `live_qualification=false`; no new tool
-authority, image support, key quota, or provider qualification follows.
+inference or compaction. All retain `live_qualification=false` and declare
+image support only for routes and keys that separately grant it. No new tool
+authority, key quota, or provider qualification follows.
 
 ## Native vLLM backends
 

@@ -11,6 +11,7 @@ from slaif_gateway.services.codex_profile_registry import (
     QWEN38_CODEX_PROFILE,
     QWEN38_240K_CODEX_PROFILE,
     QWEN38_256K_CODEX_PROFILE,
+    QWEN38_100K_VISION_CODEX_PROFILE,
     QWEN38_TEXT_CODEX_CANDIDATE,
     QWEN38_VISION_CODEX_CANDIDATE,
 )
@@ -24,6 +25,7 @@ def test_qwen_registration_and_two_file_example_match_renderer():
         profile.profile_id,
         QWEN38_240K_CODEX_PROFILE.profile_id,
         QWEN38_256K_CODEX_PROFILE.profile_id,
+        QWEN38_100K_VISION_CODEX_PROFILE.profile_id,
     }
     assert QWEN38_TEXT_CODEX_CANDIDATE.profile_id not in CODEX_PROFILE_REGISTRY
     assert QWEN38_VISION_CODEX_CANDIDATE.profile_id not in CODEX_PROFILE_REGISTRY
@@ -87,6 +89,46 @@ def test_full_context_profiles_keep_client_and_catalog_limits_consistent(profile
     )
     assert config["model_auto_compact_token_limit"] == entry["auto_compact_token_limit"] == compact
     assert config["model"] == entry["slug"] == profile.public_model
+    assert entry["display_name"] == profile.public_model
+    assert profile.input_modalities == ("text", "image")
+    assert entry["input_modalities"] == ["text", "image"]
+    assert "image_input" in profile.required_route_gates
     assert profile.live_qualification is False
     assert profile.client_module_version == QWEN38_CODEX_PROFILE.client_module_version
     assert QWEN38_CODEX_PROFILE.context_window_tokens == 131072
+
+
+def test_100k_vision_profile_keeps_public_alias_upstream_and_image_gate_distinct():
+    profile = QWEN38_100K_VISION_CODEX_PROFILE
+    artifacts = render_codex_profile("https://gateway.example.org/v1", profile.profile_id)
+    config = tomllib.loads(artifacts.profile_config_toml)
+    entry = json.loads(artifacts.model_catalog_json)["models"][0]
+    assert artifacts.profile_config_self_contained
+    assert profile.public_model == entry["slug"] == config["model"] == "qwen3.8-27b-rtx3090"
+    assert profile.profile_name == "qwen38_rtx3090"
+    assert profile.upstream_model == "qwen3.8-27b"
+    assert profile.context_window_tokens == entry["context_window"] == config["model_context_window"] == 100000
+    assert profile.auto_compaction_token_threshold == entry["auto_compact_token_limit"] == config["model_auto_compact_token_limit"] == 80000
+    assert profile.input_modalities == ("text", "image")
+    assert entry["input_modalities"] == ["text", "image"]
+    assert "image_input" in profile.required_route_gates
+    assert profile.live_qualification is False
+
+
+def test_three_backend_example_catalog_matches_registered_profiles():
+    root = Path(__file__).resolve().parents[2] / "examples/codex/qwen38-three-backends"
+    config = tomllib.loads((root / "config.toml").read_text())
+    catalog = json.loads((root / "qwen38-models.json").read_text())
+    profiles = (
+        QWEN38_240K_CODEX_PROFILE,
+        QWEN38_256K_CODEX_PROFILE,
+        QWEN38_100K_VISION_CODEX_PROFILE,
+    )
+    assert catalog["models"] == [
+        json.loads(profile.model_catalog_artifact)["models"][0] for profile in profiles
+    ]
+    assert config["model"] == QWEN38_256K_CODEX_PROFILE.public_model
+    assert config["model_catalog_json"] == "qwen38-models.json"
+    assert config["model_providers"]["slaif_qwen"]["experimental_bearer_token"] == (
+        "PASTE_YOUR_GATEWAY_BEARER_KEY_HERE"
+    )

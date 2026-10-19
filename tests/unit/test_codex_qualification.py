@@ -954,7 +954,7 @@ def test_pilot_key_validation_rejects_unbounded_or_widened_policy(
     "missing_gate",
     [None, "codex_client_tools", "codex_streaming_tool_events", "codex_encrypted_reasoning_replay"],
 )
-@pytest.mark.parametrize("profile_id", ["qwen38-27b-codex-0.162-v1", "qwen38-27b-240k-codex-0.162-v1", "qwen3.8-27b-256k-codex-0.162-v1"])
+@pytest.mark.parametrize("profile_id", ["qwen38-27b-codex-0.162-v1", "qwen3.8-27b-v100-codex-0.162-v1", "qwen3.8-27b-a100-codex-0.162-v1", "qwen3.8-27b-rtx3090-codex-0.162-v1"])
 async def test_registered_qwen_route_requires_exact_download_prerequisites(missing_gate, profile_id):
     from slaif_gateway.services.codex_profile_registry import get_codex_profile
 
@@ -962,7 +962,8 @@ async def test_registered_qwen_route_requires_exact_download_prerequisites(missi
     assert profile is not None
     route, _ = _pair()
     route.provider = "synthetic"
-    route.requested_model = route.upstream_model = profile.public_model
+    route.requested_model = profile.public_model
+    route.upstream_model = profile.upstream_model
     route.capabilities = {
         "responses": {
             "text": True,

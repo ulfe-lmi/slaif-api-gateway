@@ -20,6 +20,7 @@ from slaif_gateway.services.codex_profile_registry import (
     QWEN38_CODEX_PROFILE_ID,
     QWEN38_240K_CODEX_PROFILE_ID,
     QWEN38_256K_CODEX_PROFILE_ID,
+    QWEN38_100K_VISION_CODEX_PROFILE_ID,
     PROFILE_ID,
     PROFILE_METADATA_VERSION,
     CodexQualificationProfile,
@@ -608,6 +609,7 @@ def render_codex_profile_artifacts(
         QWEN38_CODEX_PROFILE_ID,
         QWEN38_240K_CODEX_PROFILE_ID,
         QWEN38_256K_CODEX_PROFILE_ID,
+        QWEN38_100K_VISION_CODEX_PROFILE_ID,
     }
     if self_contained:
         profile_config = (

@@ -1,0 +1,26 @@
+# Illustrative operator configuration; see README.md before adapting it.
+# Copy both files into your Codex home. Replace the gateway URL and bearer key.
+# The default model is A100; select another with -m qwen3.8-27b-V100 or
+# -m qwen3.8-27b-rtx3090 (or use /model in an interactive session).
+model = "qwen3.8-27b"
+model_provider = "slaif_qwen"
+model_catalog_json = "qwen38-models.json"
+model_reasoning_effort = "xhigh"
+show_raw_agent_reasoning = true
+web_search = "disabled"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[model_providers.slaif_qwen]
+name = "SLAIF Qwen 3.8 27B"
+base_url = "https://gateway.example.org/v1"
+experimental_bearer_token = "PASTE_YOUR_GATEWAY_BEARER_KEY_HERE"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+
+[features]
+apps = false
+enable_mcp_apps = false
+plugins = false
+remote_compaction_v2 = false
