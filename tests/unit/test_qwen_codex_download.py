@@ -89,6 +89,7 @@ def test_full_context_profiles_keep_client_and_catalog_limits_consistent(profile
     )
     assert config["model_auto_compact_token_limit"] == entry["auto_compact_token_limit"] == compact
     assert config["model"] == entry["slug"] == profile.public_model
+    assert entry["display_name"] == profile.public_model
     assert profile.input_modalities == ("text", "image")
     assert entry["input_modalities"] == ["text", "image"]
     assert "image_input" in profile.required_route_gates

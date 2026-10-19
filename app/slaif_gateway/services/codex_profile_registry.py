@@ -1130,6 +1130,7 @@ def _qwen_capacity_profile(
     entry = catalog["models"][0]
     entry.update(
         slug=model,
+        display_name=model,
         context_window=context,
         max_context_window=context,
         auto_compact_token_limit=compact,
