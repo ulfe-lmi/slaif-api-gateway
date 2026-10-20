@@ -166,6 +166,10 @@ slaif-gateway codex inspect-profile-file \
 
 Export refuses to overwrite an existing file. Presets contain no credentials.
 They are server-side policy, not the user's `qwen-students.config.toml`.
+Export creates mode 0600. Grant the serving account read access to the file
+and traversal access to its directory before promotion; the secret-loading
+entrypoint may drop root privileges before reading the preset. Keep operator
+write access separate from the container's read-only mount.
 
 Mount its host directory read-only into API and maintenance containers and set:
 
