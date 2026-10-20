@@ -5,6 +5,11 @@
 
 This gateway is OpenAI-compatible for the endpoint set implemented in this repository. It is not a full OpenAI platform clone.
 
+The ordinary Responses input-message allowlist remains unchanged by the opt-in
+Codex revision-9 candidate for completed assistant-history status. This candidate
+is version-owned and requires explicit Codex gates; see
+[the Responses contract](responses-compatibility.md).
+
 ## Generic backend conformance status
 
 Objective 020 records generic `openai_compatible` Chat Completions and

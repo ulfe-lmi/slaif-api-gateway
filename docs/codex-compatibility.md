@@ -536,6 +536,17 @@ limits and UTF-8 input estimation apply. This is transient client history and
 does not grant provider, tool, replay, or output authority. The default policy,
 Codex 0.147, other roles, and extra fields remain fail-closed.
 
+An opt-in revision-9 candidate data file,
+`app/slaif_gateway/modules/clients/profiles/codex_0162_assistant_history.json`,
+adds one narrowly gated replay shape: an explicit assistant `message` may
+preserve `status: "completed"` alongside its existing bounded content. It
+requires the request-envelope, client-tools, and streaming-tool-events gates.
+Null, nonterminal, malformed, other-role, implicit-message, and unknown-field
+shapes remain rejected. The packaged default remains revision 8. This candidate
+does not qualify Codex 0.163.0 or change any deployed key pin; deployment needs
+the exact-client multi-turn evidence and audited profile migration required by
+`AGENTIC_CLIENT_INTEGRATION.md`.
+
 With these declarations, `tool_choice` is limited to the strings `none`,
 `auto`, or `required`; the pinned profile uses `auto`. Named/object choices are
 denied. The declarations, descriptions, schemas, grammar, and choice are

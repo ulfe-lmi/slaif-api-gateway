@@ -1140,7 +1140,26 @@ class ResponsesRequestPolicy:
                 "This Responses input item type is not enabled by this gateway.",
             )
 
-        unknown = set(item) - _SUPPORTED_INPUT_MESSAGE_FIELDS
+        completed_assistant_status = (
+            self._codex_spec is not None
+            and self._codex_spec.allow_completed_assistant_message_status
+            and allow_codex_request_envelope
+            and allow_codex_client_tools
+            and allow_codex_streaming_tool_events
+            and item_type == "message"
+            and item.get("role") == "assistant"
+            and "status" in item
+        )
+        allowed_message_fields = _SUPPORTED_INPUT_MESSAGE_FIELDS
+        if completed_assistant_status:
+            if item["status"] != "completed":
+                _raise(
+                    f"{param}.status",
+                    "responses_input_item_invalid",
+                    "Only completed Codex assistant message history is enabled.",
+                )
+            allowed_message_fields = allowed_message_fields | {"status"}
+        unknown = set(item) - allowed_message_fields
         if unknown:
             _raise(
                 f"{param}.{sorted(unknown)[0]}",
@@ -1177,6 +1196,8 @@ class ResponsesRequestPolicy:
             role=role,
         )
         canonical_item: dict[str, Any] = {"role": role, "content": canonical_content}
+        if completed_assistant_status:
+            canonical_item["status"] = "completed"
         if item_type == "message":
             canonical_item["type"] = "message"
         if "id" in item:

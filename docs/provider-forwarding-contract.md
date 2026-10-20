@@ -2,6 +2,13 @@
 
 > **Authority:** Current upstream endpoint, header, body, model, and credential-mutation rules
 
+The optional Codex revision-9 assistant-history candidate preserves the inert
+`status: "completed"` field on explicitly typed assistant messages after all
+three Codex envelope/tool gates pass. Existing content bounds, input metering,
+route pairing, credentials, replay ownership, and accounting still apply.
+Packaged revision 8 and ordinary Responses are unchanged. This candidate adds no
+provider or execution authority and is not a new live-qualification claim.
+
 This document describes exactly how implemented `/v1/chat/completions`,
 standalone `/v1/audio/*`, `/v1/embeddings`, `POST /v1/realtime/client_secrets`,
 and the current `/v1/responses` subset are forwarded to upstream providers. It

@@ -8,6 +8,11 @@ This matrix summarizes implemented behavior for reviewers. It describes the curr
 See [the detailed normative agentic-client integration contract](../AGENTIC_CLIENT_INTEGRATION.md)
 for exact-profile identity, default-denied dialects, and qualification rules.
 
+The optional revision-9 Codex assistant-history profile is a candidate, not a
+new qualification claim. It preserves only completed explicit assistant-message
+status under the existing three independent Codex gates. Packaged revision 8 and
+ordinary Responses remain strict. See [the candidate boundary](codex-compatibility.md).
+
 For the canonical RC2 target classification, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). This document records current
 implemented behavior only; a green harness on current `main` means

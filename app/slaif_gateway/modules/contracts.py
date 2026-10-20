@@ -110,6 +110,7 @@ class ResponsesClientPolicySpec:
     allow_sparse_visible_reasoning: bool = False
     allow_empty_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
+    allow_completed_assistant_message_status: bool = False
 
 
 @dataclass(frozen=True, slots=True)

@@ -302,6 +302,7 @@ def _build_policy_spec(profile: CodexProfileData) -> ResponsesClientPolicySpec:
         allow_sparse_visible_reasoning=int(profile.revision) >= 6,
         allow_empty_visible_reasoning=int(profile.revision) >= 7,
         allow_sparse_function_events=int(profile.revision) >= 8,
+        allow_completed_assistant_message_status=int(profile.revision) >= 9,
         custom_client_tools=(
             frozenset({("functions", "apply_patch", "custom")})
             if int(profile.revision) >= 5 else frozenset()
