@@ -71,7 +71,8 @@ from slaif_gateway.modules.clients.codex_0162 import (
 )
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID, ModuleSelectionError
 from slaif_gateway.modules.servers.local_coding_vllm.contract import (
-    VLLM_SERVER_MODULE_ID, parse_vllm_route_contract,
+    VLLM_SERVER_MODULE_ID,
+    parse_vllm_route_contract,
 )
 from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_SERVER_MODULE_ID,
@@ -153,6 +154,7 @@ from slaif_gateway.services.openai_web_search_contract import (
     parse_web_search_output,
     parse_web_search_stream,
 )
+from slaif_gateway.services.media_input_estimation import apply_media_input_estimate
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.pricing import PricingService
 from slaif_gateway.services.pricing_errors import PricingError
@@ -164,7 +166,7 @@ from slaif_gateway.services.lazy_throttling import (
     key_admission_policy_unchanged,
     make_request_disconnect_probe,
     policy_changed_while_waiting_error,
-    wait_for_rate_limit_admission
+    wait_for_rate_limit_admission,
 )
 from slaif_gateway.services.rate_limit_errors import (
     ConcurrencyRateLimitExceededError,
@@ -400,7 +402,11 @@ def _build_local_coding_server_context(
         )
         if descriptor.module_id not in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID}:
             return None
-        contract = (parse_vllm_route_contract(route.capabilities) if descriptor.module_id == VLLM_SERVER_MODULE_ID else parse_local_coding_route_contract(route.capabilities))
+        contract = (
+            parse_vllm_route_contract(route.capabilities)
+            if descriptor.module_id == VLLM_SERVER_MODULE_ID
+            else parse_local_coding_route_contract(route.capabilities)
+        )
         if contract is None:
             raise ValueError("Local Coding route contract is unavailable")
         policy = authenticated_key.responses_policy
@@ -471,8 +477,7 @@ def _codex_local_pair_omits_prompt_cache_key(
     # metadata as well (client.rs 581-590); the Local pair keeps the same
     # privacy behavior for both versioned dialects.
     return (
-        client_module_id
-        in {CODEX_0149_CLIENT_MODULE_ID, CODEX_0162_CLIENT_MODULE_ID}
+        client_module_id in {CODEX_0149_CLIENT_MODULE_ID, CODEX_0162_CLIENT_MODULE_ID}
         and local_coding_server_context is not None
     )
 
@@ -484,8 +489,7 @@ def _codex_0162_local_pair_lowers_declaration(
 ) -> bool:
     """Only the approved 0.162 x Local pair lowers the initial prefix."""
     return (
-        client_module_id == CODEX_0162_CLIENT_MODULE_ID
-        and local_coding_server_context is not None
+        client_module_id == CODEX_0162_CLIENT_MODULE_ID and local_coding_server_context is not None
     )
 
 
@@ -960,9 +964,7 @@ async def handle_response_compact(
         route_checks_after_wait=_compact_route_checks_after_wait,
     )
     refreshed_context = (
-        rate_limit_reservation.refreshed_context
-        if rate_limit_reservation is not None
-        else None
+        rate_limit_reservation.refreshed_context if rate_limit_reservation is not None else None
     )
     if refreshed_context is not None:
         # The request genuinely waited: admission was re-validated, so
@@ -1198,6 +1200,7 @@ async def handle_response_create(
     try:
         policy_result = policy.apply(
             body,
+            defer_media_limit=True,
             allow_store=True,
             allow_codex_request_envelope=allow_codex_request_envelope,
             allow_codex_client_tools=allow_codex_client_tools,
@@ -1373,6 +1376,15 @@ async def handle_response_create(
         authorization=replay_authorization,
         route=route,
     )
+    if not codex_extended_limits_requested:
+        try:
+            policy_result = apply_media_input_estimate(
+                policy_result,
+                route_capabilities=route.capabilities,
+                input_ceiling=settings.HARD_MAX_INPUT_TOKENS,
+            )
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
     external_web_search_admission = None
     if external_web_search_requested:
         try:
@@ -1422,6 +1434,7 @@ async def handle_response_create(
             endpoint=RESPONSES_ENDPOINT,
             request=request,
         )
+
     async def _create_revalidate_route(
         key: AuthenticatedGatewayKey,
     ) -> RouteResolutionResult:
@@ -1494,6 +1507,15 @@ async def handle_response_create(
                 )
             except RequestPolicyError as exc:
                 raise openai_error_from_request_policy_error(exc) from exc
+        if not codex_extended_limits_requested:
+            try:
+                current_policy_result = apply_media_input_estimate(
+                    current_policy_result,
+                    route_capabilities=new_route.capabilities,
+                    input_ceiling=settings.HARD_MAX_INPUT_TOKENS,
+                )
+            except RequestPolicyError as exc:
+                raise openai_error_from_request_policy_error(exc) from exc
         _verify_codex_replay_route(authorization=replay_authorization, route=new_route)
         if external_web_search_admission is not None:
             # Re-run the existing hosted admission decision on the current
@@ -1533,9 +1555,7 @@ async def handle_response_create(
         route_checks_after_wait=_create_route_checks_after_wait,
     )
     refreshed_context = (
-        rate_limit_reservation.refreshed_context
-        if rate_limit_reservation is not None
-        else None
+        rate_limit_reservation.refreshed_context if rate_limit_reservation is not None else None
     )
     if refreshed_context is not None:
         # The request genuinely waited: admission was re-validated, so
@@ -1642,7 +1662,8 @@ async def handle_response_create(
                         ),
                         custom_client_tools=(
                             client_module.policy_spec.custom_client_tools
-                            if client_module.policy_spec is not None else frozenset()
+                            if client_module.policy_spec is not None
+                            else frozenset()
                         ),
                         codex_streaming_tool_events=(
                             codex_streaming_tool_events_requested
@@ -2913,15 +2934,22 @@ def _streaming_responses_response(
         failure_response_id: str | None = None
         last_sequence = -1
 
-        def _failure(*, message, code, param=None, request_id=None,
-                     status_code=502, error_type=None):
+        def _failure(
+            *, message, code, param=None, request_id=None, status_code=502, error_type=None
+        ):
             if not stream_started:
-                raise OpenAICompatibleError(message, status_code=status_code,
-                                            error_type=error_type, code=code, param=param)
+                raise OpenAICompatibleError(
+                    message, status_code=status_code, error_type=error_type, code=code, param=param
+                )
             return format_responses_error_event(
-                message=message, code=code, param=param, request_id=request_id,
-                response_id=failure_response_id, sequence_number=last_sequence + 1,
+                message=message,
+                code=code,
+                param=param,
+                request_id=request_id,
+                response_id=failure_response_id,
+                sequence_number=last_sequence + 1,
             )
+
         provider_status = "error"
         stream_estimate_monitor = build_responses_streaming_estimate_monitor(
             cost_estimate=cost_estimate,
@@ -3398,9 +3426,7 @@ async def _reserve_redis_rate_limit(
         raise openai_error_from_rate_limit_error(rate_limit_exc) from exc
     fail_closed = settings.rate_limit_fail_closed()
     service = RedisRateLimitService(redis_client, fail_closed=fail_closed)
-    estimated_tokens = (
-        policy_result.estimated_input_tokens + policy_result.effective_output_tokens
-    )
+    estimated_tokens = policy_result.estimated_input_tokens + policy_result.effective_output_tokens
     initial_context = LazyAdmissionContext(
         gateway_key_id=authenticated_key.gateway_key_id,
         authenticated_key=authenticated_key,
@@ -3560,8 +3586,7 @@ async def _preflight_responses_wait_hard_quota(
                 reserved_tokens = 0
             else:
                 reserved_tokens = (
-                    policy_result.estimated_input_tokens
-                    + policy_result.effective_output_tokens
+                    policy_result.estimated_input_tokens + policy_result.effective_output_tokens
                 )
         else:
             reserved_cost_eur = None
@@ -3615,23 +3640,31 @@ async def _preflight_responses_wait_hard_quota(
 
 def _hosted_remaining_balance_exhausted(gateway_key: object) -> bool:
     """The fence flow's positive-remaining-balance gate (read-only mirror)."""
-    if gateway_key.request_limit_total is not None and (
-        gateway_key.request_limit_total
-        - gateway_key.requests_used_total
-        - gateway_key.requests_reserved_total
-    ) < 1:
+    if (
+        gateway_key.request_limit_total is not None
+        and (
+            gateway_key.request_limit_total
+            - gateway_key.requests_used_total
+            - gateway_key.requests_reserved_total
+        )
+        < 1
+    ):
         return True
-    if gateway_key.token_limit_total is not None and (
-        gateway_key.token_limit_total
-        - gateway_key.tokens_used_total
-        - gateway_key.tokens_reserved_total
-    ) <= 0:
+    if (
+        gateway_key.token_limit_total is not None
+        and (
+            gateway_key.token_limit_total
+            - gateway_key.tokens_used_total
+            - gateway_key.tokens_reserved_total
+        )
+        <= 0
+    ):
         return True
-    if gateway_key.cost_limit_eur is not None and (
-        gateway_key.cost_limit_eur
-        - gateway_key.cost_used_eur
-        - gateway_key.cost_reserved_eur
-    ) <= 0:
+    if (
+        gateway_key.cost_limit_eur is not None
+        and (gateway_key.cost_limit_eur - gateway_key.cost_used_eur - gateway_key.cost_reserved_eur)
+        <= 0
+    ):
         return True
     return False
 
@@ -3738,9 +3771,7 @@ def _revalidate_responses_after_wait(
                 gateway_keys_repository=GatewayKeysRepository(session),
             )
             try:
-                new_key = await auth_service.authenticate_authorization_header(
-                    authorization
-                )
+                new_key = await auth_service.authenticate_authorization_header(authorization)
             except GatewayAuthError as exc:
                 raise openai_error_from_auth_error(exc) from exc
             # R4 requires the owner to remain active after a real wait; reuse
@@ -3781,7 +3812,9 @@ def _revalidate_responses_after_wait(
         ) != (original.route.resolved_model, original.route.provider):
             raise policy_changed_while_waiting_error()
 
-        new_policy_result = await route_checks_after_wait(new_key, new_route, original.policy_result)
+        new_policy_result = await route_checks_after_wait(
+            new_key, new_route, original.policy_result
+        )
 
         return LazyAdmissionContext(
             gateway_key_id=new_key.gateway_key_id,
@@ -3790,12 +3823,12 @@ def _revalidate_responses_after_wait(
             policy_result=new_policy_result,
             route=new_route,
             estimated_tokens=(
-                new_policy_result.estimated_input_tokens
-                + new_policy_result.effective_output_tokens
+                new_policy_result.estimated_input_tokens + new_policy_result.effective_output_tokens
             ),
         )
 
     return _revalidate
+
 
 def _start_rate_limit_heartbeat(
     reservation: _RateLimitReservation | None,

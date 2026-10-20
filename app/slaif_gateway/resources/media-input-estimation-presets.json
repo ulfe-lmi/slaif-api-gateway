@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "presets": {
+    "qwen-native-images": {
+      "version": 1,
+      "image_tokens": 16896
+    },
+    "qwen-native-chat-video": {
+      "version": 1,
+      "image_tokens": 16896,
+      "video_tokens": 65536,
+      "video_frames": 4
+    }
+  },
+  "notes": "Operator-owned conservative reservation budgets, not actual billable usage. Verify budgets against the selected model/preprocessor; keep byte caps independently enforced. Native video is inline Chat Completions input only."
+}

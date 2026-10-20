@@ -1081,3 +1081,9 @@ in reverse order. Existing input caps, taxonomy validation, independent gates,
 HMAC same-key/same-route ownership and accounting remain enforced. The current
 parallel-generation preference does not invalidate prior parallel history.
 No history is reordered, repaired, dropped or synthesized.
+
+
+The opt-in correction for encoded image estimates and bounded native-vLLM
+Chat video input is described in [media input estimation](media-input-estimation.md).
+Existing generic/unknown provider video behavior remains fail-closed; this
+exception does not enable video generation or direct Codex video input.

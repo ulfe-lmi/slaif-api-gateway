@@ -82,7 +82,7 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 | Web search | Implemented only for bounded OpenAI Responses canonical `web_search`; Chat search, aliases, filters/location/source controls, and OpenRouter search remain fail-closed | Contract, gateway, PostgreSQL concurrency/hold/reconciliation, SSE, negative/privacy, and mocked official-client coverage | PostgreSQL full-balance fence, provider tokens plus configured per-call fee, one admitted overrun, following-block, and durable unknown-outcome hold | Exact stateless OpenAI Responses shape only | No query, URL, source, result, citation, OAuth token, provider secret, or raw provider payload storage | `RC2_EXPLICITLY_DEFERRED` | Implemented after/outside the locked RC2 target; classification remains historical scope truth | — |
 | Code interpreter | Unsupported/fail-closed | Unit/policy coverage | No billing/accounting path exposed | Rejected before provider forwarding | No tool payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
 | Image generation | Unsupported/fail-closed | Unsupported-route/policy coverage | No pricing/accounting path exposed | No supported provider forwarding | No media payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
-| Video | Unsupported/fail-closed | Policy/docs coverage | No pricing/accounting path exposed | No supported provider forwarding | No media payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
+| Video generation/general video APIs | Unsupported/fail-closed | Policy/docs coverage | No pricing/accounting path exposed | No supported provider forwarding | No media payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
 | Moderations | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No moderation payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
 | Batch | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No batch payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
 | Vector stores | Not implemented | Unsupported-route/error-shape coverage only | No pricing/accounting path yet | No provider forwarding path yet | No vector-store payload storage | `RC2_EXPLICITLY_DEFERRED` | Explicitly not an RC2 target | — |
@@ -129,3 +129,7 @@ This is the canonical RC2 scope-lock document for `slaif-api-gateway`.
 
 4. `feature/rc2-final-verification`
    - run the full 128-worker harness only after the merged Realtime client-secret slice is on `main`
+
+A later bounded native Chat video-input exception is described in
+[media input estimation](media-input-estimation.md). It does not implement
+video generation or change the original RC2 scope classification.

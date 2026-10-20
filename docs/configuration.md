@@ -541,6 +541,8 @@ forwarding. Defaults:
 | `CHAT_MAX_MESSAGES_PER_REQUEST` | `128` | Number of `messages` entries |
 | `CHAT_MAX_MESSAGE_CONTENT_BYTES` | `262144` | One message's string/text-part content |
 | `CHAT_MAX_TEXT_PARTS_PER_MESSAGE` | `64` | Text parts in one message |
+| `CHAT_MAX_VIDEOS_PER_REQUEST` | `1` | Inline video parts on explicitly enabled native Chat routes |
+| `CHAT_MAX_VIDEO_DATA_URL_BYTES` | `10485760` | Encoded video data URL bytes; separate from frame/token limits |
 | `CHAT_MAX_IMAGES_PER_REQUEST` | `8` | Image content parts in one request |
 | `CHAT_MAX_IMAGES_PER_MESSAGE` | `4` | Image content parts in one message |
 | `CHAT_MAX_IMAGE_URL_BYTES` | `4096` | One remote image URL |

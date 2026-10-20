@@ -264,3 +264,66 @@ async def test_postgres_provider_failure_releases_reservation(
     assert gateway_key.cost_used_eur == Decimal("0E-9")
     assert reservation_row is not None
     assert reservation_row.status == "released"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,budget", [("image_url", 16896), ("video_url", 65536)])
+async def test_media_reserves_configured_budget_then_finalizes_actual_usage(
+    async_test_session, kind, budget
+):
+    import base64
+    from dataclasses import replace
+    from slaif_gateway.config import Settings
+    from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
+    from slaif_gateway.services.media_input_estimation import apply_media_input_estimate
+
+    mime = "image/png" if kind == "image_url" else "video/mp4"
+    url = "data:" + mime + ";base64," + base64.b64encode(b"a" * 474454).decode()
+    body = {
+        "model": "classroom-cheap",
+        "max_tokens": 100,
+        "messages": [{"role": "user", "content": [{"type": kind, kind: {"url": url}}]}],
+    }
+    policy = ChatCompletionRequestPolicy(Settings()).apply(body, defer_media_limit=True)
+    assert policy.estimated_input_tokens > 200000
+    modality = "image_tokens" if kind == "image_url" else "video_tokens"
+    policy = apply_media_input_estimate(
+        policy,
+        route_capabilities={"media_input_estimation": {"version": 1, modality: budget}},
+        input_ceiling=128000,
+    )
+    gateway_key = await _create_gateway_key(async_test_session, token_limit_total=100000)
+    estimate = replace(_estimate(), estimated_input_tokens=policy.estimated_input_tokens)
+    reservation = await QuotaService(
+        gateway_keys_repository=GatewayKeysRepository(async_test_session),
+        quota_reservations_repository=QuotaReservationsRepository(async_test_session),
+    ).reserve_for_chat_completion(
+        authenticated_key=_authenticated_key(gateway_key),
+        route=_route(),
+        policy=policy,
+        cost_estimate=estimate,
+        request_id="req-media-" + uuid.uuid4().hex,
+    )
+    assert reservation.reserved_tokens == policy.estimated_input_tokens + 100
+    await AccountingService(async_test_session).finalize_successful_response(
+        reservation.reservation_id,
+        _authenticated_key(gateway_key),
+        _route(),
+        policy,
+        estimate,
+        ProviderResponse(
+            provider="openai",
+            upstream_model="gpt-4.1-mini",
+            status_code=200,
+            json_body={},
+            usage=ProviderUsage(prompt_tokens=84, completion_tokens=1, total_tokens=85),
+        ),
+        request_id=reservation.request_id,
+    )
+    await async_test_session.refresh(gateway_key)
+    assert gateway_key.tokens_used_total == 85
+    assert gateway_key.tokens_reserved_total == 0
+    ledger = await UsageLedgerRepository(async_test_session).get_usage_record_by_request_id(
+        reservation.request_id
+    )
+    assert ledger.accounting_status == "finalized"

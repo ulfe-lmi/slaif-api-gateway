@@ -48,7 +48,7 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
             error_code="invalid_provider_configuration",
         )
         _validate_module_base_url(base_url)
-    elif descriptor.module_id in {"openai-compatible", "local-coding-v1", "local-coding-vLLM"}:
+    elif descriptor.module_id in {"openai-compatible", "local-coding-v1", "local-coding-vLLM", "vllm-chat-video-v1"}:
         if not base_url:
             raise ProviderConfigurationError(
                 "OpenAI-compatible server module requires a base URL",

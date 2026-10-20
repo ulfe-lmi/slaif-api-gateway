@@ -101,7 +101,7 @@ fields remain denied.
 | `service_tier` | Limited | OpenAI, OpenRouter | Omitted or `auto` is allowed; non-default values are rejected because local pricing is not service-tier aware | Request policy tests |
 | `prediction` | Preserved when accepted | OpenAI, OpenRouter | Static-output hint must be a bounded object and is counted when forwarded | Request policy tests |
 | Chat Completions audio output | Non-streaming implemented behind explicit route capability and pricing metadata | OpenAI, OpenRouter | Supports `modalities=["text","audio"]` plus top-level `audio` with allowed formats `wav`, `aac`, `mp3`, `flac`, `opus`, `pcm16` and built-in voices `alloy`, `ash`, `ballad`, `coral`, `echo`, `fable`, `nova`, `onyx`, `sage`, `shimmer`, `marin`, `cedar`. Preserves non-streaming `choices[].message.audio` response objects. Requires `chat_audio_outputs=true` and `pricing_metadata.audio_output_price_per_1m`. Streaming audio output is fail-closed for RC2 even if an unsafe config toggle is attempted; `n > 1` with audio output, custom voices, and assistant previous-audio references are also rejected | Request caps, route capability, provider forwarding, pricing/accounting, no-storage, and mocked official-client E2E tests |
-| `modalities` / `audio` / broader multimodal content | Image/file/audio input plus non-streaming audio output | OpenAI, OpenRouter | `modalities=["text"]`, route-enabled `modalities=["text","audio"]`, text content parts, route-enabled user-message `image_url` parts, route-enabled inline `file` parts, and route-enabled `input_audio` parts with raw base64 `wav`/`mp3` data are allowed. Streaming audio output, audio data URLs, audio URLs, file IDs, file URLs, previous-audio references, `n > 1` with audio output, video, alternate part names such as `input_image`, and image generation remain rejected. Upstream evidence and the future implementation sequence are documented in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) | Request policy tests |
+| `modalities` / `audio` / broader multimodal content | Image/file/audio input plus non-streaming audio output | OpenAI, OpenRouter | `modalities=["text"]`, route-enabled `modalities=["text","audio"]`, text content parts, route-enabled user-message `image_url` parts, route-enabled inline `file` parts, and route-enabled `input_audio` parts with raw base64 `wav`/`mp3` data are allowed. Streaming audio output, audio data URLs, audio URLs, file IDs, file URLs, previous-audio references, `n > 1` with audio output, generic video, alternate part names such as `input_image`, and image generation remain rejected. Upstream evidence and the future implementation sequence are documented in [`chat-completions-multimodal-investigation.md`](chat-completions-multimodal-investigation.md) | Request policy tests |
 | OpenAI non-streaming | Implemented | OpenAI | Uses OpenAI provider key and JSON Accept | Provider adapter tests |
 | OpenAI streaming | Implemented | OpenAI | SSE parse/forward, usage chunk parse, tool-call delta and logprobs preservation, error event handling | Provider streaming tests |
 | OpenRouter non-streaming | Implemented | OpenRouter | Parses usage, request IDs, and provider-reported cost metadata when present | Provider adapter tests |
@@ -254,3 +254,13 @@ streaming. The repository can therefore reproduce the transport calls but not
 independently establish those database claims from that verifier. See
 [real-provider qualification](real-provider-qualification.md). Complete current
 real-provider accounting qualification is not established.
+
+
+The opt-in correction for encoded image estimates and bounded native-vLLM
+Chat video input is described in [media input estimation](media-input-estimation.md).
+Existing generic/unknown provider video behavior remains fail-closed; this
+exception does not enable video generation or direct Codex video input.
+
+The separately gated `vllm-chat-video-v1` module accepts inline MP4/WebM video
+on explicitly configured native Chat routes, with operator frame/token budgets.
+See [media input estimation](media-input-estimation.md).

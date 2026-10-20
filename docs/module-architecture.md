@@ -162,3 +162,10 @@ install them. No database migration is needed. Upgrade key pins explicitly;
 see the [Qwen runbook](runbooks/codex-qwen38.md),
 [clean client examples](../examples/codex/qwen38-27b/README.md), and
 [bounded verification record](verification/codex-qwen38-live-smoke.md).
+
+The static `vllm-chat-video-v1` server module is Chat-only and pairs with the
+default client. Explicit route metadata supplies its inline video frame cap;
+it delegates ordinary wire forwarding and credentials to the existing native
+OpenAI-compatible adapter. It has no key, quota, accounting or routing authority,
+and creates no new Codex client/server pair. See
+[media input estimation](media-input-estimation.md).

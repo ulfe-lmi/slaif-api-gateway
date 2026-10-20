@@ -16,6 +16,9 @@ class ChatCompletionPolicyResult(BaseModel):
     effective_output_tokens_per_choice: int = 0
     effective_choice_count: int = 1
     estimated_input_tokens: int
+    unadjusted_input_tokens: int | None = None
+    estimated_media_input_tokens: int = 0
+    encoded_media_input_bytes: int = 0
     estimated_message_input_tokens: int = 0
     estimated_non_message_input_tokens: int = 0
     estimated_non_message_input_bytes: int = 0
@@ -32,6 +35,9 @@ class ResponsesPolicyResult(BaseModel):
     effective_output_tokens_per_choice: int = 0
     effective_choice_count: int = 1
     estimated_input_tokens: int
+    unadjusted_input_tokens: int | None = None
+    estimated_media_input_tokens: int = 0
+    encoded_media_input_bytes: int = 0
     estimated_message_input_tokens: int = 0
     estimated_non_message_input_tokens: int = 0
     estimated_non_message_input_bytes: int = 0
