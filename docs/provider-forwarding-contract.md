@@ -1070,3 +1070,14 @@ No success or response identity is fabricated. The native-vLLM codec validates
 completed and replayed function arguments as bounded, finite JSON objects before
 marking a call complete or serializing history. It does not repair malformed
 arguments or grant new execution authority. See the [Responses failure boundary](responses-compatibility.md#failure-before-and-after-streaming-starts).
+
+
+### Parallel client-tool history
+
+Codex replay pairs each result with one preceding call by call ID and kind.
+The native transport already supports multiple calls in one response; replay
+therefore accepts call-call-result-result ordering, including results completing
+in reverse order. Existing input caps, taxonomy validation, independent gates,
+HMAC same-key/same-route ownership and accounting remain enforced. The current
+parallel-generation preference does not invalidate prior parallel history.
+No history is reordered, repaired, dropped or synthesized.

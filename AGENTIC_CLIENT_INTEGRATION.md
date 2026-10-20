@@ -988,7 +988,7 @@ Then prove whether the client:
 
 - preserves, rewrites, or removes the item ID;
 - preserves the call ID;
-- emits the matching adjacent output;
+- emits matching output(s), recording their ordering relative to parallel calls;
 - generates a replacement ID.
 
 Objective 155 proved that exact Codex 0.149 request preparation removed a non-prefixed item ID and generated no replacement.
@@ -1005,7 +1005,9 @@ An ID-less fallback is allowed only if:
 - HMAC key version is available and matches;
 - tool namespace/name match;
 - route/provider/model compatibility matches;
-- the matching output is adjacent and has the same call ID;
+- the matching output has the same call ID and kind and follows its call;
+- each pending call resolves before new user/system/developer input or compaction;
+- parallel calls/results are matched by identity without reordering saved history;
 - no raw ID or digest is logged or exposed.
 
 ### 15.4 No downgrade when an ID is present

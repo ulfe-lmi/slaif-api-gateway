@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "client_version": "0.162.1",
+  "client_mode": "exec",
+  "source_tag": "rust-v0.162.1",
+  "client_sha256": "628e35487d888a28f0427fc37501da529dd3d81fcbad7a2c3421c1e8670d92e1",
+  "before": [
+    {
+      "stage": 0,
+      "main_passed": true,
+      "input_items": 5,
+      "item_sequence": [
+        "additional_tools",
+        "message",
+        "message",
+        "message",
+        "message"
+      ],
+      "parallel_tool_calls": false,
+      "tool_outputs": 0
+    },
+    {
+      "main_passed": false,
+      "item_sequence": [
+        "additional_tools",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "function_call",
+        "function_call",
+        "function_call_output",
+        "function_call_output"
+      ],
+      "parallel_tool_calls": false,
+      "error_code": "responses_codex_tool_roundtrip_invalid",
+      "param": "input[7]"
+    }
+  ],
+  "after": [
+    {
+      "stage": 1,
+      "main_passed": true,
+      "input_items": 11,
+      "item_sequence": [
+        "additional_tools",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "function_call",
+        "function_call",
+        "function_call_output",
+        "function_call_output",
+        "message"
+      ],
+      "parallel_tool_calls": false,
+      "tool_outputs": 2
+    },
+    {
+      "stage": 2,
+      "main_passed": true,
+      "input_items": 13,
+      "item_sequence": [
+        "additional_tools",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "function_call",
+        "function_call",
+        "function_call_output",
+        "function_call_output",
+        "message",
+        "message",
+        "message"
+      ],
+      "parallel_tool_calls": false,
+      "tool_outputs": 2
+    },
+    {
+      "stage": 0,
+      "main_passed": true,
+      "input_items": 5,
+      "item_sequence": [
+        "additional_tools",
+        "message",
+        "message",
+        "message",
+        "message"
+      ],
+      "parallel_tool_calls": false,
+      "tool_outputs": 0
+    },
+    {
+      "stage": 1,
+      "main_passed": true,
+      "input_items": 10,
+      "item_sequence": [
+        "additional_tools",
+        "message",
+        "message",
+        "message",
+        "message",
+        "message",
+        "function_call",
+        "function_call",
+        "function_call_output",
+        "function_call_output"
+      ],
+      "parallel_tool_calls": false,
+      "tool_outputs": 2
+    }
+  ],
+  "recovery": "The same failed synthetic conversation resumed successfully without rewriting saved history.",
+  "live": {
+    "client_version": "0.162.1",
+    "mode": "exec",
+    "model": "qwen3.8-27b",
+    "provider": "neumann",
+    "history_sequence": [
+      "reasoning",
+      "function_call:A",
+      "function_call:B",
+      "function_call_output:A",
+      "function_call_output:B",
+      "reasoning",
+      "message:assistant"
+    ],
+    "parallel_calls": 2,
+    "completed_turn": true,
+    "resumed_followup": true,
+    "successful_ledger_rows": 3,
+    "accounting_status": "finalized",
+    "reservation_status": "finalized",
+    "source_commit": "58c45db770b55c0b449b037af2d9a4f336b89aaa",
+    "keys_unchanged": 42
+  }
+}
