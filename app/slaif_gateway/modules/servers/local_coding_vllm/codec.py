@@ -41,6 +41,30 @@ def _unique_pairs(pairs):
     return result
 
 
+def _reject_nonfinite(_):
+    raise ValueError("Nonfinite JSON argument")
+
+
+def _function_arguments(arguments: str, *, replay: bool = False) -> None:
+    """Native vLLM function arguments are complete JSON objects, never patches."""
+    try:
+        if not isinstance(arguments, str) or len(arguments.encode("utf-8")) > MAX_ARGUMENT_BYTES:
+            raise ValueError
+        value = json.loads(arguments, object_pairs_hook=_unique_pairs,
+                           parse_constant=_reject_nonfinite)
+        if not isinstance(value, dict):
+            raise ValueError
+    except (ValueError, TypeError, RecursionError, UnicodeError):
+        if replay:
+            raise ProviderRequestError(
+                "Replayed function-call arguments contain invalid JSON. Start a new conversation "
+                "or rewind before the interrupted tool call; existing files are unaffected.",
+                provider="local-coding-vLLM", status_code=400,
+                error_type="invalid_request_error", error_code="vllm_replay_arguments_invalid",
+            ) from None
+        raise _bad("vllm_function_arguments_invalid") from None
+
+
 def _json_input(arguments: str) -> str:
     try:
         value = json.loads(arguments, object_pairs_hook=_unique_pairs)
@@ -147,6 +171,8 @@ class VLLMToolCodec:
                 if kind == "custom_tool_call":
                     item["type"] = "function_call"
                     item["arguments"] = json.dumps({"input": item.pop("input")}, ensure_ascii=True)
+                else:
+                    _function_arguments(item.get("arguments"), replay=True)
 
     def item(self, raw, *, added=False):
         if not isinstance(raw, dict) or raw.get("type") != "function_call":
@@ -176,6 +202,8 @@ class VLLMToolCodec:
                 raise _bad()
             item["type"] = "custom_tool_call"
             item["input"] = "" if added else _json_input(arguments)
+        elif not added:
+            _function_arguments(item.get("arguments"))
         return item
 
     def response(self, raw, *, terminal=False):
@@ -314,6 +342,8 @@ class VLLMToolCodec:
                 joined = "".join(state.deltas)
                 if event.get("arguments") != joined or event.get("name", state.name) != state.name:
                     raise _bad()
+                if state.kind == "function":
+                    _function_arguments(joined)
                 state.arguments = joined
                 state.deltas.clear()
                 state.done = True

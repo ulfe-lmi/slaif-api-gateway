@@ -85,6 +85,8 @@ from slaif_gateway.modules.servers.registry import (
 )
 from slaif_gateway.providers.errors import ProviderConfigurationError, ProviderError
 from slaif_gateway.providers.factory import get_provider_adapter
+from slaif_gateway.utils.streaming_response import DeferredStartStreamingResponse
+
 from slaif_gateway.providers.streaming import (
     RESPONSES_PROVIDER_FAILURE_EVENT_TYPES,
     RESPONSES_TEXT_STREAM_EVENT_TYPES,
@@ -2907,6 +2909,19 @@ def _streaming_responses_response(
         completed_event: str | None = None
         terminal_done_event: str | None = None
         completed = False
+        stream_started = False
+        failure_response_id: str | None = None
+        last_sequence = -1
+
+        def _failure(*, message, code, param=None, request_id=None,
+                     status_code=502, error_type=None):
+            if not stream_started:
+                raise OpenAICompatibleError(message, status_code=status_code,
+                                            error_type=error_type, code=code, param=param)
+            return format_responses_error_event(
+                message=message, code=code, param=param, request_id=request_id,
+                response_id=failure_response_id, sequence_number=last_sequence + 1,
+            )
         provider_status = "error"
         stream_estimate_monitor = build_responses_streaming_estimate_monitor(
             cost_estimate=cost_estimate,
@@ -2987,12 +3002,20 @@ def _streaming_responses_response(
                             stream_estimate_monitor=stream_estimate_monitor,
                         )
                     provider_status = "incomplete"
-                    yield format_responses_error_event(
+                    yield _failure(
                         message=safe_message,
                         code=error_code,
                         request_id=request_id,
                     )
                     return
+                payload = chunk.json_body
+                if isinstance(payload, Mapping):
+                    sequence = payload.get("sequence_number")
+                    if type(sequence) is int:
+                        last_sequence = max(last_sequence, sequence)
+                    response = payload.get("response")
+                    if isinstance(response, Mapping) and isinstance(response.get("id"), str):
+                        failure_response_id = response["id"]
                 if _is_responses_completed_chunk(chunk):
                     completed = True
                     completed_event = chunk.raw_sse_event
@@ -3025,12 +3048,13 @@ def _streaming_responses_response(
                             request=request,
                         )
                     provider_status = "interrupted"
-                    yield format_responses_error_event(
+                    yield _failure(
                         message=RESPONSES_STREAMING_LIVE_BURN_ERROR_MESSAGE,
                         code=RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE,
                         request_id=request_id,
                     )
                     return
+                stream_started = True
                 yield chunk.raw_sse_event
 
             if completed and completed_chunk is not None and completed_chunk.usage is not None:
@@ -3132,7 +3156,7 @@ def _streaming_responses_response(
                         )
                     except CodexReplayReferenceError as exc:
                         provider_status = "incomplete"
-                        yield format_responses_error_event(
+                        yield _failure(
                             message=exc.safe_message,
                             code=exc.error_code,
                             request_id=request_id,
@@ -3178,7 +3202,7 @@ def _streaming_responses_response(
                         stream_estimate_monitor=stream_estimate_monitor,
                     )
                 provider_status = "incomplete"
-                yield format_responses_error_event(
+                yield _failure(
                     message=(
                         "Provider Responses stream completed without final usage metadata; "
                         "accounting could not finalize successfully."
@@ -3186,7 +3210,7 @@ def _streaming_responses_response(
                     code="responses_stream_usage_missing",
                     request_id=request_id,
                 )
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, GeneratorExit):
             with anyio.CancelScope(shield=True):
                 if external_web_search_admission is not None:
                     await _place_external_web_search_hold(
@@ -3248,9 +3272,12 @@ def _streaming_responses_response(
                 if external_web_search_admission is not None
                 else exc
             )
-            yield format_responses_error_event(
-                message=wire_error.safe_message,
-                code=wire_error.error_code,
+            public_error = openai_error_from_provider_error(wire_error)
+            yield _failure(
+                message=public_error.message,
+                code=public_error.code,
+                status_code=public_error.status_code,
+                error_type=public_error.error_type,
             )
         except AccountingError as exc:
             if external_web_search_admission is not None:
@@ -3264,16 +3291,21 @@ def _streaming_responses_response(
                     evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
                 )
             increment_accounting_failure(exc.error_code)
-            yield format_responses_error_event(
+            yield _failure(
                 message=exc.safe_message,
                 code=exc.error_code,
+                status_code=500,
             )
         except QuotaError as exc:
             increment_quota_rejection(exc.error_code)
-            yield format_responses_error_event(
+            yield _failure(
                 message=exc.safe_message,
                 code=exc.error_code,
+                status_code=429,
+                error_type="insufficient_quota",
             )
+        except OpenAICompatibleError:
+            raise
         except Exception:  # noqa: BLE001
             if external_web_search_admission is not None:
                 await _place_external_web_search_hold(
@@ -3288,7 +3320,7 @@ def _streaming_responses_response(
                         cost_estimate.estimated_total_cost_eur + external_tool_hold_fee_eur
                     ),
                 )
-                yield format_responses_error_event(
+                yield _failure(
                     message="External-tool streaming accounting could not be finalized safely.",
                     code="external_tool_accounting_uncertain",
                     request_id=request_id,
@@ -3313,7 +3345,7 @@ def _streaming_responses_response(
                     duration_seconds=time.perf_counter() - start,
                 )
 
-    return StreamingResponse(
+    return DeferredStartStreamingResponse(
         _events(),
         media_type="text/event-stream",
         headers={

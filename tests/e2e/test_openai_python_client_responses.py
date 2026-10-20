@@ -1176,14 +1176,23 @@ def test_local_coding_malformed_stream_before_output_releases_accounting(
         monkeypatch, after_output=False
     )
 
-    assert response.status_code == 200
-    assert "local_coding_sse_invalid_json" in response.text
+    assert response.status_code == 502
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["error"] == {
+        "message": "Local Coding returned invalid JSON in its SSE data.",
+        "type": "server_error",
+        "param": None,
+        "code": "local_coding_sse_invalid_json",
+    }
     assert "data: [DONE]" not in response.text
     assert canary not in response.text
     assert len(local_route.calls) == 1
     assert state.reservation.status == "released"
     assert state.gateway_key.tokens_reserved_total == 0
+    assert state.gateway_key.requests_reserved_total == 0
+    assert state.gateway_key.cost_reserved_eur == 0
     assert state.usage_ledger.accounting_status == "failed"
+    assert state.usage_ledger.success is False
     assert state.usage_ledger.error_type == "local_coding_sse_invalid_json"
     assert canary not in json.dumps(state.usage_ledger.response_metadata, sort_keys=True)
 
