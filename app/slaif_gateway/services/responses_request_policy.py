@@ -2070,6 +2070,7 @@ class ResponsesRequestPolicy:
             declarations = input_declarations
         calls: dict[str, tuple[str, str, str]] = {}
         outputs: dict[str, str] = {}
+        pending: set[str] = set()
         item_ids: set[str] = set()
         for index, item in enumerate(items):
             item_type = item.get("type")
@@ -2117,27 +2118,7 @@ class ResponsesRequestPolicy:
                         "Codex tool-call IDs must be unique.",
                     )
                 calls[call_id] = matches[0]
-                if index + 1 >= len(items):
-                    _raise(
-                        "input",
-                        "responses_codex_tool_roundtrip_invalid",
-                        "Each Codex tool call must be followed immediately by its output.",
-                    )
-                next_item = items[index + 1]
-                expected_output_type = (
-                    "custom_tool_call_output"
-                    if item_type == "custom_tool_call"
-                    else "function_call_output"
-                )
-                if (
-                    next_item.get("type") != expected_output_type
-                    or next_item.get("call_id") != call_id
-                ):
-                    _raise(
-                        f"input[{index + 1}]",
-                        "responses_codex_tool_roundtrip_invalid",
-                        "Each Codex tool output must immediately follow its matching call.",
-                    )
+                pending.add(call_id)
             elif item_type in {"function_call_output", "custom_tool_call_output"}:
                 call_id = str(item["call_id"])
                 if call_id in outputs:
@@ -2147,24 +2128,27 @@ class ResponsesRequestPolicy:
                         "Codex tool-call output IDs must be unique.",
                     )
                 outputs[call_id] = str(item_type)
-                if index == 0:
-                    _raise(
-                        f"input[{index}]",
-                        "responses_codex_tool_roundtrip_invalid",
-                        "Codex tool outputs must follow their matching call.",
-                    )
-                previous = items[index - 1]
-                expected_call_type = (
-                    "custom_tool_call"
-                    if item_type == "custom_tool_call_output"
-                    else "function_call"
+                declaration = calls.get(call_id)
+                expected_output_type = (
+                    "custom_tool_call_output"
+                    if declaration is not None and declaration[2] == "custom"
+                    else "function_call_output"
                 )
-                if previous.get("type") != expected_call_type or previous.get("call_id") != call_id:
+                if call_id not in pending or item_type != expected_output_type:
                     _raise(
                         f"input[{index}]",
                         "responses_codex_tool_roundtrip_invalid",
-                        "Codex tool outputs must immediately follow their matching call.",
+                        "Codex tool outputs must match one preceding call of the same kind.",
                     )
+                pending.remove(call_id)
+            elif pending and not (
+                item_type in (None, "message") and item.get("role") == "assistant"
+            ):
+                _raise(
+                    f"input[{index}]",
+                    "responses_codex_tool_roundtrip_invalid",
+                    "Codex tool calls must be resolved before new input or compaction.",
+                )
 
         for call_id, output_type in outputs.items():
             declaration = calls.get(call_id)

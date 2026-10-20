@@ -267,9 +267,9 @@ the existing 128-character ASCII-safe Codex item-ID validator, is canonicalized
 unchanged, contributes its complete canonical bytes to input-token/cost
 estimation, and must be unique across every request history item ID. It is not
 a separate replay/HMAC reference: the output remains authorized only by the
-immediately preceding matching HMAC-owned call and `call_id`. Absent IDs retain
+preceding matching HMAC-owned call and `call_id`. Absent IDs retain
 the prior canonical shape. Ordinary outputs, malformed or duplicate IDs,
-unknown fields, orphan/reordered/cross-type pairs, and linkage mismatches remain
+unknown fields, orphan/result-before-call/cross-type pairs, and linkage mismatches remain
 denied. Raw output IDs are transient provider input and never enter safe
 evidence or persistence.
 
@@ -494,10 +494,17 @@ Streamed content, arguments, identifiers, and raw events are transient and are
 not persisted or logged.
 
 A next stateless request may replay only the exact validated declared function
-or `functions.exec` custom call with one immediately following matching output.
+or approved custom call with exactly one later matching output. Multiple calls
+may precede their results, and results may finish in either order; calls/results
+are paired by call ID and kind, never by adjacency. This also applies when the
+current request disables parallel generation: prior parallel history remains
+valid. Validated reasoning and assistant commentary remain in their original
+positions. Every pending call must resolve before new user/system/developer
+input, a declaration boundary, or compaction. All history remains subject to
+the existing input-item/byte ceilings and per-call HMAC ownership checks.
 Function output is a bounded string. For the pinned Code Mode `functions.exec`
 path, custom output may also be its bounded exact list of `input_text` parts.
-Orphans, reorderings, duplicates, unknown names/namespaces/types, mismatched
+Orphans, results before calls, duplicates, unknown names/namespaces/types, mismatched
 call IDs, unapproved authority, and oversize arguments/results are rejected.
 Reconstructed items are deep-copied and all canonical bytes are counted as
 input.
@@ -1124,3 +1131,6 @@ silently removed or repaired. These transport fixes require no key changes or
 compatibility-pin migration.
 
 See [stream-failure verification](verification/2026-10-20-responses-stream-failures.md).
+
+Parallel-history verification and unchanged-key deployment evidence are recorded
+in [the follow-up report](verification/2026-10-20-parallel-tool-replay.md).
