@@ -337,12 +337,12 @@
         <form method="post" action="/admin/keys/{{ key.id }}/validity">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
-            Valid from
-            <input name="valid_from" autocomplete="off" placeholder="{{ key.valid_from.isoformat() }}">
+            Valid from (UTC)
+            <input type="datetime-local" name="valid_from" step="60" autocomplete="off">
           </label>
           <label>
-            Valid until
-            <input name="valid_until" autocomplete="off" placeholder="{{ key.valid_until.isoformat() }}">
+            Valid until (UTC)
+            <input type="datetime-local" name="valid_until" step="60" autocomplete="off">
           </label>
           <label>
             Audit reason

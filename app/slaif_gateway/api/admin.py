@@ -39,6 +39,8 @@ from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
+from slaif_gateway.modules.clients.codex_0162 import CODEX_0162_CLIENT_MODULE_ID
+from slaif_gateway.modules.clients.registry import client_module_metadata, get_client_module
 from slaif_gateway.services.admin_activity_dashboard import (
     AdminActivityDashboardService,
     AdminActivityNotFoundError,
@@ -53,6 +55,13 @@ from slaif_gateway.services.codex_qualification import (
     CodexQualificationService,
     render_codex_profile,
     validate_codex_pilot_key_input,
+)
+from slaif_gateway.services.codex_profile_registry import (
+    CODEX_PROFILE_REGISTRY,
+    QWEN38_CODEX_PROFILE_ID,
+    QWEN38_240K_CODEX_PROFILE_ID,
+    QWEN38_256K_CODEX_PROFILE_ID,
+    QWEN38_100K_VISION_CODEX_PROFILE_ID,
 )
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
 from slaif_gateway.schemas.admin_keys import LazyThrottlingOperatorCeilings
@@ -263,7 +272,35 @@ templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parents[1] / "web" / "templates"),
     context_processors=[_branding_context],
 )
+
+
+def _utc_datetime_local(value: datetime | str | None) -> str:
+    """Render an ISO value for a UTC datetime-local picker without changing its instant."""
+    if isinstance(value, datetime):
+        parsed = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    else:
+        try:
+            parsed = _parse_admin_datetime(value)
+        except ValueError:
+            return ""
+    return parsed.strftime("%Y-%m-%dT%H:%M") if parsed is not None else ""
+
+
+templates.env.filters["utc_datetime_local"] = _utc_datetime_local
 logger = structlog.get_logger(__name__)
+
+_QWEN_CODEX_PROFILE_IDS = frozenset(
+    {
+        QWEN38_CODEX_PROFILE_ID,
+        QWEN38_240K_CODEX_PROFILE_ID,
+        QWEN38_256K_CODEX_PROFILE_ID,
+        QWEN38_100K_VISION_CODEX_PROFILE_ID,
+    }
+)
+_QWEN_CODEX_PROFILES_BY_MODEL = {
+    CODEX_PROFILE_REGISTRY[profile_id].public_model: CODEX_PROFILE_REGISTRY[profile_id]
+    for profile_id in _QWEN_CODEX_PROFILE_IDS
+}
 
 _POLICY_SELECTOR_MODEL_BACKED_ENDPOINTS = frozenset(
     {
@@ -744,6 +781,8 @@ async def create_admin_key(
     confirm_trusted_calibration: str = Form(""),
     codex_protocol_pilot: str = Form(""),
     confirm_codex_protocol_pilot: str = Form(""),
+    qwen_codex: str = Form(""),
+    confirm_qwen_codex: str = Form(""),
     external_tool_mode: str = Form(STRICT_BOUNDED),
     external_tool_capabilities: list[str] = Form([]),
     external_tool_destination_ids: str = Form(""),
@@ -790,6 +829,8 @@ async def create_admin_key(
         "confirm_trusted_calibration": confirm_trusted_calibration,
         "codex_protocol_pilot": codex_protocol_pilot,
         "confirm_codex_protocol_pilot": confirm_codex_protocol_pilot,
+        "qwen_codex": qwen_codex,
+        "confirm_qwen_codex": confirm_qwen_codex,
         "external_tool_mode": external_tool_mode,
         "external_tool_capabilities": "\n".join(external_tool_capabilities),
         "external_tool_destination_ids": external_tool_destination_ids,
@@ -822,6 +863,8 @@ async def create_admin_key(
             allow_all_models=validated_request_policy.allow_all_models,
             allow_all_endpoints=validated_request_policy.allow_all_endpoints,
         )
+        if _is_checked(codex_protocol_pilot) and _is_checked(qwen_codex):
+            raise ValueError("Select only one Codex key mode.")
         if _is_checked(codex_protocol_pilot):
             validate_codex_pilot_key_input(
                 parsed_input,
@@ -841,6 +884,13 @@ async def create_admin_key(
                     ),
                     "client_module": dict(CODEX_RESPONSES_POLICY["client_module"]),
                 },
+            )
+        if _is_checked(qwen_codex):
+            if not _is_checked(confirm_qwen_codex):
+                raise ValueError("Confirm Qwen Codex mode before creating this key.")
+            parsed_input = replace(
+                parsed_input,
+                responses_policy=await _validated_admin_qwen_codex_policy(request, parsed_input),
             )
         parsed_email_delivery_mode = _parse_admin_email_delivery_mode(email_delivery_mode)
         _validate_admin_email_delivery_preconditions(settings, parsed_email_delivery_mode)
@@ -8045,6 +8095,8 @@ def _default_key_create_form() -> dict[str, str]:
         "confirm_trusted_calibration": "",
         "codex_protocol_pilot": "",
         "confirm_codex_protocol_pilot": "",
+        "qwen_codex": "",
+        "confirm_qwen_codex": "",
         "external_tool_mode": STRICT_BOUNDED,
         "external_tool_capabilities": "",
         "external_tool_destination_ids": "",
@@ -9681,7 +9733,10 @@ def _parse_key_create_form(
             valid_days=form.get("valid_days"),
         )
     except ValueError as exc:
-        raise ValueError("Enter a valid key validity window.") from exc
+        raise ValueError(
+            "Enter a valid key validity window. Use UTC date and time "
+            "(YYYY-MM-DD HH:MM) or positive Valid days, not both."
+        ) from exc
     if valid_until <= valid_from:
         raise ValueError("Enter a valid key validity window.")
 
@@ -9837,6 +9892,99 @@ async def _validate_admin_codex_protocol_pilot_readiness(
         ).ready_responses_profile(provider=provider)
 
 
+async def _validated_admin_qwen_codex_policy(
+    request: Request,
+    key_input: CreateGatewayKeyInput,
+) -> dict[str, object]:
+    """Grant only selected, currently ready Qwen routes under the loaded 0.162 module."""
+    models = set(key_input.allowed_models)
+    providers = set(key_input.allowed_providers or ())
+    if (
+        key_input.key_purpose != "standard"
+        or key_input.allow_all_models
+        or key_input.allow_all_endpoints
+        or not models
+        or not providers
+        or not models.issubset(_QWEN_CODEX_PROFILES_BY_MODEL)
+        or set(key_input.allowed_endpoints) != {"/v1/models", "/v1/responses"}
+    ):
+        raise ValueError(
+            "Qwen Codex requires explicit Qwen models and providers, and exactly "
+            "/v1/models and /v1/responses; do not use allow-all settings."
+        )
+
+    module = get_client_module(CODEX_0162_CLIENT_MODULE_ID)
+    selected_profiles = [_QWEN_CODEX_PROFILES_BY_MODEL[model] for model in sorted(models)]
+    if any(
+        profile.client_module_id != module.module_id
+        or profile.client_module_version != module.module_version
+        for profile in selected_profiles
+    ):
+        raise ValueError("The active Codex 0.162 module does not match the selected Qwen profile.")
+
+    async_session_factory = get_sessionmaker_from_app(request)
+    async with async_session_factory() as session:
+        results = await CodexQualificationService(
+            provider_configs_repository=ProviderConfigsRepository(session),
+            model_routes_repository=ModelRoutesRepository(session),
+            pricing_rules_repository=PricingRulesRepository(session),
+            fx_rates_repository=FxRatesRepository(session),
+        ).inspect()
+
+    matched_providers: set[str] = set()
+    for profile in selected_profiles:
+        candidates = [
+            result
+            for result in results
+            if result.requested_model == profile.public_model
+            and result.endpoint == "/v1/responses"
+            and result.provider in providers
+        ]
+        if (
+            len(candidates) != 1
+            or not candidates[0].ready
+            or candidates[0].profile_id != profile.profile_id
+        ):
+            raise ValueError(
+                "Each selected Qwen model must have exactly one ready Codex route "
+                "among the selected providers."
+            )
+        matched_providers.add(candidates[0].provider)
+    if matched_providers != providers:
+        raise ValueError("Every selected provider must serve a selected, ready Qwen Codex model.")
+
+    gates = set().union(*(profile.required_route_gates for profile in selected_profiles))
+    supported_gates = {
+        "codex_request_envelope",
+        "codex_client_tools",
+        "codex_streaming_tool_events",
+        "codex_encrypted_reasoning_replay",
+        "codex_compaction",
+        "image_input",
+    }
+    if not gates.issubset(supported_gates) or any(
+        set(profile.local_tools) != {"function", "custom"} for profile in selected_profiles
+    ):
+        raise ValueError("The selected Qwen Codex profile requires unsupported key permissions.")
+    return {
+        "version": 1,
+        "allowed_capabilities": [
+            gate
+            for gate in (
+                "codex_request_envelope",
+                "codex_client_tools",
+                "codex_streaming_tool_events",
+                "codex_encrypted_reasoning_replay",
+                "codex_compaction",
+                "image_input",
+            )
+            if gate in gates
+        ],
+        "allowed_local_tool_types": ["function", "custom"],
+        "client_module": client_module_metadata(module),
+    }
+
+
 def _parse_admin_email_delivery_mode(value: str | None) -> str:
     mode = (value or "none").strip().lower()
     if mode not in _ADMIN_EMAIL_DELIVERY_MODES:
@@ -9917,7 +10065,7 @@ def _safe_created_key_result(created: CreatedGatewayKey) -> dict[str, object]:
 def _safe_codex_responses_policy_summary(
     policy: object,
 ) -> dict[str, tuple[str, ...]] | None:
-    """Return only the exact reviewed Codex pilot policy vocabulary."""
+    """Return only reviewed Codex key capability vocabulary for GUI summaries."""
 
     if not isinstance(policy, Mapping):
         return None
@@ -9925,14 +10073,28 @@ def _safe_codex_responses_policy_summary(
     allowed_local_tool_types = policy.get("allowed_local_tool_types")
     expected_capabilities = tuple(CODEX_RESPONSES_POLICY["allowed_capabilities"])
     expected_local_tool_types = tuple(CODEX_RESPONSES_POLICY["allowed_local_tool_types"])
-    if not isinstance(allowed_capabilities, list) or (
-        tuple(allowed_capabilities) != expected_capabilities
-    ):
+    if not isinstance(allowed_capabilities, list):
         return None
     if not isinstance(allowed_local_tool_types, list) or (
         tuple(allowed_local_tool_types) != expected_local_tool_types
     ):
         return None
+    if tuple(allowed_capabilities) != expected_capabilities:
+        qwen_gates = (
+            "codex_request_envelope",
+            "codex_client_tools",
+            "codex_streaming_tool_events",
+            "codex_encrypted_reasoning_replay",
+        )
+        if (
+            policy.get("version") != 1
+            or tuple(allowed_capabilities)
+            not in {qwen_gates, (*qwen_gates, "image_input")}
+            or policy.get("client_module")
+            != client_module_metadata(get_client_module(CODEX_0162_CLIENT_MODULE_ID))
+        ):
+            return None
+        expected_capabilities = tuple(allowed_capabilities)
     return {
         "allowed_capabilities": expected_capabilities,
         "allowed_local_tool_types": expected_local_tool_types,

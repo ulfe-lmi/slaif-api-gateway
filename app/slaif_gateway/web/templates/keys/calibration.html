@@ -57,12 +57,12 @@
       <form method="post" action="/admin/keys/{{ key.id }}/calibration/preview">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
-          Start at
-          <input name="start_at" value="{{ form.start_at }}" autocomplete="off" placeholder="Optional ISO datetime">
+          Start at (UTC)
+          <input type="datetime-local" name="start_at" value="{{ form.start_at|utc_datetime_local }}" step="60" autocomplete="off">
         </label>
         <label>
-          End at
-          <input name="end_at" value="{{ form.end_at }}" autocomplete="off" placeholder="Optional ISO datetime">
+          End at (UTC)
+          <input type="datetime-local" name="end_at" value="{{ form.end_at|utc_datetime_local }}" step="60" autocomplete="off">
         </label>
         <label>
           Multiplier

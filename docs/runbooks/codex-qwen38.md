@@ -19,7 +19,14 @@ real gateway/model tests from synthetic fixtures and operator reports.
    `codex_request_envelope`, `codex_client_tools`,
    `codex_streaming_tool_events`, and `codex_encrypted_reasoning_replay`.
    Select the correct client module and model allowance on the key. Selecting
-   the model or enabling a generic Codex checkbox alone is insufficient.
+   the model or enabling a generic Codex checkbox alone is insufficient. In
+   **Administration → Keys → Create key**, select explicit Qwen models and
+   their providers, exactly `/v1/models` and `/v1/responses`, then check
+   **Enable Codex for the selected Qwen models** and its confirmation. The
+   server rechecks each selected route's Codex qualification and pins the
+   loaded 0.162 module before issuing the key. The separate **Codex Protocol
+   Pilot** checkbox is for the older OpenAI 0.147 pilot; leave it off. This
+   creation option does not retrofit keys already issued without Codex grants.
 3. Supply valid route `codex_limits` and complete Codex pricing. A free route
    still needs explicit zero prices for input, output, cached input, reasoning,
    and cache writes, plus valid `codex_accounting` thresholds/multipliers.
@@ -38,6 +45,10 @@ real gateway/model tests from synthetic fixtures and operator reports.
 
 Keep backend credentials on the gateway and give clients only gateway-issued
 keys. A user/key owner need not be an administrator to make model requests.
+The key form's Valid from and Valid until pickers use UTC date and time;
+leave Valid from blank to start immediately, and enter either Valid until or
+a positive Valid days number. The server still accepts existing ISO datetime
+submissions. A date-only value submitted outside the picker means 00:00 UTC.
 Test backend reachability from the API container's network context; a host-only
 probe does not prove the container can reach a VPN backend. Configure the VPN
 and firewall deliberately, rather than exposing every backend port publicly.
