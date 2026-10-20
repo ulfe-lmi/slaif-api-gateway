@@ -40,12 +40,12 @@ dev = [
   "pytest-asyncio",
   "pytest-xdist",
   "respx==0.23.1",
-  "openai==3.14.1",
+  "openai==3.34.0",
   "playwright",
   "testcontainers[postgres]",
   "hypothesis",
   "jsonschema>=4.23,<5",
-  "ruff==0.16.7",
+  "ruff==0.17.1",
 ]
 
 [project.scripts]
