@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.163.0",
+  "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+  "source_contract_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+  "transport": "isolated synthetic localhost, no real credential or provider",
+  "request_max_retries": 0,
+  "stream_max_retries": 0,
+  "cases": [
+    {
+      "phase": "before_first_event",
+      "http_status": 400,
+      "ui_message": "Synthetic upstream rejection.",
+      "generic_closed_before_completion": false
+    },
+    {
+      "phase": "after_output",
+      "http_status": 200,
+      "terminal_event": "response.failed",
+      "ui_message": "stream disconnected before completion: Synthetic terminal stream failure.",
+      "generic_closed_before_completion": false
+    }
+  ],
+  "scope": "Direct interactive client observations; midstream provider failures can still be retried under normal client retry policy. No success completion was fabricated."
+}

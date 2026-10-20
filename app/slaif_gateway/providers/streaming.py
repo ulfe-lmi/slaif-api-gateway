@@ -1931,6 +1931,8 @@ def format_responses_error_event(
     code: str | None,
     param: str | None = None,
     request_id: str | None = None,
+    response_id: str | None = None,
+    sequence_number: int = 0,
 ) -> str:
     """Format a safe Responses typed error event for an already-open stream."""
     payload: dict[str, object | None] = {
@@ -1938,8 +1940,19 @@ def format_responses_error_event(
         "message": message,
         "code": code,
         "param": param,
-        "sequence_number": 0,
+        "sequence_number": sequence_number,
     }
+    if response_id is not None:
+        payload = {
+            "type": "response.failed",
+            "sequence_number": sequence_number,
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "status": "failed",
+                "error": {"code": code, "message": message},
+            },
+        }
     if request_id is not None:
         payload["request_id"] = request_id
     return format_sse_data(json.dumps(payload, separators=(",", ":")))

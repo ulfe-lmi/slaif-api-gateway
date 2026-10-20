@@ -1058,3 +1058,15 @@ install them. No database migration is needed. Upgrade key pins explicitly;
 see the [Qwen runbook](runbooks/codex-qwen38.md),
 [clean client examples](../examples/codex/qwen38-27b/README.md), and
 [bounded verification record](verification/codex-qwen38-live-smoke.md).
+
+
+### Responses failure transport boundary
+
+Responses forwarding defers public HTTP headers until the first validated event.
+Pre-event provider failures preserve the established non-2xx JSON mapping;
+post-event failures use the actual provider response identity in a terminal
+`response.failed` event when available, with monotonic sequence numbering.
+No success or response identity is fabricated. The native-vLLM codec validates
+completed and replayed function arguments as bounded, finite JSON objects before
+marking a call complete or serializing history. It does not repair malformed
+arguments or grant new execution authority. See the [Responses failure boundary](responses-compatibility.md#failure-before-and-after-streaming-starts).

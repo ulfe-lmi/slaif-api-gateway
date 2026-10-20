@@ -1098,3 +1098,29 @@ install them. No database migration is needed. Upgrade key pins explicitly;
 see the [Qwen runbook](runbooks/codex-qwen38.md),
 [clean client examples](../examples/codex/qwen38-27b/README.md), and
 [bounded verification record](verification/codex-qwen38-live-smoke.md).
+
+
+## Failure before and after streaming starts
+
+The gateway defers HTTP response headers until the first validated public event
+is available. A provider rejection or timeout before that point returns the
+existing OpenAI-shaped non-2xx JSON response, preserving its mapped status and
+error code. Admission, accounting and concurrency cleanup still run once.
+
+After public output starts, the gateway cannot change the HTTP status. When the
+provider has supplied a validated response ID, failure is emitted as a terminal
+`response.failed` event with that same ID and a sequence number greater than
+all observed provider events. Unknown IDs are never fabricated; without an ID,
+the existing typed error event remains the fallback. Failures never create a
+successful `response.completed`, `[DONE]`, or committed replay references.
+Client disconnects close the producer and run existing shielded cleanup.
+
+The native-vLLM transport requires complete function-call arguments to be JSON
+objects. Invalid, duplicate-key, nonfinite, scalar or truncated arguments are
+rejected before marking a call complete or replaying it upstream. Malformed
+historical arguments return a fixed HTTP-400 error directing the client to a
+new conversation or to rewind before the interrupted call. History is never
+silently removed or repaired. These transport fixes require no key changes or
+compatibility-pin migration.
+
+See [stream-failure verification](verification/2026-10-20-responses-stream-failures.md).
