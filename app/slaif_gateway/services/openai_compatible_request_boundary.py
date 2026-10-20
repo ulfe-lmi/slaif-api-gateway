@@ -80,9 +80,14 @@ def _check_response_images(body: Mapping[str, Any]) -> None:
                 param=f"input[{input_index}].image_url",
             )
             continue
-        if item.get("type") != "message" and "role" not in item:
+        if item.get("type") in {"function_call_output", "custom_tool_call_output"}:
+            content = item.get("output")
+            content_field = "output"
+        elif item.get("type") == "message" or "role" in item:
+            content = item.get("content")
+            content_field = "content"
+        else:
             continue
-        content = item.get("content")
         if not isinstance(content, list):
             continue
         for part_index, part in enumerate(content):
@@ -90,7 +95,7 @@ def _check_response_images(body: Mapping[str, Any]) -> None:
                 continue
             _check_response_image_part(
                 part,
-                param=f"input[{input_index}].content[{part_index}].image_url",
+                param=f"input[{input_index}].{content_field}[{part_index}].image_url",
             )
 
 

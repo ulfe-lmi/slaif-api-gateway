@@ -125,6 +125,7 @@ from slaif_gateway.services.openai_compatible_request_boundary import (
     OpenAICompatibleRequestBoundaryError,
     enforce_openai_compatible_request_boundary,
 )
+from slaif_gateway.services.media_input_estimation import apply_media_input_estimate
 from slaif_gateway.services.request_policy import ChatCompletionRequestPolicy
 from slaif_gateway.services.route_resolution import RouteResolutionService
 from slaif_gateway.services.routing_errors import RouteResolutionError
@@ -224,6 +225,7 @@ async def handle_chat_completion(
     try:
         policy_result = policy.apply(
             body,
+            defer_media_limit=True,
             capability_policy_mode=authenticated_key.capability_policy_mode,
         )
     except RequestPolicyError as exc:
@@ -236,6 +238,10 @@ async def handle_chat_completion(
         policy_result=policy_result,
         request=request,
     )
+    try:
+        policy_result = apply_media_input_estimate(policy_result, route_capabilities=route.capabilities, input_ceiling=settings.HARD_MAX_INPUT_TOKENS)
+    except RequestPolicyError as exc:
+        raise openai_error_from_request_policy_error(exc) from exc
     try:
         enforce_openai_compatible_request_boundary(
             policy_result.effective_body,
@@ -996,6 +1002,7 @@ def _revalidate_chat_completion_after_wait(
         try:
             new_policy_result = ChatCompletionRequestPolicy(settings=settings).apply(
                 body,
+                defer_media_limit=True,
                 capability_policy_mode=new_key.capability_policy_mode,
             )
         except RequestPolicyError as exc:
@@ -1007,6 +1014,10 @@ def _revalidate_chat_completion_after_wait(
             policy_result=new_policy_result,
             request=request,
         )
+        try:
+            new_policy_result = apply_media_input_estimate(new_policy_result, route_capabilities=new_route.capabilities, input_ceiling=settings.HARD_MAX_INPUT_TOKENS)
+        except RequestPolicyError as exc:
+            raise openai_error_from_request_policy_error(exc) from exc
         try:
             enforce_openai_compatible_request_boundary(
                 new_policy_result.effective_body,

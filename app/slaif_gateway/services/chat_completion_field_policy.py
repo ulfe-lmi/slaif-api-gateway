@@ -249,6 +249,8 @@ def _finding_for_message_content(messages: Any) -> ChatCompletionFieldFinding | 
             part_type = part.get("type")
             if part_type == "text":
                 continue
+            if part_type == "video_url":
+                continue
             if part_type == "image_url":
                 continue
             if part_type == "file":

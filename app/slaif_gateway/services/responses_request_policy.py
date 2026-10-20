@@ -59,6 +59,7 @@ from slaif_gateway.modules.contracts import ResponsesClientPolicySpec
 from slaif_gateway.config import Settings
 from slaif_gateway.schemas.policy import ResponsesPolicyResult
 from slaif_gateway.services.input_token_estimation import canonical_json_bytes
+from slaif_gateway.services.media_input_estimation import apply_media_input_estimate, text_only_input_estimate
 from slaif_gateway.services.policy_errors import RequestPolicyError
 from slaif_gateway.services.responses_route_capabilities import (
     KNOWN_RESPONSES_CAPABILITIES,
@@ -197,6 +198,7 @@ class ResponsesRequestPolicy:
         self,
         body: Mapping[str, Any],
         *,
+        defer_media_limit: bool = False,
         allow_store: bool = False,
         allow_codex_request_envelope: bool = False,
         allow_codex_client_tools: bool = False,
@@ -426,7 +428,8 @@ class ResponsesRequestPolicy:
             if allow_codex_extended_limits
             else self._settings.HARD_MAX_INPUT_TOKENS
         )
-        if estimated_input_tokens > input_ceiling:
+        preliminary = text_only_input_estimate(estimated_input_tokens, effective_body) if defer_media_limit else estimated_input_tokens
+        if preliminary > input_ceiling:
             _raise(
                 "input",
                 "input_token_limit_exceeded",
@@ -4224,6 +4227,7 @@ def apply_codex_route_limits(
     """Finalize fully gated Codex limits after route resolution and before side effects."""
 
     limits = parse_codex_route_limits(route_capabilities)
+    policy_result = apply_media_input_estimate(policy_result, route_capabilities=route_capabilities, input_ceiling=settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS)
     if limits.default_max_output_tokens > settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS:
         _raise(
             "model",

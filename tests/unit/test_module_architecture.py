@@ -49,6 +49,7 @@ def test_module_registries_are_literal_and_fail_closed() -> None:
         "facial_scoring",
         "local-coding-v1",
         "local-coding-vLLM",
+        "vllm-chat-video-v1",
     }
     assert ClientServerPair("openai-default", FACIAL_SCORING_SERVER_MODULE_ID) in CLIENT_SERVER_COMPATIBILITY
     assert ClientServerPair("openai-default", "local-coding-v1") in CLIENT_SERVER_COMPATIBILITY

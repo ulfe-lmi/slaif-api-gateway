@@ -16,6 +16,7 @@ from slaif_gateway.services.chat_completion_request_caps import (
 )
 from slaif_gateway.services.hosted_tool_policy import enforce_chat_completion_capability_policy
 from slaif_gateway.services.input_token_estimation import estimate_chat_completion_input_tokens
+from slaif_gateway.services.media_input_estimation import text_only_input_estimate
 from slaif_gateway.services.policy_errors import (
     AmbiguousOutputTokenLimitError,
     ChoiceCountLimitExceededError,
@@ -40,6 +41,7 @@ class ChatCompletionRequestPolicy:
         body: Mapping[str, Any],
         *,
         capability_policy_mode: str = "standard",
+        defer_media_limit: bool = False,
     ) -> ChatCompletionPolicyResult:
         effective_body = copy.deepcopy(dict(body))
         enforce_chat_completion_field_policy(
@@ -74,7 +76,8 @@ class ChatCompletionRequestPolicy:
                 param="request",
             ) from exc
 
-        if input_estimate.total_input_tokens_estimate > self._settings.HARD_MAX_INPUT_TOKENS:
+        preliminary = text_only_input_estimate(input_estimate.total_input_tokens_estimate, effective_body) if defer_media_limit else input_estimate.total_input_tokens_estimate
+        if preliminary > self._settings.HARD_MAX_INPUT_TOKENS:
             raise InputTokenLimitExceededError(
                 (
                     "Estimated input size exceeds the configured hard maximum "

@@ -1134,3 +1134,9 @@ See [stream-failure verification](verification/2026-10-20-responses-stream-failu
 
 Parallel-history verification and unchanged-key deployment evidence are recorded
 in [the follow-up report](verification/2026-10-20-parallel-tool-replay.md).
+
+
+The opt-in correction for encoded image estimates and bounded native-vLLM
+Chat video input is described in [media input estimation](media-input-estimation.md).
+Existing generic/unknown provider video behavior remains fail-closed; this
+exception does not enable video generation or direct Codex video input.

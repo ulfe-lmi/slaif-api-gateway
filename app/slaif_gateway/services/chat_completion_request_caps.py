@@ -112,6 +112,7 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
             "The request includes too many Chat Completions messages.",
         )
 
+    total_videos = 0
     total_images = 0
     total_files = 0
     total_audio_inputs = 0
@@ -144,6 +145,10 @@ def _validate_messages(value: Any, *, settings: Settings) -> None:
             total_files_seen=total_files,
             total_audio_inputs_seen=total_audio_inputs,
         )
+        content = message.get("content")
+        total_videos += sum(isinstance(p, Mapping) and p.get("type") == "video_url" for p in content) if isinstance(content, list) else 0
+        if total_videos > settings.CHAT_MAX_VIDEOS_PER_REQUEST:
+            _raise("messages", "chat_video_count_exceeded", "Too many video input parts.")
         total_images += _count_image_parts(message.get("content"))
         if total_images > settings.CHAT_MAX_IMAGES_PER_REQUEST:
             _raise(
@@ -214,6 +219,9 @@ def _validate_message_content(
                 "Chat Completions message content parts must be text strings or text objects.",
             )
         if part.get("type") != "text":
+            if part.get("type") == "video_url":
+                _validate_video_part(part, role=message_role, param=f"messages[{message_index}].content[{part_index}]", settings=settings)
+                continue
             if part.get("type") == "image_url":
                 image_parts += 1
                 _validate_image_part(
@@ -1748,3 +1756,21 @@ def _raise(param: str, error_code: str, safe_message: str) -> None:
         param=param,
         error_code=error_code,
     )
+
+
+def _validate_video_part(part, *, role, param, settings):
+    if role != "user" or set(part) != {"type", "video_url"}:
+        _raise(param, "chat_video_input_invalid", "Video input is a user-only typed video_url part.")
+    value = part.get("video_url")
+    if not isinstance(value, Mapping) or set(value) != {"url"} or not isinstance(value.get("url"), str):
+        _raise(param, "chat_video_input_invalid", "Video input requires exactly one URL string.")
+    url = value["url"]
+    if len(url.encode("utf-8")) > settings.CHAT_MAX_VIDEO_DATA_URL_BYTES:
+        _raise(param, "chat_video_data_url_too_large", "Video input exceeds the byte limit.")
+    header, separator, encoded = url.partition(",")
+    if not separator or header not in {"data:video/mp4;base64", "data:video/webm;base64"} or not encoded:
+        _raise(param, "chat_video_input_invalid", "Video input requires an inline MP4 or WebM base64 data URL.")
+    try:
+        base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        _raise(param, "chat_video_input_invalid", "Video input requires valid base64 data.")
