@@ -115,5 +115,28 @@
       "tool_outputs": 2
     }
   ],
-  "recovery": "The same failed synthetic conversation resumed successfully without rewriting saved history."
+  "recovery": "The same failed synthetic conversation resumed successfully without rewriting saved history.",
+  "live": {
+    "client_version": "0.162.1",
+    "mode": "exec",
+    "model": "qwen3.8-27b",
+    "provider": "neumann",
+    "history_sequence": [
+      "reasoning",
+      "function_call:A",
+      "function_call:B",
+      "function_call_output:A",
+      "function_call_output:B",
+      "reasoning",
+      "message:assistant"
+    ],
+    "parallel_calls": 2,
+    "completed_turn": true,
+    "resumed_followup": true,
+    "successful_ledger_rows": 3,
+    "accounting_status": "finalized",
+    "reservation_status": "finalized",
+    "source_commit": "58c45db770b55c0b449b037af2d9a4f336b89aaa",
+    "keys_unchanged": 42
+  }
 }
