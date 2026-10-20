@@ -8,6 +8,12 @@ This matrix summarizes implemented behavior for reviewers. It describes the curr
 See [the detailed normative agentic-client integration contract](../AGENTIC_CLIENT_INTEGRATION.md)
 for exact-profile identity, default-denied dialects, and qualification rules.
 
+External schema-2 [client compatibility presets](client-compatibility-presets.md)
+own optional metadata rules and bounded dialect settings. The engine, ordinary
+Responses contract, and independent authority/accounting gates remain fixed.
+Shipped 0.162.1/0.163.0 presets are exact data profiles, not a broad client or
+production-certification claim; packaged revision 8 remains the frozen fallback.
+
 For the canonical RC2 target classification, see
 [`rc2-feature-scope.md`](rc2-feature-scope.md). This document records current
 implemented behavior only; a green harness on current `main` means

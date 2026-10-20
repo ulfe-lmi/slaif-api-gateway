@@ -6,6 +6,7 @@ import base64
 import binascii
 import copy
 import re
+from slaif_gateway.modules.compatibility_rules import CompatibilityRuleError, MAX_VALUE_BYTES
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, NoReturn
@@ -190,6 +191,7 @@ class ResponsesRequestPolicy:
         self._settings = settings
         self._codex_spec = client_spec
         self._active_scope: Mapping[str, Any] | None = None
+        self._compatibility_metadata_bytes = 0
 
     def apply(
         self,
@@ -210,6 +212,7 @@ class ResponsesRequestPolicy:
         scope: Mapping[str, Any] | None = None,
     ) -> ResponsesPolicyResult:
         self._active_scope = scope
+        self._compatibility_metadata_bytes = 0
         effective_body = copy.deepcopy(dict(body))
         codex_client_tools_requested = responses_codex_client_tools_requested(effective_body)
         if codex_client_tools_requested and not (
@@ -251,6 +254,12 @@ class ResponsesRequestPolicy:
                 "responses_codex_encrypted_reasoning_replay_not_allowed",
                 "Codex encrypted reasoning replay is not enabled for this gateway key.",
             )
+        request_extensions: dict[str, Any] = {}
+        request_extension_bytes = 0
+        if allow_codex_request_envelope and allow_codex_client_tools and allow_codex_streaming_tool_events:
+            effective_body, request_extensions, request_extension_bytes = self._split_dialect_fields(
+                effective_body, "request", param=""
+            )
         self._reject_unknown_fields(effective_body)
 
         model = effective_body.get("model")
@@ -284,6 +293,7 @@ class ResponsesRequestPolicy:
             codex_top_level_tool_taxonomy=continuation_taxonomy,
         )
         effective_body["input"] = canonical_input
+        input_material_bytes += request_extension_bytes
         instructions = self._validate_optional_string(
             effective_body.get("instructions"),
             param="instructions",
@@ -423,6 +433,7 @@ class ResponsesRequestPolicy:
                 "Estimated Responses input size exceeds the configured hard maximum.",
             )
 
+        effective_body.update(request_extensions)
         return ResponsesPolicyResult(
             effective_body=effective_body,
             requested_output_tokens=output_tokens,
@@ -1016,7 +1027,71 @@ class ResponsesRequestPolicy:
             )
         return canonical_items, total_material_bytes
 
+    def _split_dialect_fields(
+        self, value: Mapping[str, Any], scope: str, *, param: str
+    ) -> tuple[dict[str, Any], dict[str, Any], int]:
+        if self._codex_spec is None:
+            return dict(value), {}, 0
+        try:
+            stripped, preserved, size = self._codex_spec.dialect_rules.split(value, scope)
+        except CompatibilityRuleError as exc:
+            field_param = f"{param}.{exc.field}" if param and exc.field else (exc.field or param)
+            raise ResponsesRequestPolicyError(
+                "This field does not match the selected client compatibility preset.",
+                param=field_param,
+                error_code="responses_dialect_value_invalid",
+            ) from None
+        self._compatibility_metadata_bytes += size
+        if self._compatibility_metadata_bytes > MAX_VALUE_BYTES:
+            raise ResponsesRequestPolicyError(
+                "Client compatibility metadata exceeds the gateway size limit.",
+                param=param or "input",
+                error_code="responses_dialect_metadata_too_large",
+            )
+        return stripped, preserved, size
+
     def _validate_input_item(
+        self, item: Any, *, index: int, **options: Any
+    ) -> tuple[dict[str, Any], int, int, int, int, int, int]:
+        """Interpret preset metadata around, never instead of, core validation."""
+        enabled = (
+            self._codex_spec is not None
+            and options.get("allow_codex_request_envelope", False)
+            and options.get("allow_codex_client_tools", False)
+            and options.get("allow_codex_streaming_tool_events", False)
+        )
+        if not enabled or not isinstance(item, Mapping):
+            return self._validate_input_item_core(item, index=index, **options)
+        item_type = item.get("type")
+        role = item.get("role")
+        scope = f"message.{role}" if item_type == "message" else f"item.{item_type}"
+        stripped, preserved, size = self._split_dialect_fields(item, scope, param=f"input[{index}]")
+        parts = []
+        content = stripped.get("content")
+        if item_type == "message" and isinstance(content, list):
+            content = list(content)
+            for part_index, part in enumerate(content):
+                if not isinstance(part, Mapping):
+                    continue
+                part_type = part.get("type")
+                if part_type in ("input_text", "input_image", "input_file", "input_audio") or (
+                    part_type == "output_text" and role == "assistant"
+                ):
+                    content[part_index], extras, extra_bytes = self._split_dialect_fields(
+                        part, f"part.{part_type}", param=f"input[{index}].content[{part_index}]"
+                    )
+                    parts.append((part_index, extras))
+                    size += extra_bytes
+            stripped["content"] = content
+        canonical, text_bytes, material_bytes, *remaining = self._validate_input_item_core(
+            stripped, index=index, **options
+        )
+        canonical.update(preserved)
+        for part_index, extras in parts:
+            canonical["content"][part_index].update(extras)
+        return (canonical, text_bytes + size, material_bytes + size, *remaining)
+
+    def _validate_input_item_core(
         self,
         item: Any,
         *,
@@ -2151,6 +2226,9 @@ class ResponsesRequestPolicy:
             else self._settings.RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES
         )
         canonical_output: str | list[dict[str, str]]
+        image_parts = 0
+        image_data_bytes = 0
+        image_material_bytes = 0
         if isinstance(output, str):
             self._validate_string_bytes(
                 output,
@@ -2159,7 +2237,7 @@ class ResponsesRequestPolicy:
                 code="responses_codex_tool_roundtrip_too_large",
             )
             canonical_output = output
-        elif custom and isinstance(output, list) and 0 < len(output) <= 8:
+        elif (custom or self._codex_spec.allow_tool_output_images) and isinstance(output, list) and 0 < len(output) <= 8:
             canonical_parts: list[dict[str, str]] = []
             total_text_bytes = 0
             for part_index, part in enumerate(output):
@@ -2170,6 +2248,15 @@ class ResponsesRequestPolicy:
                         "responses_codex_tool_roundtrip_invalid",
                         "Codex custom tool output parts must be bounded text objects.",
                     )
+                if self._codex_spec.allow_tool_output_images and part.get("type") == "input_image":
+                    canonical_part, part_bytes, data_bytes = self._validate_input_image_part(
+                        part, param=part_param, role="user"
+                    )
+                    image_parts += 1
+                    image_data_bytes += data_bytes
+                    image_material_bytes += part_bytes
+                    canonical_parts.append(canonical_part)
+                    continue
                 unknown_part_fields = set(part) - self._codex_spec.tool_output_content_fields
                 text = part.get("text")
                 if (
@@ -2208,7 +2295,7 @@ class ResponsesRequestPolicy:
                 param=f"{param}.id",
             )
         material_bytes = len(canonical_json_bytes(canonical))
-        return canonical, material_bytes, material_bytes, 0, 0, 0, 0
+        return canonical, material_bytes - image_material_bytes, material_bytes, image_parts, image_data_bytes, 0, 0
 
     def _validate_function_call_output_item(
         self,
@@ -4933,7 +5020,9 @@ def _input_contains_image_input(value: Any) -> bool:
     for item in value:
         if not isinstance(item, Mapping):
             continue
-        content = item.get("content")
+        content = (item.get("output") if item.get("type") in {
+            "function_call_output", "custom_tool_call_output"
+        } else item.get("content"))
         if not isinstance(content, list):
             continue
         for part in content:

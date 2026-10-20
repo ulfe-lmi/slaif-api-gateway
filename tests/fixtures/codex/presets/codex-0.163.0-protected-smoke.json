@@ -1,0 +1,76 @@
+{
+  "source_revision": "1a4c4b4c9441484eb8f08784a6af6573d55489ce",
+  "cli_version": "0.163.0",
+  "preset_revision": "11",
+  "preset_digest": "b0012de33a3beade9cf1b16c1cb92865146570e52980f7da0f6015efce4f22d9",
+  "model": "qwen3.8-27b",
+  "provider": "neumann",
+  "started_at": "2026-10-20T12:41:29.178947+00:00",
+  "completed_at": "2026-10-20T12:43:23.677003+00:00",
+  "sequence": [
+    "local_tool",
+    "first_final",
+    "second_user_turn",
+    "second_final"
+  ],
+  "markers": [
+    "PRESET_A100_TOOL_OK",
+    "PRESET_A100_FIRST_OK",
+    "PRESET_A100_SECOND_OK"
+  ],
+  "ledger": [
+    {
+      "model": "qwen3.8-27b",
+      "resolved_model": "qwen3.8-27b",
+      "provider": "neumann",
+      "success": true,
+      "accounting": "finalized",
+      "http_status": 200,
+      "tokens": 5418,
+      "started_at": "2026-10-20T12:41:51.367909+00:00",
+      "reservation_status": "finalized"
+    },
+    {
+      "model": "qwen3.8-27b",
+      "resolved_model": "qwen3.8-27b",
+      "provider": "neumann",
+      "success": true,
+      "accounting": "finalized",
+      "http_status": 200,
+      "tokens": 5513,
+      "started_at": "2026-10-20T12:42:00.905257+00:00",
+      "reservation_status": "finalized"
+    },
+    {
+      "model": "qwen3.8-27b",
+      "resolved_model": "qwen3.8-27b",
+      "provider": "neumann",
+      "success": true,
+      "accounting": "finalized",
+      "http_status": 200,
+      "tokens": 5564,
+      "started_at": "2026-10-20T12:42:34.840191+00:00",
+      "reservation_status": "finalized"
+    }
+  ],
+  "preserved_limits": {
+    "requests_per_window": 1,
+    "concurrency": 1,
+    "window": {
+      "window_seconds": 10
+    },
+    "wait": {
+      "mode": "wait",
+      "max_wait_seconds": 120,
+      "max_waiting_requests": 2
+    }
+  },
+  "credentials_preserved": true,
+  "configuration_defaults": {
+    "model": "qwen3.8-27b",
+    "sandbox_mode": "workspace-write",
+    "approval_policy": "on-request"
+  },
+  "test_permission_override": "--yolo on this isolated smoke only",
+  "scope": "bounded interactive multi-turn smoke; no general Codex qualification"
+}

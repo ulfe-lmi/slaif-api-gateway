@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from re import Pattern
 from typing import Callable
 
+from slaif_gateway.modules.compatibility_rules import DialectRules
+
 DEFAULT_CLIENT_MODULE_ID = "openai-default"
 DEFAULT_CLIENT_MODULE_VERSION = "1"
 
@@ -110,6 +112,8 @@ class ResponsesClientPolicySpec:
     allow_sparse_visible_reasoning: bool = False
     allow_empty_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
+    allow_tool_output_images: bool = False
+    dialect_rules: DialectRules = field(default_factory=DialectRules)
 
 
 @dataclass(frozen=True, slots=True)

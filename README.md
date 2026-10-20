@@ -28,6 +28,10 @@ assumes one organization per self-hosted deployment.
 
 ## Get started
 
+For Codex dialect settings, use [external client compatibility presets](docs/client-compatibility-presets.md).
+The bounded engine loads versioned JSON policy at startup; optional metadata
+allowances can be changed without another source patch or image rebuild.
+
 - **[QUICKSTART.md](QUICKSTART.md)** — boot the Gateway with no provider
   credentials, log in as admin, then send your first bounded model call
   using an explicitly configured server-side provider credential, in one

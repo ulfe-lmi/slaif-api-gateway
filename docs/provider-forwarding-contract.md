@@ -2,6 +2,14 @@
 
 > **Authority:** Current upstream endpoint, header, body, model, and credential-mutation rules
 
+External schema-2 client presets may preserve explicitly described, bounded
+inert metadata, or discard only explicitly described empty/null metadata, after
+all three Codex envelope/tool gates pass. Preserved bytes are included in input
+estimation. Transport encoding, content bounds, route pairing, credentials,
+replay ownership, quotas, and accounting remain code-enforced. Presets cannot
+override core fields or teach a backend a new transport. See
+[client compatibility presets](client-compatibility-presets.md).
+
 This document describes exactly how implemented `/v1/chat/completions`,
 standalone `/v1/audio/*`, `/v1/embeddings`, `POST /v1/realtime/client_secrets`,
 and the current `/v1/responses` subset are forwarded to upstream providers. It

@@ -8,6 +8,12 @@ It contains no hardware, institution, or private host names.
 The [verification record](../verification/codex-qwen38-live-smoke.md) separates
 real gateway/model tests from synthetic fixtures and operator reports.
 
+For optional replay metadata and dialect updates, use the
+[external compatibility preset workflow](../client-compatibility-presets.md).
+Do not add another field-specific source exception. Frozen revision-8 references
+below describe the existing registered model profiles; an operator override has
+its own revision/digest and audited key migration.
+
 ## Gateway setup
 
 1. Configure an explicit `local-coding-v1` Responses route for the public model

@@ -1,5 +1,13 @@
 # Responses Compatibility Contract
 
+Optional client metadata is validated by the bounded schema-2
+[external preset engine](client-compatibility-presets.md), behind all three
+Codex envelope/client-tools/streaming-tool gates. Presets describe allowed
+fields, typed values, empty-only dropping, custom declarations, and existing
+parser modes. Core message/tool/replay validation and PostgreSQL accounting
+remain authoritative. The shipped presets preserve completed assistant status
+and empty output-text annotations; ordinary Responses remains unchanged.
+
 > **Authority:** Current bounded Responses and Conversations behavior
 > **Boundary:** Unknown fields and unsupported provider-side authority fail closed
 

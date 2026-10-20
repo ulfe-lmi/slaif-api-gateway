@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "minimum_revision": 3,
+      "dialect": {
+        "features": {
+          "schema_property_names": false,
+          "sparse_visible_reasoning": false,
+          "empty_visible_reasoning": false,
+          "sparse_function_events": false
+        },
+        "extensions": {},
+        "custom_tools": []
+      }
+    },
+    {
+      "minimum_revision": 4,
+      "dialect": {
+        "features": {
+          "schema_property_names": true,
+          "sparse_visible_reasoning": false,
+          "empty_visible_reasoning": false,
+          "sparse_function_events": false
+        },
+        "extensions": {},
+        "custom_tools": []
+      }
+    },
+    {
+      "minimum_revision": 5,
+      "dialect": {
+        "features": {
+          "schema_property_names": true,
+          "sparse_visible_reasoning": false,
+          "empty_visible_reasoning": false,
+          "sparse_function_events": false
+        },
+        "extensions": {},
+        "custom_tools": [
+          {
+            "namespace": "functions",
+            "name": "apply_patch",
+            "type": "custom"
+          }
+        ]
+      }
+    },
+    {
+      "minimum_revision": 6,
+      "dialect": {
+        "features": {
+          "schema_property_names": true,
+          "sparse_visible_reasoning": true,
+          "empty_visible_reasoning": false,
+          "sparse_function_events": false
+        },
+        "extensions": {},
+        "custom_tools": [
+          {
+            "namespace": "functions",
+            "name": "apply_patch",
+            "type": "custom"
+          }
+        ]
+      }
+    },
+    {
+      "minimum_revision": 7,
+      "dialect": {
+        "features": {
+          "schema_property_names": true,
+          "sparse_visible_reasoning": true,
+          "empty_visible_reasoning": true,
+          "sparse_function_events": false
+        },
+        "extensions": {},
+        "custom_tools": [
+          {
+            "namespace": "functions",
+            "name": "apply_patch",
+            "type": "custom"
+          }
+        ]
+      }
+    },
+    {
+      "minimum_revision": 8,
+      "dialect": {
+        "features": {
+          "schema_property_names": true,
+          "sparse_visible_reasoning": true,
+          "empty_visible_reasoning": true,
+          "sparse_function_events": true
+        },
+        "extensions": {},
+        "custom_tools": [
+          {
+            "namespace": "functions",
+            "name": "apply_patch",
+            "type": "custom"
+          }
+        ]
+      }
+    },
+    {
+      "minimum_revision": 9,
+      "dialect": {
+        "features": {
+          "schema_property_names": true,
+          "sparse_visible_reasoning": true,
+          "empty_visible_reasoning": true,
+          "sparse_function_events": true
+        },
+        "extensions": {
+          "message.assistant": {
+            "status": {
+              "action": "preserve",
+              "value": {
+                "kind": "enum",
+                "values": [
+                  "completed"
+                ]
+              }
+            }
+          }
+        },
+        "custom_tools": [
+          {
+            "namespace": "functions",
+            "name": "apply_patch",
+            "type": "custom"
+          }
+        ]
+      }
+    }
+  ]
+}
