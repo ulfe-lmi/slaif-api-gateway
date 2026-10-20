@@ -7,7 +7,9 @@ suffixes and tool names (finite, known grammar-trait identifiers only), and
 cardinality/schema/byte ceilings that may only *lower* the engine's fixed
 hard caps.  It never contains a tool-name inventory, executable content,
 import paths, arbitrary regular expressions, authority grants, or any field
-outside the exact reviewed schema below.
+outside the exact reviewed schema below. Schema 2 additionally describes
+optional inert metadata through a bounded value-rule grammar and selects known
+parser modes. All such data is included in its canonical identity.
 
 The parser accepts one bounded regular UTF-8 JSON document with a duplicate
 key hook, a nonfinite-value hook, strict types, exact key sets, and literal
@@ -34,9 +36,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from re import Pattern
+from functools import lru_cache
+
+from slaif_gateway.modules.compatibility_rules import (
+    CompatibilityRuleError,
+    DialectRules,
+    parse_dialect_rules,
+)
 
 CODEX_PROFILE_MODULE_ID = "codex-0.162-responses-v1"
 CODEX_PROFILE_SCHEMA_VERSION = 1
+CODEX_PROFILE_SUPPORTED_SCHEMA_VERSIONS = (1, 2)
 # Revisions 1 and 2 are the frozen historical identities; data revisions
 # start at 3.  Revisions are bounded ASCII decimal strings (no leading
 # zeros, at most nine digits) with no compiled upper bound.
@@ -259,6 +269,7 @@ class CodexProfileData:
     max_tool_description_bytes: int
     max_total_description_bytes: int
     max_declaration_bytes: int
+    dialect: DialectRules
     digest: str
 
     def classify_namespace_name(self, name: object) -> str | None:
@@ -297,6 +308,8 @@ class CodexProfileData:
             "max_namespaces": str(self.max_namespaces),
             "max_total_tools": str(self.max_total_tools),
             "max_tools_per_namespace": str(self.max_tools_per_namespace),
+            "dialect_features": ",".join(sorted(self.dialect.features)),
+            "dialect_extension_scopes": ",".join(scope for scope, _ in self.dialect.extensions),
         }
 
 
@@ -343,18 +356,37 @@ def _parse_name_rule(section: Mapping[str, object]) -> CodexProfileNameRule:
     )
 
 
+@lru_cache(maxsize=1)
+def _legacy_dialects() -> tuple[tuple[int, DialectRules], ...]:
+    """Frozen schema-1 behavior; new schema-2 presets bind their own rules."""
+    path = Path(__file__).parent / "clients/profiles/codex_0162_legacy_dialects.json"
+    try:
+        raw = _read_codex_profile_text(path).encode("utf-8")
+        if hashlib.sha256(raw).hexdigest() != "2317b86d83eb7879bb538ec8d1ed1fb6f869c18c6ec3eb97ee29bec7a3a00a5d":
+            raise ValueError
+        document = json.loads(raw)
+        return tuple(
+            (entry["minimum_revision"], parse_dialect_rules(entry["dialect"]))
+            for entry in document["profiles"]
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        raise _fail("dialect_rule_invalid", "The frozen legacy compatibility presets are invalid.") from None
+
+
 def _validate_document(document: object) -> CodexProfileData:
     if not isinstance(document, Mapping):
         raise _fail("schema_invalid", "The Codex compatibility profile is invalid.")
     top = dict(document)
-    if set(top) != _TOP_LEVEL_FIELDS:
+    schema_version = top.get("schema_version")
+    fields = _TOP_LEVEL_FIELDS | {"dialect"} if schema_version == 2 else _TOP_LEVEL_FIELDS
+    if set(top) != fields:
         raise _fail("schema_invalid", "The Codex compatibility profile fields are invalid.")
 
     schema_version = top.get("schema_version")
     if (
         isinstance(schema_version, bool)
         or not isinstance(schema_version, int)
-        or schema_version != CODEX_PROFILE_SCHEMA_VERSION
+        or schema_version not in CODEX_PROFILE_SUPPORTED_SCHEMA_VERSIONS
     ):
         raise _fail("schema_invalid", "The Codex compatibility profile version is unsupported.")
     if top.get("module_id") != CODEX_PROFILE_MODULE_ID:
@@ -483,9 +515,24 @@ def _validate_document(document: object) -> CodexProfileData:
     for field, hard_cap in _LIMIT_HARD_CAPS.items():
         limit_values[field] = _require_int(limits.get(field), 1, hard_cap, "limit_above_hard_cap")
 
+    try:
+        if schema_version == 2:
+            dialect = parse_dialect_rules(top["dialect"])
+        else:
+            dialect = next(
+                rules for minimum, rules in reversed(_legacy_dialects())
+                if int(revision) >= minimum
+            )
+    except CompatibilityRuleError as exc:
+        raise _fail(exc.code, "The Codex compatibility preset dialect rules are invalid.") from None
+    if any(
+        namespace not in builtin_names or not builtin_name_rule.is_allowed(name)
+        for namespace, name, _ in dialect.custom_tools
+    ):
+        raise _fail("dialect_rule_invalid", "Custom dialect tools must use declared builtin namespaces.")
     digest = canonical_profile_digest(top)
     return CodexProfileData(
-        schema_version=CODEX_PROFILE_SCHEMA_VERSION,
+        schema_version=schema_version,
         module_id=CODEX_PROFILE_MODULE_ID,
         revision=revision,
         cli_version=cli_version,
@@ -507,6 +554,7 @@ def _validate_document(document: object) -> CodexProfileData:
         max_tool_description_bytes=limit_values["max_tool_description_bytes"],
         max_total_description_bytes=limit_values["max_total_description_bytes"],
         max_declaration_bytes=limit_values["max_declaration_bytes"],
+        dialect=dialect,
         digest=digest,
     )
 
@@ -532,7 +580,7 @@ def parse_codex_profile_data(text: str) -> CodexProfileData:
     return _validate_document(document)
 
 
-def load_codex_profile_file(path: object) -> CodexProfileData:
+def _read_codex_profile_text(path: object) -> str:
     """Load one bounded operator profile file; no silent fallback on failure.
 
     Opens the path once in non-blocking read mode, verifies through ``fstat``
@@ -587,7 +635,12 @@ def load_codex_profile_file(path: object) -> CodexProfileData:
         raise _fail(
             "malformed_json", "The Codex compatibility profile is not valid JSON."
         ) from None
-    return parse_codex_profile_data(text)
+    return text
+
+
+def load_codex_profile_file(path: object) -> CodexProfileData:
+    """Validate one bounded document from one regular-file snapshot."""
+    return parse_codex_profile_data(_read_codex_profile_text(path))
 
 
 _PACKAGED_DEFAULT_PROFILE_PATH = (
@@ -598,6 +651,52 @@ _PACKAGED_DEFAULT_PROFILE_PATH = (
 def load_default_codex_profile() -> CodexProfileData:
     """Load the packaged default profile DATA shipped with the engine."""
     return load_codex_profile_file(_PACKAGED_DEFAULT_PROFILE_PATH)
+
+
+def list_codex_presets() -> tuple[tuple[str, Path, CodexProfileData], ...]:
+    """Inspect shipped presets offline; neither activate nor mutate anything."""
+    root = _PACKAGED_DEFAULT_PROFILE_PATH.parent
+    try:
+        data = (root / "presets.json").read_bytes()
+        if len(data) > MAX_PROFILE_FILE_BYTES:
+            raise ValueError
+        document = json.loads(data, object_pairs_hook=_reject_duplicate_pairs)
+        if not isinstance(document, dict) or set(document) != {"schema_version", "presets"}:
+            raise ValueError
+        if type(document["schema_version"]) is not int or document["schema_version"] != 1:
+            raise ValueError
+        entries = document["presets"]
+        if not isinstance(entries, list) or not 1 <= len(entries) <= 16:
+            raise ValueError
+        result = []
+        names = set()
+        for entry in entries:
+            if not isinstance(entry, dict) or set(entry) != {"name", "file"}:
+                raise ValueError
+            name, filename = entry["name"], entry["file"]
+            if (
+                not isinstance(name, str) or re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,79}", name) is None
+                or name in names or not isinstance(filename, str)
+                or re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,79}\.json", filename) is None
+                or ".." in filename
+            ):
+                raise ValueError
+            path = root / filename
+            result.append((name, path, load_codex_profile_file(path)))
+            names.add(name)
+        return tuple(result)
+    except (OSError, ValueError, TypeError, KeyError):
+        raise _fail("preset_index_invalid", "The shipped compatibility preset index is invalid.") from None
+
+
+def read_codex_preset(name: str) -> str:
+    """Return a validated shipped document by literal preset name."""
+    for candidate, path, _ in list_codex_presets():
+        if candidate == name:
+            text = _read_codex_profile_text(path)
+            parse_codex_profile_data(text)
+            return text
+    raise _fail("preset_unknown", "The requested compatibility preset is unavailable.")
 
 
 __all__ = [

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "presets": [
+    {
+      "name": "codex-0.162.1",
+      "file": "codex-0.162.1.json"
+    },
+    {
+      "name": "codex-0.163.0",
+      "file": "codex-0.163.0.json"
+    }
+  ]
+}

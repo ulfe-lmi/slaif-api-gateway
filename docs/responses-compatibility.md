@@ -1,12 +1,12 @@
 # Responses Compatibility Contract
 
-The opt-in Codex revision-9 assistant-history candidate accepts only an explicit
-assistant message with `status: "completed"`, behind all three Codex envelope,
-client-tools, and streaming-tool gates. Existing bounded text validation and
-metering still apply, and status is preserved in transient forwarding. Ordinary
-Responses and packaged revision 8 remain unchanged. See
-[Codex compatibility](codex-compatibility.md) for the candidate qualification and
-migration boundary.
+Optional client metadata is validated by the bounded schema-2
+[external preset engine](client-compatibility-presets.md), behind all three
+Codex envelope/client-tools/streaming-tool gates. Presets describe allowed
+fields, typed values, empty-only dropping, custom declarations, and existing
+parser modes. Core message/tool/replay validation and PostgreSQL accounting
+remain authoritative. The shipped presets preserve completed assistant status
+and empty output-text annotations; ordinary Responses remains unchanged.
 
 > **Authority:** Current bounded Responses and Conversations behavior
 > **Boundary:** Unknown fields and unsupported provider-side authority fail closed

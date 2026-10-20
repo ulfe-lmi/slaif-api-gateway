@@ -104,6 +104,8 @@ PostgreSQL evidence and do not call providers to reconstruct an outcome.
 slaif-gateway codex inspect|profile
 slaif-gateway codex upgrade-key-module
 slaif-gateway codex rollback-key-module
+slaif-gateway codex presets
+slaif-gateway codex export-preset
 slaif-gateway codex inspect-profile-file
 slaif-gateway codex show-profile
 slaif-gateway codex migrate-key-profile
@@ -128,6 +130,11 @@ error. The default is a dry run;
 record in one atomic PostgreSQL transaction. The commands change no schema,
 no quota, no key policy, and no route or pricing data. Unexpected failures
 render a fixed generic safe error and never echo exception details.
+
+`codex presets [--json]` lists validated shipped compatibility presets.
+`codex export-preset <name> --output <path>` copies one to a new operator-owned
+file without overwriting or activating it. See
+[external preset configuration](client-compatibility-presets.md).
 
 `codex inspect-profile-file <path> [--json]` validates a candidate Codex
 0.162 compatibility profile DATA file completely offline (bounded regular

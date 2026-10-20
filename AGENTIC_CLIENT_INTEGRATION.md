@@ -51,6 +51,15 @@ initial declaration prefix is lowered into the top-level namespace `tools`
 array before final serialization and HMAC signing and then discarded with its
 protocol ID, preserving the remaining input.
 
+Schema-2 external presets are the approved data boundary for optional inert
+metadata, typed value constraints, empty-only normalization, custom declaration
+facts, and selection among existing bounded parser/state-machine modes. These
+rules are digest-bound and cannot override core fields, identity, authorization,
+replay ownership, transport semantics, hard caps, or accounting. Schema-1
+profiles use checksum-frozen historical data. New compatibility vocabulary must
+use the preset interpreter rather than field-specific source exceptions or
+revision-number conditionals. See [client compatibility presets](docs/client-compatibility-presets.md).
+
 ### 0.1 Normative language
 
 The words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, and **MAY** are normative.
@@ -356,9 +365,11 @@ literals/prefixes, finite grammar traits, cardinality/schema/description/
 declaration ceilings, revision and provenance) is a separate shipped JSON
 document: an operator may replace that trusted data file and restart
 processes without a source change or rebuild. That distinction is narrow:
-the data vocabulary is finite, validated at bootstrap, and cannot grant
+the data rule language is finite, validated at bootstrap, and cannot grant
 permissions, endpoints, providers, hosted authority, executable code,
-import paths, or unbounded regexes.
+import paths, or unbounded regexes. Schema-2 rules may describe additional
+optional inert fields within the fixed value grammar and protected-field
+boundaries; selecting a bounded parser mode never replaces its state machine.
 
 ### 3.3 Server-side selection only
 

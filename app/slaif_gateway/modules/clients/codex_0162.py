@@ -18,7 +18,7 @@ The executable engine (module ID ``codex-0.162-responses-v1``) is
 one-time-upgraded to be data-driven: its identity and its namespace/tool
 grammar and ceilings come from a validated Codex compatibility profile DATA
 snapshot.  The packaged default profile
-``clients/profiles/codex_0162.json`` (revision 3) is loaded once when this
+``clients/profiles/codex_0162.json`` (frozen revision 8) is loaded once when this
 module is imported and, in a deployment that configures an operator profile
 file, that file is loaded once at process bootstrap before any traffic.
 The effective module version is the validated data revision and the
@@ -29,8 +29,9 @@ closed and are repaired exclusively through the explicit audited key
 migration.  The historical revision 1 and 2 identities are frozen literal
 tuples retained for that audited migration/rollback path only; they are not
 live runtime decoders and no compiled policy documents for them exist in
-this module.  Data can never grant permissions, alter identity, replay,
-signing, privacy, streams, or accounting, and it is never re-read per
+this module.  Data cannot grant permissions or replace identity, replay, signing, privacy,
+stream-state-machine, or accounting code. Schema-2 data selects bounded
+metadata rules and existing parser modes, and it is never re-read per
 request.
 
 For the registered Local Coding pair only, the gateway lowers the single
@@ -45,6 +46,7 @@ top-level declaration, fails closed.
 from __future__ import annotations
 
 import copy
+from slaif_gateway.modules.compatibility_rules import CompatibilityRuleError
 from collections.abc import Mapping
 from dataclasses import replace
 from types import MappingProxyType
@@ -228,11 +230,9 @@ def classify_additional_tools(
                     tool_index=tool_index,
                     field="name",
                 )
-            if tool_type != "function" and not (
-                int(profile.revision) >= 5
-                and namespace_name == "functions"
-                and name == "apply_patch"
-                and tool_type == "custom"
+            if tool_type != "function" and (
+                not isinstance(tool_type, str)
+                or (namespace_name, name, tool_type) not in profile.dialect.custom_tools
             ):
                 return CodexTaxonomyResult(
                     accepted=False,
@@ -296,17 +296,14 @@ def _build_policy_spec(profile: CodexProfileData) -> ResponsesClientPolicySpec:
         max_client_tool_description_bytes=profile.max_tool_description_bytes,
         max_client_tool_total_description_bytes=profile.max_total_description_bytes,
         max_client_tool_declaration_bytes=profile.max_declaration_bytes,
-        # Revision 3 and historical modules retain their frozen authority scan.
+        # Preset data selects known bounded modes, never inferred from revisions.
         # JSON Schema property labels are data, not provider authority.
-        allow_schema_property_names=int(profile.revision) >= 4,
-        allow_sparse_visible_reasoning=int(profile.revision) >= 6,
-        allow_empty_visible_reasoning=int(profile.revision) >= 7,
-        allow_sparse_function_events=int(profile.revision) >= 8,
-        allow_completed_assistant_message_status=int(profile.revision) >= 9,
-        custom_client_tools=(
-            frozenset({("functions", "apply_patch", "custom")})
-            if int(profile.revision) >= 5 else frozenset()
-        ),
+        allow_schema_property_names="schema_property_names" in profile.dialect.features,
+        allow_sparse_visible_reasoning="sparse_visible_reasoning" in profile.dialect.features,
+        allow_empty_visible_reasoning="empty_visible_reasoning" in profile.dialect.features,
+        allow_sparse_function_events="sparse_function_events" in profile.dialect.features,
+        dialect_rules=profile.dialect,
+        custom_client_tools=profile.dialect.custom_tools,
     )
 
 
@@ -442,6 +439,8 @@ class Codex0162ResponsesClientModule(Codex0149ResponsesClientModule):
         endpoint: str,
         body: Mapping[str, object],
     ) -> CanonicalClientRequest:
+        if not isinstance(body, Mapping):
+            return super().normalize(endpoint, body)
         if endpoint == "/v1/responses" and isinstance(body, Mapping):
             tools = body.get("tools")
             if tools is not None and tools != []:
@@ -449,11 +448,21 @@ class Codex0162ResponsesClientModule(Codex0149ResponsesClientModule):
                     "The Codex 0.162 client dialect declares local tools only through additional_tools",
                     "codex_0162_tool_declaration",
                 )
-        canonical = super().normalize(endpoint, body)
+        try:
+            stripped, _, _ = self._profile.dialect.split(body, "request")
+        except CompatibilityRuleError:
+            raise _error("The request does not match the selected client preset.", "codex_dialect_value_invalid") from None
+        canonical = super().normalize(endpoint, stripped)
         # The shared 0.149 validator embeds the 0.149 profile facts; this
         # module must return its own version-owned identity and source facts
         # from the bound data profile.
-        return replace(canonical, profile_facts=_profile_facts_for(self._profile))
+        return replace(
+            canonical,
+            # Keep even explicitly droppable fields until independent core
+            # capability gates run. Only the core applies normalization.
+            body={**canonical.body, **{k: copy.deepcopy(body[k]) for k in body if k not in stripped}},
+            profile_facts=_profile_facts_for(self._profile),
+        )
 
 
 def build_codex_0162_client_module(profile: CodexProfileData) -> Codex0162ResponsesClientModule:

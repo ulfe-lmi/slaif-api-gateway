@@ -5,10 +5,9 @@
 
 This gateway is OpenAI-compatible for the endpoint set implemented in this repository. It is not a full OpenAI platform clone.
 
-The ordinary Responses input-message allowlist remains unchanged by the opt-in
-Codex revision-9 candidate for completed assistant-history status. This candidate
-is version-owned and requires explicit Codex gates; see
-[the Responses contract](responses-compatibility.md).
+Ordinary Responses remains strict. Optional Codex metadata vocabulary and bounded
+parser settings are selected by an external, digest-bound JSON preset, behind
+the independent core gates. See [client compatibility presets](client-compatibility-presets.md).
 
 ## Generic backend conformance status
 

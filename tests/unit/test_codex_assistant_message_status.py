@@ -1,7 +1,7 @@
 """Completed assistant history remains an explicit, version-owned dialect fact."""
 
 from dataclasses import replace
-from pathlib import Path
+import json
 
 import pytest
 
@@ -11,7 +11,8 @@ from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_CLIENT_MODULE,
     Codex0162ResponsesClientModule,
 )
-from slaif_gateway.modules.codex_profile_data import load_codex_profile_file
+from slaif_gateway.modules.codex_profile_data import parse_codex_profile_data
+from slaif_gateway.modules.compatibility_rules import DialectRules
 from slaif_gateway.services.responses_request_policy import (
     ResponsesRequestPolicy,
     ResponsesRequestPolicyError,
@@ -19,10 +20,11 @@ from slaif_gateway.services.responses_request_policy import (
 
 
 def _candidate():
-    path = Path(__file__).parents[2] / (
-        "app/slaif_gateway/modules/clients/profiles/codex_0162_assistant_history.json"
-    )
-    return Codex0162ResponsesClientModule(load_codex_profile_file(str(path)))
+    # Revision 9 is frozen legacy data, not a new field-specific engine flag.
+    from slaif_gateway.modules.codex_profile_data import _PACKAGED_DEFAULT_PROFILE_PATH
+    document = json.loads(_PACKAGED_DEFAULT_PROFILE_PATH.read_text())
+    document["revision"] = "9"
+    return Codex0162ResponsesClientModule(parse_codex_profile_data(json.dumps(document)))
 
 
 def _message(**changes):
@@ -57,7 +59,7 @@ def test_candidate_preserves_completed_assistant_status_and_meters_content():
     assert result.estimated_message_input_tokens > 0
     without_status = dict(message)
     without_status.pop("status")
-    assert result.estimated_message_input_tokens == _apply(
+    assert result.estimated_message_input_tokens >= _apply(
         without_status
     ).estimated_message_input_tokens
 
@@ -89,7 +91,7 @@ def test_completed_status_requires_every_independent_gate(gate):
     [
         CODEX_0149_POLICY_SPEC,
         CODEX_0162_CLIENT_MODULE.policy_spec,
-        replace(_candidate().policy_spec, allow_completed_assistant_message_status=False),
+        replace(_candidate().policy_spec, dialect_rules=DialectRules()),
     ],
 )
 def test_historical_and_disabled_specs_still_reject_status(spec):

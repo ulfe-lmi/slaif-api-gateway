@@ -1,0 +1,57 @@
+{
+  "preset_revision": "11",
+  "preset_digest": "b0012de33a3beade9cf1b16c1cb92865146570e52980f7da0f6015efce4f22d9",
+  "requests": [
+    {
+      "stage": 0,
+      "main_passed": true,
+      "input_items": 5,
+      "completed_assistant_messages": 0,
+      "empty_annotations_parts": 0,
+      "tool_outputs": 0
+    },
+    {
+      "main_passed": false,
+      "expected_auxiliary_rejection": true,
+      "error_type": "ResponsesRequestPolicyError",
+      "error_code": "responses_structured_streaming_not_supported",
+      "param": "text.format"
+    },
+    {
+      "stage": 1,
+      "main_passed": true,
+      "input_items": 8,
+      "completed_assistant_messages": 1,
+      "empty_annotations_parts": 1,
+      "tool_outputs": 1
+    },
+    {
+      "stage": 2,
+      "main_passed": true,
+      "input_items": 10,
+      "completed_assistant_messages": 2,
+      "empty_annotations_parts": 2,
+      "tool_outputs": 1
+    },
+    {
+      "main_passed": false,
+      "expected_auxiliary_rejection": true,
+      "error_type": "ResponsesRequestPolicyError",
+      "error_code": "responses_structured_streaming_not_supported",
+      "param": "text.format"
+    }
+  ],
+  "cli_version": "0.163.0",
+  "binary_sha256": "399ff69c431c066e40de318fba45c2b07f45a76b19939d247ee4828fc70c4215",
+  "source_contract_tag": "rust-v0.163.0",
+  "source_contract_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+  "model": "qwen3.8-27b",
+  "backend": "synthetic-loopback-no-upstream",
+  "local_tool_marker": "PRESET_TOOL_OK",
+  "final_markers": [
+    "PRESET_FIRST_TURN_OK",
+    "PRESET_SECOND_TURN_OK"
+  ],
+  "capture_scope": "structural counts only; no bodies, tool arguments, headers, or raw identifiers",
+  "scope_limit": "0.163.0 main interactive two-turn sequence; auxiliary structured streaming remains rejected; 0.162.1 live conformance not run in this change"
+}

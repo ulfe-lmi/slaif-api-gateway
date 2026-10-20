@@ -2,12 +2,13 @@
 
 > **Authority:** Current upstream endpoint, header, body, model, and credential-mutation rules
 
-The optional Codex revision-9 assistant-history candidate preserves the inert
-`status: "completed"` field on explicitly typed assistant messages after all
-three Codex envelope/tool gates pass. Existing content bounds, input metering,
-route pairing, credentials, replay ownership, and accounting still apply.
-Packaged revision 8 and ordinary Responses are unchanged. This candidate adds no
-provider or execution authority and is not a new live-qualification claim.
+External schema-2 client presets may preserve explicitly described, bounded
+inert metadata, or discard only explicitly described empty/null metadata, after
+all three Codex envelope/tool gates pass. Preserved bytes are included in input
+estimation. Transport encoding, content bounds, route pairing, credentials,
+replay ownership, quotas, and accounting remain code-enforced. Presets cannot
+override core fields or teach a backend a new transport. See
+[client compatibility presets](client-compatibility-presets.md).
 
 This document describes exactly how implemented `/v1/chat/completions`,
 standalone `/v1/audio/*`, `/v1/embeddings`, `POST /v1/realtime/client_secrets`,

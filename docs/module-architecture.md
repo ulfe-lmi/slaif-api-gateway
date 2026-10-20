@@ -42,6 +42,12 @@ digest of the shipped compatibility policy DATA
 (`slaif_gateway/modules/clients/profiles/codex_0162.json`), which defines the
 namespace literals/prefixes, bounded identifier grammar, and ceilings
 (including the namespace-scoped leading-underscore connector tool names).
+Schema-2 [client compatibility presets](client-compatibility-presets.md) also
+own optional metadata field/value rules and bounded feature modes. The core
+uses a generic interpreter around its existing validators; it does not infer
+allowances from revision numbers. No preset can override protected fields or
+permissions.
+
 The operator-only `CODEX_COMPATIBILITY_PROFILE_FILE` override loads a
 validated data revision >= 3 once at bootstrap with the same installed
 engine and no rebuild; data revisions `1`/`2` remain frozen migration

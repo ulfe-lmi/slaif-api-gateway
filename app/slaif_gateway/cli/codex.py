@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+import os
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -29,6 +31,8 @@ from slaif_gateway.modules.clients.registry import get_client_module
 from slaif_gateway.modules.codex_profile_data import (
     CodexProfileDataError,
     load_codex_profile_file,
+    list_codex_presets,
+    read_codex_preset,
 )
 from slaif_gateway.services.codex_module_upgrade import (
     CodexModuleUpgradeError,
@@ -45,6 +49,44 @@ from slaif_gateway.services.codex_qualification import (
 )
 
 app = typer.Typer(help="Inspect Codex protocol qualification and render a safe user profile")
+
+
+@app.command("presets")
+def presets(
+    json_output: Annotated[bool, typer.Option("--json", help="Output safe preset facts")] = False,
+) -> None:
+    """List shipped client compatibility presets without activating one."""
+    try:
+        rows = [{"name": name, "path": str(path), **profile.to_facts()}
+                for name, path, profile in list_codex_presets()]
+    except CodexProfileDataError as exc:
+        typer.echo(exc.safe_message)
+        raise typer.Exit(code=1) from None
+    if json_output:
+        emit_json({"presets": rows})
+    else:
+        for row in rows:
+            typer.echo(f"{row['name']}: revision {row['revision']} {row['digest']}")
+
+
+@app.command("export-preset")
+def export_preset(
+    name: Annotated[str, typer.Argument(help="Shipped compatibility preset name")],
+    output: Annotated[Path, typer.Option("--output", help="New operator-owned JSON file")],
+) -> None:
+    """Copy a validated preset to a new file; never overwrite or activate it."""
+    try:
+        document = read_codex_preset(name)
+        fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(document)
+    except CodexProfileDataError as exc:
+        typer.echo(exc.safe_message)
+        raise typer.Exit(code=1) from None
+    except OSError:
+        typer.echo("The preset output must be a new writable file.")
+        raise typer.Exit(code=1) from None
+    typer.echo(f"Exported compatibility preset: {output}")
 
 
 def _service(session: object) -> CodexQualificationService:
