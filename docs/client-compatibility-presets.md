@@ -19,7 +19,7 @@ no silent fallback or per-request file reload.
 | Preset | CLI provenance | Data revision | Format |
 | --- | --- | --- | --- |
 | `codex-0.162.1` | `rust-v0.162.1` | 10 | schema 2 |
-| `codex-0.163.0` | `rust-v0.163.0` | 11 | schema 2 |
+| `codex-0.163.0` | `rust-v0.163.0` | 12 | schema 2 |
 
 The existing static module ID `codex-0.162-responses-v1` names the decoder
 generation. Its active version and fixture digest come from the selected data
@@ -152,6 +152,34 @@ Neither preset inspection nor request validation persists prompt/history data,
 raw IDs, tool arguments/results, annotations, or credentials. Errors report fixed
 safe categories and the offending public parameter, never values or rule contents.
 
+## Reasoning and replay budgets
+
+Schema 2 also accepts an optional `replay_limits` object. When present, all
+eight settings below are required, positive integers, and digest-bound. When
+absent, the frozen decoder defaults remain unchanged, including its historical
+8,192-byte visible reasoning part limit. This preserves existing profile
+identities. These settings belong in the external preset rather than field
+exceptions in source code.
+
+| Setting | Shipped 0.163.0 revision 12 | Engine ceiling |
+| --- | ---: | ---: |
+| `max_reasoning_visible_parts` | 64 | 256 |
+| `max_reasoning_visible_part_bytes` | 262,144 | 1,048,576 |
+| `max_reasoning_visible_bytes` | 1,048,576 | 4,194,304 |
+| `max_reasoning_summary_parts` | 64 | 256 |
+| `max_reasoning_summary_bytes` | 65,536 | 1,048,576 |
+| `max_encrypted_reasoning_item_bytes` | 262,144 | 262,144 |
+| `max_encrypted_reasoning_request_bytes` | 1,048,576 | 1,048,576 |
+| `max_compaction_item_bytes` | 1,048,576 | 1,048,576 |
+
+Part and summary byte budgets cannot exceed their enclosing aggregate budget.
+These are UTF-8 byte counts; arrays have independent part-count bounds. Reasoning
+is preserved and included in input estimation. Global body/text, route context,
+quota, capability and replay-ownership checks still apply. Increasing a replay
+budget cannot raise the model's context or output allowance. Codex can replay
+reasoning even when its transcript view does not display it. A reasoning replay
+size error is distinct from throttling and from malformed backend tool arguments.
+
 ## Operator workflow
 
 Export and inspect a new file, outside the repository and image:
@@ -211,3 +239,11 @@ user turn that naturally replays the previous final answer. Text-only or a
 single tool round trip does not cover this sequence. Qualification must record
 the exact binary, preset digest, model/catalog, backend, accounting, and
 client/transport limitations as required by `AGENTIC_CLIENT_INTEGRATION.md`.
+
+The optional `dialect.features.tool_output_images` selector accepts bounded
+input_text/input_image tool-result arrays through the existing image validator.
+It is off when absent. Image counts, decoded-byte limits, context estimation,
+and explicit image-input permissions on both key and route remain mandatory.
+It does not enable files, audio, image generation, or arbitrary result objects.
+
+Verification: [2026-10-20 deployment evidence](verification/2026-10-20-external-client-presets.md).

@@ -81,7 +81,7 @@ def test_new_optional_field_requires_only_a_file_change(tmp_path):
     with pytest.raises(ResponsesRequestPolicyError):
         _apply(body, old)
     second = copy.deepcopy(first)
-    second['revision'] = '12'
+    second['revision'] = str(int(first['revision']) + 1)
     second['dialect']['extensions']['message.assistant']['review_note'] = {
         'action':'preserve','value':{'kind':'string','minimum':0,'maximum':128}}
     path.write_text(json.dumps(second))

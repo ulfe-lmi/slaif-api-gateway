@@ -239,6 +239,10 @@
             },
             "sparse_visible_reasoning": {
               "type": "boolean"
+            },
+            "tool_output_images": {
+              "type": "boolean",
+              "description": "Known bounded tool-result image parser; requires independent existing key/route image-input policy."
             }
           },
           "required": [
@@ -501,6 +505,63 @@
         "features",
         "custom_tools",
         "extensions"
+      ],
+      "additionalProperties": false
+    },
+    "replay_limits": {
+      "type": "object",
+      "description": "Optional complete replay budgets; absent retains frozen legacy values. Global body, context, capability and accounting checks remain mandatory. Part budgets must not exceed aggregate budgets.",
+      "properties": {
+        "max_reasoning_visible_parts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "max_reasoning_visible_part_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_reasoning_visible_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4194304
+        },
+        "max_reasoning_summary_parts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 256
+        },
+        "max_reasoning_summary_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_encrypted_reasoning_item_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 262144
+        },
+        "max_encrypted_reasoning_request_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "max_compaction_item_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        }
+      },
+      "required": [
+        "max_reasoning_visible_parts",
+        "max_reasoning_visible_part_bytes",
+        "max_reasoning_visible_bytes",
+        "max_reasoning_summary_parts",
+        "max_reasoning_summary_bytes",
+        "max_encrypted_reasoning_item_bytes",
+        "max_encrypted_reasoning_request_bytes",
+        "max_compaction_item_bytes"
       ],
       "additionalProperties": false
     }

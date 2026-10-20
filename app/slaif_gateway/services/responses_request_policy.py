@@ -2226,6 +2226,9 @@ class ResponsesRequestPolicy:
             else self._settings.RESPONSES_MAX_FUNCTION_CALL_OUTPUT_BYTES
         )
         canonical_output: str | list[dict[str, str]]
+        image_parts = 0
+        image_data_bytes = 0
+        image_material_bytes = 0
         if isinstance(output, str):
             self._validate_string_bytes(
                 output,
@@ -2234,7 +2237,7 @@ class ResponsesRequestPolicy:
                 code="responses_codex_tool_roundtrip_too_large",
             )
             canonical_output = output
-        elif custom and isinstance(output, list) and 0 < len(output) <= 8:
+        elif (custom or self._codex_spec.allow_tool_output_images) and isinstance(output, list) and 0 < len(output) <= 8:
             canonical_parts: list[dict[str, str]] = []
             total_text_bytes = 0
             for part_index, part in enumerate(output):
@@ -2245,6 +2248,15 @@ class ResponsesRequestPolicy:
                         "responses_codex_tool_roundtrip_invalid",
                         "Codex custom tool output parts must be bounded text objects.",
                     )
+                if self._codex_spec.allow_tool_output_images and part.get("type") == "input_image":
+                    canonical_part, part_bytes, data_bytes = self._validate_input_image_part(
+                        part, param=part_param, role="user"
+                    )
+                    image_parts += 1
+                    image_data_bytes += data_bytes
+                    image_material_bytes += part_bytes
+                    canonical_parts.append(canonical_part)
+                    continue
                 unknown_part_fields = set(part) - self._codex_spec.tool_output_content_fields
                 text = part.get("text")
                 if (
@@ -2283,7 +2295,7 @@ class ResponsesRequestPolicy:
                 param=f"{param}.id",
             )
         material_bytes = len(canonical_json_bytes(canonical))
-        return canonical, material_bytes, material_bytes, 0, 0, 0, 0
+        return canonical, material_bytes - image_material_bytes, material_bytes, image_parts, image_data_bytes, 0, 0
 
     def _validate_function_call_output_item(
         self,
@@ -5008,7 +5020,9 @@ def _input_contains_image_input(value: Any) -> bool:
     for item in value:
         if not isinstance(item, Mapping):
             continue
-        content = item.get("content")
+        content = (item.get("output") if item.get("type") in {
+            "function_call_output", "custom_tool_call_output"
+        } else item.get("content"))
         if not isinstance(content, list):
             continue
         for part in content:

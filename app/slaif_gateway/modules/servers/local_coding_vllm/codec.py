@@ -130,6 +130,10 @@ class VLLMToolCodec:
                         # field, even when the client chooses the default.
                         part.setdefault("detail", "auto")
             kind = item.get("type")
+            if kind in {"function_call_output", "custom_tool_call_output"} and isinstance(item.get("output"), list):
+                for part in item["output"]:
+                    if isinstance(part, dict) and part.get("type") == "input_image":
+                        part.setdefault("detail", "auto")
             if kind == "custom_tool_call_output":
                 item["type"] = "function_call_output"
             elif kind in {"custom_tool_call", "function_call"}:

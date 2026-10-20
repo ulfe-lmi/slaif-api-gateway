@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "module_id": "codex-0.162-responses-v1",
-  "revision": "11",
+  "revision": "12",
   "provenance": {
     "cli_version": "0.163.0",
     "source_tag": "rust-v0.163.0",
@@ -48,7 +48,8 @@
       "schema_property_names": true,
       "sparse_visible_reasoning": true,
       "empty_visible_reasoning": true,
-      "sparse_function_events": true
+      "sparse_function_events": true,
+      "tool_output_images": true
     },
     "extensions": {
       "message.assistant": {
@@ -111,5 +112,15 @@
         "type": "custom"
       }
     ]
+  },
+  "replay_limits": {
+    "max_reasoning_visible_parts": 64,
+    "max_reasoning_visible_part_bytes": 262144,
+    "max_reasoning_visible_bytes": 1048576,
+    "max_reasoning_summary_parts": 64,
+    "max_reasoning_summary_bytes": 65536,
+    "max_encrypted_reasoning_item_bytes": 262144,
+    "max_encrypted_reasoning_request_bytes": 1048576,
+    "max_compaction_item_bytes": 1048576
   }
 }

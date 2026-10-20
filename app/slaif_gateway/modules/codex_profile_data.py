@@ -141,6 +141,19 @@ _LIMIT_HARD_CAPS = {
     "max_declaration_bytes": MAX_DECLARATION_BYTES_HARD_CAP,
 }
 
+# Transport/accounting remain core-owned. These configurable replay budgets
+# only bound client-carried content; global body/context limits still apply.
+REPLAY_LIMIT_HARD_CAPS = {
+    "max_reasoning_visible_parts": 256,
+    "max_reasoning_visible_part_bytes": 1_048_576,
+    "max_reasoning_visible_bytes": 4_194_304,
+    "max_reasoning_summary_parts": 256,
+    "max_reasoning_summary_bytes": 1_048_576,
+    "max_encrypted_reasoning_item_bytes": 262_144,
+    "max_encrypted_reasoning_request_bytes": 1_048_576,
+    "max_compaction_item_bytes": 1_048_576,
+}
+
 
 class CodexProfileDataError(ValueError):
     """Safe rejection of one compatibility profile data document.
@@ -269,6 +282,7 @@ class CodexProfileData:
     max_tool_description_bytes: int
     max_total_description_bytes: int
     max_declaration_bytes: int
+    replay_limits: tuple[tuple[str, int], ...]
     dialect: DialectRules
     digest: str
 
@@ -379,6 +393,8 @@ def _validate_document(document: object) -> CodexProfileData:
     top = dict(document)
     schema_version = top.get("schema_version")
     fields = _TOP_LEVEL_FIELDS | {"dialect"} if schema_version == 2 else _TOP_LEVEL_FIELDS
+    if schema_version == 2 and "replay_limits" in top:
+        fields = fields | {"replay_limits"}
     if set(top) != fields:
         raise _fail("schema_invalid", "The Codex compatibility profile fields are invalid.")
 
@@ -515,6 +531,20 @@ def _validate_document(document: object) -> CodexProfileData:
     for field, hard_cap in _LIMIT_HARD_CAPS.items():
         limit_values[field] = _require_int(limits.get(field), 1, hard_cap, "limit_above_hard_cap")
 
+    replay_limits: dict[str, int] = {}
+    if "replay_limits" in top:
+        raw = _require_object(top["replay_limits"], frozenset(REPLAY_LIMIT_HARD_CAPS), "limits_invalid")
+        replay_limits = {
+            name: _require_int(raw[name], 1, maximum, "limit_above_hard_cap")
+            for name, maximum in REPLAY_LIMIT_HARD_CAPS.items()
+        }
+        if (
+            replay_limits["max_reasoning_visible_part_bytes"] > replay_limits["max_reasoning_visible_bytes"]
+            or replay_limits["max_reasoning_summary_bytes"] > replay_limits["max_reasoning_visible_bytes"]
+            or replay_limits["max_encrypted_reasoning_item_bytes"] > replay_limits["max_encrypted_reasoning_request_bytes"]
+        ):
+            raise _fail("limits_invalid", "Replay part budgets exceed their aggregate budgets.")
+
     try:
         if schema_version == 2:
             dialect = parse_dialect_rules(top["dialect"])
@@ -554,6 +584,7 @@ def _validate_document(document: object) -> CodexProfileData:
         max_tool_description_bytes=limit_values["max_tool_description_bytes"],
         max_total_description_bytes=limit_values["max_total_description_bytes"],
         max_declaration_bytes=limit_values["max_declaration_bytes"],
+        replay_limits=tuple(sorted(replay_limits.items())),
         dialect=dialect,
         digest=digest,
     )

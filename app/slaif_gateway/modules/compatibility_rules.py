@@ -25,6 +25,7 @@ FEATURE_NAMES = frozenset({
     "schema_property_names", "sparse_visible_reasoning", "empty_visible_reasoning",
     "sparse_function_events",
 })
+OPTIONAL_FEATURE_NAMES = frozenset({"tool_output_images"})
 SCOPES = frozenset({
     "request", "message.assistant", "message.user", "message.developer", "message.system",
     "part.output_text", "part.input_text", "part.input_image", "part.input_file", "part.input_audio",
@@ -247,7 +248,8 @@ def _parse_dialect_rules(document: object) -> DialectRules:
     """Compile the exact finite rule vocabulary into a deeply frozen snapshot."""
     _check(isinstance(document, Mapping) and set(document) == {"features", "extensions", "custom_tools"})
     features = document["features"]
-    _check(isinstance(features, Mapping) and set(features) == FEATURE_NAMES)
+    _check(isinstance(features, Mapping) and FEATURE_NAMES <= set(features)
+           and set(features) <= FEATURE_NAMES | OPTIONAL_FEATURE_NAMES)
     _check(all(type(value) is bool for value in features.values()))
     raw = document["extensions"]
     _check(isinstance(raw, Mapping) and set(raw) <= SCOPES)

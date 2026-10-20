@@ -112,6 +112,7 @@ class ResponsesClientPolicySpec:
     allow_sparse_visible_reasoning: bool = False
     allow_empty_visible_reasoning: bool = False
     allow_sparse_function_events: bool = False
+    allow_tool_output_images: bool = False
     dialect_rules: DialectRules = field(default_factory=DialectRules)
 
 

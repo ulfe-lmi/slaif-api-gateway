@@ -302,8 +302,10 @@ def _build_policy_spec(profile: CodexProfileData) -> ResponsesClientPolicySpec:
         allow_sparse_visible_reasoning="sparse_visible_reasoning" in profile.dialect.features,
         allow_empty_visible_reasoning="empty_visible_reasoning" in profile.dialect.features,
         allow_sparse_function_events="sparse_function_events" in profile.dialect.features,
+        allow_tool_output_images="tool_output_images" in profile.dialect.features,
         dialect_rules=profile.dialect,
         custom_client_tools=profile.dialect.custom_tools,
+        **dict(profile.replay_limits),
     )
 
 
