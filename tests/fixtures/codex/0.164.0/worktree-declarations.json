@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.164.0",
+  "source_commit": "6aaac694803004a63c6f393d153c96d22521a6b9",
+  "source_path": "codex-rs/tui/src/managed_worktree_tool_specs.rs",
+  "namespace": {
+    "type": "namespace",
+    "name": "mcp__codex_worktrees",
+    "tools": [
+      {
+        "type": "function",
+        "name": "create_worktree",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ref": {"type": "string", "maxLength": 128},
+            "allowAsync": {"type": "boolean", "const": true}
+          },
+          "required": ["allowAsync"]
+        }
+      },
+      {
+        "type": "function",
+        "name": "get_worktree_creation_status",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "operationId": {"type": "string", "maxLength": 128}
+          },
+          "required": ["operationId"]
+        }
+      },
+      {
+        "type": "function",
+        "name": "list_worktrees",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cursor": {"type": "string", "maxLength": 512}
+          },
+          "required": []
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "schema_version": 2,
+  "module_id": "codex-0.162-responses-v1",
+  "revision": "14",
+  "provenance": {
+    "cli_version": "0.164.0",
+    "source_tag": "rust-v0.164.0",
+    "source_commit": "6aaac694803004a63c6f393d153c96d22521a6b9"
+  },
+  "namespace_rules": {
+    "builtin_names": [
+      "functions",
+      "multi_agent_v1",
+      "clock",
+      "collaboration",
+      "mcp__codex_worktrees"
+    ],
+    "connector_prefixes": [
+      "mcp__codex_apps__"
+    ],
+    "suffix_initial": "lowercase_ascii",
+    "suffix_tail": "lowercase_ascii_digits_underscore_dot_hyphen",
+    "max_suffix_characters": 64
+  },
+  "tool_name_rules": {
+    "builtin": {
+      "initial": "lowercase_ascii",
+      "tail": "lowercase_ascii_digits_underscore_dot_hyphen",
+      "max_characters": 64,
+      "max_leading_underscores": 0
+    },
+    "connector": {
+      "initial": "lowercase_ascii",
+      "tail": "lowercase_ascii_digits_underscore_dot_hyphen",
+      "max_characters": 64,
+      "max_leading_underscores": 1
+    }
+  },
+  "limits": {
+    "max_namespaces": 16,
+    "max_total_tools": 256,
+    "max_tools_per_namespace": 256,
+    "max_schema_depth": 16,
+    "max_schema_properties": 4096,
+    "max_tool_description_bytes": 20000,
+    "max_total_description_bytes": 262144,
+    "max_declaration_bytes": 589824
+  },
+  "dialect": {
+    "features": {
+      "schema_property_names": true,
+      "sparse_visible_reasoning": true,
+      "empty_visible_reasoning": true,
+      "sparse_function_events": true,
+      "tool_output_images": true
+    },
+    "extensions": {
+      "message.assistant": {
+        "status": {
+          "action": "preserve",
+          "value": {
+            "kind": "enum",
+            "values": [
+              "completed"
+            ]
+          }
+        },
+        "phase": {
+          "action": "preserve",
+          "value": {
+            "kind": "enum",
+            "values": [
+              null,
+              "commentary",
+              "final_answer"
+            ]
+          }
+        }
+      },
+      "part.output_text": {
+        "annotations": {
+          "action": "preserve",
+          "value": {
+            "kind": "array",
+            "max_items": 0,
+            "items": {
+              "kind": "null"
+            }
+          }
+        },
+        "logprobs": {
+          "action": "preserve",
+          "value": {
+            "kind": "one_of",
+            "rules": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "array",
+                "max_items": 0,
+                "items": {
+                  "kind": "null"
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "custom_tools": [
+      {
+        "namespace": "functions",
+        "name": "apply_patch",
+        "type": "custom"
+      },
+      {
+        "namespace": "functions",
+        "name": "exec",
+        "type": "custom"
+      }
+    ]
+  },
+  "replay_limits": {
+    "max_reasoning_visible_parts": 64,
+    "max_reasoning_visible_part_bytes": 262144,
+    "max_reasoning_visible_bytes": 1048576,
+    "max_reasoning_summary_parts": 64,
+    "max_reasoning_summary_bytes": 65536,
+    "max_encrypted_reasoning_item_bytes": 262144,
+    "max_encrypted_reasoning_request_bytes": 1048576,
+    "max_compaction_item_bytes": 1048576
+  }
+}

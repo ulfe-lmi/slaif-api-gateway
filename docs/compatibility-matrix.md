@@ -264,3 +264,12 @@ exception does not enable video generation or direct Codex video input.
 The separately gated `vllm-chat-video-v1` module accepts inline MP4/WebM video
 on explicitly configured native Chat routes, with operator frame/token budgets.
 See [media input estimation](media-input-estimation.md).
+
+The separately versioned Codex 0.164.0 revision-14 preset adds the observed
+`clock`/`collaboration` and exact `mcp__codex_worktrees` namespaces plus the
+exact `functions.exec` custom grammar declaration. Native-vLLM transports approved custom strings through one bounded
+JSON `input` wrapper, preserving replay and streaming linkage without executing
+the text. Independent key/route capabilities remain required; only A100 is
+selected for the scoped live check. See
+[the preset contract](client-compatibility-presets.md#codex-01640-declaration-compatibility)
+and [the bounded verification record](verification/2026-10-23-codex-0164.md).
