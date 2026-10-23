@@ -265,9 +265,9 @@ The separately gated `vllm-chat-video-v1` module accepts inline MP4/WebM video
 on explicitly configured native Chat routes, with operator frame/token budgets.
 See [media input estimation](media-input-estimation.md).
 
-The separately versioned Codex 0.164.0 revision-13 preset adds the observed
-`clock`/`collaboration` namespaces and exact `functions.exec` custom grammar
-declaration. Native-vLLM transports approved custom strings through one bounded
+The separately versioned Codex 0.164.0 revision-14 preset adds the observed
+`clock`/`collaboration` and exact `mcp__codex_worktrees` namespaces plus the
+exact `functions.exec` custom grammar declaration. Native-vLLM transports approved custom strings through one bounded
 JSON `input` wrapper, preserving replay and streaming linkage without executing
 the text. Independent key/route capabilities remain required; only A100 is
 selected for the scoped live check. See

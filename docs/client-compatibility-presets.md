@@ -20,7 +20,7 @@ no silent fallback or per-request file reload.
 | --- | --- | --- | --- |
 | `codex-0.162.1` | `rust-v0.162.1` | 10 | schema 2 |
 | `codex-0.163.0` | `rust-v0.163.0` | 12 | schema 2 |
-| `codex-0.164.0` | `rust-v0.164.0` | 13 | schema 2 |
+| `codex-0.164.0` | `rust-v0.164.0` | 14 | schema 2 |
 
 The existing static module ID `codex-0.162-responses-v1` names the decoder
 generation. Its active version and fixture digest come from the selected data
@@ -251,8 +251,12 @@ Verification: [2026-10-20 deployment evidence](verification/2026-10-20-external-
 
 ## Codex 0.164.0 declaration compatibility
 
-Revision 13 retains the older built-in namespaces and adds the observed `clock`
-and `collaboration` names plus the exact `functions.exec` custom declaration.
+Revision 14 retains revision 13's older built-in namespaces, `clock` and
+`collaboration`, and the exact `functions.exec` custom declaration. It additionally
+accepts the exact `mcp__codex_worktrees` namespace advertised by the 0.164.0 TUI.
+This does not allow other MCP namespaces or add a wildcard connector prefix.
+Upstream marks the `worktrees` feature flag as removed in this version, so
+`[features] worktrees = false` does not suppress this built-in declaration.
 Namespace/type vocabulary remains bounded preset data. The native-vLLM adapter
 wraps approved custom input strings in the same bounded JSON `input` field for
 transport and reverses that wrapper on streaming/non-streaming/replay paths.

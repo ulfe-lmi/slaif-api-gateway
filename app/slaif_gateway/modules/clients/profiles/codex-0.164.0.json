@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "module_id": "codex-0.162-responses-v1",
-  "revision": "13",
+  "revision": "14",
   "provenance": {
     "cli_version": "0.164.0",
     "source_tag": "rust-v0.164.0",
@@ -12,7 +12,8 @@
       "functions",
       "multi_agent_v1",
       "clock",
-      "collaboration"
+      "collaboration",
+      "mcp__codex_worktrees"
     ],
     "connector_prefixes": [
       "mcp__codex_apps__"
