@@ -124,13 +124,14 @@ class VLLMToolCodec:
                     raise ProviderRequestError(provider="local-coding-vLLM")
                 self.tools[wire_name] = (namespace, name, kind)
                 if kind == "custom":
-                    if (namespace, name) != ("functions", "apply_patch"):
-                        raise ProviderRequestError(provider="local-coding-vLLM")
+                    # Core client/policy validation approves custom declarations.
+                    # Transport preserves each declared raw string via one bounded
+                    # JSON input wrapper; it never executes or interprets that text.
                     converted = {
                         "type": "function",
                         "name": wire_name,
                         "description": tool.get("description", "")
-                        + " Pass the raw patch text as input.",
+                        + " Pass the raw custom-tool text as input.",
                         "parameters": {
                             "type": "object",
                             "properties": {"input": {"type": "string"}},
