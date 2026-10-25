@@ -406,9 +406,10 @@ class Settings(BaseSettings):
     # operator-owned 0700 directory outside the repo/DB; see the runbook.
     REQUEST_CAPTURE_ENABLED: bool = False
     REQUEST_CAPTURE_DIR: str = ""
-    # Body capture budget. Default 10 MiB so a full request within the shipped
-    # NGINX client_max_body_size (10m) is capturable; base64/metadata overhead
-    # is accounted separately in the store.
+    # Body capture budget. Default 10 MiB, independent of the larger Nginx
+    # API transport allowance. Larger captures need explicit operator budgets;
+    # exceeding a capture budget never rejects the original request.
+    # Base64/metadata overhead is accounted separately in the store.
     REQUEST_CAPTURE_BODY_BUDGET_BYTES: int = 10485760
     # Total on-disk storage budget for the whole capture root (all sessions).
     # Must be at least the per-capture budget to allow one full-body capture.

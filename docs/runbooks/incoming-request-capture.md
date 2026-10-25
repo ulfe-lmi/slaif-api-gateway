@@ -105,10 +105,18 @@ completes the facility is off and nothing is written. `arm`/`status`/`stop`/
 ## 4. Safe-Format Or Disable Access Logs For The Window (No Ingress Downtime)
 
 The gateway can capture only bytes that reach it: anything the reverse proxy
-rejects upstream (for example Nginx's `client_max_body_size` of 10 m) is not
+rejects upstream (for example the API's `client_max_body_size 128m`) is not
 visible and cannot be captured. Independently, the reverse proxy and any
 fronting server write their **own** access logs, which may contain
 credential querystrings or `Authorization` values.
+
+The 128 MiB API transport allowance does not increase capture budgets. The
+default body capture budget remains 10 MiB, with a hard maximum of 64 MiB.
+To capture a larger request within that maximum, an
+operator must explicitly configure sufficient body and total storage budgets,
+including artifact encoding and metadata overhead, for the bounded window.
+Over-budget requests are not persisted as complete captures; normal request
+handling is unaffected.
 
 Do **not** stop the logging/ingress container while it is serving traffic.
 Instead, for the capture window, set the capture vhost to
