@@ -1012,8 +1012,10 @@ client `Authorization` is never forwarded.
 
 Native module configurations use `kind=module` and a separately reviewed
 static adapter contract built on the same safe `ProviderRequest` and
-`ProviderResponse` boundary. The reviewed `facial_scoring` registration is
-the only native module currently available; unknown identifiers, arbitrary
+`ProviderResponse` boundary. The legacy `facial_scoring` and explicit
+`configured-completion` registrations share one adapter. Strict JSON profiles
+select its fixed mapping primitives for facial scoring and ZAP-IT; unknown
+identifiers, invalid profiles, arbitrary
 import paths, user-supplied classes, and dynamic plugin loading fail closed.
 Module base URLs remain operator configuration and are validated without
 hardcoding a downstream host; the facial adapter uses the configured origin's
@@ -1023,8 +1025,14 @@ content, and data URLs are not forwarded as module credentials or persisted.
 The facial adapter permits only one non-streaming Chat image request, sends a
 single `image` multipart field, and returns an OpenAI-shaped text completion
 with zero provider token usage. Module Responses and module streaming remain
-unsupported.
-The current qualification record for this adapter is mocked HTTP plus
+unsupported. The ZAP-IT profile sends one image and one YAML file as JSON
+to the operator-configured `/v1/responses` facade using its server-side
+Bearer, validates the completed public JSON text response, and wraps it as
+Chat assistant content. It never calls the native private completions/ZIP
+interface or forwards client tools. Both profiles bound decoded success/error
+responses to their configured byte ceiling before processing. See
+[completion services](completion-services.md) for exact configuration and limits.
+The current qualification record for the facial profile is mocked HTTP plus
 PostgreSQL evidence for the gateway boundaries, with one explicitly authorized
 live native smoke. The sanitized smoke returned HTTP 200 with the native
 `unscorable` result and reason `no_face_detected`, which is `PASS` evidence for

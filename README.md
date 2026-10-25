@@ -26,6 +26,10 @@ users and applications keep using the standard OpenAI Python client with no
 code changes beyond two environment variables. The current deployment model
 assumes one organization per self-hosted deployment.
 
+For image-processing services, [configured completion profiles](docs/completion-services.md)
+route facial scoring and ZAP-IT through one shared adapter with separate JSON
+profiles and the existing gateway policy/accounting path.
+
 ## Get started
 
 For Codex dialect settings, use [external client compatibility presets](docs/client-compatibility-presets.md).
