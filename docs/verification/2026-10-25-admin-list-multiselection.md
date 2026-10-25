@@ -111,11 +111,14 @@ The root-reproduced R5 scope/limit failures
   fallback chips and a `selected=` lookup response (mocked, delivering
   exactly what the real fetch returns for resolvable ids) refreshes the
   chip labels in place with hidden values, order, input text, and
-  focus untouched; resolvable OLDEST cohorts (outside the initial
-  latest-100 batch, proven from the embedded options) keep friendly
-  chips from page load with exact rows and remain reachable by name
-  through the real server search; and chips wrap down at narrow 390px
-  with no horizontal overflow. Screenshots:
+  focus untouched; resolvable OLDEST cohorts — the UNFILTERED page's
+  embedded latest-100 batch is asserted to EXCLUDE both first
+  (independent older-status proof from the real server), THEN the
+  selected URL's embedded options INCLUDE both with their
+  authoritative labels (page-load hydration), chips carry the
+  friendly names from load, rows are exact, and both remain reachable
+  by name through the real server search; and chips wrap down at
+  narrow 390px with no horizontal overflow. Screenshots:
   `/tmp/slaif195/screenshots/keys-two-cohorts-desktop-1600.png`,
   `keys-two-cohorts-narrow-390.png`,
   `keys-chip-async-label-recovery.png`,
@@ -126,6 +129,19 @@ The root-reproduced R5 scope/limit failures
   A2 typography/geometry at all four viewports, and the grow-down
   proof with the six-control keys bar keeping the top-aligned Filter
   button fixed while chips push the table down).
+- Final-CSS re-runs (after the keys filter bar CSS reached its final
+  state: desktop six-track rule, 960px five-track rule, and the
+  640px single-column override whose selector list explicitly
+  includes `.filter-bar.keys-filters` so the higher-specificity
+  six-track rule is overridden on small screens — controls stay
+  42px, top-aligned): the new 4-test module re-ran to 4 passed
+  (JUnit `browser-195-new4`) and the five affected keys visual nodes
+  (four `test_keys_list_visual` viewports + `test_keys_chip_grow_down`)
+  re-ran to 5 passed (JUnit `browser-195-visual4`); the recaptured
+  screenshots replace the pre-final-CSS captures. Earlier overlapping
+  runs with transient failures (`browser-195-adapted`,
+  `browser-195-new2`, `browser-195-visual2`) are superseded and are
+  not counted as new cases.
 
 Layer honesty: the async label-refresh browser test MOCKS the lookup
 response (the page itself only hydrates resolvable values); the
@@ -138,7 +154,12 @@ older-cohort proof uses the real server. No full local all-layer or
   (OR/AND, bounds, scalar service/CLI distinction, CSV exports,
   chips/labels, Rows-limit vs total, no migration, key-policy
   distinction) and the audit-target / one-time-secret hydration
-  vocabularies.
+  vocabularies, including the parent-scope precision: the selected
+  parent scope constrains which selected ids are *eligible* choices
+  (an id with no event under any selected parent type cannot be
+  resolved from that scoped source and may keep a plain-id fallback
+  chip), while its accepted selection value and chip are retained —
+  the scope never silently evicts an accepted selection.
 - This record + `docs/verification/README.md` index entry.
 
 ## Outstanding

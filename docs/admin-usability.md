@@ -374,8 +374,14 @@ editable manual fallback:
   type(s) (a multi parent selection OR-scopes BEFORE the limit, in
   full — parent values are not truncated). A selected target outside
   the initial batch keeps its authoritative label: the latest event's
-  entity type wins, one choice per selected id, and the parent scope
-  never evicts an accepted selection.
+  entity type wins, one choice per selected id, and the per-id
+  reduction happens in SQL BEFORE the 100-choice limit. The selected
+  parent scope constrains which ids are *eligible* choices: a
+  selected id with no event under any selected parent type cannot be
+  resolved from that scoped source (it may keep a plain-id fallback
+  chip), but its selected value and chip are retained — the scope
+  excludes out-of-scope ids from the eligible choices, it never
+  silently evicts an accepted selection.
 
 - **One-time secrets**: minimal public lifecycle metadata only (id,
   status, purpose — never the secret value, encrypted payload, or

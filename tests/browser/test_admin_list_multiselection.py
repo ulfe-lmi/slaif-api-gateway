@@ -431,16 +431,28 @@ def test_keys_older_selected_cohorts_stay_searchable(
     ) as context:
         page = context.new_page()
         _login(page, env)
-        # The two OLDEST cohorts: outside the initial latest-100 batch.
-        # The PAGE hydrates resolvable selections (192-a), so the chips
-        # carry the friendly names from load; the rows are exact.
+        # Premise first: on the UNFILTERED page the two OLDEST cohorts
+        # (001/002, staggered created_at) are OUTSIDE the embedded
+        # latest-100 batch. That independently establishes that they are
+        # older than the initial batch before any selection is involved.
+        page.goto("/admin/keys?limit=100")
+        unfiltered_options = page.evaluate(
+            """() => JSON.parse(
+                document.querySelector('.rc[data-rc-id="keys-cohort"]')
+                    .dataset.initialOptions
+            )"""
+        )
+        assert len(unfiltered_options) == 100
+        unfiltered_ids = {o["id"] for o in unfiltered_options}
+        assert id_1 not in unfiltered_ids
+        assert id_2 not in unfiltered_ids
+
+        # THEN the selected URL: page-load hydration (192-a/R5) deliberately
+        # merges the resolvable selected older IDs INTO the initial options
+        # (displacing the two oldest in-batch entries to hold the cap of
+        # 100), so their PRESENCE here proves correct hydration, and the
+        # chips carry the friendly names from load.
         page.goto(f"/admin/keys?limit=100&cohort_id={id_1}&cohort_id={id_2}")
-        # Direct proof they are OLDER than the initial latest-100 batch
-        # AND that page-load hydration works end to end: the embedded
-        # option list still holds exactly 100 entries, CONTAINS both
-        # selected older cohorts with their authoritative labels (they
-        # displaced the two oldest in-batch entries), so the chips carry
-        # the friendly names from load.
         initial_options = page.evaluate(
             """() => JSON.parse(
                 document.querySelector('.rc[data-rc-id="keys-cohort"]')
