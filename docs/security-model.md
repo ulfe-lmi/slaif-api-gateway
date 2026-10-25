@@ -1192,11 +1192,14 @@ request content, and it is bounded as follows:
   validation, admission, accounting, and provider forwarding are unaffected.
 - **Reverse-proxy caveat.** The gateway can capture only what reaches it:
   bytes rejected upstream by the reverse proxy (for example Nginx's
-  `client_max_body_size` 10 m limit) are not visible to the gateway, and
+  API `client_max_body_size 128m` limit) are not visible to the gateway, and
   reverse-proxy/server access logs may independently record credential
   querystrings. The runbook requires safe-formatting or disabling access
   logs during capture; the gateway does not claim control over arbitrary
   external operator logs.
+  The API transport allowance is independent of the default 10 MiB capture
+  body budget; capturing larger bodies requires explicit operator budgets,
+  and capture limits never change normal request acceptance.
 - **Trust model.** The facility assumes a trusted, operator-owned local
   directory. It is not a hostile same-UID filesystem jail: symlink/FIFO/
   ownership checks protect against accidents and path confusion, not against

@@ -2631,10 +2631,13 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 ```
 
-Set a sane body size, for example:
+Set the API transport body-size default inside `location /v1/`. This allows
+JSON/base64 media and conversation history through to the gateway's own
+validation; it does not enable unsupported inputs or raise endpoint, media,
+context, quota, or capture budgets. Keep admin upload limits separate.
 
 ```nginx
-client_max_body_size 20m;
+client_max_body_size 128m;
 ```
 
 If `/metrics` is exposed through Nginx, restrict it by IP allowlist, internal network, or admin authentication. Do not expose metrics publicly.
