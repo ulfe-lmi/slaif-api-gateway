@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "default_profile": "facial-scoring-v1",
+  "providers": {
+    "facial_scoring": "facial-scoring-v1"
+  }
+}

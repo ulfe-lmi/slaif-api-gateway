@@ -437,8 +437,10 @@ Profiles are cached per worker; edits require worker restart.
 The `completion_service` route selector is `{"version": 1, "profile":
 "zap-it-v1"}` for ZAP-IT, or `facial-scoring-v1` for facial scoring. It
 requires `kind=module`, an exact non-streaming `/v1/chat/completions` route
-and fixed-request pricing. Existing facial routes without a selector use
-the bundled facial profile. `FACIAL_SCORING_API_KEY` and `ZAP_IT_API_KEY`
+and fixed-request pricing. Existing providers without a selector resolve through bundled JSON binding
+data. The shared `json_fields` response mapper selects text and optionally one
+base64 PNG/JPEG/WebP using bounded JSON pointers and configured response/image
+byte limits; service names are not dispatch conditions. `FACIAL_SCORING_API_KEY` and `ZAP_IT_API_KEY`
 are separate server-side environment references, never client keys. See
 [completion services](completion-services.md) for limits, setup and SDK examples.
 

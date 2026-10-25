@@ -821,9 +821,10 @@ live score request or production route activation is implied by this contract.
 The `zap-it-1` profile uses the same adapter and non-streaming Chat ingress:
 one inline image plus one YAML text part becomes a request to the backend
 public `/v1/responses` facade. Assistant content is canonical
-`zap-it.public.v1` JSON text, with zero token usage and fixed-request
-accounting. This does not expose the private multipart `/v1/completions`,
-ZIP/debug outputs, image-generation calls or module Responses ingress.
+`zap-it.public.v1` JSON text plus one annotated PNG in the documented
+`message.images` custom-client extension, with zero token usage and fixed-request
+accounting. Image output mapping is generic profile data for any service. This does not expose the private multipart `/v1/completions`,
+ZIP/debug outputs, client-selected image tools or module Responses ingress.
 See [configured completion services](completion-services.md).
 
 ## Hard quota exhaustion errors

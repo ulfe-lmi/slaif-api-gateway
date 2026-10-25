@@ -72,9 +72,10 @@ The old `slaif_gateway.modules.facial_scoring` import path is a thin
 compatibility re-export. Its implementation is shared with ZAP-IT under
 `modules/servers/completion_service/`; the former server path also re-exports
 the same class. Strict external JSON profiles select reviewed transport and
-response-mapping primitives, not code paths or plugin classes. The legacy
-`facial_scoring` descriptor and explicit `configured-completion` descriptor
-use one factory and adapter class. See [completion services](completion-services.md). Provider construction delegates to the
+response-mapping primitives, not code paths or plugin classes. One `configured-completion` descriptor serves every configured service;
+legacy provider/default-profile bindings are JSON data. No service name selects
+a code branch or adapter class. The generic output-field mapper supports text
+plus one inline image using configured JSON pointers. See [completion services](completion-services.md). Provider construction delegates to the
 server registry; there is no parallel production factory.
 
 ## Change ownership

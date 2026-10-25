@@ -106,7 +106,12 @@ def test_sdk_completion_profiles_with_real_admission_and_accounting(monkeypatch,
                             "text": '{"schema_version":"zap-it.public.v1","objects":[]}',
                         },
                     ],
-                }
+                },
+                {
+                    "type": "image_generation_call",
+                    "status": "completed",
+                    "result": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=",
+                },
             ],
         }
     with _run_uvicorn_server(create_app(get_settings()), port):
@@ -133,6 +138,11 @@ def test_sdk_completion_profiles_with_real_admission_and_accounting(monkeypatch,
     assert result.usage.total_tokens == 0
     if profile_id == "zap-it-v1":
         assert json.loads(result.choices[0].message.content)["schema_version"] == "zap-it.public.v1"
+        image = result.choices[0].message.model_extra["images"][0]["image_url"]["url"]
+        assert image.startswith("data:image/png;base64,")
+        import base64
+
+        assert base64.b64decode(image.split(",")[1], validate=True).startswith(b"\x89PNG\r\n\x1a\n")
     else:
         assert result.choices[0].message.content == "Score: 0.2500 (type: uncalibrated_model_score)"
     state = asyncio.run(_load_accounting_state(db, created.gateway_key_id, provider=provider))

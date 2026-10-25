@@ -13,7 +13,7 @@ from slaif_gateway.modules.contracts import (
 )
 from slaif_gateway.modules.servers.completion_service import CompletionServiceAdapter
 from slaif_gateway.modules.servers.completion_service.profiles import (
-    MODULE_ID as COMPLETION_SERVICE_MODULE_ID, load_profile, profile_id_from_capabilities,
+    MODULE_ID as COMPLETION_SERVICE_MODULE_ID, load_profile, load_bindings, resolve_profile_id,
 )
 from slaif_gateway.modules.servers.local_coding.adapter import LocalCodingAdapter
 from slaif_gateway.modules.servers.local_coding.contract import (
@@ -35,7 +35,7 @@ from slaif_gateway.providers.openrouter import OpenRouterProviderAdapter
 OPENAI_SERVER_MODULE_ID = "openai"
 OPENROUTER_SERVER_MODULE_ID = "openrouter"
 OPENAI_COMPATIBLE_SERVER_MODULE_ID = "openai-compatible"
-FACIAL_SCORING_SERVER_MODULE_ID = "facial_scoring"
+FACIAL_SCORING_SERVER_MODULE_ID = COMPLETION_SERVICE_MODULE_ID  # deprecated import alias
 
 
 def _openai_factory(settings: object, **kwargs: object) -> object:
@@ -97,15 +97,6 @@ SERVER_MODULE_REGISTRY: Mapping[str, tuple[ServerModuleDescriptor, Callable[...,
             ),
             _openai_compatible_factory,
         ),
-        FACIAL_SCORING_SERVER_MODULE_ID: (
-            ServerModuleDescriptor(
-                module_id=FACIAL_SCORING_SERVER_MODULE_ID,
-                module_version="1",
-                provider_slugs=frozenset({"facial_scoring"}),
-                provider_kinds=frozenset({"module"}),
-            ),
-            _completion_service_factory,
-        ),
         COMPLETION_SERVICE_MODULE_ID: (
             ServerModuleDescriptor(
                 module_id=COMPLETION_SERVICE_MODULE_ID, module_version="1",
@@ -165,16 +156,14 @@ def resolve_server_module(
     """Resolve provider configuration to one static server descriptor."""
     normalized_provider = provider.strip().lower() if isinstance(provider, str) else ""
     normalized_kind = provider_kind.strip() if isinstance(provider_kind, str) else ""
-    profile_id = profile_id_from_capabilities(route_capabilities)
-    if profile_id is not None:
+    has_profile = isinstance(route_capabilities, Mapping) and "completion_service" in route_capabilities
+    if has_profile or (normalized_kind == "module" and normalized_provider in load_bindings().providers):
         if normalized_kind != "module" or any(
-            key in route_capabilities for key in (VLLM_ROUTE_CAPABILITY_KEY, LOCAL_CODING_ROUTE_CAPABILITY_KEY, VIDEO_CAPABILITY_KEY)
+            key in (route_capabilities or {}) for key in (VLLM_ROUTE_CAPABILITY_KEY, LOCAL_CODING_ROUTE_CAPABILITY_KEY, VIDEO_CAPABILITY_KEY)
         ):
             raise ProviderConfigurationError(error_code="completion_service_profile_invalid")
-        module_id = (FACIAL_SCORING_SERVER_MODULE_ID
-                     if profile_id == "facial-scoring-v1" and normalized_provider == "facial_scoring"
-                     else COMPLETION_SERVICE_MODULE_ID)
-        return SERVER_MODULE_REGISTRY[module_id][0]
+        resolve_profile_id(normalized_provider, route_capabilities)
+        return SERVER_MODULE_REGISTRY[COMPLETION_SERVICE_MODULE_ID][0]
 
     if isinstance(route_capabilities, Mapping) and VIDEO_CAPABILITY_KEY in route_capabilities:
         try:
@@ -277,7 +266,7 @@ def build_server_adapter(
     factory = entry[1]
     kwargs: dict[str, object] = {
         "api_key": api_key,
-        "timeout_seconds": timeout_seconds or (300 if descriptor.module_id == FACIAL_SCORING_SERVER_MODULE_ID else None),
+        "timeout_seconds": timeout_seconds or None,
         "max_retries": max_retries,
         "provider_name": provider_name,
     }
@@ -285,10 +274,10 @@ def build_server_adapter(
         kwargs["base_url"] = base_url
     if descriptor.module_id in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID, VIDEO_MODULE_ID}:
         kwargs["route_capabilities"] = route_capabilities
-    if descriptor.module_id in {FACIAL_SCORING_SERVER_MODULE_ID, COMPLETION_SERVICE_MODULE_ID}:
-        profile_id = profile_id_from_capabilities(route_capabilities)
+    if descriptor.module_id == COMPLETION_SERVICE_MODULE_ID:
+        profile_id = resolve_profile_id(provider_name, route_capabilities)
         profile = load_profile(
-            profile_id or "facial-scoring-v1", getattr(settings, "COMPLETION_SERVICE_PROFILE_DIR", ""),
+            profile_id, getattr(settings, "COMPLETION_SERVICE_PROFILE_DIR", ""),
         )
         if profile.module_id != descriptor.module_id:
             raise ProviderConfigurationError(error_code="completion_service_profile_invalid")

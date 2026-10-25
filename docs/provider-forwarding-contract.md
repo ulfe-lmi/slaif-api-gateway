@@ -1012,8 +1012,8 @@ client `Authorization` is never forwarded.
 
 Native module configurations use `kind=module` and a separately reviewed
 static adapter contract built on the same safe `ProviderRequest` and
-`ProviderResponse` boundary. The legacy `facial_scoring` and explicit
-`configured-completion` registrations share one adapter. Strict JSON profiles
+`ProviderResponse` boundary. The `configured-completion` registration serves every configured
+service through one adapter; legacy provider bindings are JSON data. Strict JSON profiles
 select its fixed mapping primitives for facial scoring and ZAP-IT; unknown
 identifiers, invalid profiles, arbitrary
 import paths, user-supplied classes, and dynamic plugin loading fail closed.
@@ -1027,8 +1027,10 @@ single `image` multipart field, and returns an OpenAI-shaped text completion
 with zero provider token usage. Module Responses and module streaming remain
 unsupported. The ZAP-IT profile sends one image and one YAML file as JSON
 to the operator-configured `/v1/responses` facade using its server-side
-Bearer, validates the completed public JSON text response, and wraps it as
-Chat assistant content. It never calls the native private completions/ZIP
+Bearer, validates the completed public JSON text and annotated image response,
+and maps them to Chat assistant content plus `message.images`. The same generic
+JSON-pointer mapper serves arbitrary configured services; service identities
+and endpoints are profile data, not code conditions. It never calls the native private completions/ZIP
 interface or forwards client tools. Both profiles bound decoded success/error
 responses to their configured byte ceiling before processing. See
 [completion services](completion-services.md) for exact configuration and limits.

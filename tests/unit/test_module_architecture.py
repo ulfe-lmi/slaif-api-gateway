@@ -46,7 +46,6 @@ def test_module_registries_are_literal_and_fail_closed() -> None:
         "openai",
         "openrouter",
         "openai-compatible",
-        "facial_scoring",
         "configured-completion",
         "local-coding-v1",
         "local-coding-vLLM",
@@ -67,7 +66,7 @@ def test_server_resolution_is_static_and_unknown_modules_fail_closed() -> None:
     assert resolve_server_module("openai", None).module_id == "openai"
     assert resolve_server_module("openrouter", "openrouter").module_id == "openrouter"
     assert resolve_server_module("local-model", "openai_compatible").module_id == "openai-compatible"
-    assert resolve_server_module("facial_scoring", "module").module_id == "facial_scoring"
+    assert resolve_server_module("facial_scoring", "module").module_id == "configured-completion"
     with pytest.raises(ProviderConfigurationError) as exc_info:
         resolve_server_module("unreviewed", "module")
     assert exc_info.value.error_code == "unsupported_module"

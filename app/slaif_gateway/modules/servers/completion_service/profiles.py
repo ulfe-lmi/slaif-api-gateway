@@ -19,6 +19,31 @@ MODULE_ID = "configured-completion"
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 
 
+def validate_pointer(value: str) -> str:
+    if (
+        not value.startswith("/")
+        or len(value) > 256
+        or len(value.split("/")) > 17
+        or re.search(r"~(?![01])", value)
+    ):
+        raise ValueError("Invalid bounded JSON pointer")
+    return value
+
+
+class ImageOutput(BaseModel):
+    """One inline image selected from a service response, without URL fetching."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    pointer: str
+    media_type: Literal["image/png", "image/jpeg", "image/webp"]
+    max_decoded_bytes: int = Field(default=16 * 1024 * 1024, gt=0, le=32 * 1024 * 1024)
+
+    @field_validator("pointer")
+    @classmethod
+    def safe_pointer(cls, value):
+        return validate_pointer(value)
+
+
 class CompletionProfile(BaseModel):
     """Only reviewed transport/mapping primitives, never expressions or imports."""
 
@@ -27,17 +52,22 @@ class CompletionProfile(BaseModel):
     profile_id: str
     public_model: str = Field(min_length=1, max_length=128)
     upstream_model: str = Field(min_length=1, max_length=128)
-    module_id: Literal["facial_scoring", "configured-completion"] = MODULE_ID
+    module_id: Literal["configured-completion"] = MODULE_ID
     upstream_path: str
     api_key_env_var: str
     auth_header: Literal["X-API-Key", "Authorization"]
     auth_prefix: Literal["", "Bearer "]
     request_mapping: Literal["multipart_image", "responses_image_yaml"]
-    response_mapping: Literal["score_status", "responses_json_text"]
+    response_mapping: Literal["score_status", "responses_json_text", "json_fields"]
     image_media_types: list[Literal["image/png", "image/jpeg", "image/webp", "image/gif"]]
     max_image_data_url_bytes: int = Field(gt=0, le=28 * 1024 * 1024)
     max_yaml_bytes: int = Field(default=262144, gt=0, le=262144)
-    max_response_bytes: int = Field(default=2 * 1024 * 1024, gt=0, le=16 * 1024 * 1024)
+    max_response_bytes: int = Field(default=2 * 1024 * 1024, gt=0, le=64 * 1024 * 1024)
+    text_pointer: str | None = None
+    image_output: ImageOutput | None = None
+    response_checks: dict[str, str | int | bool] = Field(default_factory=dict)
+    response_array_lengths: dict[str, int] = Field(default_factory=dict)
+    request_image_output: bool = False
     result_schema_version: str | None = None
     request_error_code: str = "completion_service_request_invalid"
     response_id_prefix: str = Field(default="chatcmpl-service-", pattern=r"^[A-Za-z0-9-]{1,32}$")
@@ -65,20 +95,30 @@ class CompletionProfile(BaseModel):
             self.image_media_types
         ):
             raise ValueError("Invalid image media types")
-        if (self.request_mapping == "responses_image_yaml") != (
-            self.response_mapping == "responses_json_text"
+        if (
+            self.request_mapping == "responses_image_yaml"
+            and self.response_mapping == "score_status"
         ):
             raise ValueError("Incompatible request/response mappings")
         if self.response_mapping == "responses_json_text" and not self.result_schema_version:
             raise ValueError("JSON projection requires a schema version")
-        if self.module_id == "facial_scoring" and (
-            self.profile_id != "facial-scoring-v1"
-            or self.public_model != "facial-manipulation-scoring"
-            or self.upstream_model != self.public_model
-            or self.request_mapping != "multipart_image"
-            or self.api_key_env_var != "FACIAL_SCORING_API_KEY"
+        if self.response_mapping == "json_fields":
+            if self.text_pointer is None:
+                raise ValueError("Field mapping requires a text pointer")
+            validate_pointer(self.text_pointer)
+        elif self.text_pointer is not None or self.image_output is not None:
+            raise ValueError("Output field selectors require json_fields mapping")
+        if self.request_image_output and (
+            self.request_mapping != "responses_image_yaml" or self.image_output is None
         ):
-            raise ValueError("Legacy module identity cannot be reassigned")
+            raise ValueError("Responses image request requires an image output mapping")
+        for checks in (self.response_checks, self.response_array_lengths):
+            if len(checks) > 16:
+                raise ValueError("Too many response checks")
+            for pointer in checks:
+                validate_pointer(pointer)
+        if any(type(n) is not int or n < 0 or n > 64 for n in self.response_array_lengths.values()):
+            raise ValueError("Invalid response array bound")
         if not re.fullmatch(r"[a-z][a-z0-9_]{0,95}", self.request_error_code):
             raise ValueError("Invalid error code")
         return self
@@ -126,3 +166,47 @@ def load_profile(profile_id: str, directory: str = "") -> CompletionProfile:
         return profile
     except (OSError, ValueError, TypeError, RecursionError) as exc:
         raise ProviderConfigurationError(error_code="completion_service_profile_invalid") from exc
+
+
+class ProfileBindings(BaseModel):
+    """Data-only compatibility bindings; new routes normally select a profile explicitly."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    version: Literal[1]
+    default_profile: str
+    providers: dict[str, str]
+
+    @model_validator(mode="after")
+    def safe_bindings(self):
+        if not _ID.fullmatch(self.default_profile) or len(self.providers) > 256:
+            raise ValueError("Invalid profile bindings")
+        for provider, profile in self.providers.items():
+            if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", provider) or not _ID.fullmatch(
+                profile
+            ):
+                raise ValueError("Invalid profile binding")
+        return self
+
+
+@lru_cache(maxsize=1)
+def load_bindings() -> ProfileBindings:
+    path = Path(__file__).parent / "profiles" / "bindings.json"
+    try:
+        if path.stat().st_size > 65536:
+            raise ValueError("Bindings exceed size limit")
+        return ProfileBindings.model_validate(json.loads(path.read_bytes()))
+    except (OSError, ValueError, TypeError, RecursionError) as exc:
+        raise ProviderConfigurationError(error_code="completion_service_profile_invalid") from exc
+
+
+def resolve_profile_id(provider: str, capabilities: object) -> str:
+    profile_id = profile_id_from_capabilities(capabilities) or load_bindings().providers.get(
+        provider
+    )
+    if profile_id is None:
+        raise ProviderConfigurationError(error_code="unsupported_module")
+    return profile_id
+
+
+def load_default_profile() -> CompletionProfile:
+    return load_profile(load_bindings().default_profile)
