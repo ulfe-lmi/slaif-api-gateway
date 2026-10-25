@@ -798,7 +798,8 @@ its own bounded qualification.
 `ProviderConfig.kind=module` is an operator metadata and accounting
 foundation, not a new OpenAI-compatible provider claim. Dispatch is restricted
 to a reviewed static source registry. The registry contains the bounded
-`facial_scoring` adapter; unknown module identifiers still fail closed and
+shared configured-completion adapter for facial scoring and ZAP-IT; unknown
+module identifiers and missing/invalid profiles still fail closed and
 configuration cannot select an import path, class, or plugin.
 
 The `facial-manipulation-scoring` public model is limited to non-streaming
@@ -816,6 +817,14 @@ sent, logged, or persisted. The module credential is read only from
 `FACIAL_SCORING_API_KEY`; the client gateway credential is never reused. No
 live score request or production route activation is implied by this contract.
 
+
+The `zap-it-1` profile uses the same adapter and non-streaming Chat ingress:
+one inline image plus one YAML text part becomes a request to the backend
+public `/v1/responses` facade. Assistant content is canonical
+`zap-it.public.v1` JSON text, with zero token usage and fixed-request
+accounting. This does not expose the private multipart `/v1/completions`,
+ZIP/debug outputs, image-generation calls or module Responses ingress.
+See [configured completion services](completion-services.md).
 
 ## Hard quota exhaustion errors
 

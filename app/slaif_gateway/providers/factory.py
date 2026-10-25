@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 
 from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR, Settings
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID
+from slaif_gateway.modules.servers.completion_service.profiles import load_profile, profile_id_from_capabilities
 from slaif_gateway.modules.servers.registry import (
     build_server_adapter,
     ensure_client_server_pair,
@@ -30,17 +31,22 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
 
     base_url = _provider_base_url(provider)
     api_key_env_var = _provider_api_key_env_var(provider) or _default_api_key_env_var(normalized)
-    if descriptor.module_id == "facial_scoring" and api_key_env_var != "FACIAL_SCORING_API_KEY":
-        raise ProviderConfigurationError(
-            "Facial scoring requires the FACIAL_SCORING_API_KEY environment variable",
-            provider=normalized,
-            error_code="invalid_provider_configuration",
+    if descriptor.module_id in {"facial_scoring", "configured-completion"}:
+        profile = load_profile(
+            profile_id_from_capabilities(route_capabilities) or "facial-scoring-v1",
+            settings.COMPLETION_SERVICE_PROFILE_DIR,
         )
+        api_key_env_var = api_key_env_var or profile.api_key_env_var
+        if api_key_env_var != profile.api_key_env_var:
+            raise ProviderConfigurationError(
+                "Completion service credential reference does not match its profile",
+                provider=normalized, error_code="invalid_provider_configuration",
+            )
     api_key = _provider_api_key(api_key_env_var, settings=settings, provider=normalized)
     timeout_seconds = _provider_timeout_seconds(provider)
     max_retries = _provider_max_retries(provider)
 
-    if descriptor.module_id == "facial_scoring":
+    if descriptor.module_id in {"facial_scoring", "configured-completion"}:
         if not base_url:
             raise ProviderConfigurationError(
                 "Native module provider requires a base URL",

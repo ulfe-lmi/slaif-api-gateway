@@ -433,6 +433,40 @@ def test_facial_scoring_module_forwards_one_image_and_finalizes_fixed_usage(
     assert state["provider_responses"][0].usage.total_tokens == 0
 
 
+def test_zap_module_uses_shared_adapter_and_existing_accounting(monkeypatch, respx_mock):
+    monkeypatch.setenv("ZAP_IT_API_KEY", "zap-native-key")
+    app = create_app(Settings(OPENAI_UPSTREAM_API_KEY=None))
+    state = _wire_pipeline(
+        monkeypatch, app, provider="zap_it", resolved_model="zap-it-1",
+        route_requested_model="zap-it-1", expected_requested_model="zap-it-1",
+        provider_kind="module", provider_base_url="https://zap-native.example",
+        provider_api_key_env_var="ZAP_IT_API_KEY",
+        route_capabilities={
+            "chat_completions": facial_scoring_chat_completion_capabilities(),
+            "completion_service": {"version": 1, "profile": "zap-it-v1"},
+        },
+    )
+    upstream = respx_mock.post("https://zap-native.example/v1/responses").mock(
+        return_value=httpx.Response(200, json={"status": "completed", "output": [{
+            "type": "message", "role": "assistant", "content": [{"type": "output_text",
+            "text": '{"schema_version":"zap-it.public.v1","objects":[]}'}],
+        }]}),
+    )
+    response = TestClient(app).post("/v1/chat/completions", json={
+        "model": "zap-it-1", "messages": [{"role": "user", "content": [
+            {"type": "text", "text": "pipeline: sam2\n"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+        ]}],
+    }, headers={"Authorization": "Bearer client-gateway-key"})
+    assert response.status_code == 200
+    assert json.loads(response.json()["choices"][0]["message"]["content"])["schema_version"] == "zap-it.public.v1"
+    assert response.json()["usage"]["total_tokens"] == 0
+    assert upstream.call_count == 1
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer zap-native-key"
+    assert state["reserve_calls"] and state["finalize_calls"]
+    assert state["provider_responses"][0].usage.total_tokens == 0
+
+
 def test_facial_scoring_module_preserves_unscorable_result_without_native_content(
     monkeypatch,
     respx_mock,

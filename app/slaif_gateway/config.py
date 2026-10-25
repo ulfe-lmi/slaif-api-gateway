@@ -404,6 +404,9 @@ class Settings(BaseSettings):
     # stop operate on a shared local manifest and need no restart. Reading a
     # setting alone never creates a capture window. Requires an absolute
     # operator-owned 0700 directory outside the repo/DB; see the runbook.
+    # Optional operator-owned profile directory; empty uses bundled JSON presets.
+    # Profile edits require API worker restart.
+    COMPLETION_SERVICE_PROFILE_DIR: str = ""
     REQUEST_CAPTURE_ENABLED: bool = False
     REQUEST_CAPTURE_DIR: str = ""
     # Body capture budget. Default 10 MiB, independent of the larger Nginx
