@@ -57,7 +57,7 @@ def test_shipped_presets_validate_against_schema_and_loader():
     Draft202012Validator.check_schema(schema)
     validator = Draft202012Validator(schema)
     presets = list_codex_presets()
-    assert {name for name, _, _ in presets} == {'codex-0.162.1','codex-0.163.0'}
+    assert {name for name, _, _ in presets} == {'codex-0.162.1','codex-0.163.0','codex-0.164.0'}
     for _, path, profile in presets:
         validator.validate(json.loads(path.read_text()))
         assert profile.schema_version == 2
@@ -207,7 +207,7 @@ def test_cli_exports_a_complete_validated_preset_without_overwrite(tmp_path):
     runner = CliRunner()
     result = runner.invoke(codex_cli,['presets','--json'])
     assert result.exit_code == 0, result.output
-    assert len(json.loads(result.output)['presets']) == 2
+    assert len(json.loads(result.output)['presets']) == 3
     target = tmp_path/'operator.json'
     assert runner.invoke(codex_cli,['export-preset','codex-0.163.0','--output',str(target)]).exit_code == 0
     assert load_codex_profile_file(target).cli_version == '0.163.0'

@@ -8,6 +8,10 @@
     {
       "name": "codex-0.163.0",
       "file": "codex-0.163.0.json"
+    },
+    {
+      "name": "codex-0.164.0",
+      "file": "codex-0.164.0.json"
     }
   ]
 }
