@@ -69,8 +69,12 @@ loading, package discovery, admin-supplied classes, a plugin marketplace, or a
 third-party module SDK.
 
 The old `slaif_gateway.modules.facial_scoring` import path is a thin
-compatibility re-export. Its single implementation is now under
-`modules/servers/facial_scoring/`. Provider construction delegates to the
+compatibility re-export. Its implementation is shared with ZAP-IT under
+`modules/servers/completion_service/`; the former server path also re-exports
+the same class. Strict external JSON profiles select reviewed transport and
+response-mapping primitives, not code paths or plugin classes. The legacy
+`facial_scoring` descriptor and explicit `configured-completion` descriptor
+use one factory and adapter class. See [completion services](completion-services.md). Provider construction delegates to the
 server registry; there is no parallel production factory.
 
 ## Change ownership

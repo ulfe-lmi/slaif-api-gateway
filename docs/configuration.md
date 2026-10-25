@@ -425,6 +425,23 @@ smoke. That smoke returned HTTP 200 and the sanitized native
 model accuracy, authenticity, calibration, gateway end-to-end qualification,
 certification, production readiness, or an SLA.
 
+## Configured Completion Service Profiles
+
+`COMPLETION_SERVICE_PROFILE_DIR` defaults to empty (bundled JSON profiles).
+An absolute operator-owned directory can provide strict `<profile-id>.json`
+files for the shared facial-scoring/ZAP-IT adapter. Files must be regular,
+non-symlink, at most 64 KiB and not group/world-writable. Unknown fields,
+unsafe IDs, paths, credential references and mapping modes fail closed.
+Profiles are cached per worker; edits require worker restart.
+
+The `completion_service` route selector is `{"version": 1, "profile":
+"zap-it-v1"}` for ZAP-IT, or `facial-scoring-v1` for facial scoring. It
+requires `kind=module`, an exact non-streaming `/v1/chat/completions` route
+and fixed-request pricing. Existing facial routes without a selector use
+the bundled facial profile. `FACIAL_SCORING_API_KEY` and `ZAP_IT_API_KEY`
+are separate server-side environment references, never client keys. See
+[completion services](completion-services.md) for limits, setup and SDK examples.
+
 ## OpenAI Assisted Catalog Proposals
 
 The admin-only proposal generator uses a separate discovery key:

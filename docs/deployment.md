@@ -240,6 +240,27 @@ viewer.
 `/admin`, and `/healthz` to the API service. `/readyz` is allowlisted to private
 networks by default, and `/metrics` is denied by default.
 
+Both shipped Nginx templates (`deploy/nginx/slaif-api-gateway.conf` and
+`nginx/production.conf`) set the API transport allowance inside
+`location /v1/`:
+
+```nginx
+client_max_body_size 128m;
+```
+
+This is 128 MiB for the complete request body, including JSON, base64 media,
+conversation history and tool declarations. Base64 adds roughly one third to
+the original binary size. Gateway endpoint/media validation, model context,
+key policy, quotas and request-capture budgets remain independent. This does
+not add video support or guarantee that a 128 MiB body is valid model input.
+Admin upload limits remain separate. Custom ingress configurations need the
+same explicit API setting; omitting it leaves Nginx's default 1 MiB limit,
+which returns an HTML 413 before the gateway can authenticate or validate.
+
+After editing an existing deployment, run `nginx -t` and reload Nginx. An
+application rebuild, API restart, database migration or key rotation is not
+needed for this setting.
+
 Streaming routes require anti-buffering and long timeouts:
 
 ```nginx

@@ -404,11 +404,15 @@ class Settings(BaseSettings):
     # stop operate on a shared local manifest and need no restart. Reading a
     # setting alone never creates a capture window. Requires an absolute
     # operator-owned 0700 directory outside the repo/DB; see the runbook.
+    # Optional operator-owned profile directory; empty uses bundled JSON presets.
+    # Profile edits require API worker restart.
+    COMPLETION_SERVICE_PROFILE_DIR: str = ""
     REQUEST_CAPTURE_ENABLED: bool = False
     REQUEST_CAPTURE_DIR: str = ""
-    # Body capture budget. Default 10 MiB so a full request within the shipped
-    # NGINX client_max_body_size (10m) is capturable; base64/metadata overhead
-    # is accounted separately in the store.
+    # Body capture budget. Default 10 MiB, independent of the larger Nginx
+    # API transport allowance. Larger captures need explicit operator budgets;
+    # exceeding a capture budget never rejects the original request.
+    # Base64/metadata overhead is accounted separately in the store.
     REQUEST_CAPTURE_BODY_BUDGET_BYTES: int = 10485760
     # Total on-disk storage budget for the whole capture root (all sessions).
     # Must be at least the per-capture budget to allow one full-body capture.

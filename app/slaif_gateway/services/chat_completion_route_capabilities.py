@@ -117,8 +117,8 @@ def default_chat_completion_capabilities(*, supports_streaming: bool = True) -> 
     }
 
 
-def facial_scoring_chat_completion_capabilities() -> dict[str, bool]:
-    """Return the exact narrow capability profile for the facial module route."""
+def completion_service_chat_completion_capabilities() -> dict[str, bool]:
+    """Return the narrow text/image profile for configured completion services."""
 
     capabilities = default_chat_completion_capabilities(supports_streaming=False)
     capabilities.update(
@@ -136,6 +136,11 @@ def facial_scoring_chat_completion_capabilities() -> dict[str, bool]:
         }
     )
     return capabilities
+
+
+def facial_scoring_chat_completion_capabilities() -> dict[str, bool]:
+    """Compatibility name for the shared completion-service capability profile."""
+    return completion_service_chat_completion_capabilities()
 
 
 def ensure_default_chat_completion_capabilities(

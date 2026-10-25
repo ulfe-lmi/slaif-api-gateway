@@ -57,10 +57,10 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _policy() -> ChatCompletionPolicyResult:
+def _policy(model=MODEL) -> ChatCompletionPolicyResult:
     return ChatCompletionPolicyResult(
         effective_body={
-            "model": MODEL,
+            "model": model,
             "messages": [{"role": "user", "content": [{"type": "image_url"}]}],
             "max_completion_tokens": 1,
         },
@@ -90,33 +90,36 @@ def _route(*, provider_config, route_row) -> RouteResolutionResult:
     )
 
 
-async def _qualification_objects(session: AsyncSession):
+async def _qualification_objects(session: AsyncSession, service):
+    model, provider, env = service
     now = datetime.now(UTC).replace(microsecond=0)
     provider_config = await ProviderConfigsRepository(session).create_provider_config(
-        provider=PROVIDER,
+        provider=provider,
         display_name="Facial scoring qualification module",
         kind="module",
         base_url="https://facial-module.test",
-        api_key_env_var="FACIAL_SCORING_API_KEY",
+        api_key_env_var=env,
         timeout_seconds=17,
         max_retries=0,
         notes="mocked qualification metadata only",
     )
     route_row = await ModelRoutesRepository(session).create_model_route(
-        requested_model=MODEL,
-        provider=PROVIDER,
-        upstream_model=MODEL,
+        requested_model=model,
+        provider=provider,
+        upstream_model=model,
         endpoint=ENDPOINT,
         priority=100,
         enabled=True,
         visible_in_models=True,
         supports_streaming=False,
-        capabilities={"chat_completions": facial_scoring_chat_completion_capabilities()},
+        capabilities={"chat_completions": facial_scoring_chat_completion_capabilities(),
+                      **({"completion_service": {"version": 1, "profile": "zap-it-v1"}}
+                         if provider == "zap_it" else {})},
         notes="mocked qualification route only",
     )
     pricing_row = await PricingRulesRepository(session).create_pricing_rule(
-        provider=PROVIDER,
-        upstream_model=MODEL,
+        provider=provider,
+        upstream_model=model,
         endpoint=ENDPOINT,
         currency="EUR",
         input_price_per_1m=Decimal("0"),
@@ -153,9 +156,9 @@ async def _qualification_objects(session: AsyncSession):
             cost_limit_eur=Decimal("0.01"),
             token_limit_total=1,
             request_limit_total=2,
-            allowed_models=[MODEL],
+            allowed_models=[model],
             allowed_endpoints=[ENDPOINT],
-            allowed_providers=[PROVIDER],
+            allowed_providers=[provider],
             rate_limit_policy={
                 "requests_per_minute": 5,
                 "tokens_per_minute": 5,
@@ -171,14 +174,19 @@ async def _qualification_objects(session: AsyncSession):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("service", [
+    (MODEL, PROVIDER, "FACIAL_SCORING_API_KEY"),
+    ("zap-it-1", "zap_it", "ZAP_IT_API_KEY"),
+])
 async def test_postgres_facial_scoring_fixed_pricing_reservation_accounting_and_release(
-    async_test_session: AsyncSession,
+    async_test_session: AsyncSession, service,
 ) -> None:
+    model, provider, env = service
     now, settings, provider_config, route_row, pricing_row, created, gateway_key = (
-        await _qualification_objects(async_test_session)
+        await _qualification_objects(async_test_session, service)
     )
     route = _route(provider_config=provider_config, route_row=route_row)
-    policy = _policy()
+    policy = _policy(model)
     pricing = PricingService(
         pricing_rules_repository=PricingRulesRepository(async_test_session),
         fx_rates_repository=FxRatesRepository(async_test_session),
@@ -227,8 +235,8 @@ async def test_postgres_facial_scoring_fixed_pricing_reservation_accounting_and_
         policy,
         estimate,
         ProviderResponse(
-            provider=PROVIDER,
-            upstream_model=MODEL,
+            provider=provider,
+            upstream_model=model,
             status_code=200,
             json_body={"status": "scored"},
             usage=ProviderUsage(prompt_tokens=51, completion_tokens=7, total_tokens=58),
@@ -311,8 +319,8 @@ async def test_postgres_facial_scoring_fixed_pricing_reservation_accounting_and_
         policy,
         estimate,
         ProviderResponse(
-            provider=PROVIDER,
-            upstream_model=MODEL,
+            provider=provider,
+            upstream_model=model,
             status_code=200,
             json_body={"status": "unscorable"},
             usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
@@ -332,18 +340,23 @@ async def test_postgres_facial_scoring_fixed_pricing_reservation_accounting_and_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("service", [
+    (MODEL, PROVIDER, "FACIAL_SCORING_API_KEY"),
+    ("zap-it-1", "zap_it", "ZAP_IT_API_KEY"),
+])
 async def test_postgres_facial_scoring_revocation_expiry_and_audit_boundaries(
-    async_test_session: AsyncSession,
+    async_test_session: AsyncSession, service,
 ) -> None:
+    model, provider, env = service
     now, settings, provider_config, route_row, _, created, gateway_key = (
-        await _qualification_objects(async_test_session)
+        await _qualification_objects(async_test_session, service)
     )
     route = _route(provider_config=provider_config, route_row=route_row)
-    policy = _policy()
+    policy = _policy(model)
     estimate = ChatCostEstimate(
-        provider=PROVIDER,
-        requested_model=MODEL,
-        resolved_model=MODEL,
+        provider=provider,
+        requested_model=model,
+        resolved_model=model,
         native_currency="EUR",
         estimated_input_tokens=0,
         estimated_output_tokens=0,
@@ -420,4 +433,4 @@ async def test_postgres_facial_scoring_revocation_expiry_and_audit_boundaries(
     assert "revoke_key" in actions
     audit_text = " ".join(str(row.new_values or {}) for row in audits)
     assert created.plaintext_key not in audit_text
-    assert "FACIAL_SCORING_API_KEY" not in audit_text
+    assert env not in audit_text

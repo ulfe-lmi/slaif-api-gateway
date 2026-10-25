@@ -19,6 +19,7 @@ and do not override current contracts or merged code.
   tutorial: real-provider wiring, Mailpit email, testing, refresh workflows,
   troubleshooting.
 - [Configuration reference](configuration.md) — every supported setting.
+- [Configured completion services](completion-services.md) — shared facial-scoring/ZAP-IT adapter, profiles and client usage.
 - [Product scope](product-scope.md) — what SLAIF is, the deployment boundary,
   and the current/approved-target/non-goal labels.
 - [Compatibility matrix](compatibility-matrix.md) — exact endpoint-family
