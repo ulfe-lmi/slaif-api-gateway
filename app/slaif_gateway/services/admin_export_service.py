@@ -6,7 +6,7 @@ import csv
 import json
 import re
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -16,6 +16,7 @@ from typing import Protocol
 from slaif_gateway.db.models import AuditLog, UsageLedger
 from slaif_gateway.services.chat_live_burn_telemetry import parse_chat_live_burn_usage_detail
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
+from slaif_gateway.utils.admin_list_filters import clean_text_filter
 from slaif_gateway.utils.sanitization import is_content_key, sanitize_metadata
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -79,15 +80,15 @@ class UsageExportRepository(Protocol):
     async def list_usage_for_admin(
         self,
         *,
-        provider: str | None = None,
-        model: str | None = None,
-        endpoint: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        model: str | Sequence[str] | None = None,
+        endpoint: str | Sequence[str] | None = None,
         status: str | None = None,
-        gateway_key_id: uuid.UUID | None = None,
-        owner_id: uuid.UUID | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
-        request_id: str | None = None,
+        gateway_key_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        request_id: str | Sequence[str] | None = None,
         streaming: bool | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
@@ -100,11 +101,11 @@ class AuditExportRepository(Protocol):
     async def list_audit_logs_for_admin(
         self,
         *,
-        actor_admin_id: uuid.UUID | None = None,
-        action: str | None = None,
-        target_type: str | None = None,
-        target_id: uuid.UUID | None = None,
-        request_id: str | None = None,
+        actor_admin_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        action: str | Sequence[str] | None = None,
+        target_type: str | Sequence[str] | None = None,
+        target_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        request_id: str | Sequence[str] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         limit: int = 50,
@@ -155,15 +156,15 @@ class AdminCsvExportService:
         actor_admin_id: uuid.UUID,
         reason: str,
         limit: int,
-        provider: str | None = None,
-        model: str | None = None,
-        endpoint: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        model: str | Sequence[str] | None = None,
+        endpoint: str | Sequence[str] | None = None,
         status: str | None = None,
-        gateway_key_id: uuid.UUID | None = None,
-        owner_id: uuid.UUID | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
-        request_id: str | None = None,
+        gateway_key_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        request_id: str | Sequence[str] | None = None,
         streaming: bool | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
@@ -171,16 +172,20 @@ class AdminCsvExportService:
         user_agent: str | None = None,
         audit_request_id: str | None = None,
     ) -> AdminCsvExportResult:
+        # 195-a: the export follows the SAME validated OR/AND multi-filter
+        # scope as the list page (same predicate path, no first/last
+        # subset, no list stringification). Scalar callers keep the exact
+        # legacy behavior.
         rows = await self._usage.list_usage_for_admin(
-            provider=_clean(provider),
-            model=_clean(model),
-            endpoint=_clean(endpoint),
+            provider=clean_text_filter(provider),
+            model=clean_text_filter(model),
+            endpoint=clean_text_filter(endpoint),
             status=_clean(status),
             gateway_key_id=gateway_key_id,
             owner_id=owner_id,
             institution_id=institution_id,
             cohort_id=cohort_id,
-            request_id=_clean(request_id),
+            request_id=clean_text_filter(request_id),
             streaming=streaming,
             start_at=start_at,
             end_at=end_at,
@@ -231,23 +236,24 @@ class AdminCsvExportService:
         actor_admin_id: uuid.UUID,
         reason: str,
         limit: int,
-        actor_filter_admin_id: uuid.UUID | None = None,
-        action: str | None = None,
-        target_type: str | None = None,
-        target_id: uuid.UUID | None = None,
-        request_id: str | None = None,
+        actor_filter_admin_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        action: str | Sequence[str] | None = None,
+        target_type: str | Sequence[str] | None = None,
+        target_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        request_id: str | Sequence[str] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         ip_address: str | None = None,
         user_agent: str | None = None,
         audit_request_id: str | None = None,
     ) -> AdminCsvExportResult:
+        # 195-a: same validated multi-filter scope as the audit list page.
         rows = await self._audit.list_audit_logs_for_admin(
             actor_admin_id=actor_filter_admin_id,
-            action=_clean(action),
-            target_type=_clean(target_type),
+            action=clean_text_filter(action),
+            target_type=clean_text_filter(target_type),
             target_id=target_id,
-            request_id=_clean(request_id),
+            request_id=clean_text_filter(request_id),
             start_at=start_at,
             end_at=end_at,
             limit=limit,
@@ -436,10 +442,24 @@ def _drop_export_unsafe_metadata(value: object) -> object:
 
 
 def _safe_filter_metadata(values: Mapping[str, object]) -> dict[str, object]:
+    """JSON-safe effective-filter metadata for the audit row.
+
+    195-a: multi filters arrive as tuples of UUID/datetime/str; every
+    scalar OR sequence member is converted so the persisted metadata is
+    always JSON-serializable (no raw UUID objects, no tuple reprs).
+    Scalar behavior is unchanged.
+    """
+    def convert(value: object) -> object:
+        if isinstance(value, uuid.UUID | datetime):
+            return str(value)
+        if isinstance(value, (list, tuple, set)):
+            return [convert(item) for item in value]
+        return value
+
     return {
-        key: str(value) if isinstance(value, uuid.UUID | datetime) else value
+        key: convert(value)
         for key, value in values.items()
-        if value is not None and value != ""
+        if value is not None and value != "" and value != ()
     }
 
 

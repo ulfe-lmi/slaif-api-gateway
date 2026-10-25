@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from slaif_gateway.db.models import EmailDelivery, Owner
+from slaif_gateway.utils.admin_list_filters import (
+    as_uuid_tuple,
+    as_value_tuple,
+    or_equals,
+)
 
 
 class EmailDeliveriesRepository:
@@ -158,26 +164,35 @@ class EmailDeliveriesRepository:
         self,
         *,
         status: str | None = None,
-        owner_email: str | None = None,
-        gateway_key_id: uuid.UUID | None = None,
-        one_time_secret_id: uuid.UUID | None = None,
+        owner_email: str | Sequence[str] | None = None,
+        gateway_key_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        one_time_secret_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[EmailDelivery]:
         """Return email delivery rows with safe dashboard relationships loaded."""
+        emails = as_value_tuple(owner_email)
+        key_ids = as_uuid_tuple(gateway_key_id)
+        secret_ids = as_uuid_tuple(one_time_secret_id)
+        # 195-a: OR WITHIN a field, AND ACROSS fields; predicates apply in
+        # SQL BEFORE LIMIT/OFFSET. Pre-195 per-member normalization
+        # preserved (case-insensitive substring for owner email, exact
+        # equality for the UUID ids and status).
         statement = _email_delivery_admin_statement()
         if status is not None:
             statement = statement.where(EmailDelivery.status == status)
-        if owner_email is not None:
+        if emails is not None:
             statement = statement.join(EmailDelivery.owner).where(
-                func.lower(Owner.email).like(f"%{owner_email.lower()}%")
+                or_(
+                    *[func.lower(Owner.email).like(f"%{value.lower()}%") for value in emails]
+                )
             )
-        if gateway_key_id is not None:
-            statement = statement.where(EmailDelivery.gateway_key_id == gateway_key_id)
-        if one_time_secret_id is not None:
-            statement = statement.where(EmailDelivery.one_time_secret_id == one_time_secret_id)
+        if key_ids is not None:
+            statement = statement.where(or_equals(EmailDelivery.gateway_key_id, key_ids))
+        if secret_ids is not None:
+            statement = statement.where(or_equals(EmailDelivery.one_time_secret_id, secret_ids))
         if start_at is not None:
             statement = statement.where(EmailDelivery.created_at >= start_at)
         if end_at is not None:

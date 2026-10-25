@@ -27,9 +27,9 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/owners" id="owners-filter">
-    {{ record_choice("email", "owner_email", "Email", options=choices.email, selected_id=filters.email, selected_label=filters.email, allow_new=true, input_id="owners-email") }}
-    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, selected_id=filters.institution_id, selected_label=filters.institution_id, allow_new=true, input_id="owners-institution") }}
-    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id, selected_id=filters.cohort_id, selected_label=filters.cohort_id, allow_new=true, input_id="owners-cohort") }}
+    {{ record_choice("email", "owner_email", "Email", options=choices.email, multi=true, multi_value=filters.email|join("\n"), allow_new=true, help="Matches any selected value", input_id="owners-email") }}
+    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, multi=true, multi_value=filters.institution_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="owners-institution") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id, multi=true, multi_value=filters.cohort_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="owners-cohort") }}
     <button type="submit">Filter</button>
   </form>
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import types
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
-from sqlalchemy import Select, select, text
+from sqlalchemy import Select, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import PricingRule
+from slaif_gateway.utils.admin_list_filters import as_value_tuple, or_equals
 
 # Column keys of the pricing_rules row returned by _COHERENT_PAIR_SQL. The
 # attribute set matches what services.pricing._pricing_lookup_result reads
@@ -155,25 +157,40 @@ class PricingRulesRepository:
     async def list_pricing_rules_for_admin(
         self,
         *,
-        provider: str | None = None,
-        model: str | None = None,
-        endpoint: str | None = None,
-        currency: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        model: str | Sequence[str] | None = None,
+        endpoint: str | Sequence[str] | None = None,
+        currency: str | Sequence[str] | None = None,
         enabled: bool | None = None,
         active: bool | None = None,
         now: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[PricingRule]:
+        providers = as_value_tuple(provider)
+        models = as_value_tuple(model)
+        endpoints = as_value_tuple(endpoint)
+        currencies = as_value_tuple(currency)
+        # 195-a: OR WITHIN a field, AND ACROSS fields; the pre-195
+        # per-member normalization is preserved exactly (exact provider/
+        # endpoint/currency equality, case-insensitive substring for the
+        # upstream model).
         statement: Select[tuple[PricingRule]] = select(PricingRule)
-        if provider is not None:
-            statement = statement.where(PricingRule.provider == provider)
-        if model is not None:
-            statement = statement.where(PricingRule.upstream_model.ilike(f"%{model}%"))
-        if endpoint is not None:
-            statement = statement.where(PricingRule.endpoint == endpoint)
-        if currency is not None:
-            statement = statement.where(PricingRule.currency == currency)
+        if providers is not None:
+            statement = statement.where(or_equals(PricingRule.provider, providers))
+        if models is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        PricingRule.upstream_model.ilike(f"%{value}%")
+                        for value in models
+                    ]
+                )
+            )
+        if endpoints is not None:
+            statement = statement.where(or_equals(PricingRule.endpoint, endpoints))
+        if currencies is not None:
+            statement = statement.where(or_equals(PricingRule.currency, currencies))
         if enabled is not None:
             statement = statement.where(PricingRule.enabled == enabled)
         if active is not None and now is not None:

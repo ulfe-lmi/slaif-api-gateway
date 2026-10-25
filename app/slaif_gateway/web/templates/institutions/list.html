@@ -27,7 +27,7 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/institutions" id="institutions-filter">
-    {{ record_choice("name", "institution_name", "Name", options=choices.name, selected_id=filters.name, selected_label=filters.name, allow_new=true, placeholder="Institution name", input_id="institutions-name-filter") }}
+    {{ record_choice("name", "institution_name", "Name", options=choices.name, multi=true, multi_value=filters.name|join("\n"), allow_new=true, placeholder="Institution name", help="Matches any selected value", input_id="institutions-name-filter") }}
     <button type="submit">Filter</button>
   </form>
 

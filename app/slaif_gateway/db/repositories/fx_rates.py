@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Select, select, text
+from sqlalchemy import Select, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import FxRate
+from slaif_gateway.utils.admin_list_filters import as_value_tuple, or_equals
 
 
 class FxRatesRepository:
@@ -64,21 +66,31 @@ class FxRatesRepository:
     async def list_fx_rates_for_admin(
         self,
         *,
-        base_currency: str | None = None,
-        quote_currency: str | None = None,
-        source: str | None = None,
+        base_currency: str | Sequence[str] | None = None,
+        quote_currency: str | Sequence[str] | None = None,
+        source: str | Sequence[str] | None = None,
         active: bool | None = None,
         now: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[FxRate]:
+        bases = as_value_tuple(base_currency)
+        quotes = as_value_tuple(quote_currency)
+        sources = as_value_tuple(source)
+        # 195-a: OR WITHIN a field; pre-195 per-member normalization
+        # preserved (exact currency equality, case-insensitive source
+        # substring).
         statement: Select[tuple[FxRate]] = select(FxRate)
-        if base_currency is not None:
-            statement = statement.where(FxRate.base_currency == base_currency)
-        if quote_currency is not None:
-            statement = statement.where(FxRate.quote_currency == quote_currency)
-        if source is not None:
-            statement = statement.where(FxRate.source.ilike(f"%{source}%"))
+        if bases is not None:
+            statement = statement.where(or_equals(FxRate.base_currency, bases))
+        if quotes is not None:
+            statement = statement.where(or_equals(FxRate.quote_currency, quotes))
+        if sources is not None:
+            statement = statement.where(
+                or_(
+                    *[FxRate.source.ilike(f"%{value}%") for value in sources]
+                )
+            )
         if active is not None and now is not None:
             active_condition = (
                 (FxRate.valid_from <= now)

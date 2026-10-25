@@ -23,7 +23,7 @@
     </div>
   </header>
 
-  <form id="keys-filter" class="filter-bar" method="get" action="/admin/keys">
+  <form id="keys-filter" class="filter-bar keys-filters" method="get" action="/admin/keys">
     <label>
       Status
       <select name="status">
@@ -33,9 +33,10 @@
         <option value="revoked" {% if filters.status == "revoked" %}selected{% endif %}>Revoked</option>
       </select>
     </label>
-    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, selected_id=filters.owner_email, selected_label=filters.owner_email, allow_new=true, input_id="keys-owner-email") }}
-    {{ record_choice("public_key_id", "key_public_id", "Public key ID", options=choices.key_public_id, selected_id=filters.public_key_id, selected_label=filters.public_key_id, allow_new=true, input_id="keys-public-key-id") }}
-    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort, selected_id=filters.cohort_id, selected_label=filters.cohort_id, allow_new=true, input_id="keys-cohort") }}
+    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, multi=true, multi_value=filters.owner_email|join("\n"), allow_new=true, help="Matches any selected value", input_id="keys-owner-email") }}
+    {{ record_choice("public_key_id", "key_public_id", "Public key ID", options=choices.key_public_id, multi=true, multi_value=filters.public_key_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="keys-public-key-id") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort, multi=true, multi_value=filters.cohort_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="keys-cohort") }}
+    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, multi=true, multi_value=filters.institution_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="keys-institution") }}
     <label>
       Expired
       <select name="expired">
@@ -52,7 +53,7 @@
      custom valid limit (1..200) not in the presets is preserved as an
      explicit option. There is NO duplicate hidden limit field. #}
   <div class="table-toolbar" aria-label="Key table rows">
-    <span class="rows-shown" id="keys-rows-shown">{{ keys|length }} rows shown{% if filters.status or filters.owner_email or filters.public_key_id or filters.cohort_id or filters.expired %} &middot; <a href="/admin/keys?limit={{ filters.limit }}">Clear filters</a>{% endif %}</span>
+    <span class="rows-shown" id="keys-rows-shown">{{ keys|length }} rows shown{% if filters.status or filters.owner_email or filters.public_key_id or filters.cohort_id or filters.institution_id or filters.expired %} &middot; <a href="/admin/keys?limit={{ filters.limit }}">Clear filters</a>{% endif %}</span>
     <label>Rows
       <select name="limit" id="keys-limit" form="keys-filter">
         {% for n in (10, 25, 50, 100, 200) %}

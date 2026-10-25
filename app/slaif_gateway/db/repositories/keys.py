@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from slaif_gateway.db.models import GatewayKey, Owner
 from slaif_gateway.services.quota_errors import QuotaCounterInvariantError
+from slaif_gateway.utils.admin_list_filters import (
+    as_uuid_tuple,
+    as_value_tuple,
+    or_equals,
+)
 
 
 class GatewayKeysRepository:
@@ -139,33 +145,50 @@ class GatewayKeysRepository:
         self,
         *,
         status: str | None = None,
-        owner_email: str | None = None,
-        public_key_id: str | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
+        owner_email: str | Sequence[str] | None = None,
+        public_key_id: str | Sequence[str] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         expired: bool | None = None,
         now: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[GatewayKey]:
         """Return gateway keys with safe admin-dashboard relationships loaded."""
+        owner_emails = as_value_tuple(owner_email)
+        public_key_ids = as_value_tuple(public_key_id)
+        institution_ids = as_uuid_tuple(institution_id)
+        cohort_ids = as_uuid_tuple(cohort_id)
         statement: Select[tuple[GatewayKey]] = select(GatewayKey).options(
             selectinload(GatewayKey.owner).selectinload(Owner.institution),
             selectinload(GatewayKey.cohort),
         )
-        if owner_email is not None or institution_id is not None:
+        if owner_emails is not None or institution_ids is not None:
             statement = statement.join(GatewayKey.owner)
         if status is not None:
             statement = statement.where(GatewayKey.status == status)
-        if owner_email is not None:
-            normalized_email = owner_email.strip().lower()
-            statement = statement.where(func.lower(Owner.email).like(f"%{normalized_email}%"))
-        if public_key_id is not None:
-            statement = statement.where(GatewayKey.public_key_id == public_key_id.strip())
-        if institution_id is not None:
-            statement = statement.where(Owner.institution_id == institution_id)
-        if cohort_id is not None:
-            statement = statement.where(GatewayKey.cohort_id == cohort_id)
+        # 195-a: OR WITHIN a filter field, AND ACROSS fields; predicates
+        # apply in SQL BEFORE LIMIT/OFFSET (never post-fetch filtering).
+        if owner_emails is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        func.lower(Owner.email).like(f"%{email.strip().lower()}%")
+                        for email in owner_emails
+                    ]
+                )
+            )
+        if public_key_ids is not None:
+            statement = statement.where(
+                or_equals(
+                    GatewayKey.public_key_id,
+                    tuple(value.strip() for value in public_key_ids),
+                )
+            )
+        if institution_ids is not None:
+            statement = statement.where(or_equals(Owner.institution_id, institution_ids))
+        if cohort_ids is not None:
+            statement = statement.where(or_equals(GatewayKey.cohort_id, cohort_ids))
         if expired is not None and now is not None:
             if expired:
                 statement = statement.where(GatewayKey.valid_until <= now)

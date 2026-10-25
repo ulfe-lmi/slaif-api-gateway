@@ -27,7 +27,7 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/cohorts" id="cohorts-filter">
-    {{ record_choice("name", "cohort_name", "Name", options=choices.name, selected_id=filters.name, selected_label=filters.name, allow_new=true, placeholder="Cohort name", input_id="cohorts-name-filter") }}
+    {{ record_choice("name", "cohort_name", "Name", options=choices.name, multi=true, multi_value=filters.name|join("\n"), allow_new=true, placeholder="Cohort name", help="Matches any selected value", input_id="cohorts-name-filter") }}
     <label>
       Active
       <select name="active">

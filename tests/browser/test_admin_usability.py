@@ -860,7 +860,9 @@ def test_record_choice_batch_older_search_and_selection(chromium, usab_env) -> N
         # Initial batch: the latest 100 ELIGIBLE owners (eligibility
         # filtered before the limit) = owners 5..105 minus the anonymized
         # owner 99 -> exactly 100 options; u004 is OLDER than the batch.
-        page.locator(f"{email_rc} .rc-open").click()  # type: ignore[attr-defined]
+        # 195-a: the list filter is a MULTI control — clicking the
+        # integrated box (focus) opens the menu; there is no open arrow.
+        page.locator(f"{email_rc} .rc-input").click()  # type: ignore[attr-defined]
         assert _menu_visible(page, email_rc)
         options = page.locator(f"{email_rc} .rc-option")
         labels = [
@@ -872,12 +874,13 @@ def test_record_choice_batch_older_search_and_selection(chromium, usab_env) -> N
         assert f"u005-{suffix}@example.org" in labels
         assert f"u004-{suffix}@example.org" not in labels
 
-        # Keyboard: ArrowDown + Enter selects the first (newest) option and
-        # closes the menu.
+        # Keyboard: ArrowDown + Enter toggles the first (newest) option
+        # into the selection; the menu STAYS open so a second OR value
+        # can follow (multi contract).
         page.keyboard.press("ArrowDown")  # type: ignore[attr-defined]
         page.keyboard.press("Enter")  # type: ignore[attr-defined]
-        assert not _menu_visible(page, email_rc), (
-            "menu must close after keyboard selection"
+        assert _menu_visible(page, email_rc), (
+            "multi menu must stay open after keyboard selection"
         )
         assert _hidden_values(page, email_rc) == [f"u105-{suffix}@example.org"]
         # 193-a: the selected value remains a chip; the integrated box
@@ -896,8 +899,10 @@ def test_record_choice_batch_older_search_and_selection(chromium, usab_env) -> N
             == 1
         )
 
-        # Re-opening shows the latest batch again (search starts empty).
-        page.locator(f"{email_rc} .rc-open").click()  # type: ignore[attr-defined]
+        # Re-opening (focus click after Escape) shows the latest batch
+        # again (search starts empty).
+        page.keyboard.press("Escape")  # type: ignore[attr-defined]
+        page.locator(f"{email_rc} .rc-input").click()  # type: ignore[attr-defined]
         assert _menu_visible(page, email_rc)
         options = page.locator(f"{email_rc} .rc-option")
         labels = [
@@ -908,8 +913,9 @@ def test_record_choice_batch_older_search_and_selection(chromium, usab_env) -> N
         assert f"u105-{suffix}@example.org" in labels
 
         # Server search reaches the OLDER record outside the batch.
+        # Multi: the box itself is the search field (no popup search row).
         page.fill(  # type: ignore[attr-defined]
-            f"{email_rc} .rc-search", f"u004-{suffix}@example.org"
+            f"{email_rc} .rc-input", f"u004-{suffix}@example.org"
         )
         page.wait_for_selector(  # type: ignore[attr-defined]
             f'{email_rc} .rc-option:has-text("u004-{suffix}@example.org")',
@@ -926,10 +932,23 @@ def test_record_choice_batch_older_search_and_selection(chromium, usab_env) -> N
             f"u004-{suffix}@example.org",
             f"u105-{suffix}@example.org",
         }, f"expected the older match plus the hydrated selection, got {older_labels}"
-        # Mouse selection: exactly one managed hidden field, no duplicates.
+        # Mouse selection ADDS the second OR value: two managed hidden
+        # fields, no duplicates, menu still open for further selection.
         page.locator(f'{email_rc} .rc-option:has-text("u004-{suffix}@example.org")').click()  # type: ignore[attr-defined]
-        assert not _menu_visible(page, email_rc), "menu must close after mouse selection"
+        assert _menu_visible(page, email_rc), "multi menu must stay open after mouse selection"
+        assert _hidden_values(page, email_rc) == [
+            f"u105-{suffix}@example.org",
+            f"u004-{suffix}@example.org",
+        ]
+        assert page.locator(f"{email_rc} .rc-selected .rc-chip").count() == 2
+
+        # Chip removal: dropping u105 keeps exactly the u004 selection.
+        page.locator(  # type: ignore[attr-defined]
+            f'{email_rc} .rc-selected .rc-chip:has-text("u105-{suffix}@example.org") .rc-chip-remove'
+        ).click()  # type: ignore[attr-defined]
+        assert page.locator(f"{email_rc} .rc-selected .rc-chip").count() == 1
         assert _hidden_values(page, email_rc) == [f"u004-{suffix}@example.org"]
+        page.keyboard.press("Escape")  # type: ignore[attr-defined]
 
         # The submitted value filters the real list to that one owner.
         # The real filter submit button — never a union of all filter-bar
@@ -1183,7 +1202,9 @@ def test_multi_chips_and_dependent_pickers(chromium, usab_env) -> None:
 
         type_rc = '.rc[data-rc-id="audit-target-type"]'
         target_rc = '.rc[data-rc-id="audit-target-id"]'
-        page.locator(f"{type_rc} .rc-open").click()  # type: ignore[attr-defined]
+        # 195-a: the audit list filters are MULTI controls (focus opens
+        # the menu; no open arrow).
+        page.locator(f"{type_rc} .rc-input").click()  # type: ignore[attr-defined]
         # Same completion law: wait for the scoped target lookup
         # response before reading the dependent options.
         with page.expect_response(  # type: ignore[attr-defined]
@@ -1196,7 +1217,7 @@ def test_multi_chips_and_dependent_pickers(chromium, usab_env) -> None:
             f"audit target lookup must send target_type: {audit_lookups}"
         )
 
-        page.locator(f"{target_rc} .rc-open").click()  # type: ignore[attr-defined]
+        page.locator(f"{target_rc} .rc-input").click()  # type: ignore[attr-defined]
         page.wait_for_selector(  # type: ignore[attr-defined]
             f'{target_rc} .rc-option:has-text("{env["cold_key_id"]}")', timeout=15000
         )
@@ -1568,7 +1589,8 @@ def test_institution_cohort_name_filters_submit_names(chromium, usab_env) -> Non
         # --- institutions list: name picker offers the known names ---
         page.goto("/admin/institutions")
         inst_rc = '.rc[data-rc-id="institutions-name-filter"]'
-        page.locator(f"{inst_rc} .rc-open").click()  # type: ignore[attr-defined]
+        # 195-a: multi list filter — focus opens the menu.
+        page.locator(f"{inst_rc} .rc-input").click()  # type: ignore[attr-defined]
         assert _menu_visible(page, inst_rc)
         options = page.locator(f"{inst_rc} .rc-option")
         labels = [
@@ -1576,17 +1598,19 @@ def test_institution_cohort_name_filters_submit_names(chromium, usab_env) -> Non
             for i in range(options.count())
         ]
         assert inst_a in labels, f"known institution name missing: {labels}"
-        # Server search reaches a name by partial match.
-        page.fill(f"{inst_rc} .rc-search", "Inst A")  # type: ignore[attr-defined]
+        # Server search reaches a name by partial match (the box itself
+        # is the search field in multi mode).
+        page.fill(f"{inst_rc} .rc-input", "Inst A")  # type: ignore[attr-defined]
         page.wait_for_selector(  # type: ignore[attr-defined]
             f'{inst_rc} .rc-option:has-text("{inst_a}")', timeout=15000
         )
         # Mouse select: the submitted value is the NAME, never a UUID.
         page.locator(f'{inst_rc} .rc-option:has-text("{inst_a}")').click()  # type: ignore[attr-defined]
-        assert not _menu_visible(page, inst_rc), "menu must close after mouse selection"
+        assert _menu_visible(page, inst_rc), "multi menu must stay open after mouse selection"
         submitted = _hidden_values(page, inst_rc)
         assert submitted == [inst_a], f"name filter must submit the name: {submitted}"
         assert env["institution_a_id"] not in submitted, "a UUID must never be submitted"
+        page.keyboard.press("Escape")  # type: ignore[attr-defined]
 
         # Submitting the filter narrows the real list to that institution.
         # The real filter submit button — never a union of all filter-bar
@@ -1601,15 +1625,16 @@ def test_institution_cohort_name_filters_submit_names(chromium, usab_env) -> Non
         # --- cohorts list: same contract for the cohort name filter ---
         page.goto("/admin/cohorts")
         cohort_rc = '.rc[data-rc-id="cohorts-name-filter"]'
-        page.locator(f"{cohort_rc} .rc-open").click()  # type: ignore[attr-defined]
+        page.locator(f"{cohort_rc} .rc-input").click()  # type: ignore[attr-defined]
         assert _menu_visible(page, cohort_rc)
-        page.fill(f"{cohort_rc} .rc-search", cohort_name)  # type: ignore[attr-defined]
+        page.fill(f"{cohort_rc} .rc-input", cohort_name)  # type: ignore[attr-defined]
         page.wait_for_selector(  # type: ignore[attr-defined]
             f'{cohort_rc} .rc-option:has-text("{cohort_name}")', timeout=15000
         )
         page.locator(f'{cohort_rc} .rc-option:has-text("{cohort_name}")').click()  # type: ignore[attr-defined]
-        assert not _menu_visible(page, cohort_rc), "menu must close after mouse selection"
+        assert _menu_visible(page, cohort_rc), "multi menu must stay open after mouse selection"
         assert _hidden_values(page, cohort_rc) == [cohort_name]
+        page.keyboard.press("Escape")  # type: ignore[attr-defined]
         # The real filter submit button — never a union of all filter-bar
         # buttons: the record-choice clear/open buttons sit inside the
         # same form and would clear/reopen the menu instead of submitting.
@@ -1631,21 +1656,28 @@ def test_institution_cohort_name_filters_submit_names(chromium, usab_env) -> Non
 def test_allow_new_physical_keystroke_typed_value_is_authoritative(
     chromium, usab_env
 ) -> None:
+    """Retained SCALAR allow-new control (195-a R6): the route-create
+    "Requested model or pattern" picker. PHYSICAL keystrokes (not fill())
+    on the real macro/JS/CSS + Chromium: the authoritative value end to
+    end, plus typed-replacement CHIP COHERENCE (the visible chip follows
+    the typed candidate without resetting input text/focus/cursor)."""
     env = usab_env
     suffix = env["suffix"]
-    inst_rc = '.rc[data-rc-id="institutions-name-filter"]'
-    new_name = f"Usab Typed Inst {suffix} 042"
+    model_rc = '.rc[data-input-name="requested_model"]'
+    new_name = f"usab-typed-model-{suffix}-042"
+    known_name = str(env["model_a1"])
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
         _login(page, env)
-        page.goto("/admin/institutions")
+        page.goto("/admin/routes/new")
 
-        # 1) Click the primary field and type a NEW name with real
+        # 1) Click the primary field and type a NEW value with real
         #    keystrokes: focus must STAY on the authoritative input,
         #    the whole typed value must be carried by the managed
-        #    hidden field, and the popup candidate lookup must search
-        #    the typed text.
-        page.locator(f"{inst_rc} .rc-input").click()  # type: ignore[attr-defined]
+        #    hidden field, the visible chip must show the typed
+        #    candidate, and the candidate lookup must search the
+        #    typed text.
+        page.locator(f"{model_rc} .rc-input").click()  # type: ignore[attr-defined]
         # The debounced candidate lookup must search the typed text;
         # match on the DECODED query (URLSearchParams encodes spaces as
         # "+", not "%20").
@@ -1661,40 +1693,74 @@ def test_allow_new_physical_keystroke_typed_value_is_authoritative(
             f"focus left the primary input while typing: {focused_class!r}"
         )
         assert (
-            page.locator(f"{inst_rc} .rc-input").input_value()  # type: ignore[attr-defined]
+            page.locator(f"{model_rc} .rc-input").input_value()  # type: ignore[attr-defined]
             == new_name
         )
-        assert _hidden_values(page, inst_rc) == [new_name]
+        assert _hidden_values(page, model_rc) == [new_name]
+        # 195-a R6: the typed candidate is a coherent VISIBLE chip, not
+        # a stale/missing selection line.
+        assert (
+            page.locator(
+                f'{model_rc} .rc-selected .rc-chip:has-text("{new_name}")'
+            ).count()
+            == 1
+        )
+
+        # 1b) Typed REPLACEMENT: appending more keystrokes must update
+        # the chip AND the managed field in place — without blanking or
+        # moving the input (no syncFromSelection on every keystroke).
+        page.keyboard.type("-x")  # type: ignore[attr-defined]
+        assert (
+            page.locator(f"{model_rc} .rc-input").input_value()  # type: ignore[attr-defined]
+            == new_name + "-x"
+        )
+        assert _hidden_values(page, model_rc) == [new_name + "-x"]
+        assert (
+            page.locator(
+                f'{model_rc} .rc-selected .rc-chip:has-text("{new_name}-x")'
+            ).count()
+            == 1
+        )
+        assert (
+            page.locator(
+                f'{model_rc} .rc-selected .rc-chip:has-text("{new_name}")'
+                f':not(:has-text("-x"))'
+            ).count()
+            == 0
+        ), "stale chip must be replaced by the typed candidate"
+        focused_class = page.evaluate("document.activeElement.className")
+        assert "rc-input" in focused_class, (
+            f"focus left the primary input on replacement: {focused_class!r}"
+        )
 
         # 2) Escape closes the menu (if open) but PRESERVES the typed
         #    value in both the visible field and the managed field.
         page.keyboard.press("Escape")  # type: ignore[attr-defined]
         assert (
-            page.locator(f"{inst_rc} .rc-input").input_value()  # type: ignore[attr-defined]
-            == new_name
+            page.locator(f"{model_rc} .rc-input").input_value()  # type: ignore[attr-defined]
+            == new_name + "-x"
         )
-        assert _hidden_values(page, inst_rc) == [new_name]
+        assert _hidden_values(page, model_rc) == [new_name + "-x"]
 
-        # 3) Clear, reopen, and pick an EXPLICIT known database name by
+        # 3) Clear, reopen, and pick an EXPLICIT known database value by
         #    keyboard on the primary input: the submitted value is the
-        #    known option's value (the name itself), never stale typed
-        #    text. The reopened menu must show the latest batch again —
-        #    the previously typed NEW name must not linger as a stale
-        #    search option (the clear handler cancels the pending
-        #    debounce, invalidates the in-flight response, and resets
-        #    the option set to the server-rendered batch).
-        page.locator(f"{inst_rc} .rc-clear").click()  # type: ignore[attr-defined]
-        assert _hidden_values(page, inst_rc) == [""]
-        page.locator(f"{inst_rc} .rc-input").click()  # type: ignore[attr-defined]
-        assert _menu_visible(page, inst_rc)
+        #    known option's value, never stale typed text. The reopened
+        #    menu must show the batch again — the previously typed NEW
+        #    value must not linger as a stale search option (the clear
+        #    handler cancels the pending debounce, invalidates the
+        #    in-flight response, and rescales the option set).
+        page.locator(f"{model_rc} .rc-clear").click()  # type: ignore[attr-defined]
+        assert _hidden_values(page, model_rc) == [""]
+        assert page.locator(f"{model_rc} .rc-chip").count() == 0
+        page.locator(f"{model_rc} .rc-input").click()  # type: ignore[attr-defined]
+        assert _menu_visible(page, model_rc)
         assert (
-            page.locator(f'{inst_rc} .rc-option:has-text("{new_name}")').count()  # type: ignore[attr-defined]
+            page.locator(f'{model_rc} .rc-option:has-text("{new_name}")').count()  # type: ignore[attr-defined]
             == 0
         ), "stale typed value must not be a menu option after clear"
-        known_name = str(env["institution_a_name"])
-        # Physical typing filters the menu and issues the fresh scoped
-        # lookup; wait for BOTH the request and its response so the
-        # rendered list is the server's, not a mid-flight re-render.
+        # Physical typing filters the menu and issues the fresh lookup;
+        # wait for BOTH the request and its response so the rendered
+        # list is the server's, not a mid-flight re-render.
         with page.expect_request(  # type: ignore[attr-defined]
             lambda r: "/admin/record-choices" in r.url
             and parse_qs(urlparse(r.url).query).get("q") == [known_name],
@@ -1706,23 +1772,23 @@ def test_allow_new_physical_keystroke_typed_value_is_authoritative(
             page.keyboard.type(known_name)  # type: ignore[attr-defined]
         assert known_lookup.value is not None
         assert known_response.value is not None
-        known_option = page.locator(f'{inst_rc} .rc-option:has-text("{known_name}")')  # type: ignore[attr-defined]
+        known_option = page.locator(f'{model_rc} .rc-option:has-text("{known_name}")')  # type: ignore[attr-defined]
         known_option.wait_for(timeout=15000)
         page.keyboard.press("ArrowDown")  # type: ignore[attr-defined]
         page.keyboard.press("Enter")  # type: ignore[attr-defined]
-        assert not _menu_visible(page, inst_rc), "menu must close after keyboard selection"
+        assert not _menu_visible(page, model_rc), "menu must close after keyboard selection"
         # 193-a: explicit option selection maps the label to its stored
         # value in the managed hidden field; the integrated box keeps a
         # blank search prompt and the value remains a chip.
         assert (
-            page.locator(f"{inst_rc} .rc-input").input_value()  # type: ignore[attr-defined]
+            page.locator(f"{model_rc} .rc-input").input_value()  # type: ignore[attr-defined]
             == ""
         )
-        assert _hidden_values(page, inst_rc) == [known_name]
-        assert new_name not in _hidden_values(page, inst_rc)
+        assert _hidden_values(page, model_rc) == [known_name]
+        assert new_name not in _hidden_values(page, model_rc)
         assert (
             page.locator(
-                f'{inst_rc} .rc-selected .rc-chip:has-text("{known_name}")'
+                f'{model_rc} .rc-selected .rc-chip:has-text("{known_name}")'
             ).count()
             == 1
         )

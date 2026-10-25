@@ -203,6 +203,61 @@ by `web/static/js/record-choices.js`:
   (prefilled, raw value submitted); multi fields are real
   newline-preserving textareas. Existing server validation applies.
 
+### Multi-value list filters (195-a)
+
+The eleven GET admin list pages (keys, owners, institutions, cohorts,
+providers, routes, pricing, fx, usage, audit, email deliveries) accept
+**one or more values** per known-record/text filter field:
+
+- **OR within a field, AND across fields.** Selecting two cohorts
+  returns the union of both cohorts' rows; adding a status filter
+  narrows that union. The multi predicate runs in SQL **before**
+  `LIMIT`/`OFFSET`, so every page (and the row count) is exact over the
+  matching set — never a post-filter of a fetched page.
+- **Serialization.** JavaScript chip submission and the no-JS
+  repeated-form submit REPEATED parameters; the no-JS multi textarea
+  submits ONE newline-serialized value (the same serialization the
+  server has always parsed). Legacy one-value links keep working
+  unchanged.
+- **Scalar service/CLI contracts are unchanged.** A one-value request
+  reaches the service/repository layers as the exact legacy scalar call
+  (`collapse_singleton`); only a real multi-selection crosses the
+  boundary as a tuple. Per-family normalization (strip, case, LIKE)
+  stays owned by the repository predicate, exactly as before.
+- **Bounds (enforced before any use; excess is a 400, never a
+  slice/ignore):** at most 20 unique accepted values per field (the
+  UUID cap follows canonicalization — case/hyphen spellings of one id
+  deduplicate), at most 100 submitted values per field (raw count,
+  repeats and newline members included, checked incrementally), at
+  most 1024 characters per value (the same bound the record-choice
+  lookup hydration uses; this is NOT the 200-character search-term
+  `q` limit, so an otherwise valid >200-character text selection
+  round-trips). UUID fields parse strictly per member: ONE invalid
+  member rejects the whole field. Error messages name only the fixed
+  field and the limits — they never echo the submitted values.
+- **CSV exports follow the same scope.** The usage and audit CSV
+  export forms use the identical validated multi filters, and the
+  persisted effective-filter metadata is JSON-safe (UUID/datetime
+  tuples become lists; empty/blank selections drop out).
+- **Chips and labels.** Selected values render as chips BELOW the
+  integrated control (chips grow down; the control box itself does not
+  move). Removing a chip only updates the managed hidden fields until
+  the operator applies the form. A selection outside the initial
+  latest-100 batch re-hydrates with its authoritative label when the
+  menu opens or a lookup returns; the label-only refresh never changes
+  the value, never emits a value-change event, and never disturbs the
+  input text/focus. Unknown/manual values keep their fallback label.
+- **Rows limit vs total.** The Rows selector (presets 10/25/50/100/200
+  plus a preserved custom value) bounds DISPLAYED rows only; "N rows
+  shown" reflects the page, and pagination walks the matching set.
+- **No database migration.** Multi filters reuse the existing
+  columns/indexes (`=` becomes a bounded `IN`); no schema, migration,
+  or dependency change.
+- **Not a key-policy selector.** The key create/edit policy lists keep
+  their separate all/none/one/many policy semantics (an explicitly
+  empty scope yields NO choices; submitted values are revalidated by
+  bounded lookups) — list-filter OR semantics do not apply there.
+
 ### Visual contract (193-a)
 
 The picker reads as ONE integrated control, not a field plus detached
@@ -315,8 +370,17 @@ editable manual fallback:
   bounded and provider-scoped when a provider is selected.
 - **Audit targets**: distinct entity ids grouped BEFORE the limit, so
   many recent events for one entity cannot crowd all other known
-  targets out of the initial batch; scoped to the selected
-  target type.
+  targets out of the initial batch; scoped to the selected target
+  type(s) (a multi parent selection OR-scopes BEFORE the limit, in
+  full — parent values are not truncated). A selected target outside
+  the initial batch keeps its authoritative label: the latest event's
+  entity type wins, one choice per selected id, and the parent scope
+  never evicts an accepted selection.
+
+- **One-time secrets**: minimal public lifecycle metadata only (id,
+  status, purpose — never the secret value, encrypted payload, or
+  nonce); a selected secret outside the initial batch keeps its
+  lifecycle label instead of degrading to a plain id==label fallback.
 - **Request IDs**: the union of usage-ledger request ids (AI calls)
   and audit-log request ids (admin actions), each source bounded.
 - **Page row limits (NOT reference pickers)**: the eleven GET-limit
@@ -512,3 +576,9 @@ control appearance, asset-revision URLs, A1 screenshots) and
 for the 194-a record (ordinal/metric/Rows-selector focused groups,
 owned-PG/Chromium facts, honest layer separation, and the
 root-discovered renderer-identity follow-up).
+and
+`docs/verification/2026-10-25-admin-list-multiselection.md` for the
+195-a multi-value list filter record (OR/AND bounded filters,
+SQL-before-LIMIT pagination oracle, real-PG R5 selected-hydration
+scope/limit regressions, chip UI, label-only async refresh, CSV multi
+exports, honest layer separation).

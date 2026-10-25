@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Protocol
@@ -21,6 +22,7 @@ from slaif_gateway.schemas.admin_catalog import (
     AdminRouteListRow,
     AdminRouteSummary,
 )
+from slaif_gateway.utils.admin_list_filters import clean_text_filter
 from slaif_gateway.services.codex_qualification import (
     CodexQualificationResult,
     CodexQualificationService,
@@ -43,7 +45,7 @@ class _ProviderConfigsAdminRepository(Protocol):
     async def list_provider_configs_for_admin(
         self,
         *,
-        provider: str | None = None,
+        provider: str | Sequence[str] | None = None,
         enabled: bool | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -67,8 +69,8 @@ class _ModelRoutesAdminRepository(Protocol):
     async def list_model_routes_for_admin(
         self,
         *,
-        provider: str | None = None,
-        requested_model: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        requested_model: str | Sequence[str] | None = None,
         match_type: str | None = None,
         enabled: bool | None = None,
         visible: bool | None = None,
@@ -92,10 +94,10 @@ class _PricingRulesAdminRepository(Protocol):
     async def list_pricing_rules_for_admin(
         self,
         *,
-        provider: str | None = None,
-        model: str | None = None,
-        endpoint: str | None = None,
-        currency: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        model: str | Sequence[str] | None = None,
+        endpoint: str | Sequence[str] | None = None,
+        currency: str | Sequence[str] | None = None,
         enabled: bool | None = None,
         active: bool | None = None,
         now: datetime | None = None,
@@ -118,9 +120,9 @@ class _FxRatesAdminRepository(Protocol):
     async def list_fx_rates_for_admin(
         self,
         *,
-        base_currency: str | None = None,
-        quote_currency: str | None = None,
-        source: str | None = None,
+        base_currency: str | Sequence[str] | None = None,
+        quote_currency: str | Sequence[str] | None = None,
+        source: str | Sequence[str] | None = None,
         active: bool | None = None,
         now: datetime | None = None,
         limit: int = 50,
@@ -149,13 +151,13 @@ class AdminCatalogDashboardService:
     async def list_providers(
         self,
         *,
-        provider: str | None = None,
+        provider: str | Sequence[str] | None = None,
         enabled: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[AdminProviderListRow]:
         rows = await self._providers.list_provider_configs_for_admin(
-            provider=_clean_filter(provider),
+            provider=clean_text_filter(provider),
             enabled=enabled,
             limit=limit,
             offset=offset,
@@ -178,8 +180,8 @@ class AdminCatalogDashboardService:
     async def list_routes(
         self,
         *,
-        provider: str | None = None,
-        requested_model: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        requested_model: str | Sequence[str] | None = None,
         match_type: str | None = None,
         enabled: bool | None = None,
         visible: bool | None = None,
@@ -187,8 +189,8 @@ class AdminCatalogDashboardService:
         offset: int = 0,
     ) -> list[AdminRouteListRow]:
         rows = await self._routes.list_model_routes_for_admin(
-            provider=_clean_filter(provider),
-            requested_model=_clean_filter(requested_model),
+            provider=clean_text_filter(provider),
+            requested_model=clean_text_filter(requested_model),
             match_type=_clean_filter(match_type),
             enabled=enabled,
             visible=visible,
@@ -228,10 +230,10 @@ class AdminCatalogDashboardService:
     async def list_pricing_rules(
         self,
         *,
-        provider: str | None = None,
-        model: str | None = None,
-        endpoint: str | None = None,
-        currency: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        model: str | Sequence[str] | None = None,
+        endpoint: str | Sequence[str] | None = None,
+        currency: str | Sequence[str] | None = None,
         enabled: bool | None = None,
         active: bool | None = None,
         limit: int = 50,
@@ -240,9 +242,9 @@ class AdminCatalogDashboardService:
     ) -> list[AdminPricingRuleListRow]:
         timestamp = _utcnow(now)
         rows = await self._pricing.list_pricing_rules_for_admin(
-            provider=_clean_filter(provider),
-            model=_clean_filter(model),
-            endpoint=_clean_filter(endpoint),
+            provider=clean_text_filter(provider),
+            model=clean_text_filter(model),
+            endpoint=clean_text_filter(endpoint),
             currency=_normalize_currency_filter(currency),
             enabled=enabled,
             active=active,
@@ -266,9 +268,9 @@ class AdminCatalogDashboardService:
     async def list_fx_rates(
         self,
         *,
-        base_currency: str | None = None,
-        quote_currency: str | None = None,
-        source: str | None = None,
+        base_currency: str | Sequence[str] | None = None,
+        quote_currency: str | Sequence[str] | None = None,
+        source: str | Sequence[str] | None = None,
         active: bool | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -278,7 +280,7 @@ class AdminCatalogDashboardService:
         rows = await self._fx_rates.list_fx_rates_for_admin(
             base_currency=_normalize_currency_filter(base_currency),
             quote_currency=_normalize_currency_filter(quote_currency),
-            source=_clean_filter(source),
+            source=clean_text_filter(source),
             active=active,
             now=timestamp,
             limit=limit,
@@ -450,9 +452,24 @@ def _clean_filter(value: str | None) -> str | None:
     return stripped or None
 
 
-def _normalize_currency_filter(value: str | None) -> str | None:
-    cleaned = _clean_filter(value)
-    return cleaned.upper() if cleaned else None
+def _normalize_currency_filter(
+    value: str | Sequence[str] | None,
+) -> str | tuple[str, ...] | None:
+    """Strip + uppercase currency filters; a scalar returns a cleaned
+    SCALAR exactly like the legacy behavior (strip, upper, empty ->
+    None); a sequence is additive (195-a) and returns a tuple of
+    cleaned members or ``None``."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return cleaned.upper() if cleaned else None
+    items = tuple(
+        str(item).strip().upper()
+        for item in value
+        if item is not None and str(item).strip()
+    )
+    return items or None
 
 
 def _utcnow(now: datetime | None = None) -> datetime:

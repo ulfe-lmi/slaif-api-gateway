@@ -223,6 +223,16 @@ def _admin_user_choice(row: Any) -> RecordChoice:
     )
 
 
+def _one_time_secret_choice(row: Any) -> RecordChoice:
+    # Minimal public lifecycle metadata only: never the secret value,
+    # encrypted payload, nonce, or any other secret-bearing column.
+    return RecordChoice(
+        id=str(row.id),
+        label=f"{str(row.id)[:8]}… ({row.status})",
+        sub=str(row.purpose or ""),
+    )
+
+
 async def _fetch_selected(
     session: AsyncSession,
     stmt: Any,
@@ -373,6 +383,32 @@ def _grouped_model_stmt(
     return stmt
 
 
+def _target_type_values(
+    value: str | Sequence[str] | None,
+) -> tuple[str, ...] | None:
+    """Normalize the ``audit_target`` entity-type scope (195-a).
+
+    ``None`` = no scope; a single string is the legacy dependent-picker
+    form (a blank string is legacy "no scope" and becomes ``None``). A
+    sequence is an explicit scope: ``()`` means "no scope" (the audit
+    picker has no all/none semantics), a non-empty tuple is a bounded
+    ``IN`` scope applied BEFORE the ``LIMIT``.
+
+    Values are preserved in FULL: the API layer enforces the explicit
+    bounds (at most 100 values of at most
+    ``MAX_LIST_FILTER_VALUE_LENGTH`` characters each, 400 on excess), so
+    no downstream slice is applied here — truncating an accepted parent
+    value would change its identity and silently rescope the targets
+    (the 200-char ``q`` bound is the SEARCH-term limit only).
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        trimmed = value.strip()
+        return (trimmed,) if trimmed else None
+    cleaned = tuple(str(item).strip() for item in value)
+    return tuple(item for item in cleaned if item) or None
+
 async def _distinct_name_choices(
     session: AsyncSession,
     *,
@@ -442,12 +478,14 @@ async def load_choices(
     selected: Sequence[str] = (),
     provider: str | Sequence[str] | None = None,
     endpoints: Sequence[str] | None = None,
-    target_type: str | None = None,
+    target_type: str | Sequence[str] | None = None,
 ) -> list[RecordChoice]:
     """Return bounded choices for one allowlisted kind.
 
-    ``target_type`` scopes the ``audit_target`` kind to one entity type
-    (the dependent picker's parent selection); all other kinds ignore it.
+    ``target_type`` scopes the ``audit_target`` kind to one or more
+    entity types (the dependent picker's parent selection; a multi
+    parent selection OR-scopes the targets BEFORE the LIMIT); all other
+    kinds ignore it.
 
     ``provider`` scopes the ``model`` / ``policy_model`` kinds to one or
     more provider slugs and mirrors the policy selector's client-side
@@ -459,7 +497,7 @@ async def load_choices(
     query = (q or "").strip()[:QUERY_MAX_LENGTH] or None
     provider_values = _scope_values(provider)
     endpoint_values = _scope_values(endpoints)
-    target_type_value = str(target_type).strip()[:QUERY_MAX_LENGTH] or None if target_type else None
+    target_type_values = _target_type_values(target_type)
     choices: list[RecordChoice] = []
 
     # Explicitly-empty scope (an all/none control with nothing selected)
@@ -942,8 +980,12 @@ async def load_choices(
             )
             .limit(CHOICE_LIMIT)
         )
-        if target_type_value:
-            stmt = stmt.where(AuditLog.entity_type == target_type_value)
+        if target_type_values is not None:
+            if len(target_type_values) == 1:
+                stmt = stmt.where(AuditLog.entity_type == target_type_values[0])
+            else:
+                # Multi parent selection: OR scope BEFORE the LIMIT.
+                stmt = stmt.where(AuditLog.entity_type.in_(target_type_values))
         if query:
             stmt = stmt.where(
                 or_(
@@ -959,6 +1001,75 @@ async def load_choices(
                     label=f"{row.entity_type or 'unknown'}: {row.entity_id}",
                 )
             )
+        # Selected-id hydration (195-a): a selected target outside the
+        # initial batch keeps its authoritative label. The selected
+        # fetch applies the SAME parent constraint as the initial query
+        # (all selected parent types ORed, unscoped when the parent is
+        # absent): a user-supplied selection is a display request, not
+        # eligibility or authority, so an out-of-scope id is never
+        # turned into an eligible choice (the UI keeps its raw-id
+        # fallback chip; the form submission is still validated).
+        #
+        # One choice per selected id is guaranteed IN SQL before the
+        # 100-limit: the (entity_id, entity_type) groups are ranked per
+        # id (latest eligible event first, deterministic tie-breaker)
+        # and only rank 1 reaches the limit. Deduplicating in Python
+        # AFTER ``LIMIT 100`` would let many (id, type) groups of the
+        # first ids starve later eligible ids of their label. Requested
+        # selection order is preserved in the merge; evictions never
+        # touch a selected entry.
+        parsed = _uuids(selected)
+        if parsed:
+            inner = (
+                select(
+                    AuditLog.entity_id.label("entity_id"),
+                    AuditLog.entity_type.label("entity_type"),
+                    func.max(AuditLog.created_at).label("latest"),
+                    func.row_number()
+                    .over(
+                        partition_by=AuditLog.entity_id,
+                        order_by=[
+                            func.max(AuditLog.created_at).desc().nulls_last(),
+                            AuditLog.entity_type.asc(),
+                        ],
+                    )
+                    .label("rn"),
+                )
+                .where(AuditLog.entity_id.is_not(None), AuditLog.entity_id.in_(parsed))
+                .group_by(AuditLog.entity_id, AuditLog.entity_type)
+            )
+            if target_type_values is not None:
+                if len(target_type_values) == 1:
+                    inner = inner.where(AuditLog.entity_type == target_type_values[0])
+                else:
+                    inner = inner.where(AuditLog.entity_type.in_(target_type_values))
+            ranked = inner.subquery()
+            sel_stmt = (
+                select(ranked.c.entity_id, ranked.c.entity_type, ranked.c.latest)
+                .where(ranked.c.rn == 1)
+                .order_by(asc(ranked.c.entity_id))
+                .limit(CHOICE_LIMIT)
+            )
+            sel_rows = (await session.execute(sel_stmt)).all()
+            # Exactly one row per eligible id (SQL); map by canonical id
+            # and keep the requested selection order.
+            latest_by_id: dict[str, RecordChoice] = {}
+            for row in sel_rows:
+                key = str(row.entity_id)
+                if key not in latest_by_id:
+                    latest_by_id[key] = RecordChoice(
+                        id=key,
+                        label=f"{row.entity_type or 'unknown'}: {row.entity_id}",
+                    )
+            hydrated: list[RecordChoice] = []
+            for raw in selected:
+                canonical = _canonical_uuid(str(raw))
+                if canonical is None:
+                    continue
+                choice = latest_by_id.get(canonical)
+                if choice is not None and all(c.id != choice.id for c in hydrated):
+                    hydrated.append(choice)
+            choices = _merge_selected_keep_cap(choices, hydrated)
 
     elif kind == "audit_actor":
         stmt = select(AdminUser.id, AdminUser.display_name, AdminUser.email)
@@ -1058,13 +1169,19 @@ async def load_choices(
             CHOICE_LIMIT
         )
         rows = (await session.execute(stmt)).all()
-        for row in rows:
-            choices.append(
-                RecordChoice(
-                    id=str(row.id),
-                    label=f"{str(row.id)[:8]}… ({row.status})",
-                    sub=str(row.purpose or ""),
-                )
+        choices = [_one_time_secret_choice(row) for row in rows]
+        # Selected-id hydration (195-a): a selected secret outside the
+        # initial batch keeps its public lifecycle label (status +
+        # purpose) instead of degrading to a plain id==label fallback.
+        # Still minimal columns: never the secret value or ciphertext.
+        parsed = _uuids(selected)
+        if parsed:
+            sel_stmt = select(
+                OneTimeSecret.id, OneTimeSecret.status, OneTimeSecret.purpose
+            ).where(OneTimeSecret.id.in_(parsed))
+            choices = _merge_selected_keep_cap(
+                choices,
+                await _fetch_selected(session, sel_stmt, selected, _one_time_secret_choice),
             )
 
     else:

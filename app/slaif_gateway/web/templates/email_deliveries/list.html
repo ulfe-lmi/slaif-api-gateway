@@ -33,9 +33,9 @@
         <option value="expired" {% if filters.status == "expired" %}selected{% endif %}>Expired</option>
       </select>
     </label>
-    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, selected_id=filters.owner_email, selected_label=filters.owner_email, allow_new=true, input_id="email-owner-email") }}
-    {{ record_choice("gateway_key_id", "key", "Gateway key ID", options=choices.gateway_key_id, selected_id=filters.gateway_key_id, selected_label=filters.gateway_key_id, allow_new=true, input_id="email-key") }}
-    {{ record_choice("one_time_secret_id", "one_time_secret", "One-time secret ID", options=choices.one_time_secret_id, selected_id=filters.one_time_secret_id, selected_label=filters.one_time_secret_id, allow_new=true, input_id="email-ots") }}
+    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, multi=true, multi_value=filters.owner_email|join("\n"), allow_new=true, help="Matches any selected value", input_id="email-owner-email") }}
+    {{ record_choice("gateway_key_id", "key", "Gateway key ID", options=choices.gateway_key_id, multi=true, multi_value=filters.gateway_key_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="email-key") }}
+    {{ record_choice("one_time_secret_id", "one_time_secret", "One-time secret ID", options=choices.one_time_secret_id, multi=true, multi_value=filters.one_time_secret_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="email-ots") }}
     <button type="submit">Filter</button>
   </form>
 

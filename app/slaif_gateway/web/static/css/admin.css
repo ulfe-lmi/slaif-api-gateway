@@ -855,6 +855,15 @@ button.signout:hover {
   grid-template-columns: repeat(3, minmax(150px, 1fr)) auto;
 }
 
+/* 195-a: the keys bar carries SIX controls (institution_id was added to
+   the existing five). Keep all six and the Filter button on the SAME
+   row at desktop widths: the button top-aligns (margin-top above), so
+   growing chip rows push the TABLE down and never move the button
+   (193-a grow-down contract). */
+.filter-bar.keys-filters {
+  grid-template-columns: repeat(6, minmax(120px, 1fr)) auto;
+}
+
 /* Labeled, keyboard-focusable table scroll region: the wrapper carries
    tabindex/aria-label in the templates; native table semantics remain. */
 .table-wrap {
@@ -1177,6 +1186,10 @@ dd {
   .filter-bar {
     grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
   }
+  /* The six-field keys bar wraps like the 5-field bars at these widths. */
+  .filter-bar.keys-filters {
+    grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+  }
 
   .policy-selector-grid {
     grid-template-columns: 1fr;
@@ -1230,7 +1243,8 @@ dd {
   }
 
   .filter-bar,
-  .filter-bar.compact {
+  .filter-bar.compact,
+  .filter-bar.keys-filters {
     grid-template-columns: 1fr;
     align-items: stretch;
   }

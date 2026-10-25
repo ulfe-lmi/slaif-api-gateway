@@ -9,6 +9,7 @@ from sqlalchemy import Select, asc, desc, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import ModelRoute, ProviderConfig
+from slaif_gateway.utils.admin_list_filters import as_value_tuple, or_equals
 
 
 class ModelRoutesRepository:
@@ -77,19 +78,31 @@ class ModelRoutesRepository:
     async def list_model_routes_for_admin(
         self,
         *,
-        provider: str | None = None,
-        requested_model: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        requested_model: str | Sequence[str] | None = None,
         match_type: str | None = None,
         enabled: bool | None = None,
         visible: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[ModelRoute]:
+        providers = as_value_tuple(provider)
+        requested_models = as_value_tuple(requested_model)
+        # 195-a: OR WITHIN a field; the pre-195 per-member normalization is
+        # preserved exactly (exact provider equality, case-insensitive
+        # substring for the requested model, no added case folding).
         statement: Select[tuple[ModelRoute]] = select(ModelRoute)
-        if provider is not None:
-            statement = statement.where(ModelRoute.provider == provider)
-        if requested_model is not None:
-            statement = statement.where(ModelRoute.requested_model.ilike(f"%{requested_model}%"))
+        if providers is not None:
+            statement = statement.where(or_equals(ModelRoute.provider, providers))
+        if requested_models is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        ModelRoute.requested_model.ilike(f"%{value}%")
+                        for value in requested_models
+                    ]
+                )
+            )
         if match_type is not None:
             statement = statement.where(ModelRoute.match_type == match_type)
         if enabled is not None:
