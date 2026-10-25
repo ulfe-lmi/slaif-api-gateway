@@ -825,7 +825,10 @@ async def list_admin_keys(
         parsed_institution_ids = parse_uuid_filter_values(institution_id, field_name="institution_id")
         parsed_cohort_ids = parse_uuid_filter_values(cohort_id, field_name="cohort_id")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_key_dashboard_service_scope(request) as service:
         rows = await service.list_keys(
@@ -2914,7 +2917,10 @@ async def list_admin_owners(
         parsed_institution_ids = parse_uuid_filter_values(institution_id, field_name="institution_id")
         parsed_cohort_ids = parse_uuid_filter_values(cohort_id, field_name="cohort_id")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_records_dashboard_service_scope(request) as service:
         rows = await service.list_owners(
@@ -3246,7 +3252,10 @@ async def list_admin_institutions(
     try:
         cleaned_names = normalize_filter_values(name, field_name="name")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_records_dashboard_service_scope(request) as service:
         rows = await service.list_institutions(name=collapse_singleton(cleaned_names), limit=limit, offset=offset)
@@ -3496,7 +3505,10 @@ async def list_admin_cohorts(
     try:
         cleaned_names = normalize_filter_values(name, field_name="name")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_records_dashboard_service_scope(request) as service:
         rows = await service.list_cohorts(name=collapse_singleton(cleaned_names), active=active, limit=limit, offset=offset)
@@ -3763,7 +3775,10 @@ async def list_admin_providers(
     try:
         cleaned_providers = normalize_filter_values(provider, field_name="provider")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
         rows = await service.list_providers(
@@ -4375,7 +4390,10 @@ async def list_admin_routes(
         cleaned_providers = normalize_filter_values(provider, field_name="provider")
         cleaned_requested_models = normalize_filter_values(requested_model, field_name="requested_model")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
         rows = await service.list_routes(
@@ -5376,7 +5394,10 @@ async def list_admin_pricing_rules(
         cleaned_endpoints = normalize_filter_values(endpoint, field_name="endpoint")
         cleaned_currencies = normalize_filter_values(currency, field_name="currency")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
         rows = await service.list_pricing_rules(
@@ -6113,7 +6134,10 @@ async def list_admin_fx_rates(
         cleaned_quote_currencies = normalize_filter_values(quote_currency, field_name="quote_currency")
         cleaned_sources = normalize_filter_values(source, field_name="source")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
         rows = await service.list_fx_rates(
@@ -6677,7 +6701,10 @@ async def list_admin_usage(
         parsed_cohort_ids = parse_uuid_filter_values(cohort_id, field_name="cohort_id")
         cleaned_request_ids = normalize_filter_values(request_id, field_name="request_id")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_usage(
@@ -6877,7 +6904,10 @@ async def list_admin_audit_logs(
         parsed_target_ids = parse_uuid_filter_values(target_id, field_name="target_id")
         cleaned_request_ids = normalize_filter_values(request_id, field_name="request_id")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_audit_logs(
@@ -7049,7 +7079,10 @@ async def list_admin_email_deliveries(
         parsed_gateway_key_ids = parse_uuid_filter_values(gateway_key_id, field_name="gateway_key_id")
         parsed_one_time_secret_ids = parse_uuid_filter_values(one_time_secret_id, field_name="one_time_secret_id")
     except AdminListFilterError as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_email_deliveries(

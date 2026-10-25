@@ -71,6 +71,18 @@ not a release/production claim, and it does not establish that every
   catalog/records/activity/keys dashboard services, csv exports,
   export service, record choices, csrf, assets): 0 failures (see
   JUnit `unit-195-affected`).
+- CI error-copy compatibility repair (after the first
+  implementation-head CI run, which completed 8/10 with the two
+  failures being pre-195 stale oracles expecting the generic
+  "Invalid filter." summary): the eleven list-filter 400 render
+  sites in `api/admin.py` now render the stable pre-195
+  "Invalid filter." summary FIRST, then the fixed per-field detail
+  (fixed parameter name + limit only; still never echoes submitted
+  values; same 400/whole-field rejection). The two affected legacy
+  oracles were NOT edited; both re-passed locally — the unit node
+  plus the new 195 filter unit module (32 passed, JUnit
+  `unit-cifix-1`, real exit 0) and the one existing browser design
+  node (1 passed, JUnit `browser-cifix-1`, real exit 0).
 
 Commands captured real pytest exits via `PIPESTATUS[0]` alongside the
 JUnit files in `/tmp/slaif195/`.
@@ -164,6 +176,11 @@ older-cohort proof uses the real server. No full local all-layer or
 
 ## Outstanding
 
+- The first implementation head's CI run completed 8/10 successful;
+  the two failures were exactly the stale "Invalid filter." oracles
+  above and are repaired by the error-copy compatibility commit on
+  this same branch/PR. CI at the subsequent heads (including the
+  report publication commit) is the remaining gate.
 - Final-head CI (all checks) is gated by root on the report
   publication commit; this record does not claim CI green.
 - No merge, no release, no production/security/compliance claim.
