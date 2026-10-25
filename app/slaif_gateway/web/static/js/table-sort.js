@@ -40,6 +40,17 @@
  * - Rows marked <tr data-no-sort> (empty-state, summary, footer) never
  *   move; <tr data-sort-group> moves together with its following
  *   consecutive <tr data-sort-group-continue> rows (multi-row units).
+ * - Structural first-position ordinal column (194-a): a <th data-ordinal>
+ *   in the leaf header row is PLAIN (no sort link, no aria-sort, no
+ *   indicator). Its body cells carry the displayed logical row numbers
+ *   1..N server-rendered for the initial business order (SSR/no-JS
+ *   coherent); after a sort this script renumbers ONLY the positional
+ *   values of the moved unit head cells (continuation cells stay empty),
+ *   never changing any data cell, ID, URL, or form state.
+ * - Grouped (multi-row) theads (194-a): the initializer reads only the LAST
+ *   thead row (the leaf header row). The admin tables author that leaf row
+ *   as one complete header cell per body column, so the leaf position
+ *   equals the body position. Group and ordinal headings stay plain.
  * - Sorting only reorders the existing <tr> nodes of the DISPLAYED result
  *   set (existing filters/row limits stay in effect). Forms, inputs,
  *   checkboxes, links, and review selections move with their rows and keep
@@ -374,8 +385,17 @@
     const ths = Array.from(headerRow.cells);
     const state = { col: -1, dir: 1 };
 
+    /* Structural ordinal column (194-a): plain header, never sortable; its
+       body cells display 1..N for the displayed logical data rows. -1 when
+       the table has no ordinal column. */
+    const ordIdx = ths.findIndex((th) => th.hasAttribute("data-ordinal"));
+
     const updateAria = () => {
       ths.forEach((th, i) => {
+        if (i === ordIdx) {
+          // Structural ordinal header stays plain: no aria-sort state.
+          return;
+        }
         const active = i === state.col;
         th.setAttribute(
           "aria-sort",
@@ -419,6 +439,19 @@
         })
         .map((entry) => entry.unit);
       placeUnits(tbody, children, units, sorted);
+      // 194-a ordinal bookkeeping: renumber ONLY the positional values of
+      // the moved unit head cells (1..N in the new displayed order).
+      // Continuation cells stay empty; fixed/no-sort rows are untouched.
+      if (ordIdx !== -1) {
+        let n = 0;
+        for (const unit of sorted) {
+          n += 1;
+          const cell = unit.head.cells[ordIdx];
+          if (cell) {
+            cell.textContent = String(n);
+          }
+        }
+      }
       updateAria();
     };
 
@@ -433,6 +466,11 @@
     };
 
     ths.forEach((th, index) => {
+      if (index === ordIdx) {
+        // 194-a: the ordinal header is plain (no sort link, no neutral
+        // marker); the mockup-verified column order is preserved.
+        return;
+      }
       const label = normalize(th.textContent);
       // A real focusable text hyperlink (193-a): safe local fragment
       // target, no network. Enter activates it natively; the click

@@ -33,8 +33,7 @@
     <div class="table-wrap" tabindex="0" role="region" aria-label="FX import preview">
       <table data-sortable>
         <thead>
-          <tr>
-            <th data-sort-type="number">Row</th>
+          <tr><th data-ordinal scope="col" aria-label="Row number">#</th>            <th data-sort-type="number">Source row</th>
             <th>Status</th>
             <th>Classification</th>
             <th>Pair</th>
@@ -49,6 +48,7 @@
         <tbody>
           {% for row in preview.rows %}
           <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
             <td data-sort-value="{{ row.row_number }}">{{ row.row_number }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.classification }}</td>
@@ -84,7 +84,7 @@
             </td>
           </tr>
           {% else %}
-          <tr><td colspan="10" class="empty-state">No rows found.</td></tr>
+          <tr data-no-sort><td colspan="11" class="empty-state">No rows found.</td></tr>
           {% endfor %}
         </tbody>
       </table>

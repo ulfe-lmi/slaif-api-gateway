@@ -263,6 +263,116 @@ def test_every_admin_table_is_sortable() -> None:
     assert unsorted == [], f"tables lost their sortable annotation: {unsorted}"
 
 
+def _iter_admin_tables() -> list[tuple[str, str, str]]:
+    """(relative_template, table_tag, table_block) for every sortable
+    admin table; relative paths keep the list/detail templates distinct
+    in failure messages."""
+    out: list[tuple[str, str, str]] = []
+    for path in sorted(TEMPLATES.rglob("*.html")):
+        src = path.read_text(encoding="utf-8")
+        for match in re.finditer(
+            r"<table\b[^>]*data-sortable[^>]*>.*?</table>", src, flags=re.DOTALL
+        ):
+            out.append((str(path.relative_to(TEMPLATES)), match.group(0)[:60], match.group(0)))
+    return out
+
+
+def test_every_admin_table_has_structural_ordinal_column() -> None:
+    """194-a R1/R2 source law: EVERY admin table carries the
+    first-position structural ordinal column and nothing else changes
+    about its rows:
+
+    - the LEAF header row (last thead row; grouped theads keep their
+      plain group row above) starts with a plain ``<th data-ordinal>``;
+    - each data row starts with ``<td class="row-ordinal">{{ loop.index }}``
+      (server-rendered 1..N, renumbered by the fixed sort script);
+    - empty-state rows are fixed (``data-no-sort``) and their single
+      ``colspan`` equals the leaf column count, so the script can never
+      number or corrupt them.
+    """
+    tables = _iter_admin_tables()
+    assert len(tables) == 25, f"expected 25 sortable admin tables, got {len(tables)}"
+    problems: list[str] = []
+    for name, tag, block in tables:
+        thead = re.search(r"<thead>.*?</thead>", block, flags=re.DOTALL)
+        if thead is None:
+            problems.append(f"{name}: missing <thead> in {tag}")
+            continue
+        leaf_rows = re.findall(r"<tr\b[^>]*>.*?</tr>", thead.group(0), flags=re.DOTALL)
+        leaf = leaf_rows[-1]
+        header_ths = re.findall(r"<th\b[^>]*>", leaf)
+        if "data-ordinal" not in header_ths[0]:
+            problems.append(f"{name}: first leaf header is not data-ordinal: {header_ths[0]}")
+        if any("data-col" in th for th in header_ths):
+            problems.append(f"{name}: explicit data-col mapping reintroduced")
+        column_count = len(header_ths)
+        tbody = re.search(r"<tbody>.*?</tbody>", block, flags=re.DOTALL)
+        if tbody is None:
+            problems.append(f"{name}: missing <tbody>")
+            continue
+        data_rows = 0
+        empty_rows = 0
+        # Inspect EVERY authored tbody row (not just rows that already
+        # carry the fixed marker): a data row must START with the SSR
+        # ordinal cell, and an empty-state row must be a fixed
+        # single-span row whose colspan equals the leaf column count.
+        for row in re.findall(r"<tr\b[^>]*>.*?</tr>", tbody.group(0), flags=re.DOTALL):
+            open_tag = row[: row.index(">") + 1]
+            if "empty-state" in row:
+                empty_rows += 1
+                if "data-no-sort" not in open_tag:
+                    problems.append(
+                        f"{name}: empty-state row lost its fixed marker: {open_tag}"
+                    )
+                if f'colspan="{column_count}"' not in row:
+                    problems.append(
+                        f"{name}: empty-state colspan != {column_count}: {row[:80]}"
+                    )
+                if "row-ordinal" in row:
+                    problems.append(
+                        f"{name}: empty-state row must never be numbered: {row[:80]}"
+                    )
+                continue
+            data_rows += 1
+            first_cell = row.split("</td>")[0] + "</td>"
+            if '<td class="row-ordinal">{{ loop.index }}</td>' not in first_cell:
+                problems.append(
+                    f"{name}: data row does not START with the SSR ordinal cell: {first_cell[:100]}"
+                )
+        if data_rows != 1:
+            problems.append(f"{name}: expected exactly 1 authored data row, got {data_rows}")
+        if empty_rows != 1:
+            problems.append(f"{name}: expected exactly 1 empty-state row, got {empty_rows}")
+    assert problems == [], problems
+
+
+def test_import_tables_keep_source_row_provenance_distinct() -> None:
+    """194-a R2: import tables label their provenance column "Source row"
+    (sortable, the CSV/plan row identity) and no admin template keeps a
+    bare "Row" header or collides the provenance with the ordinal column."""
+    import_templates = (
+        "fx/import_preview.html",
+        "fx/import_result.html",
+        "pricing/import_preview.html",
+        "pricing/import_result.html",
+        "routes/import_preview.html",
+        "routes/import_result.html",
+        "keys/bulk_import_preview.html",
+        "keys/bulk_import_result.html",
+    )
+    problems: list[str] = []
+    for template in import_templates:
+        src = _template_source(template)
+        if '<th data-sort-type="number">Source row</th>' not in src:
+            problems.append(f"{template}: missing sortable 'Source row' header")
+    for path in sorted(TEMPLATES.rglob("*.html")):
+        src = path.read_text(encoding="utf-8")
+        for th in re.findall(r"<th\b[^>]*>(.*?)</th>", src, flags=re.DOTALL):
+            if th.strip() in ("Row", "Row number"):
+                problems.append(f"{path.name}: bare 'Row' header reintroduced: {th!r}")
+    assert problems == [], problems
+
+
 def test_usage_status_select_uses_canonical_ledger_vocabulary() -> None:
     assert len(STATUS_VALUES_USAGE_LEDGER_ACCOUNTING) == 6
     admin_src = (REPO / "app" / "slaif_gateway" / "api" / "admin.py").read_text(

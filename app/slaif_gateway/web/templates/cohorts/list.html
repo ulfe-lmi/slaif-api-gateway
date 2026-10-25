@@ -26,7 +26,7 @@
   <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
   {% endif %}
 
-  <form class="filter-bar compact" method="get" action="/admin/cohorts">
+  <form class="filter-bar compact" method="get" action="/admin/cohorts" id="cohorts-filter">
     {{ record_choice("name", "cohort_name", "Name", options=choices.name, selected_id=filters.name, selected_label=filters.name, allow_new=true, placeholder="Cohort name", input_id="cohorts-name-filter") }}
     <label>
       Active
@@ -36,14 +36,27 @@
         <option value="false" {% if filters.active == "false" %}selected{% endif %}>No</option>
       </select>
     </label>
-    <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
+  <div class="table-toolbar" aria-label="Cohorts rows">
+    <span class="rows-shown" id="cohorts-rows-shown">{{ cohorts|length }} rows shown</span>
+    <label>Rows
+      <select name="limit" id="cohorts-limit" form="cohorts-filter">
+        {% for n in (10, 25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        {% if filters.limit not in (10, 25, 50, 100, 200) %}
+        <option value="{{ filters.limit }}" selected>{{ filters.limit }} (current)</option>
+        {% endif %}
+      </select>
+    </label>
+  </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Cohorts">
     <table data-sortable>
       <thead>
         <tr>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
           <th>Cohort</th>
           <th data-sort-type="datetime">Window (start)</th>
           <th data-sort-type="number">Owners (count)</th>
@@ -54,6 +67,7 @@
       <tbody>
         {% for cohort in cohorts %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td>
             <a href="/admin/cohorts/{{ cohort.id }}">{{ cohort.name }}</a>
             {% if cohort.description %}<div class="muted small">{{ cohort.description }}</div>{% endif %}
@@ -70,8 +84,8 @@
           <td>{{ cohort.created_at.isoformat() }}</td>
         </tr>
         {% else %}
-        <tr>
-          <td colspan="5" class="empty-state">No cohorts found.</td>
+        <tr data-no-sort>
+          <td colspan="6" class="empty-state">No cohorts found.</td>
         </tr>
         {% endfor %}
       </tbody>

@@ -61,8 +61,7 @@
   <div class="table-wrap" tabindex="0" role="region" aria-label="Route import result">
     <table data-sortable>
       <thead>
-        <tr>
-          <th data-sort-type="number">Row</th>
+        <tr><th data-ordinal scope="col" aria-label="Row number">#</th>          <th data-sort-type="number">Source row</th>
           <th>Status</th>
           <th>Action</th>
           <th>Route</th>
@@ -76,6 +75,7 @@
       <tbody>
         {% for row in result.rows %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td data-sort-value="{{ row.row_number }}">{{ row.row_number }}</td>
           <td>{{ row.status }}</td>
           <td>{{ row.action }}</td>
@@ -120,7 +120,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="9" class="empty-state">No rows were processed.</td></tr>
+        <tr data-no-sort><td colspan="10" class="empty-state">No rows were processed.</td></tr>
         {% endfor %}
       </tbody>
     </table>

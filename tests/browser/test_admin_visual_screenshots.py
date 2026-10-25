@@ -54,7 +54,7 @@ from tests.browser.test_admin_usability import (
 
 pytestmark = pytest.mark.playwright
 
-SCREENSHOT_DIR = Path("/tmp/slaif193/screenshots")
+SCREENSHOT_DIR = Path("/tmp/slaif194/screenshots")
 
 GROUP_HEADINGS = ("Access management", "Providers and models", "Usage and operations")
 
@@ -188,16 +188,77 @@ def test_keys_list_visual(chromium, usab_env, name: str, width: int, height: int
             ph = page.locator(f'.rc[data-rc-id="{rc_id}"] .rc-input').get_attribute("placeholder")
             assert ph and ph.strip(), f"blank box for {rc_id} has no visible prompt"
 
-        # A3: sortable headers are hyperlinks, not buttons.
+        # A3 + 194-a: grouped thead, hyperlink sort headers, plain ordinal.
         table = page.locator("table[data-sortable]")
         assert table.count() == 1
-        assert table.locator("thead th a.ts-link").count() == 6
         assert table.locator("thead th button").count() == 0
+        # Group row: plain group labels, never sortable; the leaf row holds
+        # all 13 column headers 1:1 with the body cells.
+        group_row = page.locator("thead tr.group-row")
+        assert group_row.locator("th").count() == 4
+        # DOM text is "Key details" etc.; the rendered text is CSS-
+        # uppercased (same posture as the .eyebrow checks above).
+        assert group_row.locator("th.group-th").all_inner_texts() == [
+            "",
+            "KEY DETAILS",
+            "USAGE",
+            "QUOTAS",
+        ]
+        assert group_row.locator("a.ts-link").count() == 0
+        leaf_th = page.locator("thead tr:not(.group-row) th")
+        assert leaf_th.count() == 13
+        assert leaf_th.nth(0).get_attribute("data-ordinal") is not None
+        assert leaf_th.nth(0).locator("a.ts-link").count() == 0
+        assert leaf_th.locator("a.ts-link").count() == 12
 
         # The keys table holds the full seeded page: exactly the 12
         # synthetic keys (10 for one owner + 2 for another); opaque
         # prefix + public id only, never a one-time plaintext cell.
         assert table.locator("tbody tr").count() == 12
+        # 194-a: server-rendered ordinals 1..12 in the initial business
+        # order, first cell of every row.
+        assert [
+            table.locator("tbody tr").nth(k).locator("td").first.inner_text()
+            for k in range(12)
+        ] == [str(k + 1) for k in range(12)]
+
+        # 194-a R6: the displayed-row count is the real rendered length.
+        assert "12 rows shown" in page.locator(".table-toolbar .rows-shown").inner_text()
+
+        if name == "desktop-1440":
+            # A valid custom limit outside the presets is preserved as an
+            # explicit selected option and really limits the GET page.
+            page.goto("/admin/keys?limit=37")
+            sel = page.locator('select[name="limit"][form="keys-filter"]')
+            assert sel.locator("option[selected]").get_attribute("value") == "37"
+            assert sel.locator("option", has_text="37 (current)").count() == 1
+
+        if width == 390:
+            # 194-a R5: on narrow screens the identity columns keep their
+            # per-column minimum widths (readable values, no one-character
+            # fragments) and the wide table scrolls INSIDE its labeled
+            # region while the page itself does not overflow.
+            metrics = page.evaluate(  # type: ignore[attr-defined]
+                """() => {
+                    const firstWidth = (cls) => {
+                        const el = document.querySelector(`tbody td.${cls}`);
+                        return el ? el.getBoundingClientRect().width : null;
+                    };
+                    const wrap = document.querySelector('.table-wrap');
+                    return {
+                        key: firstWidth('col-key'),
+                        owner: firstWidth('col-owner'),
+                        cohort: firstWidth('col-cohort'),
+                        wrapScroll: wrap.scrollWidth,
+                        wrapClient: wrap.clientWidth,
+                    };
+                }"""
+            )
+            # 12rem / 9rem / 7rem minima (border-box cell >= min width).
+            assert metrics["key"] is not None and metrics["key"] >= 190, metrics
+            assert metrics["owner"] is not None and metrics["owner"] >= 142, metrics
+            assert metrics["cohort"] is not None and metrics["cohort"] >= 110, metrics
+            assert metrics["wrapScroll"] > metrics["wrapClient"], metrics
 
         _assert_no_horizontal_overflow(page)
         _assert_top_anchored(page)

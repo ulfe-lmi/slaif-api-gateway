@@ -96,12 +96,15 @@
     <table data-sortable>
       <thead>
         <tr>
-          <th data-sort-type="number">Row</th>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
+          <th data-sort-type="number">Source row</th>
           <th>Status</th>
           <th>Owner</th>
           <th>Scope</th>
           <th data-sort-type="datetime">Validity</th>
-          <th data-sort-type="money">Quotas</th>
+          <th class="num" data-sort-type="money">Budget (EUR)</th>
+          <th class="num" data-sort-type="number">Tokens</th>
+          <th class="num" data-sort-type="number">Requests</th>
           <th>Policy</th>
           <th>Email</th>
           <th>Errors</th>
@@ -110,6 +113,7 @@
       <tbody>
         {% for row in preview.rows %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td data-sort-value="{{ row.row_number }}">{{ row.row_number }}</td>
           <td>
             <span class="status-pill status-{{ row.status }}">{{ row.status }}</span>
@@ -129,10 +133,14 @@
             {% if row.valid_from %}<div>{{ row.valid_from.isoformat() }}</div>{% endif %}
             {% if row.valid_until %}<div class="muted small">until {{ row.valid_until.isoformat() }}</div>{% endif %}
           </td>
-          <td data-sort-value="{{ row.cost_limit_eur if row.cost_limit_eur is not none else '' }}">
-            <div>EUR {{ row.cost_limit_eur if row.cost_limit_eur is not none else "unlimited" }}</div>
-            <div class="muted small">{{ row.token_limit if row.token_limit is not none else "unlimited" }} tokens</div>
-            <div class="muted small">{{ row.request_limit if row.request_limit is not none else "unlimited" }} requests</div>
+          <td class="num" data-sort-value="{% if row.cost_limit_eur is not none %}{{ row.cost_limit_eur | dec }}{% endif %}">
+            {% if row.cost_limit_eur is not none %}{{ row.cost_limit_eur | dec }}{% else %}unlimited{% endif %}
+          </td>
+          <td class="num" data-sort-value="{{ row.token_limit if row.token_limit is not none else '' }}">
+            {{ row.token_limit if row.token_limit is not none else "unlimited" }}
+          </td>
+          <td class="num" data-sort-value="{{ row.request_limit if row.request_limit is not none else '' }}">
+            {{ row.request_limit if row.request_limit is not none else "unlimited" }}
           </td>
           <td>
             <div>Models: {{ row.allowed_models_summary }}</div>
@@ -165,8 +173,8 @@
           </td>
         </tr>
         {% else %}
-        <tr>
-          <td colspan="9" class="empty-state">No rows parsed.</td>
+        <tr data-no-sort>
+          <td colspan="12" class="empty-state">No rows parsed.</td>
         </tr>
         {% endfor %}
       </tbody>

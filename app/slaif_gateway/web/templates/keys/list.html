@@ -23,7 +23,7 @@
     </div>
   </header>
 
-  <form class="filter-bar" method="get" action="/admin/keys">
+  <form id="keys-filter" class="filter-bar" method="get" action="/admin/keys">
     <label>
       Status
       <select name="status">
@@ -44,56 +44,94 @@
         <option value="false" {% if filters.expired == "false" %}selected{% endif %}>No</option>
       </select>
     </label>
-    <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
+  {# 194-a R6: toolbar between filters and table. The visible Rows selector is
+     form-associated with the GET filter form above (Filter applies it); a
+     custom valid limit (1..200) not in the presets is preserved as an
+     explicit option. There is NO duplicate hidden limit field. #}
+  <div class="table-toolbar" aria-label="Key table rows">
+    <span class="rows-shown" id="keys-rows-shown">{{ keys|length }} rows shown{% if filters.status or filters.owner_email or filters.public_key_id or filters.cohort_id or filters.expired %} &middot; <a href="/admin/keys?limit={{ filters.limit }}">Clear filters</a>{% endif %}</span>
+    <label>Rows
+      <select name="limit" id="keys-limit" form="keys-filter">
+        {% for n in (10, 25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        {% if filters.limit not in (10, 25, 50, 100, 200) %}
+        <option value="{{ filters.limit }}" selected>{{ filters.limit }} (current)</option>
+        {% endif %}
+      </select>
+    </label>
+  </div>
+
   <div class="table-wrap" tabindex="0" role="region" aria-label="Gateway keys">
-    <table data-sortable>
+    <table data-sortable class="table-wide">
       <thead>
+        {# 194-a: pure group row (plain, never sortable); the leaf row below
+           holds every column header 1:1 with the body cells. #}
+        <tr class="group-row">
+          <th class="group-th group-th-spacer" aria-hidden="true"></th>
+          <th colspan="6" class="group-th" scope="colgroup">Key details</th>
+          <th colspan="3" class="group-th" scope="colgroup">Usage</th>
+          <th colspan="3" class="group-th" scope="colgroup">Quotas</th>
+        </tr>
         <tr>
-          <th>Key</th>
-          <th>Owner</th>
-          <th>Status</th>
-          <th data-sort-type="datetime">Validity (from)</th>
-          <th data-sort-type="number">Usage (requests)</th>
-          <th data-sort-type="number">Limits (requests)</th>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
+          <th class="col-key" scope="col">Key</th>
+          <th class="col-owner" scope="col">Owner</th>
+          <th class="col-cohort" scope="col">Cohort</th>
+          <th scope="col">Status</th>
+          <th data-sort-type="datetime" scope="col">Valid from</th>
+          <th data-sort-type="datetime" scope="col">Expires</th>
+          <th class="num" data-sort-type="number" scope="col">Requests</th>
+          <th class="num" data-sort-type="number" scope="col">Tokens</th>
+          <th class="num" data-sort-type="money" scope="col">Cost (EUR)</th>
+          <th class="num" data-sort-type="number" scope="col">Requests</th>
+          <th class="num" data-sort-type="number" scope="col">Tokens</th>
+          <th class="num" data-sort-type="money" scope="col">Budget (EUR)</th>
         </tr>
       </thead>
       <tbody>
         {% for key in keys %}
         <tr>
-          <td>
+          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="col-key">
             <a href="/admin/keys/{{ key.id }}">{{ key.key_prefix }}{{ key.public_key_id }}</a>
             {% if key.key_hint %}<div class="muted small">{{ key.key_hint }}</div>{% endif %}
             {% if key.key_purpose == "trusted_calibration" %}
             <div class="muted small"><span class="status-pill status-suspended">Trusted calibration</span></div>
             {% endif %}
           </td>
-          <td>
+          <td class="col-owner">
             {{ key.owner_display_name or "Unknown owner" }}
             {% if key.owner_email %}<div class="muted small">{{ key.owner_email }}</div>{% endif %}
-            {% if key.institution_name or key.cohort_name %}
-            <div class="muted small">{{ key.institution_name or "No institution" }}{% if key.cohort_name %} / {{ key.cohort_name }}{% endif %}</div>
-            {% endif %}
+            {% if key.institution_name %}<div class="muted small">{{ key.institution_name }}</div>{% endif %}
           </td>
-          <td><span class="status-pill status-{{ key.computed_display_status }}">{{ key.computed_display_status }}</span></td>
-          <td data-sort-value="{{ key.valid_from.isoformat() }}">
-            <div>{{ key.valid_from.isoformat() }}</div>
-            <div class="muted small">until {{ key.valid_until.isoformat() }}</div>
+          <td class="col-cohort">{{ key.cohort_name or "—" }}</td>
+          <td class="nowrap"><span class="status-pill status-{{ key.computed_display_status }}">{{ key.computed_display_status }}</span></td>
+          <td class="nowrap" data-sort-value="{{ key.valid_from.isoformat() }}" title="{{ key.valid_from.isoformat() }}">
+            {{ key.valid_from | utc_date_display }}
           </td>
-          <td data-sort-value="{{ key.requests_used_total }}">
-            <div>{{ key.requests_used_total }} requests</div>
-            <div class="muted small">{{ key.tokens_used_total }} tokens / EUR {{ key.cost_used_eur }}</div>
+          <td class="nowrap" data-sort-value="{{ key.valid_until.isoformat() }}" title="{{ key.valid_until.isoformat() }}">
+            {{ key.valid_until | utc_date_display }}
           </td>
-          <td data-sort-value="{{ key.request_limit_total if key.request_limit_total is not none else '' }}">
-            <div>{{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }} requests</div>
-            <div class="muted small">{{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }} tokens / EUR {{ key.cost_limit_eur if key.cost_limit_eur is not none else "Unlimited" }}</div>
+          <td class="num" data-sort-value="{{ key.requests_used_total }}">{{ key.requests_used_total }}</td>
+          <td class="num" data-sort-value="{{ key.tokens_used_total }}">{{ key.tokens_used_total }}</td>
+          <td class="num" data-sort-value="{{ key.cost_used_eur | dec }}">{{ key.cost_used_eur | dec }}</td>
+          <td class="num" data-sort-value="{{ key.request_limit_total if key.request_limit_total is not none else '' }}">
+            {{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }}
+          </td>
+          <td class="num" data-sort-value="{{ key.token_limit_total if key.token_limit_total is not none else '' }}">
+            {{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }}
+          </td>
+          <td class="num" data-sort-value="{% if key.cost_limit_eur is not none %}{{ key.cost_limit_eur | dec }}{% endif %}">
+            {% if key.cost_limit_eur is not none %}{{ key.cost_limit_eur | dec }}{% else %}Unlimited{% endif %}
           </td>
         </tr>
         {% else %}
-        <tr>
-          <td colspan="6" class="empty-state">No gateway keys found.</td>
+        <tr data-no-sort>
+          <td colspan="13" class="empty-state">No gateway keys found.</td>
         </tr>
         {% endfor %}
       </tbody>

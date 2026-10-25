@@ -26,18 +26,31 @@
   <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
   {% endif %}
 
-  <form class="filter-bar compact" method="get" action="/admin/owners">
+  <form class="filter-bar compact" method="get" action="/admin/owners" id="owners-filter">
     {{ record_choice("email", "owner_email", "Email", options=choices.email, selected_id=filters.email, selected_label=filters.email, allow_new=true, input_id="owners-email") }}
     {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, selected_id=filters.institution_id, selected_label=filters.institution_id, allow_new=true, input_id="owners-institution") }}
     {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id, selected_id=filters.cohort_id, selected_label=filters.cohort_id, allow_new=true, input_id="owners-cohort") }}
-    <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
+  <div class="table-toolbar" aria-label="Owners rows">
+    <span class="rows-shown" id="owners-rows-shown">{{ owners|length }} rows shown</span>
+    <label>Rows
+      <select name="limit" id="owners-limit" form="owners-filter">
+        {% for n in (10, 25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        {% if filters.limit not in (10, 25, 50, 100, 200) %}
+        <option value="{{ filters.limit }}" selected>{{ filters.limit }} (current)</option>
+        {% endif %}
+      </select>
+    </label>
+  </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Owners">
     <table data-sortable>
       <thead>
         <tr>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
           <th>Owner</th>
           <th>Institution</th>
           <th>Status</th>
@@ -48,6 +61,7 @@
       <tbody>
         {% for owner in owners %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td>
             <a href="/admin/owners/{{ owner.id }}">{{ owner.display_name }}</a>
             <div class="muted small">{{ owner.email }}</div>
@@ -61,8 +75,8 @@
           <td>{{ owner.created_at.isoformat() }}</td>
         </tr>
         {% else %}
-        <tr>
-          <td colspan="5" class="empty-state">No owners found.</td>
+        <tr data-no-sort>
+          <td colspan="6" class="empty-state">No owners found.</td>
         </tr>
         {% endfor %}
       </tbody>

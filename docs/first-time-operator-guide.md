@@ -285,6 +285,21 @@ them, and the dashboard works without JavaScript (plain form fields).
 Boolean list filters offer Any / Yes / No; "Any" applies no filter.
 Details: `docs/admin-usability.md`.
 
+Every list table starts with a numbered first column (`#`): the rows
+show their position 1..N in the current displayed order, and the
+numbering renumbers automatically after any column sort (the `#`
+header itself is plain and not sortable). The key list shows usage
+and quota as separate numeric columns (Requests / Tokens / Cost, and
+Requests / Tokens / Budget); a `NULL` limit reads `Unlimited`. The
+eleven GET-limit lists (owners, institutions, cohorts, providers,
+routes, pricing, FX, usage, audit, email deliveries, keys) also have a
+Rows selector between the filters and the table: choose a preset
+(10/25/50/100/200) or keep a custom valid limit, then press Filter;
+the table shows the displayed-row count. (The key-template list, the
+related-record detail tables, and the import tables have no page
+limit and no Rows selector.) On narrow screens the wide key table
+scrolls inside its panel instead of squeezing the columns.
+
 After updating the deployment (image rebuild or restart), no manual
 cache step is needed for newly loaded pages: the dashboard's CSS/JS
 are served under a content-revision URL (`?v=<digest>`), so changed

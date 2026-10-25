@@ -21,7 +21,7 @@
     </div>
   </header>
 
-  <form class="filter-bar compact" method="get" action="/admin/usage">
+  <form class="filter-bar compact" method="get" action="/admin/usage" id="usage-filter">
     {{ record_choice("provider", "provider", "Provider", options=choices.provider, selected_id=filters.provider, selected_label=filters.provider, allow_new=true, input_id="usage-provider") }}
     {{ record_choice("model", "model", "Model", options=choices.model, selected_id=filters.model, selected_label=filters.model, allow_new=true, input_id="usage-model") }}
     {{ record_choice("endpoint", "endpoint", "Endpoint", options=choices.endpoint, selected_id=filters.endpoint, selected_label=filters.endpoint, allow_new=false, input_id="usage-endpoint") }}
@@ -51,7 +51,6 @@
         <option value="false" {% if filters.streaming == "false" %}selected{% endif %}>No</option>
       </select>
     </label>
-    <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
@@ -89,10 +88,24 @@
     </form>
   </section>
 
+  <div class="table-toolbar" aria-label="Usage ledger rows rows">
+    <span class="rows-shown" id="usage-rows-shown">{{ usage_rows|length }} rows shown</span>
+    <label>Rows
+      <select name="limit" id="usage-limit" form="usage-filter">
+        {% for n in (10, 25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        {% if filters.limit not in (10, 25, 50, 100, 200) %}
+        <option value="{{ filters.limit }}" selected>{{ filters.limit }} (current)</option>
+        {% endif %}
+      </select>
+    </label>
+  </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Usage ledger rows">
     <table data-sortable>
       <thead>
         <tr>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
           <th>Request</th>
           <th>Key / Owner</th>
           <th>Provider / Model</th>
@@ -105,6 +118,7 @@
       <tbody>
         {% for row in usage_rows %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td>
             <a href="/admin/usage/{{ row.id }}">{{ row.request_id }}</a>
             <div class="muted small">{{ row.endpoint }}</div>
@@ -129,8 +143,8 @@
           <td>{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr>
-          <td colspan="7" class="empty-state">No usage rows found.</td>
+        <tr data-no-sort>
+          <td colspan="8" class="empty-state">No usage rows found.</td>
         </tr>
         {% endfor %}
       </tbody>

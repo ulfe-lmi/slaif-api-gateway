@@ -508,3 +508,44 @@ def test_build_manifest_is_sorted_and_digests_files() -> None:
     assert [entry["path"] for entry in manifest["files"]] == ["a.tsv", "b.tsv"]
     assert manifest["files"][0]["sha256"] == hashlib.sha256(b"alpha\n").hexdigest()
     assert manifest["files"][0]["bytes"] == len(b"alpha\n")
+
+
+def test_render_injects_structural_ordinal_column() -> None:
+    """194-a R1: every sortable report table carries a plain
+    first-position ordinal header and server-rendered 1..N body cells in
+    the initial business order; the apply-plan table keeps its stable
+    sortable plan reference, relabeled "Plan #", distinct from displayed
+    position. The fixed script carries no explicit column-mapping feature
+    (leaf position equals body position in every report/admin table)."""
+    bundle = _bundle("bundle-refresh-ready.json")
+    report = _report_for(bundle, _baseline())
+    html = render_report(bundle, report.to_dict()).decode("utf-8")
+
+    table_count = html.count("<table data-sortable>")
+    assert table_count >= 5
+    # Exactly one plain ordinal header per sortable table.
+    assert html.count("<th data-ordinal class='num'>#</th>") == table_count
+    # No leftover sortable bare-# header: the plan reference is "Plan #".
+    assert html.count("<th data-sort-type='number'>#</th>") == 0
+    assert "<th data-sort-type='number'>Plan #</th>" in html
+    # No explicit leaf-to-body column mapping anywhere in the report or
+    # the embedded fixed script.
+    assert "data-col" not in html
+    assert "data-col" not in _fixed_sort_script_bytes().decode("utf-8")
+
+    tables = re.findall(r"<table data-sortable>.*?</table>", html, flags=re.S)
+    assert len(tables) == table_count
+    for table in tables:
+        # The ordinal header is the FIRST cell of the (single-row) thead.
+        head = table[table.index("<thead>"):table.index("</thead>")]
+        assert head.startswith("<thead><tr><th data-ordinal class='num'>#</th>")
+        body = table[table.index("<tbody>") : table.index("</tbody>")]
+        row_count = body.count("<tr>")
+        ords = [int(m) for m in re.findall(r"<td class='ord'>(\d+)</td>", body)]
+        # Every data row carries a positional ordinal as its first cell,
+        # numbered 1..N for the initial business order.
+        assert ords == list(range(1, row_count + 1)), (row_count, ords)
+        assert body.count("<tr>") == body.count("<tr><td class='ord'>")
+        # No fixed/no-sort rows exist in report tables: nothing is
+        # excluded from numbering or would corrupt an empty-state cell.
+        assert "data-no-sort" not in table

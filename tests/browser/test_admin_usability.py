@@ -245,8 +245,22 @@ async def _seed_usability_data(database_url: str) -> dict[str, Any]:
                 # must put 900 first; a lexicographic string sort would put
                 # "2000" before "900".
                 limit_plan = ((owners[19], 10, 2000), (owners[20], 2, 900))
+                # 194-a A2: budget limits follow a THIRD numeric order
+                # (actual zero, tiny Decimal, ordinary values, a NULL
+                # limit, and the plain 10s) so the Budget column must
+                # sort independently too; NULL renders "Unlimited" with
+                # an empty raw key and sorts last in both directions.
+                budget_plan = (
+                    Decimal("10.000000000"),
+                    Decimal("0"),
+                    Decimal("0.000000001"),
+                    None,
+                    Decimal("7.750000000"),
+                    Decimal("12.500000000"),
+                )
                 for k_i, (owner, count, limit) in enumerate(limit_plan):
                     for j in range(count):
+                        g = (10 if k_i == 1 else 0) + j
                         key = await GatewayKeysRepository(session).create_gateway_key_record(
                             public_key_id=f"usab-{suffix[:6]}-{k_i}-{j}",
                             token_hash=f"token_hash_usab_{suffix}_{k_i}_{j}",
@@ -255,14 +269,35 @@ async def _seed_usability_data(database_url: str) -> dict[str, Any]:
                             valid_from=now - timedelta(days=1),
                             valid_until=now + timedelta(days=30),
                             key_hint=f"sk-slaif-usab{suffix[:4]}{k_i}{j}",
-                            cost_limit_eur=Decimal("10.000000000"),
-                            token_limit_total=1000,
+                            cost_limit_eur=budget_plan[g] if g < len(budget_plan) else Decimal("10.000000000"),
+                            # 194-a A2: token quotas follow a DIFFERENT
+                            # numeric order than the request quotas
+                            # (500x6/1500x4 vs 700/800), so the two quota
+                            # columns must sort independently.
+                            token_limit_total=(500 if j < 6 else 1500) if k_i == 0 else 700 + 100 * j,
                             request_limit_total=limit,
                             allow_all_models=True,
                             allow_all_endpoints=True,
                             created_by_admin_user_id=admin.id,
                         )
                         keys.append(key)
+
+                # 194-a A2: per-key usage counters where the REQUEST and
+                # TOKEN orders deliberately DIVERGE (a sort that collapsed
+                # the two columns into one order would fail), with a valid
+                # actual cost of zero and plain zeros for the unused keys.
+                divergent_usage = (
+                    (3, 990, Decimal("9.500000000")),
+                    (5, 1000, Decimal("12.500000000")),
+                    (1, 25, Decimal("0.990000000")),
+                    (2, 75, Decimal("0")),
+                    (4, 80, Decimal("7.750000000")),
+                    (0, 90, Decimal("0")),
+                )
+                for idx, (reqs, toks, cost) in enumerate(divergent_usage):
+                    keys[idx].requests_used_total = reqs
+                    keys[idx].tokens_used_total = toks
+                    keys[idx].cost_used_eur = cost
 
                 prov_a = f"usab-provider-a-{suffix}"
                 prov_b = f"usab-provider-b-{suffix}"
@@ -582,46 +617,60 @@ def test_owner_table_sorting_not_intercepted(chromium, usab_env) -> None:
 
         def row_emails() -> list[str]:
             return [
-                rows.nth(k).locator("td").first.locator("div").first.inner_text()
+                rows.nth(k).locator("td").nth(1).locator("div").first.inner_text()
                 for k in range(count)
             ]
 
         def key_values() -> list[str]:
             return [
-                rows.nth(k).locator("td").nth(3).get_attribute("data-sort-value")
+                rows.nth(k).locator("td").nth(4).get_attribute("data-sort-value")
                 for k in range(count)
+            ]
+
+        def ordinals() -> list[str]:
+            return [
+                rows.nth(k).locator("td").first.inner_text() for k in range(count)
             ]
 
         _assert_menus_closed(page)
 
+        # 194-a: first-position ordinal column — plain header (no sort
+        # link), server-rendered 1..N for the initial business order, and
+        # renumbered after every sort.
+        assert th(0).locator("a.ts-link").count() == 0
+        assert ordinals() == [str(k + 1) for k in range(count)]
+
         # Natural-order text: "Num 2" before "Num 10" (lexicographic would
         # put "Num 10" first).
-        header_click(0)
-        assert th(0).get_attribute("aria-sort") == "ascending"
-        assert th(1).get_attribute("aria-sort") == "none"
+        header_click(1)
+        assert th(1).get_attribute("aria-sort") == "ascending"
+        assert th(2).get_attribute("aria-sort") == "none"
         names = owner_names()
         assert names.index("Num 2") < names.index("Num 10"), names[:12]
-        header_click(0)
-        assert th(0).get_attribute("aria-sort") == "descending"
+        header_click(1)
+        assert th(1).get_attribute("aria-sort") == "descending"
         names = owner_names()
         assert names.index("Num 10") < names.index("Num 2")
+        # 194-a: the ordinal column renumbers 1..N in the NEW displayed
+        # order (descending), never showing 0 or gaps.
+        assert ordinals() == [str(k + 1) for k in range(count)]
 
         # Datetime column: ascending = oldest owner (u001) first.
-        header_click(4)
-        assert th(4).get_attribute("aria-sort") == "ascending"
+        header_click(5)
+        assert th(5).get_attribute("aria-sort") == "ascending"
         assert row_emails()[0] == f"u001-{suffix}@example.org"
-        header_click(4)
-        assert th(4).get_attribute("aria-sort") == "descending"
+        header_click(5)
+        assert th(5).get_attribute("aria-sort") == "descending"
         assert row_emails()[0] == f"u105-{suffix}@example.org"
 
         # Typed numeric column: 2 keys before 10 keys (a string sort would
         # put "10" first).
-        header_click(3)
-        assert th(3).get_attribute("aria-sort") == "ascending"
+        header_click(4)
+        assert th(4).get_attribute("aria-sort") == "ascending"
         values = key_values()
         assert values.index("2") < values.index("10"), values[:20]
-        header_click(3)
-        assert th(3).get_attribute("aria-sort") == "descending"
+        header_click(4)
+        assert th(4).get_attribute("aria-sort") == "descending"
         values = key_values()
         assert values.index("10") < values.index("2")
 
@@ -630,26 +679,168 @@ def test_owner_table_sorting_not_intercepted(chromium, usab_env) -> None:
         # currently UNSORTED (the previous clicks moved the sort to the
         # numeric column), so Enter must walk none -> ascending ->
         # descending, while Space must leave it unchanged.
-        assert th(4).get_attribute("aria-sort") == "none"
-        header_link = th(4).locator("a.ts-link")
+        assert th(5).get_attribute("aria-sort") == "none"
+        header_link = th(5).locator("a.ts-link")
         header_link.focus()
         page.keyboard.press("Enter")  # type: ignore[attr-defined]
-        assert th(4).get_attribute("aria-sort") == "ascending", (
+        assert th(5).get_attribute("aria-sort") == "ascending", (
             "Enter on the focused header link must sort ascending"
         )
         page.keyboard.press("Space")  # type: ignore[attr-defined]
-        assert th(4).get_attribute("aria-sort") == "ascending", (
+        assert th(5).get_attribute("aria-sort") == "ascending", (
             "Space must NOT activate a header link (link semantics)"
         )
         page.keyboard.press("Enter")  # type: ignore[attr-defined]
-        assert th(4).get_attribute("aria-sort") == "descending", (
+        assert th(5).get_attribute("aria-sort") == "descending", (
             "Enter again must toggle the sort direction to descending"
         )
 
         # The hidden menus stayed hidden through every interaction, and a
         # further unforced click still works.
         _assert_menus_closed(page)
-        header_click(0)
+        header_click(1)
+
+
+# ---------------------------------------------------------------------------
+# 1b) Keys metric columns (194-a A2): independent typed sorts of the split
+#     usage/quota columns, ordinal renumbering, Enter activation
+# ---------------------------------------------------------------------------
+
+
+def test_keys_metric_columns_sort_independently(chromium, usab_env) -> None:
+    """194-a A2 on the real keys page: all SIX split metric columns (usage
+    Requests/Tokens/Cost, quota Requests/Tokens/Budget) sort INDEPENDENTLY
+    by their typed raw keys — the seeded request/token orders deliberately
+    diverge in both usage and quotas, and the budget column carries an
+    actual zero, a tiny Decimal, ordinary values, and a NULL limit that
+    sorts last in both directions — while the first ordinal header stays
+    plain (no link), ordinals renumber 1..N after every sort, and each row
+    keeps its own metric tuple."""
+    env = usab_env
+    with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+
+        def raw(column: int) -> list[str]:
+            return [
+                rows.nth(k).locator("td").nth(column).get_attribute("data-sort-value")
+                for k in range(12)
+            ]
+
+        def ordinals() -> list[str]:
+            return [rows.nth(k).locator("td").first.inner_text() for k in range(12)]
+
+        def key_ids() -> list[str]:
+            return [
+                rows.nth(k).locator("td a").first.inner_text() for k in range(12)
+            ]
+
+        def load() -> None:
+            page.goto("/admin/keys?limit=50")
+
+        load()
+        table = page.locator(".table-wrap table[data-sortable]")  # type: ignore[attr-defined]
+        rows = table.locator("tbody tr")
+        assert rows.count() == 12
+        leaf_th = table.locator("thead tr:not(.group-row) th")
+        # First ordinal header: plain — no sort link, no aria-sort state.
+        assert leaf_th.nth(0).locator("a.ts-link").count() == 0
+        assert leaf_th.nth(0).get_attribute("aria-sort") is None
+        assert ordinals() == [str(k + 1) for k in range(12)]
+
+        # Leaf positions: 7 usage requests, 8 usage tokens, 9 cost,
+        # 10 quota requests, 11 quota tokens, 12 budget.
+        initial = {
+            kid: tuple(raw(c)[k] for c in (7, 8, 9, 10, 11, 12))
+            for k, kid in enumerate(key_ids())
+        }
+        assert len(initial) == 12
+
+        def sort_by(leaf_index: int, times: int = 1) -> None:
+            for _ in range(times):
+                leaf_th.nth(leaf_index).locator("a.ts-link").click(timeout=10000)
+
+        def check_pairs_preserved() -> None:
+            # Only POSITIONAL numbers move: every row keeps its own
+            # key -> metric tuple association.
+            for k in range(12):
+                kid = rows.nth(k).locator("td a").first.inner_text()
+                got = tuple(rows.nth(k).locator("td").nth(c).get_attribute("data-sort-value") for c in (7, 8, 9, 10, 11, 12))
+                assert got == initial[kid], (kid, got, initial[kid])
+
+        # --- usage requests ascending: exact typed order ---
+        sort_by(7)
+        assert leaf_th.nth(7).get_attribute("aria-sort") == "ascending"
+        assert raw(7) == ["0"] * 7 + ["1", "2", "3", "4", "5"], raw(7)
+        assert ordinals() == [str(k + 1) for k in range(12)]
+        check_pairs_preserved()
+        req_order = key_ids()
+
+        # --- usage tokens ascending: a DIFFERENT row order, exact ---
+        load()
+        rows = table.locator("tbody tr")
+        sort_by(8)
+        assert leaf_th.nth(8).get_attribute("aria-sort") == "ascending"
+        assert raw(8) == ["0"] * 6 + ["25", "75", "80", "90", "990", "1000"], raw(8)
+        assert ordinals() == [str(k + 1) for k in range(12)]
+        check_pairs_preserved()
+        assert key_ids() != req_order, "usage request/token orders must diverge"
+
+        # --- cost ascending: faithful zeros first, dec money after ---
+        load()
+        rows = table.locator("tbody tr")
+        sort_by(9)
+        assert raw(9) == ["0"] * 8 + ["0.99", "7.75", "9.5", "12.5"], raw(9)
+
+        # --- quota requests ascending: 900,900 then 2000s (numeric) ---
+        load()
+        rows = table.locator("tbody tr")
+        sort_by(10)
+        assert raw(10) == ["900", "900"] + ["2000"] * 10, raw(10)
+        assert ordinals() == [str(k + 1) for k in range(12)]
+        check_pairs_preserved()
+        qreq_order = key_ids()
+
+        # --- quota tokens ascending: a DIFFERENT order, exact ---
+        load()
+        rows = table.locator("tbody tr")
+        sort_by(11)
+        assert raw(11) == ["500"] * 6 + ["700", "800"] + ["1500"] * 4, raw(11)
+        check_pairs_preserved()
+        assert key_ids() != qreq_order, "quota request/token orders must diverge"
+
+        # --- descending reverses exactly ---
+        sort_by(11)
+        assert leaf_th.nth(11).get_attribute("aria-sort") == "descending"
+        assert raw(11) == ["1500"] * 4 + ["800", "700"] + ["500"] * 6, raw(11)
+        assert ordinals() == [str(k + 1) for k in range(12)]
+
+        # --- budget ascending: actual zero, tiny Decimal, ordinary
+        #     values, the plain 10s, and the NULL limit (empty raw key)
+        #     LAST — a sixth, independent numeric column ---
+        load()
+        rows = table.locator("tbody tr")
+        sort_by(12)
+        assert leaf_th.nth(12).get_attribute("aria-sort") == "ascending"
+        assert raw(12) == ["0", "0.000000001", "7.75"] + ["10"] * 7 + ["12.5", ""], raw(12)
+        assert ordinals() == [str(k + 1) for k in range(12)]
+        check_pairs_preserved()
+        # Descending reverses the values; the NULL limit (missing) stays
+        # LAST in both directions.
+        sort_by(12)
+        assert leaf_th.nth(12).get_attribute("aria-sort") == "descending"
+        assert raw(12) == ["12.5"] + ["10"] * 7 + ["7.75", "0.000000001", "0", ""], raw(12)
+        check_pairs_preserved()
+
+        # --- Enter activation on a metric header (link semantics) ---
+        load()
+        rows = table.locator("tbody tr")
+        link = leaf_th.nth(7).locator("a.ts-link")
+        link.focus()
+        page.keyboard.press("Enter")  # type: ignore[attr-defined]
+        assert leaf_th.nth(7).get_attribute("aria-sort") == "ascending"
+        assert raw(7) == ["0"] * 7 + ["1", "2", "3", "4", "5"], raw(7)
+        assert ordinals() == [str(k + 1) for k in range(12)]
 
 
 # ---------------------------------------------------------------------------
@@ -748,7 +939,7 @@ def test_record_choice_batch_older_search_and_selection(chromium, usab_env) -> N
         page.wait_for_url("**/admin/owners?email=*")  # type: ignore[attr-defined]
         rows = page.locator(".table-wrap table[data-sortable] tbody tr")  # type: ignore[attr-defined]
         assert rows.count() == 1
-        assert f"u004-{suffix}@example.org" in rows.first.locator("td").first.inner_text()
+        assert f"u004-{suffix}@example.org" in rows.first.locator("td").nth(1).inner_text()
 
 
 # ---------------------------------------------------------------------------
@@ -1141,11 +1332,11 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         rows = table.locator("tbody tr")
         assert rows.count() == 6
         costs = [
-            rows.nth(i).locator("td").nth(5).get_attribute("data-sort-value")
+            rows.nth(i).locator("td").nth(6).get_attribute("data-sort-value")
             for i in range(6)
         ]
         tokens = [
-            rows.nth(i).locator("td").nth(4).get_attribute("data-sort-value")
+            rows.nth(i).locator("td").nth(5).get_attribute("data-sort-value")
             for i in range(6)
         ]
         assert sorted(float(c) for c in costs if c) == [0.0, 0.99, 7.75, 9.5, 12.5]
@@ -1156,7 +1347,7 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         assert cost_header.get_attribute("aria-sort") == "ascending"
         rows = table.locator("tbody tr")
         ascending_costs = [
-            rows.nth(i).locator("td").nth(5).get_attribute("data-sort-value")
+            rows.nth(i).locator("td").nth(6).get_attribute("data-sort-value")
             for i in range(6)
         ]
         assert [float(c) for c in ascending_costs if c] == [
@@ -1175,7 +1366,7 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         # estimate and not n/a); the estimate-only row shows the estimate;
         # the neither row shows n/a.
         for i in range(6):
-            cell = rows.nth(i).locator("td").nth(5)
+            cell = rows.nth(i).locator("td").nth(6)
             value = ascending_costs[i]
             visible = cell.inner_text().strip()
             if value == "":
@@ -1192,7 +1383,7 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         token_header.locator("a.ts-link").click()
         rows = table.locator("tbody tr")
         ascending_tokens = [
-            rows.nth(i).locator("td").nth(4).get_attribute("data-sort-value")
+            rows.nth(i).locator("td").nth(5).get_attribute("data-sort-value")
             for i in range(6)
         ]
         assert ascending_tokens == ["25", "75", "80", "90", "990", "1000"], (
@@ -1205,12 +1396,19 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         table = page.locator(".table-wrap table[data-sortable]")  # type: ignore[attr-defined]
         rows = table.locator("tbody tr")
         assert rows.count() == before_count == 12
-        limits_header = table.locator("thead th").filter(has_text="Limits (requests)")
+        # 194-a: the combined Limits column is split; the quota Requests
+        # leaf header (the second "Requests" heading, under the Quotas
+        # group) carries the typed request-limit raw key.
+        limits_header = (
+            table.locator("thead tr:not(.group-row) th")
+            .filter(has_text="Requests")
+            .nth(1)
+        )
         limits_header.locator("a.ts-link").click()
         assert limits_header.get_attribute("aria-sort") == "ascending"
         rows = table.locator("tbody tr")
         limits = [
-            rows.nth(i).locator("td").nth(5).get_attribute("data-sort-value")
+            rows.nth(i).locator("td").nth(10).get_attribute("data-sort-value")
             for i in range(12)
         ]
         assert limits[:2] == ["900", "900"], (
@@ -1227,12 +1425,14 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         rows = table.locator("tbody tr")
         assert rows.count() == 3
         assert page.locator(".summary-card strong").nth(0).inner_text() == "3"
-        quotas_header = table.locator("thead th").filter(has_text="Quotas")
+        # 194-a: the combined Quotas column is split; the preview Budget
+        # (EUR) cell carries the typed money raw key.
+        quotas_header = table.locator("thead th").filter(has_text="Budget (EUR)")
         quotas_header.locator("a.ts-link").click()
         assert quotas_header.get_attribute("aria-sort") == "ascending"
         rows = table.locator("tbody tr")
         preview_costs = [
-            rows.nth(i).locator("td").nth(5).get_attribute("data-sort-value")
+            rows.nth(i).locator("td").nth(6).get_attribute("data-sort-value")
             for i in range(3)
         ]
         assert [float(c) for c in preview_costs] == [2.0, 5.5, 10.0], (
@@ -1241,7 +1441,22 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         # Association: the 2.00 row is u021's row.
         for i in range(3):
             if float(preview_costs[i]) == 2.0:
-                assert f"u021-{suffix}@example.org" in rows.nth(i).locator("td").nth(2).inner_text()
+                assert f"u021-{suffix}@example.org" in rows.nth(i).locator("td").nth(3).inner_text()
+
+        # 194-a A4: sorting moves ONLY the row nodes — the execute form's
+        # identity (action), its checkbox state, and its CSRF token are
+        # untouched by a sort.
+        exec_form = page.locator('form[action="/admin/keys/bulk-import/execute"]')
+        assert exec_form.count() == 1
+        exec_form.locator('input[name="confirm_import"]').check()
+        csrf_before = exec_form.locator('input[name="csrf_token"]').input_value()
+        assert csrf_before
+        quotas_header.locator("a.ts-link").click()
+        assert quotas_header.get_attribute("aria-sort") == "descending"
+        assert exec_form.get_attribute("action") == "/admin/keys/bulk-import/execute"
+        assert exec_form.locator('input[name="csrf_token"]').input_value() == csrf_before
+        assert exec_form.locator('input[name="confirm_import"]').is_checked()
+
         # Dry run must not create keys.
         assert _run_in_thread(_key_count(env["database_url"])) == before_count
 
@@ -1262,18 +1477,18 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
 
         def _execute_diagnostics() -> str:
             # Evidence hygiene: read ONLY the overall flash error, the
-            # per-row action pill (td 1) and the errors cell (td 9).
-            # The one-time plaintext key cell (td 4) and any full row or
+            # per-row action pill (td 2) and the errors cell (td 12).
+            # The one-time plaintext key cell (td 5) and any full row or
             # page HTML are never read, so a failure cannot log a key.
             flash = page.locator(".admin-flash-error")  # type: ignore[attr-defined]
             flash_text = flash.first.inner_text().strip() if flash.count() else ""
             action_texts = [
-                rows.nth(i).locator("td").nth(1).inner_text().strip()
+                rows.nth(i).locator("td").nth(2).inner_text().strip()
                 for i in range(rows.count())
             ]
             error_texts: list[str] = []
             for i in range(rows.count()):
-                items = rows.nth(i).locator("td").nth(9).locator("li")  # type: ignore[attr-defined]
+                items = rows.nth(i).locator("td").nth(12).locator("li")  # type: ignore[attr-defined]
                 error_texts.extend(
                     items.nth(j).inner_text().strip() for j in range(items.count())
                 )
@@ -1289,39 +1504,41 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
             f"expected 3 created result rows: {_execute_diagnostics()}"
         )
         created = [
-            rows.nth(i).locator("td").nth(1).inner_text() for i in range(3)
+            rows.nth(i).locator("td").nth(2).inner_text() for i in range(3)
         ]
         assert all("created" in action.lower() for action in created), created
         # Row numbers sort numerically descending (3, 2, 1).
-        row_header = table.locator("thead th").filter(has_text="Row")
+        # 194-a: the provenance column is "Source row" (kept distinct from
+        # the structural ordinal column).
+        row_header = table.locator("thead th").filter(has_text="Source row")
         row_header.locator("a.ts-link").click()
         assert row_header.get_attribute("aria-sort") == "ascending"
         rows = table.locator("tbody tr")
         assert [
-            rows.nth(i).locator("td").nth(0).inner_text().strip() for i in range(3)
+            rows.nth(i).locator("td").nth(1).inner_text().strip() for i in range(3)
         ] == ["1", "2", "3"]
         row_header.locator("a.ts-link").click()
         assert row_header.get_attribute("aria-sort") == "descending"
         rows = table.locator("tbody tr")
         assert [
-            rows.nth(i).locator("td").nth(0).inner_text().strip() for i in range(3)
+            rows.nth(i).locator("td").nth(1).inner_text().strip() for i in range(3)
         ] == ["3", "2", "1"]
-        # Quotas sort: the 2.00 row still carries u021's created public key.
-        # Evidence hygiene: read ONLY the owner cell (2) and key-metadata
-        # cell (3) + quota cell (6); the one-time plaintext key cell (4)
+        # Budget sort: the 2.00 row still carries u021's created public key.
+        # Evidence hygiene: read ONLY the owner cell (3) and key-metadata
+        # cell (4) + budget cell (7); the one-time plaintext key cell (5)
         # is never read, so an assertion failure cannot log it.
-        quotas_header = table.locator("thead th").filter(has_text="Quotas")
+        quotas_header = table.locator("thead th").filter(has_text="Budget (EUR)")
         quotas_header.locator("a.ts-link").click()
         rows = table.locator("tbody tr")
         result_costs = [
-            rows.nth(i).locator("td").nth(6).get_attribute("data-sort-value")
+            rows.nth(i).locator("td").nth(7).get_attribute("data-sort-value")
             for i in range(3)
         ]
         assert [float(c) for c in result_costs] == [2.0, 5.5, 10.0], (
             f"result money sort wrong: {result_costs}"
         )
-        owner_cell = rows.nth(0).locator("td").nth(2).inner_text()
-        key_cell = rows.nth(0).locator("td").nth(3).inner_text()
+        owner_cell = rows.nth(0).locator("td").nth(3).inner_text()
+        key_cell = rows.nth(0).locator("td").nth(4).inner_text()
         assert f"u021-{suffix}@example.org" in owner_cell
         assert "Public ID:" in key_cell, (
             "created row association lost: the 2.00 row must keep its key cell"
@@ -1379,7 +1596,7 @@ def test_institution_cohort_name_filters_submit_names(chromium, usab_env) -> Non
         page.wait_for_url("**/admin/institutions?name=*")  # type: ignore[attr-defined]
         rows = page.locator(".table-wrap table[data-sortable] tbody tr")  # type: ignore[attr-defined]
         assert rows.count() == 1
-        assert inst_a in rows.first.locator("td").first.inner_text()
+        assert inst_a in rows.first.locator("td").nth(1).inner_text()
 
         # --- cohorts list: same contract for the cohort name filter ---
         page.goto("/admin/cohorts")
@@ -1400,7 +1617,7 @@ def test_institution_cohort_name_filters_submit_names(chromium, usab_env) -> Non
         page.wait_for_url("**/admin/cohorts?name=*")  # type: ignore[attr-defined]
         rows = page.locator(".table-wrap table[data-sortable] tbody tr")  # type: ignore[attr-defined]
         assert rows.count() == 1
-        assert cohort_name in rows.first.locator("td").first.inner_text()
+        assert cohort_name in rows.first.locator("td").nth(1).inner_text()
 
 
 # ---------------------------------------------------------------------------

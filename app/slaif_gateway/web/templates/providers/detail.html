@@ -93,18 +93,19 @@
     <h2>Recent Routes</h2>
     <table data-sortable>
       <thead>
-        <tr><th>Requested model</th><th>Upstream model</th><th data-sort-type="number">Priority</th><th>Status</th></tr>
+        <tr><th data-ordinal scope="col" aria-label="Row number">#</th><th>Requested model</th><th>Upstream model</th><th data-sort-type="number">Priority</th><th>Status</th></tr>
       </thead>
       <tbody>
         {% for route in provider.route_summaries %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
           <td>{{ route.upstream_model }}</td>
           <td data-sort-value="{{ route.priority }}">{{ route.priority }}</td>
           <td>{{ "enabled" if route.enabled else "disabled" }} / {{ "visible" if route.visible_in_models else "hidden" }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="empty-state">No routes found.</td></tr>
+        <tr data-no-sort><td colspan="5" class="empty-state">No routes found.</td></tr>
         {% endfor %}
       </tbody>
     </table>
@@ -114,18 +115,19 @@
     <h2>Recent Pricing Rules</h2>
     <table data-sortable>
       <thead>
-        <tr><th>Model</th><th>Endpoint</th><th>Currency</th><th>Status</th></tr>
+        <tr><th data-ordinal scope="col" aria-label="Row number">#</th><th>Model</th><th>Endpoint</th><th>Currency</th><th>Status</th></tr>
       </thead>
       <tbody>
         {% for pricing in provider.pricing_summaries %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td><a href="/admin/pricing/{{ pricing.id }}">{{ pricing.upstream_model }}</a></td>
           <td>{{ pricing.endpoint }}</td>
           <td>{{ pricing.currency }}</td>
           <td>{{ "enabled" if pricing.enabled else "disabled" }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="empty-state">No pricing rules found.</td></tr>
+        <tr data-no-sort><td colspan="5" class="empty-state">No pricing rules found.</td></tr>
         {% endfor %}
       </tbody>
     </table>

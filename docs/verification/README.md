@@ -16,6 +16,13 @@ on record. They are dated, commit-specific evidence, not certifications.
   hyperlink table-sort headers, integrated record-choice control
   appearance, and deterministic local asset-revision URLs; synthetic
   data only, no real provider/model/email claim.
+- [`2026-10-25 Objective 194-a admin numbered tables and metric columns verification`](2026-10-25-admin-numbered-tables-and-metric-columns.md)
+  (recorded 2026-10-25) — focused unit (130 passed, mocked ASGI /
+  pure renderer) and native-Chromium owned-PostgreSQL evidence for
+  the structural row ordinals, split usage/quota metric columns,
+  Rows selector, Source-row provenance, and the report ordinal
+  column; synthetic data only, no real provider/model/email claim;
+  records the pending renderer-identity (194.1) same-PR follow-up.
 - [`2026-10-25 Objective 192-a admin-usability verification`](2026-10-25-admin-usability.md)
   (recorded 2026-10-25) — focused JUnit, owned-PostgreSQL, real
   authenticated admin HTTP, and native-Chromium evidence for the

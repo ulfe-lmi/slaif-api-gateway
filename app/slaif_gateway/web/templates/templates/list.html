@@ -29,6 +29,7 @@
     <table data-sortable>
       <thead>
         <tr>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
           <th>Name</th>
           <th>Status</th>
           <th>Current revision</th>
@@ -39,6 +40,7 @@
       <tbody>
         {% for template in templates %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td>
             <a href="/admin/templates/{{ template.id }}">{{ template.name }}</a>
             {% if template.description %}<div class="muted small">{{ template.description }}</div>{% endif %}
@@ -53,8 +55,8 @@
           </td>
         </tr>
         {% else %}
-        <tr>
-          <td colspan="5" class="empty-state">No key templates found.</td>
+        <tr data-no-sort>
+          <td colspan="6" class="empty-state">No key templates found.</td>
         </tr>
         {% endfor %}
       </tbody>

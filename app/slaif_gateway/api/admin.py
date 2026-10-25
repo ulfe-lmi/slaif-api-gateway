@@ -314,6 +314,30 @@ def _utc_datetime_local(value: datetime | str | None) -> str:
 
 templates.env.filters["utc_datetime_local"] = _utc_datetime_local
 
+
+def _utc_date_display(value: datetime | str | None) -> str:
+    """Human-readable UTC date for table cells (194-a presentation only).
+
+    Renders the UTC calendar date of the given instant (e.g. ``20 Oct
+    2026``) without shifting time zones or changing the underlying value;
+    the full precise timestamp stays accessible in the cell's title
+    attribute, and raw sorting keeps the real ISO instant. No form/submit
+    behavior is affected.
+    """
+    if isinstance(value, datetime):
+        parsed = value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    else:
+        try:
+            parsed = _parse_admin_datetime(value)
+        except ValueError:
+            return ""
+    if parsed is None:
+        return ""
+    return parsed.strftime("%d %b %Y")
+
+
+templates.env.filters["utc_date_display"] = _utc_date_display
+
 # Deterministic local asset revision URLs (193-a): changed bundled CSS/JS
 # bytes are served under a changed ?v= URL; unchanged bytes stay stable.
 templates.env.globals["asset_url"] = asset_url

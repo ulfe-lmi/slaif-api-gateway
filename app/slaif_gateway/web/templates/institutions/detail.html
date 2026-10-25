@@ -69,6 +69,7 @@
       <table data-sortable>
         <thead>
           <tr>
+            <th data-ordinal scope="col" aria-label="Row number">#</th>
             <th>Key</th>
             <th>Owner</th>
             <th>Status</th>
@@ -78,6 +79,7 @@
         <tbody>
           {% for key in institution.recent_keys %}
           <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
             <td>
               <a href="/admin/keys/{{ key.id }}">{{ key.key_prefix }}{{ key.public_key_id }}</a>
               {% if key.key_hint %}<div class="muted small">{{ key.key_hint }}</div>{% endif %}
@@ -87,8 +89,8 @@
             <td data-sort-value="{{ key.valid_until.isoformat() }}">{{ key.valid_until.isoformat() }}</td>
           </tr>
           {% else %}
-          <tr>
-            <td colspan="4" class="empty-state">No keys found for this institution.</td>
+          <tr data-no-sort>
+            <td colspan="5" class="empty-state">No keys found for this institution.</td>
           </tr>
           {% endfor %}
         </tbody>
