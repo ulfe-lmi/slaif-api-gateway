@@ -194,7 +194,13 @@ top-level route `codex_limits` object (`context_window_tokens`,
 context), or route resolution denies with
 `responses_route_capability_not_supported` or
 `responses_codex_limits_invalid` before Redis, pricing, quota, or provider
-work. Codex pricing is complete only when the resolved pricing row also
+work. Registered Codex profile readiness treats the profile's context and maximum
+output as minimum route allowances. The route default must lie between the
+profile's default and maximum output, inclusive. A padded gateway estimation
+ceiling does not rewrite the conservative client catalog's context or compaction
+threshold; malformed or insufficient route limits still deny readiness. This
+readiness comparison changes neither runtime request admission nor forwarding.
+Codex pricing is complete only when the resolved pricing row also
 provides `cached_input_price_per_1m`, `reasoning_price_per_1m`, and
 `pricing_metadata.codex_accounting` holding a positive integer
 `long_context_threshold_tokens`, positive decimal-string

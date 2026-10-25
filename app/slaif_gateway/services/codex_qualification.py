@@ -750,10 +750,15 @@ def _route_capability_reasons(
             reasons.append("compact_route_capability_missing")
     try:
         limits = parse_codex_route_limits(capabilities)
+        # Profiles are conservative client requirements, not an instruction to
+        # advertise the gateway's (possibly padded) estimation ceiling. A route
+        # may provide more headroom without changing the immutable catalog.
+        # Its injected default must still fit the profile's output envelope.
         if (
-            limits.context_window_tokens != profile.context_window_tokens
-            or limits.default_max_output_tokens != profile.default_max_output_tokens
-            or limits.max_output_tokens != profile.max_output_tokens
+            limits.context_window_tokens < profile.context_window_tokens
+            or limits.default_max_output_tokens < profile.default_max_output_tokens
+            or limits.default_max_output_tokens > profile.max_output_tokens
+            or limits.max_output_tokens < profile.max_output_tokens
         ):
             reasons.append("codex_limits_mismatch")
     except Exception:
