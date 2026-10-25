@@ -1,3 +1,4 @@
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -138,8 +139,9 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert "Positive margin stops streams early" in html
     assert "create-chat-streaming-live-burn-fields" in html
     assert "data-streaming-live-burn-surface" in html
-    assert 'src="/admin/static/js/policy-selector.js"' in html
-    assert 'src="/admin/static/js/streaming-live-burn.js"' in html
+    # 193-a: bundled local scripts carry a content-revision query string.
+    assert re.search(r'src="/admin/static/js/policy-selector\.js\?v=[0-9a-f]{16}"', html)
+    assert re.search(r'src="/admin/static/js/streaming-live-burn\.js\?v=[0-9a-f]{16}"', html)
     assert "https://cdn" not in html.lower()
     assert "react" not in html.lower()
     assert "vue" not in html.lower()
@@ -403,7 +405,8 @@ def test_create_form_renders_lazy_throttling_defaults_ceilings_and_inactive_note
         in html
     )
     assert "streaming starts only after admission" in html
-    assert 'src="/admin/static/js/lazy-throttling.js"' in html
+    # 193-a: bundled local scripts carry a content-revision query string.
+    assert re.search(r'src="/admin/static/js/lazy-throttling\.js\?v=[0-9a-f]{16}"', html)
     # Default settings leave Redis rate limiting off: state that honestly.
     assert "Redis rate limiting is currently disabled" in html
 

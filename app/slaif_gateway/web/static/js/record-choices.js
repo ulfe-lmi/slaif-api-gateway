@@ -84,6 +84,10 @@
       return;
     }
     rc.dataset.rcInitialized = "1";
+    // 193-a: marks the JS-enhanced mode so CSS can collapse the multi
+    // box to one integrated line. Without JavaScript this class is never
+    // added and the no-JS fallback keeps its natural multi-line height.
+    rc.classList.add("rc-js");
 
     const kind = rc.dataset.kind || "";
     const inputName = rc.dataset.inputName || "";
@@ -187,14 +191,14 @@
         refreshClearVisibility();
         return;
       }
-      if (selected.length === 0) {
-        input.value = "";
-        renderSelected();
-      } else {
-        const value = selected[0];
-        input.value = value.label || value.id;
-        renderSelected();
-      }
+      // 193-a: a single currently selected value remains a CHIP below the
+      // box; the integrated box keeps a BLANK search prompt for the next
+      // search instead of duplicating the value in the input. The scalar
+      // form authority is the managed hidden field (writeHidden), which is
+      // unchanged: selection, replacement, and no-JS submissions all keep
+      // their exact server-side semantics.
+      input.value = "";
+      renderSelected();
       refreshClearVisibility();
     };
 

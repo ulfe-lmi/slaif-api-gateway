@@ -1,3 +1,4 @@
+import re
 import uuid
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
@@ -226,7 +227,8 @@ def test_key_detail_renders_chat_streaming_live_burn_form(monkeypatch) -> None:
     assert "Live estimates are provisional, not invoice-grade" in html
     assert "detail-chat-streaming-live-burn-fields" in html
     assert "data-streaming-live-burn-surface" in html
-    assert 'src="/admin/static/js/streaming-live-burn.js"' in html
+    # 193-a: bundled local scripts carry a content-revision query string.
+    assert re.search(r'src="/admin/static/js/streaming-live-burn\.js\?v=[0-9a-f]{16}"', html)
     assert "https://cdn" not in html.lower()
     assert "react" not in html.lower()
     assert "vue" not in html.lower()

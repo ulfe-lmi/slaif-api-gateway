@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}SLAIF Gateway Admin{% endblock %}</title>
     {{ branding_icon_link | safe }}
-    <link rel="stylesheet" href="/admin/static/css/admin.css">
+    <link rel="stylesheet" href="{{ asset_url('admin.css') }}">
     {{ branding_css_link | safe }}
   </head>
   <body>
@@ -62,11 +62,11 @@
     <footer class="admin-footer">
       <div class="admin-footer-inner">
         <span class="admin-footer-identity">SLAIF API Gateway</span>
-        <span>Operator console: keys, policy, accounting</span>
+        <span>Administration</span>
       </div>
     </footer>
-    <script src="/admin/static/js/navigation.js" defer></script>
-    <script src="/admin/static/js/table-sort.js" defer></script>
-    <script src="/admin/static/js/record-choices.js" defer></script>
+    <script src="{{ asset_url('navigation.js') }}" defer></script>
+    <script src="{{ asset_url('table-sort.js') }}" defer></script>
+    <script src="{{ asset_url('record-choices.js') }}" defer></script>
   </body>
 </html>

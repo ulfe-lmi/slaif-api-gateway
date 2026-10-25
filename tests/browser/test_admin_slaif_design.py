@@ -287,6 +287,29 @@ def _rgb_parts(value: str) -> tuple[int, int, int]:
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
 
 
+def _effective_background(page: object, selector: str) -> str:
+    """Opaque background an element is actually rendered on.
+
+    193-a: secondary header actions are plain text links (transparent
+    background by design), so their readable pair is measured against
+    the first opaque ancestor surface, not their own (transparent)
+    background. Elements with an opaque background return it directly.
+    """
+    return page.locator(selector).evaluate(  # type: ignore[attr-defined]
+        """(el) => {
+            let node = el;
+            while (node) {
+                const bg = getComputedStyle(node).backgroundColor;
+                if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") {
+                    return bg;
+                }
+                node = node.parentElement;
+            }
+            return getComputedStyle(document.body).backgroundColor;
+        }"""
+    )
+
+
 def _contrast_ratio(color_a: str, color_b: str) -> float:
     def lin(channel: int) -> float:
         c = channel / 255
@@ -397,9 +420,12 @@ def test_design_default_theme_shell_fonts_navigation_and_tables(owned_pg_url: st
             select_selector = 'form.filter-bar[action="/admin/keys"] select[name="status"]'
             assert _computed(page, primary_selector, "backgroundColor") == DEFAULT_ACCENT
             for selector in (primary_selector, secondary_selector, select_selector):
+                # 193-a: secondary actions are transparent plain-text
+                # links; readable pair = link color vs the opaque
+                # surface it renders on (effective background).
                 assert _contrast_ratio(
                     _computed(page, selector, "color"),
-                    _computed(page, selector, "backgroundColor"),
+                    _effective_background(page, selector),
                 ) >= 4.5, selector
             _assert_no_horizontal_overflow(page, 1440)
             _shot(page, tmp_path, "design-default-keys-1440.png")
@@ -565,7 +591,16 @@ def test_design_alternate_theme_contrast_and_compact_selection(
             links = page.eval_on_selector_all(  # type: ignore[attr-defined]
                 "head link", "els => els.map(e => e.getAttribute('href'))"
             )
-            assert links.index(PACKAGED_CSS_URL) < links.index("/admin/branding/style.css")
+            # 193-a: the packaged stylesheet carries a content-revision
+            # query string; match on its URL prefix, not the bare path.
+            def _css_index(url: str) -> int:
+                return next(
+                    i
+                    for i, href in enumerate(links)
+                    if href is not None and href.startswith(url)
+                )
+
+            assert _css_index(PACKAGED_CSS_URL) < _css_index("/admin/branding/style.css")
             assert _computed(page, "body", "backgroundColor") == ALT_BODY_BG
             assert _computed(page, "h1", "color") == ALT_H1_COLOR
             assert page.locator("img.admin-header-logo").get_attribute("src") == "/admin/branding/logo"
@@ -593,7 +628,11 @@ def test_design_alternate_theme_contrast_and_compact_selection(
             assert primary_fg == ALT_PRIMARY_FG
             assert _contrast_ratio(primary_fg, primary_bg) >= 4.5
 
-            secondary_bg = _computed(page, secondary_selector, "backgroundColor")
+            # 193-a: the secondary action is a transparent plain-text
+            # link; its coordinated pair is the theme accent on the
+            # opaque panel surface (effective background), still the
+            # operator theme's surface token.
+            secondary_bg = _effective_background(page, secondary_selector)
             secondary_fg = _computed(page, secondary_selector, "color")
             assert secondary_bg == ALT_SECONDARY_BG
             assert secondary_fg == ALT_SECONDARY_FG

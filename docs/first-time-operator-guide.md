@@ -269,21 +269,29 @@ are intentionally generic.
 
 ### Dashboard basics (sortable lists, record pickers)
 
-The admin lists are sortable in the browser: click a column header
-(Enter or Space also work) to sort that column ascending, click it
-again to reverse; columns show machine values (counts, limits,
+The admin lists are sortable in the browser: every column header is a
+focusable text link — click it, or focus it and press Enter, to sort
+that column ascending; click/focus-Enter it again to reverse (Space
+does not activate a link). Before the first click each sortable
+header shows a neutral up/down marker; after the first click it shows
+the active direction. Columns show machine values (counts, limits,
 timestamps, money) in their correct numeric/money order, missing
 values always sort last. Known-record fields (owner, provider, model,
 currency, …) are searchable pickers over the latest ~100 local records
-with a server-side search box for older ones; free-typed values are
-only accepted where the field allows them, and the dashboard works
-without JavaScript (plain form fields). Boolean list filters offer
-Any / Yes / No; "Any" applies no filter. Details:
-`docs/admin-usability.md`.
+with a server-side search box for older ones; a selected value shows
+as a chip below the field while the field stays blank for the next
+search; free-typed values are only accepted where the field allows
+them, and the dashboard works without JavaScript (plain form fields).
+Boolean list filters offer Any / Yes / No; "Any" applies no filter.
+Details: `docs/admin-usability.md`.
 
-After updating the deployment (image rebuild or restart), hard-refresh
-the browser (Ctrl/Cmd+Shift+R) once so the dashboard's updated
-JavaScript is loaded; there is no database migration for this feature.
+After updating the deployment (image rebuild or restart), no manual
+cache step is needed for newly loaded pages: the dashboard's CSS/JS
+are served under a content-revision URL (`?v=<digest>`), so changed
+bytes are picked up on the next page load. A tab that was ALREADY
+open during the update may still show the old look until you hard-
+refresh it once (Ctrl/Cmd+Shift+R). There is no database migration,
+schema change, or key/credential change for this feature.
 
 ## Pricing
 

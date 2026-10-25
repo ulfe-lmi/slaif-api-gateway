@@ -298,7 +298,16 @@ def test_admin_branding_enabled_all_slots_desktop_and_mobile(
             links = page.eval_on_selector_all(  # type: ignore[attr-defined]
                 "head link", "els => els.map(e => e.getAttribute('href'))"
             )
-            assert links.index(PACKAGED_CSS_URL) < links.index("/admin/branding/style.css")
+            # 193-a: the packaged stylesheet carries a content-revision
+            # query string; match on its URL prefix, not the bare path.
+            def _css_index(url: str) -> int:
+                return next(
+                    i
+                    for i, href in enumerate(links)
+                    if href is not None and href.startswith(url)
+                )
+
+            assert _css_index(PACKAGED_CSS_URL) < _css_index("/admin/branding/style.css")
             assert _computed(page, "body", "backgroundColor") == CUSTOM_BODY_BG
             assert _computed(page, ".auth-panel h1", "color") == CUSTOM_H1_COLOR
 
