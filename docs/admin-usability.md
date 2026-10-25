@@ -89,6 +89,13 @@ with JavaScript disabled. Its `<main>` carries the local `ts-sort`
 fragment target so the hyperlink sort headers resolve to an id that
 exists in the document (the report's internal-link audit enforces
 this).
+The report renderer is versioned: the current CLI binds renderer
+`194.1` (the structural ordinal column plus the `Plan #` relabel),
+and sealed runs of the `183.1` era or earlier are refused explicitly
+by the unsupported-renderer guard — see the [Renderer version
+upgrade](catalog-refresh.md#renderer-version-upgrade-1831--1941)
+section in the catalog-refresh documentation for regeneration and
+rollback.
 
 ### Numbered rows, split metric columns, and the Rows selector (194-a)
 

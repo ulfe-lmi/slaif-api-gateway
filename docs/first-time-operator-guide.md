@@ -308,6 +308,16 @@ open during the update may still show the old look until you hard-
 refresh it once (Ctrl/Cmd+Shift+R). There is no database migration,
 schema change, or key/credential change for this feature.
 
+If you use the optional catalog-refresh workflow (see
+[Catalog Refresh](catalog-refresh.md)): the current CLI supports
+exactly one report renderer version (`194.1`), and sealed review runs
+created by an OLDER CLI image are refused explicitly instead of being
+re-derived or re-sealed — regenerate the review as a fresh run under
+the current CLI (the [Renderer version
+upgrade](catalog-refresh.md#renderer-version-upgrade-1831--1941)
+section has the exact commands). This is a normal image/code upgrade
+and service restart: no database migration and no key/policy change.
+
 ## Pricing
 
 The gateway needs local pricing metadata before cost-limited requests can be

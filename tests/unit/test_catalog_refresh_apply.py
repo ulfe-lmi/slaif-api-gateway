@@ -11,6 +11,7 @@ tests/integration/test_catalog_refresh_apply_postgres.py.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,13 +22,18 @@ import pytest
 from typer.testing import CliRunner
 
 from slaif_gateway.cli.main import app
+from slaif_gateway.services.catalog_refresh import filesystem as fs
+from slaif_gateway.services.catalog_refresh import sealing
 from slaif_gateway.services.catalog_refresh import apply as apply_mod
 from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshBlockedError
 from slaif_gateway.services.catalog_refresh.filesystem import (
     load_seal_key_bytes,
     open_anchored_handle,
 )
-from slaif_gateway.services.catalog_refresh.sealing import CatalogRefreshSealError
+from slaif_gateway.services.catalog_refresh.sealing import (
+    CONTENT_FILES,
+    CatalogRefreshSealError,
+)
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "catalog_refresh"
 runner = CliRunner()
@@ -343,6 +349,90 @@ async def test_wrong_seal_key_refuses_before_database(
             reason="why",
             actor="who",
         )
+
+
+def _forge_renderer_version_and_reseal(run_dir: Path, key: bytes, version: str) -> None:
+    """Forge the sealed context's renderer version and re-sign the run with
+    the runner key: a correctly AUTHENTICATED (digests + HMAC valid) legacy
+    context, exactly as a key-holding local actor could produce it (194-b
+    A2). The refusal must come from the supported-versions guard, not from
+    any authentication failure."""
+    victim = run_dir / "validation.json"
+    document = json.loads(victim.read_bytes())
+    document["execution_context"]["generator_versions"]["renderer_version"] = version
+    victim.write_bytes((json.dumps(document, sort_keys=True, indent=1) + "\n").encode("utf-8"))
+    files = {
+        name: hashlib.sha256((run_dir / name).read_bytes()).hexdigest()
+        for name in CONTENT_FILES
+    }
+    manifest = {
+        "schema_version": "1",
+        "files": [
+            {"path": name, "sha256": files[name], "bytes": (run_dir / name).stat().st_size}
+            for name in sorted(files)
+        ],
+    }
+    (run_dir / "manifest.json").write_bytes(
+        (json.dumps(manifest, sort_keys=True, indent=1) + "\n").encode("utf-8")
+    )
+    run_fd, _chain = fs._open_anchored(run_dir)
+    try:
+        sealing.seal_run(run_fd, key)
+    finally:
+        os.close(run_fd)
+
+
+@pytest.mark.asyncio
+async def test_authenticated_old_183_1_renderer_refuses_before_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correctly AUTHENTICATED sealed context of the previous renderer
+    generation (183.1: digests ok, HMAC ok) is refused by the existing
+    distinguishable unsupported-renderer guard in BOTH apply and
+    apply-status BEFORE any database contact, with the fixed reason, and
+    the sealed bytes stay untouched (194-b R2/A2)."""
+    run_dir, key = _make_first_install_run(tmp_path)
+    _forge_renderer_version_and_reseal(run_dir, key, "183.1")
+    before = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(run_dir.iterdir())
+    }
+
+    def _lock_boom(_connection: Any) -> None:
+        raise AssertionError("a refused status must never take catalog table locks")
+
+    _no_db_contact(monkeypatch)
+    monkeypatch.setattr(apply_mod, "lock_catalog_tables", _lock_boom)
+
+    with pytest.raises(CatalogRefreshSealError) as apply_exc:
+        await apply_mod.apply_reviewed_run(
+            run_dir=run_dir,
+            seal_key=key,
+            database_url=LEAK_DB_URL,
+            reason="why",
+            actor="who",
+        )
+    message = str(apply_exc.value)
+    assert "unsupported renderer version in sealed context" in message
+    assert "re-run the review under the current CLI" in message
+    assert "digests=ok" in message  # authentication passed...
+    assert "hmac=ok" in message  # ...and was then refused by the guard
+    assert LEAK_PASS not in message
+
+    with pytest.raises(CatalogRefreshSealError) as status_exc:
+        await apply_mod.apply_status(
+            run_dir=run_dir, seal_key=key, database_url=LEAK_DB_URL
+        )
+    status_message = str(status_exc.value)
+    assert "unsupported renderer version in sealed context" in status_message
+    assert "hmac=ok" in status_message
+    assert LEAK_PASS not in status_message
+
+    after = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(run_dir.iterdir())
+    }
+    assert before == after  # both refusals are read-only: no sealed bytes changed
 
 
 @pytest.mark.asyncio

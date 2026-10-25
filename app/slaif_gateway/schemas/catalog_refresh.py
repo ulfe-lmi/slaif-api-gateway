@@ -59,18 +59,21 @@ from slaif_gateway.services.responses_route_capabilities import (
 )
 
 SCHEMA_VERSION = "1"
-# 183: the report renderer gained the measured research identity and
-# grounding-evidence wording (plus the 182 apply-plan section), so the sealed
-# artifacts of pre-183 (182.1) runs are NOT byte-stable under this verifier's
-# recomputation. The authenticated execution context therefore accepts exactly
-# the renderer versions this verifier can replay byte-stably: 183.1 only. A
-# sealed context carrying 182.1 or 181.1 (or any other value) is refused
-# explicitly as an unsupported replay version — no historical renderer fleet,
-# no re-derivation, no re-sealing. The supported path for legacy proposal data
-# is a fresh review (or collection) under the current CLI, which produces
-# current artifacts without rewriting sealed archives or source dates.
-SUPPORTED_RENDERER_VERSIONS: tuple[str, ...] = ("183.1",)
-RENDERER_VERSION = "183.1"
+# 194: the report renderer gained the structural first-position ordinal
+# column (plain header; 1..N over the displayed logical rows; renumbered by
+# the fixed shared sort script after every client-side sort) and the
+# relabeled apply-plan reference ("Plan #"), so the sealed artifacts of
+# pre-194 (183.1 and earlier) runs are NOT byte-stable under this verifier's
+# recomputation. The authenticated execution context therefore accepts
+# exactly the renderer versions this verifier can replay byte-stably: 194.1
+# only. A sealed context carrying 183.1 or any earlier/unknown value is
+# refused explicitly as an unsupported replay version — no historical
+# renderer fleet, no re-derivation, no re-sealing. The supported path for
+# legacy proposal data is a fresh review (or collection) under the current
+# CLI, which produces current artifacts without rewriting sealed archives or
+# source dates.
+SUPPORTED_RENDERER_VERSIONS: tuple[str, ...] = ("194.1",)
+RENDERER_VERSION = "194.1"
 POLICY_VERSION = 1
 # 182: canonical typed apply-plan contract (bounded plan/result/version).
 # The plan is a deterministic derivation from the authenticated sealed bytes

@@ -129,23 +129,28 @@ All groups: REAL pytest exit `0` (captured via `PIPESTATUS[0]`):
   budget fixture change (JUnit `/tmp/slaif194/browser-metric-1.xml`):
   owners-table sorting with the shifted column indices and ordinal
   renumbering after each sort; the NEW
-  `test_keys_metric_columns_sort_independently` covering ALL SIX
-  metric columns with seeded DIVERGENT orders — exact typed
-  ascending orders `0…/1,2,3,4,5` vs `0…/25,75,80,90,990,1000`
-  (usage), `900,900,2000…` vs `500×6,700,800,1500×4` (quota
-  requests/tokens), and `0, 0.000000001, 7.75, 10×7, 12.5, ∅`
-  (budget, the `∅` NULL limit last in BOTH directions) — with exact
-  descending reversals, faithful zeros in the cost column, per-row
-  metric-tuple association preserved, ordinals 1..12 after every
-  sort, a plain ordinal header with no link, and Enter activation on
-  a metric header; bulk-import preview/result with Source-row
+  `test_keys_metric_columns_sort_independently` covering all SIX
+  metric columns with seeded DIVERGENT orders — every column sorted
+  ASCENDING with its exact typed order (`0…/1,2,3,4,5` usage
+  requests; `0…/25,75,80,90,990,1000` usage tokens; faithful zeros
+  in the cost column; `900,900,2000…` quota requests;
+  `500×6,700,800,1500×4` quota tokens; and `0, 0.000000001, 7.75,
+  10×7, 12.5, ∅` budget with the `∅` NULL limit last), the
+  quota-tokens and budget columns additionally sorted DESCENDING with
+  exact reversals (the NULL limit stays last in both directions),
+  per-row metric-tuple association preserved, ordinals 1..12 after
+  every sort, a plain ordinal header with no link, and Enter
+  activation on the usage-requests header; bulk-import preview/result with Source-row
   ordering, split Budget/Tokens/Requests cells, and the execute
   form's action/checkbox/CSRF state preserved across a sort;
   institution/cohort name filters with the shifted name column
-  index. (Beyond-float-precision integers and the signed-64 upper
-  edges were additionally proven by root's separate
-  Jinja-template/mock-HTTP/Chromium component probes; they are NOT
-  claimed as permanent PG-suite coverage.)
+  index. (The full all-six-columns-BOTH-directions numeric matrix,
+  and the beyond-float-precision / signed-64 upper-edge values, were
+  proven by root's separate actual-template/mock-HTTP/Chromium
+  component probes; they are NOT claimed as permanent PG-suite
+  coverage — the permanent case covers every column ascending, the
+  quota-tokens and budget columns descending, and Enter activation on
+  the usage-requests header.)
 - `tests/browser/test_admin_visual_screenshots.py` (9 tests, JUnit
   `/tmp/slaif194/browser-visual-1.xml`, refreshed after the budget
   fixture change in `/tmp/slaif194/browser-refresh-1.xml`): dashboard
