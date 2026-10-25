@@ -16,6 +16,26 @@ on record. They are dated, commit-specific evidence, not certifications.
   hyperlink table-sort headers, integrated record-choice control
   appearance, and deterministic local asset-revision URLs; synthetic
   data only, no real provider/model/email claim.
+- [`2026-10-25 Objective 194-a admin numbered tables and metric columns verification`](2026-10-25-admin-numbered-tables-and-metric-columns.md)
+  (recorded 2026-10-25) — focused unit (131 passed, mocked ASGI /
+  pure renderer) and native-Chromium owned-PostgreSQL evidence for
+  the structural row ordinals, split usage/quota metric columns,
+  Rows selector, Source-row provenance, and the report ordinal
+  column; synthetic data only, no real provider/model/email claim.
+  The same-day 194-b record below resolves the pending
+  renderer-identity (194.1) same-PR follow-up.
+- [`2026-10-25 Objective 194-b catalog renderer identity upgrade verification`](2026-10-25-catalog-renderer-upgrade.md)
+  (recorded 2026-10-25) — bounded metadata repair binding the
+  current report renderer to `194.1`: supported-versions constants
+  only (no schema/field/policy/accounting change), authenticated
+  `183.1` refusal proven before database contact in apply and
+  apply-status (digests/HMAC ok, fixed distinguishable reason,
+  sealed bytes untouched), fresh-run CLI review→verify binding
+  `194.1`, focused catalog-refresh unit groups, and one real owned
+  PostgreSQL 16 atomic-apply node; no full-matrix rerun, no
+  release/production claim. (194-d same-PR continuation later
+  corrected the upgrade instructions' output-root collision and this
+  record's Layer-2 evidence wording — see the 194-d OAP report.)
 - [`2026-10-25 Objective 192-a admin-usability verification`](2026-10-25-admin-usability.md)
   (recorded 2026-10-25) — focused JUnit, owned-PostgreSQL, real
   authenticated admin HTTP, and native-Chromium evidence for the

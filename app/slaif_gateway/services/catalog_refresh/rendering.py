@@ -40,6 +40,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -195,6 +196,9 @@ th[aria-sort="ascending"] .ts-link, th[aria-sort="descending"] .ts-link { color:
 th[aria-sort="ascending"] .ts-indicator, th[aria-sort="descending"] .ts-indicator { color: #2b6cb0; font-weight: 700; }
 td { overflow-wrap: anywhere; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 194-a: first-position displayed-position ordinal cells (plain, right-
+   aligned, tabular); the shared table-sort.js renumbers them after a sort. */
+td.ord { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wrap { overflow-wrap: anywhere; }
 .table-scroll { overflow-x: auto; margin: 4px 0 8px; }
 .table-scroll table { margin: 0; }
@@ -1859,6 +1863,44 @@ def _fixed_sort_script() -> str:
     return source
 
 
+def _inject_row_ordinals(html: str) -> str:
+    """194-a: give every sortable report table a first-position ordinal column.
+
+    One bounded, deterministic post-processing pass over the finished HTML.
+    The report tables all author single-row theads and plain ``<tr>`` body
+    rows (no fixed, grouped, or nested rows), so the pass is complete:
+
+    - the apply-plan table keeps its stable sortable plan REFERENCE; it is
+      relabeled ``Plan #`` so it stays distinct from displayed position;
+    - a plain (non-sortable) ``<th data-ordinal>`` header becomes the first
+      cell of every sortable ``<thead><tr>``;
+    - a positional 1..N ``<td class='ord'>`` cell is inserted as the first
+      cell of every tbody data row (server-rendered initial business order;
+      the shared fixed table-sort.js renumbers these after any sort, and
+      never touches the plan reference).
+    """
+    html = html.replace(
+        "<th data-sort-type='number'>#</th>",
+        "<th data-sort-type='number'>Plan #</th>",
+    )
+    html = html.replace(
+        "<table data-sortable><thead><tr>",
+        "<table data-sortable><thead><tr><th data-ordinal class='num'>#</th>",
+    )
+
+    def _number_rows(match: re.Match[str]) -> str:
+        n = 0
+
+        def _row(row: re.Match[str]) -> str:
+            nonlocal n
+            n += 1
+            return f"<tr><td class='ord'>{n}</td>"
+
+        return re.sub(r"<tr>", _row, match.group(0))
+
+    return re.sub(r"<tbody>.*?</tbody>", _number_rows, html, flags=re.S)
+
+
 def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
     """Render the sealed one-page REVIEW.html. Pure function of inputs."""
     source_index = _source_index(bundle)
@@ -1942,7 +1984,7 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
         "</footer>"
     )
     parts.extend(["</main>", "</body>", "</html>"])
-    return ("\n".join(parts) + "\n").encode("utf-8")
+    return _inject_row_ordinals("\n".join(parts) + "\n").encode("utf-8")
 
 
 def build_manifest(files: dict[str, bytes]) -> bytes:

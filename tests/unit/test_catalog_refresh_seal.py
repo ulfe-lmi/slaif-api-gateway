@@ -530,15 +530,17 @@ def test_resealed_unsupported_context_is_refused(
     assert verify_run(run_dir, _raw_key(seal_key)).valid
 
 
-@pytest.mark.parametrize("version", ["181.1", "999.9", "CANARY-SECRET-\x01\x02malicious"])
+@pytest.mark.parametrize("version", ["183.1", "181.1", "999.9", "CANARY-SECRET-\x01\x02malicious"])
 def test_resealed_unsupported_renderer_version_is_refused(
     sealed_run: tuple[Path, Path], version: str
 ) -> None:
     """A FORGED context of a renderer version this verifier cannot replay
-    byte-stably is refused explicitly and distinguishably: 181.1 is the
-    concrete pre-182 boundary (its sealed artifacts are not byte-stable
-    under the 182 renderer); unknown future values are refused the same
-    way. No historical renderer fleet, no re-derivation. The refusal
+    byte-stably is refused explicitly and distinguishably: 183.1 is the
+    concrete pre-194 boundary (a correctly authenticated sealed context of
+    the previous renderer generation, whose sealed artifacts are not
+    byte-stable under the 194 renderer); 181.1 remains the pre-182
+    boundary; unknown future values are refused the same way. No
+    historical renderer fleet, no re-derivation. The refusal
     message is fixed and never echoes the authenticated (untrusted) value
     (A1 safe-error surface)."""
     run_dir, seal_key = sealed_run

@@ -21,7 +21,7 @@
     </div>
   </header>
 
-  <form class="filter-bar compact" method="get" action="/admin/email-deliveries">
+  <form class="filter-bar compact" method="get" action="/admin/email-deliveries" id="email-deliveries-filter">
     <label>
       Status
       <select name="status">
@@ -36,16 +36,29 @@
     {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, selected_id=filters.owner_email, selected_label=filters.owner_email, allow_new=true, input_id="email-owner-email") }}
     {{ record_choice("gateway_key_id", "key", "Gateway key ID", options=choices.gateway_key_id, selected_id=filters.gateway_key_id, selected_label=filters.gateway_key_id, allow_new=true, input_id="email-key") }}
     {{ record_choice("one_time_secret_id", "one_time_secret", "One-time secret ID", options=choices.one_time_secret_id, selected_id=filters.one_time_secret_id, selected_label=filters.one_time_secret_id, allow_new=true, input_id="email-ots") }}
-    <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
+  <div class="table-toolbar" aria-label="Email deliveries rows">
+    <span class="rows-shown" id="email-rows-shown">{{ email_deliveries|length }} rows shown</span>
+    <label>Rows
+      <select name="limit" id="email-limit" form="email-deliveries-filter">
+        {% for n in (10, 25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        {% if filters.limit not in (10, 25, 50, 100, 200) %}
+        <option value="{{ filters.limit }}" selected>{{ filters.limit }} (current)</option>
+        {% endif %}
+      </select>
+    </label>
+  </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Email deliveries">
     <table data-sortable>
       <thead>
         <tr>
-          <th>Recipient</th>
-          <th>Subject</th>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
+          <th class="col-email">Recipient</th>
+          <th class="col-subject">Subject</th>
           <th>Key</th>
           <th>Status</th>
           <th data-sort-type="datetime">Created</th>
@@ -54,18 +67,19 @@
       <tbody>
         {% for row in email_deliveries %}
         <tr>
-          <td>
+          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="col-email">
             <a href="/admin/email-deliveries/{{ row.id }}">{{ row.to_email }}</a>
             <div class="muted small">{{ row.owner_email or "No owner" }}</div>
           </td>
-          <td>{{ row.subject }}</td>
+          <td class="col-subject">{{ row.subject }}</td>
           <td>{{ row.public_key_id or row.gateway_key_id or "n/a" }}</td>
           <td><span class="status-pill status-{{ 'active' if row.status == 'sent' else 'revoked' if row.status == 'failed' else 'suspended' }}">{{ row.status }}</span></td>
           <td>{{ row.created_at }}</td>
         </tr>
         {% else %}
-        <tr>
-          <td colspan="5" class="empty-state">No email deliveries found.</td>
+        <tr data-no-sort>
+          <td colspan="6" class="empty-state">No email deliveries found.</td>
         </tr>
         {% endfor %}
       </tbody>

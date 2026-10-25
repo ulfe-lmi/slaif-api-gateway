@@ -627,7 +627,9 @@ def _check_case(
                 f"short header {label!r} wrapped to multiple lines at 1440 "
                 f"(height={box['height']:.1f})"
             )
-        provider_cells = page.locator("#per-provider tbody tr:first-child td:first-child")
+        # 194-a: the first cell is the structural ordinal; the provider
+        # name is the second cell.
+        provider_cells = page.locator("#per-provider tbody tr:first-child td:nth-child(2)")
         for cell in provider_cells.all():
             box = cell.bounding_box()
             assert box is not None
@@ -885,7 +887,8 @@ def test_browser_report_sort_script_js_on(playwright, case_html) -> None:
         def prov_order() -> list[str]:
             rows = page.locator("#per-provider tbody tr")
             return [
-                rows.nth(i).locator("td").first.inner_text()
+                # 194-a: first cell is the structural ordinal column.
+                rows.nth(i).locator("td").nth(1).inner_text()
                 for i in range(rows.count())
             ]
 
@@ -898,10 +901,21 @@ def test_browser_report_sort_script_js_on(playwright, case_html) -> None:
         rows = field_table.locator("tbody tr")
         count = rows.count()
         assert count >= 2
-        initial = [rows.nth(i).locator("td").first.inner_text() for i in range(count)]
+        # 194-a: first cell is the structural ordinal; the field name is
+        # the second cell. Server-rendered ordinals are 1..N in the
+        # initial business order.
+        initial = [rows.nth(i).locator("td").nth(1).inner_text() for i in range(count)]
+        assert [
+            rows.nth(i).locator("td").first.inner_text() for i in range(count)
+        ] == [str(i + 1) for i in range(count)]
         assert initial[0] == "display_name", f"business order lost: {initial}"
         assert initial != sorted(initial), "fixture field order must not pre-sort"
-        field_th = field_table.locator("thead th").first
+        # The structural ordinal header is plain (no aria-sort, no link);
+        # the sortable "Field" header starts unsorted.
+        ordinal_th = field_table.locator("thead th").first
+        assert ordinal_th.get_attribute("data-ordinal") is not None
+        assert ordinal_th.locator("a.ts-link").count() == 0
+        field_th = field_table.locator("thead th").filter(has_text="Field")
         assert field_th.get_attribute("aria-sort") == "none"
 
         # Independent real table order before any click (this fixture's
@@ -912,17 +926,23 @@ def test_browser_report_sort_script_js_on(playwright, case_html) -> None:
         field_th.locator("a.ts-link").click()
         assert field_th.get_attribute("aria-sort") == "ascending"
         ascending = [
-            field_table.locator("tbody tr").nth(i).locator("td").first.inner_text()
+            field_table.locator("tbody tr").nth(i).locator("td").nth(1).inner_text()
             for i in range(count)
         ]
         assert ascending == sorted(initial), f"ascending sort wrong: {ascending}"
         assert ascending != initial
+        # 194-a: the ordinal column renumbers 1..N in the NEW displayed
+        # order after the sort.
+        assert [
+            field_table.locator("tbody tr").nth(i).locator("td").first.inner_text()
+            for i in range(count)
+        ] == [str(i + 1) for i in range(count)]
         assert prov_order() == prov_before, "independent table must not move"
 
         field_th.locator("a.ts-link").click()
         assert field_th.get_attribute("aria-sort") == "descending"
         descending = [
-            field_table.locator("tbody tr").nth(i).locator("td").first.inner_text()
+            field_table.locator("tbody tr").nth(i).locator("td").nth(1).inner_text()
             for i in range(count)
         ]
         assert descending == list(reversed(ascending)), (

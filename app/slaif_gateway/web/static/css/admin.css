@@ -1663,3 +1663,115 @@ th.ts-col[aria-sort="descending"] .ts-indicator {
   font-size: 0.75rem;
   color: var(--muted);
 }
+
+/* --- Numbered rows, metric columns, rows toolbar (194-a) --------------------
+   Structural first-position ordinal column: plain header (no sort link),
+   narrow, muted, tabular. Data cells are right-aligned position numbers. */
+th[data-ordinal] {
+  width: 3rem;
+  min-width: 3rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+}
+td.row-ordinal {
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* Grouped thead: the visual group row sits above the leaf header row;
+   group cells are plain (never sortable) and keep the header background. */
+th.group-th {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* Numeric metric cells: tabular figures, right aligned, never wrap the
+   value (headers keep their nowrap from the shared th rule). */
+th.num,
+td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+td.num {
+  overflow-wrap: normal;
+}
+/* Whole short labels (status pills, dates) must not split mid-word. */
+.nowrap {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+/* Toolbar between the filter form and the table (mockup): displayed-row
+   count on the left, the visible Rows selector (bound to the GET filter
+   form) on the right. */
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 28px 4px;
+  font-size: 0.875rem;
+}
+.table-toolbar .rows-shown {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.table-toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.table-toolbar select {
+  /* Shared 193-a control geometry: same border/radius/height family. */
+  height: 42px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--control-bg);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 14px;
+  font-weight: 400;
+}
+/* Per-column minimum widths (194-a R5): identity columns keep sensible
+   widths so values stay readable (no one-character columns, no text
+   shrinking); the wide table scrolls inside its labeled region. */
+th.col-key,
+td.col-key {
+  min-width: 12rem;
+}
+th.col-owner,
+td.col-owner {
+  min-width: 9rem;
+}
+th.col-cohort,
+td.col-cohort {
+  min-width: 7rem;
+}
+th.col-email,
+td.col-email {
+  min-width: 13rem;
+}
+th.col-subject,
+td.col-subject {
+  min-width: 14rem;
+}
+/* Wide data tables (keys list) scroll INSIDE their labeled region on
+   narrow screens instead of squeezing columns or overflowing the page. */
+.table-wrap table.table-wide {
+  min-width: 64rem;
+}
+@media (max-width: 1100px) {
+  .table-wrap table.table-wide {
+    min-width: 56rem;
+  }
+}

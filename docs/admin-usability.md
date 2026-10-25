@@ -5,6 +5,13 @@ usable: every list table is sortable in the browser, and every
 known-record / finite-vocabulary field is backed by a searchable
 picker over real local data (with a faithful no-JavaScript fallback).
 
+Objective 194-a added the structural first-position row ordinal to
+every admin table, split the combined usage/quota metric columns on
+the key list (and the combined quota cells on the bulk-import
+tables), gave every GET-limit list a visible Rows selector bound to
+its filter form, and renamed the import provenance column "Row" to
+"Source row" so it stays distinct from the structural ordinal.
+
 This document is the coverage reference. It does not replace
 `docs/security-model.md` (auth/CSRF/lookup boundary) or
 `docs/database-schema.md` (field semantics).
@@ -82,6 +89,73 @@ with JavaScript disabled. Its `<main>` carries the local `ts-sort`
 fragment target so the hyperlink sort headers resolve to an id that
 exists in the document (the report's internal-link audit enforces
 this).
+The report renderer is versioned: the current CLI binds renderer
+`194.1` (the structural ordinal column plus the `Plan #` relabel),
+and sealed runs of the `183.1` era or earlier are refused explicitly
+by the unsupported-renderer guard — see the [Renderer version
+upgrade](catalog-refresh.md#renderer-version-upgrade-1831--1941)
+section in the catalog-refresh documentation for regeneration and
+rollback.
+
+### Numbered rows, split metric columns, and the Rows selector (194-a)
+
+- **Structural ordinal column.** Every admin table (all 25) and every
+  generated `REVIEW.html` table carries a first-position plain
+  `<th data-ordinal>` header and a first-position ordinal data cell
+  (`<td class="row-ordinal">` in the admin tables; the report
+  renderer's post-processing pass authors the same positional cell as
+  `<td class="ord">`). The header is PLAIN (no sort
+  link, no `aria-sort` state, no indicator) — it is a structural
+  position, not a data column. The server renders `1..N` for the
+  initial business order, so the numbering is coherent with
+  JavaScript disabled; after any sort the fixed `table-sort.js`
+  renumbers ONLY the positional values of the moved unit head cells
+  (1..N in the new displayed order) and never touches data cells,
+  ids, URLs, or form state.
+- **Fixed rows are never numbered.** Empty-state rows carry
+  `<tr data-no-sort>` and a single `colspan` equal to the table's
+  column count; the sort script excludes them from both movement and
+  numbering. Group rows (the keys table's plain `Key details` /
+  `Usage` / `Quotas` group row) stay plain and above the complete
+  leaf header row, which keeps one header cell per body column.
+- **Split metric columns.** The key list separates the combined
+  usage into `Requests` / `Tokens` / `Cost (EUR)` and the combined
+  quota into `Requests` / `Tokens` / `Budget (EUR)` (typed raw keys:
+  integer counts plain, money through the `dec` filter), under the
+  plain `Usage` / `Quotas` group headers. A valid actual zero
+  displays `0` (never "missing"); a `NULL` limit displays
+  `Unlimited` with an EMPTY raw key, so it sorts last in both
+  directions. The bulk-import preview/result tables split their
+  combined quota cell into `Budget (EUR)` / `Tokens` / `Requests`
+  the same way.
+- **Rows selector.** Every GET-limit list (owners, institutions,
+  cohorts, providers, routes, pricing, FX, usage, audit, email
+  deliveries, keys) shows a toolbar between the filter form and the
+  table: the displayed-row count and a visible `<select name="limit">`
+  form-associated with the GET filter form. The presets are
+  10/25/50/100/200; a valid custom limit outside the presets is
+  preserved as an explicit `N (current)` option. There is no hidden
+  duplicate limit field.
+- **Provenance stays distinct.** Import preview/result tables label
+  their CSV/plan row identity "Source row" (sortable number) — the
+  structural ordinal and the provenance row reference are different
+  columns; the report's apply-plan keeps its own stable sortable
+  `Plan #` reference, distinct from its displayed-position ordinal.
+- **Readability.** Identity columns carry per-column minimum widths
+  (`col-key` 12rem, `col-owner` 9rem, `col-cohort` 7rem, email/subject
+  13/14rem); numeric cells are tabular and right-aligned; the wide
+  keys table scrolls INSIDE its labeled region on narrow viewports
+  (390/768) instead of squeezing columns or overflowing the page.
+- Pinned by `tests/unit/test_admin_usability_inventory.py`
+  (`test_every_admin_table_has_structural_ordinal_column`,
+  `test_import_tables_keep_source_row_provenance_distinct`) and
+  `tests/unit/test_admin_table_rows_194.py` (real-rendered zero/one/
+  many ordinals, empty-state, typed metric cells, Rows selector),
+  with runtime proof in `tests/browser/test_admin_usability.py`
+  (independent metric-column sorts, Enter activation, form/CSRF
+  state across sorts) and
+  `tests/browser/test_admin_visual_screenshots.py` (grouped thead,
+  narrow-width containment, custom limit 37).
 
 ## 2. Known-record choices (searchable pickers)
 
@@ -245,6 +319,14 @@ editable manual fallback:
   target type.
 - **Request IDs**: the union of usage-ledger request ids (AI calls)
   and audit-log request ids (admin actions), each source bounded.
+- **Page row limits (NOT reference pickers)**: the eleven GET-limit
+  lists carry a bounded NUMERIC preset/custom Rows selector (presets
+  10/25/50/100/200 plus a preserved custom value) bound to the GET
+  filter form. These are presentation controls over the existing page
+  limit — they are deliberately NOT part of the 102-field
+  known-reference inventory and do no database reference lookup.
+  Pinned by `tests/unit/test_admin_table_rows_194.py::
+  test_all_eleven_get_limit_lists_have_bound_rows_selectors`.
 
 ## 3. Coverage inventory
 
@@ -395,11 +477,14 @@ documented, justified non-picker groups:
 ## 5. Import preview/result tables
 
 Bulk key import (and FX/routes/pricing import) preview and result
-pages are dry-run tables over the parsed rows: Row number (numeric),
-status/action, owner, scope, validity (datetime), quotas (money),
+pages are dry-run tables over the parsed rows: structural ordinal
+(194-a), Source row (sortable numeric provenance, kept distinct from
+the ordinal), status/action, owner, scope, validity (datetime), the
+split quota cells Budget (EUR) / Tokens / Requests (bulk import),
 policy, email, errors. They are `data-sortable` like every other
 table; row associations (owner, created key public ID, quota) travel
-with their row. The confirmed-execution result page displays each
+with their row, and the execute form's checkboxes/CSRF state is
+untouched by a sort. The confirmed-execution result page displays each
 one-time plaintext key once (no-store); the permanent browser tests
 read only the safe owner/key-metadata/quota/error cells and never the
 plaintext cell.
@@ -422,4 +507,8 @@ See `docs/verification/2026-10-25-admin-usability.md` for the
 facts, owned-PostgreSQL facts, and honest skips) and
 `docs/verification/2026-10-25-admin-visual-consolidation.md` for the
 193-a visual-consolidation record (hyperlink headers, integrated
-control appearance, asset-revision URLs, A1 screenshots).
+control appearance, asset-revision URLs, A1 screenshots) and
+`docs/verification/2026-10-25-admin-numbered-tables-and-metric-columns.md`
+for the 194-a record (ordinal/metric/Rows-selector focused groups,
+owned-PG/Chromium facts, honest layer separation, and the
+root-discovered renderer-identity follow-up).

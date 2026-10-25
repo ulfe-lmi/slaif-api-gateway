@@ -27,7 +27,7 @@
   <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
   {% endif %}
 
-  <form class="filter-bar" method="get" action="/admin/routes">
+  <form class="filter-bar" method="get" action="/admin/routes" id="routes-filter">
     {{ record_choice("provider", "provider", "Provider", options=choices.provider, selected_id=filters.provider, selected_label=filters.provider, allow_new=true, input_id="routes-provider") }}
     {{ record_choice("requested_model", "model", "Requested model", options=choices.model, selected_id=filters.requested_model, selected_label=filters.requested_model, allow_new=true, input_id="routes-model") }}
     <label>
@@ -55,18 +55,31 @@
         <option value="false" {% if filters.visible == "false" %}selected{% endif %}>No</option>
       </select>
     </label>
-    <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
+  <div class="table-toolbar" aria-label="Model routes rows">
+    <span class="rows-shown" id="routes-rows-shown">{{ routes|length }} rows shown</span>
+    <label>Rows
+      <select name="limit" id="routes-limit" form="routes-filter">
+        {% for n in (10, 25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        {% if filters.limit not in (10, 25, 50, 100, 200) %}
+        <option value="{{ filters.limit }}" selected>{{ filters.limit }} (current)</option>
+        {% endif %}
+      </select>
+    </label>
+  </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Model routes">
     <table data-sortable>
       <thead>
-        <tr><th>Requested model</th><th>Provider</th><th>Upstream model</th><th>Codex qualification</th><th data-sort-type="number">Priority</th><th>Status</th></tr>
+        <tr><th data-ordinal scope="col" aria-label="Row number">#</th><th>Requested model</th><th>Provider</th><th>Upstream model</th><th>Codex qualification</th><th data-sort-type="number">Priority</th><th>Status</th></tr>
       </thead>
       <tbody>
         {% for route in routes %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
           <td>{{ route.provider }}</td>
           <td>{{ route.upstream_model }}</td>
@@ -88,7 +101,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="6" class="empty-state">No model routes found.</td></tr>
+        <tr data-no-sort><td colspan="7" class="empty-state">No model routes found.</td></tr>
         {% endfor %}
       </tbody>
     </table>

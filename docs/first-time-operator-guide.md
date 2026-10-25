@@ -285,6 +285,21 @@ them, and the dashboard works without JavaScript (plain form fields).
 Boolean list filters offer Any / Yes / No; "Any" applies no filter.
 Details: `docs/admin-usability.md`.
 
+Every list table starts with a numbered first column (`#`): the rows
+show their position 1..N in the current displayed order, and the
+numbering renumbers automatically after any column sort (the `#`
+header itself is plain and not sortable). The key list shows usage
+and quota as separate numeric columns (Requests / Tokens / Cost, and
+Requests / Tokens / Budget); a `NULL` limit reads `Unlimited`. The
+eleven GET-limit lists (owners, institutions, cohorts, providers,
+routes, pricing, FX, usage, audit, email deliveries, keys) also have a
+Rows selector between the filters and the table: choose a preset
+(10/25/50/100/200) or keep a custom valid limit, then press Filter;
+the table shows the displayed-row count. (The key-template list, the
+related-record detail tables, and the import tables have no page
+limit and no Rows selector.) On narrow screens the wide key table
+scrolls inside its panel instead of squeezing the columns.
+
 After updating the deployment (image rebuild or restart), no manual
 cache step is needed for newly loaded pages: the dashboard's CSS/JS
 are served under a content-revision URL (`?v=<digest>`), so changed
@@ -292,6 +307,16 @@ bytes are picked up on the next page load. A tab that was ALREADY
 open during the update may still show the old look until you hard-
 refresh it once (Ctrl/Cmd+Shift+R). There is no database migration,
 schema change, or key/credential change for this feature.
+
+If you use the optional catalog-refresh workflow (see
+[Catalog Refresh](catalog-refresh.md)): the current CLI supports
+exactly one report renderer version (`194.1`), and sealed review runs
+created by an OLDER CLI image are refused explicitly instead of being
+re-derived or re-sealed — regenerate the review as a fresh run under
+the current CLI (the [Renderer version
+upgrade](catalog-refresh.md#renderer-version-upgrade-1831--1941)
+section has the exact commands). This is a normal image/code upgrade
+and service restart: no database migration and no key/policy change.
 
 ## Pricing
 

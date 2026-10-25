@@ -26,16 +26,29 @@
   <div class="admin-flash admin-flash-{{ admin_status_message.level }}" role="status">{{ admin_status_message.text }}</div>
   {% endif %}
 
-  <form class="filter-bar compact" method="get" action="/admin/institutions">
+  <form class="filter-bar compact" method="get" action="/admin/institutions" id="institutions-filter">
     {{ record_choice("name", "institution_name", "Name", options=choices.name, selected_id=filters.name, selected_label=filters.name, allow_new=true, placeholder="Institution name", input_id="institutions-name-filter") }}
-    <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
+  <div class="table-toolbar" aria-label="Institutions rows">
+    <span class="rows-shown" id="institutions-rows-shown">{{ institutions|length }} rows shown</span>
+    <label>Rows
+      <select name="limit" id="institutions-limit" form="institutions-filter">
+        {% for n in (10, 25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        {% if filters.limit not in (10, 25, 50, 100, 200) %}
+        <option value="{{ filters.limit }}" selected>{{ filters.limit }} (current)</option>
+        {% endif %}
+      </select>
+    </label>
+  </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Institutions">
     <table data-sortable>
       <thead>
         <tr>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
           <th>Institution</th>
           <th>Country</th>
           <th data-sort-type="number">Owners (count)</th>
@@ -46,6 +59,7 @@
       <tbody>
         {% for institution in institutions %}
         <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
           <td><a href="/admin/institutions/{{ institution.id }}">{{ institution.name }}</a></td>
           <td>{{ institution.country or "Not set" }}</td>
           <td data-sort-value="{{ institution.owner_count }}">{{ institution.owner_count }}</td>
@@ -56,8 +70,8 @@
           <td>{{ institution.created_at.isoformat() }}</td>
         </tr>
         {% else %}
-        <tr>
-          <td colspan="5" class="empty-state">No institutions found.</td>
+        <tr data-no-sort>
+          <td colspan="6" class="empty-state">No institutions found.</td>
         </tr>
         {% endfor %}
       </tbody>
