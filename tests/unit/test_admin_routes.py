@@ -224,7 +224,15 @@ def test_get_admin_returns_dashboard_when_authenticated(monkeypatch) -> None:
     response = client.get("/admin")
 
     assert response.status_code == 200
-    assert "Dashboard Foundation" in response.text
+    # 193-a: the dashboard shows the product heading inside the dashboard
+    # body with an Administration context and the three destination
+    # groups; the implementation-oriented foundation prose is gone.
+    assert '<h1 id="dashboard-heading">SLAIF API Gateway</h1>' in response.text
+    assert '<p class="eyebrow">Administration</p>' in response.text
+    assert "<h2>Access management</h2>" in response.text
+    assert "<h2>Providers and models</h2>" in response.text
+    assert "<h2>Usage and operations</h2>" in response.text
+    assert "Dashboard Foundation" not in response.text
     assert "dashboard-csrf" in response.text
 
 
