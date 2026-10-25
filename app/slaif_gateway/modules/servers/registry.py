@@ -35,7 +35,6 @@ from slaif_gateway.providers.openrouter import OpenRouterProviderAdapter
 OPENAI_SERVER_MODULE_ID = "openai"
 OPENROUTER_SERVER_MODULE_ID = "openrouter"
 OPENAI_COMPATIBLE_SERVER_MODULE_ID = "openai-compatible"
-FACIAL_SCORING_SERVER_MODULE_ID = COMPLETION_SERVICE_MODULE_ID  # deprecated import alias
 
 
 def _openai_factory(settings: object, **kwargs: object) -> object:

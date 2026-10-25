@@ -16,7 +16,7 @@ from slaif_gateway.modules.clients.registry import (
 from slaif_gateway.modules.contracts import ClientServerPair, ModuleSelectionError
 from slaif_gateway.modules.servers.registry import (
     CLIENT_SERVER_COMPATIBILITY,
-    FACIAL_SCORING_SERVER_MODULE_ID,
+    COMPLETION_SERVICE_MODULE_ID,
     SERVER_MODULE_REGISTRY,
     ensure_client_server_pair,
     resolve_server_module,
@@ -51,7 +51,7 @@ def test_module_registries_are_literal_and_fail_closed() -> None:
         "local-coding-vLLM",
         "vllm-chat-video-v1",
     }
-    assert ClientServerPair("openai-default", FACIAL_SCORING_SERVER_MODULE_ID) in CLIENT_SERVER_COMPATIBILITY
+    assert ClientServerPair("openai-default", COMPLETION_SERVICE_MODULE_ID) in CLIENT_SERVER_COMPATIBILITY
     assert ClientServerPair("openai-default", "local-coding-v1") in CLIENT_SERVER_COMPATIBILITY
     with pytest.raises(TypeError):
         CLIENT_MODULE_REGISTRY["dynamic"] = DEFAULT_CLIENT_MODULE  # type: ignore[index]
