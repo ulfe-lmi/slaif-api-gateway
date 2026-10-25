@@ -166,7 +166,12 @@
       }
     };
 
-    const renderSelected = () => {
+    // 195-a: rebuilds ONLY the visible chip area. Label-only refreshes
+    // (e.g. the server re-hydrating an older selection's authoritative
+    // label after a lookup) call this directly so they never rewrite the
+    // managed hidden fields, never emit rc-change (the value did not
+    // change), and never disturb input text/focus/caret.
+    const renderChips = () => {
       if (selectedArea) {
         selectedArea.replaceChildren();
         selectedArea.hidden = selected.length === 0;
@@ -181,6 +186,10 @@
           selectedArea.appendChild(chip);
         }
       }
+    };
+
+    const renderSelected = () => {
+      renderChips();
       writeHidden(selected);
     };
 
@@ -309,9 +318,10 @@
           searchInput.focus();
         }
       }
-      if (!multi && selected.length > 0 && selected[0].id) {
-        // Re-hydrate a selection that may live outside the initial batch.
-        runSearch("", { selectedIds: [selected[0].id] });
+      if (selected.length > 0) {
+        // Re-hydrate the selection(s) that may live outside the initial
+        // batch (single, or every multi chip; 195-a).
+        runSearch("", { selectedIds: selected.map((v) => v.id) });
       }
     };
 
@@ -340,7 +350,7 @@
 
     // ---- server search ------------------------------------------------------
 
-    const depValue = () => {
+    const depValues = () => {
       if (!dependsOn) {
         return null;
       }
@@ -349,8 +359,13 @@
       if (!dep) {
         return null;
       }
-      const depHidden = dep.querySelector(".rc-value");
-      return depHidden ? depHidden.value : null;
+      // 195-a: return ALL managed values of the parent control (multi
+      // parents submit one hidden field per accepted value) so the
+      // dependent lookup keeps the full parent scope.
+      const values = Array.from(dep.querySelectorAll(".rc-value"))
+        .map((el) => el.value)
+        .filter((value) => value !== "");
+      return values.length > 0 ? values : null;
     };
 
     const runSearch = (query, { selectedIds = [] } = {}) => {
@@ -365,9 +380,15 @@
       for (const id of selectedIds) {
         params.append("selected", id);
       }
-      const dep = depValue();
+      const dep = depValues();
       if (dep) {
-        params.set(dependsParam, dep.slice(0, MAX_QUERY_LENGTH));
+        // 195-a: every accepted parent value is sent as a repeatable
+        // scope parameter; the server applies its own explicit
+        // per-value/count bounds, so a valid selection is never
+        // truncated client-side.
+        for (const value of dep) {
+          params.append(dependsParam, value);
+        }
       }
       const seq = ++searchSeq;
       if (searchInFlight) {
@@ -394,6 +415,27 @@
             label: String(item.label),
             sub: item.sub ? String(item.sub) : "",
           }));
+          // 195-a: label-only refresh. Selected entries the server
+          // re-hydrated (selections older than the initial batch, or a
+          // parent-scoped refetch) get their authoritative labels. IDs
+          // and order are untouched; unknown/manual values keep their
+          // fallback label. Value did not change: no hidden-field
+          // rewrite, no rc-change, no input text/focus/caret change.
+          const labelById = new Map();
+          for (const item of items) {
+            labelById.set(String(item.id), String(item.label));
+          }
+          let labelsChanged = false;
+          for (const value of selected) {
+            const next = labelById.get(value.id);
+            if (next && next !== value.label) {
+              value.label = next;
+              labelsChanged = true;
+            }
+          }
+          if (labelsChanged) {
+            renderChips();
+          }
           if (menuOpen) {
             renderList(options, items.length === 0 ? "No matching records." : null);
           }
@@ -513,7 +555,12 @@
         // keyboard on a rendered option) maps a display label to its
         // stored id. The server validation decides on submit.
         selected = text ? [{ id: text, label: text, typed: true }] : [];
-        writeHidden(selected);
+        // 195-a: re-render the visible chip from the typed candidate via
+        // renderSelected (it rebuilds .rc-selected and the managed hidden
+        // field only) so a typed replacement updates the chip WITHOUT
+        // touching the input text/focus/cursor — syncFromSelection would
+        // blank the input on every keystroke.
+        renderSelected();
         // The typed candidate changed the value: the clear affordance
         // must track it (refreshClearVisibility only reads selected and
         // input.value, so focus/cursor/verbatim text are untouched).

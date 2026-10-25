@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -30,6 +31,7 @@ from slaif_gateway.services.streaming_live_burn_surface import (
     CHAT_STREAMING_LIVE_BURN_SURFACE,
     streaming_live_burn_surface_policy_summary,
 )
+from slaif_gateway.utils.admin_list_filters import clean_text_filter
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 
@@ -42,10 +44,10 @@ class _GatewayKeysAdminRepository(Protocol):
         self,
         *,
         status: str | None = None,
-        owner_email: str | None = None,
-        public_key_id: str | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
+        owner_email: str | Sequence[str] | None = None,
+        public_key_id: str | Sequence[str] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         expired: bool | None = None,
         now: datetime | None = None,
         limit: int = 50,
@@ -77,10 +79,10 @@ class AdminKeyDashboardService:
         self,
         *,
         status: str | None = None,
-        owner_email: str | None = None,
-        public_key_id: str | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
+        owner_email: str | Sequence[str] | None = None,
+        public_key_id: str | Sequence[str] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         expired: bool | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -89,8 +91,10 @@ class AdminKeyDashboardService:
         timestamp = _utcnow(now)
         rows = await self._gateway_keys.list_keys_for_admin(
             status=_clean_filter(status),
-            owner_email=_clean_filter(owner_email),
-            public_key_id=_clean_filter(public_key_id),
+            # 195-a: one-or-many OR filters; scalars keep the exact legacy
+            # _clean_filter behavior, sequences are idempotently cleaned.
+            owner_email=clean_text_filter(owner_email),
+            public_key_id=clean_text_filter(public_key_id),
             institution_id=institution_id,
             cohort_id=cohort_id,
             expired=expired,

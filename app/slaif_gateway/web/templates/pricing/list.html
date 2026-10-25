@@ -28,10 +28,10 @@
   {% endif %}
 
   <form class="filter-bar" method="get" action="/admin/pricing" id="pricing-filter">
-    {{ record_choice("provider", "provider", "Provider", options=choices.provider, selected_id=filters.provider, selected_label=filters.provider, allow_new=true, input_id="pricing-provider") }}
-    {{ record_choice("model", "model", "Model", options=choices.model, selected_id=filters.model, selected_label=filters.model, allow_new=true, input_id="pricing-model") }}
-    {{ record_choice("endpoint", "endpoint", "Endpoint", options=choices.endpoint, selected_id=filters.endpoint, selected_label=filters.endpoint, allow_new=false, input_id="pricing-endpoint") }}
-    {{ record_choice("currency", "currency", "Currency", options=choices.currency, selected_id=filters.currency, selected_label=filters.currency, allow_new=true, input_id="pricing-currency") }}
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value", input_id="pricing-provider") }}
+    {{ record_choice("model", "model", "Model", options=choices.model, multi=true, multi_value=filters.model|join("\n"), allow_new=true, help="Matches any selected value", input_id="pricing-model") }}
+    {{ record_choice("endpoint", "endpoint", "Endpoint", options=choices.endpoint, multi=true, multi_value=filters.endpoint|join("\n"), allow_new=false, help="Matches any selected value", input_id="pricing-endpoint") }}
+    {{ record_choice("currency", "currency", "Currency", options=choices.currency, multi=true, multi_value=filters.currency|join("\n"), allow_new=true, help="Matches any selected value", input_id="pricing-currency") }}
     <label>
       Enabled
       <select name="enabled">

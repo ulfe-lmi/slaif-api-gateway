@@ -240,6 +240,12 @@ from slaif_gateway.services.streaming_live_burn_surface import (
     parse_streaming_live_burn_surface_form_policy,
     streaming_live_burn_surface_policy_summary,
 )
+from slaif_gateway.utils.admin_list_filters import (
+    AdminListFilterError,
+    collapse_singleton,
+    normalize_filter_values,
+    parse_uuid_filter_values,
+)
 from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.web.assets import asset_url
 from slaif_gateway.web.branding import (
@@ -793,10 +799,10 @@ async def dashboard(request: Request) -> Response:
 async def list_admin_keys(
     request: Request,
     status: str | None = Query(None),
-    owner_email: str | None = Query(None),
-    public_key_id: str | None = Query(None),
-    institution_id: str | None = Query(None),
-    cohort_id: str | None = Query(None),
+    owner_email: list[str] = Query([]),
+    public_key_id: list[str] = Query([]),
+    institution_id: list[str] = Query([]),
+    cohort_id: list[str] = Query([]),
     expired: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -810,24 +816,33 @@ async def list_admin_keys(
         return page_context
     context, csrf_token = page_context
 
-    parsed_institution_id = _parse_optional_uuid(institution_id)
-    parsed_cohort_id = _parse_optional_uuid(cohort_id)
-    if parsed_institution_id is False or parsed_cohort_id is False:
-        return _admin_error_page(request, status_code=400, message="Invalid filter.")
+    # 195-a: known-record/text filters are REPEATABLE (OR within the
+    # field, AND across fields); one invalid member rejects the whole
+    # field with a fixed safe message (400), never silent removal.
+    try:
+        cleaned_owner_emails = normalize_filter_values(owner_email, field_name="owner_email")
+        cleaned_public_key_ids = normalize_filter_values(public_key_id, field_name="public_key_id")
+        parsed_institution_ids = parse_uuid_filter_values(institution_id, field_name="institution_id")
+        parsed_cohort_ids = parse_uuid_filter_values(cohort_id, field_name="cohort_id")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_key_dashboard_service_scope(request) as service:
         rows = await service.list_keys(
             status=status,
-            owner_email=owner_email,
-            public_key_id=public_key_id,
-            institution_id=parsed_institution_id,
-            cohort_id=parsed_cohort_id,
+            owner_email=collapse_singleton(cleaned_owner_emails),
+            public_key_id=collapse_singleton(cleaned_public_key_ids),
+            institution_id=collapse_singleton(parsed_institution_ids),
+            cohort_id=collapse_singleton(parsed_cohort_ids),
             expired=expired,
             limit=limit,
             offset=offset,
         )
 
-    choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", owner_email), ("key_public_id", "key_public_id", public_key_id), ("cohort", "cohort", cohort_id)))
+    choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", cleaned_owner_emails), ("key_public_id", "key_public_id", cleaned_public_key_ids), ("cohort", "cohort", parsed_cohort_ids), ("institution_id", "institution", parsed_institution_ids)))
 
     return templates.TemplateResponse(
         request,
@@ -840,10 +855,10 @@ async def list_admin_keys(
             "keys": rows,
             "filters": {
                 "status": status or "",
-                "owner_email": owner_email or "",
-                "public_key_id": public_key_id or "",
-                "institution_id": institution_id or "",
-                "cohort_id": cohort_id or "",
+                "owner_email": cleaned_owner_emails or (),
+                "public_key_id": cleaned_public_key_ids or (),
+                "institution_id": parsed_institution_ids or (),
+                "cohort_id": parsed_cohort_ids or (),
                 "expired": "" if expired is None else str(expired).lower(),
                 "limit": limit,
                 "offset": offset,
@@ -2882,9 +2897,9 @@ async def rotate_admin_key(
 @router.get("/owners", response_class=HTMLResponse)
 async def list_admin_owners(
     request: Request,
-    email: str | None = Query(None),
-    institution_id: str | None = Query(None),
-    cohort_id: str | None = Query(None),
+    email: list[str] = Query([]),
+    institution_id: list[str] = Query([]),
+    cohort_id: list[str] = Query([]),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -2897,21 +2912,26 @@ async def list_admin_owners(
         return page_context
     context, csrf_token = page_context
 
-    parsed_institution_id = _parse_optional_uuid(institution_id)
-    parsed_cohort_id = _parse_optional_uuid(cohort_id)
-    if parsed_institution_id is False or parsed_cohort_id is False:
-        return _admin_error_page(request, status_code=400, message="Invalid filter.")
+    try:
+        cleaned_emails = normalize_filter_values(email, field_name="email")
+        parsed_institution_ids = parse_uuid_filter_values(institution_id, field_name="institution_id")
+        parsed_cohort_ids = parse_uuid_filter_values(cohort_id, field_name="cohort_id")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_records_dashboard_service_scope(request) as service:
         rows = await service.list_owners(
-            email=email,
-            institution_id=parsed_institution_id,
-            cohort_id=parsed_cohort_id,
+            email=collapse_singleton(cleaned_emails),
+            institution_id=collapse_singleton(parsed_institution_ids),
+            cohort_id=collapse_singleton(parsed_cohort_ids),
             limit=limit,
             offset=offset,
         )
 
-    choices = await _load_admin_record_choices(request, (("email", "owner_email", email), ("institution_id", "institution", institution_id), ("cohort_id", "cohort", cohort_id)))
+    choices = await _load_admin_record_choices(request, (("email", "owner_email", cleaned_emails), ("institution_id", "institution", parsed_institution_ids), ("cohort_id", "cohort", parsed_cohort_ids)))
 
     return templates.TemplateResponse(
         request,
@@ -2923,9 +2943,9 @@ async def list_admin_owners(
             "admin_status_message": _admin_status_message(request),
             "owners": rows,
             "filters": {
-                "email": email or "",
-                "institution_id": institution_id or "",
-                "cohort_id": cohort_id or "",
+                "email": cleaned_emails or (),
+                "institution_id": parsed_institution_ids or (),
+                "cohort_id": parsed_cohort_ids or (),
                 "limit": limit,
                 "offset": offset,
             },
@@ -3216,7 +3236,7 @@ async def update_admin_owner(
 @router.get("/institutions", response_class=HTMLResponse)
 async def list_admin_institutions(
     request: Request,
-    name: str | None = Query(None),
+    name: list[str] = Query([]),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -3229,10 +3249,18 @@ async def list_admin_institutions(
         return page_context
     context, csrf_token = page_context
 
-    async with _admin_records_dashboard_service_scope(request) as service:
-        rows = await service.list_institutions(name=name, limit=limit, offset=offset)
+    try:
+        cleaned_names = normalize_filter_values(name, field_name="name")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
-    choices = await _load_admin_record_choices(request, (("name", "institution_name", name),))
+    async with _admin_records_dashboard_service_scope(request) as service:
+        rows = await service.list_institutions(name=collapse_singleton(cleaned_names), limit=limit, offset=offset)
+
+    choices = await _load_admin_record_choices(request, (("name", "institution_name", cleaned_names),))
 
     return templates.TemplateResponse(
         request,
@@ -3243,7 +3271,7 @@ async def list_admin_institutions(
             "admin_status_message": _admin_status_message(request),
             "institutions": rows,
             "filters": {
-                "name": name or "",
+                "name": cleaned_names or (),
                 "limit": limit,
                 "offset": offset,
             },
@@ -3460,7 +3488,7 @@ async def update_admin_institution(
 @router.get("/cohorts", response_class=HTMLResponse)
 async def list_admin_cohorts(
     request: Request,
-    name: str | None = Query(None),
+    name: list[str] = Query([]),
     active: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -3474,10 +3502,18 @@ async def list_admin_cohorts(
         return page_context
     context, csrf_token = page_context
 
-    async with _admin_records_dashboard_service_scope(request) as service:
-        rows = await service.list_cohorts(name=name, active=active, limit=limit, offset=offset)
+    try:
+        cleaned_names = normalize_filter_values(name, field_name="name")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
-    choices = await _load_admin_record_choices(request, (("name", "cohort_name", name),))
+    async with _admin_records_dashboard_service_scope(request) as service:
+        rows = await service.list_cohorts(name=collapse_singleton(cleaned_names), active=active, limit=limit, offset=offset)
+
+    choices = await _load_admin_record_choices(request, (("name", "cohort_name", cleaned_names),))
 
     return templates.TemplateResponse(
         request,
@@ -3488,7 +3524,7 @@ async def list_admin_cohorts(
             "admin_status_message": _admin_status_message(request),
             "cohorts": rows,
             "filters": {
-                "name": name or "",
+                "name": cleaned_names or (),
                 "active": "" if active is None else str(active).lower(),
                 "limit": limit,
                 "offset": offset,
@@ -3722,7 +3758,7 @@ async def update_admin_cohort(
 @router.get("/providers", response_class=HTMLResponse)
 async def list_admin_providers(
     request: Request,
-    provider: str | None = Query(None),
+    provider: list[str] = Query([]),
     enabled: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -3736,12 +3772,20 @@ async def list_admin_providers(
         return page_context
     context, csrf_token = page_context
 
+    try:
+        cleaned_providers = normalize_filter_values(provider, field_name="provider")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
+
     async with _admin_catalog_dashboard_service_scope(request) as service:
         rows = await service.list_providers(
-            provider=provider, enabled=enabled, limit=limit, offset=offset
+            provider=collapse_singleton(cleaned_providers), enabled=enabled, limit=limit, offset=offset
         )
 
-    choices = await _load_admin_record_choices(request, (("provider", "provider", provider),))
+    choices = await _load_admin_record_choices(request, (("provider", "provider", cleaned_providers),))
 
     return templates.TemplateResponse(
         request,
@@ -3753,7 +3797,7 @@ async def list_admin_providers(
             "admin_status_message": _admin_status_message(request),
             "providers": rows,
             "filters": {
-                "provider": provider or "",
+                "provider": cleaned_providers or (),
                 "enabled": "" if enabled is None else str(enabled).lower(),
                 "limit": limit,
                 "offset": offset,
@@ -4325,8 +4369,8 @@ async def admin_provider_discover_execute(
 @router.get("/routes", response_class=HTMLResponse)
 async def list_admin_routes(
     request: Request,
-    provider: str | None = Query(None),
-    requested_model: str | None = Query(None),
+    provider: list[str] = Query([]),
+    requested_model: list[str] = Query([]),
     match_type: str | None = Query(None),
     enabled: AdminOptionalBool = None,
     visible: AdminOptionalBool = None,
@@ -4342,10 +4386,19 @@ async def list_admin_routes(
         return page_context
     context, csrf_token = page_context
 
+    try:
+        cleaned_providers = normalize_filter_values(provider, field_name="provider")
+        cleaned_requested_models = normalize_filter_values(requested_model, field_name="requested_model")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
+
     async with _admin_catalog_dashboard_service_scope(request) as service:
         rows = await service.list_routes(
-            provider=provider,
-            requested_model=requested_model,
+            provider=collapse_singleton(cleaned_providers),
+            requested_model=collapse_singleton(cleaned_requested_models),
             match_type=match_type,
             enabled=enabled,
             visible=visible,
@@ -4353,7 +4406,7 @@ async def list_admin_routes(
             offset=offset,
         )
 
-    choices = await _load_admin_record_choices(request, (("provider", "provider", provider), ("model", "model", requested_model)))
+    choices = await _load_admin_record_choices(request, (("provider", "provider", cleaned_providers), ("model", "model", cleaned_requested_models)))
 
     return templates.TemplateResponse(
         request,
@@ -4372,8 +4425,8 @@ async def list_admin_routes(
                 for row in rows
             },
             "filters": {
-                "provider": provider or "",
-                "requested_model": requested_model or "",
+                "provider": cleaned_providers or (),
+                "requested_model": cleaned_requested_models or (),
                 "match_type": match_type or "",
                 "enabled": "" if enabled is None else str(enabled).lower(),
                 "visible": "" if visible is None else str(visible).lower(),
@@ -5317,10 +5370,10 @@ async def admin_route_detail(request: Request, route_id: str) -> Response:
 @router.get("/pricing", response_class=HTMLResponse)
 async def list_admin_pricing_rules(
     request: Request,
-    provider: str | None = Query(None),
-    model: str | None = Query(None),
-    endpoint: str | None = Query(None),
-    currency: str | None = Query(None),
+    provider: list[str] = Query([]),
+    model: list[str] = Query([]),
+    endpoint: list[str] = Query([]),
+    currency: list[str] = Query([]),
     enabled: AdminOptionalBool = None,
     active: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
@@ -5335,19 +5388,30 @@ async def list_admin_pricing_rules(
         return page_context
     context, csrf_token = page_context
 
+    try:
+        cleaned_providers = normalize_filter_values(provider, field_name="provider")
+        cleaned_models = normalize_filter_values(model, field_name="model")
+        cleaned_endpoints = normalize_filter_values(endpoint, field_name="endpoint")
+        cleaned_currencies = normalize_filter_values(currency, field_name="currency")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
+
     async with _admin_catalog_dashboard_service_scope(request) as service:
         rows = await service.list_pricing_rules(
-            provider=provider,
-            model=model,
-            endpoint=endpoint,
-            currency=currency,
+            provider=collapse_singleton(cleaned_providers),
+            model=collapse_singleton(cleaned_models),
+            endpoint=collapse_singleton(cleaned_endpoints),
+            currency=collapse_singleton(cleaned_currencies),
             enabled=enabled,
             active=active,
             limit=limit,
             offset=offset,
         )
 
-    choices = await _load_admin_record_choices(request, (("provider", "provider", provider), ("model", "model", model), ("endpoint", "endpoint", endpoint), ("currency", "currency", currency)))
+    choices = await _load_admin_record_choices(request, (("provider", "provider", cleaned_providers), ("model", "model", cleaned_models), ("endpoint", "endpoint", cleaned_endpoints), ("currency", "currency", cleaned_currencies)))
 
     return templates.TemplateResponse(
         request,
@@ -5359,10 +5423,10 @@ async def list_admin_pricing_rules(
             "admin_status_message": _admin_status_message(request),
             "pricing_rules": rows,
             "filters": {
-                "provider": provider or "",
-                "model": model or "",
-                "endpoint": endpoint or "",
-                "currency": currency or "",
+                "provider": cleaned_providers or (),
+                "model": cleaned_models or (),
+                "endpoint": cleaned_endpoints or (),
+                "currency": cleaned_currencies or (),
                 "enabled": "" if enabled is None else str(enabled).lower(),
                 "active": "" if active is None else str(active).lower(),
                 "limit": limit,
@@ -6049,9 +6113,9 @@ async def admin_pricing_rule_detail(request: Request, pricing_rule_id: str) -> R
 @router.get("/fx", response_class=HTMLResponse)
 async def list_admin_fx_rates(
     request: Request,
-    base_currency: str | None = Query(None),
-    quote_currency: str | None = Query(None),
-    source: str | None = Query(None),
+    base_currency: list[str] = Query([]),
+    quote_currency: list[str] = Query([]),
+    source: list[str] = Query([]),
     active: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -6065,17 +6129,27 @@ async def list_admin_fx_rates(
         return page_context
     context, csrf_token = page_context
 
+    try:
+        cleaned_base_currencies = normalize_filter_values(base_currency, field_name="base_currency")
+        cleaned_quote_currencies = normalize_filter_values(quote_currency, field_name="quote_currency")
+        cleaned_sources = normalize_filter_values(source, field_name="source")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
+
     async with _admin_catalog_dashboard_service_scope(request) as service:
         rows = await service.list_fx_rates(
-            base_currency=base_currency,
-            quote_currency=quote_currency,
-            source=source,
+            base_currency=collapse_singleton(cleaned_base_currencies),
+            quote_currency=collapse_singleton(cleaned_quote_currencies),
+            source=collapse_singleton(cleaned_sources),
             active=active,
             limit=limit,
             offset=offset,
         )
 
-    choices = await _load_admin_record_choices(request, (("base_currency", "currency", base_currency), ("quote_currency", "currency", quote_currency), ("source", "fx_source", source)))
+    choices = await _load_admin_record_choices(request, (("base_currency", "currency", cleaned_base_currencies), ("quote_currency", "currency", cleaned_quote_currencies), ("source", "fx_source", cleaned_sources)))
 
     return templates.TemplateResponse(
         request,
@@ -6087,9 +6161,9 @@ async def list_admin_fx_rates(
             "admin_status_message": _admin_status_message(request),
             "fx_rates": rows,
             "filters": {
-                "base_currency": base_currency or "",
-                "quote_currency": quote_currency or "",
-                "source": source or "",
+                "base_currency": cleaned_base_currencies or (),
+                "quote_currency": cleaned_quote_currencies or (),
+                "source": cleaned_sources or (),
                 "active": "" if active is None else str(active).lower(),
                 "limit": limit,
                 "offset": offset,
@@ -6593,15 +6667,15 @@ async def admin_fx_rate_detail(request: Request, fx_rate_id: str) -> Response:
 @router.get("/usage", response_class=HTMLResponse)
 async def list_admin_usage(
     request: Request,
-    provider: str | None = Query(None),
-    model: str | None = Query(None),
-    endpoint: str | None = Query(None),
+    provider: list[str] = Query([]),
+    model: list[str] = Query([]),
+    endpoint: list[str] = Query([]),
     status: str | None = Query(None),
-    gateway_key_id: str | None = Query(None),
-    owner_id: str | None = Query(None),
-    institution_id: str | None = Query(None),
-    cohort_id: str | None = Query(None),
-    request_id: str | None = Query(None),
+    gateway_key_id: list[str] = Query([]),
+    owner_id: list[str] = Query([]),
+    institution_id: list[str] = Query([]),
+    cohort_id: list[str] = Query([]),
+    request_id: list[str] = Query([]),
     streaming: AdminOptionalBool = None,
     start_at: datetime | None = Query(None),
     end_at: datetime | None = Query(None),
@@ -6617,24 +6691,32 @@ async def list_admin_usage(
         return page_context
     context, csrf_token = page_context
 
-    parsed_gateway_key_id = _parse_optional_uuid(gateway_key_id)
-    parsed_owner_id = _parse_optional_uuid(owner_id)
-    parsed_institution_id = _parse_optional_uuid(institution_id)
-    parsed_cohort_id = _parse_optional_uuid(cohort_id)
-    if False in {parsed_gateway_key_id, parsed_owner_id, parsed_institution_id, parsed_cohort_id}:
-        return _admin_error_page(request, status_code=400, message="Invalid filter.")
+    try:
+        cleaned_providers = normalize_filter_values(provider, field_name="provider")
+        cleaned_models = normalize_filter_values(model, field_name="model")
+        cleaned_endpoints = normalize_filter_values(endpoint, field_name="endpoint")
+        parsed_gateway_key_ids = parse_uuid_filter_values(gateway_key_id, field_name="gateway_key_id")
+        parsed_owner_ids = parse_uuid_filter_values(owner_id, field_name="owner_id")
+        parsed_institution_ids = parse_uuid_filter_values(institution_id, field_name="institution_id")
+        parsed_cohort_ids = parse_uuid_filter_values(cohort_id, field_name="cohort_id")
+        cleaned_request_ids = normalize_filter_values(request_id, field_name="request_id")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_usage(
-            provider=provider,
-            model=model,
-            endpoint=endpoint,
+            provider=collapse_singleton(cleaned_providers),
+            model=collapse_singleton(cleaned_models),
+            endpoint=collapse_singleton(cleaned_endpoints),
             status=status,
-            gateway_key_id=parsed_gateway_key_id,
-            owner_id=parsed_owner_id,
-            institution_id=parsed_institution_id,
-            cohort_id=parsed_cohort_id,
-            request_id=request_id,
+            gateway_key_id=collapse_singleton(parsed_gateway_key_ids),
+            owner_id=collapse_singleton(parsed_owner_ids),
+            institution_id=collapse_singleton(parsed_institution_ids),
+            cohort_id=collapse_singleton(parsed_cohort_ids),
+            request_id=collapse_singleton(cleaned_request_ids),
             streaming=streaming,
             start_at=start_at,
             end_at=end_at,
@@ -6642,7 +6724,7 @@ async def list_admin_usage(
             offset=offset,
         )
 
-    choices = await _load_admin_record_choices(request, (("provider", "provider", provider), ("model", "model", model), ("endpoint", "endpoint", endpoint), ("request_id", "request_id", request_id)))
+    choices = await _load_admin_record_choices(request, (("provider", "provider", cleaned_providers), ("model", "model", cleaned_models), ("endpoint", "endpoint", cleaned_endpoints), ("request_id", "request_id", cleaned_request_ids), ("gateway_key_id", "key", parsed_gateway_key_ids), ("owner_id", "owner", parsed_owner_ids), ("institution_id", "institution", parsed_institution_ids), ("cohort_id", "cohort", parsed_cohort_ids)))
 
     return templates.TemplateResponse(
         request,
@@ -6654,15 +6736,15 @@ async def list_admin_usage(
             "csrf_token": csrf_token,
             "usage_rows": rows,
             "filters": {
-                "provider": provider or "",
-                "model": model or "",
-                "endpoint": endpoint or "",
+                "provider": cleaned_providers or (),
+                "model": cleaned_models or (),
+                "endpoint": cleaned_endpoints or (),
                 "status": status or "",
-                "gateway_key_id": gateway_key_id or "",
-                "owner_id": owner_id or "",
-                "institution_id": institution_id or "",
-                "cohort_id": cohort_id or "",
-                "request_id": request_id or "",
+                "gateway_key_id": parsed_gateway_key_ids or (),
+                "owner_id": parsed_owner_ids or (),
+                "institution_id": parsed_institution_ids or (),
+                "cohort_id": parsed_cohort_ids or (),
+                "request_id": cleaned_request_ids or (),
                 "streaming": "" if streaming is None else str(streaming).lower(),
                 "start_at": start_at.isoformat() if start_at is not None else "",
                 "end_at": end_at.isoformat() if end_at is not None else "",
@@ -6713,15 +6795,15 @@ async def export_admin_usage_csv(
     csrf_token: str = Form(""),
     confirm_export: str | None = Form(None),
     reason: str | None = Form(None),
-    provider: str | None = Form(None),
-    model: str | None = Form(None),
-    endpoint: str | None = Form(None),
+    provider: list[str] = Form([]),
+    model: list[str] = Form([]),
+    endpoint: list[str] = Form([]),
     status: str | None = Form(None),
-    gateway_key_id: str | None = Form(None),
-    owner_id: str | None = Form(None),
-    institution_id: str | None = Form(None),
-    cohort_id: str | None = Form(None),
-    request_id: str | None = Form(None),
+    gateway_key_id: list[str] = Form([]),
+    owner_id: list[str] = Form([]),
+    institution_id: list[str] = Form([]),
+    cohort_id: list[str] = Form([]),
+    request_id: list[str] = Form([]),
     streaming: str | None = Form(None),
     start_at: str | None = Form(None),
     end_at: str | None = Form(None),
@@ -6741,14 +6823,17 @@ async def export_admin_usage_csv(
         return _admin_error_page(request, status_code=400, message="Enter an audit reason before exporting usage rows.")
 
     try:
-        parsed_gateway_key_id = _parse_optional_admin_uuid(
-            gateway_key_id, field_name="gateway_key_id"
-        )
-        parsed_owner_id = _parse_optional_admin_uuid(owner_id, field_name="owner_id")
-        parsed_institution_id = _parse_optional_admin_uuid(
-            institution_id, field_name="institution_id"
-        )
-        parsed_cohort_id = _parse_optional_admin_uuid(cohort_id, field_name="cohort_id")
+        # 195-a: the export follows the SAME validated OR/AND multi-filter
+        # scope as the usage list page (same bounds, same 400 page on an
+        # invalid member, never silent removal).
+        cleaned_providers = normalize_filter_values(provider, field_name="provider")
+        cleaned_models = normalize_filter_values(model, field_name="model")
+        cleaned_endpoints = normalize_filter_values(endpoint, field_name="endpoint")
+        parsed_gateway_key_ids = parse_uuid_filter_values(gateway_key_id, field_name="gateway_key_id")
+        parsed_owner_ids = parse_uuid_filter_values(owner_id, field_name="owner_id")
+        parsed_institution_ids = parse_uuid_filter_values(institution_id, field_name="institution_id")
+        parsed_cohort_ids = parse_uuid_filter_values(cohort_id, field_name="cohort_id")
+        cleaned_request_ids = normalize_filter_values(request_id, field_name="request_id")
         parsed_streaming = _parse_optional_admin_bool(streaming, field_name="streaming")
         parsed_start_at = _parse_admin_datetime(start_at)
         parsed_end_at = _parse_admin_datetime(end_at)
@@ -6770,15 +6855,15 @@ async def export_admin_usage_csv(
         result = await service.export_usage_csv(
             actor_admin_id=action_context.admin_user.id,
             reason=cleaned_reason,
-            provider=provider,
-            model=model,
-            endpoint=endpoint,
+            provider=collapse_singleton(cleaned_providers),
+            model=collapse_singleton(cleaned_models),
+            endpoint=collapse_singleton(cleaned_endpoints),
             status=status,
-            gateway_key_id=parsed_gateway_key_id,
-            owner_id=parsed_owner_id,
-            institution_id=parsed_institution_id,
-            cohort_id=parsed_cohort_id,
-            request_id=request_id,
+            gateway_key_id=collapse_singleton(parsed_gateway_key_ids),
+            owner_id=collapse_singleton(parsed_owner_ids),
+            institution_id=collapse_singleton(parsed_institution_ids),
+            cohort_id=collapse_singleton(parsed_cohort_ids),
+            request_id=collapse_singleton(cleaned_request_ids),
             streaming=parsed_streaming,
             start_at=parsed_start_at,
             end_at=parsed_end_at,
@@ -6793,11 +6878,11 @@ async def export_admin_usage_csv(
 @router.get("/audit", response_class=HTMLResponse)
 async def list_admin_audit_logs(
     request: Request,
-    actor_admin_id: str | None = Query(None),
-    action: str | None = Query(None),
-    target_type: str | None = Query(None),
-    target_id: str | None = Query(None),
-    request_id: str | None = Query(None),
+    actor_admin_id: list[str] = Query([]),
+    action: list[str] = Query([]),
+    target_type: list[str] = Query([]),
+    target_id: list[str] = Query([]),
+    request_id: list[str] = Query([]),
     start_at: datetime | None = Query(None),
     end_at: datetime | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
@@ -6812,25 +6897,32 @@ async def list_admin_audit_logs(
         return page_context
     context, csrf_token = page_context
 
-    parsed_actor_admin_id = _parse_optional_uuid(actor_admin_id)
-    parsed_target_id = _parse_optional_uuid(target_id)
-    if parsed_actor_admin_id is False or parsed_target_id is False:
-        return _admin_error_page(request, status_code=400, message="Invalid filter.")
+    try:
+        parsed_actor_admin_ids = parse_uuid_filter_values(actor_admin_id, field_name="actor_admin_id")
+        cleaned_actions = normalize_filter_values(action, field_name="action")
+        cleaned_target_types = normalize_filter_values(target_type, field_name="target_type")
+        parsed_target_ids = parse_uuid_filter_values(target_id, field_name="target_id")
+        cleaned_request_ids = normalize_filter_values(request_id, field_name="request_id")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_audit_logs(
-            actor_admin_id=parsed_actor_admin_id,
-            action=action,
-            target_type=target_type,
-            target_id=parsed_target_id,
-            request_id=request_id,
+            actor_admin_id=collapse_singleton(parsed_actor_admin_ids),
+            action=collapse_singleton(cleaned_actions),
+            target_type=collapse_singleton(cleaned_target_types),
+            target_id=collapse_singleton(parsed_target_ids),
+            request_id=collapse_singleton(cleaned_request_ids),
             start_at=start_at,
             end_at=end_at,
             limit=limit,
             offset=offset,
         )
 
-    choices = await _load_admin_record_choices(request, (("action", "audit_action", action), ("target_type", "audit_target_type", target_type), ("target_id", "audit_target", target_id, target_type), ("request_id", "request_id", request_id), ("actor_admin_id", "audit_actor", actor_admin_id)))
+    choices = await _load_admin_record_choices(request, (("action", "audit_action", cleaned_actions), ("target_type", "audit_target_type", cleaned_target_types), ("target_id", "audit_target", parsed_target_ids, cleaned_target_types), ("request_id", "request_id", cleaned_request_ids), ("actor_admin_id", "audit_actor", parsed_actor_admin_ids)))
 
     return templates.TemplateResponse(
         request,
@@ -6841,11 +6933,11 @@ async def list_admin_audit_logs(
             "csrf_token": csrf_token,
             "audit_logs": rows,
             "filters": {
-                "actor_admin_id": actor_admin_id or "",
-                "action": action or "",
-                "target_type": target_type or "",
-                "target_id": target_id or "",
-                "request_id": request_id or "",
+                "actor_admin_id": parsed_actor_admin_ids or (),
+                "action": cleaned_actions or (),
+                "target_type": cleaned_target_types or (),
+                "target_id": parsed_target_ids or (),
+                "request_id": cleaned_request_ids or (),
                 "start_at": start_at.isoformat() if start_at is not None else "",
                 "end_at": end_at.isoformat() if end_at is not None else "",
                 "limit": limit,
@@ -6862,11 +6954,11 @@ async def export_admin_audit_csv(
     csrf_token: str = Form(""),
     confirm_export: str | None = Form(None),
     reason: str | None = Form(None),
-    actor_admin_id: str | None = Form(None),
-    action: str | None = Form(None),
-    target_type: str | None = Form(None),
-    target_id: str | None = Form(None),
-    request_id: str | None = Form(None),
+    actor_admin_id: list[str] = Form([]),
+    action: list[str] = Form([]),
+    target_type: list[str] = Form([]),
+    target_id: list[str] = Form([]),
+    request_id: list[str] = Form([]),
     start_at: str | None = Form(None),
     end_at: str | None = Form(None),
     limit: str | None = Form(None),
@@ -6885,10 +6977,14 @@ async def export_admin_audit_csv(
         return _admin_error_page(request, status_code=400, message="Enter an audit reason before exporting audit rows.")
 
     try:
-        parsed_actor_admin_id = _parse_optional_admin_uuid(
-            actor_admin_id, field_name="actor_admin_id"
-        )
-        parsed_target_id = _parse_optional_admin_uuid(target_id, field_name="target_id")
+        # 195-a: the export follows the SAME validated OR/AND multi-filter
+        # scope as the audit list page (same bounds, same 400 page on an
+        # invalid member, never silent removal).
+        parsed_actor_admin_ids = parse_uuid_filter_values(actor_admin_id, field_name="actor_admin_id")
+        cleaned_actions = normalize_filter_values(action, field_name="action")
+        cleaned_target_types = normalize_filter_values(target_type, field_name="target_type")
+        parsed_target_ids = parse_uuid_filter_values(target_id, field_name="target_id")
+        cleaned_request_ids = normalize_filter_values(request_id, field_name="request_id")
         parsed_start_at = _parse_admin_datetime(start_at)
         parsed_end_at = _parse_admin_datetime(end_at)
         if (
@@ -6909,11 +7005,11 @@ async def export_admin_audit_csv(
         result = await service.export_audit_csv(
             actor_admin_id=action_context.admin_user.id,
             reason=cleaned_reason,
-            actor_filter_admin_id=parsed_actor_admin_id,
-            action=action,
-            target_type=target_type,
-            target_id=parsed_target_id,
-            request_id=request_id,
+            actor_filter_admin_id=collapse_singleton(parsed_actor_admin_ids),
+            action=collapse_singleton(cleaned_actions),
+            target_type=collapse_singleton(cleaned_target_types),
+            target_id=collapse_singleton(parsed_target_ids),
+            request_id=collapse_singleton(cleaned_request_ids),
             start_at=parsed_start_at,
             end_at=parsed_end_at,
             limit=parsed_limit,
@@ -6961,9 +7057,9 @@ async def admin_audit_detail(request: Request, audit_log_id: str) -> Response:
 async def list_admin_email_deliveries(
     request: Request,
     status: str | None = Query(None),
-    owner_email: str | None = Query(None),
-    gateway_key_id: str | None = Query(None),
-    one_time_secret_id: str | None = Query(None),
+    owner_email: list[str] = Query([]),
+    gateway_key_id: list[str] = Query([]),
+    one_time_secret_id: list[str] = Query([]),
     start_at: datetime | None = Query(None),
     end_at: datetime | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
@@ -6978,24 +7074,29 @@ async def list_admin_email_deliveries(
         return page_context
     context, csrf_token = page_context
 
-    parsed_gateway_key_id = _parse_optional_uuid(gateway_key_id)
-    parsed_one_time_secret_id = _parse_optional_uuid(one_time_secret_id)
-    if parsed_gateway_key_id is False or parsed_one_time_secret_id is False:
-        return _admin_error_page(request, status_code=400, message="Invalid filter.")
+    try:
+        cleaned_owner_emails = normalize_filter_values(owner_email, field_name="owner_email")
+        parsed_gateway_key_ids = parse_uuid_filter_values(gateway_key_id, field_name="gateway_key_id")
+        parsed_one_time_secret_ids = parse_uuid_filter_values(one_time_secret_id, field_name="one_time_secret_id")
+    except AdminListFilterError as exc:
+        # Stable legacy "Invalid filter." summary first (pre-195
+        # contract, asserted by existing oracles), then the fixed
+        # per-field detail; the detail never echoes submitted values.
+        return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         rows = await service.list_email_deliveries(
             status=status,
-            owner_email=owner_email,
-            gateway_key_id=parsed_gateway_key_id,
-            one_time_secret_id=parsed_one_time_secret_id,
+            owner_email=collapse_singleton(cleaned_owner_emails),
+            gateway_key_id=collapse_singleton(parsed_gateway_key_ids),
+            one_time_secret_id=collapse_singleton(parsed_one_time_secret_ids),
             start_at=start_at,
             end_at=end_at,
             limit=limit,
             offset=offset,
         )
 
-    choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", owner_email), ("gateway_key_id", "key", gateway_key_id), ("one_time_secret_id", "one_time_secret", one_time_secret_id)))
+    choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", cleaned_owner_emails), ("gateway_key_id", "key", parsed_gateway_key_ids), ("one_time_secret_id", "one_time_secret", parsed_one_time_secret_ids)))
 
     return templates.TemplateResponse(
         request,
@@ -7007,9 +7108,9 @@ async def list_admin_email_deliveries(
             "email_deliveries": rows,
             "filters": {
                 "status": status or "",
-                "owner_email": owner_email or "",
-                "gateway_key_id": gateway_key_id or "",
-                "one_time_secret_id": one_time_secret_id or "",
+                "owner_email": cleaned_owner_emails or (),
+                "gateway_key_id": parsed_gateway_key_ids or (),
+                "one_time_secret_id": parsed_one_time_secret_ids or (),
                 "start_at": start_at.isoformat() if start_at is not None else "",
                 "end_at": end_at.isoformat() if end_at is not None else "",
                 "limit": limit,
@@ -7234,17 +7335,21 @@ async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, st
 
 
 async def _load_admin_record_choices(
-    request: Request, specs: tuple[tuple[str, str, str | None, str | None | None], ...]
+    request: Request,
+    specs: tuple[tuple[str, str, object, object | None], ...],
 ) -> dict[str, list[RecordChoice]]:
     """Bounded read-only initial option lists for record-choice controls.
 
-    ``specs`` is a sequence of (field_name, kind, selected_id_or_None[,
-    target_type_or_None]) triples (the 4th element is the audit target
-    picker's entity-type scope; 3-element specs remain valid); each entry
-    returns at most 100 choices ordered created_at DESC with a
+    ``specs`` is a sequence of (field_name, kind, selected_or_None[,
+    target_type_or_None]) entries (the 4th element is the audit target
+    picker's entity-type scope; 3-element specs remain valid); each
+    entry returns at most 100 choices ordered created_at DESC with a
     deterministic tie-breaker, keyed by field name (a page may use the
-    same kind for two fields, e.g. base and quote currency).
-    Strictly read-only (no writes/audit/quota side effects).
+    same kind for two fields, e.g. base and quote currency). ``selected``
+    may be a scalar (legacy) or a normalized sequence (195-a multi
+    filters hydrate ALL accepted values, including older choices outside
+    the initial ~100). Strictly read-only (no writes/audit/quota side
+    effects).
     """
     session_factory = get_sessionmaker_from_app(request)
     result: dict[str, list[RecordChoice]] = {}
@@ -7253,10 +7358,16 @@ async def _load_admin_record_choices(
             for spec in specs:
                 field_name, kind, selected = spec[0], spec[1], spec[2]
                 target_type = spec[3] if len(spec) > 3 else None
+                if selected is None:
+                    selected_values: tuple[str, ...] = ()
+                elif isinstance(selected, str):
+                    selected_values = (selected,) if selected else ()
+                else:
+                    selected_values = tuple(str(value) for value in selected)
                 result[field_name] = await load_choices(
                     session,
                     kind,
-                    selected=(selected,) if selected else (),
+                    selected=selected_values,
                     target_type=target_type,
                 )
     return result

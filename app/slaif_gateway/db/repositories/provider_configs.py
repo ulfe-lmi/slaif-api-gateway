@@ -9,6 +9,7 @@ from sqlalchemy import Select, asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import ProviderConfig
+from slaif_gateway.utils.admin_list_filters import as_value_tuple, or_equals
 
 
 class ProviderConfigsRepository:
@@ -118,14 +119,19 @@ class ProviderConfigsRepository:
     async def list_provider_configs_for_admin(
         self,
         *,
-        provider: str | None = None,
+        provider: str | Sequence[str] | None = None,
         enabled: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[ProviderConfig]:
+        providers = as_value_tuple(provider)
+        # 195-a: OR WITHIN the provider field (exact equality, no case
+        # folding — the pre-195 normalization is preserved per member).
         statement: Select[tuple[ProviderConfig]] = select(ProviderConfig)
-        if provider is not None:
-            statement = statement.where(ProviderConfig.provider == provider)
+        if providers is not None:
+            statement = statement.where(
+                or_equals(ProviderConfig.provider, providers)
+            )
         if enabled is not None:
             statement = statement.where(ProviderConfig.enabled == enabled)
 

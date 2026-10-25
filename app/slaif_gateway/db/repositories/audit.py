@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import Select, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import AuditLog
+from slaif_gateway.utils.admin_list_filters import (
+    as_uuid_tuple,
+    as_value_tuple,
+    or_equals,
+)
 from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
@@ -73,28 +79,59 @@ class AuditRepository:
     async def list_audit_logs_for_admin(
         self,
         *,
-        actor_admin_id: uuid.UUID | None = None,
-        action: str | None = None,
-        target_type: str | None = None,
-        target_id: uuid.UUID | None = None,
-        request_id: str | None = None,
+        actor_admin_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        action: str | Sequence[str] | None = None,
+        target_type: str | Sequence[str] | None = None,
+        target_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        request_id: str | Sequence[str] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[AuditLog]:
         """Return audit log rows for read-only admin dashboard pages."""
+        actor_ids = as_uuid_tuple(actor_admin_id)
+        actions = as_value_tuple(action)
+        target_types = as_value_tuple(target_type)
+        target_ids = as_uuid_tuple(target_id)
+        request_ids = as_value_tuple(request_id)
+        # 195-a: OR WITHIN a field, AND ACROSS fields; all predicates apply
+        # in SQL BEFORE LIMIT/OFFSET (so multi target_type parents OR-scope
+        # the target picker too). Pre-195 per-member normalization preserved
+        # exactly (case-insensitive substring for action/target_type/
+        # request-id, exact equality for the UUID ids).
         statement: Select[tuple[AuditLog]] = select(AuditLog)
-        if actor_admin_id is not None:
-            statement = statement.where(AuditLog.admin_user_id == actor_admin_id)
-        if action is not None:
-            statement = statement.where(func.lower(AuditLog.action).like(f"%{action.lower()}%"))
-        if target_type is not None:
-            statement = statement.where(func.lower(AuditLog.entity_type).like(f"%{target_type.lower()}%"))
-        if target_id is not None:
-            statement = statement.where(AuditLog.entity_id == target_id)
-        if request_id is not None:
-            statement = statement.where(func.lower(AuditLog.request_id).like(f"%{request_id.lower()}%"))
+        if actor_ids is not None:
+            statement = statement.where(or_equals(AuditLog.admin_user_id, actor_ids))
+        if actions is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        func.lower(AuditLog.action).like(f"%{value.lower()}%")
+                        for value in actions
+                    ]
+                )
+            )
+        if target_types is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        func.lower(AuditLog.entity_type).like(f"%{value.lower()}%")
+                        for value in target_types
+                    ]
+                )
+            )
+        if target_ids is not None:
+            statement = statement.where(or_equals(AuditLog.entity_id, target_ids))
+        if request_ids is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        func.lower(AuditLog.request_id).like(f"%{value.lower()}%")
+                        for value in request_ids
+                    ]
+                )
+            )
         if start_at is not None:
             statement = statement.where(AuditLog.created_at >= start_at)
         if end_at is not None:

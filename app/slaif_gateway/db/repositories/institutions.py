@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from slaif_gateway.db.models import Institution, Owner
+from slaif_gateway.utils.admin_list_filters import as_value_tuple
 
 
 class InstitutionsRepository:
@@ -52,17 +54,25 @@ class InstitutionsRepository:
     async def list_institutions_for_admin(
         self,
         *,
-        name: str | None = None,
+        name: str | Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Institution]:
         """Return institutions with safe admin-dashboard relationships loaded."""
+        names = as_value_tuple(name)
         statement: Select[tuple[Institution]] = select(Institution).options(
             selectinload(Institution.owners).selectinload(Owner.gateway_keys),
         )
-        if name is not None:
-            normalized_name = name.strip().lower()
-            statement = statement.where(func.lower(Institution.name).like(f"%{normalized_name}%"))
+        # 195-a: OR WITHIN the name field, predicates before LIMIT/OFFSET.
+        if names is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        func.lower(Institution.name).like(f"%{value.strip().lower()}%")
+                        for value in names
+                    ]
+                )
+            )
 
         statement = statement.order_by(Institution.name.asc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)

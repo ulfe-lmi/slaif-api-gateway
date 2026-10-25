@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
@@ -11,6 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from slaif_gateway.db.models import UsageLedger
+from slaif_gateway.utils.admin_list_filters import (
+    as_uuid_tuple,
+    as_value_tuple,
+    or_equals,
+)
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 
 
@@ -432,15 +438,15 @@ class UsageLedgerRepository:
     async def list_usage_for_admin(
         self,
         *,
-        provider: str | None = None,
-        model: str | None = None,
-        endpoint: str | None = None,
+        provider: str | Sequence[str] | None = None,
+        model: str | Sequence[str] | None = None,
+        endpoint: str | Sequence[str] | None = None,
         status: str | None = None,
-        gateway_key_id: uuid.UUID | None = None,
-        owner_id: uuid.UUID | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
-        request_id: str | None = None,
+        gateway_key_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        request_id: str | Sequence[str] | None = None,
         streaming: bool | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
@@ -451,15 +457,15 @@ class UsageLedgerRepository:
         statement = _usage_admin_statement()
         statement = _apply_usage_admin_filters(
             statement,
-            provider=provider,
-            model=model,
-            endpoint=endpoint,
+            provider=as_value_tuple(provider),
+            model=as_value_tuple(model),
+            endpoint=as_value_tuple(endpoint),
             status=status,
-            gateway_key_id=gateway_key_id,
-            owner_id=owner_id,
-            institution_id=institution_id,
-            cohort_id=cohort_id,
-            request_id=request_id,
+            gateway_key_id=as_uuid_tuple(gateway_key_id),
+            owner_id=as_uuid_tuple(owner_id),
+            institution_id=as_uuid_tuple(institution_id),
+            cohort_id=as_uuid_tuple(cohort_id),
+            request_id=as_value_tuple(request_id),
             streaming=streaming,
             start_at=start_at,
             end_at=end_at,
@@ -516,43 +522,73 @@ def _usage_admin_statement() -> Select[tuple[UsageLedger]]:
 def _apply_usage_admin_filters(
     statement: Select[tuple[UsageLedger]],
     *,
-    provider: str | None,
-    model: str | None,
-    endpoint: str | None,
+    provider: tuple[str, ...] | None,
+    model: tuple[str, ...] | None,
+    endpoint: tuple[str, ...] | None,
     status: str | None,
-    gateway_key_id: uuid.UUID | None,
-    owner_id: uuid.UUID | None,
-    institution_id: uuid.UUID | None,
-    cohort_id: uuid.UUID | None,
-    request_id: str | None,
+    gateway_key_id: tuple[uuid.UUID, ...] | None,
+    owner_id: tuple[uuid.UUID, ...] | None,
+    institution_id: tuple[uuid.UUID, ...] | None,
+    cohort_id: tuple[uuid.UUID, ...] | None,
+    request_id: tuple[str, ...] | None,
     streaming: bool | None,
     start_at: datetime | None,
     end_at: datetime | None,
 ) -> Select[tuple[UsageLedger]]:
+    # 195-a: OR WITHIN a filter field, AND ACROSS fields; all predicates
+    # apply in SQL BEFORE LIMIT/OFFSET. The pre-195 per-member
+    # normalization is preserved exactly (case-insensitive substring for
+    # provider/endpoint/request-id, requested-OR-resolved for model, exact
+    # equality for the UUID ids and status).
     if provider is not None:
-        statement = statement.where(func.lower(UsageLedger.provider).like(f"%{provider.lower()}%"))
-    if model is not None:
-        normalized_model = f"%{model.lower()}%"
         statement = statement.where(
             or_(
-                func.lower(UsageLedger.requested_model).like(normalized_model),
-                func.lower(UsageLedger.resolved_model).like(normalized_model),
+                *[
+                    func.lower(UsageLedger.provider).like(f"%{value.lower()}%")
+                    for value in provider
+                ]
+            )
+        )
+    if model is not None:
+        statement = statement.where(
+            or_(
+                *[
+                    or_(
+                        func.lower(UsageLedger.requested_model).like(f"%{value.lower()}%"),
+                        func.lower(UsageLedger.resolved_model).like(f"%{value.lower()}%"),
+                    )
+                    for value in model
+                ]
             )
         )
     if endpoint is not None:
-        statement = statement.where(func.lower(UsageLedger.endpoint).like(f"%{endpoint.lower()}%"))
+        statement = statement.where(
+            or_(
+                *[
+                    func.lower(UsageLedger.endpoint).like(f"%{value.lower()}%")
+                    for value in endpoint
+                ]
+            )
+        )
     if status is not None:
         statement = statement.where(UsageLedger.accounting_status == status)
     if gateway_key_id is not None:
-        statement = statement.where(UsageLedger.gateway_key_id == gateway_key_id)
+        statement = statement.where(or_equals(UsageLedger.gateway_key_id, gateway_key_id))
     if owner_id is not None:
-        statement = statement.where(UsageLedger.owner_id == owner_id)
+        statement = statement.where(or_equals(UsageLedger.owner_id, owner_id))
     if institution_id is not None:
-        statement = statement.where(UsageLedger.institution_id == institution_id)
+        statement = statement.where(or_equals(UsageLedger.institution_id, institution_id))
     if cohort_id is not None:
-        statement = statement.where(UsageLedger.cohort_id == cohort_id)
+        statement = statement.where(or_equals(UsageLedger.cohort_id, cohort_id))
     if request_id is not None:
-        statement = statement.where(func.lower(UsageLedger.request_id).like(f"%{request_id.lower()}%"))
+        statement = statement.where(
+            or_(
+                *[
+                    func.lower(UsageLedger.request_id).like(f"%{value.lower()}%")
+                    for value in request_id
+                ]
+            )
+        )
     if streaming is not None:
         statement = statement.where(UsageLedger.streaming.is_(streaming))
     if start_at is not None:

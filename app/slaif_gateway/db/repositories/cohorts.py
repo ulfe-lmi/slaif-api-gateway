@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import Select, and_, func, or_, select
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from slaif_gateway.db.models import Cohort, GatewayKey, Owner
+from slaif_gateway.utils.admin_list_filters import as_value_tuple
 
 
 class CohortsRepository:
@@ -57,19 +59,27 @@ class CohortsRepository:
     async def list_cohorts_for_admin(
         self,
         *,
-        name: str | None = None,
+        name: str | Sequence[str] | None = None,
         active: bool | None = None,
         now: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Cohort]:
         """Return cohorts with safe admin-dashboard relationships loaded."""
+        names = as_value_tuple(name)
         statement: Select[tuple[Cohort]] = select(Cohort).options(
             selectinload(Cohort.gateway_keys).selectinload(GatewayKey.owner).selectinload(Owner.institution),
         )
-        if name is not None:
-            normalized_name = name.strip().lower()
-            statement = statement.where(func.lower(Cohort.name).like(f"%{normalized_name}%"))
+        # 195-a: OR WITHIN the name field, predicates before LIMIT/OFFSET.
+        if names is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        func.lower(Cohort.name).like(f"%{value.strip().lower()}%")
+                        for value in names
+                    ]
+                )
+            )
         if active is not None and now is not None:
             active_filter = and_(
                 or_(Cohort.starts_at.is_(None), Cohort.starts_at <= now),

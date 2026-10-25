@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from slaif_gateway.db.models import GatewayKey, Owner
+from slaif_gateway.utils.admin_list_filters import (
+    as_uuid_tuple,
+    as_value_tuple,
+    or_equals,
+)
 
 
 class OwnersRepository:
@@ -70,24 +76,42 @@ class OwnersRepository:
     async def list_owners_for_admin(
         self,
         *,
-        email: str | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
+        email: str | Sequence[str] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Owner]:
         """Return owners with safe admin-dashboard relationships loaded."""
+        emails = as_value_tuple(email)
+        institution_ids = as_uuid_tuple(institution_id)
+        cohort_ids = as_uuid_tuple(cohort_id)
         statement: Select[tuple[Owner]] = select(Owner).options(
             selectinload(Owner.institution),
             selectinload(Owner.gateway_keys).selectinload(GatewayKey.cohort),
         )
-        if email is not None:
-            normalized_email = email.strip().lower()
-            statement = statement.where(func.lower(Owner.email).like(f"%{normalized_email}%"))
-        if institution_id is not None:
-            statement = statement.where(Owner.institution_id == institution_id)
-        if cohort_id is not None:
-            statement = statement.where(Owner.gateway_keys.any(GatewayKey.cohort_id == cohort_id))
+        # 195-a: OR WITHIN a filter field, AND ACROSS fields; predicates
+        # apply in SQL BEFORE LIMIT/OFFSET (never post-fetch filtering).
+        # Cohort membership stays an ANY/EXISTS over the GatewayKey
+        # relationship, so an owner with several matching keys is returned
+        # exactly once.
+        if emails is not None:
+            statement = statement.where(
+                or_(
+                    *[
+                        func.lower(Owner.email).like(f"%{value.strip().lower()}%")
+                        for value in emails
+                    ]
+                )
+            )
+        if institution_ids is not None:
+            statement = statement.where(or_equals(Owner.institution_id, institution_ids))
+        if cohort_ids is not None:
+            statement = statement.where(
+                Owner.gateway_keys.any(
+                    or_equals(GatewayKey.cohort_id, cohort_ids)
+                )
+            )
 
         statement = statement.order_by(Owner.created_at.desc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)

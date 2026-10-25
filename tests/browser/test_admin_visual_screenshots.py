@@ -158,10 +158,10 @@ def test_keys_list_visual(chromium, usab_env, name: str, width: int, height: int
                     selectFontWeight: prop('.filter-bar select', 'fontWeight'),
                     selectHeight: prop('.filter-bar select', 'height'),
                     selectRadius: prop('.filter-bar select', 'borderTopLeftRadius'),
-                    rcFontSize: prop('.rc-main:not(.rc-main-multi) .rc-input', 'fontSize'),
-                    rcFontWeight: prop('.rc-main:not(.rc-main-multi) .rc-input', 'fontWeight'),
-                    rcHeight: prop('.rc-main:not(.rc-main-multi)', 'height'),
-                    rcRadius: prop('.rc-main:not(.rc-main-multi)', 'borderTopLeftRadius'),
+                    rcFontSize: prop('.rc-main-multi .rc-input', 'fontSize'),
+                    rcFontWeight: prop('.rc-main-multi .rc-input', 'fontWeight'),
+                    rcHeight: prop('.rc-main-multi', 'height'),
+                    rcRadius: prop('.rc-main-multi', 'borderTopLeftRadius'),
                     rcLabelSize: prop('.rc-name', 'fontSize'),
                     rcLabelWeight: prop('.rc-name', 'fontWeight'),
                     plainLabelSize: prop('.filter-bar label:not(.rc-field)', 'fontSize'),
@@ -301,20 +301,26 @@ def test_keys_chip_grow_down(chromium, usab_env) -> None:  # noqa: F811
         rc = page.locator('.rc[data-rc-id="keys-owner-email"]')
         before = _layout_tops(page)
 
-        # Real mouse selection: open the integrated control, pick the
-        # known synthetic owner from the rendered menu.
-        rc.locator(".rc-open").click()
+        # Real mouse selection: click the integrated multi box (focus
+        # opens the menu), pick the known synthetic owner from the
+        # rendered menu. Multi selection keeps the menu open so a second
+        # OR value can be added (195-a list-filter contract).
+        rc.locator(".rc-input").click()
         option = rc.locator(".rc-option", has_text=owner_email)
         option.wait_for(state="visible")
         option.click()
 
-        # Selection state: menu closed, chip below the box, ONE managed
-        # hidden field carrying the submitted id (email).
-        assert not rc.locator(".rc-menu").is_visible()
+        # Selection state: chip below the box, ONE managed hidden field
+        # carrying the submitted id (email); the menu stays open for
+        # further selection. Close it before the layout measurement so
+        # the popup cannot influence the grow-down assertions.
+        assert rc.locator(".rc-menu").is_visible()
         assert rc.locator(".rc-chip", has_text=owner_email).count() == 1
         hidden = rc.locator(".rc-value")
         assert hidden.count() == 1
         assert hidden.first.input_value() == owner_email
+        page.keyboard.press("Escape")
+        assert not rc.locator(".rc-menu").is_visible()
 
         after = _layout_tops(page)
         assert abs(after["panel"] - before["panel"]) <= 1, (before, after)

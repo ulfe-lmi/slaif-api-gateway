@@ -28,9 +28,9 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/fx" id="fx-filter">
-    {{ record_choice("base_currency", "currency", "Base currency", options=choices.base_currency, selected_id=filters.base_currency, selected_label=filters.base_currency, allow_new=true, input_id="fx-base") }}
-    {{ record_choice("quote_currency", "currency", "Quote currency", options=choices.quote_currency, selected_id=filters.quote_currency, selected_label=filters.quote_currency, allow_new=true, input_id="fx-quote") }}
-    {{ record_choice("source", "fx_source", "Source", options=choices.source, selected_id=filters.source, selected_label=filters.source, allow_new=true, input_id="fx-source") }}
+    {{ record_choice("base_currency", "currency", "Base currency", options=choices.base_currency, multi=true, multi_value=filters.base_currency|join("\n"), allow_new=true, help="Matches any selected value", input_id="fx-base") }}
+    {{ record_choice("quote_currency", "currency", "Quote currency", options=choices.quote_currency, multi=true, multi_value=filters.quote_currency|join("\n"), allow_new=true, help="Matches any selected value", input_id="fx-quote") }}
+    {{ record_choice("source", "fx_source", "Source", options=choices.source, multi=true, multi_value=filters.source|join("\n"), allow_new=true, help="Matches any selected value", input_id="fx-source") }}
     <label>
       Active
       <select name="active">

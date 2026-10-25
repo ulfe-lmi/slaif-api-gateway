@@ -10,6 +10,15 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-25 Objective 195-a admin multi-value list filters verification`](2026-10-25-admin-list-multiselection.md)
+  (recorded 2026-10-25) — focused unit (147 affected + 96
+  choices/195-new), owned-PostgreSQL-16 (13, incl. the R5 selected
+  audit-hydration scope/limit regressions and the root-probe recheck
+  2/2), and real authenticated Chromium evidence for the
+  OR-within/AND-across multi filters, bounded 400s, SQL-before-LIMIT
+  pagination, chip UI, label-only async refresh, and CSV multi
+  exports; synthetic data only, no real provider/model/email claim;
+  final-head CI gated by root.
 - [`2026-10-25 Objective 193-a admin-visual-consolidation verification`](2026-10-25-admin-visual-consolidation.md)
   (recorded 2026-10-25) — focused unit (401 passed) and native-Chromium
   owned-PostgreSQL evidence for the shared visual foundations,

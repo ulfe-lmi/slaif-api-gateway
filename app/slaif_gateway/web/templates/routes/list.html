@@ -28,8 +28,8 @@
   {% endif %}
 
   <form class="filter-bar" method="get" action="/admin/routes" id="routes-filter">
-    {{ record_choice("provider", "provider", "Provider", options=choices.provider, selected_id=filters.provider, selected_label=filters.provider, allow_new=true, input_id="routes-provider") }}
-    {{ record_choice("requested_model", "model", "Requested model", options=choices.model, selected_id=filters.requested_model, selected_label=filters.requested_model, allow_new=true, input_id="routes-model") }}
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value", input_id="routes-provider") }}
+    {{ record_choice("requested_model", "model", "Requested model", options=choices.model, multi=true, multi_value=filters.requested_model|join("\n"), allow_new=true, help="Matches any selected value", input_id="routes-model") }}
     <label>
       Match type
       <select name="match_type">

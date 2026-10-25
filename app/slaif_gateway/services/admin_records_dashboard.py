@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Protocol
@@ -18,6 +19,7 @@ from slaif_gateway.schemas.admin_records import (
     AdminRelatedKeySummary,
 )
 from slaif_gateway.services.admin_key_dashboard import compute_key_display_status
+from slaif_gateway.utils.admin_list_filters import clean_text_filter
 
 
 class AdminRecordNotFoundError(Exception):
@@ -28,9 +30,9 @@ class _OwnersAdminRepository(Protocol):
     async def list_owners_for_admin(
         self,
         *,
-        email: str | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
+        email: str | Sequence[str] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Owner]: ...
@@ -42,7 +44,7 @@ class _InstitutionsAdminRepository(Protocol):
     async def list_institutions_for_admin(
         self,
         *,
-        name: str | None = None,
+        name: str | Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[Institution]: ...
@@ -54,7 +56,7 @@ class _CohortsAdminRepository(Protocol):
     async def list_cohorts_for_admin(
         self,
         *,
-        name: str | None = None,
+        name: str | Sequence[str] | None = None,
         active: bool | None = None,
         now: datetime | None = None,
         limit: int = 50,
@@ -81,16 +83,17 @@ class AdminRecordsDashboardService:
     async def list_owners(
         self,
         *,
-        email: str | None = None,
-        institution_id: uuid.UUID | None = None,
-        cohort_id: uuid.UUID | None = None,
+        email: str | Sequence[str] | None = None,
+        institution_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        cohort_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         limit: int = 50,
         offset: int = 0,
         now: datetime | None = None,
     ) -> list[AdminOwnerListRow]:
         timestamp = _utcnow(now)
         rows = await self._owners.list_owners_for_admin(
-            email=_clean_filter(email),
+            # 195-a: one-or-many OR filters (scalars keep legacy behavior).
+            email=clean_text_filter(email),
             institution_id=institution_id,
             cohort_id=cohort_id,
             limit=limit,
@@ -120,14 +123,14 @@ class AdminRecordsDashboardService:
     async def list_institutions(
         self,
         *,
-        name: str | None = None,
+        name: str | Sequence[str] | None = None,
         limit: int = 50,
         offset: int = 0,
         now: datetime | None = None,
     ) -> list[AdminInstitutionListRow]:
         timestamp = _utcnow(now)
         rows = await self._institutions.list_institutions_for_admin(
-            name=_clean_filter(name),
+            name=clean_text_filter(name),
             limit=limit,
             offset=offset,
         )
@@ -153,7 +156,7 @@ class AdminRecordsDashboardService:
     async def list_cohorts(
         self,
         *,
-        name: str | None = None,
+        name: str | Sequence[str] | None = None,
         active: bool | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -161,7 +164,7 @@ class AdminRecordsDashboardService:
     ) -> list[AdminCohortListRow]:
         timestamp = _utcnow(now)
         rows = await self._cohorts.list_cohorts_for_admin(
-            name=_clean_filter(name),
+            name=clean_text_filter(name),
             active=active,
             now=timestamp,
             limit=limit,

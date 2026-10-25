@@ -19,12 +19,17 @@ These are pure unit tests: no database, no HTTP server, no browser.
 
 from __future__ import annotations
 
+import asyncio
 import ast
 import json
+import uuid
 from html.parser import HTMLParser
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from sqlalchemy.dialects import postgresql
 from fastapi.testclient import TestClient
 
 from slaif_gateway.api import admin
@@ -437,3 +442,329 @@ def test_admin_get_optional_bool_filter_any_blank_true_false_invalid(
     assert response.status_code == expected, (
         f"{path}?{param}={value!r} must be {expected} (blank=Any=no filter)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 195-a: selected-id hydration for kinds whose options carry authoritative
+# display metadata (audit_target parent-scoped, one_time_secret lifecycle).
+# A selection outside the initial latest-100 batch must keep its
+# authoritative label instead of being dropped (audit_target) or degrading
+# to a plain id==label fallback (one_time_secret).
+# ---------------------------------------------------------------------------
+
+_HYDRATION_TS = datetime(2026, 10, 25, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _uuid_for(name: str) -> uuid.UUID:
+    return uuid.uuid5(uuid.NAMESPACE_DNS, name)
+
+
+def _params_contain(params: dict, needle: object) -> bool:
+    def _has(value: object) -> bool:
+        if isinstance(value, (list, tuple, set)):
+            return any(_has(item) for item in value)
+        return str(value) == str(needle)
+
+    return any(_has(value) for value in params.values())
+
+
+def _scope_from_params(params: dict) -> tuple[str, ...] | None:
+    """The entity-type scope a compiled audit statement would apply.
+
+    ``None`` = unscoped; otherwise the bound value(s) (``entity_type ==``
+    or ``entity_type IN``), simulating PostgreSQL: rows outside the
+    scope simply do not exist for the query.
+    """
+    for key, value in params.items():
+        if "entity_type" in key:
+            if isinstance(value, (list, tuple, set)):
+                return tuple(value)
+            return (value,)
+    return None
+
+
+class _FakeResult:
+    def __init__(self, rows: list[object]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[object]:
+        return self._rows
+
+
+def _audit_target_session(
+    old_ids: list[uuid.UUID],
+    old_types: dict[uuid.UUID, str],
+    recent_ids: list[uuid.UUID],
+    recent_type: str = "gateway_key",
+) -> object:
+    """Serves batch and selected statements like PostgreSQL: a parent
+    scope present in the statement's bound parameters filters the rows
+    (out-of-scope rows are never returned), and a selected fetch is
+    recognized by the selected ids in its parameters."""
+
+    class _AuditSession:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+
+        async def execute(self, stmt: object) -> object:
+            self.statements.append(stmt)
+            params = stmt.compile(dialect=postgresql.dialect()).params
+            scope = _scope_from_params(params)
+            selected_fetch = any(_params_contain(params, old) for old in old_ids)
+            rows: list[object] = []
+            if selected_fetch:
+                # SQL now returns at most one row per id (rank 1); the
+                # newest eligible type wins and out-of-scope ids are
+                # absent.
+                for old in old_ids:
+                    if (
+                        _params_contain(params, old)
+                        and (scope is None or old_types[old] in scope)
+                    ):
+                        rows.append(
+                            SimpleNamespace(
+                                entity_id=old, entity_type=old_types[old], latest=_HYDRATION_TS
+                            )
+                        )
+            elif scope is None or recent_type in scope:
+                rows = [
+                    SimpleNamespace(
+                        entity_id=recent, entity_type=recent_type, latest=_HYDRATION_TS
+                    )
+                    for recent in recent_ids
+                ]
+            return _FakeResult(rows)
+
+    return _AuditSession()
+
+
+def test_audit_target_selected_outside_batch_hydrates_authoritative_label() -> None:
+    old = _uuid_for("slaif195-audit-older-target")
+    recent = [_uuid_for(f"slaif195-audit-recent-{i}") for i in range(CHOICE_LIMIT)]
+    session = _audit_target_session([old], {old: "owner"}, recent)
+
+    choices = asyncio.run(
+        load_choices(session, "audit_target", selected=(str(old),))
+    )
+    ids = [c.id for c in choices]
+    hydrated = next(c for c in choices if c.id == str(old))
+    assert hydrated.label == f"owner: {old}"
+    # The hydrated selection is appended (requested order) and the OLDEST
+    # non-selected batch entry is evicted to make room within the cap.
+    assert ids[-1] == str(old)
+    assert len(choices) == CHOICE_LIMIT
+    assert str(recent[-1]) not in ids
+
+
+def test_audit_target_selected_hydration_keeps_parent_scope_consistent() -> None:
+    # A selected id whose entity type is OUTSIDE the current parent scope
+    # must NOT be turned into an eligible choice (a user-supplied
+    # selection is a display request, not eligibility); the same id IS
+    # hydrated when its type is in scope, and the multi-parent OR scope
+    # hydrates both parents' ids.
+    old = _uuid_for("slaif195-audit-older-owner")
+    recent = [_uuid_for(f"slaif195-audit-usage-{i}") for i in range(CHOICE_LIMIT)]
+    session = _audit_target_session(
+        [old], {old: "owner"}, recent, recent_type="usage_ledger"
+    )
+
+    choices = asyncio.run(
+        load_choices(
+            session, "audit_target", selected=(str(old),), target_type=("usage_ledger",)
+        )
+    )
+    assert all(c.id != str(old) for c in choices), (
+        "out-of-scope selection must not become an eligible choice"
+    )
+
+    in_scope = _audit_target_session([old], {old: "owner"}, [], recent_type="usage_ledger")
+    choices = asyncio.run(
+        load_choices(
+            in_scope, "audit_target", selected=(str(old),), target_type=("owner",)
+        )
+    )
+    assert any(c.id == str(old) and c.label == f"owner: {old}" for c in choices)
+
+    first = _uuid_for("slaif195-audit-older-multi-a")
+    second = _uuid_for("slaif195-audit-older-multi-b")
+    multi = _audit_target_session(
+        [first, second],
+        {first: "owner", second: "institution"},
+        [],
+        recent_type="usage_ledger",
+    )
+    choices = asyncio.run(
+        load_choices(
+            multi,
+            "audit_target",
+            selected=(str(first), str(second)),
+            target_type=("owner", "institution"),
+        )
+    )
+    ids = {c.id: c.label for c in choices}
+    assert ids[str(first)] == f"owner: {first}"
+    assert ids[str(second)] == f"institution: {second}"
+
+
+def test_audit_target_selected_hydration_preserves_requested_order() -> None:
+    first = _uuid_for("slaif195-audit-older-first")
+    second = _uuid_for("slaif195-audit-older-second")
+    recent = [_uuid_for(f"slaif195-audit-recent-{i}") for i in range(CHOICE_LIMIT)]
+    # The DB returns the second id first; the RESULT must follow the
+    # requested selection order (first, then second) at the tail.
+    session = _audit_target_session(
+        [second, first], {second: "owner", first: "institution"}, recent
+    )
+
+    choices = asyncio.run(
+        load_choices(session, "audit_target", selected=(str(first), str(second)))
+    )
+    ids = [c.id for c in choices]
+    assert ids[-2:] == [str(first), str(second)]
+    assert next(c for c in choices if c.id == str(first)).label == (
+        f"institution: {first}"
+    )
+
+
+def test_audit_target_hydration_keeps_one_choice_per_selected_id() -> None:
+    # One entity audited under two types: the LATEST event's type wins and
+    # the id appears exactly once in the result.
+    old = _uuid_for("slaif195-audit-older-mixed")
+    recent = [_uuid_for(f"slaif195-audit-recent-{i}") for i in range(CHOICE_LIMIT)]
+
+    class _MixedSession:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+
+        async def execute(self, stmt: object) -> object:
+            self.statements.append(stmt)
+            params = stmt.compile(dialect=postgresql.dialect()).params
+            if _params_contain(params, old):
+                rows = [
+                    SimpleNamespace(entity_id=old, entity_type="owner", latest=_HYDRATION_TS),
+                    SimpleNamespace(
+                        entity_id=old, entity_type="gateway_key", latest=_HYDRATION_TS
+                    ),
+                ]
+            else:
+                rows = [
+                    SimpleNamespace(
+                        entity_id=recent, entity_type="gateway_key", latest=_HYDRATION_TS
+                    )
+                    for recent in recent
+                ]
+            return _FakeResult(rows)
+
+    choices = asyncio.run(
+        load_choices(_MixedSession(), "audit_target", selected=(str(old),))
+    )
+    matches = [c for c in choices if c.id == str(old)]
+    assert len(matches) == 1
+    assert matches[0].label == f"owner: {old}"
+
+
+def test_audit_target_hydration_never_selects_secret_bearing_or_full_rows() -> None:
+    old = _uuid_for("slaif195-audit-older-minimal")
+    recent = [_uuid_for(f"slaif195-audit-recent-{i}") for i in range(CHOICE_LIMIT)]
+    session = _audit_target_session([old], {old: "owner"}, recent)
+
+    asyncio.run(load_choices(session, "audit_target", selected=(str(old),)))
+    assert session.statements, "expected batch + hydration statements"
+    for stmt in session.statements:
+        columns = {col.name for col in stmt.selected_columns}
+        assert columns <= {"entity_id", "entity_type", "latest"}, columns
+
+
+def test_one_time_secret_selected_outside_batch_hydrates_lifecycle_label() -> None:
+    old = _uuid_for("slaif195-ots-older")
+    recent = [_uuid_for(f"slaif195-ots-recent-{i}") for i in range(CHOICE_LIMIT)]
+
+    class _OtsSession:
+        def __init__(self) -> None:
+            self.statements: list[object] = []
+
+        async def execute(self, stmt: object) -> object:
+            self.statements.append(stmt)
+            params = stmt.compile(dialect=postgresql.dialect()).params
+            if _params_contain(params, old):
+                rows = [
+                    SimpleNamespace(id=old, status="used", purpose="lifecycle review")
+                ]
+            else:
+                rows = [
+                    SimpleNamespace(id=recent, status="pending", purpose="bootstrap")
+                    for recent in recent
+                ]
+            return _FakeResult(rows)
+
+    session = _OtsSession()
+    choices = asyncio.run(
+        load_choices(session, "one_time_secret", selected=(str(old),))
+    )
+    hydrated = next(c for c in choices if c.id == str(old))
+    # Authoritative public lifecycle label (same format as the batch), not
+    # a plain id==label fallback; the purpose sub is preserved too.
+    assert hydrated.label == f"{str(old)[:8]}… (used)"
+    assert hydrated.sub == "lifecycle review"
+    assert len(choices) == CHOICE_LIMIT
+    # Minimal columns only: no statement may select a secret-bearing
+    # column (encrypted payload / nonce) or the full row.
+    for stmt in session.statements:
+        columns = {col.name for col in stmt.selected_columns}
+        assert "encrypted_payload" not in columns and "nonce" not in columns
+        assert columns <= {"id", "status", "purpose"}
+
+
+def test_one_time_secret_unknown_selected_keeps_plain_fallback() -> None:
+    # An unknown (unfound) selected id keeps its id==label fallback option
+    # instead of silently disappearing.
+    unknown = "00000000-0000-0000-0000-00000000d00d"
+    recent = [_uuid_for(f"slaif195-ots-recent-{i}") for i in range(CHOICE_LIMIT)]
+
+    class _OtsSession:
+        async def execute(self, stmt: object) -> object:
+            params = stmt.compile(dialect=postgresql.dialect()).params
+            if _params_contain(params, unknown):
+                return _FakeResult([])  # the id is unknown to the source
+            return _FakeResult(
+                [
+                    SimpleNamespace(id=recent, status="pending", purpose="bootstrap")
+                    for recent in recent
+                ]
+            )
+
+    choices = asyncio.run(
+        load_choices(_OtsSession(), "one_time_secret", selected=(unknown,))
+    )
+    matches = [c for c in choices if c.id == unknown]
+    assert len(matches) == 1 and matches[0].label == unknown
+
+
+def test_one_time_secret_selected_in_batch_keeps_batch_label() -> None:
+    # A selected id already inside the initial batch keeps its batch
+    # choice (no duplicate, no eviction churn).
+    old = _uuid_for("slaif195-ots-in-batch")
+    recent = [_uuid_for(f"slaif195-ots-recent-{i}") for i in range(CHOICE_LIMIT - 1)] + [old]
+
+    class _OtsSession:
+        async def execute(self, stmt: object) -> object:
+            params = stmt.compile(dialect=postgresql.dialect()).params
+            if _params_contain(params, old):
+                return _FakeResult(
+                    [SimpleNamespace(id=old, status="used", purpose="lifecycle review")]
+                )
+            return _FakeResult(
+                [
+                    SimpleNamespace(id=row, status="pending", purpose="bootstrap")
+                    for row in recent
+                ]
+            )
+
+    choices = asyncio.run(
+        load_choices(_OtsSession(), "one_time_secret", selected=(str(old),))
+    )
+    matches = [c for c in choices if c.id == str(old)]
+    assert len(matches) == 1
+    # The batch row for the selected id carries the pending label; the
+    # selection must not duplicate it under the hydrated "used" label.
+    assert matches[0].label == f"{str(old)[:8]}… (pending)"
