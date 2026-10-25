@@ -15,6 +15,7 @@ from slaif_gateway.schemas.admin_catalog import (
     AdminProviderListRow,
     AdminProviderSummary,
 )
+from slaif_gateway.services.admin_record_choices import RecordChoice
 from slaif_gateway.services.admin_session_service import AdminSessionContext
 
 
@@ -186,12 +187,36 @@ def _valid_form(**overrides) -> dict[str, str]:
 
 
 def _patch_provider_choices(monkeypatch, provider: AdminProviderListRow | None = None) -> None:
+    row = provider or _provider_choice()
+
     async def list_providers(self, **kwargs):
-        return [provider or _provider_choice()]
+        return [row]
+
+    async def fake_record_choices(request, specs):
+        # 192-a: the provider field renders as a record-choice control
+        # fed by the read-only lookup loader. Give it the same
+        # recognizable DTO the service would build (slug label, display
+        # name + state sub) — never the env var name.
+        state = "enabled" if row.enabled else "disabled"
+        dto = RecordChoice(
+            id=row.provider, label=row.provider, sub=f"{row.display_name} · {state}"
+        )
+        choices = {}
+        for spec in specs:
+            field_name = spec[0]
+            if field_name == "provider":
+                choices[field_name] = [dto]
+            else:
+                choices[field_name] = []
+        return choices
 
     monkeypatch.setattr(
         "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.list_providers",
         list_providers,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._load_admin_record_choices_safe",
+        fake_record_choices,
     )
 
 
@@ -213,7 +238,8 @@ def test_pricing_rule_create_get_renders_csrf_form(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert 'name="csrf_token" value="dashboard-csrf"' in response.text
-    assert "OPENAI_UPSTREAM_API_KEY" in response.text
+    assert '"label": "openai"' in response.text
+    assert '"sub": "OpenAI · enabled"' in response.text
     assert "provider key values" in response.text
     assert "sk-provider-secret" not in response.text
 
@@ -347,7 +373,8 @@ def test_pricing_rule_edit_get_renders_safe_current_values(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert pricing.upstream_model in response.text
-    assert "OPENAI_UPSTREAM_API_KEY" in response.text
+    assert '"label": "openai"' in response.text
+    assert '"sub": "OpenAI · enabled"' in response.text
     assert 'name="csrf_token" value="dashboard-csrf"' in response.text
     assert "sk-provider-secret" not in response.text
 

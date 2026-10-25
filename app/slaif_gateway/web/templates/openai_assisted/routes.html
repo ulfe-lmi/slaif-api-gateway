@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}OpenAI Route Proposal{% endblock %}
 
 {% block body %}
@@ -37,7 +39,15 @@
       <h2 id="openai-assisted-routes-source-heading">Sources And Scope</h2>
       <div class="form-grid">
         <label>Models source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off"></label>
-        <label>Proposal model<input name="proposal_model" value="{{ form.proposal_model }}" autocomplete="off"></label>
+        {{ record_choice(
+            "proposal_model", "model", "Proposal model",
+            options=choices.proposal_model or none,
+            selected_id=form.proposal_model,
+            selected_label=choice_labels.proposal_model,
+            allow_new=true,
+            nojs_value=form.proposal_model,
+            help="Upstream model used for the proposal; new values stay editable.",
+        ) }}
         <label>
           Endpoint scope
           <select name="endpoint_scope">
@@ -50,8 +60,26 @@
 
     <section class="action-panel" aria-labelledby="openai-assisted-routes-filters-heading">
       <h2 id="openai-assisted-routes-filters-heading">Model Filters</h2>
-      <label>Include model IDs or globs<textarea name="include_models" rows="4" spellcheck="false">{{ form.include_models }}</textarea></label>
-      <label>Exclude model IDs or globs<textarea name="exclude_models" rows="4" spellcheck="false">{{ form.exclude_models }}</textarea></label>
+      {{ record_choice(
+          "include_models", "model", "Include model IDs or globs",
+          options=choices.model or none,
+          multi=true,
+          multi_value=form.include_models,
+          serialize="newline",
+          allow_new=true,
+          placeholder="e.g. gpt-* or gpt-4o",
+          help="Known models from routes, pricing and usage history; typed globs/new values stay editable.",
+      ) }}
+      {{ record_choice(
+          "exclude_models", "model", "Exclude model IDs or globs",
+          options=choices.model or none,
+          multi=true,
+          multi_value=form.exclude_models,
+          serialize="newline",
+          allow_new=true,
+          placeholder="e.g. *-preview",
+          help="Known models from routes, pricing and usage history; typed globs/new values stay editable.",
+      ) }}
       <label class="checkbox-label">
         <input type="checkbox" name="acknowledge_proposal" value="true">
         I understand this is a proposal, not authoritative pricing or route truth.

@@ -31,15 +31,15 @@
     <h2 id="fx-import-details-heading">Preview Details</h2>
     <p class="muted small">Format: {{ import_format }}{% if source_label %}; source label: {{ source_label }}{% endif %}. External FX APIs and providers were not called. Uploaded content was not stored.</p>
     <div class="table-wrap" tabindex="0" role="region" aria-label="FX import preview">
-      <table>
+      <table data-sortable>
         <thead>
           <tr>
-            <th>Row</th>
+            <th data-sort-type="number">Row</th>
             <th>Status</th>
             <th>Classification</th>
             <th>Pair</th>
-            <th>Rate</th>
-            <th>Validity</th>
+            <th data-sort-type="number">Rate</th>
+            <th data-sort-type="datetime">Validity</th>
             <th>Source</th>
             <th>Metadata</th>
             <th>Notes</th>
@@ -49,7 +49,7 @@
         <tbody>
           {% for row in preview.rows %}
           <tr>
-            <td>{{ row.row_number }}</td>
+            <td data-sort-value="{{ row.row_number }}">{{ row.row_number }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.classification }}</td>
             <td>
@@ -59,8 +59,8 @@
               <span class="muted">Invalid</span>
               {% endif %}
             </td>
-            <td>{{ row.rate or "Invalid" }}</td>
-            <td>
+            <td data-sort-value="{{ row.rate or '' }}">{{ row.rate or "Invalid" }}</td>
+            <td data-sort-value="{{ row.valid_from.isoformat() if row.valid_from else '' }}">
               {% if row.valid_from %}
               <div>{{ row.valid_from.isoformat() }}</div>
               <div class="muted small">until {{ row.valid_until.isoformat() if row.valid_until else "open" }}</div>

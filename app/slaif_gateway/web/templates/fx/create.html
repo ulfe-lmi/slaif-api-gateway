@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Create FX Rate{% endblock %}
 
 {% block body %}
@@ -29,8 +31,24 @@
     <section class="action-panel" aria-labelledby="fx-pair-heading">
       <h2 id="fx-pair-heading">Currency Pair</h2>
       <div class="form-grid">
-        <label>Base currency<input name="base_currency" value="{{ form.base_currency }}" maxlength="3" autocomplete="off" required></label>
-        <label>Quote currency<input name="quote_currency" value="{{ form.quote_currency }}" maxlength="3" autocomplete="off" required></label>
+        {{ record_choice(
+            "base_currency", "currency", "Base currency",
+            options=choices.base_currency or none,
+            selected_id=form.base_currency,
+            selected_label=choice_labels.base_currency,
+            allow_new=true,
+            nojs_value=form.base_currency,
+            help="ISO 4217 code; new codes stay editable.",
+        ) }}
+        {{ record_choice(
+            "quote_currency", "currency", "Quote currency",
+            options=choices.quote_currency or none,
+            selected_id=form.quote_currency,
+            selected_label=choice_labels.quote_currency,
+            allow_new=true,
+            nojs_value=form.quote_currency,
+            help="ISO 4217 code; new codes stay editable.",
+        ) }}
         <label>Rate<input name="rate" value="{{ form.rate }}" inputmode="decimal" autocomplete="off" required></label>
       </div>
       <p class="muted small">Rates affect future EUR conversion, quota reservation, and accounting. Unknown FX conversion still fails closed for cost-limited keys.</p>
@@ -47,7 +65,15 @@
 
     <section class="action-panel" aria-labelledby="fx-audit-heading">
       <h2 id="fx-audit-heading">Audit</h2>
-      <label>Source<input name="source" value="{{ form.source }}" autocomplete="off"></label>
+      {{ record_choice(
+          "source", "fx_source", "Source",
+          options=choices.source or none,
+          selected_id=form.source,
+          selected_label=choice_labels.source,
+          allow_new=true,
+          nojs_value=form.source,
+          help="FX source label; new values stay editable.",
+      ) }}
       <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
       <button type="submit">Create FX rate</button>
       <a class="button-link secondary" href="/admin/fx">Cancel</a>

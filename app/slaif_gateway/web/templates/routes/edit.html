@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Edit Model Route{% endblock %}
 
 {% block body %}
@@ -30,10 +32,15 @@
     <section class="action-panel" aria-labelledby="route-edit-match-heading">
       <h2 id="route-edit-match-heading">Match</h2>
       <div class="form-grid">
-        <label>
-          Requested model or pattern
-          <input name="requested_model" value="{{ form.requested_model }}" required autocomplete="off">
-        </label>
+        {{ record_choice(
+            "requested_model", "model", "Requested model or pattern",
+            options=choices.requested_model or none,
+            selected_id=form.requested_model,
+            selected_label=choice_labels.requested_model,
+            allow_new=true,
+            nojs_value=form.requested_model,
+            depends_on="route-provider",
+        ) }}
         <label>
           Match type
           <select name="match_type">
@@ -42,10 +49,14 @@
             <option value="glob" {% if form.match_type == "glob" %}selected{% endif %}>Glob</option>
           </select>
         </label>
-        <label>
-          Endpoint
-          <input name="endpoint" value="{{ form.endpoint }}" required autocomplete="off">
-        </label>
+        {{ record_choice(
+            "endpoint", "endpoint", "Endpoint",
+            options=choices.endpoint or none,
+            selected_id=form.endpoint,
+            selected_label=choice_labels.endpoint,
+            allow_new=false,
+            nojs_value=form.endpoint,
+        ) }}
       </div>
     </section>
 
@@ -53,21 +64,26 @@
       <h2 id="route-edit-target-heading">Target</h2>
       <p class="warning-text">Provider config choices expose environment variable names only. Do not enter provider key values in route metadata.</p>
       <div class="form-grid">
-        <label>
-          Provider config
-          <select name="provider" required>
-            <option value="">Select provider</option>
-            {% for provider in provider_choices %}
-            <option value="{{ provider.provider }}" {% if form.provider == provider.provider %}selected{% endif %}>
-              {{ provider.display_name }} ({{ provider.provider }}) / {{ provider.api_key_env_var }}
-            </option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          Upstream model
-          <input name="upstream_model" value="{{ form.upstream_model }}" autocomplete="off">
-        </label>
+        {{ record_choice(
+            "provider", "provider", "Provider config",
+            options=choices.provider or none,
+            selected_id=form.provider,
+            selected_label=choice_labels.provider,
+            allow_new=false,
+            nojs_value=form.provider,
+            clear_label="Select provider",
+            placeholder="Search providers",
+            input_id="route-provider",
+        ) }}
+        {{ record_choice(
+            "upstream_model", "model", "Upstream model",
+            options=choices.upstream_model or none,
+            selected_id=form.upstream_model,
+            selected_label=choice_labels.upstream_model,
+            allow_new=true,
+            nojs_value=form.upstream_model,
+            help="Leave empty to forward the requested model unchanged; new upstream model values stay editable.",
+        ) }}
         <label>
           Priority
           <input name="priority" value="{{ form.priority }}" inputmode="numeric" required>

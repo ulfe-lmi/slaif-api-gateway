@@ -20,6 +20,28 @@ from slaif_gateway.services.admin_records_dashboard import AdminRecordNotFoundEr
 from slaif_gateway.services.admin_session_service import AdminSessionContext
 
 
+class _FakeResult:
+    """Empty read result for the fake DB session.
+
+    192-a record-choice loaders issue read queries on admin pages; under
+    the unit fake DB they degrade to "no options" (same posture as the
+    production safe loaders' error degradation). Tests needing specific
+    rows monkeypatch at repository/service level, so this empty result
+    never weakens a product check."""
+
+    def all(self):
+        return []
+
+    def first(self):
+        return None
+
+    def scalar_one_or_none(self):
+        return None
+
+    def scalars(self):
+        return self
+
+
 class _FakeSession:
     async def __aenter__(self):
         return self
@@ -29,6 +51,9 @@ class _FakeSession:
 
     def begin(self):
         return self
+
+    async def execute(self, *args, **kwargs):
+        return _FakeResult()
 
 
 class _FakeSessionmaker:

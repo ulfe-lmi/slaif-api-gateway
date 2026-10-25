@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Cohorts{% endblock %}
 
 {% block body %}
@@ -25,10 +27,7 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/cohorts">
-    <label>
-      Name
-      <input name="name" value="{{ filters.name }}" autocomplete="off">
-    </label>
+    {{ record_choice("name", "cohort_name", "Name", options=choices.name, selected_id=filters.name, selected_label=filters.name, allow_new=true, placeholder="Cohort name", input_id="cohorts-name-filter") }}
     <label>
       Active
       <select name="active">
@@ -42,14 +41,14 @@
   </form>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Cohorts">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Cohort</th>
-          <th>Window</th>
-          <th>Owners</th>
-          <th>Keys</th>
-          <th>Created</th>
+          <th data-sort-type="datetime">Window (start)</th>
+          <th data-sort-type="number">Owners (count)</th>
+          <th data-sort-type="number">Keys (total)</th>
+          <th data-sort-type="datetime">Created</th>
         </tr>
       </thead>
       <tbody>
@@ -59,12 +58,12 @@
             <a href="/admin/cohorts/{{ cohort.id }}">{{ cohort.name }}</a>
             {% if cohort.description %}<div class="muted small">{{ cohort.description }}</div>{% endif %}
           </td>
-          <td>
+          <td data-sort-value="{{ cohort.starts_at.isoformat() if cohort.starts_at else '' }}">
             <div>{{ cohort.starts_at.isoformat() if cohort.starts_at else "No start" }}</div>
             <div class="muted small">until {{ cohort.ends_at.isoformat() if cohort.ends_at else "No end" }}</div>
           </td>
-          <td>{{ cohort.owner_count }}</td>
-          <td>
+          <td data-sort-value="{{ cohort.owner_count }}">{{ cohort.owner_count }}</td>
+          <td data-sort-value="{{ cohort.key_count }}">
             <div>{{ cohort.key_count }} total</div>
             <div class="muted small">{{ cohort.active_key_count }} active</div>
           </td>

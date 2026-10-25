@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Edit Owner{% endblock %}
 
 {% block body %}
@@ -39,14 +41,16 @@
 
     <section class="action-panel" aria-labelledby="owner-institution-heading">
       <h2 id="owner-institution-heading">Institution</h2>
-      <label>Institution
-        <select name="institution_id">
-          <option value="">Not set</option>
-          {% for institution in institutions %}
-          <option value="{{ institution.id }}" {% if form.institution_id == institution.id|string %}selected{% endif %}>{{ institution.name }}</option>
-          {% endfor %}
-        </select>
-      </label>
+      {{ record_choice(
+          "institution_id", "institution", "Institution",
+          options=choices.institution_id or none,
+          selected_id=form.institution_id,
+          selected_label=choice_labels.institution_id,
+          allow_new=false,
+          nojs_value=form.institution_id,
+          clear_label="Not set",
+          placeholder="Search institutions",
+      ) }}
       <label class="checkbox-row"><input type="checkbox" name="is_active" value="true" {% if form.is_active in ["true", "1", "on", "yes"] %}checked{% endif %}> Active owner</label>
       <p class="muted small">Owners do not link directly to cohorts in the current schema; cohorts are assigned through keys.</p>
     </section>

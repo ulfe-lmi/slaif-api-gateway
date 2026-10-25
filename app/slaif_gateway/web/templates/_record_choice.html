@@ -1,0 +1,107 @@
+{#-
+  Record choice combobox macro (objective 192-a).
+
+  Renders the accessible searchable record-choice control consumed by
+  web/static/js/record-choices.js. Progressive enhancement:
+
+  - Single-value fields render a visible text input that carries the form
+    field name; with JavaScript the name moves to a managed hidden input
+    (selected id) and the visible field becomes the search/entry field.
+    Without JavaScript it is a plain text field prefilled with the current
+    value, exactly like the pre-192 controls.
+  - Multi-value fields render a visible <textarea> (newline-preserving, so
+    the no-JS fallback keeps the existing newline-list serialization);
+    with JavaScript it becomes the chip manager plus a managed hidden
+    input (one per value, or one newline-serialized field).
+
+  Parameters:
+    name          form field name (submitted value)
+    kind          lookup kind for the /admin/record-choices endpoint
+    label_text    visible label
+    options       list of {id, label, sub} (server latest ~100) or none
+    selected_id   current selected id/value (single)
+    selected_label  human label for the current selection (single)
+    allow_new     allow typing a new valid value (single)
+    multi         multi-value control (textarea + chips)
+    multi_value   current newline-joined value (multi)
+    serialize     "single" (one hidden input per value) or "newline"
+    placeholder   visible input placeholder
+    help          optional help line (e.g. typed sort keys)
+    depends_on    data-rc-id of the parent control (dependent choices)
+    depends_param query parameter the dependent control sends the parent's
+                  value under (default "provider" for model choices;
+                  "target_type" for the audit target picker). Only the two
+                  documented names are emitted.
+    clear_label   clear/Any label
+    input_id      stable data-rc-id so other controls can depend on it
+    nojs_value    exact value the no-JS fallback field submits (defaults to
+                  selected_label or selected_id; forms with id-based server
+                  fields pass the raw id so a no-JS submission stays valid)
+-#}
+{% macro record_choice(
+    name, kind, label_text,
+    options=none,
+    selected_id="",
+    selected_label="",
+    allow_new=true,
+    multi=false,
+    multi_value="",
+    serialize="single",
+    placeholder="",
+    help="",
+    depends_on="",
+    depends_param="provider",
+    clear_label="Any",
+    input_id="",
+    nojs_value=none
+) -%}
+<label class="rc-field">
+  <span class="rc-name">{{ label_text }}</span>
+  <span class="rc"
+        data-rc
+        data-kind="{{ kind }}"
+        data-input-name="{{ name }}"
+        data-multi="{{ '1' if multi else '0' }}"
+        data-allow-new="{{ '1' if allow_new else '0' }}"
+        data-serialize="{{ 'newline' if serialize == 'newline' else 'single' }}"
+        data-depends-on="{{ depends_on }}"
+        data-depends-param="{{ depends_param if depends_param in ['provider', 'target_type'] else 'provider' }}"
+        data-clear-label="{{ clear_label }}"
+        {% if input_id %}data-rc-id="{{ input_id }}"{% endif %}
+        {% if not multi %}
+        data-selected-id="{{ selected_id or '' }}"
+        data-selected-label="{{ selected_label or '' }}"
+        {% endif %}
+        data-initial-options='{{ options | tojson_attr if options is not none else "[]" }}'>
+    {% if multi %}
+    <textarea class="rc-input" name="{{ name }}" rows="2" autocomplete="off"
+              spellcheck="false" placeholder="{{ placeholder }}">{{ multi_value or '' }}</textarea>
+    {% else %}
+    <span class="rc-main">
+      <input type="text" class="rc-input" name="{{ name }}" autocomplete="off"
+             spellcheck="false" placeholder="{{ placeholder }}"
+             value="{{ nojs_value if nojs_value is not none else (selected_label or selected_id or '') }}"
+             aria-expanded="false" aria-autocomplete="list"
+             role="combobox">
+      <button type="button" class="rc-clear" hidden
+              aria-label="Clear {{ label_text }}">&#215;</button>
+      <button type="button" class="rc-open" aria-haspopup="listbox"
+              aria-expanded="false"
+              aria-label="Show {{ label_text }} choices">&#9662;</button>
+    </span>
+    {% endif %}
+    <span class="rc-selected" hidden></span>
+    <span class="rc-menu" hidden>
+      {% if not multi %}
+      <input type="search" class="rc-search" autocomplete="off"
+             placeholder="Search all records"
+             aria-label="Search {{ label_text }} choices">
+      {% endif %}
+      <ul class="rc-list" role="listbox"
+          aria-multiselectable="{{ 'true' if multi else 'false' }}"></ul>
+      <span class="rc-status" role="status" hidden></span>
+    </span>
+  </span>
+  {% if help %}<span class="rc-help">{{ help }}</span>{% endif %}
+</label>
+{%- endmacro %}

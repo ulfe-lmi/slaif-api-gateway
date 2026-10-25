@@ -217,6 +217,8 @@ async def _create_lazy_browser_data(database_url: str) -> dict[str, object]:
                     "admin_email": admin.email,
                     "owner_id": owner.id,
                     "cohort_id": cohort.id,
+                    "owner_email": owner.email,
+                    "cohort_name": cohort.name,
                     "key_id": key.id,
                     "public_key_id": key.public_key_id,
                 }
@@ -307,9 +309,36 @@ def _fill_minimal_key_form(
     max_wait_seconds: str,
     max_waiting_requests: str,
     reason: str,
+    js_enabled: bool = True,
 ) -> None:
-    page.select_option(f'{CREATE_FORM} select[name="owner_id"]', str(data["owner_id"]))  # type: ignore[attr-defined]
-    page.select_option(f'{CREATE_FORM} select[name="cohort_id"]', str(data["cohort_id"]))  # type: ignore[attr-defined]
+    # 192-a: owner/cohort are record-choice controls (no <select>).
+    # With JS the menu selection writes the UUID to the managed hidden
+    # field; without JS the visible field is a plain text input that
+    # submits the raw UUID (the no-JS value contract).
+    if js_enabled:
+        owner_rc = page.locator(  # type: ignore[attr-defined]
+            f'{CREATE_FORM} .rc:has(input[name="owner_id"])'
+        )
+        owner_rc.locator(".rc-open").click()
+        owner_rc.locator(f'.rc-option:has-text("{data["owner_email"]}")').click()
+        cohort_rc = page.locator(  # type: ignore[attr-defined]
+            f'{CREATE_FORM} .rc:has(input[name="cohort_id"])'
+        )
+        cohort_rc.locator(".rc-open").click()
+        cohort_rc.locator(f'.rc-option:has-text("{data["cohort_name"]}")').click()
+    else:
+        page.fill(  # type: ignore[attr-defined]
+            f'{CREATE_FORM} input[name="owner_id"]', str(data["owner_id"])
+        )
+        page.fill(  # type: ignore[attr-defined]
+            f'{CREATE_FORM} input[name="cohort_id"]', str(data["cohort_id"])
+        )
+    assert page.locator(  # type: ignore[attr-defined]
+        f'{CREATE_FORM} input[name="owner_id"]'
+    ).input_value() == str(data["owner_id"])
+    assert page.locator(  # type: ignore[attr-defined]
+        f'{CREATE_FORM} input[name="cohort_id"]'
+    ).input_value() == str(data["cohort_id"])
     page.fill(f'{CREATE_FORM} input[name="valid_days"]', "30")  # type: ignore[attr-defined]
     page.fill(f'{CREATE_FORM} input[name="cost_limit_eur"]', "10")  # type: ignore[attr-defined]
     page.fill(f'{CREATE_FORM} input[name="token_limit_total"]', "1000")  # type: ignore[attr-defined]
@@ -500,6 +529,7 @@ def test_admin_lazy_throttling_no_js_create_and_escaped_redisplay(
                 max_wait_seconds="40",
                 max_waiting_requests="3",
                 reason="browser lazy no-js create: wait 40s / 3 waiting",
+                js_enabled=False,
             )
             page.click(f'{CREATE_FORM} button[type="submit"]')
             page.wait_for_selector("#created-key-heading", timeout=20000)

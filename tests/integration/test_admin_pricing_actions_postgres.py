@@ -206,7 +206,12 @@ def test_admin_pricing_actions_postgres(migrated_postgres_url: str) -> None:
 
         create_page = client.get("/admin/pricing/new")
         assert create_page.status_code == 200
-        assert str(data["api_key_env_var"]) in create_page.text
+        # 192-a: the provider record-choice shows the recognizable slug
+        # and display name from the DB row — never the credential env
+        # var name or value.
+        assert f'"label": "{data["provider"]}"' in create_page.text
+        assert '"sub": "Pricing Provider · enabled"' in create_page.text
+        assert str(data["api_key_env_var"]) not in create_page.text
         assert provider_secret_value not in create_page.text
 
         without_csrf = client.post(

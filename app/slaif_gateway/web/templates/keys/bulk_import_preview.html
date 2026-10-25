@@ -70,7 +70,7 @@
       </label>
       <label>
         Or paste CSV/JSON
-        <textarea name="import_text" rows="10" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,email_delivery_mode&#10;ada@example.org,30,10.00,none"></textarea>
+        <textarea name="import_text" rows="10" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,allowed_endpoints,allowed_models&#10;ada@example.org,30,10.00,/v1/chat/completions,gpt-5.2"></textarea>
       </label>
       <label class="checkbox-row">
         <input type="checkbox" name="confirm_import" value="true">
@@ -93,15 +93,15 @@
   {% endif %}
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Bulk import preview rows">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
-          <th>Row</th>
+          <th data-sort-type="number">Row</th>
           <th>Status</th>
           <th>Owner</th>
           <th>Scope</th>
-          <th>Validity</th>
-          <th>Quotas</th>
+          <th data-sort-type="datetime">Validity</th>
+          <th data-sort-type="money">Quotas</th>
           <th>Policy</th>
           <th>Email</th>
           <th>Errors</th>
@@ -110,7 +110,7 @@
       <tbody>
         {% for row in preview.rows %}
         <tr>
-          <td>{{ row.row_number }}</td>
+          <td data-sort-value="{{ row.row_number }}">{{ row.row_number }}</td>
           <td>
             <span class="status-pill status-{{ row.status }}">{{ row.status }}</span>
             <div class="muted small">{{ row.classification }}</div>
@@ -125,12 +125,12 @@
             {% if row.institution_id %}<div class="muted small">{{ row.institution_id }}</div>{% endif %}
             <div class="muted small">Cohort: {{ row.cohort_name or "none" }}</div>
           </td>
-          <td>
+          <td data-sort-value="{{ row.valid_from.isoformat() if row.valid_from else '' }}">
             {% if row.valid_from %}<div>{{ row.valid_from.isoformat() }}</div>{% endif %}
             {% if row.valid_until %}<div class="muted small">until {{ row.valid_until.isoformat() }}</div>{% endif %}
           </td>
-          <td>
-            <div>EUR {{ row.cost_limit_eur or "unlimited" }}</div>
+          <td data-sort-value="{{ row.cost_limit_eur if row.cost_limit_eur is not none else '' }}">
+            <div>EUR {{ row.cost_limit_eur if row.cost_limit_eur is not none else "unlimited" }}</div>
             <div class="muted small">{{ row.token_limit if row.token_limit is not none else "unlimited" }} tokens</div>
             <div class="muted small">{{ row.request_limit if row.request_limit is not none else "unlimited" }} requests</div>
           </td>

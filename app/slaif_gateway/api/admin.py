@@ -12,16 +12,19 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlencode, urlparse
 
 import structlog
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from pydantic import BeforeValidator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.auth.csrf import CsrfError, create_login_csrf_token, verify_login_csrf_token
 from slaif_gateway.config import Settings
+from slaif_gateway.db.models import STATUS_VALUES_USAGE_LEDGER_ACCOUNTING
 from slaif_gateway.db.repositories.admin_sessions import AdminSessionsRepository
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
@@ -39,6 +42,7 @@ from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
 from slaif_gateway.db.repositories.usage_profiles import UsageProfilesRepository
 from slaif_gateway.db.session import get_sessionmaker_from_app
+from slaif_gateway.services.admin_record_choices import RecordChoice, load_choices
 from slaif_gateway.modules.clients.codex_0162 import CODEX_0162_CLIENT_MODULE_ID
 from slaif_gateway.modules.clients.registry import client_module_metadata, get_client_module
 from slaif_gateway.services.admin_activity_dashboard import (
@@ -246,6 +250,27 @@ from slaif_gateway.web.branding import (
 )
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
+# --- Admin list filters: optional boolean "Any" normalization (192-a) ------
+#
+# Admin GET list filters render an "Any" select option that submits a BLANK
+# value for its boolean parameter (e.g. /admin/cohorts?name=...&active=).
+# The plain bool parser turns that blank into a 422 (bool_parsing), breaking
+# the default filter form. The normalization below maps blank to None (no
+# filter) and leaves every other value to the native pydantic bool parser,
+# so "true"/"false" keep working and invalid non-blank values keep failing
+# with 422. Scope: admin filter query params only — public /v1 routes,
+# request bodies, permissions, and schemas are untouched.
+
+
+def _admin_optional_bool_blank(value: object) -> object:
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
+AdminOptionalBool = Annotated[bool | None, BeforeValidator(_admin_optional_bool_blank)]
+
+
 router = APIRouter(prefix="/admin", include_in_schema=False)
 
 
@@ -288,6 +313,73 @@ def _utc_datetime_local(value: datetime | str | None) -> str:
 
 templates.env.filters["utc_datetime_local"] = _utc_datetime_local
 logger = structlog.get_logger(__name__)
+
+
+def _choice_option_default(obj: object) -> object:
+    """Serialize option-like objects (id/label/sub) as explicit DTO dicts.
+
+    Duck-typed on purpose so the filter stays self-contained (it is the
+    only code path that sees loader DTOs such as ``RecordChoice``).
+    """
+    if hasattr(obj, "id") and hasattr(obj, "label") and hasattr(obj, "sub"):
+        return {"id": str(obj.id), "label": str(obj.label), "sub": str(obj.sub)}
+    return str(obj)
+
+
+def _tojson_attr_filter(value: object) -> str:
+    """JSON serialization safe inside a single-quoted HTML attribute.
+
+    Registered as the ``tojson_attr`` filter and used ONLY for the record
+    choice macro's ``data-initial-options`` attribute. The built-in
+    ``tojson`` filter is preserved unchanged for text-context JSON
+    display (e.g. the route detail capabilities block).
+
+    The payload is marked safe because it is inert inside a single-quoted
+    HTML attribute by construction:
+
+    - option-like objects (id/label/sub) are serialized as explicit DTO
+      dicts, never via ``str()``;
+    - ``<``, ``>``, ``&`` and ``'`` are emitted as ``\\uXXXX`` JSON
+      escapes. Those characters can only occur inside JSON string values
+      (they are not JSON structural characters), so the payload remains
+      valid JSON while containing no raw attribute quotes, no raw ``&``
+      (no HTML entity interpretation) and no raw tag characters.
+    """
+    import json
+
+    from markupsafe import Markup
+
+    payload = json.dumps(value, ensure_ascii=False, default=_choice_option_default)
+    payload = (
+        payload.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("'", "\\u0027")
+    )
+    return Markup(payload)
+
+
+templates.env.filters["tojson_attr"] = _tojson_attr_filter
+
+
+def _decimal_display_filter(value: object) -> str:
+    """Fixed-point decimal display with trailing zeros stripped.
+
+    PostgreSQL Numeric(18,9) values come back as ``Decimal``; a stored
+    zero is rendered by ``str()`` as ``0E-9``. Fixed-point formatting
+    followed by zero-stripping keeps a valid actual zero readable as
+    ``0`` (and small non-zero values readable without exponent
+    notation) without rounding or changing any value.
+    """
+    if isinstance(value, Decimal):
+        text = format(value, "f")
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text
+    return str(value)
+
+
+templates.env.filters["dec"] = _decimal_display_filter
 
 _QWEN_CODEX_PROFILE_IDS = frozenset(
     {
@@ -676,7 +768,7 @@ async def list_admin_keys(
     public_key_id: str | None = Query(None),
     institution_id: str | None = Query(None),
     cohort_id: str | None = Query(None),
-    expired: bool | None = Query(None),
+    expired: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -706,11 +798,14 @@ async def list_admin_keys(
             offset=offset,
         )
 
+    choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", owner_email), ("key_public_id", "key_public_id", public_key_id), ("cohort", "cohort", cohort_id)))
+
     return templates.TemplateResponse(
         request,
         "keys/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "keys": rows,
@@ -746,6 +841,13 @@ async def create_admin_key_form(request: Request) -> Response:
         csrf_token=csrf_token,
         options=options,
         form=_default_key_create_form(),
+        choices=await _load_admin_record_choices_safe(
+            request,
+            (
+                ("owner_id", "owner", None),
+                ("cohort_id", "cohort", None),
+            ),
+        ),
     )
 
 
@@ -847,7 +949,9 @@ async def create_admin_key(
             form,
             actor_admin_id=action_context.admin_user.id,
             settings=settings,
-            available_provider_values=options["policy_catalog"]["enabled_provider_values"],
+            available_provider_values=await _admin_enabled_provider_values_for(
+                request, form
+            ),
         )
         validated_request_policy = await _validate_admin_request_policy(
             request,
@@ -917,6 +1021,13 @@ async def create_admin_key(
             csrf_token=csrf_token,
             options=options,
             form=form,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("owner_id", "owner", form.get("owner_id")),
+                    ("cohort_id", "cohort", form.get("cohort_id")),
+                ),
+            ),
             error=str(exc),
             diagnostic_id=diagnostic_id,
             status_code=400,
@@ -938,6 +1049,13 @@ async def create_admin_key(
                     csrf_token=csrf_token,
                     options=options,
                     form=form,
+                    choices=await _load_admin_record_choices_safe(
+                        request,
+                        (
+                            ("owner_id", "owner", form.get("owner_id")),
+                            ("cohort_id", "cohort", form.get("cohort_id")),
+                        ),
+                    ),
                     error="Select an existing owner before creating a key.",
                     status_code=400,
                 )
@@ -951,6 +1069,13 @@ async def create_admin_key(
                         csrf_token=csrf_token,
                         options=options,
                         form=form,
+                        choices=await _load_admin_record_choices_safe(
+                            request,
+                            (
+                                ("owner_id", "owner", form.get("owner_id")),
+                                ("cohort_id", "cohort", form.get("cohort_id")),
+                            ),
+                        ),
                         error="Select an existing cohort or leave cohort blank.",
                         status_code=400,
                     )
@@ -986,6 +1111,13 @@ async def create_admin_key(
             csrf_token=csrf_token,
             options=options,
             form=form,
+                choices=await _load_admin_record_choices_safe(
+                    request,
+                    (
+                        ("owner_id", "owner", form.get("owner_id")),
+                        ("cohort_id", "cohort", form.get("cohort_id")),
+                    ),
+                ),
             error=error_message,
             diagnostic_id=diagnostic_id,
             status_code=400,
@@ -1633,6 +1765,14 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
 
     current_revision = _current_template_revision(template)
     options = await _load_key_create_form_options_or_empty(request)
+    template_key_form = _default_template_key_create_form(current_revision)
+    template_key_choices = await _load_admin_record_choices_safe(
+        request,
+        (
+            ("owner_id", "owner", None),
+            ("cohort_id", "cohort", None),
+        ),
+    )
     response = templates.TemplateResponse(
         request,
         "templates/detail.html",
@@ -1650,7 +1790,15 @@ async def admin_key_template_detail(request: Request, template_id: str) -> Respo
             ),
             "owners": options["owners"],
             "cohorts": options["cohorts"],
-            "form": _default_template_key_create_form(current_revision),
+            "choices": template_key_choices,
+            "choice_labels": _choice_selected_labels(
+                template_key_choices,
+                (
+                    ("owner_id", template_key_form.get("owner_id")),
+                    ("cohort_id", template_key_form.get("cohort_id")),
+                ),
+            ),
+            "form": template_key_form,
             "admin_status_message": _admin_status_message(request),
         },
     )
@@ -1712,6 +1860,13 @@ async def create_admin_key_from_template_revision(
             current_revision=current_revision,
             options=options,
             form=form,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("owner_id", "owner", form.get("owner_id")),
+                    ("cohort_id", "cohort", form.get("cohort_id")),
+                ),
+            ),
             error="Select a valid revision for this template before creating a key.",
         )
 
@@ -1732,6 +1887,13 @@ async def create_admin_key_from_template_revision(
             current_revision=current_revision,
             options=options,
             form=form,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("owner_id", "owner", form.get("owner_id")),
+                    ("cohort_id", "cohort", form.get("cohort_id")),
+                ),
+            ),
             error=str(exc),
         )
 
@@ -1788,6 +1950,13 @@ async def create_admin_key_from_template_revision(
             current_revision=current_revision,
             options=options,
             form=form,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("owner_id", "owner", form.get("owner_id")),
+                    ("cohort_id", "cohort", form.get("cohort_id")),
+                ),
+            ),
             error=str(exc)
             if isinstance(exc, (KeyTemplateError, ValueError))
             else "Gateway key creation failed.",
@@ -1947,7 +2116,6 @@ async def update_admin_key_policy(
             },
         )
 
-    policy_catalog = await _load_key_policy_catalog(request)
     policy_form = {
         "allowed_providers": allowed_providers,
         "allowed_models": allowed_models,
@@ -1971,7 +2139,9 @@ async def update_admin_key_policy(
                     gateway_key_id=parsed_key_id,
                     allowed_providers=_parse_admin_allowed_providers(
                         policy_form,
-                        available_provider_values=policy_catalog["enabled_provider_values"],
+                        available_provider_values=await _admin_enabled_provider_values_for(
+                            request, policy_form
+                        ),
                     ),
                     update_allowed_providers=True,
                     allowed_models=validated_request_policy.allowed_models,
@@ -2712,11 +2882,14 @@ async def list_admin_owners(
             offset=offset,
         )
 
+    choices = await _load_admin_record_choices(request, (("email", "owner_email", email), ("institution_id", "institution", institution_id), ("cohort_id", "cohort", cohort_id)))
+
     return templates.TemplateResponse(
         request,
         "owners/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "owners": rows,
@@ -2750,6 +2923,9 @@ async def new_admin_owner_form(request: Request) -> Response:
         csrf_token=csrf_token,
         form=_default_owner_form(),
         institutions=institutions,
+        choices=await _load_admin_record_choices_safe(
+            request, (("institution_id", "institution", None),)
+        ),
     )
 
 
@@ -2794,6 +2970,9 @@ async def create_admin_owner(
             csrf_token=csrf_token,
             form=form,
             institutions=await _load_record_form_institutions(request),
+            choices=await _load_admin_record_choices_safe(
+                request, (("institution_id", "institution", form.get("institution_id")),)
+            ),
             error=str(exc),
             status_code=400,
         )
@@ -2819,6 +2998,9 @@ async def create_admin_owner(
             csrf_token=csrf_token,
             form=form,
             institutions=await _load_record_form_institutions(request),
+            choices=await _load_admin_record_choices_safe(
+                request, (("institution_id", "institution", form.get("institution_id")),)
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
             status_code=400,
         )
@@ -2882,14 +3064,18 @@ async def edit_admin_owner_form(request: Request, owner_id: str) -> Response:
     except AdminRecordNotFoundError:
         return _admin_error_page(request, status_code=404, message="Owner not found.")
 
+    owner_form = _owner_form_from_detail(owner)
     return _render_owner_form(
         request,
         template_name="owners/edit.html",
         admin=context.admin_user,
         csrf_token=csrf_token,
-        form=_owner_form_from_detail(owner),
+        form=owner_form,
         institutions=await _load_record_form_institutions(request),
         owner_id=parsed_owner_id,
+        choices=await _load_admin_record_choices_safe(
+            request, (("institution_id", "institution", owner_form.get("institution_id")),)
+        ),
     )
 
 
@@ -2941,6 +3127,9 @@ async def update_admin_owner(
             form=form,
             institutions=await _load_record_form_institutions(request),
             owner_id=parsed_owner_id,
+            choices=await _load_admin_record_choices_safe(
+                request, (("institution_id", "institution", form.get("institution_id")),)
+            ),
             error=str(exc),
             status_code=400,
         )
@@ -2970,6 +3159,9 @@ async def update_admin_owner(
             form=form,
             institutions=await _load_record_form_institutions(request),
             owner_id=parsed_owner_id,
+            choices=await _load_admin_record_choices_safe(
+                request, (("institution_id", "institution", form.get("institution_id")),)
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
             status_code=400,
         )
@@ -2982,6 +3174,9 @@ async def update_admin_owner(
             form=form,
             institutions=await _load_record_form_institutions(request),
             owner_id=parsed_owner_id,
+            choices=await _load_admin_record_choices_safe(
+                request, (("institution_id", "institution", form.get("institution_id")),)
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_admin_record"][1],
             status_code=400,
         )
@@ -3008,6 +3203,8 @@ async def list_admin_institutions(
     async with _admin_records_dashboard_service_scope(request) as service:
         rows = await service.list_institutions(name=name, limit=limit, offset=offset)
 
+    choices = await _load_admin_record_choices(request, (("name", "institution_name", name),))
+
     return templates.TemplateResponse(
         request,
         "institutions/list.html",
@@ -3021,6 +3218,7 @@ async def list_admin_institutions(
                 "limit": limit,
                 "offset": offset,
             },
+            "choices": choices,
         },
     )
 
@@ -3234,7 +3432,7 @@ async def update_admin_institution(
 async def list_admin_cohorts(
     request: Request,
     name: str | None = Query(None),
-    active: bool | None = Query(None),
+    active: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -3250,6 +3448,8 @@ async def list_admin_cohorts(
     async with _admin_records_dashboard_service_scope(request) as service:
         rows = await service.list_cohorts(name=name, active=active, limit=limit, offset=offset)
 
+    choices = await _load_admin_record_choices(request, (("name", "cohort_name", name),))
+
     return templates.TemplateResponse(
         request,
         "cohorts/list.html",
@@ -3264,6 +3464,7 @@ async def list_admin_cohorts(
                 "limit": limit,
                 "offset": offset,
             },
+            "choices": choices,
         },
     )
 
@@ -3493,7 +3694,7 @@ async def update_admin_cohort(
 async def list_admin_providers(
     request: Request,
     provider: str | None = Query(None),
-    enabled: bool | None = Query(None),
+    enabled: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -3511,11 +3712,14 @@ async def list_admin_providers(
             provider=provider, enabled=enabled, limit=limit, offset=offset
         )
 
+    choices = await _load_admin_record_choices(request, (("provider", "provider", provider),))
+
     return templates.TemplateResponse(
         request,
         "providers/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "providers": rows,
@@ -4095,8 +4299,8 @@ async def list_admin_routes(
     provider: str | None = Query(None),
     requested_model: str | None = Query(None),
     match_type: str | None = Query(None),
-    enabled: bool | None = Query(None),
-    visible: bool | None = Query(None),
+    enabled: AdminOptionalBool = None,
+    visible: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -4120,11 +4324,14 @@ async def list_admin_routes(
             offset=offset,
         )
 
+    choices = await _load_admin_record_choices(request, (("provider", "provider", provider), ("model", "model", requested_model)))
+
     return templates.TemplateResponse(
         request,
         "routes/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "routes": rows,
@@ -4185,7 +4392,7 @@ async def admin_openai_assisted_pricing_form(request: Request) -> Response:
         return page_context
     context, csrf_token = page_context
 
-    return _render_openai_assisted_pricing_form(
+    return await _render_openai_assisted_pricing_form(
         request,
         admin=context.admin_user,
         csrf_token=csrf_token,
@@ -4225,7 +4432,7 @@ async def admin_openai_assisted_pricing_propose(
         max_web_calls=str(max_web_calls),
     )
     if not _is_checked(acknowledge_proposal):
-        return _render_openai_assisted_pricing_form(
+        return await _render_openai_assisted_pricing_form(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
@@ -4248,7 +4455,7 @@ async def admin_openai_assisted_pricing_propose(
             max_web_calls=max_web_calls,
         )
     except Exception as exc:  # noqa: BLE001
-        return _render_openai_assisted_failure(
+        return await _render_openai_assisted_failure(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
@@ -4294,7 +4501,7 @@ async def admin_openai_assisted_routes_form(request: Request) -> Response:
         return page_context
     context, csrf_token = page_context
 
-    return _render_openai_assisted_routes_form(
+    return await _render_openai_assisted_routes_form(
         request,
         admin=context.admin_user,
         csrf_token=csrf_token,
@@ -4328,7 +4535,7 @@ async def admin_openai_assisted_routes_propose(
         exclude_models=exclude_models,
     )
     if not _is_checked(acknowledge_proposal):
-        return _render_openai_assisted_routes_form(
+        return await _render_openai_assisted_routes_form(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
@@ -4348,7 +4555,7 @@ async def admin_openai_assisted_routes_propose(
             implemented_endpoints_only=True,
         )
     except Exception as exc:  # noqa: BLE001
-        return _render_openai_assisted_failure(
+        return await _render_openai_assisted_failure(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
@@ -4607,6 +4814,15 @@ async def create_admin_route_form(request: Request) -> Response:
         csrf_token=csrf_token,
         form=_default_route_form(),
         provider_choices=await _load_route_provider_choices(request),
+        choices=await _load_admin_record_choices_safe(
+            request,
+            (
+                ("provider", "provider", None),
+                ("requested_model", "model", None),
+                ("upstream_model", "model", None),
+                ("endpoint", "endpoint", None),
+            ),
+        ),
     )
 
 
@@ -4662,6 +4878,15 @@ async def create_admin_route(
             csrf_token=csrf_token,
             form=form,
             provider_choices=provider_choices,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("requested_model", "model", form.get("requested_model")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                ),
+            ),
             error=str(exc),
             status_code=400,
         )
@@ -4691,6 +4916,15 @@ async def create_admin_route(
             csrf_token=csrf_token,
             form=form,
             provider_choices=provider_choices,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("requested_model", "model", form.get("requested_model")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_model_route"][1],
             status_code=400,
         )
@@ -4720,14 +4954,24 @@ async def edit_admin_route_form(request: Request, route_id: str) -> Response:
     except AdminCatalogNotFoundError:
         return _admin_error_page(request, status_code=404, message="Model route not found.")
 
+    route_form = _route_form_from_detail(route)
     return _render_route_form(
         request,
         template_name="routes/edit.html",
         admin=context.admin_user,
         csrf_token=csrf_token,
-        form=_route_form_from_detail(route),
+        form=route_form,
         provider_choices=await _load_route_provider_choices(request),
         route_id=parsed_route_id,
+        choices=await _load_admin_record_choices_safe(
+            request,
+            (
+                ("provider", "provider", route_form.get("provider")),
+                ("requested_model", "model", route_form.get("requested_model")),
+                ("upstream_model", "model", route_form.get("upstream_model")),
+                ("endpoint", "endpoint", route_form.get("endpoint")),
+            ),
+        ),
     )
 
 
@@ -4790,6 +5034,15 @@ async def update_admin_route(
             form=form,
             provider_choices=provider_choices,
             route_id=parsed_route_id,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("requested_model", "model", form.get("requested_model")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                ),
+            ),
             error=str(exc),
             status_code=400,
         )
@@ -4823,6 +5076,15 @@ async def update_admin_route(
             form=form,
             provider_choices=provider_choices,
             route_id=parsed_route_id,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("requested_model", "model", form.get("requested_model")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_model_route"][1],
             status_code=400,
         )
@@ -5030,8 +5292,8 @@ async def list_admin_pricing_rules(
     model: str | None = Query(None),
     endpoint: str | None = Query(None),
     currency: str | None = Query(None),
-    enabled: bool | None = Query(None),
-    active: bool | None = Query(None),
+    enabled: AdminOptionalBool = None,
+    active: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -5056,11 +5318,14 @@ async def list_admin_pricing_rules(
             offset=offset,
         )
 
+    choices = await _load_admin_record_choices(request, (("provider", "provider", provider), ("model", "model", model), ("endpoint", "endpoint", endpoint), ("currency", "currency", currency)))
+
     return templates.TemplateResponse(
         request,
         "pricing/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "pricing_rules": rows,
@@ -5302,6 +5567,15 @@ async def create_admin_pricing_rule_form(request: Request) -> Response:
         csrf_token=csrf_token,
         form=_default_pricing_rule_form(),
         provider_choices=await _load_catalog_provider_choices(request),
+        choices=await _load_admin_record_choices_safe(
+            request,
+            (
+                ("provider", "provider", None),
+                ("upstream_model", "model", None),
+                ("endpoint", "endpoint", None),
+                ("currency", "currency", None),
+            ),
+        ),
     )
 
 
@@ -5365,6 +5639,15 @@ async def create_admin_pricing_rule(
             csrf_token=csrf_token,
             form=form,
             provider_choices=provider_choices,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                    ("currency", "currency", form.get("currency")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_pricing_rule"][1],
             status_code=400,
         )
@@ -5398,6 +5681,15 @@ async def create_admin_pricing_rule(
             csrf_token=csrf_token,
             form=form,
             provider_choices=provider_choices,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                    ("currency", "currency", form.get("currency")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_pricing_rule"][1],
             status_code=400,
         )
@@ -5427,14 +5719,24 @@ async def edit_admin_pricing_rule_form(request: Request, pricing_rule_id: str) -
     except AdminCatalogNotFoundError:
         return _admin_error_page(request, status_code=404, message="Pricing rule not found.")
 
+    pricing_form = _pricing_rule_form_from_detail(pricing_rule)
     return _render_pricing_rule_form(
         request,
         template_name="pricing/edit.html",
         admin=context.admin_user,
         csrf_token=csrf_token,
-        form=_pricing_rule_form_from_detail(pricing_rule),
+        form=pricing_form,
         provider_choices=await _load_catalog_provider_choices(request),
         pricing_rule_id=parsed_pricing_rule_id,
+        choices=await _load_admin_record_choices_safe(
+            request,
+            (
+                ("provider", "provider", pricing_form.get("provider")),
+                ("upstream_model", "model", pricing_form.get("upstream_model")),
+                ("endpoint", "endpoint", pricing_form.get("endpoint")),
+                ("currency", "currency", pricing_form.get("currency")),
+            ),
+        ),
     )
 
 
@@ -5505,6 +5807,15 @@ async def update_admin_pricing_rule(
             form=form,
             provider_choices=provider_choices,
             pricing_rule_id=parsed_pricing_rule_id,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                    ("currency", "currency", form.get("currency")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_pricing_rule"][1],
             status_code=400,
         )
@@ -5542,6 +5853,15 @@ async def update_admin_pricing_rule(
             form=form,
             provider_choices=provider_choices,
             pricing_rule_id=parsed_pricing_rule_id,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                    ("currency", "currency", form.get("currency")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_pricing_rule"][1],
             status_code=400,
         )
@@ -5703,7 +6023,7 @@ async def list_admin_fx_rates(
     base_currency: str | None = Query(None),
     quote_currency: str | None = Query(None),
     source: str | None = Query(None),
-    active: bool | None = Query(None),
+    active: AdminOptionalBool = None,
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -5726,11 +6046,14 @@ async def list_admin_fx_rates(
             offset=offset,
         )
 
+    choices = await _load_admin_record_choices(request, (("base_currency", "currency", base_currency), ("quote_currency", "currency", quote_currency), ("source", "fx_source", source)))
+
     return templates.TemplateResponse(
         request,
         "fx/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "fx_rates": rows,
@@ -5763,6 +6086,14 @@ async def create_admin_fx_rate_form(request: Request) -> Response:
         admin=context.admin_user,
         csrf_token=csrf_token,
         form=_default_fx_rate_form(),
+        choices=await _load_admin_record_choices_safe(
+            request,
+            (
+                ("base_currency", "currency", None),
+                ("quote_currency", "currency", None),
+                ("source", "fx_source", None),
+            ),
+        ),
     )
 
 
@@ -6014,6 +6345,14 @@ async def create_admin_fx_rate(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             form=form,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("base_currency", "currency", form.get("base_currency")),
+                    ("quote_currency", "currency", form.get("quote_currency")),
+                    ("source", "fx_source", form.get("source")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_fx_rate"][1],
             status_code=400,
         )
@@ -6037,6 +6376,14 @@ async def create_admin_fx_rate(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             form=form,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("base_currency", "currency", form.get("base_currency")),
+                    ("quote_currency", "currency", form.get("quote_currency")),
+                    ("source", "fx_source", form.get("source")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_fx_rate"][1],
             status_code=400,
         )
@@ -6066,13 +6413,22 @@ async def edit_admin_fx_rate_form(request: Request, fx_rate_id: str) -> Response
     except AdminCatalogNotFoundError:
         return _admin_error_page(request, status_code=404, message="FX rate not found.")
 
+    fx_form = _fx_rate_form_from_detail(fx_rate)
     return _render_fx_rate_form(
         request,
         template_name="fx/edit.html",
         admin=context.admin_user,
         csrf_token=csrf_token,
-        form=_fx_rate_form_from_detail(fx_rate),
+        form=fx_form,
         fx_rate_id=parsed_fx_rate_id,
+        choices=await _load_admin_record_choices_safe(
+            request,
+            (
+                ("base_currency", "currency", fx_form.get("base_currency")),
+                ("quote_currency", "currency", fx_form.get("quote_currency")),
+                ("source", "fx_source", fx_form.get("source")),
+            ),
+        ),
     )
 
 
@@ -6121,6 +6477,14 @@ async def update_admin_fx_rate(
             csrf_token=csrf_token,
             form=form,
             fx_rate_id=parsed_fx_rate_id,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("base_currency", "currency", form.get("base_currency")),
+                    ("quote_currency", "currency", form.get("quote_currency")),
+                    ("source", "fx_source", form.get("source")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_fx_rate"][1],
             status_code=400,
         )
@@ -6148,6 +6512,14 @@ async def update_admin_fx_rate(
             csrf_token=csrf_token,
             form=form,
             fx_rate_id=parsed_fx_rate_id,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("base_currency", "currency", form.get("base_currency")),
+                    ("quote_currency", "currency", form.get("quote_currency")),
+                    ("source", "fx_source", form.get("source")),
+                ),
+            ),
             error=_ADMIN_STATUS_MESSAGES["invalid_fx_rate"][1],
             status_code=400,
         )
@@ -6201,7 +6573,7 @@ async def list_admin_usage(
     institution_id: str | None = Query(None),
     cohort_id: str | None = Query(None),
     request_id: str | None = Query(None),
-    streaming: bool | None = Query(None),
+    streaming: AdminOptionalBool = None,
     start_at: datetime | None = Query(None),
     end_at: datetime | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
@@ -6241,11 +6613,15 @@ async def list_admin_usage(
             offset=offset,
         )
 
+    choices = await _load_admin_record_choices(request, (("provider", "provider", provider), ("model", "model", model), ("endpoint", "endpoint", endpoint), ("request_id", "request_id", request_id)))
+
     return templates.TemplateResponse(
         request,
         "usage/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
+            "status_options": list(STATUS_VALUES_USAGE_LEDGER_ACCOUNTING),
             "csrf_token": csrf_token,
             "usage_rows": rows,
             "filters": {
@@ -6425,11 +6801,14 @@ async def list_admin_audit_logs(
             offset=offset,
         )
 
+    choices = await _load_admin_record_choices(request, (("action", "audit_action", action), ("target_type", "audit_target_type", target_type), ("target_id", "audit_target", target_id, target_type), ("request_id", "request_id", request_id), ("actor_admin_id", "audit_actor", actor_admin_id)))
+
     return templates.TemplateResponse(
         request,
         "audit/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
             "csrf_token": csrf_token,
             "audit_logs": rows,
             "filters": {
@@ -6587,11 +6966,14 @@ async def list_admin_email_deliveries(
             offset=offset,
         )
 
+    choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", owner_email), ("gateway_key_id", "key", gateway_key_id), ("one_time_secret_id", "one_time_secret", one_time_secret_id)))
+
     return templates.TemplateResponse(
         request,
         "email_deliveries/list.html",
         {
             "admin": context.admin_user,
+            "choices": choices,
             "csrf_token": csrf_token,
             "email_deliveries": rows,
             "filters": {
@@ -6820,6 +7202,73 @@ async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, st
         response = RedirectResponse("/admin/login", status_code=303)
         _clear_session_cookie(response, settings)
         return response
+
+
+async def _load_admin_record_choices(
+    request: Request, specs: tuple[tuple[str, str, str | None, str | None | None], ...]
+) -> dict[str, list[RecordChoice]]:
+    """Bounded read-only initial option lists for record-choice controls.
+
+    ``specs`` is a sequence of (field_name, kind, selected_id_or_None[,
+    target_type_or_None]) triples (the 4th element is the audit target
+    picker's entity-type scope; 3-element specs remain valid); each entry
+    returns at most 100 choices ordered created_at DESC with a
+    deterministic tie-breaker, keyed by field name (a page may use the
+    same kind for two fields, e.g. base and quote currency).
+    Strictly read-only (no writes/audit/quota side effects).
+    """
+    session_factory = get_sessionmaker_from_app(request)
+    result: dict[str, list[RecordChoice]] = {}
+    async with session_factory() as session:
+        async with session.begin():
+            for spec in specs:
+                field_name, kind, selected = spec[0], spec[1], spec[2]
+                target_type = spec[3] if len(spec) > 3 else None
+                result[field_name] = await load_choices(
+                    session,
+                    kind,
+                    selected=(selected,) if selected else (),
+                    target_type=target_type,
+                )
+    return result
+
+
+async def _load_admin_record_choices_safe(
+    request: Request, specs: tuple[tuple[str, str, str | None, str | None | None], ...]
+) -> dict[str, list[RecordChoice]]:
+    """Resilient variant for form re-render paths: degrades to an empty
+    option map on unexpected session setup errors (same posture as
+    ``_load_key_create_form_options_or_empty``); the control then behaves
+    like a plain text field and server validation stays authoritative."""
+    try:
+        return await _load_admin_record_choices(request, specs)
+    except (AttributeError, RuntimeError):
+        return {}
+
+
+def _choice_selected_labels(
+    choices: Mapping[str, Sequence[RecordChoice]],
+    pairs: tuple[tuple[str, str | None], ...],
+) -> dict[str, str]:
+    """Display label for each field's currently selected raw value.
+
+    Falls back to the raw value itself when the selection is not present in
+    the loaded option batch (it may lie outside the initial ~100); the
+    server validation error path stays authoritative for invalid values.
+    """
+    labels: dict[str, str] = {}
+    for field_name, raw in pairs:
+        raw_value = (raw or "").strip()
+        if not raw_value:
+            labels[field_name] = ""
+            continue
+        label = raw_value
+        for option in choices.get(field_name, ()):
+            if option.id == raw_value:
+                label = option.label
+                break
+        labels[field_name] = label
+    return labels
 
 
 async def _admin_action_context(
@@ -7330,10 +7779,29 @@ async def _load_key_policy_catalog(request: Request) -> dict[str, object]:
         session_factory = get_sessionmaker_from_app(request)
         async with session_factory() as session:
             async with session.begin():
-                providers = await ProviderConfigsRepository(session).list_provider_configs(
-                    enabled=True, limit=500
+                # Presentation page: the LATEST 100 enabled providers,
+                # recency order (repository), no re-sort. Older providers
+                # stay reachable through the providers server search
+                # (read-only record-choices lookup, kind=policy_provider).
+                # This page is NOT the authority for submitted-provider
+                # validation — that is a bounded submit-time point query.
+                providers = await ProviderConfigsRepository(session).list_provider_configs_latest(
+                    enabled=True, limit=100
                 )
-                routes = await ModelRoutesRepository(session).list_enabled_model_routes()
+                provider_choices = _build_policy_provider_choices(providers)
+                # Bounded model catalog: the LATEST 100 enabled routes
+                # on enabled providers (SQL subquery eligibility, no
+                # registry materialization) over implemented client
+                # endpoint paths, filtered in SQL before the LIMIT.
+                # Older routes stay reachable through the models server
+                # search (read-only record-choices lookup,
+                # kind=policy_model).
+                routes = await ModelRoutesRepository(session).list_enabled_model_routes_latest(
+                    endpoints=sorted(
+                        {_policy_endpoint_path(token) for token in IMPLEMENTED_CLIENT_ENDPOINTS}
+                    ),
+                    limit=100,
+                )
                 qualification_results = await CodexQualificationService(
                     provider_configs_repository=ProviderConfigsRepository(session),
                     model_routes_repository=ModelRoutesRepository(session),
@@ -7343,15 +7811,12 @@ async def _load_key_policy_catalog(request: Request) -> dict[str, object]:
     except (AttributeError, RuntimeError):
         return _empty_policy_catalog()
 
-    provider_choices = _build_policy_provider_choices(providers)
     provider_labels = {choice.value: choice.display_name for choice in provider_choices}
-    enabled_provider_values = tuple(choice.value for choice in provider_choices)
-    enabled_provider_set = set(enabled_provider_values)
 
     filtered_routes = [
-        route
-        for route in routes
-        if route.endpoint in IMPLEMENTED_CLIENT_ENDPOINTS and route.provider in enabled_provider_set
+        # Double-safety endpoint check only: provider eligibility is a
+        # SQL predicate inside the repository query.
+        route for route in routes if route.endpoint in IMPLEMENTED_CLIENT_ENDPOINTS
     ]
     qualification_by_route = {result.route_id: result for result in qualification_results}
     model_choices = _build_policy_model_choices(
@@ -7368,7 +7833,6 @@ async def _load_key_policy_catalog(request: Request) -> dict[str, object]:
         "endpoint_choices": _build_policy_endpoint_choices(),
         "model_choices": model_choices,
         "model_choices_by_group": model_choices_by_group,
-        "enabled_provider_values": enabled_provider_values,
     }
 
 
@@ -7378,7 +7842,6 @@ def _empty_policy_catalog() -> dict[str, object]:
         "endpoint_choices": [],
         "model_choices": [],
         "model_choices_by_group": {},
-        "enabled_provider_values": (),
     }
 
 
@@ -7399,7 +7862,9 @@ def _build_policy_provider_choices(provider_rows: Sequence[object]) -> list[_Pol
                 label=label,
             )
         )
-    return sorted(choices, key=lambda choice: (choice.display_name.lower(), choice.value.lower()))
+    # Repository recency order (latest first) is the display order — no
+    # alphabetical re-sort.
+    return choices
 
 
 def _build_policy_endpoint_choices() -> list[_PolicyEndpointChoice]:
@@ -7516,6 +7981,21 @@ def _policy_route_capability_summary(capabilities: object) -> str | None:
     if len(parts) > 4:
         preview.append("...")
     return f"capabilities: {', '.join(preview)}"
+
+
+def _policy_endpoint_path(endpoint: str) -> str:
+    """Reduce a canonical endpoint token to the plain /v1 path form.
+
+    The canonical vocabulary (``IMPLEMENTED_CLIENT_ENDPOINTS``) mixes
+    plain paths with method-prefixed grants (e.g. ``GET /v1/...``);
+    route endpoint columns store plain paths, so catalog SQL scopes use
+    the reduced form. The canonical set stays the single source.
+    """
+    if " " in endpoint:
+        method, path = endpoint.split(" ", 1)
+        if method.isalpha() and path.startswith("/v1/"):
+            return path
+    return endpoint
 
 
 def _policy_endpoint_label(endpoint: str) -> str:
@@ -7677,6 +8157,14 @@ def _render_key_detail(
     diagnostic_id: str | None = None,
     status_code: int = 200,
 ) -> Response:
+    external_policy_form = external_policy_form or {}
+    tool_destination_options = [
+        {"id": destination, "label": destination, "sub": "current key policy"}
+        for destination in (
+            external_policy_form.get("external_tool_destination_ids", "").splitlines()
+        )
+        if destination.strip()
+    ]
     return templates.TemplateResponse(
         request,
         "keys/detail.html",
@@ -7687,6 +8175,7 @@ def _render_key_detail(
             "key": key,
             "policy_catalog": policy_catalog,
             "policy_form": policy_form,
+            "tool_destination_options": tool_destination_options,
             "policy_form_state": _build_policy_selector_form_state(
                 policy_form,
                 policy_catalog=policy_catalog,
@@ -7727,7 +8216,9 @@ def _render_template_detail_error(
     error: str,
     diagnostic_id: str | None = None,
     status_code: int = 400,
+    choices: Mapping[str, Sequence[RecordChoice]] | None = None,
 ) -> Response:
+    choices = dict(choices or {})
     response = templates.TemplateResponse(
         request,
         "templates/detail.html",
@@ -7745,6 +8236,14 @@ def _render_template_detail_error(
             ),
             "owners": options["owners"],
             "cohorts": options["cohorts"],
+            "choices": choices,
+            "choice_labels": _choice_selected_labels(
+                choices,
+                (
+                    ("owner_id", form.get("owner_id")),
+                    ("cohort_id", form.get("cohort_id")),
+                ),
+            ),
             "form": form,
             "error": error,
             "diagnostic_id": diagnostic_id,
@@ -7943,7 +8442,9 @@ def _render_owner_form(
     owner_id: uuid.UUID | None = None,
     error: str | None = None,
     status_code: int = 200,
+    choices: Mapping[str, Sequence[RecordChoice]] | None = None,
 ) -> Response:
+    choices = dict(choices or {})
     return templates.TemplateResponse(
         request,
         template_name,
@@ -7954,6 +8455,10 @@ def _render_owner_form(
             "form": form,
             "institutions": institutions,
             "error": error,
+            "choices": choices,
+            "choice_labels": _choice_selected_labels(
+                choices, (("institution_id", form.get("institution_id")),)
+            ),
         },
         status_code=status_code,
     )
@@ -7969,8 +8474,10 @@ def _render_key_create_form(
     error: str | None = None,
     diagnostic_id: str | None = None,
     status_code: int = 200,
+    choices: Mapping[str, Sequence[RecordChoice]] | None = None,
 ) -> Response:
     settings = _settings(request)
+    choices = dict(choices or {})
     return templates.TemplateResponse(
         request,
         "keys/create.html",
@@ -7987,6 +8494,14 @@ def _render_key_create_form(
             "form": form,
             "error": error,
             "diagnostic_id": diagnostic_id,
+            "choices": choices,
+            "choice_labels": _choice_selected_labels(
+                choices,
+                (
+                    ("owner_id", form.get("owner_id")),
+                    ("cohort_id", form.get("cohort_id")),
+                ),
+            ),
             "chat_live_burn_surface": CHAT_STREAMING_LIVE_BURN_SURFACE,
             "external_tool_capabilities": sorted(KNOWN_EXTERNAL_CAPABILITIES),
             "external_tool_ceilings": settings.get_external_tool_operator_ceilings(),
@@ -8333,7 +8848,7 @@ def _render_openai_assisted_page(
     return response
 
 
-def _render_openai_assisted_pricing_form(
+async def _render_openai_assisted_pricing_form(
     request: Request,
     *,
     admin: object,
@@ -8344,13 +8859,30 @@ def _render_openai_assisted_pricing_form(
     status_code: int = 200,
 ) -> Response:
     settings = _settings(request)
+    form = form or _default_openai_assisted_pricing_form(settings)
+    choices = await _load_admin_record_choices_safe(
+        request,
+        (
+            ("proposal_model", "model", form.get("proposal_model")),
+            ("currency", "currency", form.get("currency")),
+            ("model", "model", None),
+        ),
+    )
     return _render_openai_assisted_page(
         request,
         "openai_assisted/pricing.html",
         {
             "admin": admin,
             "csrf_token": csrf_token,
-            "form": form or _default_openai_assisted_pricing_form(settings),
+            "form": form,
+            "choices": choices,
+            "choice_labels": _choice_selected_labels(
+                choices,
+                (
+                    ("proposal_model", form.get("proposal_model")),
+                    ("currency", form.get("currency")),
+                ),
+            ),
             "error": error,
             "diagnostic_id": diagnostic_id,
             "warning": _OPENAI_ASSISTED_UI_WARNING,
@@ -8361,7 +8893,7 @@ def _render_openai_assisted_pricing_form(
     )
 
 
-def _render_openai_assisted_routes_form(
+async def _render_openai_assisted_routes_form(
     request: Request,
     *,
     admin: object,
@@ -8372,13 +8904,25 @@ def _render_openai_assisted_routes_form(
     status_code: int = 200,
 ) -> Response:
     settings = _settings(request)
+    form = form or _default_openai_assisted_route_form(settings)
+    choices = await _load_admin_record_choices_safe(
+        request,
+        (
+            ("proposal_model", "model", form.get("proposal_model")),
+            ("model", "model", None),
+        ),
+    )
     return _render_openai_assisted_page(
         request,
         "openai_assisted/routes.html",
         {
             "admin": admin,
             "csrf_token": csrf_token,
-            "form": form or _default_openai_assisted_route_form(settings),
+            "form": form,
+            "choices": choices,
+            "choice_labels": _choice_selected_labels(
+                choices, (("proposal_model", form.get("proposal_model")),)
+            ),
             "error": error,
             "diagnostic_id": diagnostic_id,
             "warning": _OPENAI_ASSISTED_UI_WARNING,
@@ -8443,7 +8987,7 @@ def _openai_assisted_import_bridge(
     }
 
 
-def _render_openai_assisted_failure(
+async def _render_openai_assisted_failure(
     request: Request,
     *,
     admin: object,
@@ -8461,7 +9005,7 @@ def _render_openai_assisted_failure(
     )
     error = f"Proposal generation failed safely. Diagnostic ID: {diagnostic_id}."
     if proposal_kind == "pricing":
-        return _render_openai_assisted_pricing_form(
+        return await _render_openai_assisted_pricing_form(
             request,
             admin=admin,
             csrf_token=csrf_token,
@@ -8470,7 +9014,7 @@ def _render_openai_assisted_failure(
             diagnostic_id=diagnostic_id,
             status_code=400,
         )
-    return _render_openai_assisted_routes_form(
+    return await _render_openai_assisted_routes_form(
         request,
         admin=admin,
         csrf_token=csrf_token,
@@ -8713,7 +9257,9 @@ def _render_route_form(
     route_id: uuid.UUID | None = None,
     error: str | None = None,
     status_code: int = 200,
+    choices: Mapping[str, Sequence[RecordChoice]] | None = None,
 ) -> Response:
+    choices = dict(choices or {})
     return templates.TemplateResponse(
         request,
         template_name,
@@ -8725,6 +9271,16 @@ def _render_route_form(
             "provider_choices": provider_choices,
             "error": error,
             "external_tool_runtime_status": "denied_pending_objectives_014_016",
+            "choices": choices,
+            "choice_labels": _choice_selected_labels(
+                choices,
+                (
+                    ("provider", form.get("provider")),
+                    ("requested_model", form.get("requested_model")),
+                    ("endpoint", form.get("endpoint")),
+                    ("upstream_model", form.get("upstream_model")),
+                ),
+            ),
         },
         status_code=status_code,
     )
@@ -9035,7 +9591,9 @@ def _render_fx_rate_form(
     fx_rate_id: uuid.UUID | None = None,
     error: str | None = None,
     status_code: int = 200,
+    choices: Mapping[str, Sequence[RecordChoice]] | None = None,
 ) -> Response:
+    choices = dict(choices or {})
     return templates.TemplateResponse(
         request,
         template_name,
@@ -9045,6 +9603,15 @@ def _render_fx_rate_form(
             "fx_rate_id": fx_rate_id,
             "form": form,
             "error": error,
+            "choices": choices,
+            "choice_labels": _choice_selected_labels(
+                choices,
+                (
+                    ("base_currency", form.get("base_currency")),
+                    ("quote_currency", form.get("quote_currency")),
+                    ("source", form.get("source")),
+                ),
+            ),
         },
         status_code=status_code,
     )
@@ -9152,7 +9719,9 @@ def _render_pricing_rule_form(
     pricing_rule_id: uuid.UUID | None = None,
     error: str | None = None,
     status_code: int = 200,
+    choices: Mapping[str, Sequence[RecordChoice]] | None = None,
 ) -> Response:
+    choices = dict(choices or {})
     return templates.TemplateResponse(
         request,
         template_name,
@@ -9163,6 +9732,16 @@ def _render_pricing_rule_form(
             "form": form,
             "provider_choices": provider_choices,
             "error": error,
+            "choices": choices,
+            "choice_labels": _choice_selected_labels(
+                choices,
+                (
+                    ("provider", form.get("provider")),
+                    ("upstream_model", form.get("upstream_model")),
+                    ("endpoint", form.get("endpoint")),
+                    ("currency", form.get("currency")),
+                ),
+            ),
         },
         status_code=status_code,
     )
@@ -10216,6 +10795,30 @@ def _parse_admin_text_list(value: str | None) -> list[str]:
         return []
     normalized = value.replace(",", "\n")
     return [item.strip() for item in normalized.splitlines() if item.strip()]
+
+
+async def _admin_enabled_provider_values_for(
+    request: Request, form: Mapping[str, object]
+) -> set[str]:
+    """Bounded submitted-provider eligibility (submit-time point query).
+
+    Only the (small) provider tokens submitted in the form are
+    point-queried against the enabled provider configs: an older enabled
+    provider found through the providers search still validates — the
+    visible latest-100 policy catalog page is presentation, not
+    authority — while unknown or disabled slugs are denied. The whole
+    registry is never materialized, and client values are never trusted
+    without the DB check.
+    """
+    submitted = _parse_admin_text_list(str(form.get("allowed_providers") or ""))
+    if _is_checked(str(form.get("allow_all_providers") or "")) or not submitted:
+        return set()
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            return await ProviderConfigsRepository(session).list_enabled_provider_slugs_matching(
+                submitted
+            )
 
 
 def _parse_admin_allowed_providers(

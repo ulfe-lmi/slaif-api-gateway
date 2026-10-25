@@ -765,6 +765,10 @@ import sys
 import time
 from pathlib import Path
 
+# The repo root is needed for qualified ``tests.unit`` imports used by
+# the shared test helpers (e.g. catalog_report_script_audit); the
+# driver previously carried only the app and tests/unit directories.
+sys.path.insert(0, {repo_root!r})
 sys.path.insert(0, {app_root!r})
 sys.path.insert(0, {tests_unit!r})
 
@@ -817,6 +821,7 @@ def _run_watchdog_case(tmp_path: Path, *, ignore_term: bool) -> tuple[int, float
     driver = tmp_path / "watchdog_driver.py"
     driver.write_text(
         _WATCHDOG_DRIVER_TEMPLATE.format(
+            repo_root=str(REPO_ROOT),
             app_root=str(REPO_ROOT / "app"),
             tests_unit=str(TESTS_UNIT_DIR),
             ignore_term=ignore_term,

@@ -9,6 +9,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from slaif_gateway.schemas.catalog_refresh import (
     BaselineCounts,
     BaselineDocument,
@@ -18,6 +20,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineTarget,
 )
 import test_catalog_refresh_source_evidence as _evidence_tests
+from tests.unit import catalog_report_script_audit as _script_audit
 
 from slaif_gateway.services.catalog_refresh.baseline import (
     canonical_baseline_content,
@@ -43,6 +46,54 @@ from slaif_gateway.services.catalog_refresh.validation import (
 from slaif_gateway.cli.catalog_refresh import _minimal_blocked_html
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "catalog_refresh"
+_FIXED_SORT_SCRIPT = (
+    Path(__file__).resolve().parents[2]
+    / "app"
+    / "slaif_gateway"
+    / "web"
+    / "static"
+    / "js"
+    / "table-sort.js"
+)
+
+
+def _fixed_sort_script_bytes() -> bytes:
+    return _FIXED_SORT_SCRIPT.read_bytes()
+
+
+def _assert_single_fixed_script(html_text: str) -> None:
+    """Objective 192-a: exactly ONE script element, byte-identical to the
+    shared fixed sorting source; nothing else executable. The document is
+    parsed with the stdlib HTML parser (no regex tag matching)."""
+    _script_audit.audit_fixed_report_script(html_text)
+
+
+def test_script_audit_gate_accepts_fixed_and_rejects_extra_scripts() -> None:
+    """The shared gate accepts exactly the one fixed script surface and
+    rejects both an extra CLOSED script and an extra UNCLOSED one (the
+    unclosed case has no end tag to count). Harmless synthetic canary
+    bodies only."""
+    fixed = _FIXED_SORT_SCRIPT.read_text(encoding="utf-8")
+    minimal = f"<html><body><p>data</p><script>{fixed}</script></body></html>"
+    _script_audit.audit_fixed_report_script(minimal)
+
+    # An extra CLOSED script: two start tags — rejected by the start
+    # count regardless of which balance check fires first.
+    with pytest.raises(AssertionError, match="one <script> start tag"):
+        _script_audit.audit_fixed_report_script(
+            minimal.replace("</body>", "<script>void 0;</script></body>")
+        )
+    # An extra UNCLOSED script: also two start tags (its tail swallows
+    # the rest of the document as script data).
+    with pytest.raises(AssertionError, match="one <script> start tag"):
+        _script_audit.audit_fixed_report_script(
+            minimal.replace("</body>", "<script>void 0;</body>")
+        )
+    # A lone unclosed script: exactly one start tag that never closes.
+    with pytest.raises(AssertionError, match="never closed"):
+        _script_audit.audit_fixed_report_script(
+            "<html><body><p>data</p><script>void 0;"
+        )
 
 
 def _bundle(name: str):
@@ -76,14 +127,21 @@ def test_safe_href_allowlist() -> None:
     assert safe_href("") is None
 
 
-def _assert_no_external_or_executable_resources(html_text: str) -> None:
+def _assert_no_external_or_executable_resources(
+    html_text: str, *, expect_fixed_script: bool = False
+) -> None:
     """Real tags only: data payloads are escaped, so they cannot form markup.
 
     Attribute checks therefore look at actual tags, and CSS constraints are
     checked inside the <style> block where they can take effect.
     """
     lowered = html_text.lower()
-    for tag in ("script", "link", "img", "iframe", "form", "object", "embed", "video", "audio"):
+    if expect_fixed_script:
+        # Rendered reports carry exactly one fixed bundled sorting script.
+        _assert_single_fixed_script(html_text)
+    else:
+        assert not re.search(r"<script\b", lowered), "unexpected <script> tag"
+    for tag in ("link", "img", "iframe", "form", "object", "embed", "video", "audio"):
         assert not re.search(rf"<{tag}\b", lowered), f"forbidden real tag <{tag}>"
     assert not re.search(r"<[a-z][^>]*\ssrc=", lowered), "real tag carries src="
     assert not re.search(r"<[a-z][^>]*\son\w+=", lowered), "real tag carries an on* event attribute"
@@ -169,7 +227,7 @@ def test_first_screen_contains_required_decision_facts() -> None:
     assert "catalog-ccid" not in compact
     assert "renderer" not in compact
     assert "policy v" not in compact
-    _assert_no_external_or_executable_resources(html_text)
+    _assert_no_external_or_executable_resources(html_text, expect_fixed_script=True)
 
 
 def test_first_screen_blocks_are_visually_blocked() -> None:
@@ -207,8 +265,9 @@ def test_source_strings_are_escaped_and_event_attributes_cannot_inject() -> None
     report = _report_for(bundle, _baseline())
     html_text = render_report(bundle, report.to_dict()).decode("utf-8")
 
-    # Raw tags must never survive escaping; the escaped forms must be present.
-    assert not re.search(r"<script\b", html_text, flags=re.IGNORECASE)
+    # Raw tags must never survive escaping; the escaped forms must be
+    # present. The only real <script> is the fixed bundled sorting source.
+    _assert_single_fixed_script(html_text)
     assert not re.search(r"<img\b", html_text, flags=re.IGNORECASE)
     assert not re.search(r"<svg\b", html_text, flags=re.IGNORECASE)
     assert not re.search(r"<b\b", html_text, flags=re.IGNORECASE)
@@ -216,9 +275,11 @@ def test_source_strings_are_escaped_and_event_attributes_cannot_inject() -> None
     assert "&lt;img src=x onerror=alert(2)&gt;" in html_text
     assert "&lt;svg/onload=alert(3)&gt;" in html_text
     assert "&lt;b onclick=&quot;xss()&quot;&gt;" in html_text
+    # A canary </script> in data cannot terminate the embedded script element.
+    assert "</script><script>alert(1)</script>" not in html_text
     # No link may use a dangerous scheme (javascript:/data: payloads stay inert text).
     assert not re.search(r"href='[^']*(javascript|data):", html_text, flags=re.IGNORECASE)
-    _assert_no_external_or_executable_resources(html_text)
+    _assert_no_external_or_executable_resources(html_text, expect_fixed_script=True)
 
 
 def test_unchanged_only_plan_is_truthful_no_changes() -> None:

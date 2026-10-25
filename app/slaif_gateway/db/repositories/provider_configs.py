@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
-from sqlalchemy import Select, select
+from sqlalchemy import Select, asc, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.db.models import ProviderConfig
@@ -67,6 +68,52 @@ class ProviderConfigsRepository:
         statement = statement.order_by(ProviderConfig.provider.asc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_provider_configs_latest(self, *, enabled: bool, limit: int) -> list[ProviderConfig]:
+        """Bounded LATEST-first provider select for the key policy catalog.
+
+        The policy catalog renders the latest ``limit`` enabled providers;
+        older providers stay reachable through the providers server search
+        (read-only record-choices lookup, kind=policy_provider).
+        """
+        statement: Select[tuple[ProviderConfig]] = (
+            select(ProviderConfig)
+            .where(ProviderConfig.enabled == enabled)
+            .order_by(desc(ProviderConfig.created_at), asc(ProviderConfig.provider))
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def list_enabled_provider_slugs_matching(
+        self, slugs: Sequence[str]
+    ) -> set[str]:
+        """Bounded submit-time eligibility point query.
+
+        Returns exactly the subset of the given (small, form-submitted)
+        slug candidates that are ENABLED provider configs, checking both
+        the raw and lowercased spellings (provider slugs are stored
+        lowercase). Unknown or disabled slugs are simply absent from the
+        result, so they are denied by the caller. This keeps the visible
+        latest-100 catalog page a presentation detail — an older enabled
+        provider found through the providers search still validates —
+        without materializing the whole registry in Python.
+        """
+        candidates = {
+            candidate
+            for raw in slugs
+            for candidate in (str(raw).strip(), str(raw).strip().lower())
+            if str(raw).strip()
+        }
+        if not candidates:
+            return set()
+        result = await self._session.execute(
+            select(ProviderConfig.provider).where(
+                ProviderConfig.enabled == True,  # noqa: E712
+                ProviderConfig.provider.in_(candidates),
+            )
+        )
+        return {str(row[0]) for row in result.all()}
 
     async def list_provider_configs_for_admin(
         self,

@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Create Pricing Rule{% endblock %}
 
 {% block body %}
@@ -28,22 +30,46 @@
 
     <section class="action-panel" aria-labelledby="pricing-identity-heading">
       <h2>Identity</h2>
-      <p class="warning-text">Provider choices may show env var names, never provider key values.</p>
+      <p class="warning-text">Provider choices show the provider slug and display name, never provider key values.</p>
       <div class="form-grid">
-        <label>
-          Provider
-          <select name="provider" required>
-            <option value="">Select provider</option>
-            {% for provider in provider_choices %}
-            <option value="{{ provider.provider }}" {% if form.provider == provider.provider %}selected{% endif %}>
-              {{ provider.display_name }} ({{ provider.provider }}) / {{ provider.api_key_env_var }}
-            </option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>Model<input name="upstream_model" value="{{ form.upstream_model }}" required autocomplete="off"></label>
-        <label>Endpoint<input name="endpoint" value="{{ form.endpoint }}" required autocomplete="off"></label>
-        <label>Currency<input name="currency" value="{{ form.currency }}" maxlength="3" required autocomplete="off"></label>
+        {{ record_choice(
+            "provider", "provider", "Provider",
+            options=choices.provider or none,
+            selected_id=form.provider,
+            selected_label=choice_labels.provider,
+            allow_new=false,
+            nojs_value=form.provider,
+            clear_label="Select provider",
+            placeholder="Search providers",
+            input_id="pricing-provider",
+        ) }}
+        {{ record_choice(
+            "upstream_model", "model", "Model",
+            options=choices.upstream_model or none,
+            selected_id=form.upstream_model,
+            selected_label=choice_labels.upstream_model,
+            allow_new=true,
+            nojs_value=form.upstream_model,
+            depends_on="pricing-provider",
+            help="New upstream model values stay editable.",
+        ) }}
+        {{ record_choice(
+            "endpoint", "endpoint", "Endpoint",
+            options=choices.endpoint or none,
+            selected_id=form.endpoint,
+            selected_label=choice_labels.endpoint,
+            allow_new=false,
+            nojs_value=form.endpoint,
+        ) }}
+        {{ record_choice(
+            "currency", "currency", "Currency",
+            options=choices.currency or none,
+            selected_id=form.currency,
+            selected_label=choice_labels.currency,
+            allow_new=true,
+            nojs_value=form.currency,
+            help="ISO 4217 code; new codes stay editable.",
+        ) }}
         <label class="checkbox-row">
           <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
           <span>Enabled</span>

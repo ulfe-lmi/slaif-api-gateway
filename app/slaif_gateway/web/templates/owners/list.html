@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Owners{% endblock %}
 
 {% block body %}
@@ -25,31 +27,22 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/owners">
-    <label>
-      Email
-      <input name="email" value="{{ filters.email }}" autocomplete="off">
-    </label>
-    <label>
-      Institution ID
-      <input name="institution_id" value="{{ filters.institution_id }}" autocomplete="off">
-    </label>
-    <label>
-      Cohort ID
-      <input name="cohort_id" value="{{ filters.cohort_id }}" autocomplete="off">
-    </label>
+    {{ record_choice("email", "owner_email", "Email", options=choices.email, selected_id=filters.email, selected_label=filters.email, allow_new=true, input_id="owners-email") }}
+    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, selected_id=filters.institution_id, selected_label=filters.institution_id, allow_new=true, input_id="owners-institution") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id, selected_id=filters.cohort_id, selected_label=filters.cohort_id, allow_new=true, input_id="owners-cohort") }}
     <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Owners">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Owner</th>
           <th>Institution</th>
           <th>Status</th>
-          <th>Keys</th>
-          <th>Created</th>
+          <th data-sort-type="number">Keys (total)</th>
+          <th data-sort-type="datetime">Created</th>
         </tr>
       </thead>
       <tbody>
@@ -61,7 +54,7 @@
           </td>
           <td>{{ owner.institution_name or "Not set" }}</td>
           <td><span class="status-pill status-{{ 'active' if owner.is_active else 'suspended' }}">{{ "active" if owner.is_active else "inactive" }}</span></td>
-          <td>
+          <td data-sort-value="{{ owner.key_count }}">
             <div>{{ owner.key_count }} total</div>
             <div class="muted small">{{ owner.active_key_count }} active</div>
           </td>

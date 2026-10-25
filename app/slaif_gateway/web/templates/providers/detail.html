@@ -91,16 +91,16 @@
 
   <div class="related-section">
     <h2>Recent Routes</h2>
-    <table>
+    <table data-sortable>
       <thead>
-        <tr><th>Requested model</th><th>Upstream model</th><th>Priority</th><th>Status</th></tr>
+        <tr><th>Requested model</th><th>Upstream model</th><th data-sort-type="number">Priority</th><th>Status</th></tr>
       </thead>
       <tbody>
         {% for route in provider.route_summaries %}
         <tr>
           <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
           <td>{{ route.upstream_model }}</td>
-          <td>{{ route.priority }}</td>
+          <td data-sort-value="{{ route.priority }}">{{ route.priority }}</td>
           <td>{{ "enabled" if route.enabled else "disabled" }} / {{ "visible" if route.visible_in_models else "hidden" }}</td>
         </tr>
         {% else %}
@@ -112,7 +112,7 @@
 
   <div class="related-section">
     <h2>Recent Pricing Rules</h2>
-    <table>
+    <table data-sortable>
       <thead>
         <tr><th>Model</th><th>Endpoint</th><th>Currency</th><th>Status</th></tr>
       </thead>

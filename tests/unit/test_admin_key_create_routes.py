@@ -23,6 +23,7 @@ from slaif_gateway.services.codex_profile_registry import (
 )
 from slaif_gateway.services.email_delivery_service import PendingKeyEmailResult
 from slaif_gateway.services.email_errors import EmailError
+from slaif_gateway.services.admin_record_choices import RecordChoice
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
@@ -216,6 +217,69 @@ def _patch_options(monkeypatch) -> None:
         "slaif_gateway.api.admin._validate_admin_request_policy",
         _validate_admin_request_policy,
     )
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._load_admin_record_choices_safe",
+        _fake_record_choices,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.provider_configs."
+        "ProviderConfigsRepository.list_enabled_provider_slugs_matching",
+        _fake_enabled_provider_slugs_matching,
+    )
+
+
+_FAKE_OWNER_ID = "11111111-1111-4111-8111-111111111111"
+_FAKE_COHORT_ID = "22222222-2222-4222-8222-222222222222"
+_FAKE_ENABLED_PROVIDERS = frozenset({"openai", "openrouter"})
+
+
+async def _fake_record_choices(request, specs) -> dict:
+    """Fixed record-choice DTOs matching ``_fake_options``' owner and cohort.
+
+    The real loader is DB-backed; under the unit fake DB the key-create
+    form still needs deterministic owner/cohort options for the
+    record-choice macro. The DTOs are a fixed set (never an echo of
+    submitted values), so server-side validation stays authoritative.
+    """
+    choices: dict = {}
+    for spec in specs:
+        field_name = spec[0]
+        if field_name == "owner_id":
+            choices[field_name] = [
+                RecordChoice(
+                    id=_FAKE_OWNER_ID,
+                    label="Ada Lovelace",
+                    sub=f"ada@example.org · {_FAKE_OWNER_ID}",
+                )
+            ]
+        elif field_name == "cohort_id":
+            choices[field_name] = [
+                RecordChoice(
+                    id=_FAKE_COHORT_ID,
+                    label="Spring Cohort",
+                    sub=_FAKE_COHORT_ID,
+                )
+            ]
+        else:
+            choices[field_name] = []
+    return choices
+
+
+async def _fake_enabled_provider_slugs_matching(self, slugs) -> set[str]:
+    """Fixed known enabled-provider set matching the ``_fake_options`` catalog.
+
+    Mirrors the real point query's contract (raw + lowercased candidate
+    check) against the two faked enabled providers, so unknown or
+    disabled submitted values are still denied by the caller.
+    """
+    known = set(_FAKE_ENABLED_PROVIDERS)
+    candidates = {
+        candidate
+        for raw in slugs
+        for candidate in (str(raw).strip(), str(raw).strip().lower())
+        if str(raw).strip()
+    }
+    return candidates & known
 
 
 async def _validate_admin_request_policy(
@@ -262,7 +326,14 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'action="/admin/keys/create"' in response.text
     assert 'name="csrf_token" value="rendered-create-csrf"' in response.text
     assert 'name="owner_id"' in response.text
-    assert "Ada Lovelace / ada@example.org" in response.text
+    # 192-a: the owner field is a record-choice control; its initial
+    # options carry the recognizable name, email and id as an explicit
+    # DTO list in data-initial-options (attribute-escaped JSON).
+    assert '"label": "Ada Lovelace"' in response.text
+    assert (
+        '"sub": "ada@example.org · 11111111-1111-4111-8111-111111111111"'
+        in response.text
+    )
     assert 'name="valid_until"' in response.text
     assert 'type="datetime-local" name="valid_until"' in response.text
     assert "Valid until (UTC)" in response.text

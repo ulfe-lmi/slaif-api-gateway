@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Gateway Keys{% endblock %}
 
 {% block body %}
@@ -31,18 +33,9 @@
         <option value="revoked" {% if filters.status == "revoked" %}selected{% endif %}>Revoked</option>
       </select>
     </label>
-    <label>
-      Owner email
-      <input name="owner_email" value="{{ filters.owner_email }}" autocomplete="off">
-    </label>
-    <label>
-      Public key ID
-      <input name="public_key_id" value="{{ filters.public_key_id }}" autocomplete="off">
-    </label>
-    <label>
-      Cohort ID
-      <input name="cohort_id" value="{{ filters.cohort_id }}" autocomplete="off">
-    </label>
+    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, selected_id=filters.owner_email, selected_label=filters.owner_email, allow_new=true, input_id="keys-owner-email") }}
+    {{ record_choice("public_key_id", "key_public_id", "Public key ID", options=choices.key_public_id, selected_id=filters.public_key_id, selected_label=filters.public_key_id, allow_new=true, input_id="keys-public-key-id") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort, selected_id=filters.cohort_id, selected_label=filters.cohort_id, allow_new=true, input_id="keys-cohort") }}
     <label>
       Expired
       <select name="expired">
@@ -56,15 +49,15 @@
   </form>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Gateway keys">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Key</th>
           <th>Owner</th>
           <th>Status</th>
-          <th>Validity</th>
-          <th>Usage</th>
-          <th>Limits</th>
+          <th data-sort-type="datetime">Validity (from)</th>
+          <th data-sort-type="number">Usage (requests)</th>
+          <th data-sort-type="number">Limits (requests)</th>
         </tr>
       </thead>
       <tbody>
@@ -85,15 +78,15 @@
             {% endif %}
           </td>
           <td><span class="status-pill status-{{ key.computed_display_status }}">{{ key.computed_display_status }}</span></td>
-          <td>
+          <td data-sort-value="{{ key.valid_from.isoformat() }}">
             <div>{{ key.valid_from.isoformat() }}</div>
             <div class="muted small">until {{ key.valid_until.isoformat() }}</div>
           </td>
-          <td>
+          <td data-sort-value="{{ key.requests_used_total }}">
             <div>{{ key.requests_used_total }} requests</div>
             <div class="muted small">{{ key.tokens_used_total }} tokens / EUR {{ key.cost_used_eur }}</div>
           </td>
-          <td>
+          <td data-sort-value="{{ key.request_limit_total if key.request_limit_total is not none else '' }}">
             <div>{{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }} requests</div>
             <div class="muted small">{{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }} tokens / EUR {{ key.cost_limit_eur if key.cost_limit_eur is not none else "Unlimited" }}</div>
           </td>

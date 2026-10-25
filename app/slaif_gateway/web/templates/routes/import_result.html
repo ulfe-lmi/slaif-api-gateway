@@ -59,16 +59,16 @@
   {% endif %}
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Route import result">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
-          <th>Row</th>
+          <th data-sort-type="number">Row</th>
           <th>Status</th>
           <th>Action</th>
           <th>Route</th>
           <th>Match</th>
           <th>Target</th>
-          <th>Flags</th>
+          <th data-sort-type="number">Flags</th>
           <th>Capabilities</th>
           <th>Errors</th>
         </tr>
@@ -76,7 +76,7 @@
       <tbody>
         {% for row in result.rows %}
         <tr>
-          <td>{{ row.row_number }}</td>
+          <td data-sort-value="{{ row.row_number }}">{{ row.row_number }}</td>
           <td>{{ row.status }}</td>
           <td>{{ row.action }}</td>
           <td>
@@ -97,7 +97,7 @@
             <div class="muted small">{{ row.provider_config_id }}</div>
             {% endif %}
           </td>
-          <td>
+          <td data-sort-value="{{ row.priority if row.priority is not none else '' }}">
             <div>priority {{ row.priority if row.priority is not none else "n/a" }}</div>
             <div class="muted small">{{ "enabled" if row.enabled else "disabled" }} / {{ "visible" if row.visible_in_models else "hidden" }} / {{ "streaming" if row.supports_streaming else "non-streaming" }}</div>
           </td>

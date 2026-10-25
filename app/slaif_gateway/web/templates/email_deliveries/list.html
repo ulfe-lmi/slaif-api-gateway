@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Email Deliveries{% endblock %}
 
 {% block body %}
@@ -22,33 +24,31 @@
   <form class="filter-bar compact" method="get" action="/admin/email-deliveries">
     <label>
       Status
-      <input name="status" value="{{ filters.status }}" autocomplete="off">
+      <select name="status">
+        <option value="" {% if filters.status == "" %}selected{% endif %}>Any</option>
+        <option value="pending" {% if filters.status == "pending" %}selected{% endif %}>Pending</option>
+        <option value="sent" {% if filters.status == "sent" %}selected{% endif %}>Sent</option>
+        <option value="failed" {% if filters.status == "failed" %}selected{% endif %}>Failed</option>
+        <option value="consumed" {% if filters.status == "consumed" %}selected{% endif %}>Consumed</option>
+        <option value="expired" {% if filters.status == "expired" %}selected{% endif %}>Expired</option>
+      </select>
     </label>
-    <label>
-      Owner email
-      <input name="owner_email" value="{{ filters.owner_email }}" autocomplete="off">
-    </label>
-    <label>
-      Gateway key ID
-      <input name="gateway_key_id" value="{{ filters.gateway_key_id }}" autocomplete="off">
-    </label>
-    <label>
-      One-time secret ID
-      <input name="one_time_secret_id" value="{{ filters.one_time_secret_id }}" autocomplete="off">
-    </label>
+    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, selected_id=filters.owner_email, selected_label=filters.owner_email, allow_new=true, input_id="email-owner-email") }}
+    {{ record_choice("gateway_key_id", "key", "Gateway key ID", options=choices.gateway_key_id, selected_id=filters.gateway_key_id, selected_label=filters.gateway_key_id, allow_new=true, input_id="email-key") }}
+    {{ record_choice("one_time_secret_id", "one_time_secret", "One-time secret ID", options=choices.one_time_secret_id, selected_id=filters.one_time_secret_id, selected_label=filters.one_time_secret_id, allow_new=true, input_id="email-ots") }}
     <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Email deliveries">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Recipient</th>
           <th>Subject</th>
           <th>Key</th>
           <th>Status</th>
-          <th>Created</th>
+          <th data-sort-type="datetime">Created</th>
         </tr>
       </thead>
       <tbody>

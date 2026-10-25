@@ -108,7 +108,7 @@ def test_create_form_template_includes_csrf_and_no_secret_fields(monkeypatch) ->
     assert "Add selected -&gt;" in html
     assert "&lt;- Remove selected" in html
     assert "No enabled providers are available. Add or enable a provider config under" in html
-    assert "No enabled route-backed models are available. Add or enable model routes under" in html
+    assert "No enabled route-backed models are available in the latest 100. Use the search above for older routes, or add or enable model routes under" in html
     assert "No matching route-backed models for the current provider/endpoint selection." in html
     assert 'name="allowed_providers"' in html
     assert 'name="allow_all_providers" value="true" checked' in html
@@ -196,7 +196,16 @@ def test_chat_live_burn_static_controls_are_local_and_scoped() -> None:
     assert "data-policy-toggle" in policy_js
     assert "data-policy-manual" in policy_js
     assert "data-policy-empty" in policy_js
-    assert "fetch(" not in policy_js
+    # 192-a: the policy selector may issue exactly ONE same-origin
+    # read-only GET to the bounded record-choices lookup (older-value
+    # server search). Nothing else may fetch; no external URL, no
+    # dynamic execution, no non-GET method, no other client libs.
+    assert policy_js.count("fetch(") == 1
+    assert "fetch(`/admin/record-choices?" in policy_js
+    assert "http://" not in policy_js
+    assert "eval(" not in policy_js
+    assert "new Function(" not in policy_js
+    assert "XMLHttpRequest" not in policy_js
     assert "axios" not in policy_js.lower()
     assert "React" not in policy_js
     assert "Vue" not in policy_js

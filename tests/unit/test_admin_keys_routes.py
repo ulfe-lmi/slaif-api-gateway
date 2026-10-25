@@ -19,10 +19,31 @@ from slaif_gateway.services.calibration_summary_service import (
     CalibrationPreviewResult,
 )
 from slaif_gateway.services.admin_key_dashboard import AdminKeyNotFoundError
+from slaif_gateway.services.admin_record_choices import RecordChoice
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
 from slaif_gateway.services.key_policy_validation import GatewayKeyPolicy
 from slaif_gateway.services.admin_session_service import AdminSessionContext
 from tests.unit.test_admin_key_actions_routes import _login_for_actions
+
+
+class _FakeResult:
+    """Empty read result for the fake DB session (see the shared fake in
+    test_admin_key_actions_routes). The 192-a record-choice loaders issue
+    read queries on admin pages; under the unit fake DB they degrade to
+    "no options". Tests needing specific rows monkeypatch at the
+    repository/service level, so this never weakens a product check."""
+
+    def all(self):
+        return []
+
+    def first(self):
+        return None
+
+    def scalar_one_or_none(self):
+        return None
+
+    def scalars(self):
+        return self
 
 
 class _FakeSession:
@@ -34,6 +55,9 @@ class _FakeSession:
 
     def begin(self):
         return self
+
+    async def execute(self, *args, **kwargs):
+        return _FakeResult()
 
 
 class _FakeSessionmaker:
@@ -855,6 +879,30 @@ def test_template_detail_page_shows_create_one_key_form(monkeypatch) -> None:
         get_template_for_admin_detail,
     )
     monkeypatch.setattr("slaif_gateway.api.admin._load_key_create_form_options_or_empty", load_options)
+
+    async def fake_record_choices(request, specs):
+        # 192-a: the template detail create-key form renders the owner
+        # field as a record-choice control; give it the fixed DTO for
+        # this test's owner so the recognizable id assertion holds.
+        choices = {}
+        for spec in specs:
+            field_name = spec[0]
+            if field_name == "owner_id":
+                choices[field_name] = [
+                    RecordChoice(
+                        id=str(owner_id),
+                        label="Ada Lovelace",
+                        sub=f"ada@example.org · {owner_id}",
+                    )
+                ]
+            else:
+                choices[field_name] = []
+        return choices
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._load_admin_record_choices_safe",
+        fake_record_choices,
+    )
     client = TestClient(_app())
     _login(monkeypatch, client)
 
