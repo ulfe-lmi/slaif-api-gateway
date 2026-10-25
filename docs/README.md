@@ -43,6 +43,9 @@ and do not override current contracts or merged code.
   safe baselines, and one sealed one-page report (no apply yet).
 - [Gateway key templates](key-templates.md) — template metadata and
   single-key creation.
+- [Admin dashboard usability](admin-usability.md) — sortable tables,
+  searchable record-choice fields, and the bounded read-only lookup
+  contract for the operator dashboard.
 - [CLI reference](cli-reference.md) — the operator command index.
 
 ## Operating SLAIF

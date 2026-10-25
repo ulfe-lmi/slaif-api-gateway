@@ -153,7 +153,14 @@ def test_admin_keys_readonly_pages(migrated_postgres_url: str) -> None:
         )
         assert filtered.status_code == 200
         assert data["active_public_key_id"] in filtered.text
-        assert data["expired_public_key_id"] not in filtered.text
+        # 192-a: the public-key-ID record choice legitimately offers
+        # other known keys (latest ~100) in its option data, so the
+        # negative is scoped to the filtered RESULT table rows.
+        filtered_body = (
+            filtered.text.rsplit("<tbody>", 1)[-1].rsplit("</tbody>", 1)[0]
+        )
+        assert data["expired_public_key_id"] not in filtered_body
+        assert data["active_public_key_id"] in filtered_body
 
         expired_filtered = client.get("/admin/keys", params={"expired": "true"})
         assert expired_filtered.status_code == 200

@@ -9,6 +9,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 from slaif_gateway.schemas.catalog_refresh import (
     BaselineCounts,
     BaselineDocument,
@@ -18,6 +20,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineTarget,
 )
 import test_catalog_refresh_source_evidence as _evidence_tests
+import catalog_report_script_audit as _script_audit
 
 from slaif_gateway.services.catalog_refresh.baseline import (
     canonical_baseline_content,
@@ -60,14 +63,37 @@ def _fixed_sort_script_bytes() -> bytes:
 
 def _assert_single_fixed_script(html_text: str) -> None:
     """Objective 192-a: exactly ONE script element, byte-identical to the
-    shared fixed sorting source; nothing else executable."""
-    matches = re.findall(r"<script>(.*?)</script>", html_text, flags=re.DOTALL)
-    assert len(matches) == 1, f"expected exactly one inline script, found {len(matches)}"
-    assert matches[0] == _FIXED_SORT_SCRIPT.read_text(encoding="utf-8"), (
-        "embedded script differs from web/static/js/table-sort.js"
-    )
-    # No second script element of any kind (src=, type=, ...).
-    assert len(re.findall(r"<script\b", html_text, flags=re.IGNORECASE)) == 1
+    shared fixed sorting source; nothing else executable. The document is
+    parsed with the stdlib HTML parser (no regex tag matching)."""
+    _script_audit.audit_fixed_report_script(html_text)
+
+
+def test_script_audit_gate_accepts_fixed_and_rejects_extra_scripts() -> None:
+    """The shared gate accepts exactly the one fixed script surface and
+    rejects both an extra CLOSED script and an extra UNCLOSED one (the
+    unclosed case has no end tag to count). Harmless synthetic canary
+    bodies only."""
+    fixed = _FIXED_SORT_SCRIPT.read_text(encoding="utf-8")
+    minimal = f"<html><body><p>data</p><script>{fixed}</script></body></html>"
+    _script_audit.audit_fixed_report_script(minimal)
+
+    # An extra CLOSED script: two start tags — rejected by the start
+    # count regardless of which balance check fires first.
+    with pytest.raises(AssertionError, match="one <script> start tag"):
+        _script_audit.audit_fixed_report_script(
+            minimal.replace("</body>", "<script>void 0;</script></body>")
+        )
+    # An extra UNCLOSED script: also two start tags (its tail swallows
+    # the rest of the document as script data).
+    with pytest.raises(AssertionError, match="one <script> start tag"):
+        _script_audit.audit_fixed_report_script(
+            minimal.replace("</body>", "<script>void 0;</body>")
+        )
+    # A lone unclosed script: exactly one start tag that never closes.
+    with pytest.raises(AssertionError, match="never closed"):
+        _script_audit.audit_fixed_report_script(
+            "<html><body><p>data</p><script>void 0;"
+        )
 
 
 def _bundle(name: str):

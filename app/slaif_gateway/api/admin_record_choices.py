@@ -180,8 +180,12 @@ async def list_record_choices(
     try:
         provider_values = _scope_param(provider)
         endpoint_values = _scope_param(endpoint)
-    except ScopeParamError as exc:
-        return _bad_request(str(exc).capitalize() + ".")
+    except ScopeParamError:
+        # Fixed safe message derived only from the constant cap: the
+        # exception text never reaches the client (CodeQL #15).
+        return _bad_request(
+            f"At most {SCOPE_MAX_VALUES} scope values are accepted per parameter."
+        )
     target_type_value = (
         target_type.strip()[:QUERY_MAX_LENGTH] if target_type and target_type.strip() else None
     )

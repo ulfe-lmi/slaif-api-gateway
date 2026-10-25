@@ -1044,3 +1044,61 @@ def test_lookup_is_readonly_and_original_csrf_post_succeeds(
         "CSRF token hash changed by lookups"
     )
 
+
+
+def test_multi_scope_http_keeps_all_nine_providers(
+    owned_pg_url: str, admin_client: httpx.Client
+) -> None:
+    """Bounded multi-scope over REAL HTTP: nine legitimate enabled
+    providers submitted as nine repeated scope params must ALL survive
+    (the pre-fix silent [:8] truncation dropped the ninth — root
+    receipt policy-many-scopes.json), and excess beyond the explicit
+    cap is a predictable 400, never a partial scope."""
+
+    async def _add_nine_provider_routes() -> None:
+        engine = create_async_engine(owned_pg_url, future=True)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as session:
+                async with session.begin():
+                    for i in range(9):
+                        session.add(
+                            ModelRoute(
+                                id=uuid.uuid4(),
+                                requested_model=f"policy-many-{i:03d}",
+                                match_type="exact",
+                                endpoint="/v1/chat/completions",
+                                provider=f"root-provider-{i:03d}",
+                                upstream_model=f"policy-many-up-{i:03d}",
+                                enabled=True,
+                                visible_in_models=True,
+                                supports_streaming=True,
+                                created_at=datetime.now(UTC),
+                            )
+                        )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_add_nine_provider_routes())
+
+    params: list[tuple[str, str]] = [("kind", "policy_model")]
+    params += [
+        ("provider", f"root-provider-{i:03d}") for i in range(9)
+    ]
+    response = admin_client.get("/admin/record-choices", params=params)
+    assert response.status_code == 200, response.text[:300]
+    tokens = [choice["id"] for choice in response.json()["choices"]]
+    for i in range(9):
+        assert f"policy-many-{i:03d}" in tokens, (
+            f"legitimate provider {i} was truncated from the scope: {tokens}"
+        )
+
+    excess_params: list[tuple[str, str]] = [("kind", "policy_model")]
+    excess_params += [
+        ("provider", f"scope-excess-{i:03d}") for i in range(101)
+    ]
+    excess = admin_client.get("/admin/record-choices", params=excess_params)
+    assert excess.status_code == 400
+    assert "record_choices_bad_request" in excess.text
+    # Fixed safe bound message: no exception text reaches the client.
+    assert "At most 100 scope values are accepted per parameter." in excess.text

@@ -56,6 +56,7 @@ from tests.unit.test_catalog_refresh_report import (  # noqa: E402
     _big_unchanged_case as _report_big_unchanged_case,
     _baseline as _unit_baseline,
 )
+from tests.unit import catalog_report_script_audit as _script_audit  # noqa: E402
 from tests.unit.test_catalog_refresh_source_evidence import (  # noqa: E402
     DEFAULT_PRICES as _default_prices,
     ecb_source_dict as _ecb_source_dict,
@@ -489,29 +490,17 @@ def _fixed_sort_source() -> str:
 
 
 def _assert_static_offline_html(html_text: str) -> None:
-    """No scripts beyond the one fixed bundled sort script, no event
-    handlers, external resources, or CSS fetches."""
-    lowered = html_text.lower()
-    script_open_tags = re.findall(r"<script\b[^>]*>", lowered)
-    assert len(script_open_tags) <= 1, "more than one <script> tag present"
-    if script_open_tags:
-        assert " src=" not in script_open_tags[0], "the bundled <script> carries src="
-        script_bodies = re.findall(
-            r"<script\b[^>]*>(.*?)</script>", html_text, flags=re.DOTALL
-        )
-        assert script_bodies[0].strip() == _fixed_sort_source().strip(), (
-            "the bundled <script> is not byte-identical to the fixed "
-            "web/static/js/table-sort.js source"
-        )
-    assert not re.search(r"<[a-z][^>]*\son\w+=", lowered), "real tag carries an on* handler"
-    assert not re.search(r"<[a-z][^>]*\ssrc=", lowered), "real tag carries src="
-    for tag in ("link", "iframe", "object", "embed", "form", "video", "audio", "img"):
-        assert not re.search(rf"<{tag}\b", lowered), f"forbidden real tag <{tag}>"
-    style = re.search(r"<style>(.*?)</style>", html_text, flags=re.DOTALL)
-    assert style is not None
-    assert "@import" not in style.group(1)
-    assert "url(" not in style.group(1)
-    for href in re.findall(r"href='([^']+)'", html_text):
+    """The executable surface is exactly the one fixed bundled sort
+    script; no event handlers, external resources, or CSS fetches.
+    Parsed with the shared stdlib HTML parser (no regex tag matching)."""
+    auditor = _script_audit.audit_fixed_report_script(
+        html_text, fixed_source=_fixed_sort_source()
+    )
+    assert auditor.styles, "the report must keep its inline stylesheet"
+    for style_body in auditor.styles:
+        assert "@import" not in style_body
+        assert "url(" not in style_body
+    for href in auditor.href_values():
         assert href.startswith(("http://", "https://", "#")), f"unsafe href {href!r}"
 
 

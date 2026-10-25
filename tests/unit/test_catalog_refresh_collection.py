@@ -27,6 +27,8 @@ from hashlib import sha256
 import httpx
 import pytest
 
+import catalog_report_script_audit as _script_audit
+
 from slaif_gateway.cli import catalog_refresh as cli_catalog_refresh
 from slaif_gateway.schemas.catalog_refresh import (
     BaselineCounts,
@@ -2890,7 +2892,11 @@ def test_cli_collect_malformed_port_redirect_blocks_safely(tmp_path, monkeypatch
     )
     html = (run_dirs[0] / "REVIEW.html").read_text()
     assert "url_nondefault_port" in html
-    assert "99999" not in html
+    # The unsafe port must not leak into the report's VISIBLE data. The
+    # one verified fixed sorting script is excluded from this data-level
+    # check (its precision comments contain 99999-digit literals).
+    auditor = _script_audit.audit_fixed_report_script(html)
+    assert "99999" not in auditor.visible_text
 
 
 # --- 184: observed-model truthful refusal (selected BLOCK, retention) ------

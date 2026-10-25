@@ -43,6 +43,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from urllib.parse import parse_qs, urlparse
 from typing import Any
 
 import pytest
@@ -64,6 +65,7 @@ from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.main import create_app
+from slaif_gateway.services.key_policy_validation import IMPLEMENTED_CLIENT_ENDPOINTS
 from slaif_gateway.utils.passwords import hash_admin_password
 from slaif_gateway.utils.secrets import generate_secret_key
 
@@ -332,6 +334,39 @@ async def _seed_usability_data(database_url: str) -> dict[str, Any]:
                             created_at=now - timedelta(hours=6, minutes=i),
                         )
                     )
+                # 105 OLDER enabled providers: they push the policy
+                # provider catalog past its latest-100 page so the policy
+                # search regression can prove an older provider is outside
+                # the rendered batch but server-searchable and still
+                # submittable (the page is presentation, not authority).
+                # Plus one recently created DISABLED provider that must
+                # never appear as a known choice.
+                for i in range(105):
+                    session.add(
+                        ProviderConfig(
+                            id=uuid.uuid4(),
+                            provider=f"usab-oldprov-{i:03d}-{suffix}",
+                            display_name=f"Usab Old Provider {i:03d}",
+                            kind="openai_compatible",
+                            base_url=f"https://usab-oldprov-{i:03d}-{suffix}.example.org/v1",
+                            api_key_env_var=f"USAB_OLDPROV_{i:03d}_{suffix.upper()}_API_KEY",
+                            enabled=True,
+                            created_at=now - timedelta(days=3, hours=i),
+                        )
+                    )
+                disabled_prov = f"usab-disabledprov-{suffix}"
+                session.add(
+                    ProviderConfig(
+                        id=uuid.uuid4(),
+                        provider=disabled_prov,
+                        display_name="Usab Disabled Provider",
+                        kind="openai_compatible",
+                        base_url=f"https://{disabled_prov}.example.org/v1",
+                        api_key_env_var=f"USAB_DISABLED_{suffix.upper()}_API_KEY",
+                        enabled=False,
+                        created_at=now - timedelta(hours=4),
+                    )
+                )
 
                 # Usage rows with values where numeric and lexicographic
                 # orders DIVERGE (cost 9.50 vs 12.50 vs 0.99; tokens
@@ -425,6 +460,9 @@ async def _seed_usability_data(database_url: str) -> dict[str, Any]:
                     "model_a1": model_a1,
                     "model_a2": model_a2,
                     "model_b1": model_b1,
+                    "oldprov_search": f"usab-oldprov-104-{suffix}",
+                    "oldprov_second": f"usab-oldprov-103-{suffix}",
+                    "disabled_prov": disabled_prov,
                 }
     finally:
         await engine.dispose()
@@ -844,6 +882,53 @@ def test_multi_chips_and_dependent_pickers(chromium, usab_env) -> None:
             "provider-scoped model choices must exclude the other provider"
         )
 
+        # Clearing the dependent control while a provider is SELECTED
+        # must re-scope to the CURRENT parent: neither the initial
+        # unscoped batch (which lists other providers' models) nor the
+        # stale typed candidate may reappear after clear + reopen.
+        page.locator(f"{model_rc} .rc-input").click()  # type: ignore[attr-defined]
+        with page.expect_response(  # type: ignore[attr-defined]
+            lambda r: "/admin/record-choices" in r.url and "q=zz-clear-candidate" in r.url,
+            timeout=15000,
+        ) as typed_lookup:
+            page.keyboard.type("zz-clear-candidate")  # type: ignore[attr-defined]
+        assert typed_lookup.value is not None
+        assert _hidden_values(page, model_rc) == ["zz-clear-candidate"]
+        with page.expect_response(  # type: ignore[attr-defined]
+            lambda r: (
+                "/admin/record-choices" in r.url
+                and f"provider={env['provider_a']}" in r.url
+                and "q=" not in r.url
+                and "selected=" not in r.url
+            ),
+            timeout=15000,
+        ) as clear_refetch:
+            page.locator(f"{model_rc} .rc-clear").click()  # type: ignore[attr-defined]
+        assert clear_refetch.value is not None, (
+            "clearing a dependent control must issue a fresh scoped lookup"
+        )
+        assert _hidden_values(page, model_rc) == [""]
+        # The clear handler preserves the menu state: only open it if the
+        # clear happened while it was closed (clicking the open button
+        # while open would toggle it closed). The primary input only ever
+        # opens.
+        if not _menu_visible(page, model_rc):
+            page.locator(f"{model_rc} .rc-input").click()  # type: ignore[attr-defined]
+        page.wait_for_selector(  # type: ignore[attr-defined]
+            f'{model_rc} .rc-option:has-text("{env["model_a1"]}")', timeout=15000
+        )
+        cleared = [
+            page.locator(f"{model_rc} .rc-option").nth(i).locator(".rc-option-label").inner_text()  # type: ignore[attr-defined]
+            for i in range(page.locator(f"{model_rc} .rc-option").count())  # type: ignore[attr-defined]
+        ]
+        assert env["model_a1"] in cleared and env["model_a2"] in cleared
+        assert env["model_b1"] not in cleared, (
+            "clear must re-scope to the current provider, not the initial batch"
+        )
+        assert "zz-clear-candidate" not in cleared, (
+            "stale typed candidate must not survive clear"
+        )
+
     # --- multi chips on the openai-assisted route proposal form ---
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
@@ -976,6 +1061,33 @@ async def _key_count(database_url: str) -> int:
     finally:
         await engine.dispose()
 
+
+async def _latest_key(database_url: str) -> dict[str, Any]:
+    engine = create_async_engine(database_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            result = await session.execute(
+                select(
+                    GatewayKey.id,
+                    GatewayKey.owner_id,
+                    GatewayKey.allow_all_models,
+                    GatewayKey.allow_all_endpoints,
+                    GatewayKey.metadata_json,
+                )
+                .order_by(GatewayKey.created_at.desc(), GatewayKey.id.desc())
+                .limit(1)
+            )
+            row = result.first()
+            return {
+                "id": str(row[0]),
+                "owner_id": str(row[1]),
+                "allow_all_models": bool(row[2]),
+                "allow_all_endpoints": bool(row[3]),
+                "metadata_json": dict(row[4] or {}),
+            }
+    finally:
+        await engine.dispose()
 
 def _import_csv(env: dict[str, Any]) -> str:
     suffix = env["suffix"]
@@ -1267,3 +1379,270 @@ def test_institution_cohort_name_filters_submit_names(chromium, usab_env) -> Non
         rows = page.locator(".table-wrap table[data-sortable] tbody tr")  # type: ignore[attr-defined]
         assert rows.count() == 1
         assert cohort_name in rows.first.locator("td").first.inner_text()
+
+
+# ---------------------------------------------------------------------------
+# 9) Allow-new controls: PHYSICAL keystrokes (not fill()) on the real
+#    macro/JS/CSS + Chromium. Atomic fill() masks focus/value bugs in the
+#    typed-entry path; this regression uses page.keyboard.type and
+#    asserts the authoritative value end to end.
+# ---------------------------------------------------------------------------
+
+
+def test_allow_new_physical_keystroke_typed_value_is_authoritative(
+    chromium, usab_env
+) -> None:
+    env = usab_env
+    suffix = env["suffix"]
+    inst_rc = '.rc[data-rc-id="institutions-name-filter"]'
+    new_name = f"Usab Typed Inst {suffix} 042"
+    with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+        page.goto("/admin/institutions")
+
+        # 1) Click the primary field and type a NEW name with real
+        #    keystrokes: focus must STAY on the authoritative input,
+        #    the whole typed value must be carried by the managed
+        #    hidden field, and the popup candidate lookup must search
+        #    the typed text.
+        page.locator(f"{inst_rc} .rc-input").click()  # type: ignore[attr-defined]
+        # The debounced candidate lookup must search the typed text;
+        # match on the DECODED query (URLSearchParams encodes spaces as
+        # "+", not "%20").
+        with page.expect_request(  # type: ignore[attr-defined]
+            lambda r: "/admin/record-choices" in r.url
+            and parse_qs(urlparse(r.url).query).get("q") == [new_name],
+            timeout=15000,
+        ) as lookup_info:
+            page.keyboard.type(new_name)  # type: ignore[attr-defined]
+        assert lookup_info.value is not None
+        focused_class = page.evaluate("document.activeElement.className")
+        assert "rc-input" in focused_class, (
+            f"focus left the primary input while typing: {focused_class!r}"
+        )
+        assert (
+            page.locator(f"{inst_rc} .rc-input").input_value()  # type: ignore[attr-defined]
+            == new_name
+        )
+        assert _hidden_values(page, inst_rc) == [new_name]
+
+        # 2) Escape closes the menu (if open) but PRESERVES the typed
+        #    value in both the visible field and the managed field.
+        page.keyboard.press("Escape")  # type: ignore[attr-defined]
+        assert (
+            page.locator(f"{inst_rc} .rc-input").input_value()  # type: ignore[attr-defined]
+            == new_name
+        )
+        assert _hidden_values(page, inst_rc) == [new_name]
+
+        # 3) Clear, reopen, and pick an EXPLICIT known database name by
+        #    keyboard on the primary input: the submitted value is the
+        #    known option's value (the name itself), never stale typed
+        #    text. The reopened menu must show the latest batch again —
+        #    the previously typed NEW name must not linger as a stale
+        #    search option (the clear handler cancels the pending
+        #    debounce, invalidates the in-flight response, and resets
+        #    the option set to the server-rendered batch).
+        page.locator(f"{inst_rc} .rc-clear").click()  # type: ignore[attr-defined]
+        assert _hidden_values(page, inst_rc) == [""]
+        page.locator(f"{inst_rc} .rc-input").click()  # type: ignore[attr-defined]
+        assert _menu_visible(page, inst_rc)
+        assert (
+            page.locator(f'{inst_rc} .rc-option:has-text("{new_name}")').count()  # type: ignore[attr-defined]
+            == 0
+        ), "stale typed value must not be a menu option after clear"
+        known_name = str(env["institution_a_name"])
+        # Physical typing filters the menu and issues the fresh scoped
+        # lookup; wait for BOTH the request and its response so the
+        # rendered list is the server's, not a mid-flight re-render.
+        with page.expect_request(  # type: ignore[attr-defined]
+            lambda r: "/admin/record-choices" in r.url
+            and parse_qs(urlparse(r.url).query).get("q") == [known_name],
+            timeout=15000,
+        ) as known_lookup, page.expect_response(  # type: ignore[attr-defined]
+            lambda r: "/admin/record-choices" in r.url,
+            timeout=15000,
+        ) as known_response:
+            page.keyboard.type(known_name)  # type: ignore[attr-defined]
+        assert known_lookup.value is not None
+        assert known_response.value is not None
+        known_option = page.locator(f'{inst_rc} .rc-option:has-text("{known_name}")')  # type: ignore[attr-defined]
+        known_option.wait_for(timeout=15000)
+        page.keyboard.press("ArrowDown")  # type: ignore[attr-defined]
+        page.keyboard.press("Enter")  # type: ignore[attr-defined]
+        assert not _menu_visible(page, inst_rc), "menu must close after keyboard selection"
+        assert (
+            page.locator(f"{inst_rc} .rc-input").input_value()  # type: ignore[attr-defined]
+            == known_name
+        )
+        assert _hidden_values(page, inst_rc) == [known_name]
+        assert new_name not in _hidden_values(page, inst_rc)
+
+
+# ---------------------------------------------------------------------------
+# 10) Policy selector: latest-100 page, server search, scope semantics,
+#     and real submission of an older (off-page) provider
+# ---------------------------------------------------------------------------
+
+
+def test_policy_provider_model_search_and_older_submit(
+    chromium, usab_env
+) -> None:
+    env = usab_env
+    suffix = env["suffix"]
+    prov_a = str(env["provider_a"])
+    prov_b = str(env["provider_b"])
+    model_a1 = str(env["model_a1"])
+    model_b1 = str(env["model_b1"])
+    oldprov = str(env["oldprov_search"])
+    oldprov_second = str(env["oldprov_second"])
+    disabled = str(env["disabled_prov"])
+
+    with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+        page.goto("/admin/keys/create")
+
+        provider_available = page.locator('[data-policy-available="providers"]')  # type: ignore[attr-defined]
+        provider_selected = page.locator('[data-policy-selected="providers"]')  # type: ignore[attr-defined]
+        endpoint_available = page.locator('[data-policy-available="endpoints"]')  # type: ignore[attr-defined]
+        provider_search = page.locator('[data-policy-provider-search]')  # type: ignore[attr-defined]
+        provider_results = page.locator('[data-policy-provider-search-results]')  # type: ignore[attr-defined]
+        model_search = page.locator('[data-policy-model-search]')  # type: ignore[attr-defined]
+        model_results = page.locator('[data-policy-model-search-results]')  # type: ignore[attr-defined]
+        provider_manual = page.locator('[data-policy-manual="providers"]')  # type: ignore[attr-defined]
+
+        def _select_values(locator: object) -> list[str]:
+            return locator.eval_on_selector_all(  # type: ignore[attr-defined]
+                "option", "els => els.map(e => e.value)"
+            )
+
+        # 1) The provider page is EXACTLY the latest 100 enabled providers,
+        #    newest first. The two newest (prov_b, prov_a) lead, then the
+        #    98 newest of the 105 seeded older providers; the 7 oldest
+        #    and the recently-created DISABLED provider are off-page and
+        #    must never appear as choices.
+        batch = _select_values(provider_available)
+        assert len(batch) == 100, f"provider page must cap at 100: {len(batch)}"
+        assert batch[0] == prov_b and batch[1] == prov_a
+        for i in range(98):
+            assert f"usab-oldprov-{i:03d}-{suffix}" in batch
+        assert oldprov not in batch
+        assert oldprov_second not in batch
+        assert disabled not in batch
+
+        # 2) A plain click on the multiple select REPLACES the highlight;
+        #    the Add button moves it into the policy and the JS syncs the
+        #    manual textarea (newline-separated).
+        provider_available.locator(f"option[value='{prov_a}']").click()  # type: ignore[attr-defined]
+        page.click('[data-policy-add="providers"]')  # type: ignore[attr-defined]
+        assert _select_values(provider_selected) == [prov_a]
+        assert provider_manual.input_value() == prov_a
+
+        # 3) Model search with an EXPLICITLY EMPTY endpoint scope (nothing
+        #    selected, allow-all off) must send a blank endpoint parameter
+        #    and return no choices, not an unscoped search.
+        def _model_empty_scope(url: str) -> bool:
+            params = parse_qs(urlparse(url).query, keep_blank_values=True)
+            return (
+                "/admin/record-choices" in url
+                and params.get("kind") == ["policy_model"]
+                and params.get("provider") == [prov_a]
+                and params.get("endpoint") == [""]
+                and params.get("q") == ["usab-model"]
+            )
+
+        with page.expect_request(_model_empty_scope, timeout=15000) as empty_scope:  # type: ignore[attr-defined]
+            model_search.fill("usab-model")  # type: ignore[attr-defined]
+        assert empty_scope.value is not None
+        page.wait_for_selector(  # type: ignore[attr-defined]
+            '[data-policy-model-search-results] li:has-text("No matching enabled route models.")',
+            timeout=15000,
+        )
+        model_search.fill("")  # type: ignore[attr-defined]
+        # 4) Server search finds the OLDEST seeded provider (outside the
+        #    page) and choosing it APPENDS to the current selection while
+        #    keeping the manual textarea in sync.
+        with page.expect_request(  # type: ignore[attr-defined]
+            lambda r: "/admin/record-choices" in r.url
+            and parse_qs(urlparse(r.url).query).get("kind") == ["policy_provider"]
+            and parse_qs(urlparse(r.url).query).get("q") == [oldprov],
+            timeout=15000,
+        ) as provider_lookup:
+            provider_search.fill(oldprov)  # type: ignore[attr-defined]
+        assert provider_lookup.value is not None
+        old_option = provider_results.locator(f'li:has-text("{oldprov}")')  # type: ignore[attr-defined]
+        old_option.wait_for(timeout=15000)
+        assert disabled not in old_option.inner_text()
+        old_option.click()
+        assert _select_values(provider_selected) == [prov_a, oldprov]
+        assert provider_manual.input_value() == f"{prov_a}\n{oldprov}"
+
+        # 5) The endpoint page is exactly the canonical implemented set.
+        endpoints = _select_values(endpoint_available)
+        assert len(endpoints) == 22
+        assert set(endpoints) == set(IMPLEMENTED_CLIENT_ENDPOINTS)
+
+        # 6) With the chat endpoint selected, the model search is scoped to
+        #    BOTH selected providers and the model-backed endpoint: the
+        #    provider-A model token appears, the provider-B token is
+        #    excluded by the provider scope.
+        endpoint_available.locator("option[value='/v1/chat/completions']").click()  # type: ignore[attr-defined]
+        page.click('[data-policy-add="endpoints"]')  # type: ignore[attr-defined]
+
+        def _model_scoped(url: str) -> bool:
+            params = parse_qs(urlparse(url).query, keep_blank_values=True)
+            return (
+                "/admin/record-choices" in url
+                and params.get("kind") == ["policy_model"]
+                and sorted(params.get("provider", [])) == sorted([prov_a, oldprov])
+                and params.get("endpoint") == ["/v1/chat/completions"]
+                and params.get("q") == ["usab-model"]
+            )
+
+        with page.expect_request(_model_scoped, timeout=15000) as scoped_lookup:  # type: ignore[attr-defined]
+            model_search.fill("usab-model")  # type: ignore[attr-defined]
+        assert scoped_lookup.value is not None
+        model_results.locator(f'li:has-text("{model_a1}")').wait_for(timeout=15000)  # type: ignore[attr-defined]
+        result_text = model_results.inner_text()
+        assert model_a1 in result_text
+        assert model_b1 not in result_text, (
+            "model search must respect the selected provider scope"
+        )
+
+        # 7) The page is presentation, NOT authority: an older provider
+        #    found by search must still submit. The manual textarea is the
+        #    submitted field and the JS re-syncs the selection from it, so
+        #    rewriting it to ONLY the older provider scopes the new key to
+        #    exactly that provider. The owner is chosen through the record
+        #    picker (u005 is outside its latest-100 eligible batch, so it
+        #    is reached by search, proving the picker's older search on
+        #    this form too).
+        before_keys = _run_in_thread(_key_count(env["database_url"]))
+        provider_manual.fill(oldprov)  # type: ignore[attr-defined]
+        assert _select_values(provider_selected) == [oldprov]
+
+        owner_rc = '.rc:has(input[name="owner_id"])'
+        page.locator(f"{owner_rc} .rc-open").click()  # type: ignore[attr-defined]
+        assert _menu_visible(page, owner_rc)
+        page.locator(f"{owner_rc} .rc-search").fill(f"u005-{suffix}@example.org")  # type: ignore[attr-defined]
+        page.locator(f'{owner_rc} .rc-option:has-text("u005-{suffix}@example.org")').click()  # type: ignore[attr-defined]
+        assert _hidden_values(page, owner_rc) == [str(env["owner_ids"]["u005"])]
+
+        page.check('[data-policy-toggle="endpoints"]')  # type: ignore[attr-defined]
+        page.check('[data-policy-toggle="models"]')  # type: ignore[attr-defined]
+        page.fill('input[name="valid_days"]', "30")  # type: ignore[attr-defined]
+        page.fill('input[name="reason"]', "usab policy older-provider key")  # type: ignore[attr-defined]
+        page.click('form[action="/admin/keys/create"] button[type="submit"]')  # type: ignore[attr-defined]
+        # Result page shows the one-time plaintext notice; the plaintext
+        # key cell itself is never read by this test.
+        page.wait_for_selector('text=Copy this key now', timeout=30000)  # type: ignore[attr-defined]
+
+        after_keys = _run_in_thread(_key_count(env["database_url"]))
+        assert after_keys == before_keys + 1
+        row = _run_in_thread(_latest_key(env["database_url"]))
+        assert row["owner_id"] == str(env["owner_ids"]["u005"])
+        assert row["metadata_json"].get("allowed_providers") == [oldprov]
+        assert row["allow_all_models"] is True
+        assert row["allow_all_endpoints"] is True

@@ -190,6 +190,14 @@ EXPECTED_FIELDS: dict[str, dict[str, str]] = {
         "cohort_id": "record_choice",
         "email_delivery_mode": "select",
     },
+    "usage/list.html": {
+        "provider": "record_choice",
+        "model": "record_choice",
+        "endpoint": "record_choice",
+        "request_id": "record_choice",
+        "status": "select",
+        "streaming": "select",
+    },
 }
 
 
@@ -224,10 +232,10 @@ def _field_marker(template: str, field: str, kind: str) -> bool:
     raise ValueError(f"unknown control kind {kind!r}")
 
 
-def test_expected_field_inventory_is_the_96_field_baseline() -> None:
+def test_expected_field_inventory_is_the_102_field_baseline() -> None:
     total = sum(len(fields) for fields in EXPECTED_FIELDS.values())
-    assert total == 96, f"inventory drifted from the 96-field baseline: {total}"
-    assert len(EXPECTED_FIELDS) == 33
+    assert total == 102, f"inventory drifted from the 102-field baseline: {total}"
+    assert len(EXPECTED_FIELDS) == 34
 
 
 @pytest.mark.parametrize(
@@ -321,10 +329,25 @@ def test_policy_dual_list_and_manual_sync() -> None:
         assert f'data-policy-remove="{dimension}"' in src
         assert f'data-policy-toggle="{dimension}"' in src
         assert f'data-policy-manual="{dimension}"' in src
+    # Server-side older-value search for the two latest-100 dimensions:
+    # the visible page is presentation, not the authority ceiling.
+    for dimension in ("provider", "model"):
+        assert f'data-policy-{dimension}-search' in src, (
+            f"the {dimension} search input was lost"
+        )
+        assert f'data-policy-{dimension}-search-results' in src, (
+            f"the {dimension} search results list was lost"
+        )
     js = (
         REPO / "app" / "slaif_gateway" / "web" / "static" / "js" / "policy-selector.js"
     ).read_text(encoding="utf-8")
     assert "data-policy-manual" in js, "manual textareas must stay JS-synchronized"
+    assert 'createPolicySearch("providers")' in js, (
+        "provider search must be wired to the lookup"
+    )
+    assert 'createPolicySearch("models")' in js, (
+        "model search must be wired to the lookup"
+    )
 
 
 def test_openai_assisted_model_globs_are_multi_record_choices() -> None:
@@ -362,3 +385,119 @@ def test_model_review_md_stays_a_non_gui_static_export() -> None:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# A1 regression: no NEW raw existing-record field may bypass the shared
+# pickers. The fixed 102-field baseline pins the known fields; this audit
+# additionally catches a newly added visible raw input/textarea whose
+# name has existing-record reference semantics (the *_id/*_uuid patterns
+# and the known semantic names) unless the field uses a shared
+# record-choice picker, a native select, or carries a documented
+# exception with a reason. Hidden inputs (CSRF etc.), checkboxes/radios/
+# submit/file controls, and genuine free-text/new-record/date/number
+# fields are out of scope here (the 102-field baseline classifies finite
+# choices; this audit targets reference fields only).
+# ---------------------------------------------------------------------------
+
+_RAW_REF_SEMANTICS = frozenset(
+    {
+        "provider",
+        "model",
+        "requested_model",
+        "upstream_model",
+        "proposal_model",
+        "include_models",
+        "exclude_models",
+        "endpoint",
+        "request_id",
+        "target_id",
+        "target_type",
+        "actor_admin_id",
+        "owner_email",
+    }
+)
+
+# Raw fields whose names sound like references but are legitimate:
+_RAW_FIELD_EXCEPTIONS: dict[str, dict[str, str]] = {
+    "owners/create.html": {
+        "external_id": (
+            "free-form identifier of an EXTERNAL system for the owner being "
+            "created; not a reference to an existing SLAIF record"
+        ),
+    },
+    "owners/edit.html": {
+        "external_id": (
+            "free-form identifier of an EXTERNAL system for the owner being "
+            "edited; not a reference to an existing SLAIF record"
+        ),
+    },
+    "providers/create.html": {
+        "provider": (
+            "the NEW provider's slug is the identity of the record being "
+            "created (DB-unique); a picker would require the record to "
+            "pre-exist"
+        ),
+    },
+    "providers/edit.html": {
+        "provider": (
+            "the slug is the identity of the provider record being edited, "
+            "not a reference to another record"
+        ),
+    },
+}
+
+
+def _raw_field_names(src: str) -> list[str]:
+    names: list[str] = []
+    for attrs in re.findall(r"<input\b([^>]*)>", src, flags=re.DOTALL) + re.findall(
+        r"<textarea\b([^>]*)>", src, flags=re.DOTALL
+    ):
+        match = re.search(r"""name=["']([a-z0-9_]+)["']""", attrs)
+        if not match:
+            continue
+        kind = re.search(r"""type=["']([a-z]+)["']""", attrs)
+        if kind and kind.group(1) in {
+            "hidden",
+            "checkbox",
+            "radio",
+            "submit",
+            "button",
+            "file",
+        }:
+            continue
+        names.append(match.group(1))
+    return names
+
+
+def test_no_unclassified_raw_existing_record_fields() -> None:
+    """A newly added raw existing-record field fails this audit: every
+    visible raw input/textarea whose name has reference semantics must
+    use the shared record-choice picker or a native select, or carry a
+    documented exception with a reason. The stale-entry check keeps the
+    exception table honest."""
+    for path in sorted(TEMPLATES.rglob("*.html")):
+        rel = str(path.relative_to(TEMPLATES))
+        src = path.read_text(encoding="utf-8")
+        covered = set(
+            re.findall(r"""record_choice\(\s*["']([a-z0-9_]+)["']""", src)
+        )
+        covered |= set(re.findall(r"""<select\s+name=["']([a-z0-9_]+)["']""", src))
+        exceptions = _RAW_FIELD_EXCEPTIONS.get(rel, {})
+        for name in _raw_field_names(src):
+            reference_like = (
+                re.search(r"(_ids?|_uuid)$", name) is not None
+                or name in _RAW_REF_SEMANTICS
+            )
+            if not reference_like or name in covered:
+                continue
+            assert name in exceptions, (
+                f"{rel}: raw field {name!r} has existing-record reference "
+                "semantics but no shared record-choice picker, native "
+                "select, or documented exception — add the control or a "
+                "justified exception"
+            )
+    for rel, names in _RAW_FIELD_EXCEPTIONS.items():
+        raw = set(_raw_field_names((TEMPLATES / rel).read_text(encoding="utf-8")))
+        for name in names:
+            assert name in raw, f"{rel}: stale exception for {name!r} (no longer raw)"

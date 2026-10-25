@@ -421,6 +421,39 @@
     });
 
     clearButton?.addEventListener("click", () => {
+      // Clearing must also drop stale SEARCH state: a pending debounce
+      // or an in-flight response for the old query (whose plain-value
+      // selected-preservation can carry the old typed text back as an
+      // option) must not reintroduce it after the value is cleared.
+      if (searchTimer) {
+        clearTimeout(searchTimer);
+        searchTimer = null;
+      }
+      searchSeq += 1; // invalidate any in-flight response
+      if (searchInFlight) {
+        searchInFlight.abort();
+        searchInFlight = null;
+      }
+      // The option set must come back scoped to the CURRENT context:
+      // - dependent controls: the initial batch carries the parent
+      //   scope from page load (or none), which may no longer be the
+      //   current parent, so re-fetch the latest choices with the
+      //   current dependency value and never render the stale initial
+      //   (unscoped/old-scope) set while that lookup is in flight;
+      // - plain controls: the server-rendered latest batch again,
+      //   never the stale filtered set from the cleared query.
+      if (dependsOn) {
+        options = [];
+        if (menuOpen) {
+          renderList([], "Loading choices…");
+        }
+        runSearch("", { selectedIds: [] });
+      } else {
+        options = readOptions(rc);
+        if (menuOpen) {
+          renderList(options, null);
+        }
+      }
       selected = [];
       input.value = "";
       syncFromSelection();
@@ -477,6 +510,10 @@
         // stored id. The server validation decides on submit.
         selected = text ? [{ id: text, label: text, typed: true }] : [];
         writeHidden(selected);
+        // The typed candidate changed the value: the clear affordance
+        // must track it (refreshClearVisibility only reads selected and
+        // input.value, so focus/cursor/verbatim text are untouched).
+        refreshClearVisibility();
       }
       scheduleSearch(text);
     });

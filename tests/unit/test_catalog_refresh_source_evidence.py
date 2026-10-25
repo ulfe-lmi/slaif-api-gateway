@@ -22,6 +22,8 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import catalog_report_script_audit as _script_audit
+
 from slaif_gateway.cli.main import app
 from slaif_gateway.services.catalog_refresh import source_evidence as se
 from slaif_gateway.services.catalog_refresh.baseline import load_baseline
@@ -1732,7 +1734,9 @@ def test_d5_first_install_report_contains_actual_observations(tmp_path: Path) ->
     # The exact normalization of the observed value to the comparison currency.
     assert "0.250000000" in html
     assert "0.925925926" in html
-    assert b"<script" not in html.lower().encode()
+    # 192-a: the one approved fixed sorting script is the only
+    # executable surface; all other content stays inert escaped data.
+    _script_audit.audit_fixed_report_script(html)
 
 
 # --- CLI + report + seal recomputation (family 1 end-to-end) ----------------------
@@ -1796,7 +1800,9 @@ def test_parsing_and_validation_perform_no_network_io() -> None:
     assert report.state == "READY_WITH_WARNINGS"
     assert _codes(report) == {"new_model_exposure"}
     html = render_report(bundle, report.to_dict())
-    assert b"<script" not in html.lower()
+    # 192-a: offline review still emits exactly the one fixed trusted
+    # script and nothing else executable.
+    _script_audit.audit_fixed_report_script(html.decode("utf-8"))
 
 
 def test_snapshot_text_cannot_become_report_markup() -> None:

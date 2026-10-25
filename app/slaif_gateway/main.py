@@ -65,12 +65,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_exception_handler(OpenAICompatibleError, openai_compatible_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
-
     app.include_router(health_router)
     app.include_router(metrics_router)
-    # Registered before admin so the fixed literals win over dynamic paths.
+    # Fixed-literal routers (branding, record-choices lookup) register before admin so their literals win over dynamic admin paths.
     app.include_router(branding_router)
-    # Fixed-literal lookup route registered before the admin router.
     app.include_router(admin_record_choices_router)
     app.include_router(admin_router)
     app.include_router(openai_compat_router)
