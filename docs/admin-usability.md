@@ -91,13 +91,15 @@ by `web/static/js/record-choices.js`:
   server validation stays authoritative.
 - Typed-entry law: in an `allow_new` field the primary input keeps
   focus while typing and its text is the submitted candidate value
-  EXACTLY as typed (model IDs, route aliases, and names may be opaque
-  and case-sensitive — no implicit label normalization). Only an
-  explicit option selection (mouse or keyboard on a rendered option)
-  maps a display label to its stored id. The clear button tracks the
-  current value, and clearing also drops stale search state (pending
-  debounce and in-flight results cannot reintroduce the cleared query;
-  dependent controls re-fetch scoped to the CURRENT parent value).
+  with its case and opaque characters preserved (model IDs, route
+  aliases, and names may be opaque and case-sensitive — no implicit
+  label normalization; subject to the existing edge trim and
+  server-side normalization). Only an explicit option selection (mouse
+  or keyboard on a rendered option) maps a display label to its stored
+  id. The clear button tracks the current value, and clearing also
+  drops stale search state (pending debounce and in-flight results
+  cannot reintroduce the cleared query; dependent controls re-fetch
+  scoped to the CURRENT parent value).
 - Multi-value fields manage a chip list plus either one hidden input
   per value or one newline-serialized hidden input (`serialize=
   "newline"`), so existing server-side parsing and policy semantics

@@ -19,9 +19,10 @@ pinned by `tests/unit/test_admin_usability_inventory.py` (111 tests).
 | Suite | Command target | Result |
 | --- | --- | --- |
 | Inventory + raw-reference guard | `tests/unit/test_admin_usability_inventory.py` | 111 passed / 0 failed / 0 error / 0 skipped |
-| Key-create unit routes + templates | `tests/unit/test_admin_key_create_routes.py`, `tests/unit/test_admin_keys_routes.py`, `tests/unit/test_admin_key_create_templates.py` | 63 passed / 0 failed / 0 error / 0 skipped |
+| Record-choice unit regressions + Any-filter ASGI parser | `tests/unit/test_admin_record_choices.py` | 60 passed / 0 failed / 0 error / 0 skipped |
+| Key-create unit routes | `tests/unit/test_admin_key_create_routes.py`, `tests/unit/test_admin_keys_routes.py` | 63 passed / 0 failed / 0 error / 0 skipped |
 | Related admin CI fixture repairs | activity/catalog/records/keys routes + templates-safety + pricing/route actions | 53 passed / 0 failed / 0 error / 0 skipped |
-| Catalog report parser + source evidence | `test_catalog_refresh_report.py`, `test_catalog_refresh_source_evidence.py`, `test_catalog_refresh_collection.py` | 15 passed / 0 failed / 0 error / 0 skipped |
+| Catalog report unit modules (full) | `tests/unit/test_catalog_refresh_report.py`, `tests/unit/test_catalog_refresh_source_evidence.py`, `tests/unit/test_catalog_refresh_collection.py` | 180 passed / 0 failed / 0 error / 0 skipped |
 | Report browser (generated cases + offline sort) | `tests/browser/test_catalog_refresh_report.py` | 1 passed / 0 failed / 0 error / 0 skipped |
 | Lazy-throttling browser (JS + no-JS fill helper) | `tests/browser/test_admin_lazy_throttling.py` | 3 passed / 0 failed / 0 error / 0 skipped |
 | Admin PG CI repairs | `test_admin_keys_readonly_postgres.py`, pricing/route actions PG | 3 passed / 0 failed / 0 error / 0 skipped |
@@ -29,6 +30,13 @@ pinned by `tests/unit/test_admin_usability_inventory.py` (111 tests).
 | Physical keystroke + record-choice flows | `tests/browser/test_admin_usability.py::test_allow_new_physical_keystroke_typed_value_is_authoritative` | 1 passed / 0 failed / 0 error / 0 skipped |
 | Multi chips + dependent pickers (incl. scoped clear) | `tests/browser/test_admin_usability.py::test_multi_chips_and_dependent_pickers` | 1 passed / 0 failed / 0 error / 0 skipped |
 | Policy selector page/search/scope/submit | `tests/browser/test_admin_usability.py::test_policy_provider_model_search_and_older_submit` | 1 passed / 0 failed / 0 error / 0 skipped |
+
+The record-choice row includes 24 pre-existing regressions plus 36
+new real-ASGI query-parser cases (9 admin GET boolean filters x
+blank/true/false/invalid): the unauthenticated 303 / invalid 422
+outcome proves QUERY PARSING acceptance and rejection, not
+authenticated database semantics (the authenticated default-Any
+flow is covered by the real cohort/institution browser test).
 
 ## Browser-layer facts (actual rendered pages, real stylesheet)
 
@@ -41,10 +49,12 @@ pinned by `tests/unit/test_admin_usability_inventory.py` (111 tests).
   clear-under-selected-parent (fresh scoped lookup, stale query and
   stale typed candidate absent).
 - Physical keystrokes (`keyboard.type`, not `fill`): focus stays on the
-  primary input of `allow_new` controls, the full typed value is
-  submitted exactly as typed (opaque/case-sensitive values preserved),
-  and the debounced lookup searches the typed text (decoded-query
-  matching; `URLSearchParams` encodes spaces as `+`).
+  primary input of `allow_new` controls, and the typed value is the
+  submitted candidate with its case and opaque characters preserved
+  (subject to the existing edge-trim and server-side normalization —
+  not a byte-exact edge-whitespace claim); the debounced lookup
+  searches the typed text (decoded-query matching; `URLSearchParams`
+  encodes spaces as `+`).
 - Policy selector: provider page is exactly the latest 100 enabled
   providers (oldest 7 and the disabled provider absent); explicit
   empty endpoint scope sends `endpoint=` and returns no choices;
@@ -91,7 +101,10 @@ source-stable, receipts under the strategic
 live-admin 21/21 (including the scoped-hidden CSS fix), free-typing
 2/2, policy lookup 6/6, older-provider submit 4/4, many-scope 7/7,
 name-filter flows, dependent-clear scoped recheck, and the
-inventory guard.
+inventory guard. Each receipt is source-stable AT ITS RECORDED HASH
+(a development checkpoint during the objective), not at the final
+head; the final source qualification rests on the focused JUnit rows
+above plus the final PR-head CI run.
 
 
 ## Deployment notes (objective 192-a)
