@@ -115,8 +115,53 @@ verification)` — the report byte-correspondence pass proves the
 semantic bundle/artifact fields (including the supplied source
 provenance text) are preserved while the current renderer identity is
 bound. Exit 10 is the documented READY_WITH_WARNINGS code for the
-fixture's new-model exposure warning. This is unit/mock-CLI-layer
-evidence (no PG, no provider).
+fixture's new-model exposure warning.
+
+Layer characterization: this is OFFLINE CLI evidence — the real
+installed CLI against a synthetic fixture on the real local
+filesystem with real sealing/cryptography, and NO PG, NO provider, NO
+network. It is NOT unit/mock-CLI evidence (no app, no ASGI mock, no
+database). A fresh current `verify` passing proves CURRENT
+byte-correspondence only; it does NOT by itself prove genuine
+cross-version byte preservation of a prior-generation sealed run
+(that requires the separate previous/current proof below).
+
+### Root's independent previous/current CLI proof (recorded, not agent-run)
+
+Separately, and NOT as part of the agent-run layers above, root
+independently executed the actual PREVIOUS gateway CLI (isolated
+`git-archive` source of `90a114a236a80469780fb9341b751520d5a3f964`,
+renderer `183.1`) and the CURRENT CLI against synthetic filesystem
+fixtures (no gateway HTTP/auth/PostgreSQL/provider/Codex). Facts from
+root's receipts
+(`review-artifacts/194-review/legacy-1831-baseline.json`,
+`independent-renderer-upgrade-cli-proof.json`,
+`independent-upgrade-existing-root-refusal.json` under
+`/home/janezp/codex-supervision/slaif-api-gateway`):
+
+- Previous (`183.1`) CLI: `review` exit 10 (READY_WITH_WARNINGS),
+  `verify` exit 0; the sealed legacy run's canonical source
+  `catalog-refresh.json` and `catalog-baseline.json` bytes and the
+  semantic SHA were preserved.
+- Current CLI verifying that OLD run: exit 30 with `digests: ok`,
+  `hmac: ok`, and the fixed `unsupported renderer version in sealed
+  context; re-run the review under the current CLI` reason — a
+  genuine cross-version refusal, distinct from the unit-layer
+  forged+re-signed context and from the one real-PG node.
+- Current CLI reviewing the SAME unchanged canonical source into a
+  NEW output root: exit 10 (READY_WITH_WARNINGS), `verify` of the new
+  run exit 0; the new execution context binds `194.1`; all old archive
+  bytes and the canonical source bytes/semantic SHA unchanged. The
+  supplied revision stayed `181.1` (historical provenance), distinct
+  from the old authenticated `183.1` and the fresh `194.1`.
+- Current CLI re-reviewing the unchanged source into the SAME run
+  root that already holds that run_id: exit 65 (existing run output),
+  old bytes preserved — the no-overwrite refusal that the corrected
+  upgrade instructions (new output root) avoid.
+
+This is root's independent evidence, cited with its exact facts; it is
+not counted as a newly agent-run test, and no old root evidence is
+re-described as agent execution.
 
 ## Layer 3 — one real owned PostgreSQL 16 node (real CLI / atomic apply)
 
@@ -158,9 +203,14 @@ verified).
   actual-template/mock-HTTP/Chromium probe, not permanent PG-suite
   coverage).
 - The `183.1` refusal is proven at the unit layer with a real sealed
-  run (forged + re-signed with the runner key) and at the real-PG
-  layer's fresh run by the current-identity acceptance; no pre-194
-  historical archive was edited, re-derived, or re-sealed anywhere.
+  run (forged + re-signed with the runner key) and by root's
+  independent actual previous/current CLI proof recorded above (exit
+  30 with digests/HMAC ok and the fixed reason, plus the exit-65
+  same-run-root no-overwrite refusal). The real-PG node proves the NEW
+  current identity through real CLI / atomic apply only — it does NOT
+  itself prove the `183.1` refusal; do not read it as such. No
+  pre-194 historical archive was edited, re-derived, or re-sealed
+  anywhere (agent-run or root-run).
 - No actual Codex/live-provider/backend qualification claim; no
   database migration, no schema or field-shape change, no
   key/policy change.

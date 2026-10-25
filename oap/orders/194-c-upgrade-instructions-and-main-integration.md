@@ -1,0 +1,50 @@
+# Objective 194-c — correct renderer-upgrade instructions and integrate current main
+
+## Objective, reason, and authority
+
+Continuation of approved objective194 (number all GUI tables, split metrics, readable lists); SAME PR346. Preserve accepted194-a UI behavior and194-b current-only renderer194.1. This round repairs a demonstrated operator upgrade-documentation failure and evidence wording. No additional product feature or infrastructure. Human has standing delegation for ordinary OAP continuations. Root strategic supervisor merges; coding agent never merges or enables auto-merge. Objective195 remains INERT until194 terminal and actual-main checks pass.
+
+## Verified current GitHub/OAP state at activation
+
+Shared checkout and remote PR346 are report SELF bdfc32a47205e9570fba06b37e2e1c7ae9f654da, first parent/implementation10d5b29590230aaf8f25c6728b262a351177e7d0, tree4e66d906a176ed163fd27fd5b8de55b0c7244bb7. SELF changes ONLY oap/reports/194-b-renderer-identity-upgrade.md (SHA2567f453a07d81f59d94f640ff2a27bddfe315c4373089e1bc15ea60de7735de583). Activated194-b order SHA2566e2e7da51dc99de96fe3a324557b8cbfab31717f02507b304171067201b2a57d; immutable. Root response85717 CLOSED exactOK/exit0; no resignal of b. All10 implementation10d checks SUCCESS; b SELF9SUCCESS/1PostgreSQL IN_PROGRESS at review, not all-pass. PR draftOPEN, no reviews/auto-merge. Same branch oap/194-numbered-tables-and-metric-columns, base main, unique PR https://github.com/ulfe-lmi/slaif-api-gateway/pull/346 (created2026-10-25T17:40:24Z).
+
+Remote main advanced from90a114a236a80469780fb9341b751520d5a3f964 to7a1b67360a3a7c816c27c6b6f36f39dbae088677 via human merges343 (API Nginx128MiB transport allowance) and345 (configured completion adapter). Main checks currently running, NOT yet fully passed. Root inspected comparison: no overlap with194 changed paths. Other open PR319 Dependabot is unrelated and preserved. Branch protection classic API404; root final-head CI/review remains mandatory. Reconcile live GitHub before execution; never use this dated snapshot instead of current truth.
+
+## Demonstrated finding and independent evidence
+
+Root actually invoked old CLI from isolated git-archive source90a114a and current CLI using synthetic filesystem fixtures, no DB/provider/network. Old renderer183.1 review10 READY_WITH_WARNINGS, old verify0; current verify old30 with digests/hmacOK and fixed unsupported-renderer reason. Reviewing EXACT old canonical catalog-refresh.json under current194.1 into NEW output root returned10; current verify fresh0. All9 old archive files unchanged; canonical source bytes and semantic SHA unchanged. Source revision renderer was181.1 (supplied provenance), distinct from old authenticated execution183.1 and fresh194.1. Crucially using SAME root with unchanged source run_id exits65 (existing directory) while preserving old bytes. This is a real documented upgrade path failure, not a reason to change CLI publication safeguards.
+
+Read root receipts (strategic filesystem, not repository artifacts):
+- review-artifacts/194-review/independent-renderer-upgrade-cli-proof.json
+- review-artifacts/194-review/independent-upgrade-existing-root-refusal.json
+- review-artifacts/194-review/legacy-1831-baseline.json
+under /home/janezp/codex-supervision/slaif-api-gateway.
+Source/artifacts still available /tmp/slaif194-legacy-upgrade-vkfzmayk/; key is synthetic operator-private, never print/copy its contents. Evidence filenames/catalog source fields must be inspected, not guessed.
+
+## Required changes
+
+R1 Correct docs/catalog-refresh.md upgrade section so unchanged source run_id is reviewed into an explicitly NEW output root, avoiding collision with previous run. Show actual canonical source filename catalog-refresh.json, and for refresh mode matching catalog-baseline.json via existing --baseline-file where applicable. First-install uses --first-install. Old sealed source JSON may be read AS SOURCE from archived run; the old review/HTML/seal is never edited or re-sealed. Don't say archive is never read when source is read from it. Obtain NEW run directory from actual CLI output; don't infer it from renamed archive directory or silently change source run_id/provenance/dates. Preserve normal permission/path checks and no-overwrite safeguards. Fresh collect remains an alternative when source stale. Re-review does NOT refresh source freshness.
+
+R2 Commands must use verify --run-dir and existing apply/apply-status syntax. Explicitly explain review exit0 READY,10 READY_WITH_WARNINGS (requires review),20 BLOCKED,65 error as relevant; no blindly chained &&/set-e that discards expected10 or implies failed review can apply. A new root must be operator-restrictive/outside repository as existing docs require. Show inspectable placeholders/config variables rather than inventing supported flags. Existing workflow authentication/HMAC, freshness, identity, directory binding, atomic apply, idempotency and locks remain unchanged.
+
+R3 Rollback wording: restore matching previous PRODUCING code/image and compatible archive. Merely sharing183.1 renderer label does not guarantee byte-stable replay, because historical presentation variants reused that label. Never promise all183.1 binaries replay all183.1 archives. No renderer fleet, fallback or archive edits/re-sealing;194.1 archive support under old CLI not promised. No schema/key/policy migration. Normal code/image upgrade/service restart unchanged; no deployment authorized.
+
+R4 Correct docs/verification/2026-10-25-catalog-renderer-upgrade.md Layer2: actual CLI with synthetic fixture and real local filesystem/cryptography is offline CLI evidence, NOT unit/mock-CLI evidence. Fresh current verification alone proves current correspondence, not genuine cross-version byte preservation. Separately record root's actual previous/current CLI proof above (source commit, correct exit statuses, supplied181.1 vs authenticated183.1/194.1, old bytes/source semantic identity unchanged), clearly distinguish from unit forged+re-signed context and realPG one-node proof. Preserve old results and explicitly correct any implication freshPG run proves183.1 refusal. Immutable b report must NOT be edited. Root receipts can be cited as strategic evidence with exact facts; do not fabricate new execution or count old root evidence as newly agent-run tests.
+
+R5 Safely integrate current remote main into SAME194 branch using normal non-rewriting merge if needed; preserve both human backend/Nginx changes byte-for-byte and all194 history/immutable reports/orders. Coding agent owns Git execution; no reset/clean/stash/history rewrite. Re-read updated AGENTS.md and relevant governance after integration. Scope of NEW functional changes is ZERO. If actual merge conflict or CI failure requires additional changes outside approved docs, report exact issue before expanding; do not fix backend opportunistically. Root independently reviews final integration and checks.
+
+## Exact allowed paths and non-goals
+
+NEW edits: docs/catalog-refresh.md; docs/verification/2026-10-25-catalog-renderer-upgrade.md. Optional only a narrow upgrade crosslink/accuracy edit in docs/first-time-operator-guide.md or docs/admin-usability.md and verification index if needed. OAP: this strategic-authored order and active194-c committed unchanged; NEW immutable oap/reports/194-c-upgrade-instructions-and-main-integration.md. Prior194 orders/reports immutable. Normal merge of verified human main is allowed; it must contain those upstream changes unchanged, not reimplement them.
+
+No app product code, tests, schema/model/migration/dependency/adapter/transport/auth/admission/accounting/permissions/CLI behavior changes. No production DB/SSH/deploy/release/tag/real provider/model/email/credentials. Preserve CODEX-SESSIONS.md, codex.sh, .codex/, .local-provider-catalog/, other worktrees and unrelated changes. Keep existing pane/profile/model/effort; no extra model/helper coding agents. One mandated control-wait helper only for FIFO/tmux signaling, not implementation delegation.
+
+## Acceptance and proportionate verification
+
+A1 Upgrade examples actually permit regeneration from unchanged canonical source into fresh output path and preserve old archive; prove or reuse root's genuine CLI receipts honestly. If edited command syntax needs checking, bounded offline existing CLI --help/one targeted synthetic review+verify is enough. Do not contact providers/DB. Both existing-root refusal and new-root success must be stated accurately. Source provenance and freshness unchanged.
+A2 Only bounded docs/OAP edits beyond existing194 implementation and exact upstream-main merge. Existing167unit/onePG194-b and all194-a functional evidence retained; NO full local unit/integration/browser matrix for wording only. Run documentation checker, git diff --check and focused OAP governance, real exit codes. Normal final-head CI mandatory; inspect/fix only demonstrated scoped failures. Skips/pending/cancelled/missing not passes.
+A3 Primary docs and final PR title/body describe resulting194 numbered/split tables + renderer upgrade, correct regeneration/rollback and honest evidence separation. Don't put conversational history in PR; preserve evidence/corrections in verification record. No future publication/checks claims.
+
+## Publication and handoff
+
+Append to SAME PR346 from bSELF; non-rewriting upstream merge allowed. Commit/push strategic order+active unchanged. Inspect normal CI, pending may be reported honestly rather than waiting every intermediate run. Publish exactly one immutable report with literal40hex implementationHEAD and Report publication commit: SELF in a report-only commit, first parent exactly implementationHEAD. Verify remote PR head/only-report diff/order hash/active before exactly two response bytes OK once. Return ONE mandated control-wait helper. No merge/auto-merge or selfactivation195. Root reviews exact final-head required checks/reviews/scope/security/privacy/accounting/docs and mergeability, guarded-merges, verifies actual merged-main checks, records authoritative timing, then activates195.

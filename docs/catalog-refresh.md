@@ -1611,39 +1611,89 @@ verifier:
   re-derivation, and no re-sealing of old archives. Old sealed runs
   remain exactly as they were on disk, for the operator's records.
 
-**Regenerating a legacy review into a NEW run.** Old proposal/baseline
-SOURCE data can be reviewed or collected afresh under the current CLI
-into a new run (the old sealed archive is never read as input; the
-source data is):
+**Regenerating a legacy review into a NEW run.** The old run's
+canonical SOURCE files may be read AS SOURCE from the archived run —
+`catalog-refresh.json` (the proposal bundle), and in refresh mode the
+matching `catalog-baseline.json` — and reviewed again under the
+current CLI into a new run. What is never touched: the archived run's
+review output and seal — its `REVIEW.html`, `manifest.json`,
+`receipt.json`, and sealed validation are never edited, re-derived, or
+re-sealed, and its run directory is never overwritten.
+
+The unchanged source keeps its original `run_id`, so the new review
+MUST use an explicitly NEW output root (`--run-root`). Reusing the
+root that already contains that run's directory is refused (exit 65,
+existing run output) with the old bytes preserved — that refusal is
+the no-overwrite safeguard working, not an error to work around by
+deleting or renaming the old run. The new root must follow the same
+rules as the original workflow (operator-writable, owned, not
+group/other-writable, outside the repository; the seal-key parent
+rules apply unchanged).
 
 ```bash
-# first install, offline bundle (same bundle file a previous run reviewed)
-slaif-gateway catalog-refresh review <bundle>.json --first-install \
-  --run-root /var/lib/slaif/catalog-refresh-runs \
+# 1) First install: re-review the UNCHANGED canonical source bundle
+#    read from the archived run, into an EXPLICITLY NEW output root.
+slaif-gateway catalog-refresh review \
+  /var/lib/slaif/catalog-refresh-runs/<old-run-id>/catalog-refresh.json \
+  --first-install \
+  --run-root /var/lib/slaif/catalog-refresh-runs-194.1 \
   --seal-key /var/lib/slaif/catalog-refresh/seal.key
 
-# refresh: re-collect under the current CLI (one-command workflow)
-slaif-catalog-refresh --mode refresh --db-url "$DATABASE_URL" \
-  --run-root /var/lib/slaif/catalog-refresh-runs \
-  --seal-key /var/lib/slaif/catalog-refresh/seal.key --json
+#    Refresh mode instead pairs the archived source with its matching
+#    baseline document via the existing --baseline-file:
+#    slaif-gateway catalog-refresh review \
+#      /var/lib/slaif/catalog-refresh-runs/<old-run-id>/catalog-refresh.json \
+#      --baseline-file /var/lib/slaif/catalog-refresh-runs/<old-run-id>/catalog-baseline.json \
+#      --run-root /var/lib/slaif/catalog-refresh-runs-194.1 \
+#      --seal-key /var/lib/slaif/catalog-refresh/seal.key
 
-# verify the NEW run, then use the normal apply / apply-status workflow
-slaif-gateway catalog-refresh verify --run-dir <new-run-dir> \
+#    review exits: 0 READY; 10 READY_WITH_WARNINGS (a warnings run is
+#    still sealed and verifiable — read the report before applying);
+#    20 BLOCKED (never apply); 65 data error (nothing to apply). Do
+#    not chain commands with &&/set -e in a way that treats the
+#    expected 10 as a failure or lets a 20/65 outcome flow into
+#    apply. A fresh `collect` under the current CLI (including the
+#    slaif-catalog-refresh --mode refresh one-command workflow)
+#    remains the alternative when the source is stale or a live
+#    re-collection is wanted.
+
+# 2) Take the NEW run directory from the command's own output (the
+#    `run_dir:` line) — do not infer it from a renamed archive
+#    directory — and verify it with --run-dir:
+slaif-gateway catalog-refresh verify \
+  --run-dir /var/lib/slaif/catalog-refresh-runs-194.1/<new-run-id> \
+  --seal-key /var/lib/slaif/catalog-refresh/seal.key
+
+# 3) Then the normal apply / apply-status workflow, unchanged syntax:
+slaif-gateway catalog-refresh apply \
+  --run-dir /var/lib/slaif/catalog-refresh-runs-194.1/<new-run-id> \
+  --db-url "$DATABASE_URL" \
+  --seal-key /var/lib/slaif/catalog-refresh/seal.key \
+  --confirm --reason "regenerated legacy review under 194.1" --actor "<operator>"
+slaif-gateway catalog-refresh apply-status \
+  --run-dir /var/lib/slaif/catalog-refresh-runs-194.1/<new-run-id> \
+  --db-url "$DATABASE_URL" \
   --seal-key /var/lib/slaif/catalog-refresh/seal.key
 ```
 
-A stale source may still require FRESH collection under the existing
-freshness policy: re-reviewing an old supplied bundle does not refresh
-source freshness. Historical bundle revision / research `tool_version`
-text such as `183.1` inside the NEW run's artifacts is supplied
-PROVENANCE (labeled as such in the report), not this invocation's
-measured generator version — the new run's authenticated execution
-context binds the current `194.1` renderer identity.
+Re-reviewing the old source does NOT change source run_id,
+provenance, or dates, and does NOT refresh source freshness: a stale
+source may still require FRESH collection under the existing
+freshness policy. Historical bundle revision / research `tool_version`
+text such as `181.1` or `183.1` inside the NEW run's artifacts is
+supplied PROVENANCE (labeled as such in the report), not this
+invocation's measured generator version — the new run's authenticated
+execution context binds the current `194.1` renderer identity.
 
 **Rollback.** Restoring the prior code/image changes which review
-versions are supported (a `183.1` CLI replays `183.1` sealed runs
-byte-stably). Never edit or re-seal archives to force compatibility,
-and `194.1` reviews are NOT promised replayable under the old CLI.
+versions are supported — but restore the previous PRODUCING
+code/image together with the compatible archive: merely sharing the
+`183.1` renderer label does not guarantee byte-stable replay, because
+historical presentation variants reused that label, and no `183.1`
+binary is promised to replay every `183.1` archive. Never edit or
+re-seal archives to force compatibility; there is no renderer fleet or
+fallback; and `194.1` archives are NOT promised replayable under the
+old CLI.
 
 **Deployment.** This is a normal image/code upgrade and service
 restart: no database migration, no schema or field-shape change, no

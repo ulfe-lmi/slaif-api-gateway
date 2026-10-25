@@ -33,7 +33,9 @@ on record. They are dated, commit-specific evidence, not certifications.
   sealed bytes untouched), fresh-run CLI review→verify binding
   `194.1`, focused catalog-refresh unit groups, and one real owned
   PostgreSQL 16 atomic-apply node; no full-matrix rerun, no
-  release/production claim.
+  release/production claim. (194-d same-PR continuation later
+  corrected the upgrade instructions' output-root collision and this
+  record's Layer-2 evidence wording — see the 194-d OAP report.)
 - [`2026-10-25 Objective 192-a admin-usability verification`](2026-10-25-admin-usability.md)
   (recorded 2026-10-25) — focused JUnit, owned-PostgreSQL, real
   authenticated admin HTTP, and native-Chromium evidence for the
