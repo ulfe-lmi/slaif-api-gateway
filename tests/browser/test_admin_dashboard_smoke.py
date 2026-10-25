@@ -379,7 +379,7 @@ def test_admin_dashboard_browser_smoke() -> None:
             page.wait_for_url("**/admin")
 
             pages = [
-                ("/admin", "Admin Dashboard", 1),
+                ("/admin", "SLAIF API Gateway", 1),  # 193-a product heading
                 ("/admin/keys", "Gateway Keys", 1),
                 (f"/admin/keys/{data['key_id']}", str(data["public_key_id"]), 7),
                 (
@@ -459,6 +459,14 @@ def test_admin_dashboard_browser_smoke() -> None:
                     assert "Runtime permits only exact OpenAI Responses" in html
                 if path == "/admin":
                     assert 'href="/admin/templates"' in html
+                    # 193-a: product heading inside the dashboard body, the
+                    # three destination groups, and the implementation-
+                    # oriented foundation prose removed.
+                    assert '<h1 id="dashboard-heading">SLAIF API Gateway</h1>' in html
+                    assert "<h2>Access management</h2>" in html
+                    assert "<h2>Providers and models</h2>" in html
+                    assert "<h2>Usage and operations</h2>" in html
+                    assert "Dashboard Foundation" not in html
                 if path == "/admin/templates":
                     assert "bulk participant key creation is future work" in html
                     assert "No key templates found" in html
@@ -478,7 +486,7 @@ def test_admin_dashboard_browser_smoke() -> None:
                 if path == "/admin/routes/new":
                     assert "Runtime consumes it only for exact OpenAI Responses" in html
 
-            _assert_page_ok(page, "/admin", "Admin Dashboard")
+            _assert_page_ok(page, "/admin", "SLAIF API Gateway")  # 193-a product heading
             page.click('form[action="/admin/logout"] button[type="submit"]')
             page.wait_for_url("**/admin/login")
             assert "Admin Login" in page.content()
