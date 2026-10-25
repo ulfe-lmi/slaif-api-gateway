@@ -12,7 +12,6 @@ from slaif_gateway.services.policy_errors import RequestPolicyError
 CHAT_COMPLETIONS_CAPABILITIES_KEY = "chat_completions"
 MODULE_PROVIDER_KIND = "module"
 CHAT_COMPLETIONS_ENDPOINT = "/v1/chat/completions"
-FACIAL_SCORING_PUBLIC_MODEL = "facial-manipulation-scoring"
 
 CHAT_CAPABILITY_TEXT = "chat_text"
 CHAT_CAPABILITY_STREAMING = "chat_streaming"

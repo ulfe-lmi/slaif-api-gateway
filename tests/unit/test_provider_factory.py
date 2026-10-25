@@ -62,7 +62,7 @@ def test_factory_returns_static_facial_scoring_adapter(monkeypatch) -> None:
     adapter = get_provider_adapter(route, Settings())
 
     assert isinstance(adapter, FacialScoringAdapter)
-    assert adapter.module_id == "facial_scoring"
+    assert adapter.module_id == "configured-completion"
     assert adapter._api_key == "facial-native-key"
     assert adapter._max_retries == 0
 

@@ -18,7 +18,7 @@ from slaif_gateway.config import Settings
 from slaif_gateway.modules.servers.base import ServerModuleAdapter
 from slaif_gateway.modules.servers.completion_service.profiles import (
     CompletionProfile,
-    load_profile,
+    load_default_profile,
 )
 from slaif_gateway.providers.diagnostics import build_provider_error_diagnostic_from_response
 from slaif_gateway.providers.errors import (
@@ -32,10 +32,7 @@ from slaif_gateway.providers.errors import (
 )
 from slaif_gateway.schemas.providers import ProviderRequest, ProviderResponse, ProviderUsage
 
-FACIAL_SCORING_MODULE_ID = "facial_scoring"
-FACIAL_SCORING_PUBLIC_MODEL = "facial-manipulation-scoring"
-FACIAL_SCORING_SCORE_PATH = "/v1/score"
-FACIAL_SCORING_DEFAULT_SCORE_TYPE = "uncalibrated_model_score"
+DEFAULT_SCORE_TYPE = "uncalibrated_model_score"
 
 _ALLOWED_ENDPOINTS = {"/v1/chat/completions", "chat.completions"}
 _ALLOWED_TOP_LEVEL_FIELDS = frozenset(
@@ -74,7 +71,7 @@ class CompletionServiceAdapter(ServerModuleAdapter):
         http_client: httpx.AsyncClient | None = None,
         profile: CompletionProfile | None = None,
     ) -> None:
-        self.profile = profile or load_profile("facial-scoring-v1")
+        self.profile = profile or load_default_profile()
         if max_retries != 0:
             raise ProviderConfigurationError(
                 "Completion service does not support retries.",
@@ -268,6 +265,8 @@ class CompletionServiceAdapter(ServerModuleAdapter):
                     ],
                 }
             }
+            if self.profile.request_image_output:
+                kwargs["json"]["tools"] = [{"type": "image_generation"}]
         try:
             if self._http_client is not None:
                 return await self._bounded_post(self._http_client, url, headers, timeout, kwargs)
@@ -327,11 +326,18 @@ class CompletionServiceAdapter(ServerModuleAdapter):
         if not isinstance(payload, Mapping):
             raise ProviderResponseParseError(provider=self.provider_name)
 
-        text = (
-            self._format_score(payload)
-            if self.profile.response_mapping == "score_status"
-            else self._format_json_projection(payload)
-        )
+        image_url = None
+        if self.profile.response_mapping == "json_fields":
+            text, image_url = self._map_output_fields(payload)
+        else:
+            text = (
+                self._format_score(payload)
+                if self.profile.response_mapping == "score_status"
+                else self._format_json_projection(payload)
+            )
+        message = {"role": "assistant", "content": text}
+        if image_url is not None:
+            message["images"] = [{"type": "image_url", "image_url": {"url": image_url}}]
         body = {
             "id": f"{self.profile.response_id_prefix}{secrets.token_hex(12)}",
             "object": "chat.completion",
@@ -340,7 +346,7 @@ class CompletionServiceAdapter(ServerModuleAdapter):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": text},
+                    "message": message,
                     "finish_reason": "stop",
                 }
             ],
@@ -362,7 +368,7 @@ class CompletionServiceAdapter(ServerModuleAdapter):
                 raise ProviderResponseParseError(provider=self.provider_name)
             if not math.isfinite(float(score)) or not 0 <= float(score) <= 1:
                 raise ProviderResponseParseError(provider=self.provider_name)
-            score_type = payload.get("score_type", FACIAL_SCORING_DEFAULT_SCORE_TYPE)
+            score_type = payload.get("score_type", DEFAULT_SCORE_TYPE)
             if not isinstance(score_type, str) or not score_type.strip():
                 raise ProviderResponseParseError(provider=self.provider_name)
             score_type = _sanitize_text(score_type, max_bytes=_MAX_SCORE_TYPE_BYTES)
@@ -417,6 +423,58 @@ class CompletionServiceAdapter(ServerModuleAdapter):
         except (ValueError, KeyError, TypeError, AttributeError, RecursionError) as exc:
             raise ProviderResponseParseError(provider=self.provider_name) from exc
 
+    def _map_output_fields(self, payload: Mapping[str, Any]) -> tuple[str, str | None]:
+        """Map text and one image using profile data, independent of service identity."""
+        try:
+            for pointer, expected in self.profile.response_checks.items():
+                actual = _json_pointer(payload, pointer)
+                if type(actual) is not type(expected) or actual != expected:
+                    raise ValueError("Response check failed")
+            for pointer, length in self.profile.response_array_lengths.items():
+                value = _json_pointer(payload, pointer)
+                if not isinstance(value, list) or len(value) != length:
+                    raise ValueError("Response cardinality check failed")
+            text = _json_pointer(payload, self.profile.text_pointer)
+            if not isinstance(text, str):
+                raise ValueError("Output text must be a string")
+            if self.profile.result_schema_version is not None:
+                projection = json.loads(text)
+                if (
+                    not isinstance(projection, dict)
+                    or projection.get("schema_version") != self.profile.result_schema_version
+                ):
+                    raise ValueError("Unexpected projection schema")
+                text = json.dumps(
+                    projection,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            image = self.profile.image_output
+            if image is None:
+                return text, None
+            encoded = _json_pointer(payload, image.pointer)
+            if (
+                not isinstance(encoded, str)
+                or not encoded
+                or len(encoded) > 4 * ((image.max_decoded_bytes + 2) // 3)
+            ):
+                raise ValueError("Image output exceeds its encoded bound")
+            decoded = base64.b64decode(encoded, validate=True)
+            if not decoded or len(decoded) > image.max_decoded_bytes:
+                raise ValueError("Image output exceeds its decoded bound")
+            signatures = {
+                "image/png": decoded.startswith(b"\x89PNG\r\n\x1a\n"),
+                "image/jpeg": decoded.startswith(b"\xff\xd8\xff"),
+                "image/webp": decoded.startswith(b"RIFF") and decoded[8:12] == b"WEBP",
+            }
+            if not signatures[image.media_type]:
+                raise ValueError("Image signature does not match profile media type")
+            return text, f"data:{image.media_type};base64,{encoded}"
+        except (ValueError, KeyError, TypeError, IndexError, RecursionError) as exc:
+            raise ProviderResponseParseError(provider=self.provider_name) from exc
+
     def _invalid_request(self, message: str) -> ProviderRequestError:
         return ProviderRequestError(
             message,
@@ -425,6 +483,18 @@ class CompletionServiceAdapter(ServerModuleAdapter):
             error_type="invalid_request_error",
             error_code=self.profile.request_error_code,
         )
+
+
+def _json_pointer(value: Any, pointer: str) -> Any:
+    for segment in pointer[1:].split("/"):
+        key = segment.replace("~1", "/").replace("~0", "~")
+        if isinstance(value, Mapping):
+            value = value[key]
+        elif isinstance(value, list) and re.fullmatch(r"0|[1-9][0-9]*", key):
+            value = value[int(key)]
+        else:
+            raise ValueError("Output selector does not match response")
+    return value
 
 
 def _sanitize_text(value: str, *, max_bytes: int) -> str:

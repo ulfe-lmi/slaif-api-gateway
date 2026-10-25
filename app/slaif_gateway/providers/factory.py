@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from slaif_gateway.config import CLIENT_GATEWAY_KEY_ENV_VAR, Settings
 from slaif_gateway.modules.contracts import DEFAULT_CLIENT_MODULE_ID
-from slaif_gateway.modules.servers.completion_service.profiles import load_profile, profile_id_from_capabilities
+from slaif_gateway.modules.servers.completion_service.profiles import load_profile, resolve_profile_id
 from slaif_gateway.modules.servers.registry import (
     build_server_adapter,
     ensure_client_server_pair,
@@ -31,9 +31,9 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
 
     base_url = _provider_base_url(provider)
     api_key_env_var = _provider_api_key_env_var(provider) or _default_api_key_env_var(normalized)
-    if descriptor.module_id in {"facial_scoring", "configured-completion"}:
+    if descriptor.module_id == "configured-completion":
         profile = load_profile(
-            profile_id_from_capabilities(route_capabilities) or "facial-scoring-v1",
+            resolve_profile_id(normalized, route_capabilities),
             settings.COMPLETION_SERVICE_PROFILE_DIR,
         )
         api_key_env_var = api_key_env_var or profile.api_key_env_var
@@ -46,7 +46,7 @@ def get_provider_adapter(provider: object, settings: Settings) -> ProviderAdapte
     timeout_seconds = _provider_timeout_seconds(provider)
     max_retries = _provider_max_retries(provider)
 
-    if descriptor.module_id in {"facial_scoring", "configured-completion"}:
+    if descriptor.module_id == "configured-completion":
         if not base_url:
             raise ProviderConfigurationError(
                 "Native module provider requires a base URL",
@@ -131,8 +131,6 @@ def _default_api_key_env_var(provider: str) -> str | None:
         return _DEFAULT_OPENAI_API_KEY_ENV_VAR
     if provider == "openrouter":
         return _DEFAULT_OPENROUTER_API_KEY_ENV_VAR
-    if provider == "facial_scoring":
-        return "FACIAL_SCORING_API_KEY"
     return None
 
 

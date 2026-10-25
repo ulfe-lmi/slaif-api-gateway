@@ -9,7 +9,7 @@ they are not Codex routes or arbitrary OpenAI model replacements.
 | Profile | Public model | Native path / transport | Backend authentication | Assistant content |
 | --- | --- | --- | --- | --- |
 | `facial-scoring-v1` | `facial-manipulation-scoring` | `/v1/score`, multipart `image` | `X-API-Key`, `FACIAL_SCORING_API_KEY` | Existing score/unscorable text |
-| `zap-it-v1` | `zap-it-1` | `/v1/responses`, inline image and YAML file | Bearer, `ZAP_IT_API_KEY` | Canonical `zap-it.public.v1` JSON text |
+| `zap-it-v1` | `zap-it-1` | `/v1/responses`, inline image and YAML file | Bearer, `ZAP_IT_API_KEY` | Canonical `zap-it.public.v1` JSON text plus one annotated PNG |
 
 Both transports use the operator-configured provider origin. Profiles contain
 no backend address or credential value. They select reviewed mapping primitives,
@@ -47,7 +47,8 @@ For facial scoring, replace the profile ID with `facial-scoring-v1` and use
 provider slug `facial_scoring`. Existing facial routes without this selector
 continue to resolve the same shared adapter and bundled facial profile; no
 key or database migration is required. Legacy adapter imports are aliases,
-not a second implementation. ZAP-IT providers use the explicit selector;
+not a second implementation. The registry contains one generic descriptor;
+service/provider names occur in binding/profile JSON data, not routing branches. ZAP-IT providers use the explicit selector;
 unconfigured/unknown native modules still fail closed.
 
 Add an enabled pricing row for the same provider, upstream model and endpoint:
@@ -95,6 +96,10 @@ result = OpenAI().chat.completions.create(
 )
 projection = json.loads(result.choices[0].message.content)
 assert projection["schema_version"] == "zap-it.public.v1"
+# images is an explicit Chat response extension for custom clients.
+image_url = result.choices[0].message.model_extra["images"][0]["image_url"]["url"]
+assert image_url.startswith("data:image/png;base64,")
+Path("annotated.png").write_bytes(base64.b64decode(image_url.split(",", 1)[1], validate=True))
 ```
 
 For facial scoring, use `model="facial-manipulation-scoring"`, omit the YAML
@@ -108,25 +113,87 @@ retains PNG/JPEG/WebP/GIF compatibility; ZAP-IT accepts PNG/JPEG/WebP and exactl
 one non-empty YAML text part in one user message. Core request limits also
 apply; profile limits can narrow them, never grant a capability. Bundled image
 data-URL limits are 10 MiB encoded; YAML is at most 256 KiB; decoded upstream
-responses are bounded to 2 MiB, including error bodies. Image decoding and
+responses are bounded to 2 MiB for the facial profile and 32 MiB for the
+text-and-image profile, including error bodies. The latter additionally limits
+the decoded output image to 16 MiB; both ceilings apply. Image decoding and
 API-safe YAML semantic validation remain the backend's responsibility. YAML
 bytes are placed in an inline `application/yaml` file without interpreting
 them, executing them or treating their fields as gateway routing instructions.
 
 No streaming, remote images, extra images/messages for ZAP-IT, tools,
 non-default generation controls, client-selected paths/headers, ZIP output,
-debug artifacts or image-generation calls are accepted. The adapter sends only
+debug artifacts or client-selected image-generation tools are accepted. The adapter sends only
 the selected image and (for the YAML mapping) configuration. It never sends the
 gateway key, cookies or other client headers. Results have the normal Chat
 Completion envelope and zero token usage. ZAP-IT returns the public JSON
-projection only; masks, ZIPs, native L3/debug data and the optional annotated PNG
-are outside this profile. A malformed/private/incomplete upstream envelope
+projection plus exactly one final labelled PNG. The profile requests the
+backend's fixed image-output declaration and validates its completed output
+item before mapping the PNG; it does not forward client tool declarations.
+Masks, ZIPs and native L3/debug data are outside this profile. A malformed/private/incomplete upstream envelope
 fails with a safe gateway error rather than being passed through.
 
 The public gateway does not add `/v1/completions`, multipart ingress or module
 Responses ingress. ZAP-IT's private `/v1/completions` remains a separate native
 operator API; the shared adapter deliberately calls its documented public
 Responses facade. An upstream path name does not select the gateway wire API.
+
+## Generic text-and-image output mapping
+
+The shared `json_fields` response mapping works with any configured service
+using the supported transports. It does not inspect service names, model
+names or schema names in code. A profile selects the text with `text_pointer`
+and can select one base64 image using `image_output.pointer`, its declared
+PNG/JPEG/WebP MIME type and a decoded byte ceiling. These are bounded JSON
+pointers (including fixed array indexes and RFC 6901 escapes), never expressions,
+URLs, templates or executable functions. Optional `response_checks` enforce
+exact typed scalar markers; `response_array_lengths` enforce exact cardinality.
+For example, an unrelated multipart service can use:
+
+```json
+{
+  "response_mapping": "json_fields",
+  "text_pointer": "/caption",
+  "image_output": {
+    "pointer": "/picture",
+    "media_type": "image/png",
+    "max_decoded_bytes": 16777216
+  },
+  "max_response_bytes": 33554432
+}
+```
+
+This excerpt is merged into a full service profile. It requires no new adapter
+class or service-name condition. With no `result_schema_version`, text is passed
+as a string; with one, it must contain a JSON object bearing that configured
+schema version and is canonically serialized. With no `image_output`, the
+mapping remains text-only. A selected image is required: missing, malformed,
+oversized, wrong-signature or failed-marker results reject the whole completion
+rather than silently dropping the image or returning partial text.
+
+The response keeps `choices[0].message.content` as text and adds:
+
+```json
+{"images":[{"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}]}
+```
+
+`message.images` is a documented custom-client Chat extension, not a claim that
+standard OpenAI Chat image output or automatic SDK/UI image rendering is
+supported. The official SDK retains it in `message.model_extra`; custom clients
+can decode the inline image. No remote image URL is fetched or returned by this
+mapping. Strict base64, non-empty data, declared MIME signatures and encoded,
+decoded and complete-response byte bounds are checked. The gateway does not
+fully decode/re-encode the image or claim pixel-format/image-quality validation.
+
+For Responses-shaped backends, `request_image_output: true` adds the one fixed
+`image_generation` declaration to the translated upstream request. This is a
+generic transport option, allowed only alongside an image-output mapping and the
+Responses request mapper. Native multipart backends that already return an image
+leave it false. The ZAP-IT profile configures its output paths, completed-state
+checks and two-item cardinality in JSON; it uses the backend's deterministic
+annotation renderer, not a generative model. Other services can select entirely
+different response fields with the same engine. This setting does not enable
+public client tools, a gateway image-generation endpoint, streaming, or new key
+authority. Fixed-request accounting and privacy are unchanged.
 
 ## Operator overrides and verification
 

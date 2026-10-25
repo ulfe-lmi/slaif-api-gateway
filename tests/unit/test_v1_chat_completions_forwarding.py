@@ -450,7 +450,8 @@ def test_zap_module_uses_shared_adapter_and_existing_accounting(monkeypatch, res
         return_value=httpx.Response(200, json={"status": "completed", "output": [{
             "type": "message", "role": "assistant", "content": [{"type": "output_text",
             "text": '{"schema_version":"zap-it.public.v1","objects":[]}'}],
-        }]}),
+        }, {"type": "image_generation_call", "status": "completed",
+            "result": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII="}]}),
     )
     response = TestClient(app).post("/v1/chat/completions", json={
         "model": "zap-it-1", "messages": [{"role": "user", "content": [
