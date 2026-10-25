@@ -1659,7 +1659,9 @@ slaif-gateway catalog-refresh review \
 
 # 2) Take the NEW run directory from the command's own output (the
 #    `run_dir:` line) — do not infer it from a renamed archive
-#    directory — and verify it with --run-dir:
+#    directory. review prints that line as a file:// URI; --run-dir
+#    takes a filesystem path, so pass the corresponding path, not the
+#    URI literally. Then verify:
 slaif-gateway catalog-refresh verify \
   --run-dir /var/lib/slaif/catalog-refresh-runs-194.1/<new-run-id> \
   --seal-key /var/lib/slaif/catalog-refresh/seal.key
