@@ -550,7 +550,7 @@ def _assert_menus_closed(page: object) -> None:
 
 
 def test_owner_table_sorting_not_intercepted(chromium, usab_env) -> None:
-    """Real, unforced header-button clicks sort the owners table and the
+    """Real, unforced header-link clicks sort the owners table and the
     hidden record-choice menus never overlay/intercept them (the scoped
     ``.rc [hidden]`` regression)."""
     env = usab_env
@@ -573,7 +573,7 @@ def test_owner_table_sorting_not_intercepted(chromium, usab_env) -> None:
 
         def header_click(i: int) -> None:
             # NO force=: an overlaying hidden menu would intercept this.
-            th(i).locator("button").click(timeout=10000)
+            th(i).locator("a.ts-link").click(timeout=10000)
 
         def owner_names() -> list[str]:
             return [
@@ -625,20 +625,25 @@ def test_owner_table_sorting_not_intercepted(chromium, usab_env) -> None:
         values = key_values()
         assert values.index("10") < values.index("2")
 
-        # Keyboard activation of the header button (Enter / Space).
-        # The date column is currently UNSORTED (the previous clicks moved
-        # the sort to the numeric column), so the keyboard presses must
-        # walk the exact cycle: none -> ascending -> descending.
+        # Keyboard activation of the header hyperlink (193-a): links are
+        # natively activated by Enter (NOT by Space). The date column is
+        # currently UNSORTED (the previous clicks moved the sort to the
+        # numeric column), so Enter must walk none -> ascending ->
+        # descending, while Space must leave it unchanged.
         assert th(4).get_attribute("aria-sort") == "none"
-        button = th(4).locator("button")
-        button.focus()
+        header_link = th(4).locator("a.ts-link")
+        header_link.focus()
         page.keyboard.press("Enter")  # type: ignore[attr-defined]
         assert th(4).get_attribute("aria-sort") == "ascending", (
-            "Enter on the focused header button must sort ascending"
+            "Enter on the focused header link must sort ascending"
         )
         page.keyboard.press("Space")  # type: ignore[attr-defined]
+        assert th(4).get_attribute("aria-sort") == "ascending", (
+            "Space must NOT activate a header link (link semantics)"
+        )
+        page.keyboard.press("Enter")  # type: ignore[attr-defined]
         assert th(4).get_attribute("aria-sort") == "descending", (
-            "Space must toggle the sort direction to descending"
+            "Enter again must toggle the sort direction to descending"
         )
 
         # The hidden menus stayed hidden through every interaction, and a
@@ -684,9 +689,20 @@ def test_record_choice_batch_older_search_and_selection(chromium, usab_env) -> N
             "menu must close after keyboard selection"
         )
         assert _hidden_values(page, email_rc) == [f"u105-{suffix}@example.org"]
+        # 193-a: the selected value remains a chip; the integrated box
+        # keeps a blank search prompt (no duplicated value in the input).
         assert (
             page.locator(f"{email_rc} .rc-input").input_value()  # type: ignore[attr-defined]
-            == f"u105-{suffix}@example.org"
+            == ""
+        )
+        assert (
+            page.locator(f'{email_rc} .rc-selected .rc-chip').count() == 1
+        )
+        assert (
+            page.locator(
+                f'{email_rc} .rc-selected .rc-chip:has-text("u105-{suffix}@example.org")'
+            ).count()
+            == 1
         )
 
         # Re-opening shows the latest batch again (search starts empty).
@@ -802,8 +818,14 @@ def test_owner_create_dropdown_xss_redisplay_and_create(chromium, usab_env) -> N
         assert _hidden_values(page, inst_rc) == [env["institution_a_id"]]
         assert (
             page.locator(f"{inst_rc} .rc-input").input_value()  # type: ignore[attr-defined]
-            == env["institution_a_name"]
-        )
+            == ""
+        ), "redisplay keeps a blank search prompt in the integrated box"
+        assert (
+            page.locator(
+                f'{inst_rc} .rc-selected .rc-chip:has-text("{env["institution_a_name"]}")'
+            ).count()
+            == 1
+        ), "redisplay retains the selected institution as a chip"
 
         # 5) Fix the email and create for real.
         new_email = f"new-usab-{suffix}@example.org"
@@ -1130,7 +1152,7 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         assert sum(1 for c in costs if not c) == 1, "exactly one cost-missing row"
         assert sorted(tokens) == ["1000", "25", "75", "80", "90", "990"]
         cost_header = table.locator("thead th").filter(has_text="Cost (EUR)")
-        cost_header.locator("button").click()
+        cost_header.locator("a.ts-link").click()
         assert cost_header.get_attribute("aria-sort") == "ascending"
         rows = table.locator("tbody tr")
         ascending_costs = [
@@ -1167,7 +1189,7 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
                     f"estimate-only row must show the estimate: {visible!r}"
                 )
         token_header = table.locator("thead th").filter(has_text="Tokens (total)")
-        token_header.locator("button").click()
+        token_header.locator("a.ts-link").click()
         rows = table.locator("tbody tr")
         ascending_tokens = [
             rows.nth(i).locator("td").nth(4).get_attribute("data-sort-value")
@@ -1184,7 +1206,7 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         rows = table.locator("tbody tr")
         assert rows.count() == before_count == 12
         limits_header = table.locator("thead th").filter(has_text="Limits (requests)")
-        limits_header.locator("button").click()
+        limits_header.locator("a.ts-link").click()
         assert limits_header.get_attribute("aria-sort") == "ascending"
         rows = table.locator("tbody tr")
         limits = [
@@ -1206,7 +1228,7 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         assert rows.count() == 3
         assert page.locator(".summary-card strong").nth(0).inner_text() == "3"
         quotas_header = table.locator("thead th").filter(has_text="Quotas")
-        quotas_header.locator("button").click()
+        quotas_header.locator("a.ts-link").click()
         assert quotas_header.get_attribute("aria-sort") == "ascending"
         rows = table.locator("tbody tr")
         preview_costs = [
@@ -1272,13 +1294,13 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         assert all("created" in action.lower() for action in created), created
         # Row numbers sort numerically descending (3, 2, 1).
         row_header = table.locator("thead th").filter(has_text="Row")
-        row_header.locator("button").click()
+        row_header.locator("a.ts-link").click()
         assert row_header.get_attribute("aria-sort") == "ascending"
         rows = table.locator("tbody tr")
         assert [
             rows.nth(i).locator("td").nth(0).inner_text().strip() for i in range(3)
         ] == ["1", "2", "3"]
-        row_header.locator("button").click()
+        row_header.locator("a.ts-link").click()
         assert row_header.get_attribute("aria-sort") == "descending"
         rows = table.locator("tbody tr")
         assert [
@@ -1289,7 +1311,7 @@ def test_import_preview_execute_and_related_tables(chromium, usab_env) -> None:
         # cell (3) + quota cell (6); the one-time plaintext key cell (4)
         # is never read, so an assertion failure cannot log it.
         quotas_header = table.locator("thead th").filter(has_text="Quotas")
-        quotas_header.locator("button").click()
+        quotas_header.locator("a.ts-link").click()
         rows = table.locator("tbody tr")
         result_costs = [
             rows.nth(i).locator("td").nth(6).get_attribute("data-sort-value")
@@ -1472,12 +1494,21 @@ def test_allow_new_physical_keystroke_typed_value_is_authoritative(
         page.keyboard.press("ArrowDown")  # type: ignore[attr-defined]
         page.keyboard.press("Enter")  # type: ignore[attr-defined]
         assert not _menu_visible(page, inst_rc), "menu must close after keyboard selection"
+        # 193-a: explicit option selection maps the label to its stored
+        # value in the managed hidden field; the integrated box keeps a
+        # blank search prompt and the value remains a chip.
         assert (
             page.locator(f"{inst_rc} .rc-input").input_value()  # type: ignore[attr-defined]
-            == known_name
+            == ""
         )
         assert _hidden_values(page, inst_rc) == [known_name]
         assert new_name not in _hidden_values(page, inst_rc)
+        assert (
+            page.locator(
+                f'{inst_rc} .rc-selected .rc-chip:has-text("{known_name}")'
+            ).count()
+            == 1
+        )
 
 
 # ---------------------------------------------------------------------------

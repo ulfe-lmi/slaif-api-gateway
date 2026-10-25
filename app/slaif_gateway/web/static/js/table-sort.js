@@ -12,10 +12,13 @@
  *   same header reverses to descending. Clicking a different column selects
  *   that column ascending. The initial business ordering is kept until the
  *   first click.
- * - Header controls are real <button type="button"> elements: keyboard
- *   focusable, operable with Enter and Space (native button activation),
- *   with the direction announced through <th aria-sort> and a visible
- *   marker.
+ * - Header controls are real focusable text hyperlinks (<a href="#ts-sort">,
+ *   a safe local fragment target: no network, no navigation because the
+ *   click handler always prevents the default). Native link activation is
+ *   Enter; the direction is announced through <th aria-sort> and a visible
+ *   marker. A subtle neutral sortability indicator is reserved BEFORE the
+ *   first click (no header layout jump) and is replaced by the specific
+ *   up/down marker after a column is sorted.
  * - Column types via <th data-sort-type="...">:
  *     text (default)  case-insensitive natural-order text (2 < 10)
  *     number          genuine numeric comparison; typed plain-decimal keys
@@ -195,6 +198,14 @@
     return Number.isFinite(t) ? t : null;
   };
 
+  /* Header sort markers: a neutral sortability indicator is shown BEFORE
+     the first click (reserved space, no layout jump); after a sort the
+     specific up/down marker replaces it. */
+  const NEUTRAL_MARKER = "\u2195";
+  const ASCENDING_MARKER = "\u2191";
+  const DESCENDING_MARKER = "\u2193";
+  const SORT_FRAGMENT = "#ts-sort";
+
   /** Parse one cell into {missing, value} for the given column type. */
   const parseCell = (cell, type) => {
     const rawAttr = cell.hasAttribute("data-sort-value")
@@ -365,10 +376,17 @@
 
     const updateAria = () => {
       ths.forEach((th, i) => {
+        const active = i === state.col;
         th.setAttribute(
           "aria-sort",
-          i === state.col ? (state.dir === 1 ? "ascending" : "descending") : "none"
+          active ? (state.dir === 1 ? "ascending" : "descending") : "none"
         );
+        const indicator = th.querySelector(".ts-indicator");
+        if (indicator) {
+          indicator.textContent = active
+            ? (state.dir === 1 ? ASCENDING_MARKER : DESCENDING_MARKER)
+            : NEUTRAL_MARKER;
+        }
       });
     };
 
@@ -416,16 +434,31 @@
 
     ths.forEach((th, index) => {
       const label = normalize(th.textContent);
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "ts-btn";
-      button.textContent = label;
-      button.setAttribute("aria-label", "Sort by " + label);
+      // A real focusable text hyperlink (193-a): safe local fragment
+      // target, no network. Enter activates it natively; the click
+      // handler prevents ordinary navigation (mouse or Enter) and
+      // toggles the sort.
+      const link = document.createElement("a");
+      link.className = "ts-link";
+      link.href = SORT_FRAGMENT;
+      const labelSpan = document.createElement("span");
+      labelSpan.className = "ts-label";
+      labelSpan.textContent = label;
+      const indicator = document.createElement("span");
+      indicator.className = "ts-indicator";
+      indicator.setAttribute("aria-hidden", "true");
+      indicator.textContent = NEUTRAL_MARKER;
+      link.appendChild(labelSpan);
+      link.appendChild(indicator);
+      link.setAttribute("aria-label", "Sort by " + label);
       th.textContent = "";
-      th.appendChild(button);
+      th.appendChild(link);
       th.classList.add("ts-col");
       th.setAttribute("aria-sort", "none");
-      button.addEventListener("click", () => selectColumn(index));
+      link.addEventListener("click", (event) => {
+        event.preventDefault();
+        selectColumn(index);
+      });
     });
 
     // Initial business ordering is preserved until the first click.

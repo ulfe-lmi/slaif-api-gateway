@@ -15,9 +15,18 @@ This document is the coverage reference. It does not replace
 
 - Every admin list `<table>` carries `data-sortable`. The shared
   fixed source `web/static/js/table-sort.js` upgrades each header
-  into a real, keyboard-focusable `<button type="button">` (Enter and
-  Space work natively) and announces direction through
+  into a real, keyboard-focusable text hyperlink
+  (`<a class="ts-link" href="#ts-sort">`, a safe local fragment, no
+  network) and announces direction through
   `<th aria-sort="ascending|descending|none">`.
+- Hyperlink semantics: a normal click and Enter (native link
+  activation) toggle the sort; Space does NOT activate a link, so
+  button-style keyboard assertions do not apply. Hover/focus use a
+  readable accent underline without a button background fill.
+- Before the first click every sortable header shows a subtle
+  NEUTRAL sortability marker (U+2195, reserved indicator space, no
+  layout jump); after the first click it shows the specific
+  up (U+2191) / down (U+2193) marker of the active direction.
 - First click on a header sorts that column ascending; the next click
   on the same header reverses to descending; clicking a different
   column selects it ascending. The initial server/business ordering is
@@ -65,10 +74,14 @@ lives in `tests/browser/test_admin_usability.py` and
 
 The one-page report embeds the SAME fixed `table-sort.js` bytes
 (single source of truth; byte equality is asserted by tests) as its
-only script, under `script-src 'unsafe-inline'` CSP. The report stays
-a single self-contained file: no network on open, no eval/Function,
-no user-controlled executable content, and it remains fully readable
-with JavaScript disabled.
+only script, under `script-src 'unsafe-inline'` CSP, with its fixed
+style carrying the hyperlink-header look. The report stays a single
+self-contained file: no network on open, no eval/Function, no
+user-controlled executable content, and it remains fully readable
+with JavaScript disabled. Its `<main>` carries the local `ts-sort`
+fragment target so the hyperlink sort headers resolve to an id that
+exists in the document (the report's internal-link audit enforces
+this).
 
 ## 2. Known-record choices (searchable pickers)
 
@@ -115,6 +128,55 @@ by `web/static/js/record-choices.js`:
 - No-JavaScript fallback: single fields are plain text inputs
   (prefilled, raw value submitted); multi fields are real
   newline-preserving textareas. Existing server validation applies.
+
+### Visual contract (193-a)
+
+The picker reads as ONE integrated control, not a field plus detached
+buttons:
+
+- The entry field, the compact clear affordance, and the arrow all sit
+  INSIDE a single 42px bordered box (`.rc-main`, 6px radius). Single
+  controls are one 42px line; multi controls keep their natural
+  multi-line height WITHOUT JavaScript (the no-JS fallback stays fully
+  usable) and collapse to one 42px line only after JavaScript
+  enhancement (chips then carry the values).
+- A single currently selected value remains a CHIP below the box; the
+  box itself keeps a BLANK search prompt (the default prompt is
+  "Search or select…" unless the caller supplies one) for the next
+  search instead of duplicating the value. The submitted value is the
+  managed hidden field, so scalar form authority is unchanged.
+- Unified filter-bar typography: labels 13px/600 muted (native and
+  picker labels share it), values 14px/400 (native selects and
+  picker entry fields share it). Filter bars are TOP-aligned; chips,
+  help, and new rows expand DOWNWARD and never move preceding
+  headers/inputs or the Filter button.
+- Native single dropdowns show a decorative arrow matching the picker
+  chevron geometry; it is drawn from the theme tokens
+  (`--accent`/`--accent-dark`) so an operator theme re-tints it with
+  every other accent element. `multiple`/`size` listboxes (the
+  policy dual-lists) keep the native box; native select behavior,
+  keyboard, and option rendering are unchanged.
+- Header actions (primary button + plain-text secondary links/signout)
+  share one vertically-centered optical line; the dashboard groups the
+  existing destinations under "Access management", "Providers and
+  models", and "Usage and operations" with the product heading inside
+  the dashboard body (no implementation-oriented status prose).
+- Admin management pages are TOP-anchored: the content panel starts
+  directly below the shared header and growth (long tables, chip
+  rows) pushes the table DOWN; nothing is vertically centered.
+
+### Asset revision URLs
+
+Bundled admin CSS/JS are served under a deterministic local content
+revision: `/admin/static/<asset>?v=<sha256 prefix of the exact bytes>`
+(`web/assets.py`, a fixed allowlist of logical names). Changed bytes
+produce a changed URL, so a browser that cached an old component picks
+up the new one on the next page load; unchanged bytes stay stable.
+The digest covers file content only (no paths, environment values, or
+secret material in the URL); there is no remote asset service, cache
+framework, service worker, database, or build step. An already-open
+stale page may still need one hard refresh (browser choice); every
+newly loaded page uses the current revision.
 
 ### Lookup endpoint boundary
 
@@ -356,5 +418,8 @@ plaintext cell.
 ## 7. Verification
 
 See `docs/verification/2026-10-25-admin-usability.md` for the
-objective verification record (focused JUnit counts, actual-browser
-facts, owned-PostgreSQL facts, and honest skips).
+192-a verification record (focused JUnit counts, actual-browser
+facts, owned-PostgreSQL facts, and honest skips) and
+`docs/verification/2026-10-25-admin-visual-consolidation.md` for the
+193-a visual-consolidation record (hyperlink headers, integrated
+control appearance, asset-revision URLs, A1 screenshots).

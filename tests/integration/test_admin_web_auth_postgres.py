@@ -154,7 +154,14 @@ def test_admin_web_auth_session_and_csrf_flow(migrated_postgres_url: str) -> Non
 
         dashboard = client.get("/admin")
         assert dashboard.status_code == 200
-        assert "Dashboard Foundation" in dashboard.text
+        # 193-a: product heading + grouped dashboard; the old
+        # implementation-oriented foundation prose is gone. Secret-output
+        # guards below are unchanged.
+        assert '<h1 id="dashboard-heading">SLAIF API Gateway</h1>' in dashboard.text
+        assert "<h2>Access management</h2>" in dashboard.text
+        assert "<h2>Providers and models</h2>" in dashboard.text
+        assert "<h2>Usage and operations</h2>" in dashboard.text
+        assert "Dashboard Foundation" not in dashboard.text
         assert "password_hash" not in dashboard.text
         assert session_cookie not in dashboard.text
         logout_csrf = _csrf_from_html(dashboard.text)

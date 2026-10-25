@@ -864,9 +864,9 @@ def test_browser_layout_all_cases(playwright, case_html) -> None:
 
 def test_browser_report_sort_script_js_on(playwright, case_html) -> None:
     """192-a: with JavaScript enabled the report must still perform exactly
-    one network request (the document itself), and real header-button
-    clicks must sort the rendered rows: aria-sort none → ascending →
-    descending, visible row order following, and tables independent."""
+    one network request (the document itself), and real header-hyperlink
+    clicks must sort the rendered rows (193-a): aria-sort none → ascending
+    → descending, visible row order following, tables independent."""
     html_path = case_html["two-provider"]
     requests: list[str] = []
     browser = playwright.chromium.launch()
@@ -909,7 +909,7 @@ def test_browser_report_sort_script_js_on(playwright, case_html) -> None:
         prov_before = prov_order()
         assert prov_before == ["openai", "openrouter"], prov_before
 
-        field_th.locator("button").click()
+        field_th.locator("a.ts-link").click()
         assert field_th.get_attribute("aria-sort") == "ascending"
         ascending = [
             field_table.locator("tbody tr").nth(i).locator("td").first.inner_text()
@@ -919,7 +919,7 @@ def test_browser_report_sort_script_js_on(playwright, case_html) -> None:
         assert ascending != initial
         assert prov_order() == prov_before, "independent table must not move"
 
-        field_th.locator("button").click()
+        field_th.locator("a.ts-link").click()
         assert field_th.get_attribute("aria-sort") == "descending"
         descending = [
             field_table.locator("tbody tr").nth(i).locator("td").first.inner_text()
@@ -933,10 +933,10 @@ def test_browser_report_sort_script_js_on(playwright, case_html) -> None:
         # openrouter New=0. Ascending must flip to openrouter first;
         # descending flips back to openai first.
         new_header = page.locator("#per-provider thead th").filter(has_text="New")
-        new_header.locator("button").click()
+        new_header.locator("a.ts-link").click()
         assert new_header.get_attribute("aria-sort") == "ascending"
         assert prov_order() == ["openrouter", "openai"], "numeric ascending wrong"
-        new_header.locator("button").click()
+        new_header.locator("a.ts-link").click()
         assert new_header.get_attribute("aria-sort") == "descending"
         assert prov_order() == ["openai", "openrouter"], "numeric descending wrong"
 

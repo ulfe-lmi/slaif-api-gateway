@@ -193,7 +193,9 @@ def test_login_page_renders_shared_shell_without_navigation() -> None:
     assert 'class="brand-lockup admin-brand" href="/admin"' in html
     assert 'id="admin-main"' in html
     assert 'class="admin-footer"' in html
-    assert 'src="/admin/static/js/navigation.js"' in html
+    # 193-a: bundled local scripts are referenced with a content-revision
+    # query string (cache identity), never a CDN.
+    assert re.search(r'src="/admin/static/js/navigation\.js\?v=[0-9a-f]{16}"', html)
     # Unauthenticated: no section navigation or expanded-state controls.
     assert 'id="admin-nav"' not in html
     assert 'data-nav-toggle' not in html
@@ -264,10 +266,14 @@ def test_error_pages_preserve_status_message_and_shell() -> None:
 def test_error_page_escapes_message_data() -> None:
     from jinja2 import Environment, FileSystemLoader
 
+    from slaif_gateway.web.assets import asset_url
+
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATES_DIR)),
         autoescape=True,
     )
+    # base.html resolves the bundled asset revision global (193-a).
+    env.globals["asset_url"] = asset_url
     template = env.get_template("error.html")
     # error.html extends base.html, which needs the context values.
     rendered = template.render(

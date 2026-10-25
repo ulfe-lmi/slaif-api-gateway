@@ -38,6 +38,14 @@
                   selected_label or selected_id; forms with id-based server
                   fields pass the raw id so a no-JS submission stays valid)
 -#}
+{#-
+  Visual contract (193-a): the control reads as ONE integrated
+  textbox/dropdown - the entry field, the compact clear affordance, and the
+  arrow all sit INSIDE a single 42px bordered box (CSS: .rc-main). Chips
+  and help expand BELOW the box. Element classes (.rc-input, .rc-clear,
+  .rc-open) and all data-* attributes are unchanged, so record-choices.js
+  and the no-JS fallback keep their exact behavior.
+-#}
 {% macro record_choice(
     name, kind, label_text,
     options=none,
@@ -73,13 +81,19 @@
         data-selected-label="{{ selected_label or '' }}"
         {% endif %}
         data-initial-options='{{ options | tojson_attr if options is not none else "[]" }}'>
+    {#- Default visible prompt (193-a): blank integrated boxes must read as
+        searchable/selectable; explicit caller placeholders still win. -#}
+    {%- set field_placeholder = placeholder if placeholder else 'Search or select…' -%}
     {% if multi %}
-    <textarea class="rc-input" name="{{ name }}" rows="2" autocomplete="off"
-              spellcheck="false" placeholder="{{ placeholder }}">{{ multi_value or '' }}</textarea>
+    <span class="rc-main rc-main-multi">
+      <textarea class="rc-input" name="{{ name }}" rows="2" autocomplete="off"
+                spellcheck="false" placeholder="{{ field_placeholder }}">{{ multi_value or '' }}</textarea>
+      <span class="rc-chevron rc-chevron-static" aria-hidden="true"></span>
+    </span>
     {% else %}
     <span class="rc-main">
       <input type="text" class="rc-input" name="{{ name }}" autocomplete="off"
-             spellcheck="false" placeholder="{{ placeholder }}"
+             spellcheck="false" placeholder="{{ field_placeholder }}"
              value="{{ nojs_value if nojs_value is not none else (selected_label or selected_id or '') }}"
              aria-expanded="false" aria-autocomplete="list"
              role="combobox">
@@ -87,7 +101,9 @@
               aria-label="Clear {{ label_text }}">&#215;</button>
       <button type="button" class="rc-open" aria-haspopup="listbox"
               aria-expanded="false"
-              aria-label="Show {{ label_text }} choices">&#9662;</button>
+              aria-label="Show {{ label_text }} choices">
+        <span class="rc-chevron" aria-hidden="true"></span>
+      </button>
     </span>
     {% endif %}
     <span class="rc-selected" hidden></span>

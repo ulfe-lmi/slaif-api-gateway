@@ -185,6 +185,14 @@ dl.kv dd { margin: 0; overflow-wrap: anywhere; }
 table { border-collapse: collapse; width: 100%; margin: 4px 0 8px; font-size: 14px; }
 th, td { border: 1px solid #cbd5e0; padding: 3px 6px; text-align: left; vertical-align: top; }
 th { background: #f7fafc; overflow-wrap: normal; }
+/* Sortable-table header hyperlinks (193-a): the shared fixed
+   table-sort.js creates real focusable <a> headers; readable link look
+   with reserved neutral indicator, no button backgrounds. */
+th .ts-link { color: #2b6cb0; text-decoration: underline; text-decoration-color: #a8c7e0; text-underline-offset: 2px; font-weight: 600; white-space: nowrap; background: transparent; }
+th .ts-link:hover { color: #1a4f83; text-decoration-color: #1a4f83; background: transparent; }
+th .ts-indicator { color: #a0aec0; font-size: 13px; }
+th[aria-sort="ascending"] .ts-link, th[aria-sort="descending"] .ts-link { color: #1a4f83; text-decoration-color: #1a4f83; }
+th[aria-sort="ascending"] .ts-indicator, th[aria-sort="descending"] .ts-indicator { color: #2b6cb0; font-weight: 700; }
 td { overflow-wrap: anywhere; }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .wrap { overflow-wrap: anywhere; }
@@ -1866,7 +1874,10 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
         f"<script>{_fixed_sort_script()}</script>",
         "</head>",
         "<body>",
-        "<main>",
+        # 193-a: local fragment target for the hyperlink sort headers
+        # (the report internal-link audit requires every href="#x"
+        # to resolve to an id present in the document).
+        '<main id="ts-sort">',
         "<header>",
         "<h1>SLAIF catalog refresh review</h1>",
         (

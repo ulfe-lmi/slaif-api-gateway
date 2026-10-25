@@ -10,6 +10,12 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-25 Objective 193-a admin-visual-consolidation verification`](2026-10-25-admin-visual-consolidation.md)
+  (recorded 2026-10-25) — focused unit (401 passed) and native-Chromium
+  owned-PostgreSQL evidence for the shared visual foundations,
+  hyperlink table-sort headers, integrated record-choice control
+  appearance, and deterministic local asset-revision URLs; synthetic
+  data only, no real provider/model/email claim.
 - [`2026-10-25 Objective 192-a admin-usability verification`](2026-10-25-admin-usability.md)
   (recorded 2026-10-25) — focused JUnit, owned-PostgreSQL, real
   authenticated admin HTTP, and native-Chromium evidence for the

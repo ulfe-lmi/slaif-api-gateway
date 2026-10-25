@@ -241,6 +241,7 @@ from slaif_gateway.services.streaming_live_burn_surface import (
     streaming_live_burn_surface_policy_summary,
 )
 from slaif_gateway.utils.redaction import redact_text
+from slaif_gateway.web.assets import asset_url
 from slaif_gateway.web.branding import (
     branding_css_link_html,
     branding_enabled,
@@ -312,6 +313,10 @@ def _utc_datetime_local(value: datetime | str | None) -> str:
 
 
 templates.env.filters["utc_datetime_local"] = _utc_datetime_local
+
+# Deterministic local asset revision URLs (193-a): changed bundled CSS/JS
+# bytes are served under a changed ?v= URL; unchanged bytes stay stable.
+templates.env.globals["asset_url"] = asset_url
 logger = structlog.get_logger(__name__)
 
 

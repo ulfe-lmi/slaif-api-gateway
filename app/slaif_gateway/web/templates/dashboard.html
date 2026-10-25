@@ -1,41 +1,95 @@
 {% extends "base.html" %}
 
-{% block title %}Admin Dashboard{% endblock %}
+{% block title %}SLAIF API Gateway — Administration{% endblock %}
 
 {% block body %}
 <section class="dashboard-shell" aria-labelledby="dashboard-heading">
   <header class="dashboard-header">
     <div class="brand-copy">
-      <p class="eyebrow">Gateway Admin</p>
-      <h1 id="dashboard-heading">Admin Dashboard</h1>
-      <p class="muted">Signed in as {{ admin.display_name }} &lt;{{ admin.email }}&gt;</p>
+      <p class="eyebrow">Administration</p>
+      <h1 id="dashboard-heading">SLAIF API Gateway</h1>
+      <p class="lead">Manage access, providers, and usage.</p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
     </div>
     <div class="header-actions">
+      <a class="button-link" href="/admin/keys/create">Create gateway key</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="secondary">Sign out</button>
+        <button type="submit" class="signout">Sign out</button>
       </form>
     </div>
   </header>
 
-  <div class="placeholder">
-    <h2>Dashboard Foundation</h2>
-    <p>Authentication, server-side sessions, and CSRF protection are active.</p>
-    <div class="dashboard-links">
-      <a class="button-link" href="/admin/keys">View gateway keys</a>
-      <a class="button-link" href="/admin/keys/create">Create gateway key</a>
-      <a class="button-link secondary" href="/admin/owners">View owners</a>
-      <a class="button-link secondary" href="/admin/institutions">View institutions</a>
-      <a class="button-link secondary" href="/admin/cohorts">View cohorts</a>
-      <a class="button-link secondary" href="/admin/providers">View providers</a>
-      <a class="button-link secondary" href="/admin/routes">View routes</a>
-      <a class="button-link secondary" href="/admin/pricing">View pricing</a>
-      <a class="button-link secondary" href="/admin/openai-assisted">OpenAI assisted proposals</a>
-      <a class="button-link secondary" href="/admin/templates">View key templates</a>
-      <a class="button-link secondary" href="/admin/fx">View FX rates</a>
-      <a class="button-link secondary" href="/admin/usage">View usage</a>
-      <a class="button-link secondary" href="/admin/audit">View audit log</a>
-      <a class="button-link secondary" href="/admin/email-deliveries">View email deliveries</a>
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Access management</h2>
+      <p class="dash-group-intro">People, groups, and gateway credentials.</p>
+      <ul>
+        <li>
+          <a href="/admin/keys">Gateway keys</a>
+          <p>Review, manage, and revoke access.</p>
+        </li>
+        <li>
+          <a href="/admin/owners">Owners</a>
+          <p>People and service identities.</p>
+        </li>
+        <li>
+          <a href="/admin/institutions">Institutions</a>
+          <p>Organize owners by institution.</p>
+        </li>
+        <li>
+          <a href="/admin/cohorts">Cohorts</a>
+          <p>Manage groups and workshops.</p>
+        </li>
+        <li>
+          <a href="/admin/templates">Key templates</a>
+          <p>Reuse key configuration and policies.</p>
+        </li>
+      </ul>
+    </div>
+    <div class="dash-group">
+      <h2>Providers and models</h2>
+      <p class="dash-group-intro">Configure the services behind the gateway.</p>
+      <ul>
+        <li>
+          <a href="/admin/providers">Providers</a>
+          <p>Manage upstream connections.</p>
+        </li>
+        <li>
+          <a href="/admin/routes">Routes</a>
+          <p>Connect public models to providers.</p>
+        </li>
+        <li>
+          <a href="/admin/pricing">Pricing</a>
+          <p>Review model rates and costs.</p>
+        </li>
+        <li>
+          <a href="/admin/openai-assisted">OpenAI assisted proposals</a>
+          <p>Prepare and review catalog proposals.</p>
+        </li>
+      </ul>
+    </div>
+    <div class="dash-group">
+      <h2>Usage and operations</h2>
+      <p class="dash-group-intro">Review activity, costs, and delivery.</p>
+      <ul>
+        <li>
+          <a href="/admin/usage">Usage</a>
+          <p>Inspect requests and consumption.</p>
+        </li>
+        <li>
+          <a href="/admin/audit">Audit log</a>
+          <p>Review administrative activity.</p>
+        </li>
+        <li>
+          <a href="/admin/email-deliveries">Email deliveries</a>
+          <p>Check delivery status and failures.</p>
+        </li>
+        <li>
+          <a href="/admin/fx">Exchange rates</a>
+          <p>Manage currency conversion rates.</p>
+        </li>
+      </ul>
     </div>
   </div>
 </section>

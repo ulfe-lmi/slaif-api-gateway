@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -351,7 +352,8 @@ def test_authenticated_create_form_renders_safe_fields(monkeypatch) -> None:
     assert 'name="allow_all_models" value="true"' in response.text
     assert 'name="allowed_endpoints"' in response.text
     assert 'name="allow_all_endpoints" value="true"' in response.text
-    assert 'src="/admin/static/js/policy-selector.js"' in response.text
+    # 193-a: bundled local scripts carry a content-revision query string.
+    assert re.search(r'src="/admin/static/js/policy-selector\.js\?v=[0-9a-f]{16}"', response.text)
     assert "Add selected -&gt;" in response.text
     assert "OpenAI | openai | openai_compatible" in response.text
     assert "gpt-4o-* | openrouter | /v1/chat/completions | glob" in response.text

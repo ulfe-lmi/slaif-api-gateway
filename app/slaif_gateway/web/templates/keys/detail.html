@@ -16,7 +16,7 @@
       <a class="button-link secondary" href="/admin/keys">All keys</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="secondary">Sign out</button>
+        <button type="submit" class="signout">Sign out</button>
       </form>
     </div>
   </header>
@@ -573,7 +573,7 @@
     </div>
   </section>
 </section>
-<script src="/admin/static/js/policy-selector.js"></script>
-<script src="/admin/static/js/streaming-live-burn.js"></script>
-<script src="/admin/static/js/lazy-throttling.js"></script>
+<script src="{{ asset_url('policy-selector.js') }}"></script>
+<script src="{{ asset_url('streaming-live-burn.js') }}"></script>
+<script src="{{ asset_url('lazy-throttling.js') }}"></script>
 {% endblock %}
