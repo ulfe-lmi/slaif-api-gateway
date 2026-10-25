@@ -20,7 +20,7 @@ from slaif_gateway.schemas.catalog_refresh import (
     BaselineTarget,
 )
 import test_catalog_refresh_source_evidence as _evidence_tests
-import catalog_report_script_audit as _script_audit
+from tests.unit import catalog_report_script_audit as _script_audit
 
 from slaif_gateway.services.catalog_refresh.baseline import (
     canonical_baseline_content,

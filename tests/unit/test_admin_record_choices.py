@@ -25,8 +25,10 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from slaif_gateway.api import admin
+from slaif_gateway.config import Settings
 from slaif_gateway.db.models import STATUS_VALUES_EMAIL_DELIVERIES, Owner
 from slaif_gateway.services.admin_record_choices import (
     CHOICE_LIMIT,
@@ -41,6 +43,7 @@ from slaif_gateway.services.admin_record_choices import (
     _uuids,
     load_choices,
 )
+from slaif_gateway.main import create_app
 from slaif_gateway.services.key_policy_validation import IMPLEMENTED_CLIENT_ENDPOINTS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -386,3 +389,51 @@ def test_report_embeds_identical_fixed_sort_script_bytes() -> None:
 
     embedded = rendering._fixed_sort_script()
     assert str(embedded).strip() == _js_source(TABLE_SORT_PATH).strip()
+
+
+# ---------------------------------------------------------------------------
+# Admin GET optional bool filters: the "Any" option submits BLANK, which
+# must parse as "no filter" (the same semantics as omitting the parameter)
+# on the nine optional admin list filters. True/false keep their meaning;
+# an invalid NON-blank value must still be rejected. This exercises the
+# REAL FastAPI query parsing (a TypeAdapter-only check missed the original
+# RHS `Query(None)` metadata loss), with no auth and no database: an
+# unauthenticated parse-accepted request gets the 303 login redirect, a
+# parse failure gets 422 before anything else.
+# ---------------------------------------------------------------------------
+
+_ADMIN_BOOL_FILTERS: tuple[tuple[str, str], ...] = (
+    ("/admin/keys", "expired"),
+    ("/admin/cohorts", "active"),
+    ("/admin/providers", "enabled"),
+    ("/admin/routes", "enabled"),
+    ("/admin/routes", "visible"),
+    ("/admin/pricing", "enabled"),
+    ("/admin/pricing", "active"),
+    ("/admin/fx", "active"),
+    ("/admin/usage", "streaming"),
+)
+
+
+def _bool_filter_client() -> TestClient:
+    settings = Settings(
+        APP_ENV="test",
+        DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+        ADMIN_SESSION_SECRET="s" * 40,
+    )
+    return TestClient(create_app(settings))
+
+
+@pytest.mark.parametrize("path,param", _ADMIN_BOOL_FILTERS)
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("", 303), ("true", 303), ("false", 303), ("not-a-bool", 422)],
+)
+def test_admin_get_optional_bool_filter_any_blank_true_false_invalid(
+    path: str, param: str, value: str, expected: int
+) -> None:
+    client = _bool_filter_client()
+    response = client.get(path, params={param: value}, follow_redirects=False)
+    assert response.status_code == expected, (
+        f"{path}?{param}={value!r} must be {expected} (blank=Any=no filter)"
+    )

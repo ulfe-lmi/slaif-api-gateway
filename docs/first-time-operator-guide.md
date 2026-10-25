@@ -267,6 +267,24 @@ http://localhost:8000/admin/login
 Log in with `admin@example.org` and the password you supplied. Login errors
 are intentionally generic.
 
+### Dashboard basics (sortable lists, record pickers)
+
+The admin lists are sortable in the browser: click a column header
+(Enter or Space also work) to sort that column ascending, click it
+again to reverse; columns show machine values (counts, limits,
+timestamps, money) in their correct numeric/money order, missing
+values always sort last. Known-record fields (owner, provider, model,
+currency, …) are searchable pickers over the latest ~100 local records
+with a server-side search box for older ones; free-typed values are
+only accepted where the field allows them, and the dashboard works
+without JavaScript (plain form fields). Boolean list filters offer
+Any / Yes / No; "Any" applies no filter. Details:
+`docs/admin-usability.md`.
+
+After updating the deployment (image rebuild or restart), hard-refresh
+the browser (Ctrl/Cmd+Shift+R) once so the dashboard's updated
+JavaScript is loaded; there is no database migration for this feature.
+
 ## Pricing
 
 The gateway needs local pricing metadata before cost-limited requests can be

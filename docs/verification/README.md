@@ -10,6 +10,11 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-25 Objective 192-a admin-usability verification`](2026-10-25-admin-usability.md)
+  (recorded 2026-10-25) — focused JUnit, owned-PostgreSQL, real
+  authenticated admin HTTP, and native-Chromium evidence for the
+  sortable-table and known-record/known-option picker surfaces;
+  synthetic data only, no real provider/model/email claim.
 - [`Incoming request capture bounded verification`](incoming-request-capture.md)
   (recorded 2026-10-18) — objective 191: unit/multiprocess-store/
   fresh-HTTP-owned-PG-mock-backend results for the default-OFF operator

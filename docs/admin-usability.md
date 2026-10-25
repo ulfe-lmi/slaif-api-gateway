@@ -89,6 +89,15 @@ by `web/static/js/record-choices.js`:
 - Single-value fields submit the selected id through a managed hidden
   input; `allow_new` fields also accept a typed new value, and the
   server validation stays authoritative.
+- Typed-entry law: in an `allow_new` field the primary input keeps
+  focus while typing and its text is the submitted candidate value
+  EXACTLY as typed (model IDs, route aliases, and names may be opaque
+  and case-sensitive — no implicit label normalization). Only an
+  explicit option selection (mouse or keyboard on a rendered option)
+  maps a display label to its stored id. The clear button tracks the
+  current value, and clearing also drops stale search state (pending
+  debounce and in-flight results cannot reintroduce the cleared query;
+  dependent controls re-fetch scoped to the CURRENT parent value).
 - Multi-value fields manage a chip list plus either one hidden input
   per value or one newline-serialized hidden input (`serialize=
   "newline"`), so existing server-side parsing and policy semantics
@@ -115,6 +124,35 @@ database state. An unauthenticated request gets a clean redirect to
 login. It serves only allowlisted kinds, minimal columns (no password
 hashes, encrypted payloads, or raw usage bodies), bounded queries, and
 bounded distinct/grouped SQL. See `docs/security-model.md`.
+
+### Key-policy selector: page, search, and authority
+
+The key create/edit policy selector (`keys/_policy_selector.html` +
+`web/static/js/policy-selector.js`) is a dual-list picker with an
+editable manual fallback:
+
+- **The visible list is a latest-100 page, never an authority.** The
+  provider list shows the latest 100 ENABLED provider configs (newest
+  first); the model list the latest 100 eligible enabled routes.
+  Older records are reached through the server-side search box, and a
+  selected record outside the page keeps its label (hydration) without
+  becoming a permission. Submitted provider ids are revalidated by a
+  bounded enabled-provider database lookup — the page cap cannot widen
+  or shrink what the key may use.
+- **Search scopes mirror the client-side all/none/one/many semantics
+  exactly:** no scope parameter = allow-all (unscoped search), a blank
+  scope parameter = explicitly empty selection (the server returns NO
+  choices), repeated parameters = bounded IN scope. An empty model
+  search under an explicitly-empty endpoint selection therefore yields
+  no candidates instead of silently searching everything.
+- **Endpoint grants are method-qualified.** The endpoint list carries
+  the exact `IMPLEMENTED_CLIENT_ENDPOINTS` tokens (22), so
+  `GET /v1/...` and `POST /v1/...` remain distinct grants; the
+  flattened path vocabulary is never reused for key-policy grants.
+- The manual textareas (visible in the "Advanced manual policy
+  strings" panel) stay editable for globs and free values and are kept
+  in sync with the lists while JavaScript is enabled; editing one
+  updates the other.
 
 ### Known-option vocabularies
 
@@ -147,26 +185,41 @@ bounded distinct/grouped SQL. See `docs/security-model.md`.
 ## 3. Coverage inventory
 
 The permanent unit audit
-(`tests/unit/test_admin_usability_inventory.py`) encodes the
-independent minimum-96 known-reference/finite-choice field inventory
-and pins, field by field, the required control:
+(`tests/unit/test_admin_usability_inventory.py`) encodes the full
+known-reference/finite-choice field inventory — **102 fields across
+34 templates** — and pins, field by field, the required control:
 
-- `record_choice` — 34 fields (owner, institution, cohort, provider,
+- `record_choice` — 67 fields (owner, institution, cohort, provider,
   model, endpoint-path, currency, key/public-key, owner-email,
   one-time-secret, audit action/type/target/actor/request-id, usage
-  filters, import format record fields, external-tool destinations).
-- native `select` — 36 fields over canonical/DB vocabularies (status,
-  kind, match type, import format, email delivery mode, enabled/
-  active/expired/visible, presets, endpoint scope, …).
+  provider/model/endpoint/request-id filters, institution and cohort
+  list NAME filters, import format record fields, external-tool
+  destinations).
+- native `select` — 32 fields over canonical/DB vocabularies (status,
+  kind, match type, import format, email delivery mode, usage status
+  and streaming, enabled/active/expired/visible, presets, endpoint
+  scope, …).
 - dual-list policy selector with manual-field sync — the key policy
   provider/endpoint/model allow-lists
   (`keys/_policy_selector.html` + `policy-selector.js`): the known
   options picker IS the dual-list; the advanced manual textareas stay
   editable for globs/free values and are kept synchronized with the
   lists while JavaScript is enabled.
-- justified free text — institution and cohort `name` filters are
-  text SEARCH filters (not record references); the institution
-  RECORD reference on owner create/edit is a record choice.
+- The institution and cohort list **name filters are known-name
+  pickers** (record choice with `allow_new`): they offer the latest
+  ~100 known names, reach older names through the server-side search,
+  submit the NAME (not a UUID), and still accept a genuinely new typed
+  name. They are NOT free-text exemptions.
+- documented genuine free text (pinned by the raw-reference audit):
+  owner create/edit `external_id` (an external system's identifier for
+  the owner, not a SLAIF record reference) and the provider
+  create/edit `provider` slug (the identity of the record being
+  created/edited; a picker would require it to pre-exist).
+- a raw-reference guard scans EVERY admin template for visible raw
+  inputs/textareas with reference semantics (`*_id`/`*_uuid` patterns
+  and the known reference field names) and requires either a picker/
+  select control or one of the documented exceptions, so a NEW
+  existing-record field cannot slip past the pinned 102-field map.
 
 The same audit pins: the 6-value usage status vocabulary, the
 email-delivery vocabulary equality with the model constants, the
@@ -177,7 +230,105 @@ catalog proposal artifact as a NON-GUI static Markdown export (no
 script injection surface; the catalog-refresh `REVIEW.html` is the
 GUI surface that carries the fixed sort script).
 
-## 4. Import preview/result tables
+## 4. Full coverage matrix
+
+Derived from the same source the inventory test pins (one-time
+derivation; the test is the authority if this table ever drifts).
+
+### 4.1 Sortable tables — 24 admin templates, 25 tables
+
+| Template | `data-sortable` tables |
+| --- | --- |
+| `audit/list.html` | 1 |
+| `cohorts/detail.html` (related records) | 1 |
+| `cohorts/list.html` | 1 |
+| `email_deliveries/list.html` | 1 |
+| `fx/import_preview.html` / `fx/import_result.html` | 1 / 1 |
+| `fx/list.html` | 1 |
+| `institutions/detail.html` (related records) | 1 |
+| `institutions/list.html` | 1 |
+| `keys/bulk_import_preview.html` / `keys/bulk_import_result.html` | 1 / 1 |
+| `keys/list.html` | 1 |
+| `owners/detail.html` (related records) | 1 |
+| `owners/list.html` | 1 |
+| `pricing/import_preview.html` / `pricing/import_result.html` | 1 / 1 |
+| `pricing/list.html` | 1 |
+| `providers/detail.html` (routes + related) | 2 |
+| `providers/list.html` | 1 |
+| `routes/import_preview.html` / `routes/import_result.html` | 1 / 1 |
+| `routes/list.html` | 1 |
+| `templates/list.html` (key templates) | 1 |
+| `usage/list.html` | 1 |
+
+Report families: the generated catalog-refresh `REVIEW.html` carries
+the same fixed sort script (one self-contained file per generated
+report; the browser test audits all generated cases plus real offline
+sorting). Exception: `provider_catalog_proposal`'s `model-review.md`
+is a NON-GUI static Markdown export (an HTML table inside Markdown)
+and deliberately has no script.
+
+### 4.2 Known-reference / finite-choice fields — 34 templates, 102 fields
+
+Field names grouped by control per template (`RC` = `record_choice`,
+`SEL` = native select, `DUAL` = dual-list policy selector):
+
+| Template | RC | SEL | DUAL |
+| --- | --- | --- | --- |
+| `audit/list.html` | action, target_type, target_id, request_id, actor_admin_id | — | — |
+| `cohorts/list.html` | name | active | — |
+| `email_deliveries/list.html` | owner_email, gateway_key_id, one_time_secret_id | status | — |
+| `fx/create.html` / `fx/edit.html` | base_currency, quote_currency, source | — | — |
+| `fx/import.html` | — | import_format | — |
+| `fx/list.html` | base_currency, quote_currency, source | active | — |
+| `institutions/list.html` | name | — | — |
+| `keys/_policy_selector.html` | — | — | allowed_providers, allowed_endpoints, allowed_models |
+| `keys/bulk_import.html` / `keys/bulk_import_preview.html` | — | import_format | — |
+| `keys/calibration_preview.html` | — | email_delivery_mode_default | — |
+| `keys/create.html` / `keys/detail.html` | owner_id, cohort_id, external_tool_destination_ids | external_tool_mode, email_delivery_mode | — |
+| `keys/list.html` | owner_email, public_key_id, cohort_id | status, expired | — |
+| `openai_assisted/pricing.html` | proposal_model, currency, include_models, exclude_models | endpoint_scope | — |
+| `openai_assisted/routes.html` | proposal_model, include_models, exclude_models | endpoint_scope | — |
+| `owners/create.html` / `owners/edit.html` | institution_id | — | — |
+| `owners/list.html` | email, institution_id, cohort_id | — | — |
+| `pricing/create.html` / `pricing/edit.html` | provider, upstream_model, endpoint, currency | — | — |
+| `pricing/import.html` | — | import_format | — |
+| `pricing/list.html` | provider, model, endpoint, currency | enabled, active | — |
+| `providers/create.html` / `providers/edit.html` | — | kind | — |
+| `providers/discover_preview.html` | — | preset, pricing_mode | — |
+| `providers/list.html` | provider | enabled | — |
+| `routes/create.html` / `routes/edit.html` | requested_model, endpoint, provider, upstream_model | match_type | — |
+| `routes/import.html` | — | import_format | — |
+| `routes/list.html` | provider, requested_model | match_type, enabled, visible | — |
+| `templates/detail.html` | owner_id, cohort_id | email_delivery_mode | — |
+| `usage/list.html` | provider, model, endpoint, request_id | status, streaming | — |
+
+### 4.3 Legitimate non-picker field families
+
+The raw-reference guard (Section 3) requires a picker/select for every
+visible field with reference semantics; these families are the
+documented, justified non-picker groups:
+
+- **New-record identity** — fields that CREATE a new record cannot be
+  pickers over the record they create: owner create name/surname/email,
+  institution create name, cohort create name, and the provider create
+  slug (a free NEW unique slug).
+- **Record-identity editing** — the provider EDIT slug edits the OWN
+  record's identity: an editable unique slug the service revalidates
+  (validated unique-slug rename); it never selects ANOTHER existing
+  provider. Likewise owner create/edit `external_id` (an external
+  system's identifier, not a SLAIF reference).
+- **Auth / credentials** — login and admin password fields are
+  credential inputs, never choices.
+- **Dates, numbers, money, limits** — validity, quotas, rate limits,
+  timeouts, margins: typed values with server validation.
+- **Reasons, notes, display text** — audit reasons, notes, display
+  names, descriptions.
+- **Bulk documents** — CSV/JSON upload file inputs (keys/FX/routes/
+  pricing import) and the raw manual policy strings.
+- **Hidden transport** — CSRF tokens and action ids (never visible
+  reference fields).
+
+## 5. Import preview/result tables
 
 Bulk key import (and FX/routes/pricing import) preview and result
 pages are dry-run tables over the parsed rows: Row number (numeric),
@@ -189,7 +340,7 @@ one-time plaintext key once (no-store); the permanent browser tests
 read only the safe owner/key-metadata/quota/error cells and never the
 plaintext cell.
 
-## 5. Display fidelity notes
+## 6. Display fidelity notes
 
 - A VALID actual cost of zero displays `0 EUR` (it is not "missing"
   and does not fall through to the estimate); an estimate-only row
@@ -200,7 +351,7 @@ plaintext cell.
   value. FX rates are positive-only by validation, so their
   truthiness handling stays as-is.
 
-## 6. Verification
+## 7. Verification
 
 See `docs/verification/2026-10-25-admin-usability.md` for the
 objective verification record (focused JUnit counts, actual-browser

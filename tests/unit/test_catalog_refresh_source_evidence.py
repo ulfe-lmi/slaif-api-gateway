@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-import catalog_report_script_audit as _script_audit
+from tests.unit import catalog_report_script_audit as _script_audit
 
 from slaif_gateway.cli.main import app
 from slaif_gateway.services.catalog_refresh import source_evidence as se

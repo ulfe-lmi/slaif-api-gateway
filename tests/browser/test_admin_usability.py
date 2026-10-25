@@ -1498,6 +1498,7 @@ def test_policy_provider_model_search_and_older_submit(
     oldprov = str(env["oldprov_search"])
     oldprov_second = str(env["oldprov_second"])
     disabled = str(env["disabled_prov"])
+    old_model = f"usab-policy-104-{suffix}"  # OLDEST seeded provider-A route
 
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
@@ -1514,8 +1515,8 @@ def test_policy_provider_model_search_and_older_submit(
         provider_manual = page.locator('[data-policy-manual="providers"]')  # type: ignore[attr-defined]
 
         def _select_values(locator: object) -> list[str]:
-            return locator.eval_on_selector_all(  # type: ignore[attr-defined]
-                "option", "els => els.map(e => e.value)"
+            return locator.locator("option").evaluate_all(  # type: ignore[attr-defined]
+                "els => els.map(e => e.value)"
             )
 
         # 1) The provider page is EXACTLY the latest 100 enabled providers,
@@ -1531,6 +1532,13 @@ def test_policy_provider_model_search_and_older_submit(
         assert oldprov not in batch
         assert oldprov_second not in batch
         assert disabled not in batch
+
+        # The create form defaults to "allow all enabled providers"
+        # (checked), which disables the available-providers select.
+        # Switch to an explicit selection to exercise the picker; the
+        # submission later sends the unchecked toggle plus the explicit
+        # allow-list.
+        page.uncheck('[data-policy-toggle="providers"]')  # type: ignore[attr-defined]
 
         # 2) A plain click on the multiple select REPLACES the highlight;
         #    the Add button moves it into the policy and the JS syncs the
@@ -1553,7 +1561,7 @@ def test_policy_provider_model_search_and_older_submit(
                 and params.get("q") == ["usab-model"]
             )
 
-        with page.expect_request(_model_empty_scope, timeout=15000) as empty_scope:  # type: ignore[attr-defined]
+        with page.expect_request(lambda r: _model_empty_scope(r.url), timeout=15000) as empty_scope:  # type: ignore[attr-defined]
             model_search.fill("usab-model")  # type: ignore[attr-defined]
         assert empty_scope.value is not None
         page.wait_for_selector(  # type: ignore[attr-defined]
@@ -1601,7 +1609,7 @@ def test_policy_provider_model_search_and_older_submit(
                 and params.get("q") == ["usab-model"]
             )
 
-        with page.expect_request(_model_scoped, timeout=15000) as scoped_lookup:  # type: ignore[attr-defined]
+        with page.expect_request(lambda r: _model_scoped(r.url), timeout=15000) as scoped_lookup:  # type: ignore[attr-defined]
             model_search.fill("usab-model")  # type: ignore[attr-defined]
         assert scoped_lookup.value is not None
         model_results.locator(f'li:has-text("{model_a1}")').wait_for(timeout=15000)  # type: ignore[attr-defined]
@@ -1609,6 +1617,40 @@ def test_policy_provider_model_search_and_older_submit(
         assert model_a1 in result_text
         assert model_b1 not in result_text, (
             "model search must respect the selected provider scope"
+        )
+
+        # 6b) The OLDEST seeded provider-A route (outside the initial
+        #     latest-100 model page) must be reachable by search under the
+        #     SAME provider/endpoint scope, and choosing it stores the
+        #     exact token in the model selection and manual textarea.
+        model_tokens = page.locator(  # type: ignore[attr-defined]
+            '[data-policy-available="models"] option'
+        ).evaluate_all("els => els.map(e => e.dataset.modelToken || '')")
+        assert old_model not in model_tokens, (
+            "oldest route must be outside the initial latest-100 model page"
+        )
+
+        def _model_old_scoped(url: str) -> bool:
+            params = parse_qs(urlparse(url).query, keep_blank_values=True)
+            return (
+                "/admin/record-choices" in url
+                and params.get("kind") == ["policy_model"]
+                and sorted(params.get("provider", [])) == sorted([prov_a, oldprov])
+                and params.get("endpoint") == ["/v1/chat/completions"]
+                and params.get("q") == [old_model]
+            )
+
+        with page.expect_request(lambda r: _model_old_scoped(r.url), timeout=15000) as old_model_lookup:  # type: ignore[attr-defined]
+            model_search.fill(old_model)  # type: ignore[attr-defined]
+        assert old_model_lookup.value is not None
+        old_model_option = model_results.locator(f'li:has-text("{old_model}")')  # type: ignore[attr-defined]
+        old_model_option.wait_for(timeout=15000)
+        old_model_option.click()
+        model_selected = page.locator('[data-policy-selected="models"]')  # type: ignore[attr-defined]
+        assert _select_values(model_selected) == [old_model]
+        assert (
+            page.locator('[data-policy-manual="models"]').input_value()  # type: ignore[attr-defined]
+            == old_model
         )
 
         # 7) The page is presentation, NOT authority: an older provider
@@ -1620,8 +1662,16 @@ def test_policy_provider_model_search_and_older_submit(
         #    is reached by search, proving the picker's older search on
         #    this form too).
         before_keys = _run_in_thread(_key_count(env["database_url"]))
+        # The manual textareas live inside the collapsed <details>
+        # fallback panel; expand it before editing.
+        page.click('details.policy-manual-details summary')  # type: ignore[attr-defined]
         provider_manual.fill(oldprov)  # type: ignore[attr-defined]
         assert _select_values(provider_selected) == [oldprov]
+        # Step 6b left the older model token in the model list; reset it
+        # so the submitted policy is "allow all models" again.
+        model_manual = page.locator('[data-policy-manual="models"]')  # type: ignore[attr-defined]
+        model_manual.fill("")  # type: ignore[attr-defined]
+        assert _select_values(page.locator('[data-policy-selected="models"]')) == []  # type: ignore[attr-defined]
 
         owner_rc = '.rc:has(input[name="owner_id"])'
         page.locator(f"{owner_rc} .rc-open").click()  # type: ignore[attr-defined]

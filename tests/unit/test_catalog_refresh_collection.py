@@ -27,7 +27,7 @@ from hashlib import sha256
 import httpx
 import pytest
 
-import catalog_report_script_audit as _script_audit
+from tests.unit import catalog_report_script_audit as _script_audit
 
 from slaif_gateway.cli import catalog_refresh as cli_catalog_refresh
 from slaif_gateway.schemas.catalog_refresh import (
