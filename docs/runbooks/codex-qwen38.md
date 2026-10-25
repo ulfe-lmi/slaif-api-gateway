@@ -76,8 +76,12 @@ route editor/service, set the route's top-level capabilities declaration to:
 
 Preserve the other capability fields. This profile requires upstream and
 public model `qwen38-27b`, provider kind `openai_compatible`, a streaming
-Responses route, all four Codex flags above, and exact context/default-output/
-maximum-output limits of 131072/8192/16384, with complete pricing.
+Responses route, all four Codex flags above, and context/default-output/
+maximum-output allowances that support 131072/8192/16384, with complete pricing.
+The route context and maximum output must be at least the profile values;
+its default output must be between the profile's default and maximum output,
+inclusive. Larger gateway estimation ceilings do not enlarge the model's
+physical context or change the downloaded catalog and compaction threshold.
 Run `slaif-gateway codex inspect --json` and resolve any readiness reasons.
 A ready route's Administration detail page then offers **Download Codex
 config** and **Download model catalog**. These are authenticated admin
@@ -198,8 +202,12 @@ these models available on other installations.
 | `qwen3.8-27b-rtx3090-codex-0.162-v1` | `qwen3.8-27b-rtx3090` | `qwen3.8-27b` | 100000 | 80000 | text, image | `qwen38_rtx3090` |
 
 All three require the same Codex revision 8, tool flags, pricing prerequisites and
-8192/16384 default/maximum output limits. Select the exact profile declaration
-and matching route context together through the audited route service. Download
+support for the profile's 8192/16384 default/maximum output envelope. A route may
+have a higher estimated-context ceiling and maximum output; its default output
+must remain within 8192 through 16384. Keep client context and compaction values
+at the conservative profile values above. Readiness checks those requirements
+against route allowances rather than requiring numeric equality. Select the
+exact profile declaration through the audited route service. Download
 the two files again after changing the route profile, then start a fresh client
 with the named profile above. Generated TOML and JSON use identical context and
 compaction values. Each backend has a distinct public name to prevent route

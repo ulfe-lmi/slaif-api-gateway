@@ -240,6 +240,16 @@ the fully gated operation checks all five Codex gates and strict limits.
 Missing declaration is `not_declared`; malformed, partial, unknown, disabled,
 stale, or incomplete state is invalid/not ready with fixed safe reason codes.
 
+Registered profile numeric values describe conservative client requirements.
+Route context and maximum-output allowances must be at least the corresponding
+profile values; the route's injected default output must remain between the
+profile default and profile maximum, inclusive. Larger gateway estimation
+ceilings therefore do not make a compatible conservative profile unready.
+Rendered TOML/catalog context, compaction thresholds, immutable profile identity
+and model selection remain unchanged. An estimation allowance is not evidence
+of a larger physical backend context. Capability, provider/model, pricing and
+paired-route checks remain independent readiness requirements.
+
 Codex 0.147.0 profile v2 loads a named file over the base user config. The
 gateway renderer therefore returns two separate credential-free artifacts. The
 first is a fragment to merge into `$CODEX_HOME/config.toml`:

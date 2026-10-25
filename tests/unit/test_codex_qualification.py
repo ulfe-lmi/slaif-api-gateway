@@ -997,5 +997,102 @@ async def test_registered_qwen_route_requires_exact_download_prerequisites(missi
         assert (
             await service.ready_responses_profile(qualification_profile=profile.profile_id, now=NOW)
         ).profile_id == profile.profile_id
-        route.capabilities["codex_limits"]["context_window_tokens"] += 1
+        route.capabilities["codex_limits"]["context_window_tokens"] -= 1
         assert not (await service.inspect(now=NOW))[0].ready
+
+
+def _registered_qwen_route(profile):
+    route, _ = _pair()
+    route.provider = "synthetic"
+    route.requested_model = profile.public_model
+    route.upstream_model = profile.upstream_model
+    route.capabilities = {
+        "responses": {
+            "text": True,
+            "stateless": True,
+            "streaming": True,
+            **{gate: True for gate in profile.required_route_gates},
+        },
+        "codex_limits": {
+            "context_window_tokens": profile.context_window_tokens,
+            "default_max_output_tokens": profile.default_max_output_tokens,
+            "max_output_tokens": profile.max_output_tokens,
+        },
+        "codex_profile": {
+            "version": profile.metadata_version,
+            "profile_id": profile.profile_id,
+            "fixture_sha256": profile.fixture_sha256,
+        },
+    }
+    return route
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "profile_id,context,default_output,maximum_output",
+    [
+        ("qwen3.8-27b-a100-codex-0.162-v1", 393216, 16384, 32768),
+        ("qwen3.8-27b-rtx3090-codex-0.162-v1", 150000, 8192, 16384),
+        ("qwen3.8-27b-v100-codex-0.162-v1", 368640, 16384, 32768),
+    ],
+)
+async def test_padded_routes_keep_conservative_registered_client_artifacts(
+    profile_id, context, default_output, maximum_output
+):
+    from slaif_gateway.services.codex_profile_registry import get_codex_profile
+
+    profile = get_codex_profile(profile_id)
+    original = render_codex_profile("https://gateway.example/v1", profile_id)
+    route = _registered_qwen_route(profile)
+    route.capabilities["codex_limits"] = {
+        "context_window_tokens": context,
+        "default_max_output_tokens": default_output,
+        "max_output_tokens": maximum_output,
+    }
+    unchanged_route = copy.deepcopy(route.capabilities)
+    service = _service(
+        [route], provider="synthetic", provider_kind="openai_compatible",
+        upstream_model=profile.upstream_model,
+    )
+    result = await service.ready_responses_profile(qualification_profile=profile_id, now=NOW)
+    assert result.ready and result.profile_id == profile_id
+    assert result.real_provider_e2e is False
+    rendered = render_codex_profile("https://gateway.example/v1", result.profile_id)
+    assert rendered == original
+    assert route.capabilities == unchanged_route
+    catalog = json.loads(rendered.model_catalog_json)["models"][0]
+    assert catalog["context_window"] == profile.context_window_tokens < context
+    assert catalog["auto_compact_token_limit"] == profile.auto_compaction_token_threshold
+    assert f"model_context_window = {profile.context_window_tokens}\n" in rendered.profile_config_toml
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    ["smaller_context", "smaller_default", "smaller_maximum", "oversized_default", "missing_gate"],
+)
+async def test_conservative_profile_readiness_keeps_limits_and_capability_boundaries(change):
+    from slaif_gateway.services.codex_profile_registry import get_codex_profile
+
+    profile = get_codex_profile("qwen3.8-27b-a100-codex-0.162-v1")
+    route = _registered_qwen_route(profile)
+    limits = route.capabilities["codex_limits"]
+    if change == "smaller_context":
+        limits["context_window_tokens"] -= 1
+    elif change == "smaller_default":
+        limits["default_max_output_tokens"] -= 1
+    elif change == "smaller_maximum":
+        limits["max_output_tokens"] -= 1
+    elif change == "oversized_default":
+        limits["max_output_tokens"] *= 2
+        limits["default_max_output_tokens"] = profile.max_output_tokens + 1
+    else:
+        limits["context_window_tokens"] *= 2
+        route.capabilities["responses"]["codex_client_tools"] = False
+    result = (await _service(
+        [route], provider="synthetic", provider_kind="openai_compatible",
+        upstream_model=profile.upstream_model,
+    ).inspect(now=NOW))[0]
+    assert not result.ready
+    expected = "codex_gates_incomplete" if change == "missing_gate" else "codex_limits_mismatch"
+    assert expected in result.reason_codes
