@@ -72,40 +72,46 @@ not a release/production claim, and it does not establish that every
   export service, record choices, csrf, assets): 0 failures (see
   JUnit `unit-195-affected`).
 - CI error-copy compatibility repair (after the first
-  implementation-head CI run, which completed 8/10 with the two
-  failures being pre-195 stale oracles expecting the generic
-  "Invalid filter." summary): the eleven list-filter 400 render
-  sites in `api/admin.py` now render the stable pre-195
-  "Invalid filter." summary FIRST, then the fixed per-field detail
-  (fixed parameter name + limit only; still never echoes submitted
-  values; same 400/whole-field rejection). The two affected legacy
-  oracles were NOT edited; both re-passed locally — the unit node
-  plus the new 195 filter unit module (32 passed, JUnit
-  `unit-cifix-1`, real exit 0) and the one existing browser design
-  node (1 passed, JUnit `browser-cifix-1`, real exit 0).
+  implementation-head CI run, which completed 8/10; the two
+  failures were pre-existing compatibility-contract oracles that
+  expect the generic "Invalid filter." 400 summary — valid tests
+  that exposed the copy regression, not faulty tests): the eleven
+  list-filter 400 render sites in `api/admin.py` now render the
+  stable pre-195 "Invalid filter." summary FIRST, then the fixed
+  per-field detail (fixed parameter name + limit only; still never
+  echoes submitted values; same 400/whole-field rejection). The two
+  affected oracles were NOT edited; both re-passed locally — the
+  pre-existing unit node together with the new 195 filter unit
+  module in ONE run (29 passed = 28 new + 1 pre-existing node, JUnit
+  `unit-cifix-1`, real exit 0) and, separately, the one existing
+  browser design node (1 passed, JUnit `browser-cifix-1`, real exit
+  0); the two reruns are distinct and are not summed.
 
 Commands captured real pytest exits via `PIPESTATUS[0]` alongside the
 JUnit files in `/tmp/slaif195/`.
 
-## Layer 2 — real PostgreSQL 16 (owned fixture; no HTTP/auth)
+## Layer 2 — real PostgreSQL 16 (owned fixture): 10 repository/service-level cases + 3 real authenticated HTTP uvicorn nodes
 
 `tests/integration/test_admin_list_multiselection_postgres.py` (13
-passed): two-cohort union with the third cohort excluded and status
-AND; duplicate-free owner membership across two cohorts (ANY/EXISTS,
-no fan-out); the 64-row matching-set pagination oracle
-(offset 45 -> full 10-row page of ONLY matching cohorts, 60 -> 4,
-64 -> empty); usage provider multi LIKE semantics; audit multi-parent
-OR scope before the 100-choice limit incl. a 252-char parent preserved
-in full; the two R5 selected-hydration regressions (out-of-scope
-selected target never hydrated under an `owner` parent scope; 6
-selected ids x 20 eligible parent types = 120 groups all keep their
-labels, proving per-id reduction precedes the limit); usage/audit CSV
-multi scope with JSON-safe metadata; and real authenticated HTTP
-uvicorn nodes: repeated-parameter AND newline-fallback unions with
-SCOPED data-row identity (rows from both selected cohorts, NO gamma
-row — options may legitimately list gamma), legacy one-value, 400
-no-echo, no-selected lookup, and the explicit 100-value/1024-char
-lookup bounds.
+passed) mixes two proof kinds against the same owned PostgreSQL 16.
+Ten repository/service-level cases (direct SQL and service calls; no
+HTTP, no auth) cover: the two-cohort union with the third cohort
+excluded and status AND; duplicate-free owner membership across two
+cohorts (ANY/EXISTS, no fan-out); the 64-row matching-set pagination
+oracle (offset 45 -> full 10-row page of ONLY matching cohorts, 60
+-> 4, 64 -> empty); usage provider multi LIKE semantics; audit
+multi-parent OR scope before the 100-choice limit incl. a 252-char
+parent preserved in full; the two R5 selected-hydration regressions
+(out-of-scope selected target never hydrated under an `owner` parent
+scope; 6 selected ids x 20 eligible parent types = 120 groups all
+keep their labels, proving per-id reduction precedes the limit); and
+usage/audit CSV multi scope with JSON-safe metadata. Three
+`test_http_*` cases additionally run REAL authenticated HTTP against
+a uvicorn-served app with a real admin login: repeated-parameter AND
+newline-fallback unions with SCOPED data-row identity (rows from both
+selected cohorts, NO gamma row — options may legitimately list
+gamma), legacy one-value, 400 no-echo, no-selected lookup, and the
+explicit 100-value/1024-char lookup bounds.
 
 The root-reproduced R5 scope/limit failures
 (`/tmp/slaif195-root/test_audit_hydration_scope_pg.py`, actual PG16,
@@ -177,10 +183,13 @@ older-cohort proof uses the real server. No full local all-layer or
 ## Outstanding
 
 - The first implementation head's CI run completed 8/10 successful;
-  the two failures were exactly the stale "Invalid filter." oracles
-  above and are repaired by the error-copy compatibility commit on
-  this same branch/PR. CI at the subsequent heads (including the
-  report publication commit) is the remaining gate.
-- Final-head CI (all checks) is gated by root on the report
-  publication commit; this record does not claim CI green.
+  the two failures were exactly the pre-existing "Invalid filter."
+  compatibility-contract oracles above (valid tests that exposed the
+  copy regression) and are repaired by the error-copy compatibility
+  commit on this same branch/PR.
+- CI observed at publication of the 195-b evidence correction: the
+  195-a report publication head `5088bc0` run completed 10/10
+  successful (2026-10-25 22:28:58 UTC). The CI run at the 195-b
+  head is the remaining final-head gate; this record does not claim
+  it.
 - No merge, no release, no production/security/compliance claim.
