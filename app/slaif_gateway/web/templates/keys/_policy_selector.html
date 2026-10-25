@@ -19,9 +19,15 @@
     </label>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_providers %} policy-selector-disabled{% endif %}" data-policy-selector-group="providers">
       <div class="policy-selector-pane">
+        <label class="policy-model-search">
+          <span class="rc-name">Search older providers (server-side)</span>
+          <input type="search" data-policy-provider-search autocomplete="off"
+                 placeholder="Type a provider slug or name to search ALL enabled providers">
+          <ul data-policy-provider-search-results role="listbox" hidden></ul>
+        </label>
         <label>
           Available enabled providers
-          <span class="policy-selector-caption">Available from local provider config.</span>
+          <span class="policy-selector-caption">Latest 100 enabled providers, newest first; older enabled providers are reachable through the search above.</span>
           <select id="{{ selector_id_prefix }}-providers-available" multiple size="8" data-policy-available="providers">
             {% for choice in policy_catalog.provider_choices %}
             {% if choice.value not in policy_form_state.selected_provider_values %}
@@ -119,9 +125,15 @@
     </label>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_models %} policy-selector-disabled{% endif %}" data-policy-selector-group="models">
       <div class="policy-selector-pane">
+        <label class="policy-model-search">
+          <span class="rc-name">Search older models (server-side)</span>
+          <input type="search" data-policy-model-search autocomplete="off"
+                 placeholder="Type a model token to search ALL enabled route models">
+          <ul data-policy-model-search-results role="listbox" hidden></ul>
+        </label>
         <label>
           Available route-backed model candidates
-          <span class="policy-selector-caption">Filtered by the current provider and model-backed endpoint selection when JavaScript is enabled.</span>
+          <span class="policy-selector-caption">Latest 100 enabled routes; older routes are reachable through the search above. Filtered by the current provider and model-backed endpoint selection when JavaScript is enabled.</span>
           <select id="{{ selector_id_prefix }}-models-available" multiple size="14" data-policy-available="models">
             {% for group_label, choices in policy_catalog.model_choices_by_group.items() %}
             <optgroup label="{{ group_label }}">
@@ -142,7 +154,7 @@
           </select>
         </label>
         <p class="policy-selector-empty small" data-policy-empty="models-none" hidden>
-          No enabled route-backed models are available. Add or enable model routes under <code>/admin/routes</code>.
+          No enabled route-backed models are available in the latest 100. Use the search above for older routes, or add or enable model routes under <code>/admin/routes</code>.
         </p>
         <p class="policy-selector-empty small" data-policy-empty="models-filtered" hidden>
           No matching route-backed models for the current provider/endpoint selection.

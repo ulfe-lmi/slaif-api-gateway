@@ -1329,6 +1329,33 @@ creates a server-side `admin_sessions` row. PostgreSQL stores HMAC-hashed
 session and CSRF tokens only; plaintext session tokens are sent only as secure
 browser cookies and are not logged or rendered in templates.
 
+### Admin record-choice lookups (read-only, non-mutating)
+
+The dashboard's searchable record pickers call `GET /admin/record-choices`
+(allowlisted kinds: owners, institutions, cohorts, providers, model tokens,
+endpoint paths, currencies, FX sources, keys, owner emails, one-time
+secrets, audit action/target-type/target/actor, request ids, and the
+canonical finite vocabularies documented in `docs/admin-usability.md`).
+The endpoint is a READ-ONLY lookup boundary:
+
+- It validates the current admin session with `touch=False` — no
+  last-activity mutation — and it does NOT refresh the CSRF token, so
+  dropdown searches cannot invalidate the already-rendered form's CSRF
+  token or otherwise mutate database state (sessions, CSRF hashes,
+  domains, accounting).
+- An unauthenticated request receives a clean redirect to login; there is
+  no anonymous mode.
+- It selects minimal columns only: never password hashes, encrypted
+  one-time-secret payloads, raw usage bodies, or provider key values.
+- Queries are bounded (length-capped search text, `LIMIT`ed result sets,
+  distinct/grouped aggregates computed before the limit) and serve the
+  latest ~100 eligible records plus server search over older records and
+  explicit selected-id hydration.
+
+The one-time plaintext key display on key create/rotation and bulk
+import result pages remains a separate, explicit, no-store, confirmed
+workflow and is not reachable through the lookup endpoint.
+
 Admin session cookies are `HttpOnly`, `SameSite=Lax` by default, and `Secure`
 by default in production. Session validation rejects missing, revoked, expired,
 or inactive-admin sessions. Logout revokes the server-side session row and

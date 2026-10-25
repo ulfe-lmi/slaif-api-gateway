@@ -50,16 +50,16 @@
     <h2 id="fx-import-result-details-heading">Result Details</h2>
     <p class="muted small">External FX APIs and providers were not called. Uploaded raw content was not stored.</p>
     <div class="table-wrap" tabindex="0" role="region" aria-label="FX import result">
-      <table>
+      <table data-sortable>
         <thead>
           <tr>
-            <th>Row</th>
+            <th data-sort-type="number">Row</th>
             <th>Status</th>
             <th>Action</th>
             <th>FX rate</th>
             <th>Pair</th>
-            <th>Rate</th>
-            <th>Validity</th>
+            <th data-sort-type="number">Rate</th>
+            <th data-sort-type="datetime">Validity</th>
             <th>Source</th>
             <th>Metadata</th>
             <th>Notes</th>
@@ -69,7 +69,7 @@
         <tbody>
           {% for row in result.rows %}
           <tr>
-            <td>{{ row.row_number }}</td>
+            <td data-sort-value="{{ row.row_number }}">{{ row.row_number }}</td>
             <td>{{ row.status }}</td>
             <td>{{ row.action }}</td>
             <td>
@@ -86,8 +86,8 @@
               <span class="muted small">n/a</span>
               {% endif %}
             </td>
-            <td>{{ row.rate or "n/a" }}</td>
-            <td>
+            <td data-sort-value="{{ row.rate or '' }}">{{ row.rate or "n/a" }}</td>
+            <td data-sort-value="{{ row.valid_from.isoformat() if row.valid_from else '' }}">
               <div>{{ row.valid_from.isoformat() if row.valid_from else "n/a" }}</div>
               <div class="muted small">until {{ row.valid_until.isoformat() if row.valid_until else "open" }}</div>
             </td>

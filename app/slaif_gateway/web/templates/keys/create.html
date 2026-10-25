@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Create Gateway Key{% endblock %}
 
 {% block body %}
@@ -35,28 +37,26 @@
       <h2 id="create-owner-heading">Owner</h2>
       <p class="muted">Select existing records only. Owner, institution, and cohort creation is not part of this workflow.</p>
       <div class="form-grid">
-        <label>
-          Owner
-          <select name="owner_id" required>
-            <option value="">Select owner</option>
-            {% for owner in owners %}
-            <option value="{{ owner.id }}" {% if form.owner_id == owner.id|string %}selected{% endif %}>
-              {{ owner.display_name }} / {{ owner.email }}{% if owner.institution_name %} / {{ owner.institution_name }}{% endif %}
-            </option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>
-          Cohort
-          <select name="cohort_id">
-            <option value="">No cohort</option>
-            {% for cohort in cohorts %}
-            <option value="{{ cohort.id }}" {% if form.cohort_id == cohort.id|string %}selected{% endif %}>
-              {{ cohort.name }}
-            </option>
-            {% endfor %}
-          </select>
-        </label>
+        {{ record_choice(
+            "owner_id", "owner", "Owner",
+            options=choices.owner_id or none,
+            selected_id=form.owner_id,
+            selected_label=choice_labels.owner_id,
+            allow_new=false,
+            nojs_value=form.owner_id,
+            clear_label="Select owner",
+            placeholder="Search owners",
+        ) }}
+        {{ record_choice(
+            "cohort_id", "cohort", "Cohort",
+            options=choices.cohort_id or none,
+            selected_id=form.cohort_id,
+            selected_label=choice_labels.cohort_id,
+            allow_new=false,
+            nojs_value=form.cohort_id,
+            clear_label="No cohort",
+            placeholder="Search cohorts",
+        ) }}
       </div>
     </section>
 
@@ -152,10 +152,16 @@
         </label>
         {% endfor %}
       </fieldset>
-      <label>
-        Reviewed destination IDs
-        <textarea name="external_tool_destination_ids" rows="3" autocomplete="off" placeholder="connector:reviewed_id or remote_mcp:reviewed_id, one per line">{{ form.external_tool_destination_ids }}</textarea>
-      </label>
+      {{ record_choice(
+          "external_tool_destination_ids", "tool_destination", "Reviewed destination IDs",
+          options=none,
+          multi=true,
+          multi_value=form.external_tool_destination_ids,
+          serialize="newline",
+          allow_new=true,
+          placeholder="connector:reviewed_id or remote_mcp:reviewed_id, one per line",
+          help="Destination IDs are key-local reviewed identifiers; type them directly (no global registry lookup).",
+      ) }}
       <label>
         Maximum provider tool calls per request
         <input name="external_tool_max_calls" value="{{ form.external_tool_max_calls or '0' }}" inputmode="numeric" autocomplete="off">

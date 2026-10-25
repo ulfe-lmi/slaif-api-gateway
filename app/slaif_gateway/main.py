@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from slaif_gateway import metrics as metrics_module
 from slaif_gateway.api.admin import router as admin_router
+from slaif_gateway.api.admin_record_choices import router as admin_record_choices_router
 from slaif_gateway.api.branding import router as branding_router
 from slaif_gateway.api.errors import (
     OpenAICompatibleError,
@@ -69,6 +70,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(metrics_router)
     # Registered before admin so the fixed literals win over dynamic paths.
     app.include_router(branding_router)
+    # Fixed-literal lookup route registered before the admin router.
+    app.include_router(admin_record_choices_router)
     app.include_router(admin_router)
     app.include_router(openai_compat_router)
 

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import uuid
 
-from sqlalchemy import Select, func, literal, or_, select
+from sqlalchemy import Select, asc, desc, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from slaif_gateway.db.models import ModelRoute
+from slaif_gateway.db.models import ModelRoute, ProviderConfig
 
 
 class ModelRoutesRepository:
@@ -113,6 +114,44 @@ class ModelRoutesRepository:
             statement = statement.where(ModelRoute.endpoint == endpoint)
 
         statement = statement.order_by(ModelRoute.priority.asc(), ModelRoute.created_at.asc())
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def list_enabled_model_routes_latest(
+        self,
+        *,
+        endpoints: Sequence[str],
+        limit: int,
+    ) -> list[ModelRoute]:
+        """Bounded LATEST enabled-route select for the key policy catalog.
+
+        Base catalog eligibility — ENABLED routes on ENABLED providers
+        (SQL subquery against provider_configs, no registry
+        materialization in Python) over the given endpoint paths — is
+        filtered in SQL BEFORE the LIMIT, so the page is the latest
+        ``limit`` catalog-relevant routes; older routes remain reachable
+        through the models server search (the read-only record-choices
+        lookup).
+        """
+        enabled_providers = (
+            select(ProviderConfig.provider)
+            .where(
+                ProviderConfig.enabled.is_(True),
+                ProviderConfig.provider.is_not(None),
+                ProviderConfig.provider != "",
+            )
+            .scalar_subquery()
+        )
+        statement = (
+            select(ModelRoute)
+            .where(
+                ModelRoute.enabled.is_(True),
+                ModelRoute.provider.in_(enabled_providers),
+                ModelRoute.endpoint.in_(tuple(endpoints)),
+            )
+            .order_by(desc(ModelRoute.created_at), asc(ModelRoute.id))
+            .limit(limit)
+        )
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 

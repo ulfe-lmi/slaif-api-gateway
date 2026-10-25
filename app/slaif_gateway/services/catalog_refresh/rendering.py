@@ -3,7 +3,13 @@
 The renderer is a pure function of (bundle, validation report): no clock
 reads, no environment access, stable ordering. Every data value is escaped;
 only schema-validated http/https URLs may become links. No external
-resources, no JavaScript, no event attributes, no user-controlled markup.
+resources, no event attributes, no user-controlled markup. The only script
+is the single fixed, reviewed, self-contained table-sorting source shared
+with the admin UI (web/static/js/table-sort.js), embedded verbatim at
+generation time under the human-approved objective 192-a relaxation: it
+performs no network access, no eval/Function, no dynamic code, and no
+mutation of report data; with JavaScript disabled the report stays fully
+readable.
 
 Layout contract (180-i): the first screen at 1440x900 is a concise
 decision overview, not a compressed audit — the state banner with a plain
@@ -35,6 +41,7 @@ import hashlib
 import html
 import json
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -652,13 +659,13 @@ def _render_providers_summary(
     """
     has_inventory = bool(inventory)
     header = (
-        "<th>Provider</th><th class='num'>New</th><th class='num'>Changed</th>"
-        "<th class='num'>Mutations</th><th class='num'>Unchanged</th><th class='num'>Excluded</th>"
-        "<th class='num'>Blocked</th><th class='num'>Disappeared</th><th class='num'>Deprecated</th>"
-        "<th class='num'>Not fetched</th>"
+        "<th>Provider</th><th class='num' data-sort-type='number'>New</th><th class='num' data-sort-type='number'>Changed</th>"
+        "<th class='num' data-sort-type='number'>Mutations</th><th class='num' data-sort-type='number'>Unchanged</th><th class='num' data-sort-type='number'>Excluded</th>"
+        "<th class='num' data-sort-type='number'>Blocked</th><th class='num' data-sort-type='number'>Disappeared</th><th class='num' data-sort-type='number'>Deprecated</th>"
+        "<th class='num' data-sort-type='number'>Not fetched</th>"
     )
     if has_inventory:
-        header += "<th class='num'>In snapshot</th><th class='num'>Selected in snapshot</th>"
+        header += "<th class='num' data-sort-type='number'>In snapshot</th><th class='num' data-sort-type='number'>Selected in snapshot</th>"
     rows: list[str] = []
     known = sorted(set(per_provider) | set(inventory) | set(providers))
     for provider in known:
@@ -673,7 +680,7 @@ def _render_providers_summary(
         rows.append(row + "</tr>")
     if rows:
         table = (
-            "<div class='table-scroll'><table><thead><tr>" + header + "</tr></thead><tbody>"
+            "<div class='table-scroll'><table data-sortable><thead><tr>" + header + "</tr></thead><tbody>"
             + "".join(rows)
             + "</tbody></table></div>"
         )
@@ -1005,7 +1012,7 @@ def _render_changes(bundle: RefreshBundle, report: dict[str, Any], source_index:
     changed_comparisons = [row for row in comparisons if row["state"] not in ("UNCHANGED",)]
     if changed_comparisons:
         parts.append("<h3>Price changes (old → new, with unit and currency; source timestamps are never counted as price changes)</h3>")
-        parts.append("<div class='table-scroll'><table><thead><tr><th>Provider</th><th>Model</th><th>Dimension</th><th>Old</th><th>Old currency</th><th>New</th><th>New currency</th><th>Δ (signed)</th><th>State</th></tr></thead><tbody>")
+        parts.append("<div class='table-scroll'><table data-sortable><thead><tr><th>Provider</th><th>Model</th><th>Dimension</th><th data-sort-type='number'>Old</th><th>Old currency</th><th data-sort-type='number'>New</th><th>New currency</th><th data-sort-type='percent'>Δ (signed)</th><th>State</th></tr></thead><tbody>")
         for row in changed_comparisons:
             parts.append(
                 f"<tr><td>{esc(row['provider'])}</td><td class='wrap'>{esc(row['model'])}</td><td>{esc(row['dimension'])}</td>"
@@ -1026,7 +1033,7 @@ def _render_changes(bundle: RefreshBundle, report: dict[str, Any], source_index:
     changed_models = [d for d in dispositions if d["disposition"] == "CHANGED"]
     if changed_models:
         parts.append("<h3>Route / model attribute changes (current → proposed, with reason)</h3>")
-        parts.append("<div class='table-scroll'><table><thead><tr><th>Provider</th><th>Model</th><th>Changed fields (current → proposed)</th><th>Proposed route</th><th>Reason</th></tr></thead><tbody>")
+        parts.append("<div class='table-scroll'><table data-sortable><thead><tr><th>Provider</th><th>Model</th><th>Changed fields (current → proposed)</th><th>Proposed route</th><th>Reason</th></tr></thead><tbody>")
         for d in changed_models:
             route = next((r for r in bundle.routes if r.provider == d["provider"] and r.requested_model == d["model"]), None)
             proposed = (
@@ -1137,8 +1144,8 @@ def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) ->
     parts.append("<h3>Measured retrieval records</h3>")
     if collection.retrievals:
         parts.append(
-            "<div class='table-scroll'><table><thead><tr><th>Requested URL</th><th>Outcome</th>"
-            "<th>Status</th><th>Bytes</th><th>SHA-256 (prefix)</th><th>Attempts</th><th>Redirects</th>"
+            "<div class='table-scroll'><table data-sortable><thead><tr><th>Requested URL</th><th>Outcome</th>"
+            "<th>Status</th><th data-sort-type='number'>Bytes</th><th>SHA-256 (prefix)</th><th data-sort-type='number'>Attempts</th><th data-sort-type='number'>Redirects</th>"
             "<th>Failure code</th></tr></thead><tbody>"
         )
         for record in collection.retrievals:
@@ -1177,8 +1184,8 @@ def _render_collection_details(bundle: RefreshBundle, report: dict[str, Any]) ->
             "none proposed</h3>"
         )
         parts.append(
-            "<div class='table-scroll'><table><thead><tr><th>Reason</th><th>Disposition</th>"
-            "<th>Count</th><th>Examples</th></tr></thead><tbody>"
+            "<div class='table-scroll'><table data-sortable><thead><tr><th>Reason</th><th>Disposition</th>"
+            "<th data-sort-type='number'>Count</th><th>Examples</th></tr></thead><tbody>"
         )
         for reason in sorted(by_reason):
             entries = by_reason[reason]
@@ -1239,7 +1246,7 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
                 pairs = ", ".join(f"{esc(key)}={esc(value)}" for key, value in sorted(preserved.items()))
                 out.append(f"<p class='muted'>Preserved baseline monetary metadata (active baseline row): {pairs}</p>")
             if facts is not None:
-                out.append("<table><thead><tr><th>Field</th><th>Proposed</th>" + ("<th>Provenance (derived classification)</th>" if show_provenance else "") + "</tr></thead><tbody>")
+                out.append("<table data-sortable><thead><tr><th>Field</th><th>Proposed</th>" + ("<th>Provenance (derived classification)</th>" if show_provenance else "") + "</tr></thead><tbody>")
                 rows_out = [
                     ("display_name", facts.display_name),
                     ("context_length", facts.context_length),
@@ -1279,35 +1286,35 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
         )
         parts.append(f"<details open><summary>Disappeared models — retain-local, no delete ({len(disappeared)})</summary>")
         parts.append(f"<p class='muted'>These models exist in the baseline but were absent from {source_set_note}. This version never deletes; the local rows are retained. Disappearance is a REVIEW, not an error; outage, truncated retrieval, or missing mandatory selection is never reported as disappearance.</p>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Note</th></tr></thead><tbody>")
+        parts.append("<table data-sortable><thead><tr><th>Provider</th><th>Model</th><th>Note</th></tr></thead><tbody>")
         for d in disappeared:
             parts.append(f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td></tr>")
         parts.append("</tbody></table></details>")
     deprecated = group("DEPRECATED")
     if deprecated:
         parts.append(f"<details><summary>Deprecated models ({len(deprecated)})</summary>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Note</th></tr></thead><tbody>")
+        parts.append("<table data-sortable><thead><tr><th>Provider</th><th>Model</th><th>Note</th></tr></thead><tbody>")
         for d in deprecated:
             parts.append(f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td></tr>")
         parts.append("</tbody></table></details>")
     excluded = group("EXCLUDED")
     if excluded:
         parts.append(f"<details><summary>Excluded (unsupported) rows ({len(excluded)})</summary>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Reason</th></tr></thead><tbody>")
+        parts.append("<table data-sortable><thead><tr><th>Provider</th><th>Model</th><th>Reason</th></tr></thead><tbody>")
         for d in excluded:
             parts.append(f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td></tr>")
         parts.append("</tbody></table></details>")
     blocked = group("BLOCKED")
     if blocked:
         parts.append(f"<details open><summary>Blocked rows ({len(blocked)})</summary>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Reason</th></tr></thead><tbody>")
+        parts.append("<table data-sortable><thead><tr><th>Provider</th><th>Model</th><th>Reason</th></tr></thead><tbody>")
         for d in blocked:
             parts.append(f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td></tr>")
         parts.append("</tbody></table></details>")
     not_fetched = group("NOT_FETCHED")
     if not_fetched:
         parts.append(f"<details><summary>Not fetched ({len(not_fetched)})</summary>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Model</th><th>Note</th></tr></thead><tbody>")
+        parts.append("<table data-sortable><thead><tr><th>Provider</th><th>Model</th><th>Note</th></tr></thead><tbody>")
         for d in not_fetched:
             parts.append(f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td><td>{esc(d['detail'])}</td></tr>")
         parts.append("</tbody></table></details>")
@@ -1315,7 +1322,7 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     if unchanged:
         parts.append(f"<details id='unchanged'><summary>Unchanged models ({len(unchanged)}) — collapsed</summary>")
         parts.append("<p class='muted'>Compared fields identical to the active baseline; no-op rows are excluded from the executable artifacts and aggregated by design.</p>")
-        parts.append("<table><thead><tr><th>Provider</th><th>Model</th></tr></thead><tbody>")
+        parts.append("<table data-sortable><thead><tr><th>Provider</th><th>Model</th></tr></thead><tbody>")
         for d in unchanged:
             parts.append(f"<tr><td>{esc(d['provider'])}</td><td class='wrap'>{esc(d['model'])}</td></tr>")
         parts.append("</tbody></table></details>")
@@ -1323,7 +1330,7 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     warnings = report.get("warnings", [])
     if warnings:
         parts.append(f"<details id='all-findings' open><summary>All warnings and findings ({len(warnings)})</summary>")
-        parts.append("<div class='table-scroll'><table><thead><tr><th>Severity</th><th>Code</th><th>Provider</th><th>Model</th><th>Detail</th></tr></thead><tbody>")
+        parts.append("<div class='table-scroll'><table data-sortable><thead><tr><th>Severity</th><th>Code</th><th>Provider</th><th>Model</th><th>Detail</th></tr></thead><tbody>")
         for warning in warnings:
             parts.append(
                 f"<tr><td class='sev-{esc(warning['severity'])}'>{esc(warning['severity'])}</td>"
@@ -1518,7 +1525,7 @@ def _render_details(bundle: RefreshBundle, report: dict[str, Any], source_index:
     parts.append("<details id='research-evidence'><summary>Research evidence (semantic fallback)</summary>")
     if facts:
         parts.append(
-            "<div class='table-scroll'><table><thead><tr><th>Model</th><th>Field</th>"
+            "<div class='table-scroll'><table data-sortable><thead><tr><th>Model</th><th>Field</th>"
             "<th>Locator</th><th>Quote (raw source fragment)</th><th>Value (parent-normalized)</th>"
             "<th>Unit</th><th>Currency</th></tr></thead><tbody>"
         )
@@ -1636,7 +1643,7 @@ def _render_source_evidence_details(report: dict[str, Any]) -> list[str]:
     backed = evidence.get("backed_facts", []) or []
     parts.append(f"<h3>Proposed facts bound to parsed observations ({len(backed)})</h3>")
     if backed:
-        parts.append("<div class='table-scroll'><table><thead><tr><th>Provider/Model</th><th>Field</th><th>Proposed</th><th>Normalized (EUR)</th><th>Declared backing sources</th><th>Independent sources (distinct URLs)</th><th>State</th></tr></thead><tbody>")
+        parts.append("<div class='table-scroll'><table data-sortable><thead><tr><th>Provider/Model</th><th>Field</th><th>Proposed</th><th data-sort-type='number'>Normalized (EUR)</th><th>Declared backing sources</th><th>Independent sources (distinct URLs)</th><th>State</th></tr></thead><tbody>")
         for item in backed:
             parts.append(
                 f"<tr><td>{esc(item.get('provider'))}/<span class='wrap'>{esc(item.get('model'))}</span> (upstream <span class='wrap'>{esc(item.get('upstream_model', item.get('model')))}</span>)</td>"
@@ -1801,7 +1808,7 @@ def _render_apply_plan_details(report: dict[str, Any]) -> list[str]:
         )
     )
     parts.append(
-        "<div class='table-scroll'><table><thead><tr><th>#</th><th>Operation</th>"
+        "<div class='table-scroll'><table data-sortable><thead><tr><th data-sort-type='number'>#</th><th>Operation</th>"
         "<th>Scope</th><th>Reviewed facts</th></tr></thead><tbody>"
     )
     for index, op in enumerate(ops, 1):
@@ -1822,6 +1829,28 @@ def _render_apply_plan_details(report: dict[str, Any]) -> list[str]:
     return parts
 
 
+_SORT_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[2] / "web" / "static" / "js" / "table-sort.js"
+)
+
+
+def _fixed_sort_script() -> str:
+    """Exact shared fixed sorting source embedded into generated reports.
+
+    Objective 192-a approved this one fixed, bundled, self-contained script
+    for the downloaded review HTML. The bytes MUST stay identical to
+    web/static/js/table-sort.js (single source of truth; tests assert
+    byte equality); the guards below refuse to embed a variant that uses
+    network access, dynamic code, or could terminate the <script> element.
+    """
+    source = _SORT_SCRIPT_PATH.read_text(encoding="utf-8")
+    lowered = source.lower()
+    for forbidden in ("fetch(", "xmlhttprequest", "eval(", "new function", "</script"):
+        if forbidden in lowered:
+            raise RuntimeError(f"table-sort.js violates the fixed-report script boundary: {forbidden!r}")
+    return source
+
+
 def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
     """Render the sealed one-page REVIEW.html. Pure function of inputs."""
     source_index = _source_index(bundle)
@@ -1831,9 +1860,10 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
         "<head>",
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">',
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; script-src \'unsafe-inline\'; style-src \'unsafe-inline\'">',
         f"<title>SLAIF catalog refresh review — {esc(report['state'])} — {esc(report['run_id'])}</title>",
         f"<style>{_CSS}</style>",
+        f"<script>{_fixed_sort_script()}</script>",
         "</head>",
         "<body>",
         "<main>",
@@ -1858,8 +1888,10 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
                 "supplied snapshot bytes offline (no live retrieval). Apply of the reviewed "
                 "plan is a separate explicit command. "
             )
-            + "Everything needed for the decision is in this file; no external resources, no "
-            "JavaScript, no network on open.</p>"
+            + "Everything needed for the decision is in this file; no external resources and no "
+            "network on open. The only script is the fixed bundled table-sorting source "
+            "(identical to the admin UI); with JavaScript disabled this page remains fully "
+            "readable.</p>"
         ),
         "</header>",
     ]
@@ -1894,7 +1926,8 @@ def render_report(bundle: RefreshBundle, report: dict[str, Any]) -> bytes:
         f"{footer_scope}"
         "Print behaviour: state borders and textual labels are preserved (colour is not relied on), long values wrap instead of clipping, "
         "and opened (expanded) sections print in full; closed sections print their summary line only. "
-        "This file is self-contained: no network requests, no scripts, no external assets."
+        "This file is self-contained: no network requests, exactly one fixed bundled "
+        "table-sorting script, no external assets, and no user-controlled executable content."
         "</footer>"
     )
     parts.extend(["</main>", "</body>", "</html>"])

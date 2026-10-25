@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Audit Log{% endblock %}
 
 {% block body %}
@@ -20,26 +22,11 @@
   </header>
 
   <form class="filter-bar compact" method="get" action="/admin/audit">
-    <label>
-      Action
-      <input name="action" value="{{ filters.action }}" autocomplete="off">
-    </label>
-    <label>
-      Target type
-      <input name="target_type" value="{{ filters.target_type }}" autocomplete="off">
-    </label>
-    <label>
-      Target ID
-      <input name="target_id" value="{{ filters.target_id }}" autocomplete="off">
-    </label>
-    <label>
-      Request ID
-      <input name="request_id" value="{{ filters.request_id }}" autocomplete="off">
-    </label>
-    <label>
-      Actor admin ID
-      <input name="actor_admin_id" value="{{ filters.actor_admin_id }}" autocomplete="off">
-    </label>
+    {{ record_choice("action", "audit_action", "Action", options=choices.action, selected_id=filters.action, selected_label=filters.action, allow_new=true, input_id="audit-action") }}
+    {{ record_choice("target_type", "audit_target_type", "Target type", options=choices.target_type, selected_id=filters.target_type, selected_label=filters.target_type, allow_new=true, input_id="audit-target-type") }}
+    {{ record_choice("target_id", "audit_target", "Target ID", options=choices.target_id, selected_id=filters.target_id, selected_label=filters.target_id, allow_new=true, input_id="audit-target-id", depends_on="audit-target-type", depends_param="target_type") }}
+    {{ record_choice("request_id", "request_id", "Request ID", options=choices.request_id, selected_id=filters.request_id, selected_label=filters.request_id, allow_new=true, input_id="audit-request-id") }}
+    {{ record_choice("actor_admin_id", "audit_actor", "Actor admin ID", options=choices.actor_admin_id, selected_id=filters.actor_admin_id, selected_label=filters.actor_admin_id, allow_new=true, input_id="audit-actor") }}
     <label>
       Start
       <input name="start_at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z">
@@ -82,14 +69,14 @@
   </section>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Audit log rows">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Action</th>
           <th>Target</th>
           <th>Actor</th>
           <th>Request</th>
-          <th>Created</th>
+          <th data-sort-type="datetime">Created</th>
         </tr>
       </thead>
       <tbody>

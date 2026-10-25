@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Provider Configs{% endblock %}
 
 {% block body %}
@@ -21,10 +23,7 @@
   </header>
 
   <form class="filter-bar compact" method="get" action="/admin/providers">
-    <label>
-      Provider
-      <input name="provider" value="{{ filters.provider }}" autocomplete="off">
-    </label>
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider, selected_id=filters.provider, selected_label=filters.provider, allow_new=true, input_id="providers-filter") }}
     <label>
       Enabled
       <select name="enabled">
@@ -38,14 +37,14 @@
   </form>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Provider configs">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Provider</th>
           <th>Base URL</th>
           <th>API key env var</th>
           <th>Status</th>
-          <th>Timeouts</th>
+          <th data-sort-type="number">Timeout (s)</th>
         </tr>
       </thead>
       <tbody>
@@ -58,7 +57,7 @@
           <td>{{ provider.base_url }}</td>
           <td><code>{{ provider.api_key_env_var }}</code></td>
           <td><span class="status-pill status-{{ 'active' if provider.enabled else 'suspended' }}">{{ "enabled" if provider.enabled else "disabled" }}</span></td>
-          <td>
+          <td data-sort-value="{{ provider.timeout_seconds }}">
             <div>{{ provider.timeout_seconds }}s timeout</div>
             <div class="muted small">{{ provider.max_retries }} retries</div>
           </td>

@@ -26,14 +26,14 @@
   </section>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Key templates">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Name</th>
           <th>Status</th>
           <th>Current revision</th>
           <th>Created</th>
-          <th>Summary</th>
+          <th data-sort-type="number">Revisions</th>
         </tr>
       </thead>
       <tbody>
@@ -46,7 +46,7 @@
           <td><span class="status-pill status-{{ template.status }}">{{ template.status }}</span></td>
           <td>{{ template.current_revision_id or "None" }}</td>
           <td>{{ template.created_at.isoformat() }}</td>
-          <td>
+          <td data-sort-value="{{ template.revisions|length }}">
             <div>{{ template.revisions|length }} revision{{ "" if template.revisions|length == 1 else "s" }}</div>
             <div class="muted small">{{ template_external_tool_summaries.get(template.id|string, "External tools: strict_bounded; all hosted runtime denied") }}</div>
             <div class="muted small">Bulk key creation is future work.</div>

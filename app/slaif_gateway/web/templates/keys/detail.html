@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Gateway Key Detail{% endblock %}
 
 {% block body %}
@@ -251,10 +253,16 @@
         </label>
         {% endfor %}
       </fieldset>
-      <label>
-        Reviewed destination IDs
-        <textarea name="external_tool_destination_ids" rows="3" autocomplete="off">{{ external_policy_form.external_tool_destination_ids }}</textarea>
-      </label>
+      {{ record_choice(
+          "external_tool_destination_ids", "tool_destination", "Reviewed destination IDs",
+          options=tool_destination_options,
+          multi=true,
+          multi_value=external_policy_form.external_tool_destination_ids,
+          serialize="newline",
+          allow_new=true,
+          placeholder="connector:reviewed_id or remote_mcp:reviewed_id, one per line",
+          help="Destination IDs are key-local reviewed identifiers; type new reviewed values directly (no global registry lookup).",
+      ) }}
       <label>
         Maximum provider tool calls per request
         <input name="external_tool_max_calls" value="{{ external_policy_form.external_tool_max_calls }}" inputmode="numeric" autocomplete="off">

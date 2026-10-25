@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Usage Ledger{% endblock %}
 
 {% block body %}
@@ -20,26 +22,19 @@
   </header>
 
   <form class="filter-bar compact" method="get" action="/admin/usage">
-    <label>
-      Provider
-      <input name="provider" value="{{ filters.provider }}" autocomplete="off">
-    </label>
-    <label>
-      Model
-      <input name="model" value="{{ filters.model }}" autocomplete="off">
-    </label>
-    <label>
-      Endpoint
-      <input name="endpoint" value="{{ filters.endpoint }}" autocomplete="off">
-    </label>
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider, selected_id=filters.provider, selected_label=filters.provider, allow_new=true, input_id="usage-provider") }}
+    {{ record_choice("model", "model", "Model", options=choices.model, selected_id=filters.model, selected_label=filters.model, allow_new=true, input_id="usage-model") }}
+    {{ record_choice("endpoint", "endpoint", "Endpoint", options=choices.endpoint, selected_id=filters.endpoint, selected_label=filters.endpoint, allow_new=false, input_id="usage-endpoint") }}
     <label>
       Status
-      <input name="status" value="{{ filters.status }}" autocomplete="off">
+      <select name="status">
+        <option value="" {% if filters.status == "" %}selected{% endif %}>Any</option>
+        {% for status in status_options %}
+        <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
     </label>
-    <label>
-      Request ID
-      <input name="request_id" value="{{ filters.request_id }}" autocomplete="off">
-    </label>
+    {{ record_choice("request_id", "request_id", "Request ID", options=choices.request_id, selected_id=filters.request_id, selected_label=filters.request_id, allow_new=true, input_id="usage-request-id") }}
     <label>
       Start
       <input name="start_at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z">
@@ -95,16 +90,16 @@
   </section>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Usage ledger rows">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Request</th>
           <th>Key / Owner</th>
           <th>Provider / Model</th>
           <th>Status</th>
-          <th>Tokens</th>
-          <th>Cost</th>
-          <th>Created</th>
+          <th data-sort-type="number">Tokens (total)</th>
+          <th data-sort-type="money">Cost (EUR)</th>
+          <th data-sort-type="datetime">Created</th>
         </tr>
       </thead>
       <tbody>
@@ -129,8 +124,8 @@
             <div class="muted small">Live-burn: stopped ({{ row.chat_live_burn.stop_reason or "unknown" }})</div>
             {% endif %}
           </td>
-          <td>{{ row.total_tokens }} total</td>
-          <td>{{ row.actual_cost_eur or row.estimated_cost_eur or "n/a" }} EUR</td>
+          <td data-sort-value="{{ row.total_tokens if row.total_tokens is not none else '' }}">{{ row.total_tokens }} total</td>
+          <td data-sort-value="{{ row.actual_cost_eur | dec if row.actual_cost_eur is not none else (row.estimated_cost_eur | dec if row.estimated_cost_eur is not none else '') }}">{{ (row.actual_cost_eur | dec) if row.actual_cost_eur is not none else ((row.estimated_cost_eur | dec) if row.estimated_cost_eur is not none else "n/a") }} EUR</td>
           <td>{{ row.created_at }}</td>
         </tr>
         {% else %}

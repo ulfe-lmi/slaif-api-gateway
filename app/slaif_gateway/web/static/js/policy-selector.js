@@ -51,6 +51,12 @@
     }
     groups.models.emptyNone = surface.querySelector('[data-policy-empty="models-none"]');
     groups.models.emptyFiltered = surface.querySelector('[data-policy-empty="models-filtered"]');
+    // Policy catalog server search elements (older records beyond the
+    // latest-100 page); wired up by createPolicySearch() below.
+    const providerSearch = surface.querySelector("[data-policy-provider-search]");
+    const providerSearchResults = surface.querySelector("[data-policy-provider-search-results]");
+    const modelSearch = surface.querySelector("[data-policy-model-search]");
+    const modelSearchResults = surface.querySelector("[data-policy-model-search-results]");
 
     const choiceLabels = {
       providers: new Map(),
@@ -260,10 +266,29 @@
       }
       const disabled = group.toggle.checked;
       group.container.classList.toggle("policy-selector-disabled", disabled);
-      for (const element of [group.available, group.selected, group.addButton, group.removeButton]) {
+      // Per-dimension search controls: the providers search belongs to
+      // the providers dimension and the models search to the models
+      // dimension (never to endpoints).
+      const dimensionSearch =
+        dimension === "models"
+          ? [modelSearch, modelSearchResults]
+          : dimension === "providers"
+            ? [providerSearch, providerSearchResults]
+            : [];
+      const controls = [
+        group.available,
+        group.selected,
+        group.addButton,
+        group.removeButton,
+        ...dimensionSearch,
+      ];
+      for (const element of controls) {
         if (element) {
           element.disabled = disabled;
         }
+      }
+      if (disabled && dimensionSearch[1]) {
+        dimensionSearch[1].hidden = true;
       }
     };
 
@@ -325,6 +350,157 @@
     groups.providers.selected?.addEventListener("change", refreshAll);
     groups.endpoints.selected?.addEventListener("change", refreshAll);
     groups.models.selected?.addEventListener("change", refreshAll);
+
+    // Policy catalog server search (records beyond the latest-100 page).
+    // The scope parameters mirror the client-side all/none/one/many
+    // filtering EXACTLY: no scope parameter = unscoped, a blank
+    // parameter = explicitly empty scope (the server returns no
+    // choices), repeated parameters = bounded IN scope.
+    const createPolicySearch = (dimension) => {
+      const isModels = dimension === "models";
+      const search = isModels ? modelSearch : providerSearch;
+      const results = isModels ? modelSearchResults : providerSearchResults;
+      if (!search || !results) {
+        return null;
+      }
+      let timer = null;
+      let seq = 0;
+      let abort = null;
+
+      const render = (items, message) => {
+        results.replaceChildren();
+        if (message) {
+          const li = document.createElement("li");
+          li.setAttribute("role", "presentation");
+          li.textContent = message;
+          results.appendChild(li);
+        }
+        for (const item of items) {
+          const value = String(item.id);
+          const li = document.createElement("li");
+          li.setAttribute("role", "option");
+          li.tabIndex = 0;
+          li.textContent = item.label ? String(item.label) : value;
+          if (item.sub) {
+            const sub = document.createElement("span");
+            sub.className = "policy-search-sub";
+            sub.textContent = ` — ${item.sub}`;
+            li.appendChild(sub);
+          }
+          const choose = () => {
+            const nextValues = [...selectedValues(dimension)];
+            if (!nextValues.includes(value)) {
+              nextValues.push(value);
+            }
+            setSelectedValues(dimension, nextValues);
+            syncManualFromSelected(dimension);
+            refreshAll();
+            search.value = "";
+            results.replaceChildren();
+            results.hidden = true;
+          };
+          li.addEventListener("click", choose);
+          li.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              choose();
+            }
+          });
+          results.appendChild(li);
+        }
+        results.hidden = false;
+      };
+
+      const run = () => {
+        const query = (search.value || "").trim();
+        if (!query) {
+          results.replaceChildren();
+          results.hidden = true;
+          return;
+        }
+        render([], "Searching…");
+        const params = new URLSearchParams();
+        params.set("kind", isModels ? "policy_model" : "policy_provider");
+        params.set("q", query.slice(0, 200));
+        if (isModels) {
+          const providerFilter = currentProviderFilter();
+          if (providerFilter === null) {
+            // Allow-all providers: unscoped.
+          } else if (providerFilter.size === 0) {
+            params.set("provider", ""); // explicitly empty: no choices
+          } else {
+            for (const value of providerFilter) {
+              params.append("provider", value);
+            }
+          }
+          const endpointFilter = currentEndpointFilter();
+          if (endpointFilter === null) {
+            // Allow-all endpoints or a catalog-only selection: unscoped.
+          } else if (endpointFilter.size === 0) {
+            params.set("endpoint", ""); // explicitly empty: no choices
+          } else {
+            for (const value of endpointFilter) {
+              params.append("endpoint", value);
+            }
+          }
+        }
+        const nextSeq = ++seq;
+        if (abort) {
+          abort.abort();
+        }
+        abort = new AbortController();
+        fetch(`/admin/record-choices?${params.toString()}`, {
+          headers: { Accept: "application/json" },
+          signal: abort.signal,
+        })
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(`status ${response.status}`);
+            }
+            return response.json();
+          })
+          .then((payload) => {
+            if (nextSeq !== seq) {
+              return;
+            }
+            const items = Array.isArray(payload.choices) ? payload.choices : [];
+            render(
+              items,
+              items.length === 0
+                ? isModels
+                  ? "No matching enabled route models."
+                  : "No matching enabled providers."
+                : null
+            );
+          })
+          .catch(() => {
+            if (nextSeq !== seq) {
+              return;
+            }
+            render([], "Search unavailable — retry or use the manual field below.");
+          });
+      };
+
+      search.addEventListener("input", () => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        timer = setTimeout(run, 250);
+      });
+      search.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          search.value = "";
+          results.replaceChildren();
+          results.hidden = true;
+        }
+      });
+      return { search, results };
+    };
+
+    // Both searches attach their listeners on creation (the returned
+    // handles are not needed by any caller).
+    createPolicySearch("providers");
+    createPolicySearch("models");
 
     refreshAll();
   }

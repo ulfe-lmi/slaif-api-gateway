@@ -1219,9 +1219,14 @@ import.
 
 ## The one-page report (`REVIEW.html`)
 
-`REVIEW.html` is static, standalone UTF-8 with inline CSS and native
-`<details>`/`<summary>`: no external JS/CSS/fonts/images, no JavaScript, no
-network fetches, print-friendly, and safe on an ordinary laptop width. All
+`REVIEW.html` is a standalone UTF-8 single file with inline CSS and native
+`<details>`/`<summary>`: no external JS/CSS/fonts/images, no network fetches,
+print-friendly, and safe on an ordinary laptop width. It embeds exactly ONE
+fixed, reviewed, self-contained table-sorting script — byte-identical to the
+admin UI's `web/static/js/table-sort.js` (single source of truth; tests
+assert the byte equality and refuse fetch/eval/dynamic-code variants) —
+under `script-src 'unsafe-inline'` CSP; with JavaScript disabled the report
+remains fully readable and the initial business ordering is preserved. All
 data is escaped; evidence links are allowlisted; a restrictive CSP is added
 as defense-in-depth.
 

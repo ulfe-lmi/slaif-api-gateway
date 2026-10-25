@@ -5,7 +5,10 @@ TEST_DATABASE_URL, or provider dependency. Real pipeline documents
 (CLI-published sealed runs for first-install and blocked; in-process
 validate+render for the rest — the same pure functions the CLI uses) are
 opened as ``file://`` URLs in a JavaScript-disabled Chromium context with
-full request recording.
+full request recording. 192-a adds one JavaScript-ENABLED document open:
+the single fixed bundled table-sorting script must stay offline (exactly
+one request, the document) while real header-button clicks sort the
+rendered rows (aria-sort ascending → descending, tables independent).
 
 180-i: generated HTML, screenshots, PDFs and metrics are written ONLY
 under pytest-owned temporary output (tmp_path / tmp_path_factory); tracked
@@ -478,10 +481,28 @@ def _cli_run_report(tmp_path: Path, name: str, extra: list[str]) -> Path:
 # --------------------------------------------------------------------------
 
 
+def _fixed_sort_source() -> str:
+    """The single fixed bundled script allowed in generated reports (192-a)."""
+    return (
+        REPO / "app" / "slaif_gateway" / "web" / "static" / "js" / "table-sort.js"
+    ).read_text(encoding="utf-8")
+
+
 def _assert_static_offline_html(html_text: str) -> None:
-    """No scripts, event handlers, external resources, or CSS fetches."""
+    """No scripts beyond the one fixed bundled sort script, no event
+    handlers, external resources, or CSS fetches."""
     lowered = html_text.lower()
-    assert not re.search(r"<script\b", lowered), "real <script> tag present"
+    script_open_tags = re.findall(r"<script\b[^>]*>", lowered)
+    assert len(script_open_tags) <= 1, "more than one <script> tag present"
+    if script_open_tags:
+        assert " src=" not in script_open_tags[0], "the bundled <script> carries src="
+        script_bodies = re.findall(
+            r"<script\b[^>]*>(.*?)</script>", html_text, flags=re.DOTALL
+        )
+        assert script_bodies[0].strip() == _fixed_sort_source().strip(), (
+            "the bundled <script> is not byte-identical to the fixed "
+            "web/static/js/table-sort.js source"
+        )
     assert not re.search(r"<[a-z][^>]*\son\w+=", lowered), "real tag carries an on* handler"
     assert not re.search(r"<[a-z][^>]*\ssrc=", lowered), "real tag carries src="
     for tag in ("link", "iframe", "object", "embed", "form", "video", "audio", "img"):
@@ -850,3 +871,90 @@ def test_browser_layout_all_cases(playwright, case_html) -> None:
           "fonts, requests, details opened, visible digests, print PDFs):")
     print(f"metrics written to {metrics_path}")
     print(json.dumps(metrics, indent=1, sort_keys=True))
+
+
+def test_browser_report_sort_script_js_on(playwright, case_html) -> None:
+    """192-a: with JavaScript enabled the report must still perform exactly
+    one network request (the document itself), and real header-button
+    clicks must sort the rendered rows: aria-sort none → ascending →
+    descending, visible row order following, and tables independent."""
+    html_path = case_html["two-provider"]
+    requests: list[str] = []
+    browser = playwright.chromium.launch()
+    try:
+        context = browser.new_context(
+            viewport={"width": 1440, "height": 900},
+            java_script_enabled=True,
+        )
+        page = context.new_page()
+        page.on("request", lambda req: requests.append(f"{req.resource_type}:{req.url}"))
+        page.goto(html_path.as_uri())
+        assert requests == ["document:" + html_path.as_uri()], (
+            f"JS-on report made extra requests: {requests}"
+        )
+
+        def prov_order() -> list[str]:
+            rows = page.locator("#per-provider tbody tr")
+            return [
+                rows.nth(i).locator("td").first.inner_text()
+                for i in range(rows.count())
+            ]
+
+        # Field detail table of the single NEW model in this fixture:
+        # fixed business field order, unsorted at load.
+        field_table = page.locator(
+            'details:has(summary:has-text("New models")) table[data-sortable]'
+        ).first
+        assert field_table.count() == 1
+        rows = field_table.locator("tbody tr")
+        count = rows.count()
+        assert count >= 2
+        initial = [rows.nth(i).locator("td").first.inner_text() for i in range(count)]
+        assert initial[0] == "display_name", f"business order lost: {initial}"
+        assert initial != sorted(initial), "fixture field order must not pre-sort"
+        field_th = field_table.locator("thead th").first
+        assert field_th.get_attribute("aria-sort") == "none"
+
+        # Independent real table order before any click (this fixture's
+        # per-provider summary is alphabetized at render time).
+        prov_before = prov_order()
+        assert prov_before == ["openai", "openrouter"], prov_before
+
+        field_th.locator("button").click()
+        assert field_th.get_attribute("aria-sort") == "ascending"
+        ascending = [
+            field_table.locator("tbody tr").nth(i).locator("td").first.inner_text()
+            for i in range(count)
+        ]
+        assert ascending == sorted(initial), f"ascending sort wrong: {ascending}"
+        assert ascending != initial
+        assert prov_order() == prov_before, "independent table must not move"
+
+        field_th.locator("button").click()
+        assert field_th.get_attribute("aria-sort") == "descending"
+        descending = [
+            field_table.locator("tbody tr").nth(i).locator("td").first.inner_text()
+            for i in range(count)
+        ]
+        assert descending == list(reversed(ascending)), (
+            f"descending sort wrong: {descending}"
+        )
+
+        # Numeric column in the per-provider summary: openai New=1,
+        # openrouter New=0. Ascending must flip to openrouter first;
+        # descending flips back to openai first.
+        new_header = page.locator("#per-provider thead th").filter(has_text="New")
+        new_header.locator("button").click()
+        assert new_header.get_attribute("aria-sort") == "ascending"
+        assert prov_order() == ["openrouter", "openai"], "numeric ascending wrong"
+        new_header.locator("button").click()
+        assert new_header.get_attribute("aria-sort") == "descending"
+        assert prov_order() == ["openai", "openrouter"], "numeric descending wrong"
+
+        # The fixed script is offline: still exactly one request after a
+        # full round of real interaction.
+        assert requests == ["document:" + html_path.as_uri()], (
+            f"fixed sort script caused requests: {requests}"
+        )
+    finally:
+        browser.close()

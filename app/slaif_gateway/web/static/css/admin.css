@@ -572,6 +572,56 @@ button:disabled:hover {
   gap: 6px;
 }
 
+/* Policy selector server search (192-a): the results list overlays the
+   pane and must honor [hidden] (same law as the record-choice menus).
+   Shared by the providers and models search fields. */
+.policy-model-search {
+  position: relative;
+  display: grid;
+  gap: 6px;
+}
+
+[data-policy-model-search-results],
+[data-policy-provider-search-results] {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 30;
+  margin: 4px 0 0;
+  padding: 6px;
+  max-height: 14rem;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgb(15 23 42 / 0.12);
+}
+
+[data-policy-model-search-results][hidden],
+[data-policy-provider-search-results][hidden] {
+  display: none;
+}
+
+[data-policy-model-search-results] li[role="option"],
+[data-policy-provider-search-results] li[role="option"] {
+  padding: 6px 8px;
+  border-radius: calc(var(--radius) / 2);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+[data-policy-model-search-results] li[role="option"]:hover,
+[data-policy-model-search-results] li[role="option"]:focus,
+[data-policy-provider-search-results] li[role="option"]:hover,
+[data-policy-provider-search-results] li[role="option"]:focus {
+  background: var(--muted-bg, rgb(15 23 42 / 0.06));
+  outline: none;
+}
+
 .policy-selector-caption {
   display: block;
   color: var(--muted);
@@ -1085,4 +1135,223 @@ dd {
   max-width: 18rem;
   height: auto;
   margin: 0 auto 18px;
+}
+
+/* --- Sortable tables (192-a) ------------------------------------------------
+   Shared with the generated catalog report (the report embeds table-sort.js
+   verbatim). The header control is a real <button> created by table-sort.js
+   inside each <th> of a table[data-sortable]. */
+.ts-col {
+  white-space: normal;
+}
+.ts-btn {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  font-weight: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  border-radius: 0.25rem;
+}
+.ts-btn:hover {
+  color: var(--accent-dark);
+}
+.ts-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+th.ts-col[aria-sort="ascending"] .ts-btn::after {
+  content: " \2191";
+  color: var(--accent);
+}
+th.ts-col[aria-sort="descending"] .ts-btn::after {
+  content: " \2193";
+  color: var(--accent);
+}
+
+/* --- Record choices (192-a) --------------------------------------------------
+   Accessible searchable combobox rendered by the _record_choice.html macro.
+   The control is progressive enhancement: without JavaScript the hidden
+   input and (for multi controls) the chip area degrade to a plain text
+   field, so forms stay usable. */
+.rc-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-width: 26rem;
+}
+.filter-bar .rc-field {
+  max-width: 18rem;
+}
+.rc-name {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.rc {
+  position: relative;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+.rc-main {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0.25rem;
+  flex: 1 1 12rem;
+  min-width: 12rem;
+}
+.rc-input {
+  flex: 1 1 auto;
+  min-width: 8rem;
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--control-bg);
+  color: var(--text);
+}
+.rc-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.rc-open,
+.rc-clear {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--secondary-bg);
+  color: var(--secondary-fg);
+  border-radius: 0.4rem;
+  padding: 0 0.55rem;
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.rc-open:hover,
+.rc-clear:hover {
+  background: var(--pale-blue);
+}
+.rc-open:focus-visible,
+.rc-clear:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.rc-clear {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.rc-selected {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  width: 100%;
+}
+.rc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--tint-bg);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.1rem 0.3rem 0.1rem 0.5rem;
+  font-size: 0.85rem;
+}
+.rc-chip-remove {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--danger);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 0.15rem;
+}
+.rc-chip-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.rc-menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: var(--shadow);
+  padding: 0.5rem;
+}
+.rc-search {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--control-bg);
+  color: var(--text);
+}
+.rc-search:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.rc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 16rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+}
+.rc-option {
+  display: flex;
+  flex-direction: column;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.rc-option:last-child {
+  border-bottom: 0;
+}
+.rc-option-label {
+  font-size: 0.9rem;
+  color: var(--text);
+  word-break: break-word;
+}
+.rc-option-sub {
+  font-size: 0.78rem;
+  color: var(--muted);
+  word-break: break-word;
+}
+.rc-option-active {
+  background: var(--pale-blue);
+}
+.rc-option-selected {
+  background: var(--tint-bg);
+}
+.rc-option-selected .rc-option-label::after {
+  content: " \2713";
+  color: var(--accent);
+}
+.rc-status {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+/* The [hidden] attribute must win over the display rules above: a closed
+   menu/selected/clear/status line must not overlay other controls or
+   table headers (the JS sets hidden=true; display:flex/inline-flex above
+   would otherwise override the UA hidden rule). */
+.rc [hidden] {
+  display: none;
+}
+.rc-help {
+  font-size: 0.75rem;
+  color: var(--muted);
 }

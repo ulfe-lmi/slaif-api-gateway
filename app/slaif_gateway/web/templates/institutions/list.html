@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 
+{% from "_record_choice.html" import record_choice %}
+
 {% block title %}Institutions{% endblock %}
 
 {% block body %}
@@ -25,23 +27,20 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/institutions">
-    <label>
-      Name
-      <input name="name" value="{{ filters.name }}" autocomplete="off">
-    </label>
+    {{ record_choice("name", "institution_name", "Name", options=choices.name, selected_id=filters.name, selected_label=filters.name, allow_new=true, placeholder="Institution name", input_id="institutions-name-filter") }}
     <input type="hidden" name="limit" value="{{ filters.limit }}">
     <button type="submit">Filter</button>
   </form>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Institutions">
-    <table>
+    <table data-sortable>
       <thead>
         <tr>
           <th>Institution</th>
           <th>Country</th>
-          <th>Owners</th>
-          <th>Keys</th>
-          <th>Created</th>
+          <th data-sort-type="number">Owners (count)</th>
+          <th data-sort-type="number">Keys (total)</th>
+          <th data-sort-type="datetime">Created</th>
         </tr>
       </thead>
       <tbody>
@@ -49,8 +48,8 @@
         <tr>
           <td><a href="/admin/institutions/{{ institution.id }}">{{ institution.name }}</a></td>
           <td>{{ institution.country or "Not set" }}</td>
-          <td>{{ institution.owner_count }}</td>
-          <td>
+          <td data-sort-value="{{ institution.owner_count }}">{{ institution.owner_count }}</td>
+          <td data-sort-value="{{ institution.key_count }}">
             <div>{{ institution.key_count }} total</div>
             <div class="muted small">{{ institution.active_key_count }} active</div>
           </td>
