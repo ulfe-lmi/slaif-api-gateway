@@ -194,7 +194,13 @@ top-level route `codex_limits` object (`context_window_tokens`,
 context), or route resolution denies with
 `responses_route_capability_not_supported` or
 `responses_codex_limits_invalid` before Redis, pricing, quota, or provider
-work. Codex pricing is complete only when the resolved pricing row also
+work. Registered Codex profile readiness treats the profile's context and maximum
+output as minimum route allowances. The route default must lie between the
+profile's default and maximum output, inclusive. A padded gateway estimation
+ceiling does not rewrite the conservative client catalog's context or compaction
+threshold; malformed or insufficient route limits still deny readiness. This
+readiness comparison changes neither runtime request admission nor forwarding.
+Codex pricing is complete only when the resolved pricing row also
 provides `cached_input_price_per_1m`, `reasoning_price_per_1m`, and
 `pricing_metadata.codex_accounting` holding a positive integer
 `long_context_threshold_tokens`, positive decimal-string
@@ -1140,3 +1146,12 @@ The opt-in correction for encoded image estimates and bounded native-vLLM
 Chat video input is described in [media input estimation](media-input-estimation.md).
 Existing generic/unknown provider video behavior remains fail-closed; this
 exception does not enable video generation or direct Codex video input.
+
+The separately versioned Codex 0.164.0 revision-14 preset adds the observed
+`clock`/`collaboration` and exact `mcp__codex_worktrees` namespaces plus the
+exact `functions.exec` custom grammar declaration. Native-vLLM transports approved custom strings through one bounded
+JSON `input` wrapper, preserving replay and streaming linkage without executing
+the text. Independent key/route capabilities remain required; only A100 is
+selected for the scoped live check. See
+[the preset contract](client-compatibility-presets.md#codex-01640-declaration-compatibility)
+and [the bounded verification record](verification/2026-10-23-codex-0164.md).

@@ -20,6 +20,7 @@ no silent fallback or per-request file reload.
 | --- | --- | --- | --- |
 | `codex-0.162.1` | `rust-v0.162.1` | 10 | schema 2 |
 | `codex-0.163.0` | `rust-v0.163.0` | 12 | schema 2 |
+| `codex-0.164.0` | `rust-v0.164.0` | 14 | schema 2 |
 
 The existing static module ID `codex-0.162-responses-v1` names the decoder
 generation. Its active version and fixture digest come from the selected data
@@ -247,3 +248,21 @@ and explicit image-input permissions on both key and route remain mandatory.
 It does not enable files, audio, image generation, or arbitrary result objects.
 
 Verification: [2026-10-20 deployment evidence](verification/2026-10-20-external-client-presets.md).
+
+## Codex 0.164.0 declaration compatibility
+
+Revision 14 retains revision 13's older built-in namespaces, `clock` and
+`collaboration`, and the exact `functions.exec` custom declaration. It additionally
+accepts the exact `mcp__codex_worktrees` namespace advertised by the 0.164.0 TUI.
+This does not allow other MCP namespaces or add a wildcard connector prefix.
+Upstream marks the `worktrees` feature flag as removed in this version, so
+`[features] worktrees = false` does not suppress this built-in declaration.
+Namespace/type vocabulary remains bounded preset data. The native-vLLM adapter
+wraps approved custom input strings in the same bounded JSON `input` field for
+transport and reverses that wrapper on streaming/non-streaming/replay paths.
+It neither interprets nor executes custom text; core policy and declared-call
+identity still govern admission. Unknown namespaces, undeclared calls and
+unapproved custom types remain rejected. A profile-pin migration changes no
+credentials, quotas, routing permissions, or throttling.
+
+See the [bounded 0.164 verification record](verification/2026-10-23-codex-0164.md).

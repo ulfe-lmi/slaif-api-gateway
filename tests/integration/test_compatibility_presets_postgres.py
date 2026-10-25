@@ -23,7 +23,7 @@ def _facts(module):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('preset',['codex-0.162.1','codex-0.163.0'])
+@pytest.mark.parametrize('preset',['codex-0.162.1','codex-0.163.0','codex-0.164.0'])
 async def test_external_preset_migration_preserves_key_policy_usage_and_rollback(
     owned_pg_url, monkeypatch, preset,  # noqa: F811
 ):
