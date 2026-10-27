@@ -111,7 +111,7 @@ def test_stable_partition_preserves_roles_content_tool_linkage_and_media():
     instructions = [body["input"][1], extra[-2], extra[-1]]
     assert result["input"][:3] == instructions
     assert result["input"][3:] == body["input"][:1] + body["input"][2:-2]
-    assert body == original
+    # Mutating the normalized copy must leave the original history untouched.
     result["input"][0]["content"][0]["text"] = "Changed copy"
     assert body == original
 
