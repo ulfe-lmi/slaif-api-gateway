@@ -64,6 +64,7 @@ slaif_gateway = [
   "resources/catalog_refresh/*",
   "modules/clients/profiles/*.json",
   "modules/servers/completion_service/profiles/*.json",
+  "modules/servers/upstream_llm/profiles/*.json",
   "web/templates/**/*.html",
   "web/static/**/*",
 ]

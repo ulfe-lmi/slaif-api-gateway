@@ -427,6 +427,14 @@ certification, production readiness, or an SLA.
 
 ## Configured Completion Service Profiles
 
+For Responses language-model backends, `UPSTREAM_LLM_PROFILES_FILE` selects a
+strict, immutable upstream compatibility registry (empty uses bundled
+pass-through, llama.cpp/Qwen and native-vLLM presets). Routes pin one profile
+by ID, revision and digest; external edits require worker restart and audited
+route-pin updates. See the [configurable upstream LLM adapter](upstream-llm-adapter.md)
+for available operations, setup, semantic tradeoffs and rollback. This setting
+is distinct from client syntax presets and the completion-service setting below.
+
 `COMPLETION_SERVICE_PROFILE_DIR` defaults to empty (bundled JSON profiles).
 An absolute operator-owned directory can provide strict `<profile-id>.json`
 files for the shared facial-scoring/ZAP-IT adapter. Files must be regular,

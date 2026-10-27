@@ -465,6 +465,7 @@ slaif-gateway routes add
 slaif-gateway routes list
 slaif-gateway routes show
 slaif-gateway routes enable
+slaif-gateway upstream-llm profiles
 slaif-gateway routes disable
 slaif-gateway routes import
 slaif-gateway request-capture arm

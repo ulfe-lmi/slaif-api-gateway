@@ -27,6 +27,7 @@ from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.lifespan import build_lifespan
 from slaif_gateway.logging import configure_logging
 from slaif_gateway.modules.clients.codex_0162 import bootstrap_codex_compatibility_profile
+from slaif_gateway.modules.servers.upstream_llm.profiles import bootstrap_upstream_llm_profiles
 from slaif_gateway.startup_warnings import emit_startup_configuration_warnings
 
 
@@ -38,6 +39,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     codex_profile = bootstrap_codex_compatibility_profile(
         app_settings.CODEX_COMPATIBILITY_PROFILE_FILE
     )
+    upstream_llm_profiles = bootstrap_upstream_llm_profiles(app_settings.UPSTREAM_LLM_PROFILES_FILE)
 
     @asynccontextmanager
     async def app_lifespan(app: FastAPI):
@@ -50,6 +52,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="SLAIF API Gateway", lifespan=app_lifespan)
     app.state.settings = app_settings
     app.state.codex_0162_profile = codex_profile
+    app.state.upstream_llm_profiles = upstream_llm_profiles
     app.state.db_engine = None
     app.state.db_sessionmaker = None
     app.state.redis_client = None

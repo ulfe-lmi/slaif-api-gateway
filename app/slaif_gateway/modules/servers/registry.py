@@ -26,6 +26,12 @@ from slaif_gateway.modules.servers.local_coding_vllm.adapter import LocalCodingV
 from slaif_gateway.modules.servers.local_coding_vllm.contract import (
     VLLM_SERVER_MODULE_ID, VLLM_ROUTE_CAPABILITY_KEY, parse_vllm_route_contract,
 )
+from slaif_gateway.modules.servers.upstream_llm.adapter import ConfiguredUpstreamLLMAdapter
+from slaif_gateway.modules.servers.upstream_llm.profiles import (
+    MODULE_ID as UPSTREAM_LLM_MODULE_ID,
+    CAPABILITY_KEY as UPSTREAM_LLM_CAPABILITY_KEY,
+    validate_route as validate_upstream_llm_route,
+)
 from slaif_gateway.modules.servers.vllm_chat_video import MODULE_ID as VIDEO_MODULE_ID, CAPABILITY_KEY as VIDEO_CAPABILITY_KEY, VLLMChatVideoAdapter, parse_video_frames
 from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.providers.openai import OpenAIProviderAdapter
@@ -61,6 +67,10 @@ def _local_coding_factory(settings: object, **kwargs: object) -> object:
 
 def _vllm_factory(settings: object, **kwargs: object) -> object:
     return LocalCodingVLLMAdapter(settings, **kwargs)
+
+
+def _upstream_llm_factory(settings: object, **kwargs: object) -> object:
+    return ConfiguredUpstreamLLMAdapter(settings, **kwargs)
 
 
 def _video_factory(settings: object, **kwargs: object) -> object:
@@ -112,6 +122,13 @@ SERVER_MODULE_REGISTRY: Mapping[str, tuple[ServerModuleDescriptor, Callable[...,
                                    provider_slugs=frozenset(), provider_kinds=frozenset({"openai_compatible"})),
             _vllm_factory,
         ),
+        UPSTREAM_LLM_MODULE_ID: (
+            ServerModuleDescriptor(
+                module_id=UPSTREAM_LLM_MODULE_ID, module_version="1",
+                provider_slugs=frozenset(), provider_kinds=frozenset({"openai_compatible"}),
+            ),
+            _upstream_llm_factory,
+        ),
         LOCAL_CODING_SERVER_MODULE_ID: (
             ServerModuleDescriptor(
                 module_id=LOCAL_CODING_SERVER_MODULE_ID,
@@ -135,6 +152,7 @@ CLIENT_SERVER_COMPATIBILITY = frozenset(
         ClientServerPair("codex-0.149-responses-v1", LOCAL_CODING_SERVER_MODULE_ID),
         ClientServerPair("codex-0.162-responses-v1", LOCAL_CODING_SERVER_MODULE_ID),
         ClientServerPair("codex-0.162-responses-v1", VLLM_SERVER_MODULE_ID),
+        ClientServerPair("codex-0.162-responses-v1", UPSTREAM_LLM_MODULE_ID),
     }
 )
 
@@ -155,6 +173,11 @@ def resolve_server_module(
     """Resolve provider configuration to one static server descriptor."""
     normalized_provider = provider.strip().lower() if isinstance(provider, str) else ""
     normalized_kind = provider_kind.strip() if isinstance(provider_kind, str) else ""
+    if isinstance(route_capabilities, Mapping) and UPSTREAM_LLM_CAPABILITY_KEY in route_capabilities:
+        if normalized_kind != "openai_compatible":
+            raise ProviderConfigurationError(error_code="upstream_llm_profile_invalid")
+        validate_upstream_llm_route(route_capabilities)
+        return SERVER_MODULE_REGISTRY[UPSTREAM_LLM_MODULE_ID][0]
     has_profile = isinstance(route_capabilities, Mapping) and "completion_service" in route_capabilities
     if has_profile or (normalized_kind == "module" and normalized_provider in load_bindings().providers):
         if normalized_kind != "module" or any(
@@ -208,7 +231,7 @@ def resolve_server_module(
             normalized_kind in descriptor.provider_kinds or built_in_provider
         ):
             return descriptor
-        if descriptor.module_id not in {VLLM_SERVER_MODULE_ID, VIDEO_MODULE_ID, COMPLETION_SERVICE_MODULE_ID} and not descriptor.provider_slugs and normalized_kind in descriptor.provider_kinds:
+        if descriptor.module_id not in {UPSTREAM_LLM_MODULE_ID, VLLM_SERVER_MODULE_ID, VIDEO_MODULE_ID, COMPLETION_SERVICE_MODULE_ID} and not descriptor.provider_slugs and normalized_kind in descriptor.provider_kinds:
             return descriptor
     if normalized_kind == "module":
         raise ProviderConfigurationError(
@@ -271,7 +294,7 @@ def build_server_adapter(
     }
     if base_url is not None:
         kwargs["base_url"] = base_url
-    if descriptor.module_id in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID, VIDEO_MODULE_ID}:
+    if descriptor.module_id in {UPSTREAM_LLM_MODULE_ID, LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID, VIDEO_MODULE_ID}:
         kwargs["route_capabilities"] = route_capabilities
     if descriptor.module_id == COMPLETION_SERVICE_MODULE_ID:
         profile_id = resolve_profile_id(provider_name, route_capabilities)

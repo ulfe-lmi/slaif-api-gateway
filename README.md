@@ -30,6 +30,10 @@ For image-processing services, [configured completion profiles](docs/completion-
 route facial scoring and ZAP-IT through one shared adapter with separate JSON
 profiles and the existing gateway policy/accounting path.
 
+For language-model backend quirks, [configurable upstream LLM profiles](docs/upstream-llm-adapter.md)
+select reviewed pass-through, llama.cpp/Qwen instruction placement, and native-vLLM
+tool translations through one shared adapter.
+
 ## Get started
 
 For Codex dialect settings, use [external client compatibility presets](docs/client-compatibility-presets.md).

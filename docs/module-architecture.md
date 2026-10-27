@@ -80,6 +80,14 @@ server registry; there is no parallel production factory.
 
 ## Change ownership
 
+The [configurable upstream LLM adapter](upstream-llm-adapter.md) is the single
+`configured-upstream-llm` descriptor for operator-owned Responses compatibility
+profiles. It composes reviewed instruction-placement and native tool-codec
+operations from strict revision/digest-bound JSON data. Existing Local Coding
+and native-vLLM routes retain their original adapters until a route explicitly
+selects the new module. Static registration and client/server pairing remain
+in code; profile names cannot select executable classes.
+
 Client syntax and dialect changes should normally remain client-module changes.
 Upstream protocol, header, body, and response translation changes should
 normally remain server-module or shared transport changes. Any new authority,
