@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "profiles": [
+    {
+      "profile_id": "responses-passthrough-v1",
+      "revision": 1,
+      "instruction_placement": "preserve",
+      "tool_encoding": "preserve"
+    },
+    {
+      "profile_id": "llama-cpp-qwen-v1",
+      "revision": 1,
+      "instruction_placement": "leading_system_developer",
+      "tool_encoding": "preserve"
+    },
+    {
+      "profile_id": "native-vllm-v1",
+      "revision": 1,
+      "instruction_placement": "preserve",
+      "tool_encoding": "native_vllm"
+    }
+  ]
+}

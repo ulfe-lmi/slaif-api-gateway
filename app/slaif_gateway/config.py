@@ -240,6 +240,8 @@ class Settings(BaseSettings):
     # validated exactly once at process bootstrap and any failure refuses
     # startup (no silent fallback).  Requests can never select a profile.
     CODEX_COMPATIBILITY_PROFILE_FILE: str = ""
+    # Operator-only, data-only upstream translation profiles, loaded at startup.
+    UPSTREAM_LLM_PROFILES_FILE: str = ""
     CHAT_MAX_CHOICES_PER_REQUEST: int = 4
     CHAT_MAX_MESSAGES_PER_REQUEST: int = 128
     CHAT_MAX_MESSAGE_CONTENT_BYTES: int = 262144

@@ -1,5 +1,11 @@
 # Responses Compatibility Contract
 
+Operator-owned [upstream LLM profiles](upstream-llm-adapter.md) may select
+reviewed backend instruction-placement and native tool-codec operations through
+the separately registered `configured-upstream-llm` module. These act after
+canonical request validation/admission and before transport signing. They do
+not broaden the public request dialect, permissions, replay or accounting.
+
 Optional client metadata is validated by the bounded schema-2
 [external preset engine](client-compatibility-presets.md), behind all three
 Codex envelope/client-tools/streaming-tool gates. Presets describe allowed

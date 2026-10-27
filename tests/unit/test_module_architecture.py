@@ -47,6 +47,7 @@ def test_module_registries_are_literal_and_fail_closed() -> None:
         "openrouter",
         "openai-compatible",
         "configured-completion",
+        "configured-upstream-llm",
         "local-coding-v1",
         "local-coding-vLLM",
         "vllm-chat-video-v1",

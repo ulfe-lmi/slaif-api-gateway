@@ -78,6 +78,7 @@ from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_SERVER_MODULE_ID,
     parse_local_coding_route_contract,
 )
+from slaif_gateway.modules.servers.upstream_llm.profiles import MODULE_ID as UPSTREAM_LLM_MODULE_ID
 from slaif_gateway.modules.servers.local_coding.identity import derive_request_identity
 from slaif_gateway.modules.servers.registry import (
     ensure_client_module_has_server_pair,
@@ -400,7 +401,7 @@ def _build_local_coding_server_context(
             getattr(route, "provider_kind", None),
             getattr(route, "capabilities", None),
         )
-        if descriptor.module_id not in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID}:
+        if descriptor.module_id not in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID, UPSTREAM_LLM_MODULE_ID}:
             return None
         contract = (
             parse_vllm_route_contract(route.capabilities)
@@ -2514,7 +2515,7 @@ def _reject_local_coding_auxiliary_endpoint(route: RouteResolutionResult) -> Non
             error_type="invalid_request_error",
             code="local_coding_endpoint_not_supported",
         ) from exc
-    if descriptor.module_id in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID}:
+    if descriptor.module_id in {LOCAL_CODING_SERVER_MODULE_ID, VLLM_SERVER_MODULE_ID, UPSTREAM_LLM_MODULE_ID}:
         raise OpenAICompatibleError(
             "The Local Coding server module supports Responses create only.",
             status_code=400,

@@ -5,6 +5,12 @@
 
 This matrix summarizes implemented behavior for reviewers. It describes the current repository state, not a future roadmap promise.
 
+The opt-in [configurable upstream LLM adapter](upstream-llm-adapter.md) adds a
+Responses-create/SSE server module with revision/digest-bound data presets for
+pass-through, prefix-only llama.cpp/Qwen instructions and native-vLLM tools.
+Evidence is synthetic template and mocked transport coverage, not a live Codex
+or provider qualification. Existing adapters and endpoint/key gates remain.
+
 See [the detailed normative agentic-client integration contract](../AGENTIC_CLIENT_INTEGRATION.md)
 for exact-profile identity, default-denied dialects, and qualification rules.
 

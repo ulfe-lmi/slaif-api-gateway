@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.session import get_sessionmaker
+from slaif_gateway.modules.servers.upstream_llm.profiles import bootstrap_upstream_llm_profiles
 from slaif_gateway.services.reconciliation_errors import ReconciliationError
 from slaif_gateway.services.record_errors import RecordServiceError
 
@@ -40,6 +41,7 @@ class CliSecretFileError(CliError):
 async def cli_db_session() -> AsyncIterator[tuple[Settings, AsyncSession]]:
     """Yield settings and a transaction-bound async database session."""
     settings = get_settings()
+    bootstrap_upstream_llm_profiles(settings.UPSTREAM_LLM_PROFILES_FILE)
     if not settings.DATABASE_URL:
         raise CliDatabaseConfigError("DATABASE_URL is not configured. Set DATABASE_URL and try again.")
 

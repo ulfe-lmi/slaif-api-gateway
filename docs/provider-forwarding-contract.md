@@ -25,7 +25,8 @@ Responses client modules are selected from reviewed server-side key/profile
 metadata before provider construction. `codex-0.147-responses-v1` has one
 explicit OpenAI server pair. `codex-0.149-responses-v1` has exactly one
 explicit `local-coding-v1` pair. `codex-0.162-responses-v1` is registered
-with explicit `local-coding-v1` and `local-coding-vLLM` server pairs; all
+with explicit `local-coding-v1`, `local-coding-vLLM`, and
+`configured-upstream-llm` server pairs; all
 other server pairs remain denied. Those pairs reach this forwarding contract
 only after the independent endpoint, key, model, route, capability, pricing,
 quota, accounting, and identity gates pass. The observed adapter-managed
@@ -51,6 +52,16 @@ pass the unchanged gateway validator; this adapter does not change the existing
 wrapper transport or grant any tool, identity, quota or provider authority.
 
 ## Local Coding server module
+
+The separately selected [configurable upstream LLM adapter](upstream-llm-adapter.md)
+uses the same transport with an explicit revision/digest-bound route profile.
+Optional stable system/developer-prefix normalization preserves roles,
+contents and relative order within each partition, but deliberately changes
+instruction position for prefix-only templates. Optional native tool encoding
+reuses the existing vLLM codec. These are translations after admission, not
+client presets or policy relaxations. Transformations precede exact-body
+serialization/signing. Legacy behavior below remains unchanged for routes
+without this selector.
 
 `local-coding-v1` is a literal static server module for the exact
 `openai_compatible` Local Coding route contract. Its adapter supports only

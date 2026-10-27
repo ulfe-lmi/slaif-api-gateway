@@ -30,11 +30,13 @@ from slaif_gateway.cli.request_capture import app as request_capture_app
 from slaif_gateway.cli.routes import app as routes_app
 from slaif_gateway.cli.secrets import app as secrets_app
 from slaif_gateway.cli.templates import app as templates_app
+from slaif_gateway.cli.upstream_llm import app as upstream_llm_app
 from slaif_gateway.cli.usage import app as usage_app
 from slaif_gateway.config import get_settings
 from slaif_gateway.logging import configure_logging
 
 app = typer.Typer(help="SLAIF API Gateway CLI")
+app.add_typer(upstream_llm_app, name="upstream-llm")
 app.add_typer(admin_app, name="admin")
 app.add_typer(bootstrap_app, name="bootstrap")
 app.add_typer(calibration_app, name="calibration")

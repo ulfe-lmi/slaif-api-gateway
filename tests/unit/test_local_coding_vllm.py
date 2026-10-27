@@ -286,7 +286,8 @@ def test_regular_function_calls_keep_arguments_and_namespace():
 
 
 @pytest.mark.asyncio
-async def test_native_transport_normalizes_stream_and_nonstream_without_public_key_forwarding():
+@pytest.mark.parametrize("configured", [False, True])
+async def test_native_transport_normalizes_stream_and_nonstream_without_public_key_forwarding(configured):
     arguments = json.dumps({"input": "synthetic patch"})
     seen = []
 
@@ -311,9 +312,22 @@ async def test_native_transport_normalizes_stream_and_nonstream_without_public_k
         return httpx.Response(200, json={"output": [dict(item(arguments), status="completed")]})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        adapter = LocalCodingVLLMAdapter(
+        adapter_class = LocalCodingVLLMAdapter
+        caps = CAPS
+        if configured:
+            from slaif_gateway.modules.servers.upstream_llm.adapter import ConfiguredUpstreamLLMAdapter
+            from slaif_gateway.modules.servers.upstream_llm.profiles import load_profiles
+
+            profile = load_profiles()["native-vllm-v1"]
+            adapter_class = ConfiguredUpstreamLLMAdapter
+            caps = {
+                "local_coding": dict(CAPS["local_coding_vllm"], contract_version="local-coding-v1"),
+                "upstream_llm": {"version": 1, "profile": profile.profile_id,
+                    "revision": profile.revision, "sha256": profile.sha256},
+            }
+        adapter = adapter_class(
             Settings(),
-            route_capabilities=CAPS,
+            route_capabilities=caps,
             base_url="https://backend.example/v1",
             api_key="backend-only-synthetic-0123456789abcdef",
             http_client=client,
