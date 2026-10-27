@@ -18,7 +18,7 @@ from slaif_gateway.db.repositories.codex_replay import (
 from slaif_gateway.utils.crypto import hmac_sha256_token
 
 
-CODEX_REPLAY_REFERENCE_TTL = timedelta(hours=24)
+CODEX_REPLAY_REFERENCE_TTL = timedelta(days=365)
 CODEX_REPLAY_ITEM_KINDS = frozenset(
     {"reasoning", "function_call", "custom_tool_call", "compaction"}
 )
@@ -295,7 +295,9 @@ class CodexReplayService:
             )
 
         created_at = now or datetime.now(UTC)
-        expires_at = created_at + CODEX_REPLAY_REFERENCE_TTL
+        expires_at = created_at + timedelta(
+            seconds=self._settings.CODEX_REPLAY_REFERENCE_TTL_SECONDS
+        )
         records = [
             CodexReplayReferenceInsert(
                 id=uuid.uuid4(),

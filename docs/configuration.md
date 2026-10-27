@@ -1640,3 +1640,25 @@ runtime requires an exact `http(s)://host[:port]/v1` base URL, does not follow
 redirects, and requires explicit confirmation plus a non-empty audit reason
 for generic HTTP LAN use. This foundation does not qualify models or inherit
 OpenAI hosted tools or OpenRouter provider-reported cost authority.
+
+### Codex replay-reference lifetime
+
+`CODEX_REPLAY_REFERENCE_TTL_SECONDS` controls how long newly persisted HMAC-only
+Codex replay ownership references remain usable. The default is 31,536,000 seconds
+(365 days); accepted values are 1 through 31,536,000 seconds (365 days). The packaged default and `.env.example` both select one year; an explicit
+operator override may shorten it.
+Restart application processes after changing it. No database schema migration
+is required. Existing row expiry timestamps do not change automatically.
+
+Longer lifetimes retain more metadata and widen the time during which an
+otherwise authorized same-key client can replay old items. Normal key validity,
+revocation, capability, provider/route/model, and finalized-accounting checks
+remain mandatory. No plaintext IDs, prompts, results, or encrypted reasoning
+are added to storage. Preserve the referenced HMAC secret versions for as long
+as these references must remain usable. A deleted row or unavailable secret
+cannot be recovered by increasing the lifetime.
+
+An operator extending existing references must audit the action, preserve their
+original creation time, key ownership, route and ledger linkage, and choose an
+expiry no later than the original creation time plus the new retention period.
+Do not blindly extend from the time of the update.

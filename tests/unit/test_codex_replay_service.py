@@ -843,3 +843,37 @@ async def test_hmac_rotation_fails_closed_when_old_secret_is_unavailable(
             allow_idless_tool_call_replay=True,
         )
     assert exc_info.value.error_code == "responses_codex_replay_hmac_unavailable"
+
+
+@pytest.mark.parametrize("ttl_seconds", [3600, 31536000])
+@pytest.mark.asyncio
+async def test_configured_lifetime_preserves_ownership_and_exact_expiry(ttl_seconds):
+    settings = _settings().model_copy(update={"CODEX_REPLAY_REFERENCE_TTL_SECONDS": ttl_seconds})
+    repository = FakeRepository()
+    service = CodexReplayService(repository=repository, settings=settings)
+    key_id = uuid.uuid4()
+    now = datetime(2026, 10, 27, tzinfo=UTC)
+    candidates = (_reasoning(), _tool())
+    await service.persist_validated_references(
+        candidates=candidates, gateway_key_id=key_id, usage_ledger_id=uuid.uuid4(),
+        source_request_id="req_retention", provider="openai", route_id=uuid.uuid4(),
+        upstream_model="gpt-test", now=now,
+    )
+    expiry = now + timedelta(seconds=ttl_seconds)
+    assert all(row.expires_at == expiry for row in repository.rows)
+    await service.verify_owned_replay(
+        candidates=candidates, gateway_key_id=key_id, now=expiry-timedelta(microseconds=1),
+    )
+    for checked_key, checked_time in [(uuid.uuid4(), now), (key_id, expiry)]:
+        with pytest.raises(CodexReplayReferenceError):
+            await service.verify_owned_replay(
+                candidates=candidates, gateway_key_id=checked_key, now=checked_time,
+            )
+
+
+@pytest.mark.parametrize("ttl_seconds", [0, -1, 31536001])
+def test_replay_lifetime_configuration_rejects_out_of_range(ttl_seconds):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(APP_ENV="development", CODEX_REPLAY_REFERENCE_TTL_SECONDS=ttl_seconds)

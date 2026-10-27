@@ -137,7 +137,7 @@ Core invariants:
   Encrypted and summary bytes are bounded and counted conservatively as model
   input, while provider final usage/cost remains authoritative. After a stream
   supplies final usage, the gateway finalizes PostgreSQL accounting first,
-  verifies the same finalized key/request ledger row, then writes 24-hour
+  verifies the same finalized key/request ledger row, then writes operator-expiring (365-day default)
   HMAC-only item/call ownership references before releasing the held
   `response.completed`. Reference-persistence failure emits safe failure and
   suppresses normal completion without releasing or reversing charged usage.
