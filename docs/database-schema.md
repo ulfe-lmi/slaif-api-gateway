@@ -1500,8 +1500,11 @@ check(tool namespace and name are null or non-empty and at most 256 characters)
 
 Rules:
 
-- The fixed MVP lifetime is 24 hours from successful persistence. Expired rows
-  are unusable even before a future cleanup task removes them.
+- The lifetime is `CODEX_REPLAY_REFERENCE_TTL_SECONDS` from successful
+  persistence (default 86,400 seconds; allowed range 1..31,536,000 seconds,
+  at most 365 days). Expired rows are unusable even before a future cleanup
+  task removes them. Changing configuration affects newly persisted rows;
+  existing expiries require a separate audited operator update.
 - `item_id_hmac` and `call_id_hmac` use HMAC-SHA-256 with separate domain
   labels and the existing versioned token-HMAC secret. The stored version must
   remain available for lookup; missing key material fails closed.

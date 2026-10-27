@@ -9,7 +9,7 @@ from decimal import Decimal
 from functools import lru_cache
 from urllib.parse import urlparse
 
-from pydantic import model_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _MIN_PRODUCTION_SECRET_LENGTH = 32
@@ -234,6 +234,7 @@ class Settings(BaseSettings):
     HARD_MAX_INPUT_TOKENS: int = 128000
     CODEX_ABSOLUTE_MAX_INPUT_TOKENS: int = 1050000
     CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS: int = 128000
+    CODEX_REPLAY_REFERENCE_TTL_SECONDS: int = Field(default=86400, ge=1, le=31536000)
     # Operator-only Codex 0.162 compatibility profile DATA file override.
     # Empty uses the packaged default profile.  When set, the file is
     # validated exactly once at process bootstrap and any failure refuses

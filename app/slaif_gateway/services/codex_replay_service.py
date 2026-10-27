@@ -295,7 +295,9 @@ class CodexReplayService:
             )
 
         created_at = now or datetime.now(UTC)
-        expires_at = created_at + CODEX_REPLAY_REFERENCE_TTL
+        expires_at = created_at + timedelta(
+            seconds=self._settings.CODEX_REPLAY_REFERENCE_TTL_SECONDS
+        )
         records = [
             CodexReplayReferenceInsert(
                 id=uuid.uuid4(),

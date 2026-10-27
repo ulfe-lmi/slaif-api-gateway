@@ -742,7 +742,7 @@ default-off and policy-first:
   digests, and streamed text remain transient and are never persisted, logged,
   audited, or exported. Only versioned HMAC-SHA-256 digests of replay item/call
   identifiers plus safe ownership/routing/kind/name metadata may be persisted
-  after successful usage-backed accounting, with a fixed 24-hour expiry.
+  after successful usage-backed accounting, with an operator-configurable expiry (24 hours by default, at most 365 days).
 - Fully gated Codex requests also require strict numeric route limits bounded
   by operator ceilings. An omitted output maximum becomes the bounded route
   default (32,768 for the qualification profile), never an unbounded request;
@@ -969,7 +969,7 @@ checked after route selection but before those later side effects. Raw IDs are
 domain-separated and HMACed with the existing versioned key material; missing
 HMAC key material fails closed. Rows store no encrypted content, summary,
 arguments, results, prompts, bodies, or raw/digest identifiers and expire after
-24 hours. Client replay remains separate from provider-managed
+the configured lifetime (24 hours by default, at most 365 days). Client replay remains separate from provider-managed
 `previous_response_id` and conversation state. All input items are rebuilt and
 counted conservatively. The gateway never executes the tool. Key templates
 propagate any Codex capability only from an explicit reviewed snapshot, enforce

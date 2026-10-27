@@ -33,9 +33,11 @@ class Candidate:
     tool_name: str | None = None
 
 
+@pytest.mark.parametrize("ttl_seconds", [86400, 31536000])
 @pytest.mark.asyncio
 async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
     async_test_session: AsyncSession,
+    ttl_seconds: int,
 ) -> None:
     now = datetime.now(UTC)
     owners = OwnersRepository(async_test_session)
@@ -55,7 +57,7 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
         owner_id=owner.id,
         cohort_id=cohort.id,
         valid_from=now - timedelta(minutes=1),
-        valid_until=now + timedelta(days=1),
+        valid_until=now + timedelta(seconds=ttl_seconds, days=1),
     )
     other_key = await keys.create_gateway_key_record(
         public_key_id=f"codex_replay_other_{uuid.uuid4().hex}",
@@ -63,7 +65,7 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
         owner_id=owner.id,
         cohort_id=cohort.id,
         valid_from=now - timedelta(minutes=1),
-        valid_until=now + timedelta(days=1),
+        valid_until=now + timedelta(seconds=ttl_seconds, days=1),
     )
     route = await routes.create_model_route(
         requested_model=f"classroom-codex-{uuid.uuid4().hex}",
@@ -106,6 +108,7 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
         APP_ENV="development",
         TOKEN_HMAC_SECRET="postgres-replay-test-secret",
         ACTIVE_HMAC_KEY_VERSION="1",
+        CODEX_REPLAY_REFERENCE_TTL_SECONDS=ttl_seconds,
     )
     service = CodexReplayService(
         repository=CodexReplayReferencesRepository(async_test_session),
@@ -134,6 +137,7 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
         ).scalars()
     )
     assert len(rows) == 3
+    assert all(row.expires_at == now + timedelta(seconds=ttl_seconds) for row in rows)
     serialized_safe_rows = " ".join(
         f"{row.item_kind} {row.item_id_hmac} {row.call_id_hmac or ''}" for row in rows
     )
@@ -146,6 +150,10 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
     ):
         assert forbidden not in serialized_safe_rows
 
+    await service.verify_owned_replay(
+        candidates=candidates, gateway_key_id=key.id,
+        now=now + timedelta(seconds=ttl_seconds) - timedelta(microseconds=1),
+    )
     authorization = await service.verify_owned_replay(
         candidates=candidates,
         gateway_key_id=key.id,
@@ -190,7 +198,7 @@ async def test_codex_replay_postgres_hmac_only_same_key_and_expiry(
         )
     for gateway_key_id, checked_now in (
         (other_key.id, now + timedelta(minutes=1)),
-        (key.id, now + timedelta(hours=24)),
+        (key.id, now + timedelta(seconds=ttl_seconds)),
     ):
         with pytest.raises(CodexReplayReferenceError) as exc_info:
             await service.verify_owned_replay(

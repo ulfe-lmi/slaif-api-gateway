@@ -584,7 +584,7 @@ Responses-specific rules for the current foundation:
   holds `response.completed` until finalization succeeds, and does not forward
   any upstream `data: [DONE]` marker as success before that finalization. For a
   replayable Codex stream, SLAIF next persists only versioned HMAC digests plus
-  safe key/provider/route/model/kind/name metadata with a fixed 24-hour TTL;
+  safe key/provider/route/model/kind/name metadata with an operator-configurable TTL (24 hours by default, at most 365 days);
   normal completion remains held until that persistence succeeds. Missing
   usage, accounting failure, provider error, or disconnect creates no usable
   replay reference. Persistence failure after successful accounting is a safe
