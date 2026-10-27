@@ -728,7 +728,7 @@ Current behavior:
   and replay additionally require the independent default-off
   `codex_encrypted_reasoning_replay` capability on the key and route. Fully
   validated reasoning/tool `response.output_item.done` IDs become reusable
-  HMAC-only same-key/provider/route references with an operator-configurable TTL (24 hours by default, at most 365 days) only after final usage
+  HMAC-only same-key/provider/route references with an operator-configurable TTL (default and maximum: 365 days) only after final usage
   and PostgreSQL accounting finalization; normal completion remains held until
   those references commit. Raw IDs, digests, encrypted reasoning, summaries,
   arguments, and results are never persisted or exposed. Client-managed replay

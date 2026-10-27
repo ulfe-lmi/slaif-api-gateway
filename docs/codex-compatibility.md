@@ -622,7 +622,7 @@ reference candidates. After final provider usage and successful PostgreSQL
 accounting, the gateway HMACs item/call IDs with domain-separated use of the
 existing versioned secret and writes only owner key, source ledger/request,
 provider/route/model, kind, approved tool identity, timestamps, and operator-configured
-expiry (24 hours by default, at most 365 days). Raw IDs and HMAC digests are never logged, exposed, or used as provider
+expiry (default and maximum: 365 days). Raw IDs and HMAC digests are never logged, exposed, or used as provider
 state. A later request must resolve every reference to the same key before route
 selection, then match provider/route/model before Redis, pricing, quota, or
 provider work. Cross-key, expired, unavailable-secret-version, name/kind, and

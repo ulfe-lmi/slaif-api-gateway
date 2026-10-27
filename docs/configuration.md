@@ -1644,9 +1644,9 @@ OpenAI hosted tools or OpenRouter provider-reported cost authority.
 ### Codex replay-reference lifetime
 
 `CODEX_REPLAY_REFERENCE_TTL_SECONDS` controls how long newly persisted HMAC-only
-Codex replay ownership references remain usable. The default is 86,400 seconds
-(24 hours); accepted values are 1 through 31,536,000 seconds (365 days). Set
-`CODEX_REPLAY_REFERENCE_TTL_SECONDS=31536000` for a one-year deployment policy.
+Codex replay ownership references remain usable. The default is 31,536,000 seconds
+(365 days); accepted values are 1 through 31,536,000 seconds (365 days). The packaged default and `.env.example` both select one year; an explicit
+operator override may shorten it.
 Restart application processes after changing it. No database schema migration
 is required. Existing row expiry timestamps do not change automatically.
 

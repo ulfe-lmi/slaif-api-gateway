@@ -527,7 +527,7 @@ fields, and malformed or oversized values fail closed. The accepted upstream
 frame remains unchanged in transit.
 
 Fully validated reasoning and function/custom done items receive reusable
-HMAC-only references with a configurable TTL (24 hours by default, at most 365 days) after final provider usage and successful
+HMAC-only references with a configurable TTL (default and maximum: 365 days) after final provider usage and successful
 PostgreSQL accounting. A replay request must resolve every item/call ID to the
 same key before route work and then match provider, route, model, kind, and
 approved tool identity before Redis/pricing/quota/provider work. Raw IDs,

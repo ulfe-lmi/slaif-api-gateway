@@ -243,6 +243,7 @@ def test_default_settings_load(monkeypatch) -> None:
     assert settings.get_celery_broker_url() is None
     assert settings.REDIS_CONNECT_TIMEOUT_SECONDS == 2
     assert settings.REDIS_SOCKET_TIMEOUT_SECONDS == 2
+    assert settings.CODEX_REPLAY_REFERENCE_TTL_SECONDS == 31536000
     assert settings.DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE is None
     assert settings.DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE is None
     assert settings.DEFAULT_RATE_LIMIT_CONCURRENT_REQUESTS is None

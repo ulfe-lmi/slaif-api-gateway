@@ -1501,7 +1501,7 @@ check(tool namespace and name are null or non-empty and at most 256 characters)
 Rules:
 
 - The lifetime is `CODEX_REPLAY_REFERENCE_TTL_SECONDS` from successful
-  persistence (default 86,400 seconds; allowed range 1..31,536,000 seconds,
+  persistence (default 31,536,000 seconds; allowed range 1..31,536,000 seconds,
   at most 365 days). Expired rows are unusable even before a future cleanup
   task removes them. Changing configuration affects newly persisted rows;
   existing expiries require a separate audited operator update.
