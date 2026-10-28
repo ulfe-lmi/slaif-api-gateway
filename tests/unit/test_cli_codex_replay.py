@@ -414,3 +414,52 @@ class TestExtend:
         assert payload["mode"] == "execute"
         assert payload["applied"] is True
         assert payload["updated_references"] == 2
+
+
+class TestExecuteMixedModeRefusals:
+    """200-c: --execute refuses every preview/edit flag BEFORE the plan
+    is read or any database access (fixed no-echo message)."""
+
+    @pytest.mark.parametrize(
+        "flag_args",
+        [
+            ["--key-id", str(KEY_A)],
+            ["--cohort-id", str(uuid.uuid4())],
+            ["--all-active"],
+            ["--ttl-seconds", "3600"],
+            ["--include-expired"],
+            ["--created-from", "2026-01-01T00:00:00Z"],
+            ["--created-until", "2026-10-01T00:00:00Z"],
+        ],
+    )
+    def test_execute_with_conflicting_flag_refused_before_plan_and_db(
+        self, fake_service, tmp_path, flag_args
+    ) -> None:
+        missing = str(tmp_path / "absent-plan.json")
+        result = _invoke(
+            app,
+            ["codex", "replay", "extend", "--execute", missing, "--reason", "x"]
+            + flag_args,
+        )
+        assert result.exit_code == 2
+        text = _plain(result.stderr)
+        assert "reviewed plan file only" in text
+        assert "absent-plan" not in text  # the plan path is never read
+        assert fake_service.applies == []
+        assert fake_service.previews == []
+
+    def test_execute_mixed_refusal_does_not_echo_supplied_values(
+        self, fake_service, tmp_path
+    ) -> None:
+        canary = "CanaryMixedMode200c"
+        result = _invoke(
+            app,
+            [
+                "codex", "replay", "extend", "--execute", str(tmp_path / "p.json"),
+                "--reason", "r", "--created-from", canary,
+            ],
+        )
+        assert result.exit_code == 2
+        assert canary not in result.stdout
+        assert canary not in result.stderr
+        assert fake_service.applies == []

@@ -10,7 +10,10 @@ plan document or the audit payload.
 
 from __future__ import annotations
 
+import copy
 import json
+import os
+import stat
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -25,8 +28,12 @@ from slaif_gateway.db.repositories.codex_replay import (
     ReplayReferenceTotals,
 )
 from slaif_gateway.schemas.codex_replay_maintenance import (
+    REPLAY_PLAN_MAX_BYTES,
     parse_replay_extend_plan_document,
+    parse_replay_extend_plan_file,
+    parse_scope_uuid,
     render_replay_extend_plan,
+    write_replay_extend_plan_file,
 )
 from slaif_gateway.services.codex_replay_maintenance import (
     EXTEND_ACTION,
@@ -870,3 +877,352 @@ class TestScopeCountRegressions:
         assert result.updated_references == 1
         assert audit.entries[0]["old_values"]["selected_keys"] == 1
         assert audit.entries[0]["old_values"]["eligible_references"] == 1
+
+
+def _valid_plan():
+    service, repository, _audit = _service()
+    repository.key_states = [_key_state()]
+    repository.rows = [_row()]
+    return _run(
+        service.preview_replay_extend(scope=ReplayScope(key_id=KEY_A), now=NOW)
+    )
+
+
+def _valid_document() -> dict[str, Any]:
+    return render_replay_extend_plan(_valid_plan())
+
+
+class TestPlanFileBoundaryRegressions:
+    """200-c plan-file boundary regressions (safe-domain parse/write law).
+
+    Every malformed file/JSON/scope form becomes a fixed no-echo
+    ReplayMaintenanceError - never a raw ValueError, TypeError,
+    AttributeError, or RecursionError; the plan file read is bounded at
+    cap+1 before any parsing.
+    """
+
+    def test_oversize_file_refused_with_bounded_stream_read(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        import pathlib
+
+        plan_path = tmp_path / "plan.json"
+        canary = "OversizeCanary200c"
+        # Far beyond the 32 KiB cap; the canary sits BEYOND the cap so a
+        # full-file read could have seen it (and only a bounded read
+        # request of cap+1 proves the finite read).
+        plan_path.write_bytes(b"x" * (REPLAY_PLAN_MAX_BYTES + 100) + canary.encode())
+
+        read_requests: list[int | None] = []
+        real_open = pathlib.Path.open
+
+        class _CountingStream:
+            def __init__(self, stream) -> None:
+                self._stream = stream
+
+            def read(self, size=None):
+                read_requests.append(size)
+                return self._stream.read(size)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                self._stream.close()
+                return False
+
+        def _counting_open(self, mode="r", *args, **kwargs):
+            return _CountingStream(real_open(self, mode, *args, **kwargs))
+
+        monkeypatch.setattr(pathlib.Path, "open", _counting_open)
+        with pytest.raises(ReplayMaintenanceError) as excinfo:
+            parse_replay_extend_plan_file(plan_path)
+        assert excinfo.value.error_code == "replay_maintenance_plan"
+        assert "bounded size" in excinfo.value.safe_message
+        assert read_requests == [REPLAY_PLAN_MAX_BYTES + 1]
+        assert canary not in excinfo.value.safe_message
+
+    def test_deep_json_document_refused_with_fixed_error(self, tmp_path) -> None:
+        plan_path = tmp_path / "deep.json"
+        # 10,000 levels: under the 32 KiB cap, deep enough that the
+        # bounded parser raises RecursionError.
+        plan_path.write_text("[" * 10000 + "]" * 10000, encoding="utf-8")
+        with pytest.raises(ReplayMaintenanceError) as excinfo:
+            parse_replay_extend_plan_file(plan_path)
+        assert excinfo.value.error_code == "replay_maintenance_plan"
+        assert "bounded structure depth" in excinfo.value.safe_message
+
+    def test_deep_nested_secret_walk_refused_with_fixed_error(self) -> None:
+        # 600 nested lists parse fine (below the parser limit) but
+        # exhaust the recursive secret-shape walk; fixed domain error.
+        document = _valid_document()
+        document["scope"] = {"key_id": json.loads("[" * 600 + "1" + "]" * 600)}
+        with pytest.raises(ReplayMaintenanceError) as excinfo:
+            parse_replay_extend_plan_document(document)
+        assert "bounded structure depth" in excinfo.value.safe_message
+
+    def test_giant_integer_literal_refused_with_fixed_error(self, tmp_path) -> None:
+        plan_path = tmp_path / "bigint.json"
+        digits = "7" * 5000
+        plan_path.write_text(
+            '{"schema_version": ' + digits + "}", encoding="utf-8"
+        )
+        with pytest.raises(ReplayMaintenanceError) as excinfo:
+            parse_replay_extend_plan_file(plan_path)
+        assert excinfo.value.error_code == "replay_maintenance_plan"
+        assert "not valid JSON" in excinfo.value.safe_message
+        assert digits[:32] not in excinfo.value.safe_message
+
+    def test_scope_value_types_refused_in_safe_domain(self) -> None:
+        for bad in (123, ["x"], None, "not-a-uuid"):
+            document = copy.deepcopy(_valid_document())
+            document["scope"] = {"key_id": bad}
+            with pytest.raises(ReplayMaintenanceError):
+                parse_replay_extend_plan_document(document)
+        document = copy.deepcopy(_valid_document())
+        document["scope"] = {"key_id": str(KEY_A), "all_active": 1}
+        with pytest.raises(ReplayMaintenanceError):
+            parse_replay_extend_plan_document(document)
+
+    def test_parse_scope_uuid_safe_domain_and_no_echo(self) -> None:
+        for bad in (123, None, ["x"], 12.5, "not-a-uuid"):
+            with pytest.raises(ReplayMaintenanceError):
+                parse_scope_uuid(bad, field="--key-id")
+        assert parse_scope_uuid(str(KEY_A), field="--key-id") == KEY_A
+        canary = "CanaryScopeValue991"
+        try:
+            parse_scope_uuid(canary, field="--key-id")
+        except ReplayMaintenanceError as exc:
+            assert canary not in str(exc)
+        else:
+            raise AssertionError("expected ReplayMaintenanceError")
+
+
+class TestPlanWriterBoundaryRegressions:
+    """200-c writer law: serialize/validate/bound BEFORE any descriptor;
+    reliable context-managed closure; honest static partial-file failure;
+    existing files never overwritten."""
+
+    def test_oversize_render_refused_before_descriptor_open(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        import slaif_gateway.schemas.codex_replay_maintenance as schema_module
+
+        monkeypatch.setattr(schema_module, "REPLAY_PLAN_MAX_BYTES", 10)
+        opened: list[Any] = []
+
+        def _forbidden_open(*args, **kwargs):
+            opened.append((args, kwargs))
+            return -1
+
+        monkeypatch.setattr(os, "open", _forbidden_open)
+        plan_path = tmp_path / "plan.json"
+        with pytest.raises(ReplayMaintenanceError) as excinfo:
+            write_replay_extend_plan_file(plan_path, _valid_plan())
+        assert "bounded size" in excinfo.value.safe_message
+        assert opened == []
+        assert not plan_path.exists()
+
+    def test_write_failure_closes_and_leaves_partial_honestly(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        sentinel = tmp_path / "sibling.json"
+        sentinel.write_text("sibling", encoding="utf-8")
+        plan_path = tmp_path / "plan.json"
+        closed: list[bool] = []
+
+        class _FailingStream:
+            def __init__(self, fd: int) -> None:
+                self._fd = fd
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc_info):
+                closed.append(True)
+                os.close(self._fd)
+                return False
+
+            def write(self, payload):
+                raise OSError("injected write failure")
+
+        def _fake_fdopen(fd, mode):
+            return _FailingStream(fd)
+
+        monkeypatch.setattr(os, "fdopen", _fake_fdopen)
+        with pytest.raises(ReplayMaintenanceError) as excinfo:
+            write_replay_extend_plan_file(plan_path, _valid_plan())
+        assert "could not be written" in excinfo.value.safe_message
+        assert closed == [True]
+        # Honest static semantics: the newly created file may remain
+        # (partial/empty); nothing is removed; sibling untouched.
+        assert plan_path.exists()
+        assert sentinel.read_text(encoding="utf-8") == "sibling"
+
+    def test_existing_file_never_overwritten_and_0600(self, tmp_path) -> None:
+        plan_path = tmp_path / "plan.json"
+        plan1 = _valid_plan()
+        write_replay_extend_plan_file(plan_path, plan1)
+        assert stat.S_IMODE(os.stat(plan_path).st_mode) == 0o600
+        original = plan_path.read_bytes()
+        plan2 = replace(plan1, include_expired=True)
+        with pytest.raises(ReplayMaintenanceError) as excinfo:
+            write_replay_extend_plan_file(plan_path, plan2)
+        assert "new writable file" in excinfo.value.safe_message
+        assert plan_path.read_bytes() == original
+
+
+class TestPreviewPostExpiryRanges:
+    """200-c: preview ranges advertise the ACTUAL post-expiry.
+
+    new_expiry range = max(existing expiry, original created + selected
+    TTL) per eligible row: an already-later or equal stored expiry is
+    never advertised as a shortening, and the ranges agree with the
+    post-state fingerprint and the actual monotonic apply.
+    """
+
+    def test_later_expiry_not_advertised_as_shortening(self) -> None:
+        created = NOW - timedelta(days=10)
+        later = created + timedelta(days=400)  # beyond the 365d target
+        service, repository, audit = _service()
+        repository.key_states = [_key_state()]
+        repository.rows = [_row(created=created, expires=later)]
+        plan = _run(
+            service.preview_replay_extend(scope=ReplayScope(key_id=KEY_A), now=NOW)
+        )
+        assert plan.eligible_references == 1
+        assert plan.old_expiry_min == later
+        assert plan.new_expiry_min == later
+        assert plan.new_expiry_max == later
+        # The actual apply agrees: monotonic no-op, zero writes, zero audit.
+        result = _run(
+            service.apply_replay_extend(plan=plan, reason="no shorten", now=NOW)
+        )
+        assert result.applied is False and result.already_applied is False
+        assert result.updated_references == 0
+        assert audit.entries == []
+
+    def test_equal_expiry_no_update_and_honest_range(self) -> None:
+        created = NOW - timedelta(days=10)
+        target = created + timedelta(seconds=TTL_365)
+        service, repository, audit = _service()
+        repository.key_states = [_key_state()]
+        repository.rows = [_row(created=created, expires=target)]
+        plan = _run(
+            service.preview_replay_extend(scope=ReplayScope(key_id=KEY_A), now=NOW)
+        )
+        assert plan.new_expiry_min == target and plan.new_expiry_max == target
+        result = _run(service.apply_replay_extend(plan=plan, reason="equal", now=NOW))
+        assert result.updated_references == 0 and audit.entries == []
+
+    def test_mixed_ranges_agree_with_actual_apply_and_repeat(self) -> None:
+        created_a = NOW - timedelta(days=10)
+        created_b = NOW - timedelta(days=20)
+        extended = created_a + timedelta(seconds=TTL_365)  # row A moves
+        unchanged = created_b + timedelta(days=400)  # row B stays
+        service, repository, audit = _service()
+        repository.key_states = [_key_state()]
+        row_a = _row(created=created_a, expires=created_a + timedelta(days=90))
+        row_b = _row(created=created_b, expires=unchanged, digest=DIGEST_B)
+        repository.rows = [row_a, row_b]
+        plan = _run(
+            service.preview_replay_extend(scope=ReplayScope(key_id=KEY_A), now=NOW)
+        )
+        assert plan.eligible_references == 2
+        assert plan.new_expiry_min == extended
+        assert plan.new_expiry_max == unchanged
+        result = _run(
+            service.apply_replay_extend(plan=plan, reason="mixed", now=NOW)
+        )
+        assert result.updated_references == 1
+        assert audit.entries[0]["new_values"]["new_expiry_range"] == [extended, extended]
+        # The committed post-state: the SAME plan repeats as already-
+        # applied (zero writes, no duplicate audit).
+        repository.rows = [replace(row_a, expires_at=extended), row_b]
+        repeat = _run(
+            service.apply_replay_extend(plan=plan, reason="repeat", now=NOW)
+        )
+        assert repeat.already_applied is True
+        assert repeat.updated_references == 0
+        assert len(audit.entries) == 1
+
+
+class TestFinalScopeRecheckRegressions:
+    """200-c: exact membership revalidated AFTER the reference-row locks.
+
+    A key entering or leaving the cohort while the blocking reference-
+    row lock is acquired (invisible to the post-key-lock recheck) must
+    refuse stale with zero expiry writes and zero audits.
+    """
+
+    def _repository(self, *, join_key=None, leave_key=None) -> FakeMaintenanceRepository:
+        class _RowLockCohortRepository(FakeMaintenanceRepository):
+            def __init__(self) -> None:
+                super().__init__()
+                self._row_lock_taken = False
+
+            async def list_maintenance_rows(self, **kwargs: Any) -> Any:
+                if kwargs.get("for_update") and not self._row_lock_taken:
+                    self._row_lock_taken = True
+                    # The cohort membership change commits while the
+                    # blocking reference-row lock is being acquired.
+                    if join_key is not None:
+                        self.key_states.append(join_key)
+                    if leave_key is not None:
+                        self.key_states = [
+                            k for k in self.key_states if k.id != leave_key.id
+                        ]
+                return await super().list_maintenance_rows(**kwargs)
+
+        return _RowLockCohortRepository()
+
+    def _service_for(self, repository, audit: FakeAuditRepository):
+        return CodexReplayMaintenanceService(
+            repository=repository,  # type: ignore[arg-type]
+            audit_repository=audit,  # type: ignore[arg-type]
+            settings=_settings(),
+        )
+
+    def test_zero_ref_key_joins_cohort_during_reference_lock_wait_fails_stale(self) -> None:
+        repository = self._repository(join_key=_key_state(key_id=KEY_B))
+        repository.key_states = [_key_state()]
+        repository.rows = [_row()]
+        audit = FakeAuditRepository()
+        service = self._service_for(repository, audit)
+        scope = ReplayScope(cohort_id=KEY_B)
+        plan = _run(service.preview_replay_extend(scope=scope, now=NOW))
+        assert plan.selected_keys == 1
+        with pytest.raises(ReplayMaintenanceStaleError):
+            _run(service.apply_replay_extend(plan=plan, reason="final scope", now=NOW))
+        assert audit.entries == []
+        assert repository.extend_calls == []
+
+    def test_key_leaves_cohort_during_reference_lock_wait_fails_stale(self) -> None:
+        leaver = _key_state(key_id=KEY_B)
+        repository = self._repository(leave_key=leaver)
+        repository.key_states = [_key_state(), leaver]
+        repository.rows = [_row()]  # only the survivor carries references
+        audit = FakeAuditRepository()
+        service = self._service_for(repository, audit)
+        scope = ReplayScope(cohort_id=KEY_B)
+        plan = _run(service.preview_replay_extend(scope=scope, now=NOW))
+        assert plan.selected_keys == 2
+        with pytest.raises(ReplayMaintenanceStaleError):
+            _run(service.apply_replay_extend(plan=plan, reason="final scope", now=NOW))
+        assert audit.entries == []
+        assert repository.extend_calls == []
+
+    def test_stable_membership_passes_final_recheck(self) -> None:
+        repository = self._repository()
+        repository.key_states = [_key_state()]
+        repository.rows = [_row()]
+        audit = FakeAuditRepository()
+        service = self._service_for(repository, audit)
+        scope = ReplayScope(cohort_id=KEY_B)
+        plan = _run(service.preview_replay_extend(scope=scope, now=NOW))
+        result = _run(
+            service.apply_replay_extend(plan=plan, reason="stable", now=NOW)
+        )
+        assert result.applied is True
+        assert result.updated_references == 1
+        assert len(audit.entries) == 1

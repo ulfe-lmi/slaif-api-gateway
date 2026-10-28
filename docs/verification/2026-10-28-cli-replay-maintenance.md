@@ -424,3 +424,197 @@ pure static test code).
 The 200-a report and its historical evidence (including the then
 known-unresolved failure) are immutable and were not rewritten; the
 200-b report records this resolution.
+
+## 200-c ADDENDUM — bounded plan-file, mixed-mode, preview-range, and final-scope repairs
+
+Recorded 2026-10-28 for the same 200 PR. This addendum completes the
+concrete boundary gaps found by root's independent probes after 200-b
+(actual-schema/Typer/shared-service probes, fake-repository probes, and
+a real owned-PG16/actual-Typer membership probe; receipts
+`200-final-plan-boundary-probe.json`, `200-independent-final-membership-
+defect.json`, `200-c-draft-nested-secret-walk-probe.json`,
+`200-c-draft-json-integer-limit-probe.json` under strategic
+`review-artifacts/cli-feature-round/`). The 200-a and 200-b text above,
+including the historical claims corrected below, remains unchanged
+record.
+
+### What 200-c changed (allowed paths only)
+
+Product — EXACTLY the three allowed files, nothing else under `app/`
+changed from the 200-b implementation (`8466d93…`):
+
+- **A. `schemas/codex_replay_maintenance.py` (bounded, safe-domain plan
+  parsing).** `parse_replay_extend_plan_file` now reads at most
+  `REPLAY_PLAN_MAX_BYTES + 1` bytes from a binary stream BEFORE parse
+  (an oversize file is refused by the size bound and never fully read).
+  Scope `key_id`/`cohort_id` are validated for string type and
+  canonical form BEFORE `uuid.UUID` conversion, and `all_active` must
+  be exactly `bool`, so ordinary malformed strings, numbers, lists,
+  nulls, and non-canonical forms all become the fixed
+  `ReplayMaintenanceError` vocabulary (never raw ValueError/TypeError/
+  AttributeError). The bounded parser's residual failures are mapped
+  into the same safe domain: `json.JSONDecodeError` and a plain
+  `ValueError` (e.g. an absurdly long integer literal such as a
+  5,000-digit `schema_version` tripping Python's integer
+  string-conversion guard) refuse as "not valid JSON", and a
+  pathologically deep (valid JSON) structure refusing as "exceeds the
+  bounded structure depth" (no recursion-limit change, no malformed
+  data accepted). The subsequent recursive `_contains_known_secret_
+  shape` walk is guarded the same way (a 600-level nested list parses
+  as JSON but exhausts the walk). Unknown-field/duplicate-key/
+  nonfinite/strict-canonical/secret-shape checks are preserved.
+- **B. Same file (writer before the open, honest static failure).**
+  `write_replay_extend_plan_file` now renders, strictly re-validates,
+  and size-bounds the document BEFORE opening its new-file-only 0600
+  `O_EXCL` descriptor, so a refused plan leaves no file and leaks no
+  descriptor (the CodeQuality-flagged forced-oversize FD leak is
+  closed). Every successful open enters reliable context-managed
+  closure on all subsequent failures (an `os.fdopen` failure closes
+  the raw fd). If a write then fails, the fixed error is raised and NO
+  path is removed: a partial file may remain at the exact output path
+  (the operator removes it and re-runs the dry-run); the path is
+  never overwritten (O_EXCL) and no existing/unrelated path is ever
+  touched. Format/schema version unchanged.
+- **C. `cli/codex_replay.py` (mixed-mode law).** `--execute` now
+  refuses EVERY preview/edit flag — the scope selectors
+  (`--key-id`/`--cohort-id`/`--all-active`), `--ttl-seconds`,
+  `--include-expired`, `--created-from`/`--created-until` — with a
+  fixed no-echo stderr message and exit 2 BEFORE the plan file is read
+  or any database access. The existing output/execute XOR, reason/
+  actor/JSON support are unchanged.
+- **D. `services/codex_replay_maintenance.py` (preview range only).**
+  The preview `new_expiry` range now reports, per eligible row, the
+  ACTUAL post-apply expiry `max(existing expiry, original created_at +
+  selected TTL)` — consistent with
+  `expected_post_state_fingerprint` and apply. A row whose stored
+  expiry is already later or equal no longer advertises a shortening;
+  eligibility, target law, monotonic mutation, and the audit (which
+  always derived the actual updated range) are unchanged.
+- **E. Same file (final membership recheck only).** Apply now
+  re-resolves the exact reviewed scope membership AFTER the blocking
+  reference-row locks as well as after the key locks, before any
+  mutation (fresh clock still sampled after ALL locks). A cohort
+  member entering or leaving during the reference-lock wait is refused
+  stale with zero expiry writes and zero audits. Deterministic key-then-
+  reference lock ordering, count-consistency, full pre/post identity
+  fingerprints, and idempotence are preserved; no isolation change,
+  global lock, job, or broad scope UPDATE.
+
+Tests (allowed paths only): `tests/unit/test_codex_replay_maintenance.
+py` 30 → 48 (finite stream-read request of exactly cap+1 with a
+canary beyond the cap; deep-JSON and deep-secret-walk depth refusals;
+5,000-digit integer literal; full scope type/canonical matrix; writer
+oversize-without-open, forced write failure with close proof and
+partial file REMAINING while the sibling path is untouched, existing-
+file never overwritten with 0600; later/equal/mixed preview ranges
+agreeing with the audited result and an already-applied repeat;
+scripted fake-repository final-scope join/leave-during-reference-
+wait/stable cases), `tests/unit/test_cli_codex_replay.py` 12 → 17
+(each conflicting flag individually refused before plan read and any
+DB/apply call, no-echo canary), and
+`tests/integration/test_cli_codex_replay_maintenance_postgres.py`
+14 → 15 (the new real owned-PG16 reference-lock waiter case below).
+
+### Honest corrections of 200-a claims (never rewritten above)
+
+1. **Bounded read.** The 200-a record claimed the plan file is "read
+   at cap+1 before parse". At that head `parse_replay_extend_plan_file`
+   used unbounded `Path.read_bytes()`; the 32 KiB cap bounded parsing
+   only, after the whole file was consumed. The bounded stream read
+   above makes the claim true.
+2. **Mixed-mode refusal.** The 200-a record claimed "edit flags
+   refused in mixed mode". At that head only the output/execute XOR
+   was enforced: `--execute` silently ignored `--key-id`,
+   `--ttl-seconds`, `--include-expired`, and the creation bounds and
+   proceeded to apply the plan. The explicit per-flag refusal above
+   makes the claim true.
+3. **Preview new-expiry range.** The 200-a dry run advertised
+   `new_expiry` as `created_at + TTL` even for rows whose stored
+   expiry was already later — advertising a shortening that apply
+   itself never performed. The range now reports the actual
+   post-apply expiries.
+4. **Bind-limit wording.** The 200-a record described the chunked
+   10,000-row `CASE` UPDATE batches as "staying under the PostgreSQL
+   65,535 bind-parameter limit". Corrected: the 10k-row statement
+   chunks are bounded for the ACTUAL asyncpg wire protocol used by
+   this suite; no universal 65,535 driver-limit claim is made. The
+   65,535 figure is a PostgreSQL protocol message-size fact, not a
+   server or driver bind-variable rule.
+
+### Actual focused verification (200-c)
+
+Environment: `PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python`
+with `env -u DATABASE_URL -u TEST_DATABASE_URL`; no ambient
+`DATABASE_URL`, no foreign PostgreSQL/Redis; JUnit receipts under
+`/tmp/slaif200a/` (disposable).
+
+- New unit suites (pure layer + actual-Typer, no DB): **65 passed,
+  0 failed / 0 errors / 0 skipped**, exit 0 (`c-unit-new.xml`):
+  `test_codex_replay_maintenance` 48 + `test_cli_codex_replay` 17.
+- Focused affected batch: **173 passed, 0 failed / 0 errors / 0
+  skipped**, exit 0 (`c-unit-affected.xml`): unchanged
+  `test_codex_replay_service` 24, `test_codex_replay_limits` 57,
+  `test_cli_codex` 27, plus the 65 above.
+- Owned-PostgreSQL-16 suite: **15 passed, 0 failed / 0 errors / 0
+  skipped**, exit 0 (`c-pg.xml`): the 14 ordered 200-a proofs
+  re-run unchanged at these bytes plus the NEW
+  `test_zero_ref_key_join_during_reference_lock_wait_fails_stale`:
+  a dedicated cohort with one reference-carrying key (k1) is
+  previewed (`selected_keys` 1, `eligible_references` 1); a second
+  asyncpg session BEGINs, takes `FOR UPDATE` on k1's reference row
+  (the lock apply takes LAST), captures its `pg_backend_pid()`, and —
+  after `SELECT pg_stat_clear_snapshot()` before each poll (the
+  documented cached-stats refresh, NOT `pg_stat_reset()`) — requires
+  another PID in `wait_event_type = 'Lock'` whose
+  `pg_blocking_pids` set includes the holder before committing a
+  zero-reference key (k2) joining the cohort; the committed join
+  lands exactly as the reference lock releases, so only the final
+  post-reference-lock revalidation can observe it. Execute is
+  refused stale (exit 1, JSON `invalid_value`, "pre-state no longer
+  matches") with every k1 reference column byte-equal (full row
+  snapshot), expiries unchanged, and zero audits, while the unreviewed
+  join stands (cohort count 2).
+- Governance/inventory/drift: **40 passed, 0 failed / 0 errors / 0
+  skipped**, exit 0 (`c-gov.xml`): `test_documentation_inventory`
+  16 (the accepted 200-b repair, file byte-unchanged here),
+  `test_oap_governance` 9, `test_documentation_contract_drift` 15.
+- Gates: `ruff check app/ tests/` clean;
+  `python3 scripts/check_documentation.py` -> `DOCUMENTATION_CHECK=OK
+  files=127`; `git diff --check` clean.
+- Product-byte preservation: `git diff 8466d93 -- app/` shows EXACTLY
+  the three allowed files (schema, service, CLI);
+  `app/slaif_gateway/db/repositories/codex_replay.py` and every other
+  product file are byte-identical to the 200-b implementation;
+  `tests/unit/test_documentation_inventory.py` byte-identical.
+
+Root independently rechecked the repaired plan boundary (3-product
+hashes) and re-ran the actual-Typer/owned-PG16 reference-wait cohort
+join and the real expiry-crossing case — both PASS with stale refusal,
+all reference columns unchanged, and zero audits (root receipts
+`200-c-independent-plan-boundary-recheck.json` and
+`200-c-independent-realpg-rechecks.json`; root evidence, not agent
+runs).
+
+### Documentation impact (200-c)
+
+- `docs/cli-reference.md`: the extend paragraph now states the
+  bounded cap+1 stream read, the dry-run `new_expiry_range` semantics
+  (actual post-apply expiries, never a shortening), the explicit
+  per-flag `--execute` mixed-mode refusal BEFORE plan read/database
+  access, and the double membership revalidation (after the key
+  locks AND after the reference-row locks).
+- `docs/cli-field-administration.md`: the objective-200 row carries
+  the same two corrections.
+- This addendum.
+
+### Limitations (200-c)
+
+- No full verification matrix was run; final-head CI remains the
+  root-gated gate and is PENDING at this addendum.
+- The deep-JSON depth refusals are proven at the CPython recursion
+  limit of this interpreter (a 10,000-level structure refuses; a
+  3,000-level one parses) — the guard maps the interpreter failure
+  into the fixed domain rather than raising limits.
+- The writer's honest static semantics intentionally leave a partial
+  file at the exact output path after a forced write failure
+  (documented); no cleanup/rebinding machinery was added.

@@ -235,6 +235,31 @@ def extend(
             err=True,
         )
         raise typer.Exit(code=2)
+    if execute is not None:
+        # Mixed-mode law: --execute applies the reviewed plan file ONLY.
+        # Every preview/edit flag (scope selectors, selected TTL,
+        # include-expired, creation bounds) is refused BEFORE the plan is
+        # read or any database access, so a conflicting invocation can
+        # never silently apply the plan while ignoring supplied edits.
+        # The fixed message never echoes supplied values.
+        if (
+            key_id is not None
+            or cohort_id is not None
+            or all_active
+            or ttl_seconds is not None
+            or include_expired
+            or created_from is not None
+            or created_until is not None
+        ):
+            typer.secho(
+                "--execute applies the reviewed plan file only; omit the "
+                "preview/edit flags (scope selectors, --ttl-seconds, "
+                "--include-expired, --created-from/--created-until) and "
+                "re-run the dry-run with them instead.",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=2)
     try:
         if ttl_seconds is not None and (
             ttl_seconds < MIN_REFERENCE_TTL_SECONDS

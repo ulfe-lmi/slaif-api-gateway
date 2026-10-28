@@ -795,9 +795,19 @@ or credential contact).
 --execute <path>] [--reason <text>] [--actor-admin-id <uuid>] [--json]`
 is the two-step reviewed expiry-extension operation. `--output` runs a
 READ-ONLY dry run that writes a NEW strict version-1 non-secret plan
-file (mode 0600, at most 32 KiB, never overwritten; recognized secret
-shapes refused with fixed no-echo errors). `--execute <path> --reason`
-applies that previously reviewed file exactly (mixed mode refused). The
+file (mode 0600, at most 32 KiB, never overwritten; the file is read
+in a bounded stream of at most 32 KiB + 1 bytes, and oversize,
+malformed, or over-deep JSON as well as recognized secret shapes are
+refused with fixed no-echo errors). The dry-run output reports
+`new_expiry_range` as the range of ACTUAL post-apply expiries of the
+eligible rows, i.e. `max(existing expiry, original created_at +
+selected TTL)` per row - never a shortening. `--execute <path>
+--reason` applies that previously reviewed plan file ONLY: every
+preview/edit flag (the scope selectors, `--ttl-seconds`,
+`--include-expired`, `--created-from`/`--created-until`) is refused
+with a fixed no-echo error BEFORE the plan file is read or any
+database access, so a conflicting invocation can never silently apply
+the plan while ignoring supplied edits. The
 selected lifetime is the explicit `--ttl-seconds` or, when omitted, the
 ACTUAL configured `CODEX_REPLAY_REFERENCE_TTL_SECONDS`; both are
 rendered distinctly and no global setting is modified. Extension is
@@ -805,10 +815,12 @@ monotonic and expiry-only: the target is the ORIGINAL STORED
 `created_at` + selected TTL (never execute-now + TTL), already-later
 expiries stay unchanged, expired rows require explicit
 `--include-expired`, and `created_at` is never rewritten. Execute locks
-the selected keys then their reference rows, re-resolves scope
-membership and re-derives eligible counts AFTER the locks (the saved
-plan's fingerprints and counts are public optimistic guards, not
-signed authority - drift is refused stale with zero writes), updates
+the selected keys then their reference rows, re-resolves the exact
+reviewed scope membership AFTER the key locks and AGAIN after the
+reference-row locks, and re-derives eligible counts AFTER all locks
+(the saved plan's fingerprints and counts are public optimistic
+guards, not signed authority - drift is refused stale with zero
+writes), updates
 only `expires_at` of exactly the eligible reviewed rows, and records
 ONE bounded audit. A repeated apply is recognized as already-applied
 with no duplicate audit; a zero-diff apply makes no writes or audits;

@@ -122,12 +122,24 @@ def parse_replay_scope(
     return scope
 
 
-def parse_scope_uuid(value: str, *, field: str) -> uuid.UUID:
+def parse_scope_uuid(value: Any, *, field: str) -> uuid.UUID:
+    """Validate scope UUID values in the safe domain before conversion.
+
+    Non-string values, ordinary malformed strings, and non-canonical
+    forms all become the fixed domain error (never a raw ValueError,
+    TypeError, AttributeError, or RecursionError).
+    """
+    if not isinstance(value, str) or not _UUID_RE.fullmatch(value):
+        raise ReplayMaintenanceError(
+            f"{field} must be a valid canonical UUID string.",
+            error_code="replay_maintenance_scope",
+        )
     try:
         return uuid.UUID(value)
     except ValueError:
         raise ReplayMaintenanceError(
-            f"{field} must be a valid UUID.", error_code="replay_maintenance_scope"
+            f"{field} must be a valid canonical UUID string.",
+            error_code="replay_maintenance_scope",
         ) from None
 
 
@@ -208,6 +220,17 @@ def _load_strict_object(data: bytes, cap: int, label: str) -> dict[str, Any]:
         raise
     except json.JSONDecodeError:
         _fail("file", f"{label} is not valid JSON.")
+    except ValueError:
+        # The bounded parser can raise a plain ValueError rather than
+        # JSONDecodeError (for example an absurdly long integer literal
+        # tripping the integer string-conversion guard); keep the
+        # failure in the fixed safe domain instead of a raw traceback.
+        _fail("file", f"{label} is not valid JSON.")
+    except RecursionError:
+        # A pathologically deep (valid JSON) structure can exhaust the
+        # parser stack inside json.loads; refuse it with the fixed
+        # vocabulary instead of a traceback.
+        _fail("file", f"{label} exceeds the bounded structure depth.")
     if not isinstance(value, dict):
         _fail("file", "Top level must be a JSON object.")
     return value
@@ -352,7 +375,13 @@ def parse_replay_extend_plan_document(document: dict[str, Any]) -> ReplayExtendP
     for field in _KNOWN_PLAN_FIELDS:
         if field not in document:
             _fail("file", "Missing required field.")
-    if _contains_known_secret_shape(document):
+    try:
+        has_secret_shape = _contains_known_secret_shape(document)
+    except RecursionError:
+        # Deeply nested (valid JSON) values that the parser accepted can
+        # still exhaust the Python stack during this recursive walk.
+        _fail("file", "Document exceeds the bounded structure depth.")
+    if has_secret_shape:
         _fail("file", "Value carries a recognized secret shape.")
     version = document["schema_version"]
     if type(version) is not int or version != REPLAY_MAINTENANCE_PLAN_SCHEMA_VERSION:
@@ -365,14 +394,16 @@ def parse_replay_extend_plan_document(document: dict[str, Any]) -> ReplayExtendP
     for field in raw_scope:
         if field not in _KNOWN_SCOPE_FIELDS:
             _fail("scope", "Unknown scope field.")
+    if "all_active" in raw_scope and type(raw_scope["all_active"]) is not bool:
+        _fail("scope", "all_active must be a boolean.")
     scope = ReplayScope(
         key_id=(
-            uuid.UUID(raw_scope["key_id"])
+            parse_scope_uuid(raw_scope["key_id"], field="scope key_id")
             if "key_id" in raw_scope
             else None
         ),
         cohort_id=(
-            uuid.UUID(raw_scope["cohort_id"])
+            parse_scope_uuid(raw_scope["cohort_id"], field="scope cohort_id")
             if "cohort_id" in raw_scope
             else None
         ),
@@ -383,10 +414,6 @@ def parse_replay_extend_plan_document(document: dict[str, Any]) -> ReplayExtendP
     )
     if provided != 1:
         _fail("scope", "Exactly one scope selection is required.")
-    if "key_id" in raw_scope and not _UUID_RE.fullmatch(str(raw_scope["key_id"])):
-        _fail("scope", "key_id must be a canonical UUID string.")
-    if "cohort_id" in raw_scope and not _UUID_RE.fullmatch(str(raw_scope["cohort_id"])):
-        _fail("scope", "cohort_id must be a canonical UUID string.")
     created_from = _parse_optional_bound(document["created_from"], "created_from")
     created_until = _parse_optional_bound(document["created_until"], "created_until")
     validate_utc_bounds(created_from, created_until)
@@ -478,8 +505,12 @@ def _parse_optional_bound(raw: Any, field: str) -> datetime | None:
 
 
 def parse_replay_extend_plan_file(path: Path) -> ReplayExtendPlan:
+    # Finite stream read: at most REPLAY_PLAN_MAX_BYTES + 1 bytes are
+    # consumed from disk before any parsing; an oversize file is
+    # refused by the size bound, never fully read.
     try:
-        data = path.read_bytes()
+        with path.open("rb") as stream:
+            data = stream.read(REPLAY_PLAN_MAX_BYTES + 1)
     except OSError:
         raise ReplayMaintenanceError(
             "The extend plan file is not readable.",
@@ -490,16 +521,20 @@ def parse_replay_extend_plan_file(path: Path) -> ReplayExtendPlan:
 
 
 def write_replay_extend_plan_file(path: Path, plan: ReplayExtendPlan) -> None:
-    """Bounded exclusive 0600 write; never overwrite an existing file."""
+    """Bounded exclusive 0600 write; never overwrite an existing file.
+
+    The document is rendered, strictly re-validated, and size-bounded
+    BEFORE any file descriptor is opened, so a refused plan leaves no
+    file and leaks no descriptor. Every successful open enters reliable
+    context-managed closure on all subsequent failures. If a write then
+    fails, the fixed static error is raised and NO path is removed: a
+    partial file may remain at the exact output path (the operator
+    removes it and re-runs the dry-run); existing and unrelated paths
+    are never touched, and O_EXCL guarantees the path is never
+    overwritten.
+    """
     import os
 
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except OSError:
-        raise ReplayMaintenanceError(
-            "The extend plan output must be a new writable file.",
-            error_code="replay_maintenance_plan",
-        ) from None
     payload = (
         json.dumps(render_replay_extend_plan(plan), indent=2, sort_keys=True) + "\n"
     ).encode("utf-8")
@@ -508,5 +543,32 @@ def write_replay_extend_plan_file(path: Path, plan: ReplayExtendPlan) -> None:
             "The rendered extend plan exceeds the bounded size.",
             error_code="replay_maintenance_plan",
         )
-    with os.fdopen(fd, "wb") as stream:
-        stream.write(payload)
+    # Strict re-validation of the exact bytes about to be written.
+    parse_replay_extend_plan_document(render_replay_extend_plan(plan))
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError:
+        raise ReplayMaintenanceError(
+            "The extend plan output must be a new writable file.",
+            error_code="replay_maintenance_plan",
+        ) from None
+    try:
+        stream = os.fdopen(fd, "wb")
+    except OSError:
+        os.close(fd)
+        raise ReplayMaintenanceError(
+            "The extend plan file could not be written.",
+            error_code="replay_maintenance_plan",
+        ) from None
+    try:
+        with stream:
+            stream.write(payload)
+    except OSError:
+        # Honest static failure: the descriptor is closed by the context
+        # manager and nothing is removed. A partial file may remain at
+        # the exact output path; it is never overwritten (O_EXCL).
+        raise ReplayMaintenanceError(
+            "The extend plan file could not be written; a partial file "
+            "may remain at the output path, which is never overwritten.",
+            error_code="replay_maintenance_plan",
+        ) from None

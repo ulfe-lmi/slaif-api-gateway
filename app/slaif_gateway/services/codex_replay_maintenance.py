@@ -506,7 +506,10 @@ class CodexReplayMaintenanceService:
             if state == "eligible":
                 target = row.created_at + timedelta(seconds=selected_ttl)
                 eligible_old.append(row.expires_at)
-                eligible_new.append(target)
+                # Actual post-expiry: an already-later (or equal) stored
+                # expiry is NOT shortened, so the advertised range must
+                # agree with expected_post_state_fingerprint and apply.
+                eligible_new.append(max(row.expires_at, target))
             elif reason:
                 reasons[reason] += 1
             entries.append(
@@ -593,6 +596,16 @@ class CodexReplayMaintenanceService:
             created_until=plan.created_until,
             lock=True,
         )
+        # Revalidate the EXACT reviewed membership AFTER the blocking
+        # reference-row locks as well: a key entering or leaving the
+        # cohort (or leaving the active set) while the row locks were
+        # acquired is invisible to the post-key-lock recheck and must
+        # still make the reviewed plan stale before any mutation.
+        final_rechecked = await self._resolve_scope_keys(
+            scope=plan.scope, limit=MAX_SELECTED_KEYS + 1
+        )
+        if {key.id for key in final_rechecked} != {key.id for key in locked_keys}:
+            raise _stale_error()
         # The fresh time is taken only AFTER all locks (keys + rows), never
         # the transaction-start time and never the pre-row-lock time.
         fresh_now = now or datetime.now(UTC)

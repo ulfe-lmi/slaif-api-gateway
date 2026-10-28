@@ -1313,6 +1313,124 @@ def test_concurrent_cohort_move_during_key_lock_fails_stale(
     assert _cohort_key_count(url, world["cohort"].id) == member_count_before - 1
 
 
+def test_zero_ref_key_join_during_reference_lock_wait_fails_stale(
+    world: dict[str, Any], cli_env: str, plan_dir: Path
+) -> None:
+    import asyncpg
+    import threading
+
+    url = cli_env
+    plain_url = url.replace("postgresql+asyncpg://", "postgresql://")
+    # Dedicated cohort: one reviewed key (k1) with a retained reference,
+    # plus a zero-reference key (k2) starting in a different cohort.
+    # The helper returns plain UUIDs (cohort, key, row, created).
+    cohort, k1, row_id, _created = _new_key_with_reference(
+        url, "replay-final", "final-ref"
+    )
+    k2 = _new_key(url, _new_cohort(url, "replay-final-src"), "final-jointer")
+    plan_path = plan_dir / "final-scope.json"
+    result = _cli(
+        "codex", "replay", "extend", "--cohort-id", str(cohort),
+        "--output", str(plan_path), "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["selected_keys"] == 1
+    assert payload["eligible_references"] == 1
+    snapshots_before = _snapshot_rows(url, k1)
+    expiries_before = _row_expiries(url, k1)
+    audits_before = _audits_count(url)
+
+    move_done = threading.Event()
+    move_error: dict[str, Any] = {"value": None}
+
+    def _holder_session() -> None:
+        async def _go() -> None:
+            conn = await asyncpg.connect(plain_url, timeout=10)
+            try:
+                await conn.execute("BEGIN")
+                # Hold the reference-row lock that the apply path takes
+                # LAST (after the key locks and the post-key-lock
+                # recheck have already passed).
+                await conn.execute(
+                    "SELECT id FROM codex_replay_references "
+                    "WHERE id = $1 FOR UPDATE",
+                    row_id,
+                )
+                holder_pid = await conn.fetchval("SELECT pg_backend_pid()")
+                move_done.set()
+                # Wait until the execute connection demonstrably blocks
+                # on this reference-row lock. pg_stat_activity serves a
+                # CACHED stats snapshot inside the held transaction, so
+                # clear it before every poll; the waiter must be another
+                # PID in Lock wait whose blocking set includes the
+                # holder (the holder holds no other lock at this point,
+                # so the match is exact).
+                deadline = time.monotonic() + 60
+                while time.monotonic() < deadline:
+                    await conn.execute("SELECT pg_stat_clear_snapshot()")
+                    blocked = await conn.fetchval(
+                        "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
+                        "WHERE pid <> $1 AND wait_event_type = 'Lock' "
+                        "AND $1 = ANY(pg_blocking_pids(pid)))",
+                        holder_pid,
+                    )
+                    if blocked:
+                        break
+                    await asyncio.sleep(0.05)
+                else:
+                    move_error["value"] = (
+                        "execute never blocked on the held reference row lock"
+                    )
+                    await conn.execute("ROLLBACK")
+                    return
+                # Only NOW does the zero-reference key join the reviewed
+                # cohort: the committed join lands exactly as the
+                # reference lock releases, so ONLY the final
+                # post-reference-lock revalidation can observe it.
+                await conn.execute(
+                    "UPDATE gateway_keys SET cohort_id = $1 WHERE id = $2",
+                    cohort,
+                    k2,
+                )
+                await conn.execute("COMMIT")
+            finally:
+                await conn.close()
+
+        asyncio.run(_go())
+
+    holder_thread = threading.Thread(target=_holder_session)
+    holder_thread.start()
+    assert move_done.wait(timeout=60), "reference row lock did not land uncommitted"
+    holder: dict[str, Any] = {}
+
+    def _execute() -> None:
+        holder["result"] = _cli(
+            "codex", "replay", "extend", "--execute", str(plan_path),
+            "--reason", "final scope wait", "--json",
+        )
+
+    execute_thread = threading.Thread(target=_execute)
+    execute_thread.start()
+    holder_thread.join(timeout=180)
+    assert not holder_thread.is_alive()
+    execute_thread.join(timeout=180)
+    assert not execute_thread.is_alive()
+    result = holder["result"]
+    assert move_error["value"] is None, move_error["value"]
+    assert result.exit_code == 1
+    error_payload = json.loads(result.stdout)
+    assert error_payload["error"]["code"] == "invalid_value"
+    assert "pre-state no longer matches" in error_payload["error"]["message"]
+    # The refused operation wrote nothing; the unreviewed join stands
+    # (the cohort now holds k1 and k2).
+    assert _snapshot_rows(url, k1) == snapshots_before
+    assert _row_expiries(url, k1) == expiries_before
+    assert _audits_count(url) == audits_before
+    assert _key_cohort(url, k2) == cohort
+    assert _cohort_key_count(url, cohort) == 2
+
+
 def test_edited_plan_counts_refused_with_real_file(
     world: dict[str, Any], cli_env: str, plan_dir: Path
 ) -> None:
