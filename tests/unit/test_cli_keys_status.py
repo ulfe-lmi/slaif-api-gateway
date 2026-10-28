@@ -94,12 +94,13 @@ def test_keys_list_and_show_output_safe_metadata(monkeypatch) -> None:
         assert kwargs["limit"] == 5
         return [_gateway_key_row()]
 
-    async def fake_show(gateway_key_id: uuid.UUID) -> SimpleNamespace:
-        assert gateway_key_id == GATEWAY_KEY_ID
+    async def fake_show(reference: str) -> SimpleNamespace:
+        # 197: `show` resolves safe key references (UUID or public key ID).
+        assert reference == str(GATEWAY_KEY_ID)
         return _gateway_key_row()
 
     monkeypatch.setattr(keys_cli, "_list_gateway_keys", fake_list)
-    monkeypatch.setattr(keys_cli, "_show_gateway_key", fake_show)
+    monkeypatch.setattr(keys_cli, "_show_gateway_key_by_reference", fake_show)
 
     list_result = runner.invoke(
         app,

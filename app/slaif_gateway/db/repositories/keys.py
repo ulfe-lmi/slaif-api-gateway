@@ -137,7 +137,11 @@ class GatewayKeysRepository:
         if status is not None:
             statement = statement.where(GatewayKey.status == status)
 
-        statement = statement.order_by(GatewayKey.created_at.desc()).limit(limit).offset(offset)
+        # Stable pagination: the UUID tiebreaker keeps equal-timestamp rows
+        # on a deterministic page order (no duplicates or gaps across pages).
+        statement = statement.order_by(
+            GatewayKey.created_at.desc(), GatewayKey.id.desc()
+        ).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 

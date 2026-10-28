@@ -10,6 +10,18 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-28 Objective 197-a effective key policy, safe lookup, bounded lazy throttling CLI verification`](2026-10-28-cli-effective-key-policy.md)
+  (recorded 2026-10-28) — focused unit (65 new + 135
+  affected groups) and owned-PostgreSQL-16 (9) evidence for the
+  dedicated audited `set-lazy-throttling` setter, the
+  configuration-only `policy effective` view, safe
+  UUID/public-key-ID/email lookup with bounded complete paging, and
+  configuration-only `policy explain-route` with key-state blockers
+  first, the existing resolver law, base-request capability checks,
+  and the disclosed 1000-candidate bound; real `GatewayAuthService`
+  parity proven in PG; synthetic data only, no real
+  provider/model/email claim; final-head CI gated by root.
+- [`2026-10-25 Objective 195-a admin multi-value list filters verification`](2026-10-25-admin-list-multiselection.md)
 - [`2026-10-25 Objective 195-a admin multi-value list filters verification`](2026-10-25-admin-list-multiselection.md)
   (recorded 2026-10-25) — focused unit (147 affected + 96
   choices/195-new), owned-PostgreSQL-16 (13, incl. the R5 selected

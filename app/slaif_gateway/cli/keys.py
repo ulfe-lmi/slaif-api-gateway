@@ -33,6 +33,7 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.key_templates import KeyTemplatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
@@ -51,6 +52,7 @@ from slaif_gateway.schemas.keys import (
     SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
     UpdateGatewayKeyConfigurationInput,
+    UpdateGatewayKeyLazyThrottlingInput,
     UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
@@ -83,6 +85,11 @@ from slaif_gateway.services.key_policy_configuration import (
     build_create_gateway_key_input,
 )
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.key_policy_inspection import (
+    KeyPolicyInspectionContext,
+    build_key_policy_inspection,
+    explain_model_route_access,
+)
 from slaif_gateway.services.key_template_service import (
     KeyFromTemplateCreationResult,
     KeyTemplateError,
@@ -93,12 +100,16 @@ from slaif_gateway.services.streaming_live_burn_surface import (
     streaming_live_burn_surface_policy_from_cli_options,
 )
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
+from slaif_gateway.utils.crypto import is_plausible_gateway_key
 
 app = typer.Typer(help="Manage gateway keys")
 policy_app = typer.Typer(help="Show or update gateway-key request policy")
 external_tools_app = typer.Typer(help="Show or update deny-by-default external-tool policy")
 app.add_typer(policy_app, name="policy")
 app.add_typer(external_tools_app, name="external-tools")
+
+# Documented page bound for `keys list` (bounded, complete pagination).
+MAX_KEY_LIST_LIMIT = 200
 
 
 class CliKeyError(Exception):
@@ -252,6 +263,37 @@ async def _template_key_runtime() -> AsyncIterator[
                 ),
                 email_delivery_service,
             )
+
+
+@asynccontextmanager
+async def _policy_inspection_runtime() -> AsyncIterator[
+    tuple[Settings, GatewayKeysRepository, KeyPolicyInspectionContext]
+]:
+    """Read-only runtime for effective-policy inspection and route explanation.
+
+    Opens one session (a read snapshot) and exposes only the repositories the
+    inspection service needs. It never constructs a ``KeyService`` and issues
+    no writes: the inspection layer is configuration-only by construction.
+    """
+    settings = get_settings()
+    if not settings.DATABASE_URL:
+        raise CliDatabaseConfigError(
+            "DATABASE_URL is not configured. Set DATABASE_URL and try again."
+        )
+    _bootstrap_codex_profile(settings)
+
+    try:
+        session_factory = get_sessionmaker(settings)
+    except RuntimeError as exc:
+        raise CliDatabaseConfigError(str(exc)) from exc
+
+    async with session_factory() as session:
+        async with session.begin():
+            inspection_context = KeyPolicyInspectionContext(
+                model_routes=ModelRoutesRepository(session),
+                provider_configs=ProviderConfigsRepository(session),
+            )
+            yield settings, GatewayKeysRepository(session), inspection_context
 
 
 def _run_async(coro: Any) -> Any:
@@ -554,6 +596,7 @@ def _management_result_dict(result: GatewayKeyManagementResult) -> dict[str, obj
         "last_quota_reset_at": result.last_quota_reset_at,
         "quota_reset_count": result.quota_reset_count,
         "rate_limit_policy": result.rate_limit_policy,
+        "lazy_throttling_policy": result.lazy_throttling_policy,
         "allowed_models": result.allowed_models,
         "allowed_endpoints": result.allowed_endpoints,
         "allow_all_models": result.allow_all_models,
@@ -946,17 +989,47 @@ async def _create_pending_delivery_for_created_key(
 async def _list_gateway_keys(
     *,
     owner_id: uuid.UUID | None,
+    owner_email: str | None,
     cohort_id: uuid.UUID | None,
     status: str | None,
     limit: int,
+    offset: int,
 ) -> list[GatewayKey]:
+    if owner_email is not None:
+        owner_id = await _resolve_owner_id(owner_email, expected_owner_id=owner_id)
     async with _key_runtime() as (_, keys_repository, _):
         return await keys_repository.list_gateway_keys(
             owner_id=owner_id,
             cohort_id=cohort_id,
             status=status,
             limit=limit,
+            offset=offset,
         )
+
+
+async def _resolve_owner_id(
+    owner_email: str, *, expected_owner_id: uuid.UUID | None
+) -> uuid.UUID:
+    """Exact owner-email lookup (never substring matching); fixed safe errors."""
+    settings = get_settings()
+    if not settings.DATABASE_URL:
+        raise CliDatabaseConfigError(
+            "DATABASE_URL is not configured. Set DATABASE_URL and try again."
+        )
+    try:
+        session_factory = get_sessionmaker(settings)
+    except RuntimeError as exc:
+        raise CliDatabaseConfigError(str(exc)) from exc
+    async with session_factory() as session:
+        async with session.begin():
+            owner = await OwnersRepository(session).get_owner_by_email(owner_email)
+    if owner is None:
+        raise CliKeyError("No owner exists for the provided email.")
+    if expected_owner_id is not None and owner.id != expected_owner_id:
+        raise CliKeyError(
+            "The provided owner email does not match the owner UUID."
+        )
+    return owner.id
 
 
 async def _show_gateway_key(gateway_key_id: uuid.UUID) -> GatewayKey:
@@ -965,6 +1038,94 @@ async def _show_gateway_key(gateway_key_id: uuid.UUID) -> GatewayKey:
         if gateway_key is None:
             raise GatewayKeyNotFoundError()
         return gateway_key
+
+
+async def _resolve_gateway_key_reference(
+    settings: Settings,
+    keys_repository: GatewayKeysRepository,
+    reference: str,
+) -> GatewayKey:
+    """Resolve a SAFE key reference: UUID or exact public key ID.
+
+    Full bearer-shaped key material is refused with a fixed safe message and
+    never echoed; there is no identity lookup from token hash/HMAC/plaintext.
+    """
+    trimmed = reference.strip()
+    if not trimmed:
+        raise GatewayKeyNotFoundError()
+    if is_plausible_gateway_key(
+        trimmed, settings.get_gateway_key_accepted_prefixes()
+    ):
+        raise CliKeyError(
+            "Full key material cannot be used for lookup. "
+            "Use the key UUID or its public key ID."
+        )
+    try:
+        key_id = uuid.UUID(trimmed)
+    except ValueError:
+        key_id = None
+    if key_id is not None:
+        gateway_key = await keys_repository.get_gateway_key_by_id(key_id)
+        if gateway_key is not None:
+            return gateway_key
+    gateway_key = await keys_repository.get_gateway_key_by_public_key_id(trimmed)
+    if gateway_key is None:
+        raise GatewayKeyNotFoundError()
+    return gateway_key
+
+
+async def _show_gateway_key_by_reference(reference: str) -> GatewayKey:
+    async with _key_runtime() as (settings, keys_repository, _):
+        return await _resolve_gateway_key_reference(
+            settings, keys_repository, reference
+        )
+
+
+async def _update_lazy_throttling(
+    *,
+    gateway_key_id: uuid.UUID,
+    policy: dict[str, object] | None,
+    actor_admin_id: uuid.UUID | None,
+    reason: str | None,
+) -> GatewayKeyManagementResult:
+    async with _key_runtime() as (_, keys_repository, service):
+        gateway_key = await keys_repository.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            raise GatewayKeyNotFoundError()
+        payload = UpdateGatewayKeyLazyThrottlingInput(
+            gateway_key_id=gateway_key_id,
+            lazy_throttling_policy=policy,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        )
+        return await service.update_gateway_key_lazy_throttling(payload)
+
+
+async def _effective_policy_report(gateway_key_id: uuid.UUID) -> dict[str, object]:
+    async with _policy_inspection_runtime() as (settings, keys_repository, _):
+        gateway_key = await keys_repository.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            raise GatewayKeyNotFoundError()
+        return build_key_policy_inspection(gateway_key=gateway_key, settings=settings)
+
+
+async def _explain_model_route(
+    *,
+    gateway_key_id: uuid.UUID,
+    model: str,
+    endpoint: str,
+) -> dict[str, object]:
+    async with _policy_inspection_runtime() as (settings, keys_repository, context):
+        gateway_key = await keys_repository.get_gateway_key_by_id(gateway_key_id)
+        if gateway_key is None:
+            raise GatewayKeyNotFoundError()
+        return await explain_model_route_access(
+            gateway_key=gateway_key,
+            settings=settings,
+            requested_model=model,
+            endpoint=endpoint,
+            context=context,
+        )
 
 
 async def _suspend_gateway_key(payload: SuspendGatewayKeyInput) -> GatewayKeyManagementResult:
@@ -1892,21 +2053,37 @@ def create_from_template(
 @app.command("list")
 def list_keys(
     owner_id: Annotated[str | None, typer.Option("--owner-id", help="Owner UUID")] = None,
+    owner_email: Annotated[
+        str | None,
+        typer.Option("--owner-email", help="Exact owner email (no substring match)"),
+    ] = None,
     cohort_id: Annotated[str | None, typer.Option("--cohort-id", help="Cohort UUID")] = None,
     status: Annotated[str | None, typer.Option("--status", help="Key status")] = None,
     limit: Annotated[int, typer.Option("--limit", help="Maximum rows to return")] = 50,
+    offset: Annotated[
+        int,
+        typer.Option("--offset", help="Rows to skip for bounded complete pagination"),
+    ] = 0,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
     """List gateway keys using safe metadata only."""
     if limit <= 0:
         raise typer.BadParameter("--limit must be positive")
+    if limit > MAX_KEY_LIST_LIMIT:
+        raise typer.BadParameter(f"--limit must be at most {MAX_KEY_LIST_LIMIT}")
+    if offset < 0:
+        raise typer.BadParameter("--offset must be non-negative")
+    if owner_id is not None and owner_email is not None:
+        raise typer.BadParameter("Use either --owner-id or --owner-email, not both")
     try:
         rows = _run_async(
             _list_gateway_keys(
                 owner_id=_parse_uuid(owner_id, field_name="owner_id") if owner_id else None,
+                owner_email=owner_email,
                 cohort_id=_parse_uuid(cohort_id, field_name="cohort_id") if cohort_id else None,
                 status=status,
                 limit=limit,
+                offset=offset,
             )
         )
     except Exception as exc:  # noqa: BLE001
@@ -1914,8 +2091,21 @@ def list_keys(
         return
 
     safe_rows = [_safe_gateway_key_dict(row) for row in rows]
+    has_more = len(safe_rows) == limit
+    next_offset = offset + len(safe_rows) if has_more else None
     if json_output:
-        _emit_json({"keys": safe_rows})
+        _emit_json(
+            {
+                "keys": safe_rows,
+                "paging": {
+                    "limit": limit,
+                    "offset": offset,
+                    "returned": len(safe_rows),
+                    "has_more": has_more,
+                    "next_offset": next_offset,
+                },
+            }
+        )
         return
 
     if not safe_rows:
@@ -1925,18 +2115,27 @@ def list_keys(
         if index:
             typer.echo("")
         _echo_kv(row)
+    if has_more:
+        typer.echo(
+            f"More rows may follow; continue with --offset {next_offset}."
+        )
 
 
 @app.command("show")
 def show(
-    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    gateway_key_id: Annotated[
+        str,
+        typer.Argument(help="Gateway key UUID or exact public key ID"),
+    ],
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
-    """Show safe metadata for one gateway key."""
+    """Show safe metadata for one gateway key (UUID or public key ID).
+
+    Full bearer-shaped key material is refused with a fixed safe error;
+    no bearer is required or accepted to find a key.
+    """
     try:
-        gateway_key = _run_async(
-            _show_gateway_key(_parse_uuid(gateway_key_id, field_name="gateway_key_id"))
-        )
+        gateway_key = _run_async(_show_gateway_key_by_reference(gateway_key_id))
     except Exception as exc:  # noqa: BLE001
         _handle_cli_error(exc, json_output=json_output)
         return
@@ -1976,6 +2175,113 @@ def policy_show(
         _emit_json(payload)
         return
     _echo_kv(payload)
+
+
+def _echo_nested_kv(payload: dict[str, object], *, indent: int = 0) -> None:
+    """Render a nested safe report as indented key/value text."""
+    prefix = "  " * indent
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            typer.echo(f"{prefix}{key}:")
+            _echo_nested_kv(value, indent=indent + 1)
+            continue
+        if isinstance(value, list):
+            simple = all(
+                item is None or isinstance(item, (str, int, float, bool))
+                for item in value
+            )
+            if simple:
+                typer.echo(
+                    f"{prefix}{key}: {json.dumps(value, default=_json_default, sort_keys=True)}"
+                )
+                continue
+            typer.echo(f"{prefix}{key}:")
+            for item in value:
+                typer.echo(
+                    f"{prefix}  - {json.dumps(item, default=_json_default, sort_keys=True)}"
+                )
+            continue
+        if isinstance(value, datetime):
+            display = value.isoformat()
+        elif isinstance(value, Decimal):
+            display = str(value)
+        elif value is None:
+            display = ""
+        else:
+            display = str(value)
+        typer.echo(f"{prefix}{key}: {display}")
+
+
+@policy_app.command("effective")
+def policy_effective(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Show the key's effective policy (configuration-only, not authentication).
+
+    Renders configured versus effective values with their source (key,
+    deployment, default, or none), safe lifetime quotas, allow-lists,
+    Responses/Codex module identity, and Redis configuration. A null per-key
+    rate is inherited (deployment value), never unlimited; a null lifetime
+    quota is unlimited.
+    """
+    try:
+        report = _run_async(
+            _effective_policy_report(
+                _parse_uuid(gateway_key_id, field_name="gateway_key_id")
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    if json_output:
+        _emit_json(report)
+        return
+    _echo_nested_kv(report)
+
+
+@policy_app.command("explain-route")
+def policy_explain_route(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    model: Annotated[
+        str,
+        typer.Option("--model", help="Requested model name"),
+    ],
+    endpoint: Annotated[
+        str,
+        typer.Option(
+            "--endpoint",
+            help="Endpoint path or stable ID (default /v1/chat/completions)",
+        ),
+    ] = "/v1/chat/completions",
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Explain which configuration grants or blocks model access.
+
+    Configuration-only: it names the grant/route/provider/known-capability
+    that allows or prevents access without issuing inference, reserving
+    quota, or contacting a provider. The runtime 1000-route candidate bound
+    is preserved and disclosed.
+    """
+    if not model or not model.strip():
+        raise typer.BadParameter("--model is required")
+    try:
+        report = _run_async(
+            _explain_model_route(
+                gateway_key_id=_parse_uuid(gateway_key_id, field_name="gateway_key_id"),
+                model=model.strip(),
+                endpoint=endpoint,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    if json_output:
+        _emit_json(report)
+        return
+    _echo_nested_kv(report)
 
 
 @policy_app.command("update")
@@ -2570,6 +2876,135 @@ def set_rate_limits(
                 clear_concurrency=clear_concurrency,
                 clear_window=clear_window,
                 clear_all=clear_all,
+                actor_admin_id=_parse_uuid(actor_admin_id, field_name="actor_admin_id")
+                if actor_admin_id
+                else None,
+                reason=reason,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    safe_result = _management_result_dict(result)
+    if json_output:
+        _emit_json(safe_result)
+        return
+    _echo_kv(safe_result)
+
+
+@app.command("set-lazy-throttling")
+def set_lazy_throttling(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    mode: Annotated[
+        str | None,
+        typer.Option("--mode", help="wait or reject"),
+    ] = None,
+    max_wait_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--max-wait-seconds",
+            help="Positive whole seconds to wait (within the installation ceiling)",
+        ),
+    ] = None,
+    max_waiting_requests: Annotated[
+        int | None,
+        typer.Option(
+            "--max-waiting-requests",
+            help="Positive whole waiting bound (within the installation ceiling)",
+        ),
+    ] = None,
+    clear: Annotated[
+        bool,
+        typer.Option(
+            "--clear",
+            help="Clear the stored policy (default immediate rejection)",
+        ),
+    ] = False,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Acting admin UUID"),
+    ] = None,
+    reason: Annotated[str | None, typer.Option("--reason", help="Required audit reason")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Set or clear the key's bounded lazy (waiting) throttling policy.
+
+    Semantics:
+    - ``--mode wait`` requires BOTH positive ``--max-wait-seconds`` and
+      ``--max-waiting-requests`` within the installation ceilings; the shared
+      KeyService validator remains the authority and is re-applied in the
+      same caller-owned transaction.
+    - ``--mode reject`` stores the canonical reject policy. Any waiting bounds
+      supplied alongside it are validated (must be positive and within the
+      ceilings) but remain INACTIVE for a reject policy.
+    - ``--clear`` removes the stored policy (default immediate rejection).
+    - Reject and clear are distinct verbs with the same stored outcome; they
+      cannot be combined, and reject/clear cannot take waiting bounds except
+      the validated-inactive reject case above.
+
+    Waiting never relaxes hard quota, auth, security, or pricing, and changing
+    it touches only the key's lazy metadata, ``updated_at``, and one audit row.
+    """
+    if clear and (
+        mode is not None or max_wait_seconds is not None or max_waiting_requests is not None
+    ):
+        raise typer.BadParameter(
+            "--clear cannot be combined with --mode or waiting bounds"
+        )
+    if mode is None and not clear:
+        raise typer.BadParameter("Provide --mode wait, --mode reject, or --clear")
+    if mode is not None and mode not in ("wait", "reject"):
+        raise typer.BadParameter("--mode must be wait or reject")
+    if mode == "wait" and (
+        max_wait_seconds is None or max_waiting_requests is None
+    ):
+        raise typer.BadParameter(
+            "--mode wait requires both --max-wait-seconds and --max-waiting-requests"
+        )
+    _validate_positive_int(max_wait_seconds, option_name="--max-wait-seconds")
+    _validate_positive_int(
+        max_waiting_requests, option_name="--max-waiting-requests"
+    )
+    if not reason or not reason.strip():
+        raise typer.BadParameter("--reason is required")
+
+    # Operator ceilings (installation values) gate bounds up front. The shared
+    # service re-validates in the write path and remains the authority.
+    if max_wait_seconds is not None or max_waiting_requests is not None:
+        settings = get_settings()
+        if (
+            max_wait_seconds is not None
+            and max_wait_seconds > settings.LAZY_THROTTLING_MAX_WAIT_SECONDS
+        ):
+            raise typer.BadParameter(
+                "--max-wait-seconds exceeds the operator ceiling for this installation"
+            )
+        if (
+            max_waiting_requests is not None
+            and max_waiting_requests
+            > settings.LAZY_THROTTLING_MAX_WAITING_PER_KEY
+        ):
+            raise typer.BadParameter(
+                "--max-waiting-requests exceeds the operator ceiling for this installation"
+            )
+
+    policy: dict[str, object] | None
+    if mode == "wait":
+        policy = {
+            "mode": "wait",
+            "max_wait_seconds": max_wait_seconds,
+            "max_waiting_requests": max_waiting_requests,
+        }
+    else:
+        # reject and clear both remove/normalize to the canonical reject policy.
+        policy = None
+
+    try:
+        result = _run_async(
+            _update_lazy_throttling(
+                gateway_key_id=_parse_uuid(gateway_key_id, field_name="gateway_key_id"),
+                policy=policy,
                 actor_admin_id=_parse_uuid(actor_admin_id, field_name="actor_admin_id")
                 if actor_admin_id
                 else None,

@@ -204,3 +204,23 @@ def _normalize_endpoint_entry(value: str) -> str:
     if normalized.startswith("/"):
         return normalized.lower()
     return normalized.lower()
+
+
+# Additive pure mapping (read-only inspection use): normalized alias ->
+# stable identifier. Derived once from the existing alias table; it never
+# changes runtime grant matching or the normalizer.
+_ALIAS_TO_CANONICAL_ENDPOINT: Final[dict[str, str]] = {
+    _normalize_endpoint_entry(alias): stable_id
+    for stable_id, aliases in _ENDPOINT_ALIASES.items()
+    for alias in aliases
+}
+
+
+def canonical_endpoint_id(value: str) -> str | None:
+    """Return the stable endpoint identifier for a known alias, else None.
+
+    Pure and additive: accepts the same spellings the runtime grant matcher
+    understands (stable ID, ``method /v1/...``, or bare ``/v1/...`` path) and
+    reports None for unknown input instead of guessing.
+    """
+    return _ALIAS_TO_CANONICAL_ENDPOINT.get(_normalize_endpoint_entry(value))
