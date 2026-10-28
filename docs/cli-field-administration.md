@@ -38,11 +38,16 @@ Status legend:
 | Safe lookup and bounded paging | `keys list` / `keys show` | Exact public key ID and exact owner email lookup; full bearer-shaped input AND credential-shaped references (internal whitespace, `.` secret separator, case-insensitive `Bearer` prefix, any accepted key prefix) refused with a fixed no-echo error BEFORE any database query; cohort/status filters before the limit; `--limit` (max 200) + `--offset` with additive `paging` metadata using a bounded one-row lookahead, so `has_more` is true only when an extra real row exists and `next_offset` is null at the true end; stable `created_at` + UUID tiebreaker. `show`/`list` display safe projections only (canonical or fixed-invalid Responses policy, explicit `allowed_providers_state`, finite `calibration_metadata` members, known-shape redaction of free-form read values). |
 | Configuration-only route explanation | `keys policy explain-route` | Key-state blockers first; allow-list vs enabled-route intersection; existing resolver law and 1000-candidate bound (disclosed); base-request capability checks; discovery separately authorized; provider config references never projected. |
 
+## Implemented in objective 198 (faithful standard-key cloning)
+
+| Field / group | CLI surface | Notes |
+| --- | --- | --- |
+| Source-key clone: canonical plan/fingerprint + execution | `keys clone --dry-run` / `--execute` | Two-step reviewed plan file (strict version-1, 128 KiB bound, 0600, never overwritten). Standard purpose/mode, active, in-window, unfenced sources only; target owner + existing cohort required. Canonical 196 export equality; configured totals copied, never usage/balance/replay/holds/template membership. Stable operation UUID + bounded safe metadata receipt on the NEW target deduplicates exact repeats (`already-applied`); changed plan refused; completed operation identifiable after source edits. Non-default/malformed raw Responses-streaming live-burn and recognized secret shapes in kept policy strings refused explicitly. Validity: copy-source-expiry / duration-from-EXECUTION-now / absolute. Fresh `--confirm-external-tool-fenced` required for fenced sources. Execute requires exactly one explicit one-time key channel; plaintext unrecoverable; pending delivery via `email send-pending-key`; READ COMMITTED dedup boundary. |
+
 ## Proposed for later objectives (NOT implemented)
 
 | Field / capability | Proposed objective |
 | --- | --- |
-| Source-key clone: plan/fingerprint against a live source key with expected live UUID (initial binding of a new independent key) | 198 |
 | Provider/route administration parity in the CLI | 199 |
 | Replay-reference inspection and expiry maintenance (NOT ownership administration or ownership transfer) | 200 |
 | Diagnostics and effective-state inspection commands | 201 |

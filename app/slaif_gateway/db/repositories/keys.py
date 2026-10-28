@@ -120,6 +120,79 @@ class GatewayKeysRepository:
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def find_clone_receipt(
+        self,
+        *,
+        target_owner_id: uuid.UUID,
+        source_gateway_key_id: uuid.UUID,
+        operation_uuid: uuid.UUID,
+    ) -> GatewayKey | None:
+        """Locate the target key carrying a clone receipt for (source, operation).
+
+        Narrowly-typed read-only receipt lookup scoped to the target owner.
+        The receipt is a bounded safe JSONB member (UUIDs + fingerprint only).
+        """
+        from slaif_gateway.schemas.key_clone import CLONE_RECEIPT_METADATA_KEY
+
+        needle = {
+            CLONE_RECEIPT_METADATA_KEY: {
+                "source_gateway_key_id": str(source_gateway_key_id),
+                "operation_uuid": str(operation_uuid),
+            }
+        }
+        statement = select(GatewayKey).where(
+            GatewayKey.owner_id == target_owner_id,
+            GatewayKey.metadata_json.contains(needle),
+        )
+        result = await self._session.execute(statement)
+        return result.scalars().first()
+
+    async def attach_clone_receipt(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        source_gateway_key_id: uuid.UUID,
+        operation_uuid: uuid.UUID,
+        one_time_secret_id: uuid.UUID,
+        email_delivery_id: uuid.UUID | None,
+        source_fingerprint: str,
+        target_cohort_id: uuid.UUID | None,
+        validity_mode: str,
+        validity_duration_seconds: int | None,
+        validity_from: str | None,
+        validity_until: str | None,
+    ) -> GatewayKey:
+        """Persist a bounded safe clone receipt on the new target key's metadata.
+
+        Flush-only; the caller owns the transaction boundary. The receipt
+        carries safe UUIDs, the stable plan-identity validity parameters,
+        and a fingerprint only - never key material, provider references,
+        or secrets.
+        """
+        from slaif_gateway.schemas.key_clone import CLONE_RECEIPT_METADATA_KEY
+
+        row = await self._session.get(GatewayKey, gateway_key_id)
+        if row is None:
+            raise ValueError("Clone receipt target key does not exist.")
+        metadata = dict(row.metadata_json or {})
+        metadata[CLONE_RECEIPT_METADATA_KEY] = {
+            "source_gateway_key_id": str(source_gateway_key_id),
+            "operation_uuid": str(operation_uuid),
+            "target_gateway_key_id": str(gateway_key_id),
+            "one_time_secret_id": str(one_time_secret_id),
+            "email_delivery_id": str(email_delivery_id) if email_delivery_id else None,
+            "source_fingerprint": source_fingerprint,
+            "target_cohort_id": str(target_cohort_id) if target_cohort_id else None,
+            "validity_mode": validity_mode,
+            "validity_duration_seconds": validity_duration_seconds,
+            "validity_from": validity_from,
+            "validity_until": validity_until,
+            "status": "created",
+        }
+        row.metadata_json = metadata
+        await self._session.flush()
+        return row
+
     async def list_gateway_keys(
         self,
         *,

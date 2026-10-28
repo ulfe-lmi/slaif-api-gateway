@@ -345,6 +345,11 @@ def test_external_tool_policy_contract_consumers_remain_allowlisted() -> (
         REPO_ROOT / "app/slaif_gateway/schemas/catalog_refresh.py",
         REPO_ROOT / "app/slaif_gateway/services/route_import.py",
         REPO_ROOT / "app/slaif_gateway/services/openai_web_search_contract.py",
+        # 198-a: the clone service is a read-only consumer - it parses the
+        # RAW stored key policy to detect a fenced external-tool policy and
+        # therefore require a fresh execute-time confirmation. It grants no
+        # runtime hosted-tool authority.
+        REPO_ROOT / "app/slaif_gateway/services/key_clone_service.py",
     }
     for path in (REPO_ROOT / "app/slaif_gateway").rglob("*.py"):
         if path == module_path or path in allowed_consumers:

@@ -10,6 +10,17 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-28 Objective 198-a faithful standard-key cloning verification`](2026-10-28-cli-key-cloning.md)
+  (recorded 2026-10-28) — focused unit (40 new: 19 service + 21
+  actual-Typer CLI) and owned-PostgreSQL-16 (5) evidence for the
+  auditable, retry-safe `keys clone` plan/execute operation: strict
+  non-secret plan document with source fingerprint, eligibility
+  revalidation, receipt-first deduplication, canonical
+  re-derivation/equality, recognized secret-shape refusal, one-time key
+  channel with bounded pending delivery, clone audit, and atomic
+  single-caller-transaction commit under READ COMMITTED proven with two
+  separate OS processes; synthetic data only, no real
+  provider/model/email claim; final-head CI gated by root.
 - [`2026-10-28 Objective 197-a effective key policy, safe lookup, bounded lazy throttling CLI verification`](2026-10-28-cli-effective-key-policy.md)
   (recorded 2026-10-28) — focused unit (65 new + 135
   affected groups) and owned-PostgreSQL-16 (9) evidence for the

@@ -880,6 +880,44 @@ grant waiting or bypass a ceiling. The policy is written and read only through
 the KeyService key-create/key-update paths, in the same transaction as the
 audit row.
 
+### Clone receipt JSON (objective 198)
+
+Faithful standard-key cloning stores its retry-safety receipt as JSON only,
+on the NEW target key: `gateway_keys.metadata.clone_receipt`. No column,
+table, constraint, or migration was added. Canonical shape:
+
+```json
+{
+  "source_gateway_key_id": "<uuid>",
+  "operation_uuid": "<uuid>",
+  "target_gateway_key_id": "<uuid>",
+  "one_time_secret_id": "<uuid>",
+  "email_delivery_id": "<uuid or null>",
+  "source_fingerprint": "<64 hex sha256>",
+  "target_cohort_id": "<uuid or null>",
+  "validity_mode": "copy-source-expiry",
+  "validity_duration_seconds": null,
+  "validity_from": null,
+  "validity_until": null,
+  "status": "created"
+}
+```
+
+The receipt is bounded safe data: UUIDs, the stable plan-identity validity
+parameters, and the source configuration fingerprint only. It never contains
+key material, token hashes, provider references, raw metadata, usage, or
+secrets. The lookup is a narrowly typed JSONB containment query namespaced by
+`(source_gateway_key_id, operation_uuid)` and scoped to the target owner.
+Same-operation repeats compare the receipt against the plan's stable identity
+(source fingerprint plus target cohort and validity parameters) and return
+`already-applied` or refuse a changed plan; the derived target validity window
+is not compared, because `duration-from-now` and `copy-source-expiry` are
+recomputed from EXECUTION time. The supported deduplication boundary is the
+PostgreSQL default READ COMMITTED isolation: the existing source-row
+`FOR UPDATE` lock serializes same-source executions, and a statement after
+the lock sees the prior commit's receipt. A pre-established REPEATABLE READ
+snapshot is not a supported deduplication boundary.
+
 ## 5.7 `quota_reservations`
 
 Temporary reservations created before upstream forwarding and finalized/released after response handling.

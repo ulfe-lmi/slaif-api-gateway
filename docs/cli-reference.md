@@ -44,7 +44,7 @@ create provider routes or keys implicitly.
 ## Gateway keys and templates
 
 ```text
-slaif-gateway keys create|create-from-template|list|show
+slaif-gateway keys create|create-from-template|clone|list|show
 slaif-gateway keys suspend|activate|revoke|extend|rotate
 slaif-gateway keys set-limits|set-rate-limits|set-lazy-throttling|set-chat-streaming-live-burn
 slaif-gateway keys reset-usage
@@ -236,6 +236,99 @@ contact, or capture:
   (additive metadata only).
 - Stable ordering: `created_at` DESC with a UUID tiebreaker, so rows with
   equal timestamps paginate without duplicates or lost rows.
+
+### Cloning standard keys (`keys clone`)
+
+Since objective 198, `keys clone` is a two-step plan/execute operation that
+replaces operator Python cloning: a reviewed NON-secret plan file is written
+first, then executed exactly. Help examples are actual commands.
+
+```text
+# 1) Plan: strict non-secret plan file (new 0600 file, never overwritten).
+#    Mutates nothing and writes no audit row.
+slaif-gateway keys clone --dry-run /tmp/clone-plan.json \
+  --source-key-id <source-key-uuid> \
+  --target-owner-id <target-owner-uuid> \
+  --target-cohort-id <existing-cohort-uuid> \
+  --validity-mode copy-source-expiry
+# or:  --validity-mode duration-from-now --validity-duration-seconds 86400
+# or:  --validity-mode absolute --valid-from <ISO> --valid-until <ISO>
+
+# 2) Review the file (canonical configured policy, source fingerprint,
+#    stable operation UUID, confirmation requirements), then execute with
+#    EXACTLY ONE explicit one-time key channel:
+slaif-gateway keys clone --execute /tmp/clone-plan.json \
+  --reason "clone for <owner>" \
+  --secret-output-file /tmp/new-key.secret
+# or:  --show-plaintext
+# or:  --email-delivery pending
+# or:  --email-delivery send-now
+# or:  --email-delivery enqueue
+
+# 3) Retry the SAME executed plan after a post-commit output/mail failure:
+slaif-gateway keys clone --execute /tmp/clone-plan.json \
+  --reason "retry after output failure" --email-delivery pending
+```
+
+- Eligibility: standard purpose AND standard capability mode; the source
+  must be `active`, currently within its validity window, and not fenced.
+  The target owner and (if given) cohort must already exist; nothing is
+  auto-created. Calibration sources, inactive/revoked/suspended sources,
+  not-yet-valid or expired sources, and missing targets are refused without
+  mutation.
+- Canonical configured policy: the plan stores the 196 strict version-1
+  export of the source. The target's configured policy equals the source's
+  by construction (that equality IS the clone); configured totals are
+  copied, never the source's usage, remaining balance, replay rows, holds,
+  or template membership. The target starts as an independent active key
+  with its own material, HMAC state, and zero usage.
+- Unsupported source policies fail explicitly: a non-default or malformed
+  raw `responses_streaming_live_burn` policy is refused (creation always
+  writes the default), and a policy value carrying a RECOGNIZED secret
+  shape (gateway key text, bearer token, provider key, sensitive
+  assignment) is refused with a fixed safe unsupported-source explanation
+  instead of being emitted or silently altered. This is known-shape
+  protection, not universal content sanitization.
+- Validity: exactly one mode - `copy-source-expiry` (from execution time to
+  the source's fresh `valid_until`), `duration-from-now` (positive whole
+  seconds from EXECUTION time, never from dry-run time), or `absolute`.
+  Invalid or already-expired result windows are rejected at plan and at
+  execute time.
+- Fingerprint: SHA-256 over the source public key ID, status, validity,
+  purpose/mode, and the canonical policy document. Traffic usage,
+  reservations, `last_used_at`, and usage-only `updated_at` drift do NOT
+  move the fingerprint; a configuration/validity/status change makes a
+  stale plan refuse before any write.
+- Fenced external policy: the plan records the fresh confirmation
+  requirement; execution requires `--confirm-external-tool-fenced` on the
+  execute command. Source confirmation flags are never copied into
+  execution authority.
+- Plan file: strict version-1 JSON. Unknown or duplicate fields, bad types,
+  non-UTF-8, and files over the documented 128 KiB bound are rejected with
+  fixed safe errors that never echo file bodies or values. The plan never
+  contains key material, hashes, provider environment names or base URLs,
+  raw metadata, or usage.
+- Retry safety (no schema): the stable `operation_uuid` plus a narrowly
+  typed receipt on the NEW target key's metadata, namespaced by
+  `(source, operation)` and scoped to the target owner, deduplicates. An
+  exact repeat returns `already-applied` with safe IDs - never a new key,
+  secret, send, or plaintext. A same-operation changed plan is refused. A
+  completed operation stays identifiable even if the source is later
+  edited or becomes ineligible.
+- Transaction: key creation, one-time secret, optional pending delivery,
+  receipt, and audits commit atomically in one caller-owned transaction; a
+  late audit/receipt/delivery-preparation failure rolls back ALL new rows.
+  Nothing (no SMTP, no output file, no enqueue) happens before commit.
+- Supported isolation boundary: PostgreSQL default READ COMMITTED. The
+  existing source-row `FOR UPDATE` lock serializes same-source executions
+  and the receipt query after the lock sees the prior commit. A
+  pre-established REPEATABLE READ snapshot is not a supported
+  deduplication boundary.
+- No plaintext recovery: the one-time plaintext is unrecoverable after
+  first output, and repeats never recover or re-send it. A still-unconsumed
+  pending delivery is sent with `slaif-gateway email send-pending-key
+  --one-time-secret-id <uuid>`; otherwise rotate the key. There is no
+  exactly-once SMTP promise.
 
 ### Typed key-policy configuration (`--policy-file`)
 
@@ -706,6 +799,7 @@ slaif-gateway institutions list
 slaif-gateway institutions show
 slaif-gateway keys create
 slaif-gateway keys create-from-template
+slaif-gateway keys clone
 slaif-gateway keys list
 slaif-gateway keys show
 slaif-gateway keys suspend
