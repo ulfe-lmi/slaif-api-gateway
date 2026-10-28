@@ -46,9 +46,9 @@ create provider routes or keys implicitly.
 ```text
 slaif-gateway keys create|create-from-template|list|show
 slaif-gateway keys suspend|activate|revoke|extend|rotate
-slaif-gateway keys set-limits|set-rate-limits|set-chat-streaming-live-burn
+slaif-gateway keys set-limits|set-rate-limits|set-lazy-throttling|set-chat-streaming-live-burn
 slaif-gateway keys reset-usage
-slaif-gateway keys policy show|update|export
+slaif-gateway keys policy show|update|export|effective|explain-route
 slaif-gateway keys external-tools show|update
 slaif-gateway templates create-from-calibration
 slaif-gateway calibration summarize
@@ -58,13 +58,184 @@ Plaintext key output is one-time only. Prefer `--secret-output-file` for an
 owner-only file or explicitly confirmed plaintext output. Lost keys are rotated,
 not recovered. Reserved-counter repair has additional confirmation requirements.
 
-The lazy (waiting) throttling policy has no dedicated CLI flag yet: a
-standalone setter remains deferred (see
-`docs/cli-field-administration.md`, objective 197). Since objective 196,
-the typed `--policy-file` authoring surface and `keys policy export` DO
-read and write the validated `lazy_throttling_policy` block through the
-same KeyService and audit path; the admin dashboard key create/detail
-forms remain an applicable path as well.
+Since objective 197 the lazy (waiting) throttling policy has a dedicated
+audited CLI setter, `keys set-lazy-throttling`, which reuses the same
+shared KeyService validator, write path, and audit row as the 196
+`--policy-file` authoring surface and `keys policy export`; the admin
+dashboard key create/detail forms remain an applicable path as well.
+
+### Bounded lazy (waiting) throttling (`keys set-lazy-throttling`)
+
+```bash
+# One request per 10 seconds plus concurrency 1, then a bounded wait
+slaif-gateway keys set-rate-limits <gateway-key-id> \
+  --requests-per-minute 1 --window-seconds 10 --concurrent-requests 1 \
+  --reason "one request per ten seconds"
+slaif-gateway keys set-lazy-throttling <gateway-key-id> \
+  --mode wait --max-wait-seconds 30 --max-waiting-requests 2 \
+  --reason "bounded wait for batch runs" --json
+
+# Canonical reject (immediate 429) and reset (clear the stored policy)
+slaif-gateway keys set-lazy-throttling <gateway-key-id> --mode reject \
+  --reason "fail fast"
+slaif-gateway keys set-lazy-throttling <gateway-key-id> --clear \
+  --reason "stop waiting"
+```
+
+Semantics:
+
+- `--mode wait` requires BOTH positive whole `--max-wait-seconds` and
+  `--max-waiting-requests` within the installation ceilings
+  (`LAZY_THROTTLING_MAX_WAIT_SECONDS`, `LAZY_THROTTLING_MAX_WAITING_PER_KEY`);
+  bool/float/negative values and out-of-ceiling bounds fail BEFORE any
+  write (no change, no audit row).
+- `--mode reject` removes the stored override (default immediate
+  rejection). The shared KeyService canonicalizes a reject policy to "no
+  stored override", so supplying waiting bounds alongside reject would be
+  silently discarded; the CLI refuses them with a fixed error BEFORE any
+  mutation (no change, no audit row). Use `--mode wait` for waiting bounds.
+- `--clear` removes the stored policy; plain reject and clear are distinct
+  verbs with the SAME stored outcome (no stored override / immediate
+  rejection); neither accepts waiting bounds, and they cannot be combined.
+- Safe default display: `keys show` / `keys list` project safe metadata only.
+  Stored Responses policies render through the strict shared validator
+  (canonical members only, or a fixed `{"state": "invalid"}` marker for
+  unknown/malformed/stale blocks); the stored provider restriction renders
+  as an explicit `allowed_providers_state` (`unrestricted` / `allow-list` /
+  `deny-all` / `invalid`) while the legacy `allowed_providers` /
+  `allow_all_providers` members keep their shape; `calibration_metadata`
+  keeps only its finite known members (`creation_channel`, `created_from`,
+  `operator_review_required`). Free-form read values (`revoked_reason`) and
+  surviving strings pass the existing known-shape redaction, so KNOWN
+  authentication/provider secret shapes cannot reach CLI output; this is
+  known-shape protection, not universal content sanitization.
+- The shared service validator is re-applied in the caller-owned
+  transaction, so installations with ceilings LOWER than the schema
+  defaults keep reject/clear usable without silently enlarging the active
+  wait bounds.
+- Changing the policy touches ONLY the key's lazy metadata, `updated_at`,
+  and one audit row: no rates, quotas, identity, secret, validity, status,
+  counters, reservations, or other keys.
+- Waiting never relaxes hard quota, auth, security, or pricing; it is
+  operational waiting behavior only, applicable to the Chat Completions
+  and Responses endpoints.
+
+### Effective policy inspection (`keys policy effective`)
+
+```bash
+slaif-gateway keys policy effective <gateway-key-id> --json
+```
+
+Configuration-only view of the key's configured plus effective policy:
+
+- Per rate member (`requests_per_window`, `tokens_per_window`,
+  `concurrency`, `window_seconds`): `configured`, `effective`, and
+  `source` (`key` / `deployment` / `none`). A NULL per-key rate is
+  INHERITED (the deployment value), never unlimited. The historical
+  requests-per-minute / tokens-per-minute fields are counts PER SELECTED
+  WINDOW: with a 10-second window, `1` means one per 10 seconds, not one
+  per minute. The report renders `count_semantics: "counts per selected
+  window"` and never scales or renames the values.
+- Lifetime quotas: a `null` quota is UNLIMITED (`remaining` is `null`);
+  configured quotas render configured/used/reserved/remaining.
+- A warning is emitted when an inherited deployment rate still applies
+  despite an unlimited lifetime quota; the CLI never guesses operator
+  intent or silently raises limits.
+- Stored lazy policy: `stored_state` (`absent`, `reject-configured`,
+  `wait-configured`, `invalid-stored`) plus the effective mode/bounds and
+  source. Any VALID stored mode is KEY-configured; only absent/invalid
+  fall back to the deployment default source. A stored wait beyond an
+  operator ceiling classifies as `invalid-stored` (default reject),
+  without dumping the raw stored value.
+- Allow-lists: models/endpoints plus the provider restriction as an
+  explicit state (`unrestricted` / `allow-list` / `deny-all` / `invalid`);
+  malformed stored members surface as the fixed `invalid` marker, never
+  copied values.
+- Responses/Codex profile: policy state, client-module identity (public
+  registration identity only; a pin never grants capabilities), validated
+  capabilities and local tool types. Unknown, malformed, or stale pins are
+  a fixed safe `unavailable` marker.
+- Redis: `enabled` / `fail_closed` / `has_limits` as CONFIGURATION, not
+  live health or capacity proof. No `REDIS_URL`, provider secrets, or
+  Settings/ORM/metadata dumps.
+- The key block includes `status_note` for suspended/revoked/expired/
+  not-yet-valid/fenced keys so an inspected key in a blocked state cannot
+  look like authentication success. The command performs NO
+  authentication (no HMAC, status, fence, or time checks) and never
+  changes any state.
+
+### Configuration-only route explanation (`keys policy explain-route`)
+
+```bash
+slaif-gateway keys policy explain-route <gateway-key-id> \
+  --model <model> [--endpoint /v1/chat/completions] --json
+```
+
+Explains which configuration grants or blocks model access WITHOUT
+inference, authentication, admission, quota reservation, waiting, provider
+contact, or capture:
+
+- Key-state blockers are reported FIRST (`key-suspended`, `key-revoked`,
+  `key-expired`, `key-not-yet-valid`,
+  `key-external-tool-fence-active`): an inspected key in a blocked state
+  never looks like a usable key (`key_state.usable_for_requests` is
+  false, no resolution is reported).
+- Endpoint aliases canonicalize to stable endpoint IDs; an unknown
+  endpoint fails with a fixed safe message. `/v1/models` is
+  separately-authorized discovery (`verdict:
+  discovery-separately-authorized`), never an auto-grant of model access.
+  Endpoints whose access depends on payload or resource state report
+  not-evaluated reasons instead of pretending model-route absence is their
+  full runtime verdict.
+- `allowlist_intersection` shows the key's allowed models versus
+  CANDIDATE enabled routes (enabled route + enabled provider + provider
+  allow-list) using the same public matching law as the runtime resolver;
+  a candidate match is not final routability, which is reported in
+  `verdict`/`resolution`.
+- The verdict reuses the existing RouteResolutionService law:
+  `model-not-allowed-for-key`, `model-route-disabled`, `model-not-found`,
+  `provider-not-allowed-for-key`, `provider-disabled`, `ambiguous-route`,
+  `unsupported-route-match-type`, or `resolved` with a safe resolution
+  subset (provider, resolved model, route id/match type/pattern/priority,
+  streaming support). No provider base URLs, API-key env vars, or raw
+  capability/metadata dumps.
+- `capability_checks` runs the current pure runtime enforcers with an
+  EMPTY payload: only the base required capability (Chat text / Responses
+  mandatory text) is checked (`base_request_supported`,
+  `capability_error_code`); request body, tools, media, streaming shape,
+  pricing, quota, Redis, and provider health remain explicitly
+  not-evaluated.
+- The runtime 1000-route candidate bound is preserved and disclosed in
+  `bounds` (`route_candidate_bound`, `routes_examined`,
+  `possible_unexamined_routes`).
+
+### Safe lookup and bounded paging (`keys list` / `keys show`)
+
+- `keys show <uuid-or-public-key-id>`: UUID lookup remains usable and the
+  exact public key ID is also accepted. Full bearer-shaped input is
+  refused with a fixed safe error and never echoed; there is no identity
+  lookup from token hash/HMAC/plaintext. Credential-SHAPED references are
+  likewise refused BEFORE any database query: any internal whitespace,
+  a secret separator (`.`), a case-insensitive `Bearer` header prefix, or
+  any configured accepted key prefix (including `GATEWAY_KEY_PREFIX`)
+  cannot be a safe UUID/public ID and fails with the same fixed no-echo
+  error.
+- `keys list --owner-email <exact email>` uses exact owner lookup (never
+  substring matching); unknown email fails with a fixed safe error.
+  `--owner-id` and `--owner-email` are mutually exclusive.
+- `--cohort-id` and `--status` filters apply in SQL BEFORE the limit.
+- Bounded complete pagination: `--limit` (default 50, maximum 200) and
+  `--offset`; JSON adds `paging` metadata (`limit`, `offset`, `returned`,
+  `has_more`, `next_offset`). The list fetch uses a bounded lookahead of
+  ONE extra row (`limit + 1`), so `has_more` is true ONLY when an extra
+  real row exists and `next_offset` is `null` at the true end of the
+  result set - a full final page reports `has_more: false` instead of
+  claiming unknown state. Only the requested `limit` rows are returned;
+  the internal lookahead for the maximum page of 200 is bounded (201) and
+  never unbounded. The default `{"keys": [...]}` shape is unchanged
+  (additive metadata only).
+- Stable ordering: `created_at` DESC with a UUID tiebreaker, so rows with
+  equal timestamps paginate without duplicates or lost rows.
 
 ### Typed key-policy configuration (`--policy-file`)
 
@@ -543,12 +714,15 @@ slaif-gateway keys revoke
 slaif-gateway keys extend
 slaif-gateway keys set-limits
 slaif-gateway keys set-rate-limits
+slaif-gateway keys set-lazy-throttling
 slaif-gateway keys set-chat-streaming-live-burn
 slaif-gateway keys reset-usage
 slaif-gateway keys rotate
 slaif-gateway keys policy show
 slaif-gateway keys policy update
 slaif-gateway keys policy export
+slaif-gateway keys policy effective
+slaif-gateway keys policy explain-route
 slaif-gateway keys external-tools show
 slaif-gateway keys external-tools update
 slaif-gateway openai-assisted pricing-proposal

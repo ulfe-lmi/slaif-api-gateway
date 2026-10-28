@@ -24,16 +24,24 @@ Status legend:
 | Rate-limit overrides (per member) | `create` flags, `set-rate-limits`, and policy file per-member patch | Explicit `null` resets one member (inherit); unknown members are rejected; the historical `concurrent_requests` spelling canonicalizes to `max_concurrent_requests`. |
 | Responses/Codex policy block | `create` / `policy update` policy file | Complete replacement block only; strict finite authoring validation (capabilities, prerequisites, local tool pairing, exact client-module pin). |
 | Client-module pin identity | policy file `responses_policy.client_module` | Exact registered identity; stale pins fail with migration guidance; the configured Codex profile is bootstrapped before pin authoring; the migration law guards existing bindings. |
-| Lazy throttling policy | policy file (`lazy_throttling_policy`) | `null` removes the stored policy; complete blocks only. The CLI does not otherwise read/change/reset it outside the typed file path. |
+| Lazy throttling policy | policy file (`lazy_throttling_policy`) and `set-lazy-throttling` (objective 197) | `null` removes the stored policy; complete blocks only. Objective 197 adds the dedicated audited setter; the typed file path is unchanged. |
 | Chat streaming live-burn policy | `set-chat-streaming-live-burn` and policy file (complete blocks) | `null` in a file is rejected; disabling uses the existing command. Strict authoring accepts only the closed member set (`version`, `enabled`, `cost_margin_eur`, `token_margin`) on file create, configuration update, and RAW stored export. |
 | External tool policy | `external-tools show|update` and policy file (complete blocks) | `null` removes the fenced policy; fenced blocks require the fresh `--confirm-external-tool-fenced` acknowledgement (file field or explicit flag). |
 | Safe policy export | `keys policy export` | Version-1 document; explicit `null` for absent groups; never emits fresh confirmations; fails explicitly on stored policy it cannot administer; the rendered document is re-parsed by the same strict schema, so round-trips apply on compatible targets only. |
+
+## Implemented in objective 197 (effective key policy, safe lookup, bounded lazy throttling)
+
+| Field / group | CLI surface | Notes |
+| --- | --- | --- |
+| Lazy throttling policy (dedicated setter) | `keys set-lazy-throttling` | `--mode wait` requires both positive bounds within the installation ceilings; `--mode reject` removes the stored override (default immediate rejection) and is REFUSED - before any mutation - when waiting bounds are supplied, because the shared KeyService canonicalizes reject to "no stored override"; plain reject and `--clear` are distinct verbs with the same stored outcome and accept no waiting bounds. Shared KeyService validator/write/audit path (one audit row); changes only lazy metadata, `updated_at`, and the audit. |
+| Effective policy inspection | `keys policy effective` | Configuration-only (no authentication, no state change): configured/effective/source per rate member, per-selected-window count semantics, inherited-rate-vs-unlimited-quota warning, lifetime quotas (null = unlimited), stored lazy state, model/endpoint/provider allow-lists, Responses/Codex profile identity, Redis configuration. |
+| Safe lookup and bounded paging | `keys list` / `keys show` | Exact public key ID and exact owner email lookup; full bearer-shaped input AND credential-shaped references (internal whitespace, `.` secret separator, case-insensitive `Bearer` prefix, any accepted key prefix) refused with a fixed no-echo error BEFORE any database query; cohort/status filters before the limit; `--limit` (max 200) + `--offset` with additive `paging` metadata using a bounded one-row lookahead, so `has_more` is true only when an extra real row exists and `next_offset` is null at the true end; stable `created_at` + UUID tiebreaker. `show`/`list` display safe projections only (canonical or fixed-invalid Responses policy, explicit `allowed_providers_state`, finite `calibration_metadata` members, known-shape redaction of free-form read values). |
+| Configuration-only route explanation | `keys policy explain-route` | Key-state blockers first; allow-list vs enabled-route intersection; existing resolver law and 1000-candidate bound (disclosed); base-request capability checks; discovery separately authorized; provider config references never projected. |
 
 ## Proposed for later objectives (NOT implemented)
 
 | Field / capability | Proposed objective |
 | --- | --- |
-| Dedicated lazy/effective policy commands and effective-policy lookup | 197 |
 | Source-key clone: plan/fingerprint against a live source key with expected live UUID (initial binding of a new independent key) | 198 |
 | Provider/route administration parity in the CLI | 199 |
 | Replay-reference inspection and expiry maintenance (NOT ownership administration or ownership transfer) | 200 |

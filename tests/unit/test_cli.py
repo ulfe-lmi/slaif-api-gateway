@@ -125,5 +125,16 @@ def test_cli_verbose_keeps_json_stdout_machine_readable(monkeypatch) -> None:
     result = runner.invoke(app, ["--verbose", "keys", "list", "--json"])
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {"keys": []}
+    # The "keys" array keeps its legacy shape; additive paging metadata is
+    # the only new member (bounded complete pagination, objective 197).
+    assert json.loads(result.stdout) == {
+        "keys": [],
+        "paging": {
+            "limit": 50,
+            "offset": 0,
+            "returned": 0,
+            "has_more": False,
+            "next_offset": None,
+        },
+    }
     assert "cli.command.start" in result.stderr
