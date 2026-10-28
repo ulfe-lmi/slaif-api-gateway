@@ -207,10 +207,12 @@ history) are preserved unchanged.
    asserted invariant (no connection held by the waiting request) holds at
    the blocked **sleep boundaries**; each retry's revalidation is a
    deliberate short session outside the blocked phase. The old sampler
-   confuses revalidation with blocked waiting; it is a test-phase error,
-   not a runtime regression (no `app/` path changed in 196; the archived
-   `d8` baseline and the current code reproduce the phase, and isolated
-   baseline outcomes alone never proved flake).
+   confuses revalidation with blocked waiting; it is a test-phase error.
+   The 196-a `app/` changes touched authoring/policy code, not the runtime
+   auth/admission/lazy/Redis paths. The archived `d8` isolated baseline
+   runs PASSED but were not sleep-phase instrumented; only the current
+   code was phase-instrumented, so isolated baseline outcomes alone never
+   proved flake or a runtime regression.
 
 ### Repairs (test-only)
 
@@ -285,11 +287,13 @@ test DB, no Testcontainers fallback, no foreign PG version.
   documentation inventory → see commit-level result recorded in the 196-b
   OAP report.
 
-Qualification layer: the admin and lazy nodes are REAL HTTP against a real
-uvicorn app with owned PostgreSQL/Redis and real accounting rows; no real
-provider inference, no real SMTP, no real external client. The 196-a unit
-evidence above remains fakes/pure-layer as recorded; nothing here upgrades
-it.
+Qualification layer: the lazy node is real uvicorn HTTP against a real
+app with owned PostgreSQL/Redis and real accounting rows. The admin node
+is in-process ASGI through FastAPI TestClient against the real app with
+the owned PostgreSQL (no network HTTP, no Redis in that node) and real DB
+rows. Neither uses real provider inference, real SMTP, or a real external
+client. The 196-a unit evidence above remains fakes/pure-layer as
+recorded; nothing here upgrades it.
 
 ### CI state and limits (honest, at publication)
 
