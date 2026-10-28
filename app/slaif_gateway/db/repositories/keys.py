@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -119,6 +119,108 @@ class GatewayKeysRepository:
         statement = select(GatewayKey).where(GatewayKey.public_key_id == public_key_id)
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def find_clone_receipts(
+        self,
+        *,
+        source_gateway_key_id: uuid.UUID,
+        operation_uuid: uuid.UUID,
+    ) -> list[GatewayKey]:
+        """Locate every key carrying a clone receipt for (source, operation).
+
+        Narrowly-typed read-only lookup INDEPENDENT of the (mutable) target
+        selection: retry safety is namespaced by (source, operation) only.
+        Returns every match so the caller can refuse an ambiguous result
+        rather than silently choosing one. The receipt is a bounded safe JSONB
+        member (UUIDs + fingerprints only).
+
+        Bounded: at most TWO matches are ever materialized (limit 2) - two
+        are sufficient to prove ambiguity; a corrupted third receipt adds no
+        decision information and no unbounded scan cost.
+        """
+        from slaif_gateway.schemas.key_clone import CLONE_RECEIPT_METADATA_KEY
+
+        needle = {
+            CLONE_RECEIPT_METADATA_KEY: {
+                "source_gateway_key_id": str(source_gateway_key_id),
+                "operation_uuid": str(operation_uuid),
+            }
+        }
+        statement = select(GatewayKey).where(
+            GatewayKey.metadata_json.contains(needle),
+        ).limit(2)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def current_transaction_isolation(self) -> str:
+        """Return the CURRENT transaction's isolation level (bounded read).
+
+        The clone operation enforces the supported READ COMMITTED boundary
+        before writing; this narrow read lets it refuse an unsupported level
+        (e.g. a pre-established REPEATABLE READ snapshot) rather than pretend
+        row locks guarantee arbitrary-isolation dedup.
+        """
+        result = await self._session.execute(
+            text("SELECT current_setting('transaction_isolation')")
+        )
+        return result.scalar_one()
+
+    async def attach_clone_receipt(
+        self,
+        gateway_key_id: uuid.UUID,
+        *,
+        source_gateway_key_id: uuid.UUID,
+        operation_uuid: uuid.UUID,
+        target_owner_id: uuid.UUID,
+        one_time_secret_id: uuid.UUID,
+        email_delivery_id: uuid.UUID | None,
+        source_fingerprint: str,
+        policy_fingerprint: str,
+        source_public_key_id: str,
+        source_valid_until: str | None,
+        target_cohort_id: uuid.UUID | None,
+        requires_fenced_confirmation: bool,
+        validity_mode: str,
+        validity_duration_seconds: int | None,
+        validity_from: str | None,
+        validity_until: str | None,
+    ) -> GatewayKey:
+        """Persist a bounded safe clone receipt on the new target key's metadata.
+
+        Flush-only; the caller owns the transaction boundary. The receipt
+        carries safe UUIDs, the stable business-plan identity (target
+        owner/cohort, validity parameters, confirmation requirement, and the
+        source public identity + source/policy fingerprints) only - never
+        key material, provider references, or secrets.
+        """
+        from slaif_gateway.schemas.key_clone import CLONE_RECEIPT_METADATA_KEY
+
+        row = await self._session.get(GatewayKey, gateway_key_id)
+        if row is None:
+            raise ValueError("Clone receipt target key does not exist.")
+        metadata = dict(row.metadata_json or {})
+        metadata[CLONE_RECEIPT_METADATA_KEY] = {
+            "source_gateway_key_id": str(source_gateway_key_id),
+            "operation_uuid": str(operation_uuid),
+            "target_gateway_key_id": str(gateway_key_id),
+            "target_owner_id": str(target_owner_id),
+            "one_time_secret_id": str(one_time_secret_id),
+            "email_delivery_id": str(email_delivery_id) if email_delivery_id else None,
+            "source_fingerprint": source_fingerprint,
+            "policy_fingerprint": policy_fingerprint,
+            "source_public_key_id": source_public_key_id,
+            "source_valid_until": source_valid_until,
+            "target_cohort_id": str(target_cohort_id) if target_cohort_id else None,
+            "requires_fenced_confirmation": requires_fenced_confirmation,
+            "validity_mode": validity_mode,
+            "validity_duration_seconds": validity_duration_seconds,
+            "validity_from": validity_from,
+            "validity_until": validity_until,
+            "status": "created",
+        }
+        row.metadata_json = metadata
+        await self._session.flush()
+        return row
 
     async def list_gateway_keys(
         self,

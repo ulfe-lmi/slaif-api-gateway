@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -31,6 +32,7 @@ from slaif_gateway.cli.key_policy_files import (
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.db.repositories.audit import AuditRepository
+from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.key_templates import KeyTemplatesRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
@@ -60,6 +62,15 @@ from slaif_gateway.schemas.keys import (
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
 )
+from slaif_gateway.schemas.key_clone import (
+    MAX_CLONE_PLAN_FILE_BYTES,
+    VALIDITY_ABSOLUTE,
+    VALIDITY_COPY_SOURCE_EXPIRY,
+    VALIDITY_DURATION_FROM_NOW,
+    KeyClonePlan,
+    KeyClonePlanError,
+    parse_clone_plan_file,
+)
 from slaif_gateway.services.chat_streaming_live_burn import (
     ChatStreamingLiveBurnPolicyError,
     chat_streaming_live_burn_policy_from_metadata,
@@ -86,6 +97,10 @@ from slaif_gateway.services.key_policy_configuration import (
     build_create_gateway_key_input,
 )
 from slaif_gateway.services.key_service import KeyService
+from slaif_gateway.services.key_clone_service import (
+    KeyCloneResult,
+    KeyCloneService,
+)
 from slaif_gateway.services.key_policy_inspection import (
     KeyPolicyInspectionContext,
     build_key_policy_inspection,
@@ -299,6 +314,60 @@ async def _policy_inspection_runtime() -> AsyncIterator[
                 provider_configs=ProviderConfigsRepository(session),
             )
             yield settings, GatewayKeysRepository(session), inspection_context
+
+
+@asynccontextmanager
+async def _key_clone_runtime() -> AsyncIterator[tuple[Settings, KeyCloneService]]:
+    """Caller-owned transaction runtime for the clone plan/execute operation.
+
+    The clone service is flush-only. The surrounding session transaction
+    commits the target key, one-time secret, pending delivery, clone
+    receipt, and audit rows atomically - or rolls ALL of them back on a
+    late failure.
+    """
+    settings = get_settings()
+    if not settings.DATABASE_URL:
+        raise CliDatabaseConfigError(
+            "DATABASE_URL is not configured. Set DATABASE_URL and try again."
+        )
+    _bootstrap_codex_profile(settings)
+
+    try:
+        session_factory = get_sessionmaker(settings)
+    except RuntimeError as exc:
+        raise CliDatabaseConfigError(str(exc)) from exc
+
+    async with session_factory() as session:
+        async with session.begin():
+            keys_repository = GatewayKeysRepository(session)
+            one_time_secrets_repository = OneTimeSecretsRepository(session)
+            audit_repository = AuditRepository(session)
+            key_service = KeyService(
+                settings=settings,
+                gateway_keys_repository=keys_repository,
+                one_time_secrets_repository=one_time_secrets_repository,
+                audit_repository=audit_repository,
+                model_routes_repository=ModelRoutesRepository(session),
+            )
+            email_delivery_service = EmailDeliveryService(
+                settings=settings,
+                one_time_secrets_repository=one_time_secrets_repository,
+                email_deliveries_repository=EmailDeliveriesRepository(session),
+                gateway_keys_repository=keys_repository,
+                owners_repository=OwnersRepository(session),
+                audit_repository=audit_repository,
+                email_service=EmailService(settings),
+            )
+            clone_service = KeyCloneService(
+                settings=settings,
+                key_service=key_service,
+                gateway_keys_repository=keys_repository,
+                owners_repository=OwnersRepository(session),
+                cohorts_repository=CohortsRepository(session),
+                email_delivery_service=email_delivery_service,
+                audit_repository=audit_repository,
+            )
+            yield settings, clone_service
 
 
 def _run_async(coro: Any) -> Any:
@@ -641,6 +710,64 @@ def _created_key_dict(
         "external_tool_policy": result.external_tool_policy,
     }
     if include_plaintext:
+        payload["plaintext_key"] = result.plaintext_key
+    return payload
+
+
+def _read_bounded_plan_file(path: Path) -> bytes:
+    """Read at most ``MAX_CLONE_PLAN_FILE_BYTES + 1`` bytes of a plan file.
+
+    Bounding the read (instead of loading the whole file) keeps an oversized
+    file from being fully read before the size limit is enforced. Errors are
+    fixed and safe; they never echo the path or file contents.
+    """
+    cap = MAX_CLONE_PLAN_FILE_BYTES
+    try:
+        with path.open("rb") as fh:
+            data = fh.read(cap + 1)
+    except OSError as exc:
+        raise typer.BadParameter("Clone plan file is missing or unreadable.") from exc
+    if len(data) > cap:
+        raise typer.BadParameter("Clone plan file exceeds the bounded size.")
+    return data
+
+
+def _write_clone_plan_file(path: Path, document: dict[str, object]) -> None:
+    """Write a reviewed NON-secret plan to a new 0600 file (no overwrite)."""
+    text = json.dumps(document, indent=2, sort_keys=True, default=_json_default) + "\n"
+    data = text.encode("utf-8")
+    if len(data) > MAX_CLONE_PLAN_FILE_BYTES:
+        raise CliKeyError("Clone plan exceeds the bounded file size.")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise typer.BadParameter("Clone plan file already exists.") from exc
+    except OSError as exc:
+        raise CliKeyError("Could not create clone plan file.") from exc
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(text)
+    except OSError as exc:
+        raise CliKeyError("Could not write clone plan file.") from exc
+
+
+def _clone_result_dict(
+    result: KeyCloneResult, *, include_plaintext: bool = False
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "status": result.status,
+        "operation_uuid": result.operation_uuid,
+        "source_gateway_key_id": result.source_gateway_key_id,
+        "source_fingerprint": result.source_fingerprint,
+        "requires_fenced_confirmation": result.requires_fenced_confirmation,
+        "target_gateway_key_id": result.target_gateway_key_id,
+        "target_public_key_id": result.target_public_key_id,
+        "one_time_secret_id": result.one_time_secret_id,
+        "email_delivery_id": result.email_delivery_id,
+        "valid_from": result.valid_from,
+        "valid_until": result.valid_until,
+    }
+    if include_plaintext and result.plaintext_key is not None:
         payload["plaintext_key"] = result.plaintext_key
     return payload
 
@@ -1464,6 +1591,49 @@ def _validate_email_delivery_preconditions(
             )
 
 
+async def _build_clone_plan_document(
+    *,
+    source_gateway_key_id: uuid.UUID,
+    target_owner_id: uuid.UUID,
+    target_cohort_id: uuid.UUID | None,
+    validity_mode: str,
+    validity_duration_seconds: int | None,
+    validity_from: str | None,
+    validity_until: str | None,
+) -> dict[str, object]:
+    """Read-only clone plan build: no mutation, no audit row."""
+    async with _key_clone_runtime() as (_, clone_service):
+        return await clone_service.build_plan(
+            source_gateway_key_id=source_gateway_key_id,
+            target_owner_id=target_owner_id,
+            target_cohort_id=target_cohort_id,
+            validity_mode=validity_mode,
+            validity_duration_seconds=validity_duration_seconds,
+            validity_from=validity_from,
+            validity_until=validity_until,
+        )
+
+
+async def _execute_clone_plan(
+    plan: KeyClonePlan,
+    *,
+    reason: str,
+    actor_admin_id: uuid.UUID | None,
+    confirm_external_tool_fenced: bool,
+    email_delivery_mode: EmailDeliveryMode,
+) -> KeyCloneResult:
+    """Execute one reviewed plan inside the caller-owned transaction."""
+    async with _key_clone_runtime() as (settings, clone_service):
+        _validate_email_delivery_preconditions(settings, email_delivery_mode)
+        return await clone_service.execute_plan(
+            plan=plan,
+            reason=reason,
+            actor_admin_id=actor_admin_id,
+            confirm_external_tool_fenced=confirm_external_tool_fenced,
+            create_email_delivery=email_delivery_mode is not EmailDeliveryMode.none,
+        )
+
+
 @app.callback()
 def keys() -> None:
     """Manage gateway keys."""
@@ -1953,6 +2123,405 @@ def create(
 
     _echo_kv(payload_dict)
     _exit_if_email_delivery_failed(cli_result.delivery_result)
+
+
+@app.command("clone")
+def clone(
+    dry_run: Annotated[
+        Path | None,
+        typer.Option(
+            "--dry-run",
+            help="Write the reviewed non-secret clone plan to this NEW 0600 path",
+        ),
+    ] = None,
+    execute: Annotated[
+        Path | None,
+        typer.Option(
+            "--execute",
+            help="Execute this exact previously reviewed clone plan file",
+        ),
+    ] = None,
+    source_key_id: Annotated[
+        str | None,
+        typer.Option("--source-key-id", help="Source gateway key UUID (dry-run only)"),
+    ] = None,
+    target_owner_id: Annotated[
+        str | None,
+        typer.Option("--target-owner-id", help="Target owner UUID (dry-run only)"),
+    ] = None,
+    target_cohort_id: Annotated[
+        str | None,
+        typer.Option(
+            "--target-cohort-id", help="Existing target cohort UUID (dry-run only)"
+        ),
+    ] = None,
+    validity_mode: Annotated[
+        str | None,
+        typer.Option(
+            "--validity-mode",
+            help=(
+                "copy-source-expiry, duration-from-now, or absolute (dry-run only)"
+            ),
+        ),
+    ] = None,
+    validity_duration_seconds: Annotated[
+        int | None,
+        typer.Option(
+            "--validity-duration-seconds",
+            help="Positive whole seconds for duration-from-now (dry-run only)",
+        ),
+    ] = None,
+    valid_from: Annotated[
+        str | None,
+        typer.Option(
+            "--valid-from", help="ISO datetime for absolute mode (dry-run only)"
+        ),
+    ] = None,
+    valid_until: Annotated[
+        str | None,
+        typer.Option(
+            "--valid-until", help="ISO datetime for absolute mode (dry-run only)"
+        ),
+    ] = None,
+    reason: Annotated[
+        str | None,
+        typer.Option("--reason", help="Audit note (required for execute)"),
+    ] = None,
+    actor_admin_id: Annotated[
+        str | None,
+        typer.Option("--actor-admin-id", help="Acting admin UUID"),
+    ] = None,
+    confirm_external_tool_fenced: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-external-tool-fenced",
+            help=(
+                "Fresh fenced external-tool confirmation (execute only; never "
+                "copied from the source)"
+            ),
+        ),
+    ] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+    show_plaintext: Annotated[
+        bool,
+        typer.Option(
+            "--show-plaintext",
+            help="Include the one-time plaintext key in output (execute only)",
+        ),
+    ] = False,
+    secret_output_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--secret-output-file",
+            help="Write the one-time plaintext key to a new 0600 file (execute only)",
+        ),
+    ] = None,
+    email_delivery: Annotated[
+        EmailDeliveryMode,
+        typer.Option(
+            "--email-delivery",
+            help="Key email delivery mode: pending, send-now, or enqueue (execute only)",
+        ),
+    ] = EmailDeliveryMode.none,
+) -> None:
+    """Clone a standard key from a reviewed canonical policy plan.
+
+    Two-step operation:
+
+    1. ``--dry-run PATH`` writes a strict NON-secret plan file (new 0600 file,
+       never overwrites) for the live source key: canonical configured policy,
+       source fingerprint, stable operation UUID, explicit target validity
+       mode, and confirmation requirements. Dry-run mutates nothing and
+       writes no audit row.
+    2. ``--execute PATH`` executes that exact plan file. It requires --reason
+       and EXACTLY ONE explicit one-time key channel: --show-plaintext,
+       --secret-output-file PATH, or --email-delivery pending/send-now/enqueue.
+
+    The target starts as an independent active standard key: configured
+    policy totals are copied, never source usage, remaining balance, replay
+    rows, holds, or template membership. Re-running the same executed plan
+    returns the already-applied target and never creates a new key, secret,
+    or delivery; a changed plan is refused. The one-time plaintext key cannot
+    be recovered after first output: use ``slaif-gateway email
+    send-pending-key`` for a still-unconsumed pending delivery, otherwise
+    rotate the key.
+    """
+    try:
+        if (dry_run is None) == (execute is None):
+            raise typer.BadParameter(
+                "Use exactly one of --dry-run PATH or --execute PATH."
+            )
+        if dry_run is not None:
+            if source_key_id is None:
+                raise typer.BadParameter("--source-key-id is required for --dry-run")
+            if target_owner_id is None:
+                raise typer.BadParameter("--target-owner-id is required for --dry-run")
+            if validity_mode is None:
+                raise typer.BadParameter("--validity-mode is required for --dry-run")
+            if validity_mode not in {
+                VALIDITY_COPY_SOURCE_EXPIRY,
+                VALIDITY_DURATION_FROM_NOW,
+                VALIDITY_ABSOLUTE,
+            }:
+                raise typer.BadParameter(
+                    "--validity-mode must be copy-source-expiry, duration-from-now, "
+                    "or absolute"
+                )
+            if validity_mode == VALIDITY_DURATION_FROM_NOW:
+                if validity_duration_seconds is None or validity_duration_seconds <= 0:
+                    raise typer.BadParameter(
+                        "--validity-duration-seconds must be positive for "
+                        "duration-from-now"
+                    )
+                if valid_from is not None or valid_until is not None:
+                    raise typer.BadParameter(
+                        "--valid-from/--valid-until are only valid for absolute mode"
+                    )
+            elif validity_mode == VALIDITY_ABSOLUTE:
+                if not valid_from or not valid_until:
+                    raise typer.BadParameter(
+                        "--valid-from and --valid-until are required for absolute mode"
+                    )
+                if validity_duration_seconds is not None:
+                    raise typer.BadParameter(
+                        "--validity-duration-seconds is only valid for "
+                        "duration-from-now"
+                    )
+            else:
+                if (
+                    validity_duration_seconds is not None
+                    or valid_from is not None
+                    or valid_until is not None
+                ):
+                    raise typer.BadParameter(
+                        "copy-source-expiry accepts no duration or absolute validity values"
+                    )
+            # R4: refuse execute-only channel/confirmation options on dry-run.
+            # --reason and --actor-admin-id are shared: accepted here, but the
+            # audit note and actor apply only during execute (dry-run writes no
+            # audit row).
+            if show_plaintext:
+                raise typer.BadParameter(
+                    "--show-plaintext is execute-only; it cannot be used with --dry-run."
+                )
+            if secret_output_file is not None:
+                raise typer.BadParameter(
+                    "--secret-output-file is execute-only; it cannot be used with --dry-run."
+                )
+            if email_delivery is not EmailDeliveryMode.none:
+                raise typer.BadParameter(
+                    "--email-delivery is execute-only; it cannot be used with --dry-run."
+                )
+            if confirm_external_tool_fenced:
+                raise typer.BadParameter(
+                    "--confirm-external-tool-fenced is execute-only; it cannot be used with --dry-run."
+                )
+        else:
+            # R4: refuse dry-run-only source/target/validity flags on execute;
+            # the reviewed plan file is the sole source of those values.
+            if (
+                source_key_id is not None
+                or target_owner_id is not None
+                or target_cohort_id is not None
+                or validity_mode is not None
+                or validity_duration_seconds is not None
+                or valid_from is not None
+                or valid_until is not None
+            ):
+                raise typer.BadParameter(
+                    "Clone execute reads source/target/validity from the plan "
+                    "file; do not pass --source-key-id, --target-owner-id, "
+                    "--target-cohort-id, or --validity-* with --execute."
+                )
+            if not reason or not reason.strip():
+                raise typer.BadParameter("--reason is required for --execute")
+            channels = sum(
+                (
+                    show_plaintext,
+                    secret_output_file is not None,
+                    email_delivery is not EmailDeliveryMode.none,
+                )
+            )
+            if channels != 1:
+                raise typer.BadParameter(
+                    "Clone execution requires exactly one explicit one-time key "
+                    "channel: --show-plaintext, --secret-output-file PATH, or "
+                    "--email-delivery pending/send-now/enqueue."
+                )
+            if show_plaintext and secret_output_file is not None:
+                raise typer.BadParameter(
+                    "Use either --show-plaintext or --secret-output-file, not both"
+                )
+        actor = (
+            _parse_uuid(actor_admin_id, field_name="actor_admin_id")
+            if actor_admin_id
+            else None
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
+
+    try:
+        if dry_run is not None:
+            document = _run_async(
+                _build_clone_plan_document(
+                    source_gateway_key_id=_parse_uuid(
+                        source_key_id, field_name="source_key_id"
+                    ),
+                    target_owner_id=_parse_uuid(
+                        target_owner_id, field_name="target_owner_id"
+                    ),
+                    target_cohort_id=(
+                        _parse_uuid(target_cohort_id, field_name="target_cohort_id")
+                        if target_cohort_id
+                        else None
+                    ),
+                    validity_mode=validity_mode,
+                    validity_duration_seconds=validity_duration_seconds,
+                    validity_from=valid_from,
+                    validity_until=valid_until,
+                )
+            )
+            _write_clone_plan_file(dry_run, document)
+            if json_output:
+                # The emitted document is byte-identical in content to the
+                # plan file: it re-parses with the same strict schema.
+                _emit_json(document)
+            else:
+                typer.secho(
+                    f"Clone plan written to {dry_run} (new 0600 file, never "
+                    "overwritten). Review it, then execute with:\n"
+                    f"  slaif-gateway keys clone --execute {dry_run} --reason NOTE "
+                    "<--show-plaintext | --secret-output-file PATH | --email-delivery MODE>",
+                    err=True,
+                )
+                _echo_kv(
+                    {
+                        "status": "planned",
+                        "plan_file": str(dry_run),
+                        "operation_uuid": document["operation_uuid"],
+                        "source_gateway_key_id": document["source_gateway_key_id"],
+                        "source_public_key_id": document["source_public_key_id"],
+                        "source_fingerprint": document["source_fingerprint"],
+                        "target_owner_id": document["target_owner_id"],
+                        "target_cohort_id": document["target_cohort_id"],
+                        "validity_mode": document["validity"]["mode"],
+                        "requires_fenced_confirmation": document[
+                            "requires_fenced_confirmation"
+                        ],
+                    }
+                )
+        else:
+            plan_data = _read_bounded_plan_file(Path(execute))  # type: ignore[union-attr]
+            plan = parse_clone_plan_file(plan_data)
+            result = _run_async(
+                _execute_clone_plan(
+                    plan,
+                    reason=reason,
+                    actor_admin_id=actor,
+                    confirm_external_tool_fenced=confirm_external_tool_fenced,
+                    email_delivery_mode=email_delivery,
+                )
+            )
+
+            delivery_result: PendingKeyEmailResult | None = None
+            celery_task_id: str | None = None
+            post_commit_failed = False
+
+            if result.status == "created":
+                if secret_output_file is not None:
+                    try:
+                        write_secret_file(secret_output_file, result.plaintext_key)
+                    except Exception:  # noqa: BLE001
+                        post_commit_failed = True
+                    else:
+                        _warn_secret_file(secret_output_file)
+                elif email_delivery is EmailDeliveryMode.send_now:
+                    _warn_email_delivery_channel(email_delivery)
+                    try:
+                        delivery_result = _run_async(
+                            _send_pending_key_email_now(
+                                one_time_secret_id=uuid.UUID(result.one_time_secret_id),
+                                email_delivery_id=uuid.UUID(result.email_delivery_id),
+                                actor_admin_id=actor,
+                                reason=reason,
+                            )
+                        )
+                    except Exception:  # noqa: BLE001 - committed; safe recovery only
+                        post_commit_failed = True
+                elif email_delivery is EmailDeliveryMode.enqueue:
+                    _warn_email_delivery_channel(email_delivery)
+                    try:
+                        celery_task_id = _enqueue_pending_key_email(
+                            one_time_secret_id=uuid.UUID(result.one_time_secret_id),
+                            email_delivery_id=uuid.UUID(result.email_delivery_id),
+                            actor_admin_id=actor,
+                        )
+                    except Exception:  # noqa: BLE001
+                        post_commit_failed = True
+                    else:
+                        delivery_result = PendingKeyEmailResult(
+                            email_delivery_id=uuid.UUID(result.email_delivery_id),
+                            one_time_secret_id=uuid.UUID(result.one_time_secret_id),
+                            gateway_key_id=uuid.UUID(result.target_gateway_key_id),
+                            owner_id=uuid.UUID(plan.target_owner_id),
+                            recipient_email=None,
+                            status="queued",
+                        )
+                elif email_delivery is EmailDeliveryMode.pending:
+                    _warn_email_delivery_channel(email_delivery)
+                elif show_plaintext:
+                    _warn_plaintext_display()
+            elif result.status == "already-applied":
+                typer.secho(
+                    "This clone operation already completed: the recorded target is "
+                    "returned. No new key, secret, or delivery was created, and the "
+                    "one-time plaintext is unrecoverable. Use `slaif-gateway email "
+                    "send-pending-key` for a still-unconsumed pending delivery, or "
+                    "rotate the key.",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
+
+            payload = _clone_result_dict(
+                result,
+                include_plaintext=(show_plaintext and result.status == "created"),
+            )
+            payload = _append_email_delivery_payload(
+                payload,
+                delivery_result=delivery_result,
+                celery_task_id=celery_task_id,
+            )
+            if post_commit_failed:
+                payload["recovery"] = {
+                    "plaintext_recoverable": False,
+                    "target_gateway_key_id": result.target_gateway_key_id,
+                    "one_time_secret_id": result.one_time_secret_id,
+                    "email_delivery_id": result.email_delivery_id,
+                    "guidance": (
+                        "The clone committed, but the selected output channel failed "
+                        "after commit. The one-time plaintext cannot be recovered. "
+                        "Use `slaif-gateway email send-pending-key "
+                        f"--one-time-secret-id {result.one_time_secret_id}` for a "
+                        "still-unconsumed pending delivery, or rotate the key."
+                    ),
+                }
+            if json_output:
+                _emit_json(payload)
+            else:
+                _echo_kv(payload)
+            if post_commit_failed:
+                raise typer.Exit(code=1)
+            _exit_if_email_delivery_failed(delivery_result)
+        return
+    except KeyClonePlanError as exc:
+        _handle_cli_error(CliKeyError(str(exc)), json_output=json_output)
+        return
+    except typer.Exit:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
 
 
 @app.command("create-from-template")

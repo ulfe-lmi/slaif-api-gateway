@@ -48,7 +48,14 @@ PACKAGED_PROFILE = (
 def _clean_profile_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delenv("CODEX_COMPATIBILITY_PROFILE_FILE", raising=False)
     get_settings.cache_clear()
-    yield
+    try:
+        yield
+    finally:
+        # Clear the cached Settings after the test: an invalid-profile test
+        # sets CODEX_COMPATIBILITY_PROFILE_FILE and calls get_settings(), which
+        # caches the invalid Settings object. Without this, the cache leaks
+        # into later test modules in the same pytest process.
+        get_settings.cache_clear()
 
 
 @pytest.fixture
