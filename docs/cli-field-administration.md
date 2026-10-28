@@ -25,9 +25,9 @@ Status legend:
 | Responses/Codex policy block | `create` / `policy update` policy file | Complete replacement block only; strict finite authoring validation (capabilities, prerequisites, local tool pairing, exact client-module pin). |
 | Client-module pin identity | policy file `responses_policy.client_module` | Exact registered identity; stale pins fail with migration guidance; the configured Codex profile is bootstrapped before pin authoring; the migration law guards existing bindings. |
 | Lazy throttling policy | policy file (`lazy_throttling_policy`) | `null` removes the stored policy; complete blocks only. The CLI does not otherwise read/change/reset it outside the typed file path. |
-| Chat streaming live-burn policy | `set-chat-streaming-live-burn` and policy file (complete blocks) | `null` in a file is rejected; disabling uses the existing command. |
+| Chat streaming live-burn policy | `set-chat-streaming-live-burn` and policy file (complete blocks) | `null` in a file is rejected; disabling uses the existing command. Strict authoring accepts only the closed member set (`version`, `enabled`, `cost_margin_eur`, `token_margin`) on file create, configuration update, and RAW stored export. |
 | External tool policy | `external-tools show|update` and policy file (complete blocks) | `null` removes the fenced policy; fenced blocks require the fresh `--confirm-external-tool-fenced` acknowledgement (file field or explicit flag). |
-| Safe policy export | `keys policy export` | Version-1 document; explicit `null` for absent groups; never emits fresh confirmations; fails explicitly on stored policy it cannot administer. |
+| Safe policy export | `keys policy export` | Version-1 document; explicit `null` for absent groups; never emits fresh confirmations; fails explicitly on stored policy it cannot administer; the rendered document is re-parsed by the same strict schema, so round-trips apply on compatible targets only. |
 
 ## Proposed for later objectives (NOT implemented)
 

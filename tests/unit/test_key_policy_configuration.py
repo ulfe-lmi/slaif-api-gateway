@@ -1111,3 +1111,91 @@ def test_build_create_input_carries_provider_semantics() -> None:
         config=_make_create_config(["openai"]), **base  # type: ignore[arg-type]
     )
     assert allow_list.allowed_providers == ["openai"]
+
+
+# --------------------------------------------------------------------------
+# Final authoring strictness: closed live-burn vocabulary + export law
+# --------------------------------------------------------------------------
+
+LIVE_BURN_KNOWN_BLOCK = {
+    "version": 1,
+    "enabled": False,
+    "cost_margin_eur": "0.00",
+    "token_margin": 5,
+}
+
+
+def _create_input(config: KeyConfiguration):
+    from slaif_gateway.services.key_policy_configuration import (
+        build_create_gateway_key_input,
+    )
+
+    return build_create_gateway_key_input(
+        config=config,
+        owner_id=OWNER_ID,
+        valid_from=datetime.now(UTC),
+        valid_until=datetime.now(UTC) + timedelta(days=1),
+    )
+
+
+def test_build_create_input_rejects_unknown_live_burn_members() -> None:
+    config = KeyConfiguration()
+    config.chat_streaming_live_burn_policy = {
+        **LIVE_BURN_KNOWN_BLOCK,
+        "unrecognised_margin": 7,
+    }
+    with pytest.raises(InvalidGatewayKeyPolicyError) as excinfo:
+        _create_input(config)
+    assert "unsupported members" in str(excinfo.value)
+    # Fixed safe message: the unknown member name is never echoed.
+    assert "unrecognised_margin" not in str(excinfo.value)
+
+
+def test_build_create_input_accepts_complete_live_burn_block() -> None:
+    config = KeyConfiguration()
+    config.chat_streaming_live_burn_policy = dict(LIVE_BURN_KNOWN_BLOCK)
+    payload = _create_input(config)
+    assert payload.chat_streaming_live_burn_policy == LIVE_BURN_KNOWN_BLOCK
+
+
+@pytest.mark.asyncio
+async def test_update_live_burn_unknown_member_is_rejected_before_any_write() -> None:
+    row = FakeGatewayKeyRow()
+    service, repo, _, audit, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.chat_streaming_live_burn_policy = {
+        **LIVE_BURN_KNOWN_BLOCK,
+        "unrecognised_margin": 7,
+    }
+    with pytest.raises(InvalidGatewayKeyPolicyError) as excinfo:
+        await service.update_gateway_key_configuration(_update_payload(row, config))
+    assert "unsupported members" in str(excinfo.value)
+    assert "unrecognised_margin" not in str(excinfo.value)
+    assert repo.metadata_calls == []
+    assert audit.calls == []
+
+
+@pytest.mark.asyncio
+async def test_export_stored_unknown_live_burn_member_fails_explicitly() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={
+            "chat_streaming_live_burn": {
+                **LIVE_BURN_KNOWN_BLOCK,
+                "unrecognised_margin": 7,
+            }
+        }
+    )
+    service, _, _, _, _ = make_key_service(row)
+    with pytest.raises(KeyConfigurationExportError) as excinfo:
+        await service.export_gateway_key_configuration(row.id)
+    assert excinfo.value.param == "chat_streaming_live_burn_policy"
+
+
+@pytest.mark.asyncio
+async def test_export_stored_negative_rate_window_fails_explicitly() -> None:
+    row = FakeGatewayKeyRow(
+        metadata_json={"rate_limit_policy": {"window_seconds": -1}}
+    )
+    service, _, _, _, _ = make_key_service(row)
+    with pytest.raises(KeyConfigurationExportError):
+        await service.export_gateway_key_configuration(row.id)

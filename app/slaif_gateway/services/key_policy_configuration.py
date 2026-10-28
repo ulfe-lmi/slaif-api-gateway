@@ -69,6 +69,29 @@ class KeyConfigurationExportError(KeyManagementError):
     message = "Stored key policy cannot be administered by this configuration tool."
 
 
+#: Closed set of chat streaming live-burn members that strict authoring
+#: accepts - exactly the fields the runtime policy reads and projects
+#: (``ChatStreamingLiveBurnPolicy.to_metadata()``).
+CHAT_LIVE_BURN_KNOWN_FIELDS: frozenset[str] = frozenset(
+    {"version", "enabled", "cost_margin_eur", "token_margin"}
+)
+
+
+def has_unsupported_chat_live_burn_fields(block: object) -> bool:
+    """True when an authored/stored live-burn block carries unknown members.
+
+    Fixed, safe predicate: it inspects key membership only, never values.
+    The runtime normalizer intentionally projects known fields for
+    historical metadata reads, but strict authoring (policy-file create,
+    configuration update, and RAW stored export) must fail closed on
+    unknown members instead of erasing them; fixed error messages never
+    echo member names or values.
+    """
+    if not isinstance(block, Mapping):
+        return False
+    return any(key not in CHAT_LIVE_BURN_KNOWN_FIELDS for key in block)
+
+
 def responses_policy_canonical(block: dict[str, object] | None) -> dict[str, object] | None:
     """Validate one authored/stored Responses block to its canonical form."""
     return validate_key_responses_policy(block)
@@ -319,6 +342,14 @@ def build_create_gateway_key_input(
         raise InvalidGatewayKeyPolicyError(
             "Rate-limit policy must be an object or null.", param="rate_limit_policy"
         )
+    live_burn_block = _present_or(config, "chat_streaming_live_burn_policy", None)
+    if live_burn_block is not None and has_unsupported_chat_live_burn_fields(
+        live_burn_block
+    ):
+        raise InvalidGatewayKeyPolicyError(
+            "Chat streaming live-burn policy contains unsupported members.",
+            param="chat_streaming_live_burn_policy",
+        )
     return CreateGatewayKeyInput(
         owner_id=owner_id,
         cohort_id=cohort_id,
@@ -342,9 +373,7 @@ def build_create_gateway_key_input(
         confirm_trusted_calibration=confirm_trusted_calibration,
         rate_limit_policy=dict(rate_policy) if rate_policy else None,
         lazy_throttling_policy=_present_or(config, "lazy_throttling_policy", None),
-        chat_streaming_live_burn_policy=_present_or(
-            config, "chat_streaming_live_burn_policy", None
-        ),
+        chat_streaming_live_burn_policy=live_burn_block,
         external_tool_policy=_present_or(config, "external_tool_policy", None),
         confirm_external_tool_fenced=bool(
             _present_or(config, "confirm_external_tool_fenced", False)

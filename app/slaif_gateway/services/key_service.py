@@ -13,7 +13,12 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.schemas.rate_limits import parse_lazy_throttling_policy_metadata
-from slaif_gateway.schemas.key_configuration import KeyConfiguration, key_configuration_export
+from slaif_gateway.schemas.key_configuration import (
+    KeyConfiguration,
+    KeyConfigurationError,
+    key_configuration_export,
+    parse_key_configuration,
+)
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     CreateGatewayKeyInput,
@@ -35,6 +40,7 @@ from slaif_gateway.schemas.keys import (
 )
 from slaif_gateway.services.key_policy_configuration import (
     KeyConfigurationExportError,
+    has_unsupported_chat_live_burn_fields,
     canonical_rate_policy_members,
     is_quota_group_present,
     is_request_policy_group_present,
@@ -922,6 +928,12 @@ class KeyService:
                     "blocks with enabled, cost_margin_eur, and token_margin.",
                     param="chat_streaming_live_burn_policy",
                 )
+            if has_unsupported_chat_live_burn_fields(live_burn_block):
+                raise InvalidGatewayKeyPolicyError(
+                    "Chat streaming live-burn configuration contains unsupported "
+                    "members.",
+                    param="chat_streaming_live_burn_policy",
+                )
             resulting_live_burn = self._validate_chat_streaming_live_burn_policy(
                 live_burn_block
             )
@@ -1058,10 +1070,14 @@ class KeyService:
         Faithful full-config export: known policy groups are always emitted
         (explicit null when absent) so export-then-create AND
         export-then-update reproduce the source key's configured semantics
-        on any target. Stored blocks are inspected RAW with strict typed
+        on COMPATIBLE targets (a target whose stored client-module binding
+        conflicts with the exported identity is rejected atomically by the
+        migration law). Stored blocks are inspected RAW with strict typed
         validators: malformed or unsupported policy fails the export
-        explicitly instead of falling back to runtime-safe defaults. A fresh
-        operation confirmation is NEVER emitted - confirmations are
+        explicitly instead of falling back to runtime-safe defaults. The
+        rendered document is re-parsed by the SAME strict version-1 schema
+        before being returned, so it always satisfies the file contract.
+        A fresh operation confirmation is NEVER emitted - confirmations are
         operation controls, not inherited configuration.
         """
         gateway_key = await self._get_gateway_key(gateway_key_id)
@@ -1145,6 +1161,12 @@ class KeyService:
                 default_chat_streaming_live_burn_policy().to_metadata()
             )
         else:
+            # Unsupported stored members fail the export explicitly; the
+            # runtime normalizer would otherwise erase them silently.
+            if has_unsupported_chat_live_burn_fields(raw_live_burn):
+                raise KeyConfigurationExportError(
+                    param="chat_streaming_live_burn_policy",
+                )
             try:
                 config.chat_streaming_live_burn_policy = (
                     self._validate_chat_streaming_live_burn_policy(raw_live_burn)
@@ -1172,7 +1194,16 @@ class KeyService:
         config.cost_limit_eur = gateway_key.cost_limit_eur
         config.token_limit_total = gateway_key.token_limit_total
         config.request_limit_total = gateway_key.request_limit_total
-        return key_configuration_export(config)
+        document = key_configuration_export(config)
+        # Final consumability law: the rendered document must be accepted by
+        # the SAME strict version-1 parser. A stored value the file contract
+        # would refuse (e.g. a non-positive rate window) fails the export
+        # explicitly instead of shipping an unparseable document.
+        try:
+            parse_key_configuration(document)
+        except KeyConfigurationError as exc:
+            raise KeyConfigurationExportError(param="file") from exc
+        return document
 
     async def reset_gateway_key_usage(
         self,

@@ -16,6 +16,14 @@ provider parity in the existing bulk-import execution path, and safe
 bounded file I/O and error vocabulary. No schema migration, no new
 dependencies, no API/template/CSS changes, no runtime forwarding/accounting
 changes.
+Final authoring strictness: a closed chat streaming live-burn member
+vocabulary enforced BEFORE runtime projection on policy-file create,
+configuration update, and RAW stored export (unknown members fail with a
+fixed safe message, never echoed); the rendered export is re-parsed by the
+same strict version-1 schema before return; and the bulk import rejects an
+explicit empty provider list combined with `allow_all_providers`
+(contradictory deny-all vs all; a blank/omitted column remains the
+unrestricted default).
 
 ## Layers and exact commands
 
@@ -28,10 +36,10 @@ Playwright available). `PYTHONPATH=app` for all runs.
 PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest \
   tests/unit/test_key_policy_configuration.py \
   tests/unit/test_cli_key_policy_files.py -p no:cacheprovider
-# 74 passed (0 skipped)
+# 80 passed (0 skipped)
 ```
 
-- 47 validator/schema/service-law cases: finite capability vocabulary,
+- 52 validator/schema/service-law cases: finite capability vocabulary,
   reserved-authority fail-closed, Codex prerequisite closure, local tool
   pairing, exact/stale/malformed pins, migration-law classification
   (resolved vs stored/stale vs unbound), per-member rate patch with strict
@@ -42,7 +50,13 @@ PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest \
   late-failure transaction rollback is proven in the PG section below),
   export explicit-null round-trips, and the secret-safe audit projection
   (unknown stored fields counted, never copied; canary asserted absent).
-- 27 actual-CLI cases: option-source tracking on the real installed Typer
+  The final-authoring strictness cases prove: an unknown
+  `chat_streaming_live_burn_policy` member is rejected on file create and
+  configuration update (no write, no audit, member name never echoed), a
+  complete known-member block is accepted, a RAW stored unknown live-burn
+  member fails the export explicitly, and a stored negative rate window
+  fails the export through the final schema-consumability re-parse.
+- 28 actual-CLI cases: option-source tracking on the real installed Typer
   app (explicit/omitted/negative/repeatable), file/flag conflict law,
   provider mutual exclusion, no-op rejection, bounded file read (I/O traced
   to at most 65537 bytes), safe error vocabulary (no path/body echo), and
@@ -58,7 +72,10 @@ PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest \
   `--show-plaintext`, the 0600 secret-output file, and the queued
   email-delivery channel each succeed with the documented output
   behavior, and legacy flag-free creation still prints the one-time
-  plaintext key once (the preserved, documented exception).
+  plaintext key once (the preserved, documented exception). The seventh
+  newest case rejects a policy file whose chat streaming live-burn block
+  carries an unknown member, before any creation call, with the fixed
+  safe message (member name never echoed).
 
 ### Affected existing unit suites (no oracle weakening)
 
@@ -70,14 +87,17 @@ PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest \
   tests/unit/test_cli_keys_secret_output.py tests/unit/test_key_service_policy_update.py \
   tests/unit/test_key_service_create.py tests/unit/test_key_policy_validation.py \
   tests/unit/test_key_import_service.py -p no:cacheprovider
-# 145 passed
+# 146 passed (0 skipped)
 ```
 
 Two oracles were updated exactly where the mandated behavior changed:
 `test_cli_keys_status.py` now asserts the typed configuration payload (with
 ABSENT-preservation of omitted members) and `test_key_import_service.py`
 now asserts the provider policy is a supported import column (send-now
-rejection unchanged).
+rejection unchanged) plus a permanent negative case: an explicit empty
+provider list combined with `allow_all_providers=true` is an invalid row
+(contradictory deny-all vs all), while a blank/omitted column with
+`allow_all_providers=true` remains valid and unrestricted.
 
 ### Real owned PostgreSQL 16 integration
 

@@ -77,7 +77,11 @@ secret-output, and delivery flags may accompany the file, and the explicit
 the file omits its own `confirm_external_tool_fenced` field (the file's own
 field wins when present). `keys policy export` renders the stored key policy
 as the same version-1 document, so an export can be reviewed and consumed by
-create or update.
+create or update on a COMPATIBLE target: a target whose stored
+client-module binding conflicts with the exported identity is rejected
+atomically by the migration law. The rendered document always satisfies
+the version-1 file contract (it is re-parsed by the same strict schema);
+stored policy it cannot administer fails the export explicitly.
 
 Schema version 1 fields (unknown fields, duplicate keys, and NaN/Infinity
 are rejected; all errors are fixed safe messages that never echo file
@@ -93,7 +97,7 @@ bodies or operator-supplied values):
 | `rate_limit_policy` | `null` clears every per-key override (inherit the deployment); an object carries nullable members `requests_per_minute`, `tokens_per_minute`, `max_concurrent_requests` (positive integers or `null`; `null` inherits that member). An omitted member keeps the current override (per-member patch); the historical `concurrent_requests` spelling canonicalizes to `max_concurrent_requests`, and unknown members are rejected, never silently ignored. |
 | `lazy_throttling_policy` | `null` removes the stored policy; an object is a complete block. Omitted on update: preserve. |
 | `cost_limit_eur` / `token_limit_total` / `request_limit_total` | `null` = UNLIMITED for that quota. Omitted on update: preserve. |
-| `chat_streaming_live_burn_policy` | Complete block only (`null` is not accepted - use `keys set-chat-streaming-live-burn` to disable). Omitted on update: preserve. |
+| `chat_streaming_live_burn_policy` | Complete block only (`null` is not accepted - use `keys set-chat-streaming-live-burn` to disable). The closed member set is `version`, `enabled`, `cost_margin_eur`, `token_margin`; unknown members are rejected on file create, configuration update, and RAW stored export (fixed safe message; member names never echoed). Omitted on update: preserve. |
 | `external_tool_policy` | `null` removes the fenced policy (strict bounded default); an object is a complete block. Omitted on update: preserve. |
 | `confirm_external_tool_fenced` | Boolean operation acknowledgement for fenced blocks. It is an operation control, not inherited configuration: exports never emit it and an exported document never carries it into a later operation. A fresh acknowledgement (file field or explicit flag) is required whenever a fenced `external_tool_policy` block is SUPPLIED by the operation - including supplying the unchanged full-export block. Merely omitting the block while updating unrelated fields (providers, rates, quotas) does not create a new confirmation requirement. The existing finite-quota and external-tool fence guards still apply on every path. |
 

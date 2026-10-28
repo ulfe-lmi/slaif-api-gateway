@@ -726,7 +726,10 @@ def _validate_one_row(
     allow_all_providers = _optional_bool(
         row.get("allow_all_providers"), field_name="allow_all_providers"
     )
-    if allow_all_providers and allowed_providers:
+    # An explicit provider list contradicts allow-all even when EMPTY
+    # (deny-all vs all); only an absent/blank column is the unrestricted
+    # default.
+    if allow_all_providers and allowed_providers is not None:
         raise ValueError(
             "allow_all_providers cannot be combined with an explicit provider list."
         )

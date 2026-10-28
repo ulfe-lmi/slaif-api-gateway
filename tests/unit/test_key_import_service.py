@@ -386,6 +386,22 @@ def test_execution_plan_rejects_send_now_and_accepts_provider_policy() -> None:
     assert plan.rows[0].allowed_providers == ("openai", "openrouter")
 
 
+def test_preview_rejects_empty_provider_list_combined_with_allow_all() -> None:
+    # An explicit EMPTY list is deny-all; it contradicts allow-all even
+    # when empty (only an absent/blank column is the unrestricted default).
+    preview = _preview([_valid_row(allowed_providers="[]", allow_all_providers="true")])
+    assert preview.valid_count == 0
+    assert preview.invalid_count == 1
+    row = preview.rows[0]
+    assert row.status == "invalid"
+    assert any("allow_all_providers" in error for error in row.errors)
+
+    # Blank (omitted) column plus allow-all stays valid and unrestricted.
+    blank = _preview([_valid_row(allowed_providers="", allow_all_providers="true")])
+    assert blank.valid_count == 1
+    assert blank.rows[0].allowed_providers is None
+
+
 def test_execution_plan_builds_for_supported_modes() -> None:
     context = _context(email_delivery_enabled=True, celery_configured=True)
     preview = _preview(

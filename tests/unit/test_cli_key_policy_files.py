@@ -549,6 +549,42 @@ def test_create_legacy_flag_free_still_prints_by_default(
     assert "plaintext key is shown once" in result.output
 
 
+def test_create_policy_file_unknown_live_burn_member_rejected_before_creation(
+    tmp_path: Path, captured_creates: list[object]
+) -> None:
+    policy_file = _write_policy_file(
+        tmp_path,
+        {
+            "schema_version": 1,
+            "chat_streaming_live_burn_policy": {
+                "enabled": True,
+                "cost_margin_eur": "1.50",
+                "token_margin": 0,
+                "unrecognised_margin": 7,
+            },
+        },
+    )
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "create",
+            "--owner-id",
+            OWNER_ID,
+            "--valid-days",
+            "1",
+            "--policy-file",
+            str(policy_file),
+            "--show-plaintext",
+        ],
+    )
+    assert result.exit_code != 0
+    assert captured_creates == [], "no key may be created from an unknown-member block"
+    assert "unsupported members" in result.output
+    # Fixed safe message: the unknown member name is never echoed.
+    assert "unrecognised_margin" not in result.output
+
+
 # --------------------------------------------------------------------------
 # policy update / export
 # --------------------------------------------------------------------------
