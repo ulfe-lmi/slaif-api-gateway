@@ -222,3 +222,114 @@ remains the root-gated gate.
 - This record is commit-specific evidence for the 199 PR head; it does not
   certify later commits, production fitness, security, compliance, or
   scale.
+
+## 199-b ADDENDUM — provider context bindings, audit and privacy guards
+
+Recorded 2026-10-28 for the same 199 PR. This addendum describes the
+199-b amendment evidence; the 199-a text above remains unchanged and its
+recorded results stand as 199-a results.
+
+### What 199-b changed (allowed paths only)
+
+- `services/provider_route_configuration.py`: provider audit/secret
+  guards and the clear-notes delegation fix (no direct pre-clear; the
+  audited OLD value is the real prior value); destination-provider
+  resolution with deterministic route-then-provider lock order; plan
+  binding of `expected_route_id`, `expected_provider_id`, and
+  `expected_provider_context_fingerprint` (kind, base URL, credential
+  env-var NAME, timeout, retries; display/enabled excluded); canonical
+  current/proposed preview blocks from the shared pure normalizer;
+  route-bound configuration fingerprint; `validate_route_creation_candidate`
+  (R4) with the completion zero-retry rule and the configured profile
+  directory; execution-time canonical revalidation against the FRESH
+  provider row and the no-op law.
+- `schemas/provider_route_configuration.py`: plan schema version with the
+  three binding fields (old unmerged plan shapes fail strict parsing);
+  canonical preview block validation; `local_coding`/`local_coding_vllm`
+  parsed with the existing strict transport-contract parsers (mutual
+  exclusion enforced by the vLLM parser); ceilings and `profile_dir`
+  threaded through capabilities/patch/plan parsing and rendering.
+- `cli/routes.py`, `cli/providers.py`, `cli/provider_route_files.py`:
+  nonblank + secret-shape guarded reasons; `routes add --notes` guarded
+  before database access; command-level route-argument/plan binding;
+  safe read projections with known-shape redaction (env-var NAMES never
+  masked); ACTUAL installation ceilings and the configured
+  `COMPLETION_SERVICE_PROFILE_DIR` operator directory threaded through
+  every file read, preview, and plan write round-trip.
+- `services/model_route_service.py`: additive pure
+  `normalize_route_configuration` wrapper only; CRUD bodies unchanged.
+
+ProviderConfigService/ModelRouteService CRUD bodies, AuditRepository, the
+three extracted pure validators, registry/modules/profiles/adapter, auth,
+admission, pricing, FX, accounting, Redis, key, clone, replay, and capture
+paths are unchanged. No schema, DDL, dependency, workflow, UI, or
+sanitizer-framework changes.
+
+### Evidence (focused, not a full matrix)
+
+All runs: `env -u DATABASE_URL -u TEST_DATABASE_URL PYTHONPATH=app
+/tmp/slaif192-coding-venv/bin/python -m pytest ... -p no:cacheprovider`,
+JUnit receipts under `/tmp/slaif199/`.
+
+- 199-b unit suites: 118 passed
+  (`tests/unit/test_provider_route_configuration.py`,
+  `/tmp/slaif199/b-unit-pure1.xml`) and 31 passed
+  (`tests/unit/test_cli_provider_route_configuration.py`,
+  `/tmp/slaif199/b-unit-cli1.xml`), including the ANSI/wrapping-independent
+  assertion helpers and the known-secret-shape canary refusals.
+- Affected/touched suites in one run: 298 passed, 0 failed, 0 skipped
+  (`/tmp/slaif199/b-affected1.xml`): `test_chat_completion_route_capabilities`
+  (29), `test_responses_route_capabilities` (57), `test_media_input_estimation`
+  (36), `test_provider_config_service` (8), `test_model_route_service` (4),
+  `test_cli_providers` (7), `test_cli_routes` (8), plus the two 199-b unit
+  suites above (118 + 31).
+- Real owned PostgreSQL 16 (unique owner label, loopback-bound,
+  tmpfs-backed; container removed on teardown, no leftovers): 24 passed,
+  0 failed, 0 skipped in one module run
+  (`tests/integration/test_cli_provider_route_configuration_postgres.py`,
+  `/tmp/slaif199/pg-b.xml`). New 199-b PG proofs: successive real provider
+  updates audit the REAL prior notes value; a provider switch binds the
+  destination identity and context (context drift refused stale with zero
+  writes/audits; fresh review applies exactly once; a plan tampered to
+  target a twin route refused on route identity; a deleted destination
+  provider refused as missing); a lowered
+  `EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST=1` installation
+  ceiling denies a cap-2 route policy at dry-run and stores cap-1 after
+  review; a configured `COMPLETION_SERVICE_PROFILE_DIR` operator directory
+  (0600 file) resolves a custom profile, refuses bundled-only and unknown
+  profiles, and executes without resolving or printing the credential
+  env-var reference; known credential shapes are refused pre-mutation
+  (provider notes/display name, route creation notes) with zero
+  writes/audits, and a directly planted LEGACY stored notes value is
+  redacted on `providers show`.
+- The new configured-profile PG test caught and fixed a 199-b product
+  gap: the dry-run plan-write round-trip gate previously revalidated the
+  rendered document under default ceilings and the bundled profile
+  directory instead of the configured installation state, so a plan
+  referencing an operator-directory profile failed at write time after a
+  successful preview. `cli/routes.py` now threads the actual ceilings and
+  profile directory into `write_route_plan_file`; the rerun above is the
+  post-fix result.
+- Gates: `ruff check app/ tests/` clean;
+  `python3 scripts/check_documentation.py` → `OK files=126`;
+  `git diff --check` clean.
+
+### Honest state
+
+- Secret protection is KNOWN-SHAPE protection (recognized credential
+  patterns refused on new input and redacted on safe reads), not
+  universal content sanitization; `api_key_env_var` NAMES and structured
+  fields are never masked.
+- The clear-notes stored-column boundary is the shared metadata
+  repository's pre-existing None-skip law (also used by the admin form
+  path), outside the 199 allowed paths; it is asserted as verified
+  behavior and flagged for strategic follow-up.
+- Config validation is not qualification: no real provider, client,
+  SMTP, Redis, or network contact; no credential, model, or performance
+  claim. The 200-205 rows and the 205 full executable-only transcript
+  remain outstanding.
+- No full verification matrix, browser, or Docker Compose coverage was
+  run for 199-b; final-head CI is root-gated and its state is PENDING at
+  this publication.
+- Plan files and JUnit receipts under `/tmp/slaif199/` are disposable
+  execution state, not durable evidence.

@@ -532,7 +532,10 @@ is audited, row-locked, and secret-safe: no command accepts, resolves, or
 prints a provider credential VALUE - only environment-variable NAMES - and
 recognized secret shapes in new configuration/plan input are refused with
 fixed no-echo errors instead of being emitted or silently altered. This is
-known-shape protection, not universal content sanitization.
+known-shape protection, not universal content sanitization. Free-form READ
+values (display name, base URL, notes) are projected with the same
+known-shape redaction in `providers show|list` and route output; credential
+environment-variable NAMES are never masked.
 
 **Provider configuration**
 
@@ -553,12 +556,19 @@ slaif-gateway providers update svc-a --reason "raise timeout" --timeout-seconds 
   an explicit `--enabled` activates a new provider.
 - `providers update PROVIDER` partially updates display name, base URL,
   kind, credential environment-variable name, timeout, retries, and notes.
-  `--reason` is required. The row is locked FOR UPDATE before the complete
-  service input is assembled, so omission means preserve and a stored zero
-  retry count survives. There is no `--enabled` flag: use
-  `providers enable|disable`. `--notes` and `--clear-notes` are mutually
-  exclusive; the explicit clear is a single-column change in the same
-  locked transaction, covered by the service's one audit record.
+  `--reason` is required and must be nonblank. Recognized secret shapes in
+  `--display-name`, `--base-url`, `--notes`, or `--reason` are refused
+  before any mutation with a fixed no-echo error. The row is locked FOR
+  UPDATE before the complete service input is assembled, so omission means
+  preserve and a stored zero retry count survives. There is no `--enabled`
+  flag: use `providers enable|disable`. `--notes` and `--clear-notes` are
+  mutually exclusive; the explicit clear delegates `notes=None` through the
+  UNCHANGED shared provider service (no direct pre-clear in the 199 paths),
+  so the one audit record carries the REAL prior notes value. The shared
+  metadata repository's pre-existing None-skip law (also used by the admin
+  form path) governs whether the stored column actually clears on real
+  PostgreSQL; that shared law is outside the 199 allowed paths and is
+  documented here as verified behavior, flagged for strategic follow-up.
 
 **Route creation with a strict capabilities file**
 
@@ -571,10 +581,11 @@ slaif-gateway routes add --requested-model zap-it-1 --match-type exact \
 
 - `routes add` gained `--capabilities-file PATH` (a COMPLETE strict
   capabilities document, at most 64 KiB, read at cap+1 before parse),
-  optional `--reason`, and `--actor-admin-id`. Deliberate default: a
-  capabilities-file preparation stays DISABLED unless the operator
-  explicitly passes `--enabled`; flag-free route creation keeps the
-  historical enabled default.
+  optional `--reason`, and `--actor-admin-id`. `--notes` carrying a
+  recognized secret shape is refused before any database access.
+  Deliberate default: a capabilities-file preparation stays DISABLED
+  unless the operator explicitly passes `--enabled`; flag-free route
+  creation keeps the historical enabled default.
 
 **Reviewed two-step route updates**
 
@@ -602,35 +613,73 @@ slaif-gateway routes update <route-uuid> --execute /tmp/route-plan.json \
   preserved. `--capabilities-file` is a clearly documented COMPLETE
   replacement and cannot be combined with partial capability flags
   (refused); file+flag ambiguity is always rejected.
-- `--execute PATH` applies the reviewed file exactly and requires
-  `--reason`; edit flags on execute (mixed mode) are refused. A successful
-  dry-run always writes a plan whose built document first re-parses with
-  the same strict schema (schema version 1, every top-level field explicit;
-  omitted edits snapshot the fresh current values; `capabilities_mode` is
-  `unchanged`, `partial`, or `full-replacement`), then writes exclusively
-  with mode 0600 and no overwrite. Execute reads are bounded at the 128 KiB
-  plan cap + 1 byte before parse.
-- The plan records `expected_configuration_fingerprint`: SHA-256 over the
-  reviewed configuration fields (requested model, match type, endpoint,
-  provider, upstream model, priority, visibility, streaming, enabled,
-  capabilities, notes). Route identity and timestamps are excluded; the
-  digest is staleness data only, never credential or replay authority.
-- Execute law: the route row is locked FOR UPDATE; the fresh configuration
-  fingerprint and enabled state - plus the provider's continued existence
-  and kind - are revalidated against the plan. Any mismatch is refused as
-  stale with ZERO writes and ZERO audits, so a repeated apply of an
-  already-applied plan is refused stale, never re-mutated. The merged
-  candidate is revalidated against the fresh provider kind before ONE
+- `--execute PATH` applies the reviewed file exactly and requires a
+  NONBLANK, secret-shape-guarded `--reason`; edit flags on execute (mixed
+  mode) are refused. A successful dry-run always writes a plan whose built
+  document first re-parses with the same strict schema under the SAME
+  configured installation ceilings and profile directory (schema version
+  1, every top-level field explicit; omitted edits snapshot the fresh
+  current values; `capabilities_mode` is `unchanged`, `partial`, or
+  `full-replacement`), then writes exclusively with mode 0600 and no
+  overwrite. Execute reads are bounded at the 128 KiB plan cap + 1 byte
+  before parse.
+- The plan records `expected_route_id` and
+  `expected_configuration_fingerprint`: the digest is SHA-256 over the
+  ROUTE UUID plus the reviewed configuration fields (requested model, match
+  type, endpoint, provider, upstream model, priority, visibility, streaming,
+  enabled, capabilities, notes), so an unchanged expected pre-state can
+  never validate against a DIFFERENT route that happens to carry identical
+  configuration; only timestamps are excluded. The digest is staleness data
+  only, never credential or replay authority.
+- The plan also BINDS the proposed destination provider:
+  `expected_provider_id` and `expected_provider_context_fingerprint`
+  (SHA-256 over kind, base URL, credential environment-variable NAME,
+  timeout, and retry count; display fields and the enabled flag excluded on
+  purpose). The destination is the `--provider` edit when given, otherwise
+  the route's current provider. Plans written before the 199-b plan schema
+  (without these binding fields) fail strict parsing; rerun the dry-run.
+- Execute law: the CLI route ARGUMENT is bound to the reviewed plan (a
+  plan can never be applied to a different route). The route row is locked
+  FOR UPDATE first, then the PROPOSED destination provider (deterministic
+  lock order: route, then provider). The fresh route identity, enabled
+  state, and route-bound configuration fingerprint - then the destination's
+  continued existence, provider identity, and context fingerprint - are
+  revalidated against the plan. Any mismatch is refused as stale with ZERO
+  writes and ZERO audits, so a repeated apply of an already-applied plan is
+  refused stale, never re-mutated. The merged candidate is canonicalized
+  with the same pure normalizer the service uses (installation ceilings
+  included) and revalidated against the FRESH provider row (kind, the
+  completion zero-retry rule, the configured profile directory) before ONE
   audited `ModelRouteService.update_model_route` call in the caller
   transaction; a transaction or audit failure rolls back the whole change.
 - No-op law: a plan whose complete proposed state already equals the fresh
   locked row (possible only when it changed nothing) returns the row with
   ZERO writes and ZERO audits.
-- The plan preview is configuration review only: the gateway Codex
-  context/admission ceiling, the configured default/max output reservation,
-  the physical model capacity, and the client-advertised context are
-  distinct values, and unknown physical or client values remain unknown.
-  No credential, model, or SMTP qualification is performed by a plan.
+- The plan preview block renders the CANONICAL current and proposed
+  configurations - the exact stored shape the service will write, defaults
+  included - plus the changed canonical field names; the preview is review
+  data, never execution authority. The plan preview is configuration review
+  only: the gateway Codex context/admission ceiling, the configured
+  default/max output reservation, the physical model capacity, and the
+  client-advertised context are distinct values, and unknown physical or
+  client values remain unknown. No credential, model, or SMTP
+  qualification is performed by a plan.
+- All capabilities and plan validation (capabilities files, plan
+  read/write round-trips, preview, execute) uses the ACTUAL installation
+  ceilings from the current settings (for example
+  `EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST`) - never
+  defaulted-away limits - and completion profiles resolve through the SAME
+  configured profile directory the runtime uses: the bundled directory, or
+  the absolute, non-symlink operator directory configured through
+  `COMPLETION_SERVICE_PROFILE_DIR` (files must be regular, non-symlink,
+  0600, and at most 64 KiB; when an operator directory is configured, the
+  bundled directory is not visible). A completion profile requires a
+  `module`-kind provider on the chat completions endpoint with
+  `max_retries=0` (the completion adapter's zero-retry rule), and the
+  profile's public/upstream model must match the route's requested/upstream
+  model. These are configuration-time checks: they validate configuration,
+  not credential or model readiness, and perform no credential loading,
+  adapter construction, or network call.
 
 ## Usage, email, and reconciliation
 

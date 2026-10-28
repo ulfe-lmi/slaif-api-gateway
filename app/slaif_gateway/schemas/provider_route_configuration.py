@@ -30,9 +30,11 @@ from slaif_gateway.modules.servers.completion_service.profiles import (
 )
 from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_ROUTE_CAPABILITY_KEY,
+    parse_local_coding_route_contract,
 )
 from slaif_gateway.modules.servers.local_coding_vllm.contract import (
     VLLM_ROUTE_CAPABILITY_KEY,
+    parse_vllm_route_contract,
 )
 from slaif_gateway.modules.servers.upstream_llm.profiles import (
     CAPABILITY_KEY as UPSTREAM_LLM_CAPABILITY_KEY,
@@ -111,13 +113,17 @@ KNOWN_CAPABILITY_GROUPS = frozenset(
     }
 )
 
-# Contract-defined groups outside this configuration surface. Existing
-# routes may already carry them (upstream-LLM transport profile, Local
-# Coding config-secret groups); a reviewed update PRESERVES them instead
-# of re-authoring them. The upstream-LLM group keeps its existing pure
-# transport-contract check; the Local Coding groups carry configuration
-# secrets, are conflict-checked only here, and remain enforced fail-closed
-# by their runtime contract parsers.
+# Contract-defined transport groups outside the ordinary capability
+# surface. Existing routes may already carry them (upstream-LLM transport
+# profile, Local Coding config-secret groups). A reviewed PARTIAL update
+# preserves them byte-for-byte (the typed patch never touches them). A
+# NEW complete document (route creation or full replacement) must re-author
+# them and is validated here with the existing pure transport-contract
+# parsers (upstream-LLM, Local Coding, native vLLM, exclusive-selector
+# rules); malformed or conflicting NEW declarations are refused, never
+# accepted under a "preserved" label. The Local Coding groups carry
+# configuration secrets and remain enforced fail-closed by their runtime
+# contract parsers.
 PRESERVED_CONTRACT_GROUPS = frozenset(
     {
         LOCAL_CODING_ROUTE_CAPABILITY_KEY,
@@ -270,6 +276,7 @@ def validate_capabilities_document(
     external_tool_ceilings: ExternalToolOperatorCeilings = (
         DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
     ),
+    profile_dir: str = "",
 ) -> dict[str, Any]:
     """Strict config-time validation of a COMPLETE capabilities document.
 
@@ -341,7 +348,7 @@ def validate_capabilities_document(
             profile_id = profile_id_from_capabilities(
                 {PROFILE_KEY: capabilities[PROFILE_KEY]}
             )
-            load_profile(profile_id)
+            load_profile(profile_id, profile_dir)
         except Exception:
             _fail(PROFILE_KEY, "Value must be a valid available profile selector.")
         if (
@@ -350,6 +357,22 @@ def validate_capabilities_document(
             or "vllm_chat_video" in capabilities
         ):
             _fail(PROFILE_KEY, "Value conflicts with an exclusive transport selector.")
+    if LOCAL_CODING_ROUTE_CAPABILITY_KEY in capabilities:
+        try:
+            parse_local_coding_route_contract(capabilities)
+        except Exception:
+            _fail(
+                LOCAL_CODING_ROUTE_CAPABILITY_KEY,
+                "Value must satisfy the Local Coding transport contract."
+            )
+    if VLLM_ROUTE_CAPABILITY_KEY in capabilities:
+        try:
+            parse_vllm_route_contract(capabilities)
+        except Exception:
+            _fail(
+                VLLM_ROUTE_CAPABILITY_KEY,
+                "Value must satisfy the native vLLM transport contract."
+            )
     if UPSTREAM_LLM_CAPABILITY_KEY in capabilities:
         try:
             validate_upstream_llm_route(capabilities)
@@ -371,7 +394,14 @@ def validate_capabilities_document(
     return dict(capabilities)
 
 
-def parse_capabilities_file(data: bytes) -> dict[str, Any]:
+def parse_capabilities_file(
+    data: bytes,
+    *,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
+) -> dict[str, Any]:
     """Read and strictly validate one capabilities file payload."""
     document = _load_strict_object(
         data, CAPABILITIES_FILE_MAX_BYTES, "Capabilities file"
@@ -388,7 +418,11 @@ def parse_capabilities_file(data: bytes) -> dict[str, Any]:
     capabilities = document.get("capabilities", _ABSENT)
     if capabilities is _ABSENT:
         _fail("capabilities", "Field is required.")
-    return validate_capabilities_document(capabilities)
+    return validate_capabilities_document(
+        capabilities,
+        external_tool_ceilings=external_tool_ceilings,
+        profile_dir=profile_dir,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,7 +451,9 @@ _CODEX_PATCH_FIELDS = frozenset(
 _MEDIA_PATCH_FIELDS = frozenset({"image_tokens", "video_tokens", "video_frames"})
 
 
-def parse_capability_patch(document: Any) -> CapabilityPatch:
+def parse_capability_patch(
+    document: Any, *, profile_dir: str = ""
+) -> CapabilityPatch:
     """Strict parse of the typed partial capability patch.
 
     Only explicit leaves are accepted; omission means preserve, not
@@ -493,7 +529,7 @@ def parse_capability_patch(document: Any) -> CapabilityPatch:
         else:
             try:
                 profile_id = profile_id_from_capabilities({PROFILE_KEY: raw})
-                load_profile(profile_id)
+                load_profile(profile_id, profile_dir)
             except Exception:
                 _fail(PROFILE_KEY, "Value must be a valid available profile selector.")
             completion_service = dict(raw)
@@ -550,6 +586,9 @@ class RouteUpdatePlan:
     """A typed, non-secret route update plan (reviewed data, not authority)."""
 
     route_id: str
+    expected_route_id: str
+    expected_provider_id: str
+    expected_provider_context_fingerprint: str
     requested_model: str
     match_type: str
     endpoint: str
@@ -585,7 +624,60 @@ def _require_bool(document: dict[str, Any], name: str) -> bool:
     return value
 
 
-def parse_route_update_plan_document(document: Any) -> RouteUpdatePlan:
+_CANONICAL_CONFIGURATION_KEYS = (
+    "requested_model",
+    "match_type",
+    "endpoint",
+    "provider",
+    "upstream_model",
+    "priority",
+    "enabled",
+    "visible_in_models",
+    "supports_streaming",
+    "capabilities",
+    "notes",
+)
+
+
+def _parse_canonical_configuration(raw: Any, field: str) -> dict[str, Any]:
+    """Strict shape check for one rendered canonical configuration block.
+
+    These blocks are service-rendered review data (never execution
+    authority): the finite key set and types are enforced so a reviewed
+    plan file cannot carry arbitrary preview payloads.
+    """
+    if not isinstance(raw, dict):
+        _fail(field, "Value must be a JSON object.")
+    if set(raw) != set(_CANONICAL_CONFIGURATION_KEYS):
+        _fail(field, "Object must contain exactly the canonical configuration fields.")
+    for name in ("requested_model", "match_type", "endpoint", "provider"):
+        value = raw[name]
+        if not isinstance(value, str) or not value.strip():
+            _fail(field, f"{name} must be a non-empty string.")
+    upstream = raw["upstream_model"]
+    if upstream is not None and (not isinstance(upstream, str) or not upstream.strip()):
+        _fail(field, "upstream_model must be null or a non-empty string.")
+    if type(raw["priority"]) is not int or raw["priority"] < 0:
+        _fail(field, "priority must be a non-negative integer.")
+    for name in ("enabled", "visible_in_models", "supports_streaming"):
+        if type(raw[name]) is not bool:
+            _fail(field, f"{name} must be a boolean.")
+    if not isinstance(raw["capabilities"], dict):
+        _fail(field, "capabilities must be a JSON object.")
+    notes = raw["notes"]
+    if notes is not None and (not isinstance(notes, str) or not notes.strip()):
+        _fail(field, "notes must be null or a non-empty string.")
+    return dict(raw)
+
+
+def parse_route_update_plan_document(
+    document: Any,
+    *,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
+) -> RouteUpdatePlan:
     """Strictly parse one route update plan document."""
     if not isinstance(document, dict):
         _fail("file", "Top level must be a JSON object.")
@@ -595,6 +687,9 @@ def parse_route_update_plan_document(document: Any) -> RouteUpdatePlan:
     known = {
         "schema_version",
         "route_id",
+        "expected_route_id",
+        "expected_provider_id",
+        "expected_provider_context_fingerprint",
         "requested_model",
         "match_type",
         "endpoint",
@@ -619,6 +714,20 @@ def parse_route_update_plan_document(document: Any) -> RouteUpdatePlan:
     route_id = _require_str(document, "route_id")
     if not _UUID_RE.match(route_id):
         _fail("route_id", "Value must be a UUID string.")
+    expected_route_id = _require_str(document, "expected_route_id")
+    if not _UUID_RE.match(expected_route_id):
+        _fail("expected_route_id", "Value must be a UUID string.")
+    expected_provider_id = _require_str(document, "expected_provider_id")
+    if not _UUID_RE.match(expected_provider_id):
+        _fail("expected_provider_id", "Value must be a UUID string.")
+    expected_provider_context_fingerprint = _require_str(
+        document, "expected_provider_context_fingerprint"
+    )
+    if not _HEX64_RE.match(expected_provider_context_fingerprint):
+        _fail(
+            "expected_provider_context_fingerprint",
+            "Value must be a 64-character hex digest.",
+        )
     requested_model = _require_str(document, "requested_model")
     match_type = _require_str(document, "match_type")
     if match_type not in {"exact", "prefix", "glob"}:
@@ -655,7 +764,11 @@ def parse_route_update_plan_document(document: Any) -> RouteUpdatePlan:
     if mode == "full-replacement":
         if raw_capabilities is _ABSENT:
             _fail("capabilities", "Field is required for full replacement.")
-        capabilities = validate_capabilities_document(raw_capabilities)
+        capabilities = validate_capabilities_document(
+            raw_capabilities,
+            external_tool_ceilings=external_tool_ceilings,
+            profile_dir=profile_dir,
+        )
         if raw_patch is not _ABSENT and raw_patch is not None:
             _fail("capability_patch", "Cannot combine full replacement with a patch.")
     elif mode == "partial":
@@ -670,7 +783,7 @@ def parse_route_update_plan_document(document: Any) -> RouteUpdatePlan:
             _fail("capability_patch", "Field must be omitted or null when unchanged.")
 
     if mode == "partial":
-        patch = parse_capability_patch(raw_patch)
+        patch = parse_capability_patch(raw_patch, profile_dir=profile_dir)
     else:
         patch = CapabilityPatch()
 
@@ -683,13 +796,38 @@ def parse_route_update_plan_document(document: Any) -> RouteUpdatePlan:
         if not isinstance(preview, dict):
             _fail("preview", "Value must be a JSON object.")
         extra_preview = sorted(
-            str(k) for k in set(preview) - {"note", "changed_fields", "current_configuration_fingerprint"}
+            str(k)
+            for k in set(preview)
+            - {"note", "changed_fields", "current_configuration", "proposed_configuration"}
         )
         if extra_preview:
             _fail("preview", "Object contains unsupported fields.")
+        if "current_configuration" in preview:
+            preview = {
+                **preview,
+                "current_configuration": _parse_canonical_configuration(
+                    preview["current_configuration"], "preview.current_configuration"
+                ),
+            }
+        if "proposed_configuration" in preview:
+            preview = {
+                **preview,
+                "proposed_configuration": _parse_canonical_configuration(
+                    preview["proposed_configuration"], "preview.proposed_configuration"
+                ),
+            }
+        changed_fields = preview.get("changed_fields")
+        if changed_fields is not None and (
+            not isinstance(changed_fields, list)
+            or not all(isinstance(name, str) and name for name in changed_fields)
+        ):
+            _fail("preview.changed_fields", "Value must be a list of field names.")
 
     return RouteUpdatePlan(
         route_id=route_id,
+        expected_route_id=expected_route_id,
+        expected_provider_id=expected_provider_id,
+        expected_provider_context_fingerprint=expected_provider_context_fingerprint,
         requested_model=requested_model,
         match_type=match_type,
         endpoint=endpoint,
@@ -735,6 +873,11 @@ def render_route_update_plan(plan: RouteUpdatePlan) -> dict[str, Any]:
     document: dict[str, Any] = {
         "schema_version": ROUTE_PLAN_SCHEMA_VERSION,
         "route_id": plan.route_id,
+        "expected_route_id": plan.expected_route_id,
+        "expected_provider_id": plan.expected_provider_id,
+        "expected_provider_context_fingerprint": (
+            plan.expected_provider_context_fingerprint
+        ),
         "requested_model": plan.requested_model,
         "match_type": plan.match_type,
         "endpoint": plan.endpoint,
@@ -755,12 +898,23 @@ def render_route_update_plan(plan: RouteUpdatePlan) -> dict[str, Any]:
     return document
 
 
-def parse_route_update_plan_file(data: bytes) -> RouteUpdatePlan:
+def parse_route_update_plan_file(
+    data: bytes,
+    *,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
+) -> RouteUpdatePlan:
     """Read and strictly parse one route update plan file payload."""
     document = _load_strict_object(
         data, ROUTE_PLAN_FILE_MAX_BYTES, "Route plan file"
     )
-    return parse_route_update_plan_document(document)
+    return parse_route_update_plan_document(
+        document,
+        external_tool_ceilings=external_tool_ceilings,
+        profile_dir=profile_dir,
+    )
 
 
 def compute_capabilities_document_fingerprint(document: dict[str, Any] | None) -> str:

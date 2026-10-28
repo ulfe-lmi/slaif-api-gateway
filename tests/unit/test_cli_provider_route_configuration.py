@@ -1,17 +1,21 @@
-"""Objective 199-a: providers/routes CLI surface (actual Typer, faked async helpers).
+"""Objective 199: providers/routes CLI surface (actual Typer, faked async helpers).
 
-Proves the new option wiring: provider disabled-by-default creation,
+Proves the option wiring: provider disabled-by-default creation,
 timeout/retries/actor passthrough, provider partial update plumbing and
-conflict refusals, capabilities-file preparation defaults for routes add,
-and the two-step routes update command (mode mutex, mixed-mode refusal,
-bounded plan file write/read, fixed no-echo errors). No database is used:
-the async session helpers are replaced with recording fakes.
+conflict refusals (including nonblank reasons and known-shape secret
+refusals, 199-b), safe read projections that redact recognized credential
+shapes, capabilities-file preparation defaults for routes add, and the
+two-step routes update command (mode mutex, mixed-mode refusal, bounded
+plan file write/read, reviewed-plan route binding, fixed no-echo errors).
+No database is used: the async session helpers are replaced with recording
+fakes.
 """
 
 from __future__ import annotations
 
 import json
 import stat
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -29,6 +33,22 @@ from slaif_gateway.services.provider_route_configuration import preview_route_up
 
 runner = CliRunner()
 
+# 199-b R5: renderer-stable terminal + ANSI/whitespace-independent
+# assertions (established project pattern: tests/unit/test_cli.py).
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+TERM_ENV = {"COLUMNS": "220", "NO_COLOR": "1"}
+
+
+def _plain(text: str) -> str:
+    return " ".join(_ANSI_RE.sub("", text).split())
+
+
+def _invoke(*args: Any, **kwargs: Any) -> Any:
+    """Renderer-stable invocation (fixed terminal width, no color)."""
+    kwargs.setdefault("env", TERM_ENV)
+    return runner.invoke(*args, **kwargs)
+
+
 PROVIDER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
 ROUTE_ID = "22222222-3333-4444-8555-666666666666"
 CHAT_BLOCK = {"chat_text": True, "chat_streaming": True, "chat_function_tools": False}
@@ -37,6 +57,7 @@ CODEX_BLOCK = {
     "default_max_output_tokens": 32768,
     "max_output_tokens": 128000,
 }
+SECOND_PROVIDER_ID = uuid.UUID("88888888-7777-4666-8555-444444444444")
 
 
 @dataclass
@@ -90,7 +111,7 @@ class TestProvidersAdd:
             return FakeProvider()
 
         monkeypatch.setattr(providers_cli, "_add_provider", fake_add)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "providers", "add", "--provider", "mod-a",
@@ -111,7 +132,7 @@ class TestProvidersAdd:
             return FakeProvider()
 
         monkeypatch.setattr(providers_cli, "_add_provider", fake_add)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "providers", "add", "--provider", "mod-a",
@@ -132,7 +153,7 @@ class TestProvidersAdd:
             raise AssertionError("must not be called")
 
         monkeypatch.setattr(providers_cli, "_add_provider", fake_add)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "providers", "add", "--provider", "mod-a",
@@ -154,7 +175,7 @@ class TestProvidersUpdate:
             return FakeProvider()
 
         monkeypatch.setattr(providers_cli, "_update_provider", fake_update)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "providers", "update", "mod-a", "--reason", "tune timeout",
@@ -176,7 +197,7 @@ class TestProvidersUpdate:
             raise AssertionError("must not be called")
 
         monkeypatch.setattr(providers_cli, "_update_provider", fake_update)
-        result = runner.invoke(app, ["providers", "update", "mod-a"])
+        result = _invoke(app, ["providers", "update", "mod-a"])
         assert result.exit_code != 0
 
     def test_notes_and_clear_conflict(self, monkeypatch) -> None:
@@ -184,7 +205,7 @@ class TestProvidersUpdate:
             raise AssertionError("must not be called")
 
         monkeypatch.setattr(providers_cli, "_update_provider", fake_update)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "providers", "update", "mod-a", "--reason", "r",
@@ -192,7 +213,64 @@ class TestProvidersUpdate:
             ],
         )
         assert result.exit_code != 0
-        assert "--notes or --clear-notes" in result.stderr
+        assert "--notes or --clear-notes" in _plain(result.stderr)
+
+    def test_blank_reason_refused(self, monkeypatch) -> None:
+        # 199-b: the audit reason must be NONBLANK on provider updates.
+        async def fake_update(provider_or_id: str, **kwargs: Any) -> FakeProvider:
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(providers_cli, "_update_provider", fake_update)
+        result = _invoke(
+            app,
+            ["providers", "update", "mod-a", "--reason", "   ", "--json"],
+        )
+        assert result.exit_code != 0
+        assert "nonblank" in _plain(result.stderr)
+
+    def test_notes_known_secret_shape_refused(self, monkeypatch) -> None:
+        # 199-b: known credential shapes are refused BEFORE mutation and
+        # never echoed.
+        canary = "sk-proj-abcdef1234567890abcdef1234567890"
+        async def fake_update(provider_or_id: str, **kwargs: Any) -> FakeProvider:
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(providers_cli, "_update_provider", fake_update)
+        result = _invoke(
+            app,
+            [
+                "providers", "update", "mod-a", "--reason", "r",
+                "--notes", canary,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "credential patterns" in _plain(result.stderr)
+        assert canary not in result.stderr
+        assert canary not in result.stdout
+
+    def test_safe_output_redacts_known_shapes(self, monkeypatch) -> None:
+        # 199-b: existing free-form read values are safely projected on
+        # add/update outcomes (known-shape protection, no echo).
+        canary = "sk-proj-abcdef1234567890abcdef1234567890"
+        row = FakeProvider(notes=f"legacy note {canary}")
+
+        async def fake_update(provider_or_id: str, **kwargs: Any) -> FakeProvider:
+            return row
+
+        monkeypatch.setattr(providers_cli, "_update_provider", fake_update)
+        result = _invoke(
+            app,
+            [
+                "providers", "update", "mod-a", "--reason", "r",
+                "--timeout-seconds", "45", "--json",
+            ],
+        )
+        assert result.exit_code == 0
+        assert canary not in result.stdout
+        assert "***" in result.stdout
+        payload = json.loads(result.stdout)
+        # legitimate env-reference NAME is preserved, never masked
+        assert payload["api_key_env_var"] == "SVC_A_KEY"
 
 
 # --- routes add ----------------------------------------------------------------
@@ -207,7 +285,7 @@ class TestRoutesAdd:
             return FakeRoute()
 
         monkeypatch.setattr(routes_cli, "_add_route", fake_add)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "routes", "add", "--requested-model", "zap-it-1",
@@ -234,7 +312,7 @@ class TestRoutesAdd:
             return FakeRoute()
 
         monkeypatch.setattr(routes_cli, "_add_route", fake_add)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "routes", "add", "--requested-model", "zap-it-1",
@@ -261,7 +339,7 @@ class TestRoutesAdd:
             return FakeRoute()
 
         monkeypatch.setattr(routes_cli, "_add_route", fake_add)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "routes", "add", "--requested-model", "zap-it-1",
@@ -272,6 +350,26 @@ class TestRoutesAdd:
         assert result.exit_code == 0
         assert seen["enabled"] is True
 
+    def test_notes_known_secret_shape_refused(self, monkeypatch) -> None:
+        # 199-b R4: route creation notes are guarded before any DB access.
+        canary = "sk-proj-abcdef1234567890abcdef1234567890"
+
+        async def fake_add(**kwargs: Any) -> FakeRoute:
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(routes_cli, "_add_route", fake_add)
+        result = _invoke(
+            app,
+            [
+                "routes", "add", "--requested-model", "zap-it-1",
+                "--match-type", "exact", "--provider", "mod-a",
+                "--notes", canary, "--json",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "credential patterns" in _plain(result.stderr)
+        assert canary not in result.stderr
+
     def test_invalid_capabilities_file_refused_before_db(self, tmp_path, monkeypatch) -> None:
         caps = tmp_path / "caps.json"
         caps.write_text('{"schema_version": 1, "capabilities": {"made_up": true}}', encoding="utf-8")
@@ -280,7 +378,7 @@ class TestRoutesAdd:
             raise AssertionError("must not be called")
 
         monkeypatch.setattr(routes_cli, "_add_route", fake_add)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "routes", "add", "--requested-model", "zap-it-1",
@@ -296,9 +394,11 @@ class TestRoutesAdd:
 # --- routes update ----------------------------------------------------------------
 
 
-def _fake_preview_for(route: FakeRoute, monkeypatch, provider_kind: str = "module") -> None:
+def _fake_preview_for(route: FakeRoute, monkeypatch) -> None:
+    provider = FakeProvider()
+
     async def fake_preview(route_id: str, **edits: Any):
-        return preview_route_update(route, provider_kind, **edits)
+        return preview_route_update(route, provider, **edits)
 
     monkeypatch.setattr(routes_cli, "_preview_route_update_plan", fake_preview)
 
@@ -309,12 +409,12 @@ def _dry_run_args(route_id: str, plan_path: str, *extra: str) -> list[str]:
 
 class TestRoutesUpdateDryRun:
     def test_requires_a_mode(self) -> None:
-        result = runner.invoke(app, ["routes", "update", ROUTE_ID])
+        result = _invoke(app, ["routes", "update", ROUTE_ID])
         assert result.exit_code != 0
-        assert "--dry-run PATH or --execute PATH" in result.stderr
+        assert "--dry-run PATH or --execute PATH" in _plain(result.stderr)
 
     def test_modes_are_mutex(self) -> None:
-        result = runner.invoke(
+        result = _invoke(
             app, ["routes", "update", ROUTE_ID, "--dry-run", "/tmp/a", "--execute", "/tmp/b"]
         )
         assert result.exit_code != 0
@@ -323,7 +423,7 @@ class TestRoutesUpdateDryRun:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
         plan_path = tmp_path / "plan.json"
-        result = runner.invoke(
+        result = _invoke(
             app,
             _dry_run_args(ROUTE_ID, str(plan_path), "--codex-max-output-tokens", "400000", "--json"),
         )
@@ -346,11 +446,11 @@ class TestRoutesUpdateDryRun:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
         plan_path = tmp_path / "plan.json"
-        first = runner.invoke(
+        first = _invoke(
             app, _dry_run_args(ROUTE_ID, str(plan_path), "--priority", "50")
         )
         assert first.exit_code == 0
-        second = runner.invoke(
+        second = _invoke(
             app, _dry_run_args(ROUTE_ID, str(plan_path), "--priority", "51")
         )
         assert second.exit_code != 0
@@ -365,7 +465,7 @@ class TestRoutesUpdateDryRun:
             raise RecordNotFoundError("Model route")
 
         monkeypatch.setattr(routes_cli, "_preview_route_update_plan", fake_preview)
-        result = runner.invoke(app, _dry_run_args(ROUTE_ID, "/tmp/x"))
+        result = _invoke(app, _dry_run_args(ROUTE_ID, "/tmp/x"))
         assert result.exit_code != 0
         assert ROUTE_ID not in result.stderr
 
@@ -377,7 +477,7 @@ class TestRoutesUpdateDryRun:
             json.dumps({"schema_version": 1, "capabilities": {"chat_completions": dict(CHAT_BLOCK)}}),
             encoding="utf-8",
         )
-        result = runner.invoke(
+        result = _invoke(
             app,
             _dry_run_args(ROUTE_ID, str(tmp_path / "p"), "--capabilities-file", str(caps),
                           "--codex-max-output-tokens", "400000"),
@@ -388,7 +488,7 @@ class TestRoutesUpdateDryRun:
     def test_chat_capability_flag_malformed(self, monkeypatch) -> None:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
-        result = runner.invoke(
+        result = _invoke(
             app, _dry_run_args(ROUTE_ID, "/tmp/p", "--chat-capability", "chat_text")
         )
         assert result.exit_code != 0
@@ -397,7 +497,7 @@ class TestRoutesUpdateDryRun:
     def test_completion_profile_and_clear_conflict(self, monkeypatch) -> None:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
-        result = runner.invoke(
+        result = _invoke(
             app,
             _dry_run_args(
                 ROUTE_ID, "/tmp/p",
@@ -410,7 +510,7 @@ class TestRoutesUpdateDryRun:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
         plan_path = tmp_path / "p"
-        result = runner.invoke(
+        result = _invoke(
             app, _dry_run_args(ROUTE_ID, str(plan_path), "--codex-context-window-tokens", "10")
         )
         assert result.exit_code != 0
@@ -420,20 +520,24 @@ class TestRoutesUpdateDryRun:
 
 class TestRoutesUpdateExecute:
     def test_execute_requires_reason(self, tmp_path, monkeypatch) -> None:
-        async def fake_execute(plan, *, reason: str, actor_admin_id: Any) -> FakeRoute:
+        async def fake_execute(
+            route_id: str, plan, *, reason: str, actor_admin_id: Any
+        ) -> FakeRoute:
             raise AssertionError("must not be called")
 
         monkeypatch.setattr(routes_cli, "_execute_route_update_plan", fake_execute)
-        result = runner.invoke(app, ["routes", "update", ROUTE_ID, "--execute", "/tmp/p"])
+        result = _invoke(app, ["routes", "update", ROUTE_ID, "--execute", "/tmp/p"])
         assert result.exit_code != 0
-        assert "--reason" in result.stderr
+        assert "--reason" in _plain(result.stderr)
 
     def test_mixed_mode_refused(self, tmp_path, monkeypatch) -> None:
-        async def fake_execute(plan, *, reason: str, actor_admin_id: Any) -> FakeRoute:
+        async def fake_execute(
+            route_id: str, plan, *, reason: str, actor_admin_id: Any
+        ) -> FakeRoute:
             raise AssertionError("must not be called")
 
         monkeypatch.setattr(routes_cli, "_execute_route_update_plan", fake_execute)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "routes", "update", ROUTE_ID, "--execute", "/tmp/p",
@@ -441,26 +545,29 @@ class TestRoutesUpdateExecute:
             ],
         )
         assert result.exit_code != 0
-        assert "--dry-run only" in result.stderr
+        assert "--dry-run only" in _plain(result.stderr)
 
     def test_happy_path_executes_reviewed_plan(self, tmp_path, monkeypatch) -> None:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
         plan_path = tmp_path / "plan.json"
-        written = runner.invoke(
+        written = _invoke(
             app, _dry_run_args(ROUTE_ID, str(plan_path), "--priority", "50")
         )
         assert written.exit_code == 0
 
         executed: dict[str, Any] = {}
 
-        async def fake_execute(plan, *, reason: str, actor_admin_id: Any) -> FakeRoute:
+        async def fake_execute(
+            route_id: str, plan, *, reason: str, actor_admin_id: Any
+        ) -> FakeRoute:
+            executed["route_id"] = route_id
             executed["plan"] = plan
             executed["reason"] = reason
             return FakeRoute(priority=50)
 
         monkeypatch.setattr(routes_cli, "_execute_route_update_plan", fake_execute)
-        result = runner.invoke(
+        result = _invoke(
             app,
             [
                 "routes", "update", ROUTE_ID, "--execute", str(plan_path),
@@ -469,6 +576,7 @@ class TestRoutesUpdateExecute:
         )
         assert result.exit_code == 0, result.stderr
         assert executed["reason"] == "reviewed ceiling"
+        assert executed["route_id"] == ROUTE_ID
         assert executed["plan"].priority == 50
         payload = json.loads(result.stdout)
         assert payload["priority"] == 50
@@ -477,7 +585,7 @@ class TestRoutesUpdateExecute:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
         plan_path = tmp_path / "plan.json"
-        written = runner.invoke(app, _dry_run_args(ROUTE_ID, str(plan_path), "--priority", "50"))
+        written = _invoke(app, _dry_run_args(ROUTE_ID, str(plan_path), "--priority", "50"))
         assert written.exit_code == 0
         document = json.loads(plan_path.read_text(encoding="utf-8"))
         document["priority"] = 999  # tamper outside the plan flow
@@ -485,12 +593,14 @@ class TestRoutesUpdateExecute:
 
         executed: dict[str, Any] = {}
 
-        async def fake_execute(plan, *, reason: str, actor_admin_id: Any) -> FakeRoute:
+        async def fake_execute(
+            route_id: str, plan, *, reason: str, actor_admin_id: Any
+        ) -> FakeRoute:
             executed["plan"] = plan
             return FakeRoute(priority=999)
 
         monkeypatch.setattr(routes_cli, "_execute_route_update_plan", fake_execute)
-        result = runner.invoke(
+        result = _invoke(
             app,
             ["routes", "update", ROUTE_ID, "--execute", str(plan_path), "--reason", "r"],
         )
@@ -507,15 +617,59 @@ class TestRoutesUpdateExecute:
             original.expected_configuration_fingerprint
         )
 
+    def test_blank_reason_refused(self, tmp_path, monkeypatch) -> None:
+        # 199-b: execute requires a NONBLANK reason (whitespace is refused).
+        async def fake_execute(
+            route_id: str, plan, *, reason: str, actor_admin_id: Any
+        ) -> FakeRoute:
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(routes_cli, "_execute_route_update_plan", fake_execute)
+        result = _invoke(
+            app,
+            ["routes", "update", ROUTE_ID, "--execute", "/tmp/p", "--reason", "   "],
+        )
+        assert result.exit_code != 0
+        assert "nonblank" in _plain(result.stderr)
+
+    def test_route_argument_must_match_plan(self, tmp_path, monkeypatch) -> None:
+        # 199-b: the CLI route argument BINDS to the reviewed plan; a plan
+        # can never be applied to a different route.
+        route = FakeRoute()
+        _fake_preview_for(route, monkeypatch)
+        plan_path = tmp_path / "plan.json"
+        written = _invoke(app, _dry_run_args(ROUTE_ID, str(plan_path), "--priority", "50"))
+        assert written.exit_code == 0
+
+        async def fake_execute(
+            route_id: str, plan, *, reason: str, actor_admin_id: Any
+        ) -> FakeRoute:
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(routes_cli, "_execute_route_update_plan", fake_execute)
+        other = "99999999-0000-4000-8000-000000000000"
+        result = _invoke(
+            app,
+            [
+                "routes", "update", other, "--execute", str(plan_path),
+                "--reason", "r",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "match the reviewed plan" in _plain(result.stderr)
+        assert other not in _plain(result.stderr)
+
     def test_invalid_plan_file_refused(self, tmp_path, monkeypatch) -> None:
         plan_path = tmp_path / "plan.json"
         plan_path.write_text('{"schema_version": 2}', encoding="utf-8")
 
-        async def fake_execute(plan, *, reason: str, actor_admin_id: Any) -> FakeRoute:
+        async def fake_execute(
+            route_id: str, plan, *, reason: str, actor_admin_id: Any
+        ) -> FakeRoute:
             raise AssertionError("must not be called")
 
         monkeypatch.setattr(routes_cli, "_execute_route_update_plan", fake_execute)
-        result = runner.invoke(
+        result = _invoke(
             app,
             ["routes", "update", ROUTE_ID, "--execute", str(plan_path), "--reason", "r"],
         )
@@ -526,13 +680,13 @@ class TestRoutesUpdateExecute:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
         plan_path = tmp_path / "plan.json"
-        written = runner.invoke(app, _dry_run_args(ROUTE_ID, str(plan_path), "--priority", "50"))
+        written = _invoke(app, _dry_run_args(ROUTE_ID, str(plan_path), "--priority", "50"))
         assert written.exit_code == 0
         document = json.loads(plan_path.read_text(encoding="utf-8"))
         document["expected_configuration_fingerprint"] = "z" * 64
         plan_path.write_text(json.dumps(document), encoding="utf-8")
 
-        result = runner.invoke(
+        result = _invoke(
             app,
             ["routes", "update", ROUTE_ID, "--execute", str(plan_path), "--reason", "r"],
         )

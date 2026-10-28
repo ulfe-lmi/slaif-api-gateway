@@ -106,6 +106,19 @@ contains one generic descriptor; service/provider names occur in
 binding/profile JSON data, not routing branches. ZAP-IT providers use the
 explicit selector; unconfigured/unknown native modules still fail closed.
 
+Route configuration that selects a completion profile is validated at
+CONFIGURATION time, before any write (objective 199): the provider must be
+a `module` kind on the chat completions endpoint with `max_retries=0` (the
+completion adapter's zero-retry rule), the profile must exist in the SAME
+profile directory the runtime uses - the bundled directory, or the
+absolute, non-symlink operator directory configured through
+`COMPLETION_SERVICE_PROFILE_DIR` (files regular, non-symlink, 0600, at most
+64 KiB; when an operator directory is configured, the bundled directory is
+not visible) - and the profile's public/upstream model must match the
+route's requested/upstream model. These are configuration-time checks: they
+validate configuration, not credential or model readiness, and perform no
+credential loading, adapter construction, or network call.
+
 Add an enabled pricing row for the same provider, upstream model and endpoint:
 currency `EUR`, `request_price=0`, `input_price_per_1m=0`,
 `output_price_per_1m=0`. Both profiles use existing fixed-request module billing:

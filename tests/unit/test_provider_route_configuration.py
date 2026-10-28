@@ -1,14 +1,19 @@
-"""Objective 199-a: strict provider/route configuration contracts (unit).
+"""Objective 199: strict provider/route configuration contracts (unit).
 
-Covers the versioned file envelopes (capabilities file, route update plan),
-the typed partial capability patch, the merge/preserve law, the public
-configuration fingerprint, and the shared typed operations (provider
-partial update, route preview/execute) against fakes — no database, no
-network, no credential loading.
+Objective 199-a established the versioned file envelopes (capabilities
+file, route update plan), the typed partial capability patch, the
+merge/preserve law, the public configuration fingerprint, and the shared
+typed operations (provider partial update, route preview/execute) against
+fakes — no database, no network, no credential loading. Objective 199-b
+extends the same contract: route-bound fingerprints, destination-provider
+identity/context bindings, canonical current/proposed preview, nonblank
+reasons, known-shape secret refusals, zero-retry completion rule, and
+strict new-document transport contract parsing.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +22,7 @@ from typing import Any
 
 import pytest
 
+import slaif_gateway.services.provider_route_configuration as prc
 from slaif_gateway.schemas.provider_route_configuration import (
     CAPABILITIES_FILE_MAX_BYTES,
     ProviderRouteConfigError,
@@ -32,12 +38,15 @@ from slaif_gateway.schemas.provider_route_configuration import (
     validate_capabilities_document,
 )
 from slaif_gateway.services.provider_route_configuration import (
+    contains_known_secret_shape,
+    compute_provider_context_fingerprint,
     compute_route_configuration_fingerprint,
     execute_route_update_plan,
     partial_update_provider_config,
     preview_route_update,
     preview_route_update_for_route,
     validate_merged_route_candidate,
+    validate_route_creation_candidate,
 )
 
 CHAT_BLOCK = {"chat_text": True, "chat_streaming": True, "chat_function_tools": False}
@@ -48,6 +57,27 @@ CODEX_BLOCK = {
 }
 ROUTE_ID = "11111111-2222-4333-8444-555555555555"
 PROVIDER_ID = uuid.UUID("99999999-8888-4777-8666-555555555555")
+SECOND_PROVIDER_ID = uuid.UUID("88888888-7777-4666-8555-444444444444")
+
+# Valid, unambiguous supported transport-contract fixtures (199-b): the
+# strict NEW-document parser must accept these and refuse malformed or
+# conflicting declarations.
+LOCAL_CODING_CONTRACT = {
+    "contract_version": "local-coding-v1",
+    "route_name": "codex-local-1",
+    "tool_policy_version": "responses-tool-policy-v1",
+    "identity_mode": "static",
+    "replay_mode": "process_local_inclusive_horizon_fail_closed",
+    "deployment_mode": "single_worker",
+}
+VLLM_CONTRACT = {
+    "contract_version": "local-coding-vLLM",
+    "route_name": "codex-vllm-1",
+    "tool_policy_version": "responses-tool-policy-v1",
+    "identity_mode": "static",
+    "replay_mode": "process_local_inclusive_horizon_fail_closed",
+    "deployment_mode": "single_worker",
+}
 
 
 # --- fixtures -----------------------------------------------------------------
@@ -240,17 +270,55 @@ class TestCapabilityGroups:
         )
         assert document["codex_limits"] == CODEX_BLOCK
 
-    def test_preserved_local_coding_groups_pass_through(self) -> None:
+    def test_valid_local_coding_contract_accepted(self) -> None:
+        # 199-b: NEW complete documents must re-author transport contracts
+        # and satisfy the existing pure parsers (no more permissive
+        # "preserved" pass-through).
         document = _parse(
             _caps_doc(
                 capabilities={
                     "chat_completions": dict(CHAT_BLOCK),
-                    "local_coding": {"contract_version": 1, "route_name": "r1"},
-                    "local_coding_vllm": {"contract_version": 1, "route_name": "r1"},
+                    "local_coding": dict(LOCAL_CODING_CONTRACT),
                 }
             )
         )
-        assert "local_coding" in document
+        assert document["local_coding"] == LOCAL_CODING_CONTRACT
+
+    def test_valid_vllm_contract_accepted(self) -> None:
+        document = _parse(
+            _caps_doc(
+                capabilities={
+                    "chat_completions": dict(CHAT_BLOCK),
+                    "local_coding_vllm": dict(VLLM_CONTRACT),
+                }
+            )
+        )
+        assert document["local_coding_vllm"] == VLLM_CONTRACT
+
+    def test_malformed_local_coding_contract_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="local_coding"):
+            _parse(
+                _caps_doc(
+                    capabilities={
+                        "chat_completions": dict(CHAT_BLOCK),
+                        # wrong version + missing required fields: the old
+                        # permissive oracle accepted this "preserved" data
+                        "local_coding": {"contract_version": 1, "route_name": "r1"},
+                    }
+                )
+            )
+
+    def test_conflicting_transport_selectors_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError):
+            _parse(
+                _caps_doc(
+                    capabilities={
+                        "chat_completions": dict(CHAT_BLOCK),
+                        "local_coding": dict(LOCAL_CODING_CONTRACT),
+                        "local_coding_vllm": dict(VLLM_CONTRACT),
+                    }
+                )
+            )
 
     def test_completion_service_conflicts_with_exclusive_selectors(self) -> None:
         with pytest.raises(ProviderRouteConfigError, match="exclusive transport"):
@@ -313,6 +381,36 @@ class TestCapabilityGroups:
     def test_invalid_external_tools_refused(self) -> None:
         with pytest.raises(ProviderRouteConfigError, match="external_tools"):
             _parse(_caps_doc(capabilities={"external_tools": {"mode": "made_up"}}))
+
+    def test_external_tools_above_installation_ceiling_refused(self) -> None:
+        # 199-b: full-replacement documents are validated with the ACTUAL
+        # installation ceilings, not defaulted-away limits.
+        from slaif_gateway.services.external_tool_policy_contract import (
+            build_external_tool_operator_ceilings,
+        )
+
+        ceilings = build_external_tool_operator_ceilings(
+            max_provider_tool_calls_per_request=1
+        )
+        policy = {
+            "version": 1,
+            "supported_capabilities": ["provider_web_search"],
+            "approved_destination_ids": [],
+            "max_provider_tool_calls_per_request": 2,
+            "call_limit_enforced": True,
+            "final_usage_required": True,
+            "final_cost_required": True,
+        }
+        with pytest.raises(ProviderRouteConfigError, match="external_tools"):
+            validate_capabilities_document(
+                {"external_tools": policy},
+                external_tool_ceilings=ceilings,
+            )
+        within = dict(policy, max_provider_tool_calls_per_request=1)
+        document = validate_capabilities_document(
+            {"external_tools": within}, external_tool_ceilings=ceilings
+        )
+        assert document["external_tools"]["max_provider_tool_calls_per_request"] == 1
 
 
 # --- capability patch ------------------------------------------------------------
@@ -407,6 +505,7 @@ class TestMergeCapabilityPatch:
 
 def _fingerprint(**overrides: Any) -> str:
     base: dict[str, Any] = dict(
+        route_id=ROUTE_ID,
         requested_model="m",
         match_type="exact",
         endpoint="/v1/chat/completions",
@@ -430,10 +529,13 @@ class TestFingerprint:
         int(value, 16)
         assert value == _fingerprint()
 
-    @pytest.mark.parametrize("field", ["requested_model", "priority", "enabled", "notes"])
+    @pytest.mark.parametrize(
+        "field", ["route_id", "requested_model", "priority", "enabled", "notes"]
+    )
     def test_sensitive_to_config_fields(self, field: str) -> None:
         value = _fingerprint()
         overrides = {
+            "route_id": "22222222-3333-4444-8555-666666666666",
             "requested_model": "m2",
             "priority": 2,
             "enabled": False,
@@ -441,13 +543,16 @@ class TestFingerprint:
         }[field]
         assert _fingerprint(**{field: overrides}) != value
 
-    def test_identity_and_timestamps_excluded(self) -> None:
-        # The fingerprint function takes no id/created_at/updated_at at all.
+    def test_route_bound_only_timestamps_excluded(self) -> None:
+        # 199-b: the route UUID IS bound (a different route can never
+        # validate the same expected pre-state); only timestamps are
+        # excluded from the digest.
         import inspect
 
         signature = inspect.signature(compute_route_configuration_fingerprint)
         names = set(signature.parameters)
-        assert not {"id", "created_at", "updated_at"} & names
+        assert "route_id" in names
+        assert not {"created_at", "updated_at"} & names
 
 
 # --- route plan document -----------------------------------------------------------
@@ -457,6 +562,9 @@ def _plan_doc(**overrides: Any) -> dict[str, Any]:
     document = {
         "schema_version": 1,
         "route_id": ROUTE_ID,
+        "expected_route_id": ROUTE_ID,
+        "expected_provider_id": str(PROVIDER_ID),
+        "expected_provider_context_fingerprint": "b" * 64,
         "requested_model": "zap-it-1",
         "match_type": "exact",
         "endpoint": "/v1/chat/completions",
@@ -483,6 +591,9 @@ class TestRoutePlanDocument:
         again = parse_route_update_plan_document(rendered)
         assert again.route_id == plan.route_id
         assert again.expected_configuration_fingerprint == plan.expected_configuration_fingerprint
+        assert again.expected_route_id == ROUTE_ID
+        assert again.expected_provider_id == str(PROVIDER_ID)
+        assert again.expected_provider_context_fingerprint == "b" * 64
 
     def test_partial_mode_requires_patch(self) -> None:
         with pytest.raises(ProviderRouteConfigError, match="capability_patch"):
@@ -506,6 +617,34 @@ class TestRoutePlanDocument:
         with pytest.raises(ProviderRouteConfigError, match="route_id"):
             parse_route_update_plan_document(_plan_doc(route_id="not-a-uuid"))
 
+    def test_missing_expected_route_id_refused(self) -> None:
+        document = _plan_doc()
+        del document["expected_route_id"]
+        with pytest.raises(ProviderRouteConfigError, match="expected_route_id"):
+            parse_route_update_plan_document(document)
+
+    def test_bad_expected_provider_id_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="expected_provider_id"):
+            parse_route_update_plan_document(
+                _plan_doc(expected_provider_id="not-a-uuid")
+            )
+
+    def test_bad_provider_context_fingerprint_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="context_fingerprint"):
+            parse_route_update_plan_document(
+                _plan_doc(expected_provider_context_fingerprint="zz")
+            )
+
+    def test_old_unmerged_plan_shape_refused(self) -> None:
+        # 199-b: pre-b plan shapes (no identity/context bindings) fail
+        # fixed-safe; a new dry-run is required, never silent adoption.
+        document = _plan_doc()
+        del document["expected_route_id"]
+        del document["expected_provider_id"]
+        del document["expected_provider_context_fingerprint"]
+        with pytest.raises(ProviderRouteConfigError):
+            parse_route_update_plan_document(document)
+
     def test_bad_match_type_refused(self) -> None:
         with pytest.raises(ProviderRouteConfigError, match="match_type"):
             parse_route_update_plan_document(_plan_doc(match_type="regex"))
@@ -526,55 +665,93 @@ class TestRoutePlanDocument:
         with pytest.raises(ProviderRouteConfigError, match="preview"):
             parse_route_update_plan_document(_plan_doc(preview={"note": "x", "made_up": 1}))
 
+    def test_preview_canonical_blocks_shape_checked(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="canonical"):
+            parse_route_update_plan_document(
+                _plan_doc(
+                    preview={
+                        "note": "x",
+                        "current_configuration": {"made_up": 1},
+                    }
+                )
+            )
+        with pytest.raises(ProviderRouteConfigError, match="changed_fields"):
+            parse_route_update_plan_document(
+                _plan_doc(preview={"changed_fields": "not-a-list"})
+            )
+
 
 # --- preview (pure) -----------------------------------------------------------------
 
 
 class TestPreviewRouteUpdate:
     def test_unchanged_mode_no_changes(self) -> None:
-        plan = preview_route_update(FakeRouteRow(), "module")
+        plan = preview_route_update(FakeRouteRow(), FakeProviderRow())
         assert plan.capabilities_mode == "unchanged"
         assert plan.preview["changed_fields"] == []
         assert plan.enabled is True
+        # 199-b: the plan binds the route UUID and the destination
+        # provider identity + context digest.
+        assert plan.expected_route_id == ROUTE_ID
+        assert plan.expected_provider_id == str(PROVIDER_ID)
+        assert plan.expected_provider_context_fingerprint == (
+            compute_provider_context_fingerprint(FakeProviderRow())
+        )
 
     def test_partial_codex_change(self) -> None:
         plan = preview_route_update(
             FakeRouteRow(),
-            "module",
+            FakeProviderRow(),
             capability_patch=CapabilityPatch(codex_limits={"max_output_tokens": 400000}),
         )
         assert plan.capabilities_mode == "partial"
         assert plan.preview["changed_fields"] == ["capabilities"]
         assert len(plan.expected_configuration_fingerprint) == 64
         int(plan.expected_configuration_fingerprint, 16)
+        # Canonical proposed configuration carries the numeric gateway
+        # values (default/max output), not only changed-field names.
+        proposed = plan.preview["proposed_configuration"]
+        assert proposed["capabilities"]["codex_limits"]["default_max_output_tokens"] == 32768
+        assert proposed["capabilities"]["codex_limits"]["max_output_tokens"] == 400000
+        assert proposed["capabilities"]["codex_limits"]["context_window_tokens"] == 1050000
 
     def test_field_change_tracked(self) -> None:
-        plan = preview_route_update(FakeRouteRow(), "module", priority=50, notes="other")
+        plan = preview_route_update(FakeRouteRow(), FakeProviderRow(), priority=50, notes="other")
         assert sorted(plan.preview["changed_fields"]) == ["notes", "priority"]
 
     def test_endpoint_alias_normalized(self) -> None:
-        plan = preview_route_update(FakeRouteRow(), "module", endpoint="chat.completions")
+        plan = preview_route_update(FakeRouteRow(), FakeProviderRow(), endpoint="chat.completions")
         assert plan.endpoint == "/v1/chat/completions"
         assert "endpoint" not in plan.preview["changed_fields"]
 
     def test_invalid_endpoint_refused(self) -> None:
         with pytest.raises(ProviderRouteConfigError):
-            preview_route_update(FakeRouteRow(), "module", endpoint="   ")
+            preview_route_update(FakeRouteRow(), FakeProviderRow(), endpoint="   ")
 
     def test_clear_notes_changes(self) -> None:
-        plan = preview_route_update(FakeRouteRow(), "module", clear_notes=True)
+        plan = preview_route_update(FakeRouteRow(), FakeProviderRow(), clear_notes=True)
         assert plan.notes is None
         assert "notes" in plan.preview["changed_fields"]
 
     def test_notes_and_clear_conflict(self) -> None:
         with pytest.raises(ProviderRouteConfigError, match="notes"):
-            preview_route_update(FakeRouteRow(), "module", notes="x", clear_notes=True)
+            preview_route_update(
+                FakeRouteRow(), FakeProviderRow(), notes="x", clear_notes=True
+            )
+
+    def test_notes_known_secret_shape_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="notes"):
+            preview_route_update(
+                FakeRouteRow(),
+                FakeProviderRow(),
+                notes="upstream key sk-proj-abcdef1234567890abcdef1234567890",
+            )
 
     def test_codex_relationship_broken_refused(self) -> None:
         with pytest.raises(ProviderRouteConfigError, match="codex_limits"):
             preview_route_update(
                 FakeRouteRow(),
-                "module",
+                FakeProviderRow(),
                 capability_patch=CapabilityPatch(codex_limits={"context_window_tokens": 10}),
             )
 
@@ -582,7 +759,7 @@ class TestPreviewRouteUpdate:
         with pytest.raises(ProviderRouteConfigError, match="module provider kind"):
             preview_route_update(
                 FakeRouteRow(),
-                "openai_compatible",
+                FakeProviderRow(kind="openai_compatible"),
                 capabilities_document={"completion_service": {"version": 1, "profile": "zap-it-v1"}},
             )
 
@@ -591,14 +768,27 @@ class TestPreviewRouteUpdate:
         with pytest.raises(ProviderRouteConfigError, match="profile public model"):
             preview_route_update(
                 route,
-                "module",
+                FakeProviderRow(),
                 capabilities_document={"completion_service": {"version": 1, "profile": "zap-it-v1"}},
+            )
+
+    def test_completion_retrying_provider_refused(self) -> None:
+        # 199-b zero-retry rule: the completion adapter raises on
+        # max_retries != 0, so a retrying provider cannot back a
+        # configured-completion route at configuration time.
+        with pytest.raises(ProviderRouteConfigError, match="must not retry"):
+            preview_route_update(
+                FakeRouteRow(),
+                FakeProviderRow(max_retries=2),
+                capability_patch=CapabilityPatch(
+                    completion_service={"version": 1, "profile": "zap-it-v1"}
+                ),
             )
 
     def test_completion_profile_valid_for_matching_route(self) -> None:
         plan = preview_route_update(
             FakeRouteRow(),
-            "module",
+            FakeProviderRow(),
             capability_patch=CapabilityPatch(
                 completion_service={"version": 1, "profile": "zap-it-v1"}
             ),
@@ -608,7 +798,7 @@ class TestPreviewRouteUpdate:
     def test_full_replacement_mode(self) -> None:
         plan = preview_route_update(
             FakeRouteRow(),
-            "module",
+            FakeProviderRow(),
             capabilities_document={
                 "chat_completions": {"chat_text": True, "chat_streaming": False}
             },
@@ -616,10 +806,26 @@ class TestPreviewRouteUpdate:
         assert plan.capabilities_mode == "full-replacement"
         assert plan.capabilities == {"chat_completions": {"chat_text": True, "chat_streaming": False}}
 
+    def test_endpoint_change_renders_actual_defaults(self) -> None:
+        # Root 199-a gap: an endpoint change previewed
+        # capabilities_mode=unchanged while the core service ADDS a
+        # Responses capability block on store. The canonical preview must
+        # render what the service will actually store.
+        route = FakeRouteRow()
+        plan = preview_route_update(
+            route, FakeProviderRow(), endpoint="/v1/responses"
+        )
+        proposed = plan.preview["proposed_configuration"]
+        current = plan.preview["current_configuration"]
+        assert "responses" in proposed["capabilities"]
+        assert "responses" not in current["capabilities"]
+        assert "capabilities" in plan.preview["changed_fields"]
+        assert "endpoint" in plan.preview["changed_fields"]
+
     def test_plan_round_trips_through_file(self) -> None:
         plan = preview_route_update(
             FakeRouteRow(),
-            "module",
+            FakeProviderRow(),
             capability_patch=CapabilityPatch(codex_limits={"max_output_tokens": 400000}),
             priority=77,
         )
@@ -627,6 +833,31 @@ class TestPreviewRouteUpdate:
         again = parse_route_update_plan_file(data)
         assert again.capability_patch.codex_limits == {"max_output_tokens": 400000}
         assert again.priority == 77
+        assert again.expected_route_id == plan.expected_route_id
+        assert again.expected_provider_id == plan.expected_provider_id
+        assert (
+            again.expected_provider_context_fingerprint
+            == plan.expected_provider_context_fingerprint
+        )
+
+    def test_cross_provider_preview_binds_destination(self) -> None:
+        # 199-b R2: preview resolves the PROPOSED destination provider and
+        # binds ITS identity/context — not the route's old provider.
+        route = FakeRouteRow(provider="mod-a")
+        destination = FakeProviderRow(
+            id=SECOND_PROVIDER_ID, provider="mod-b", kind="openai_compatible"
+        )
+        plan = preview_route_update(route, destination, provider="mod-b")
+        assert plan.provider == "mod-b"
+        assert plan.expected_provider_id == str(SECOND_PROVIDER_ID)
+        assert plan.expected_provider_context_fingerprint == (
+            compute_provider_context_fingerprint(destination)
+        )
+        proposed = plan.preview["proposed_configuration"]
+        current = plan.preview["current_configuration"]
+        assert proposed["provider"] == "mod-b"
+        assert current["provider"] == "mod-a"
+        assert "provider" in plan.preview["changed_fields"]
 
 
 # --- provider partial update (fakes) -------------------------------------------------
@@ -658,8 +889,6 @@ def provider_update_harness(monkeypatch: pytest.MonkeyPatch):
     row = FakeProviderRow()
     repo = _FakeProviderConfigsRepo(None, row)
     service = _RecordingUpdateService(row)
-
-    import slaif_gateway.services.provider_route_configuration as prc
 
     monkeypatch.setattr(
         prc.ProviderConfigsRepository,
@@ -736,6 +965,7 @@ class TestPartialUpdateProvider:
 
     def test_clear_notes_sets_none_before_service(self, provider_update_harness) -> None:
         row, _repo, service = provider_update_harness
+        row.notes = "real prior value"
 
         async def go() -> None:
             session = FakeSession()
@@ -747,23 +977,64 @@ class TestPartialUpdateProvider:
         import asyncio
 
         session = asyncio.run(go())
-        assert row.notes is None  # cleared in the locked row before the service write
+        # 199-b R1: NO direct pre-mutation. The complete intended state
+        # (notes=None) is delegated through the unchanged service so its
+        # audit captures the REAL prior value; the typed operation itself
+        # performs no column write and no flush.
+        assert row.notes == "real prior value"  # untouched before the service
         assert service.calls[0]["notes"] is None
-        assert session.flushes == 1
+        assert session.flushes == 0
 
-    def test_clear_notes_no_flush_when_already_empty(self, provider_update_harness) -> None:
-        row, _repo, _service = provider_update_harness
-        row.notes = None
+    def test_blank_reason_refused_before_mutation(self, provider_update_harness) -> None:
+        row, _repo, service = provider_update_harness
 
         async def go() -> None:
-            session = FakeSession()
-            await partial_update_provider_config(session, "mod-a", clear_notes=True, reason="r")
-            return session
+            await partial_update_provider_config(
+                FakeSession(), "mod-a", timeout_seconds=90, reason="   "
+            )
 
         import asyncio
 
-        session = asyncio.run(go())
-        assert session.flushes == 0
+        with pytest.raises(ProviderRouteConfigError, match="reason"):
+            asyncio.run(go())
+        assert service.calls == []
+        assert row.timeout_seconds == 30  # no mutation
+
+    def test_notes_known_secret_shape_refused(self, provider_update_harness) -> None:
+        row, _repo, service = provider_update_harness
+        canary = "sk-proj-abcdef1234567890abcdef1234567890"
+
+        async def go() -> None:
+            await partial_update_provider_config(
+                FakeSession(), "mod-a", notes=canary, reason="r"
+            )
+
+        import asyncio
+
+        with pytest.raises(ProviderRouteConfigError, match="notes"):
+            asyncio.run(go())
+        assert service.calls == []  # refused BEFORE any mutation
+        assert row.notes == "old notes"
+        assert not contains_known_secret_shape(row.notes)
+
+    def test_display_name_known_secret_shape_refused(
+        self, provider_update_harness
+    ) -> None:
+        _row, _repo, service = provider_update_harness
+
+        async def go() -> None:
+            await partial_update_provider_config(
+                FakeSession(),
+                "mod-a",
+                display_name="Auth: Bearer abcdef1234567890",
+                reason="r",
+            )
+
+        import asyncio
+
+        with pytest.raises(ProviderRouteConfigError, match="display_name"):
+            asyncio.run(go())
+        assert service.calls == []
 
     def test_notes_and_clear_conflict(self, provider_update_harness) -> None:
         row, _repo, service = provider_update_harness
@@ -780,8 +1051,6 @@ class TestPartialUpdateProvider:
         assert service.calls == []
 
     def test_missing_provider_not_found(self, provider_update_harness, monkeypatch) -> None:
-        import slaif_gateway.services.provider_route_configuration as prc
-
         monkeypatch.setattr(
             prc.ProviderConfigsRepository,
             "get_provider_config_for_update",
@@ -806,15 +1075,18 @@ class TestPartialUpdateProvider:
 
 
 def _plan_for(row: FakeRouteRow, **edits: Any) -> RouteUpdatePlan:
-    return preview_route_update(row, "module", **edits)
+    return preview_route_update(row, FakeProviderRow(), **edits)
+
+
+def _route_fingerprint_of(row: FakeRouteRow) -> str:
+    return prc._route_fingerprint(row)
 
 
 class TestExecuteRouteUpdatePlan:
     @pytest.fixture()
     def harness(self, monkeypatch):
-        import slaif_gateway.services.provider_route_configuration as prc
-
         row = FakeRouteRow()
+        provider_row = FakeProviderRow()
 
         class _Repo:
             def __init__(self, session: Any) -> None:
@@ -824,28 +1096,23 @@ class TestExecuteRouteUpdatePlan:
                 assert str(route_id) == row.id
                 return row
 
-        class _Provider:
-            id = PROVIDER_ID
-            provider = "mod-a"
-            kind = "module"
-            enabled = False
-
         class _PRRepo:
             def __init__(self, session: Any) -> None:
                 pass
 
             async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
-                return _Provider()
+                assert provider_or_id == "mod-a"
+                return provider_row
 
             async def get_provider_config_by_provider(self, provider: str) -> Any:
-                return _Provider()
+                return provider_row
 
         monkeypatch.setattr(prc, "ModelRoutesRepository", _Repo)
         monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
-        return row
+        return row, provider_row
 
     def test_stale_fingerprint_refused_zero_writes(self, harness) -> None:
-        row = harness
+        row, _provider_row = harness
         plan = _plan_for(row, priority=50)
         row.priority = 99  # someone else changed the row
 
@@ -858,7 +1125,7 @@ class TestExecuteRouteUpdatePlan:
         asyncio.run(go())
 
     def test_stale_enabled_refused(self, harness) -> None:
-        row = harness
+        row, _provider_row = harness
         plan = _plan_for(row, priority=50)
         row.enabled = False
 
@@ -871,9 +1138,7 @@ class TestExecuteRouteUpdatePlan:
         asyncio.run(go())
 
     def test_no_op_plan_returns_row_without_service_call(self, harness, monkeypatch) -> None:
-        import slaif_gateway.services.provider_route_configuration as prc
-
-        row = harness
+        row, _provider_row = harness
         plan = _plan_for(row)  # nothing changed
         calls: list[Any] = []
 
@@ -894,9 +1159,7 @@ class TestExecuteRouteUpdatePlan:
         assert calls == []  # zero writes, zero audits
 
     def test_happy_path_merges_and_calls_service_once(self, harness, monkeypatch) -> None:
-        import slaif_gateway.services.provider_route_configuration as prc
-
-        row = harness
+        row, _provider_row = harness
         plan = _plan_for(row, capability_patch=CapabilityPatch(codex_limits={"max_output_tokens": 400000}), priority=50)
         calls: list[dict[str, Any]] = []
 
@@ -924,7 +1187,7 @@ class TestExecuteRouteUpdatePlan:
         assert call["notes"] == "route notes"
 
     def test_repeated_apply_refused_stale(self, harness) -> None:
-        row = harness
+        row, _provider_row = harness
         plan = _plan_for(row, priority=50)
         # Simulate the first apply having already landed: the row now holds
         # the proposed state, so the plan's expected pre-state is stale.
@@ -938,11 +1201,142 @@ class TestExecuteRouteUpdatePlan:
 
         asyncio.run(go())
 
+    def test_blank_reason_refused_before_locks(self, harness) -> None:
+        _row, _provider_row = harness
+        async def go() -> None:
+            with pytest.raises(ProviderRouteConfigError, match="reason"):
+                await execute_route_update_plan(FakeSession(), _plan_for(_row), reason="   ")
+
+        import asyncio
+
+        asyncio.run(go())
+
+    def test_reason_known_secret_shape_refused(self, harness) -> None:
+        row, _provider_row = harness
+
+        async def go() -> None:
+            with pytest.raises(
+                ProviderRouteConfigError, match="credential patterns"
+            ):
+                await execute_route_update_plan(
+                    FakeSession(),
+                    _plan_for(row, priority=50),
+                    reason="key sk-proj-abcdef1234567890abcdef1234567890",
+                )
+
+        import asyncio
+
+        asyncio.run(go())
+
+    def test_route_identity_swap_refused(self, harness, monkeypatch) -> None:
+        # 199-b R2: a DIFFERENT route carrying identical configuration can
+        # never reuse the reviewed expected pre-state: even if the expected
+        # fingerprint were recomputed for the twin row, the bound
+        # expected_route_id still refuses it.
+        row, _provider_row = harness
+        twin_id = "22222222-3333-4444-8555-666666666666"
+        twin = FakeRouteRow(id=twin_id)
+
+        class _TwinRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_model_route_for_update(self, route_id: Any) -> Any:
+                assert str(route_id) == twin_id
+                return twin
+
+        monkeypatch.setattr(prc, "ModelRoutesRepository", _TwinRepo)
+        plan = _plan_for(twin, priority=50)
+        tampered = dataclasses.replace(
+            plan,
+            route_id=twin_id,
+            expected_route_id=ROUTE_ID,  # still bound to the reviewed route
+            expected_configuration_fingerprint=_route_fingerprint_of(twin),  # type: ignore[arg-type]
+        )
+
+        async def go() -> None:
+            with pytest.raises(ProviderRouteStaleError, match="route identity"):
+                await execute_route_update_plan(FakeSession(), tampered, reason="r")
+
+        import asyncio
+
+        asyncio.run(go())
+
+    def test_provider_context_stale_after_preview(self, harness, monkeypatch) -> None:
+        # 199-b R2: a meaningful destination-provider edit AFTER the review
+        # (retries 0 -> 2) makes the plan stale — the adapter forbids
+        # retries, so this must not be "revalidated and silently accepted".
+        row, provider_row = harness
+        plan = _plan_for(row, priority=50)
+        provider_row.max_retries = 2
+
+        async def go() -> None:
+            with pytest.raises(ProviderRouteStaleError, match="provider context"):
+                await execute_route_update_plan(FakeSession(), plan, reason="r")
+
+        import asyncio
+
+        asyncio.run(go())
+
+    def test_provider_identity_stale(self, harness, monkeypatch) -> None:
+        # The destination provider ROW was replaced by another provider
+        # with identical context fields: identity binding still refuses.
+        row, _provider_row = harness
+        plan = _plan_for(row, priority=50)
+        impostor = FakeProviderRow(
+            id=SECOND_PROVIDER_ID, provider="mod-a", kind="module"
+        )
+
+        class _ImpostorRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return impostor
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return impostor
+
+        monkeypatch.setattr(prc, "ProviderConfigsRepository", _ImpostorRepo)
+
+        async def go() -> None:
+            with pytest.raises(ProviderRouteStaleError, match="provider identity"):
+                await execute_route_update_plan(FakeSession(), plan, reason="r")
+
+        import asyncio
+
+        asyncio.run(go())
+
+    def test_missing_destination_provider_stale(self, harness, monkeypatch) -> None:
+        # The reviewed destination provider no longer EXISTS at apply time.
+        row, _provider_row = harness
+        plan = _plan_for(row, priority=50)
+
+        class _GoneRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return None
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return None
+
+        monkeypatch.setattr(prc, "ProviderConfigsRepository", _GoneRepo)
+
+        async def go() -> None:
+            with pytest.raises(
+                ProviderRouteStaleError, match="destination provider"
+            ):
+                await execute_route_update_plan(FakeSession(), plan, reason="r")
+
+        import asyncio
+
+        asyncio.run(go())
+
 
 class TestPreviewForRoute:
     def test_missing_route_not_found(self, monkeypatch) -> None:
-        import slaif_gateway.services.provider_route_configuration as prc
-
         from slaif_gateway.services.record_errors import RecordNotFoundError
 
         class _Repo:
@@ -971,8 +1365,6 @@ class TestPreviewForRoute:
             asyncio.run(go())
 
     def test_missing_provider_refused(self, monkeypatch) -> None:
-        import slaif_gateway.services.provider_route_configuration as prc
-
         row = FakeRouteRow()
 
         class _Repo:
@@ -1000,6 +1392,54 @@ class TestPreviewForRoute:
         with pytest.raises(ProviderRouteConfigError, match="provider configuration"):
             asyncio.run(go())
 
+    def test_cross_provider_preview_resolves_destination(self, monkeypatch) -> None:
+        # 199-b R2: the destination provider is resolved from the PROPOSED
+        # candidate (not the route's old provider) and bound into the plan.
+        row = FakeRouteRow(provider="mod-a")
+        destination = FakeProviderRow(
+            id=SECOND_PROVIDER_ID, provider="mod-b", kind="openai_compatible"
+        )
+
+        class _Repo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_model_route_by_id(self, route_id: Any) -> Any:
+                return row
+
+        lookups: list[str] = []
+
+        class _PRRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                lookups.append(provider)
+                if provider == "mod-b":
+                    return destination
+                return FakeProviderRow()
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return destination
+
+        monkeypatch.setattr(prc, "ModelRoutesRepository", _Repo)
+        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+
+        async def go() -> RouteUpdatePlan:
+            return await preview_route_update_for_route(
+                FakeSession(), row.id, provider="mod-b"
+            )
+
+        import asyncio
+
+        plan = asyncio.run(go())
+        assert lookups == ["mod-b"]  # destination, not the old provider
+        assert plan.provider == "mod-b"
+        assert plan.expected_provider_id == str(SECOND_PROVIDER_ID)
+        assert plan.expected_provider_context_fingerprint == (
+            compute_provider_context_fingerprint(destination)
+        )
+
 
 # --- merged candidate validator -----------------------------------------------------
 
@@ -1018,7 +1458,7 @@ class TestValidateMergedRouteCandidate:
                 },
                 endpoint="/v1/chat/completions",
                 provider="p",
-                provider_kind="module",
+                provider_row=FakeProviderRow(kind="module"),
                 requested_model="m",
                 upstream_model="m",
             )
@@ -1029,7 +1469,150 @@ class TestValidateMergedRouteCandidate:
                 {"completion_service": {"version": 1, "profile": "zap-it-v1"}},
                 endpoint="/v1/embeddings",
                 provider="p",
-                provider_kind="module",
+                provider_row=FakeProviderRow(kind="module"),
                 requested_model="zap-it-1",
                 upstream_model="zap-it-1",
             )
+
+    def test_completion_retrying_provider_refused(self) -> None:
+        # 199-b: the completion adapter raises on max_retries != 0, so the
+        # configuration-time candidate validation enforces zero retries.
+        with pytest.raises(ProviderRouteConfigError, match="must not retry"):
+            validate_merged_route_candidate(
+                {"completion_service": {"version": 1, "profile": "zap-it-v1"}},
+                endpoint="/v1/chat/completions",
+                provider="p",
+                provider_row=FakeProviderRow(kind="module", max_retries=2),
+                requested_model="zap-it-1",
+                upstream_model="zap-it-1",
+            )
+
+
+# --- route creation candidate (199-b R4) ---------------------------------------------
+
+
+def _creation_kwargs(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = dict(
+        requested_model="plain-1",
+        match_type="exact",
+        provider="mod-a",
+        upstream_model="plain-1",
+        priority=50,
+        visible_in_models=True,
+        enabled=True,
+        supports_streaming=True,
+        notes=None,
+        endpoint="/v1/chat/completions",
+        capabilities={"chat_completions": dict(CHAT_BLOCK)},
+    )
+    base.update(overrides)
+    return base
+
+
+class TestValidateRouteCreationCandidate:
+    def test_missing_provider_refused(self, monkeypatch) -> None:
+        class _PRRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return None
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return None
+
+        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+
+        async def go() -> None:
+            await validate_route_creation_candidate(
+                FakeSession(),
+                requested_model="m",
+                match_type="exact",
+                provider="ghost",
+                upstream_model=None,
+                priority=100,
+                visible_in_models=True,
+                enabled=False,
+                supports_streaming=True,
+                notes=None,
+                endpoint="/v1/chat/completions",
+                capabilities=None,
+            )
+
+        import asyncio
+
+        with pytest.raises(ProviderRouteConfigError, match="provider configuration"):
+            asyncio.run(go())
+
+    def test_valid_candidate_accepted(self, monkeypatch) -> None:
+        class _PRRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return FakeProviderRow(kind="openai_compatible")
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return FakeProviderRow(kind="openai_compatible")
+
+        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+
+        async def go() -> None:
+            await validate_route_creation_candidate(FakeSession(), **_creation_kwargs())
+
+        import asyncio
+
+        asyncio.run(go())  # no exception: valid configuration accepted
+
+    def test_completion_retrying_provider_refused_on_create(self, monkeypatch) -> None:
+        class _PRRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return FakeProviderRow(kind="module", max_retries=2)
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return FakeProviderRow(kind="module", max_retries=2)
+
+        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+
+        async def go() -> None:
+            await validate_route_creation_candidate(
+                FakeSession(),
+                **_creation_kwargs(
+                    capabilities={
+                        "chat_completions": dict(CHAT_BLOCK),
+                        "completion_service": {"version": 1, "profile": "zap-it-v1"},
+                    }
+                ),
+            )
+
+        import asyncio
+
+        with pytest.raises(ProviderRouteConfigError, match="must not retry"):
+            asyncio.run(go())
+
+    def test_notes_known_secret_shape_refused(self, monkeypatch) -> None:
+        class _PRRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return FakeProviderRow()
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return FakeProviderRow()
+
+        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        canary = "sk-proj-abcdef1234567890abcdef1234567890"
+
+        async def go() -> None:
+            await validate_route_creation_candidate(
+                FakeSession(), **_creation_kwargs(notes=canary, capabilities=None)
+            )
+
+        import asyncio
+
+        with pytest.raises(ProviderRouteConfigError, match="notes"):
+            asyncio.run(go())

@@ -21,6 +21,7 @@ from slaif_gateway.db.repositories.pricing import PricingRulesRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.services.provider_route_configuration import (
+    contains_known_secret_shape,
     partial_update_provider_config,
 )
 from slaif_gateway.services.openai_compatible_discovery import (
@@ -35,22 +36,33 @@ from slaif_gateway.services.openai_compatible_setup import (
     parse_public_model_mapping_entries,
 )
 from slaif_gateway.services.provider_config_service import ProviderConfigService
+from slaif_gateway.utils.redaction import redact_text
 
 app = typer.Typer(help="Manage provider metadata")
+
+
+def _safe_text(value: str | None) -> str | None:
+    """Known-shape redaction for free-form read values (199-b).
+
+    Legitimate env-reference NAMES (``api_key_env_var``) and structured
+    fields are never masked; only recognized credential shapes inside
+    free-form text are redacted before output.
+    """
+    return redact_text(value) if value else value
 
 
 def _safe_provider_dict(row: ProviderConfig) -> dict[str, object]:
     return {
         "id": row.id,
         "provider": row.provider,
-        "display_name": row.display_name,
+        "display_name": _safe_text(row.display_name),
         "kind": row.kind,
-        "base_url": row.base_url,
+        "base_url": _safe_text(row.base_url),
         "api_key_env_var": row.api_key_env_var,
         "enabled": row.enabled,
         "timeout_seconds": row.timeout_seconds,
         "max_retries": row.max_retries,
-        "notes": row.notes,
+        "notes": _safe_text(row.notes),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -389,6 +401,18 @@ def update(
     """Partially update one provider; omitted fields preserve current values."""
     if notes is not None and clear_notes:
         raise typer.BadParameter("Choose either --notes or --clear-notes, not both.")
+    if not (reason or "").strip():
+        raise typer.BadParameter("--reason must be a nonblank audit reason.")
+    for value, flag in (
+        (display_name, "--display-name"),
+        (base_url, "--base-url"),
+        (notes, "--notes"),
+        (reason, "--reason"),
+    ):
+        if contains_known_secret_shape(value):
+            raise typer.BadParameter(
+                f"{flag}: value must not contain recognized credential patterns."
+            )
     actor = (
         parse_uuid(actor_admin_id, field_name="actor-admin-id")
         if actor_admin_id is not None

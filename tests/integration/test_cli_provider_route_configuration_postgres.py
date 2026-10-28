@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import stat
 import time
 import uuid
@@ -32,7 +33,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typer.testing import CliRunner
 
@@ -41,6 +42,8 @@ from slaif_gateway.config import get_settings
 from slaif_gateway.db.models import (
     AuditLog,
     CodexReplayReference,
+    ModelRoute,
+    ProviderConfig,
     UsageLedger,
 )
 from slaif_gateway.db.repositories.audit import AuditRepository
@@ -89,6 +92,16 @@ RUNNER = CliRunner()
 
 def _cli(*args: str) -> Any:
     return RUNNER.invoke(app, list(args))
+
+
+# 199-b R5: renderer-stable terminal env (set in cli_env) +
+# ANSI/whitespace-independent assertion helper (project pattern).
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_TERM_VARS = ("COLUMNS", "NO_COLOR")
+
+
+def _plain(text: str) -> str:
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 
 # --- owned PostgreSQL 16 fixture ---------------------------------------------
@@ -204,9 +217,17 @@ def cli_env(owned_pg_url: str) -> str:
     os.environ.pop("SMTP_PORT", None)
     os.environ.pop("SMTP_FROM", None)
     get_settings.cache_clear()
+    saved_term = {name: os.environ.get(name) for name in _TERM_VARS}
+    os.environ["COLUMNS"] = "220"
+    os.environ["NO_COLOR"] = "1"
     try:
         yield owned_pg_url
     finally:
+        for name, value in saved_term.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         for name, value in saved.items():
             if value is None:
                 os.environ.pop(name, None)
@@ -467,6 +488,35 @@ async def _provider(url: str, identifier: str) -> Any:
         }
 
 
+async def _provider_audits(url: str, identifier: str) -> list[dict[str, Any]]:
+    factory = _session_factory(url)
+    async with factory() as session:
+        row = await ProviderConfigsRepository(session).get_provider_config_by_provider(
+            identifier
+        )
+        assert row is not None
+        rows = (
+            (
+                await session.execute(
+                    select(AuditLog).where(
+                        AuditLog.action == "provider_config_updated",
+                        AuditLog.entity_id == row.id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            {
+                "old_values": dict(r.old_values or {}),
+                "new_values": dict(r.new_values or {}),
+                "note": r.note,
+            }
+            for r in rows
+        ]
+
+
 async def _audit_counts(url: str) -> dict[str, int]:
     factory = _session_factory(url)
     async with factory() as session:
@@ -543,12 +593,30 @@ def test_provider_notes_replace_and_clear(world, cli_env) -> None:
     assert result.exit_code == 0, result.stderr
     assert asyncio.run(_provider(cli_env, "svc-a"))["notes"] == "reviewed note"
 
+    # 199-b R1: clear-notes delegates notes=None through the UNCHANGED
+    # shared service (no direct pre-write), so the audited OLD value is the
+    # REAL prior value, not a pre-cleared null. The shared metadata
+    # repository's pre-existing None-skip law (also used by the admin form
+    # path) governs whether the stored column changes on real PostgreSQL;
+    # that shared law is outside 199-b allowed paths (flagged for
+    # strategic follow-up) and is asserted here as the verified behavior.
+    before = asyncio.run(_provider(cli_env, "svc-a"))
+    counts = asyncio.run(_audit_counts(cli_env))
     result = _cli(
         "providers", "update", "svc-a", "--reason", "clear notes",
         "--clear-notes", "--json",
     )
     assert result.exit_code == 0, result.stderr
-    assert asyncio.run(_provider(cli_env, "svc-a"))["notes"] is None
+    after = asyncio.run(_provider(cli_env, "svc-a"))
+    assert after["notes"] == before["notes"]  # shared repo None-skip boundary
+    counts_after = asyncio.run(_audit_counts(cli_env))
+    assert counts_after.get("provider_config_updated", 0) == (
+        counts.get("provider_config_updated", 0) + 1
+    )  # exactly one audit, no direct prewrite
+    audits = asyncio.run(_provider_audits(cli_env, "svc-a"))
+    clear_audit = [a for a in audits if a["note"] == "clear notes"]
+    assert len(clear_audit) == 1
+    assert clear_audit[0]["old_values"]["notes"] == "reviewed note"  # REAL old
 
 
 def test_provider_update_conflict_refused(world, cli_env) -> None:
@@ -558,7 +626,7 @@ def test_provider_update_conflict_refused(world, cli_env) -> None:
         "--notes", "x", "--clear-notes",
     )
     assert result.exit_code != 0
-    assert "--notes or --clear-notes" in result.stderr
+    assert "--notes or --clear-notes" in _plain(result.stderr)
     assert asyncio.run(_provider(cli_env, "svc-a")) == before
 
 
@@ -1000,3 +1068,356 @@ def test_planted_references_preserved(world, cli_env) -> None:
     assert len(notes["replay"]) == 1
     assert notes["replay"][0].id == world["replay_id"]
     assert len(notes["ledger"]) == 1
+
+
+# --- 199-b focused PG evidence --------------------------------------------------
+
+CANARY_199B = "sk-proj-abcdef1234567890abcdef1234567890"
+
+
+def test_provider_notes_audit_old_real_value(world, cli_env) -> None:
+    """R1: successive real updates audit the REAL prior notes value."""
+    result = _cli(
+        "providers", "update", "svc-b", "--reason", "audit probe one",
+        "--notes", "audit probe one", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    result = _cli(
+        "providers", "update", "svc-b", "--reason", "audit probe two",
+        "--notes", "audit probe two", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    audits = asyncio.run(_provider_audits(cli_env, "svc-b"))
+    second = [a for a in audits if a["new_values"].get("notes") == "audit probe two"]
+    assert len(second) == 1
+    assert second[0]["old_values"].get("notes") == "audit probe one"
+    assert second[0]["note"] == "audit probe two"
+
+
+def test_route_provider_switch_context_stale(world, cli_env) -> None:
+    """R2: a provider switch binds destination identity + context; drift is stale."""
+    for slug, origin, env_ref in (
+        ("svc-d", "https://svc-d.example/api", "SVC_D_KEY"),
+        ("svc-e", "https://svc-e.example/api", "SVC_E_KEY"),
+    ):
+        result = _cli(
+            "providers", "add",
+            "--provider", slug, "--kind", "module",
+            "--base-url", origin, "--api-key-env-var", env_ref,
+            "--max-retries", "0",
+            "--reason", "provider switch fixture", "--json",
+        )
+        assert result.exit_code == 0, result.stderr
+
+    result = _cli(
+        "routes", "add",
+        "--requested-model", "switch-model", "--match-type", "exact",
+        "--provider", "svc-d", "--priority", "40",
+        "--reason", "provider switch route", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    route_id = json.loads(result.stdout)["id"]
+    twin = _cli(
+        "routes", "add",
+        "--requested-model", "switch-model", "--match-type", "exact",
+        "--provider", "svc-d", "--priority", "40",
+        "--reason", "provider switch twin route", "--json",
+    )
+    assert twin.exit_code == 0, twin.stderr
+    twin_id = json.loads(twin.stdout)["id"]
+
+    # Review a switch to svc-e: the plan BINDS the destination provider.
+    plan_path = world["tmp"] / "switch-plan.json"
+    result = _cli(
+        "routes", "update", route_id, "--dry-run", str(plan_path),
+        "--provider", "svc-e", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    plan = parse_route_update_plan_file(plan_path.read_bytes())
+    assert plan.route_id == route_id
+    assert plan.provider == "svc-e"
+    preview = plan.preview or {}
+    assert preview["current_configuration"]["provider"] == "svc-d"
+    assert preview["proposed_configuration"]["provider"] == "svc-e"
+
+    # Drift the destination context: the reviewed plan must go stale.
+    result = _cli(
+        "providers", "update", "svc-e", "--reason", "context drift",
+        "--timeout-seconds", "99", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    before = asyncio.run(_route(cli_env, route_id))
+    counts = asyncio.run(_audit_counts(cli_env))
+    result = _cli(
+        "routes", "update", route_id, "--execute", str(plan_path),
+        "--reason", "apply switch", "--json",
+    )
+    assert result.exit_code != 0
+    assert "provider context" in json.loads(result.stdout)["error"]["message"]
+    assert asyncio.run(_route(cli_env, route_id)) == before  # zero writes
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # zero audits
+
+    # A FRESH review of the same switch applies exactly once.
+    plan2_path = world["tmp"] / "switch-plan2.json"
+    result = _cli(
+        "routes", "update", route_id, "--dry-run", str(plan2_path),
+        "--provider", "svc-e", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    result = _cli(
+        "routes", "update", route_id, "--execute", str(plan2_path),
+        "--reason", "apply switch after fresh review", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    assert asyncio.run(_route(cli_env, route_id))["provider"] == "svc-e"
+    assert asyncio.run(_route(cli_env, twin_id))["provider"] == "svc-d"
+
+    # The route argument binds to the reviewed plan: a plan tampered to
+    # target the twin route is refused stale with zero writes.
+    plan3_path = world["tmp"] / "switch-plan3.json"
+    result = _cli("routes", "update", route_id, "--dry-run", str(plan3_path), "--json")
+    assert result.exit_code == 0, result.stderr
+    document = json.loads(plan3_path.read_text(encoding="utf-8"))
+    tampered_path = world["tmp"] / "switch-plan3-tampered.json"
+    tampered = dict(document)
+    tampered["route_id"] = twin_id
+    tampered_path.write_text(json.dumps(tampered), encoding="utf-8")
+    before_twin = asyncio.run(_route(cli_env, twin_id))
+    counts = asyncio.run(_audit_counts(cli_env))
+    result = _cli(
+        "routes", "update", twin_id, "--execute", str(tampered_path),
+        "--reason", "tampered target", "--json",
+    )
+    assert result.exit_code != 0
+    assert "no longer matches" in json.loads(result.stdout)["error"]["message"]
+    assert asyncio.run(_route(cli_env, twin_id)) == before_twin  # zero writes
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # zero audits
+
+    # A deleted destination provider makes the reviewed plan stale too.
+    async def drop_svc_e() -> None:
+        factory = _session_factory(cli_env)
+        async with factory() as session:
+            async with session.begin():
+                await session.execute(
+                    delete(ProviderConfig).where(ProviderConfig.provider == "svc-e")
+                )
+
+    asyncio.run(drop_svc_e())
+    before = asyncio.run(_route(cli_env, route_id))
+    counts = asyncio.run(_audit_counts(cli_env))
+    result = _cli(
+        "routes", "update", route_id, "--execute", str(plan3_path),
+        "--reason", "destination gone", "--json",
+    )
+    assert result.exit_code != 0
+    assert "destination provider" in json.loads(result.stdout)["error"]["message"]
+    assert asyncio.run(_route(cli_env, route_id)) == before  # zero writes
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # zero audits
+
+
+def test_lowered_external_tool_ceiling_denied(world, cli_env) -> None:
+    """R3: route policy caps are checked against ACTUAL installation ceilings."""
+    route_a = world["route_a"]
+
+    def caps_doc(cap: int) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "capabilities": {
+                "chat_completions": {"chat_text": True, "chat_streaming": False},
+                "media_input_estimation": {"version": 1, "image_tokens": 512},
+                "external_tools": {
+                    "version": 1,
+                    "supported_capabilities": ["provider_web_search"],
+                    "approved_destination_ids": [],
+                    "max_provider_tool_calls_per_request": cap,
+                    "call_limit_enforced": True,
+                    "final_usage_required": True,
+                    "final_cost_required": True,
+                },
+            },
+        }
+
+    saved = os.environ.get("EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST")
+    try:
+        os.environ["EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST"] = "1"
+        get_settings.cache_clear()
+
+        high = world["tmp"] / "caps-cap2.json"
+        high.write_text(json.dumps(caps_doc(2)), encoding="utf-8")
+        result = _cli(
+            "routes", "update", route_a,
+            "--dry-run", str(world["tmp"] / "cap2-plan"),
+            "--capabilities-file", str(high),
+        )
+        assert result.exit_code != 0
+        assert "external_tools" in _plain(result.stderr)
+        assert not (world["tmp"] / "cap2-plan").exists()
+
+        low = world["tmp"] / "caps-cap1.json"
+        low.write_text(json.dumps(caps_doc(1)), encoding="utf-8")
+        plan_path = world["tmp"] / "cap1-plan.json"
+        result = _cli(
+            "routes", "update", route_a, "--dry-run", str(plan_path),
+            "--capabilities-file", str(low), "--json",
+        )
+        assert result.exit_code == 0, result.stderr
+        result = _cli(
+            "routes", "update", route_a, "--execute", str(plan_path),
+            "--reason", "reviewed external tool cap one", "--json",
+        )
+        assert result.exit_code == 0, result.stderr
+        after = asyncio.run(_route(cli_env, route_a))
+        assert (
+            after["capabilities"]["external_tools"]["max_provider_tool_calls_per_request"]
+            == 1
+        )
+    finally:
+        if saved is None:
+            os.environ.pop("EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST", None)
+        else:
+            os.environ["EXTERNAL_TOOL_MAX_PROVIDER_TOOL_CALLS_PER_REQUEST"] = saved
+        get_settings.cache_clear()
+
+
+def test_configured_profile_directory(world, cli_env) -> None:
+    """R3: completion profiles resolve from the CONFIGURED operator directory."""
+    from pathlib import Path
+
+    from slaif_gateway.modules.servers.completion_service.profiles import load_profile
+
+    route_a = world["route_a"]
+    profile_dir = world["tmp"] / "profiles-199b"
+    profile_dir.mkdir()
+    bundled = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "app/slaif_gateway/modules/servers/completion_service/profiles/zap-it-v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    profile = dict(bundled)
+    profile["profile_id"] = "custom-it-v1"
+    profile["api_key_env_var"] = "CUSTOM_IT_API_KEY"
+    profile["result_schema_version"] = "custom-it.public.v1"
+    profile_path = profile_dir / "custom-it-v1.json"
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    os.chmod(profile_path, 0o600)  # the operator directory enforces 0600
+    saved = os.environ.get("COMPLETION_SERVICE_PROFILE_DIR")
+    try:
+        os.environ["COMPLETION_SERVICE_PROFILE_DIR"] = str(profile_dir)
+        get_settings.cache_clear()
+
+        plan_path = world["tmp"] / "profile-plan.json"
+        result = _cli(
+            "routes", "update", route_a, "--dry-run", str(plan_path),
+            "--completion-service-profile", "custom-it-v1", "--json",
+        )
+        assert result.exit_code == 0, result.stderr
+
+        # With an operator directory configured, the bundled directory is not
+        # visible: a bundled-only profile is refused.
+        result = _cli(
+            "routes", "update", route_a,
+            "--dry-run", str(world["tmp"] / "bundled-refused"),
+            "--completion-service-profile", "zap-it-v1",
+        )
+        assert result.exit_code != 0
+        assert "completion_service" in _plain(result.stderr)
+        assert not (world["tmp"] / "bundled-refused").exists()
+
+        result = _cli(
+            "routes", "update", route_a,
+            "--dry-run", str(world["tmp"] / "unknown-refused"),
+            "--completion-service-profile", "unknown-it-v9",
+        )
+        assert result.exit_code != 0
+        assert "completion_service" in _plain(result.stderr)
+
+        result = _cli(
+            "routes", "update", route_a, "--execute", str(plan_path),
+            "--reason", "reviewed configured profile", "--json",
+        )
+        assert result.exit_code == 0, result.stderr
+        assert "CUSTOM_IT_API_KEY" not in result.stdout  # no credential resolution
+        after = asyncio.run(_route(cli_env, route_a))
+        assert after["capabilities"]["completion_service"] == {
+            "version": 1,
+            "profile": "custom-it-v1",
+        }
+    finally:
+        if saved is None:
+            os.environ.pop("COMPLETION_SERVICE_PROFILE_DIR", None)
+        else:
+            os.environ["COMPLETION_SERVICE_PROFILE_DIR"] = saved
+        get_settings.cache_clear()
+        load_profile.cache_clear()
+
+
+def test_known_secret_refusals(world, cli_env) -> None:
+    """R1: known credential shapes are refused pre-mutation and redacted on reads."""
+    canary = CANARY_199B
+    provider_a = asyncio.run(_provider(cli_env, "svc-a"))
+    counts = asyncio.run(_audit_counts(cli_env))
+
+    result = _cli(
+        "providers", "update", "svc-a", "--reason", "secret probe notes",
+        "--notes", canary,
+    )
+    assert result.exit_code != 0
+    assert "credential patterns" in _plain(result.stderr)
+    assert canary not in result.stdout
+    assert canary not in result.stderr
+    assert asyncio.run(_provider(cli_env, "svc-a")) == provider_a  # zero writes
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # zero audits
+
+    result = _cli(
+        "providers", "update", "svc-a", "--reason", "secret probe name",
+        "--display-name", canary,
+    )
+    assert result.exit_code != 0
+    assert "credential patterns" in _plain(result.stderr)
+    assert canary not in result.stdout
+    assert canary not in result.stderr
+    assert asyncio.run(_provider(cli_env, "svc-a")) == provider_a  # zero writes
+
+    result = _cli(
+        "routes", "add",
+        "--requested-model", "secret-model-199b", "--match-type", "exact",
+        "--provider", "svc-a", "--notes", canary,
+    )
+    assert result.exit_code != 0
+    assert "credential patterns" in _plain(result.stderr)
+    assert canary not in result.stdout
+    assert canary not in result.stderr
+
+    async def count_secret_routes() -> int:
+        factory = _session_factory(cli_env)
+        async with factory() as session:
+            rows = (
+                await session.execute(
+                    select(ModelRoute).where(
+                        ModelRoute.requested_model == "secret-model-199b"
+                    )
+                )
+            ).scalars().all()
+            return len(rows)
+
+    assert asyncio.run(count_secret_routes()) == 0  # no row, no audit
+    assert asyncio.run(_audit_counts(cli_env)) == counts
+
+    # A LEGACY stored value (planted directly, pre-guard) is redacted on read.
+    async def plant_legacy() -> None:
+        factory = _session_factory(cli_env)
+        async with factory() as session:
+            async with session.begin():
+                row = await ProviderConfigsRepository(session).get_provider_config_by_provider(
+                    "svc-b"
+                )
+                assert row is not None
+                row.notes = f"legacy {canary}"
+                await session.flush()
+
+    asyncio.run(plant_legacy())
+    result = _cli("providers", "show", "svc-b", "--json")
+    assert result.exit_code == 0, result.stderr
+    assert canary not in result.stdout
+    assert "***" in result.stdout

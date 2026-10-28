@@ -35,8 +35,10 @@ from slaif_gateway.schemas.provider_route_configuration import (
     CapabilityPatch,
 )
 from slaif_gateway.services.provider_route_configuration import (
+    contains_known_secret_shape,
     execute_route_update_plan,
     preview_route_update_for_route,
+    validate_route_creation_candidate,
 )
 from slaif_gateway.services.route_import import (
     build_route_import_execution_plan,
@@ -51,6 +53,7 @@ from slaif_gateway.services.route_import import (
     route_import_preview_to_dict,
     validate_route_import_rows,
 )
+from slaif_gateway.utils.redaction import redact_text
 
 app = typer.Typer(help="Manage model routes")
 
@@ -82,7 +85,7 @@ def _safe_route_dict(row: ModelRoute) -> dict[str, object]:
         "capabilities": capabilities,
         "external_tool_policy": external_policy.to_metadata(),
         "external_tool_runtime_status": "openai_web_search_fenced_only; other_hosted_families_denied",
-        "notes": row.notes,
+        "notes": redact_text(row.notes) if row.notes else row.notes,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -112,7 +115,27 @@ async def _add_route(
     reason: str | None,
     actor_admin_id,
 ) -> ModelRoute:
-    async with cli_db_session() as (_, session):
+    async with cli_db_session() as (settings, session):
+        # 199-b R4: complete pure configuration validation BEFORE the new
+        # route is stored (provider must exist; canonical merged candidate
+        # validated against the provider's actual kind/configuration with
+        # the ACTUAL installation ceilings and configured profile dir).
+        await validate_route_creation_candidate(
+            session,
+            requested_model=requested_model,
+            match_type=match_type,
+            provider=provider,
+            upstream_model=upstream_model,
+            priority=priority,
+            visible_in_models=visible_in_models,
+            enabled=enabled,
+            supports_streaming=supports_streaming,
+            notes=notes,
+            endpoint=endpoint,
+            capabilities=capabilities,
+            external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+            profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+        )
         return await _service(session).create_model_route(
             requested_model=requested_model,
             match_type=match_type,
@@ -159,16 +182,27 @@ async def _set_route_enabled(route_id: str, *, enabled: bool) -> ModelRoute:
 
 
 async def _preview_route_update_plan(route_id: str, **edits: object):
-    async with cli_db_session() as (_, session):
-        return await preview_route_update_for_route(session, route_id, **edits)
+    async with cli_db_session() as (settings, session):
+        return await preview_route_update_for_route(
+            session,
+            route_id,
+            external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+            profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+            **edits,
+        )
 
 
 async def _execute_route_update_plan(
-    plan, *, reason: str, actor_admin_id: object
+    route_id: str, plan, *, reason: str, actor_admin_id: object
 ) -> ModelRoute:
-    async with cli_db_session() as (_, session):
+    async with cli_db_session() as (settings, session):
         return await execute_route_update_plan(
-            session, plan, reason=reason, actor_admin_id=actor_admin_id
+            session,
+            plan,
+            reason=reason,
+            external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+            profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+            actor_admin_id=actor_admin_id,
         )
 
 
@@ -325,8 +359,19 @@ def add(
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
     """Create a model route (capabilities-file preparation defaults DISABLED)."""
+    if contains_known_secret_shape(notes):
+        raise typer.BadParameter(
+            "--notes: value must not contain recognized credential patterns."
+        )
+    settings = get_settings()
     capabilities = (
-        read_capabilities_file(capabilities_file) if capabilities_file is not None else None
+        read_capabilities_file(
+            capabilities_file,
+            external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+            profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+        )
+        if capabilities_file is not None
+        else None
     )
     actor = (
         parse_uuid(actor_admin_id, field_name="actor-admin-id")
@@ -572,10 +617,29 @@ def update(
             )
         if reason is None:
             raise typer.BadParameter("--reason is required with --execute.")
-        plan = read_route_plan_file(execute)
+        if not (reason or "").strip():
+            raise typer.BadParameter("--reason must be a nonblank audit reason.")
+        if contains_known_secret_shape(reason):
+            raise typer.BadParameter(
+                "--reason: value must not contain recognized credential patterns."
+            )
+        execute_settings = get_settings()
+        plan = read_route_plan_file(
+            execute,
+            external_tool_ceilings=execute_settings.get_external_tool_operator_ceilings(),
+            profile_dir=execute_settings.COMPLETION_SERVICE_PROFILE_DIR,
+        )
+        # The CLI route argument BINDS to the reviewed plan (199-b): a plan
+        # can never be applied to a different route than the one reviewed.
+        if str(parse_uuid(route_id, field_name="route_id")) != plan.route_id:
+            raise typer.BadParameter(
+                "The route argument must match the reviewed plan."
+            )
         try:
             row = run_async(
-                _execute_route_update_plan(plan, reason=reason, actor_admin_id=actor)
+                _execute_route_update_plan(
+                    route_id, plan, reason=reason, actor_admin_id=actor
+                )
             )
         except Exception as exc:  # noqa: BLE001
             handle_cli_error(exc, json_output=json_output)
@@ -617,8 +681,15 @@ def update(
     )
     has_patch = not patch.is_empty()
 
+    preview_settings = get_settings()
     capabilities = (
-        read_capabilities_file(capabilities_file) if capabilities_file is not None else None
+        read_capabilities_file(
+            capabilities_file,
+            external_tool_ceilings=preview_settings.get_external_tool_operator_ceilings(),
+            profile_dir=preview_settings.COMPLETION_SERVICE_PROFILE_DIR,
+        )
+        if capabilities_file is not None
+        else None
     )
     try:
         plan = run_async(
@@ -641,7 +712,14 @@ def update(
     except Exception as exc:  # noqa: BLE001
         handle_cli_error(exc, json_output=json_output)
         return
-    write_route_plan_file(dry_run, plan)
+    # The round-trip gate must revalidate under the SAME configured
+    # installation ceilings and profile directory the preview used.
+    write_route_plan_file(
+        dry_run,
+        plan,
+        external_tool_ceilings=preview_settings.get_external_tool_operator_ceilings(),
+        profile_dir=preview_settings.COMPLETION_SERVICE_PROFILE_DIR,
+    )
     preview = plan.preview or {}
     payload = {
         "route_id": plan.route_id,

@@ -1,26 +1,40 @@
-"""Shared typed partial operations for provider/route configuration (199-a).
+"""Shared typed partial operations for provider/route configuration (199).
 
-The CLI uses these operations so reviewed partial provider updates and
-stable-ID route updates go through the existing field services:
+The CLI uses these operations so reviewed provider/route configuration
+changes go through the existing field services with bounded context:
 
 * ``partial_update_provider_config`` locks the provider row, assembles the
   COMPLETE state (omitted fields preserved from the fresh locked row), and
   delegates to ``ProviderConfigService.update_provider_config`` — one audit
   record and one mutation inside the caller's transaction.
 * ``preview_route_update_for_route`` resolves exactly one route READ-ONLY,
-  merges the typed edits, validates the complete merged candidate, and
-  renders a reviewed NON-secret plan (with an expected configuration
-  fingerprint) without writing or auditing anything.
-* ``execute_route_update_plan`` locks the exact route (and its provider),
-  revalidates the fresh expected pre-state and dependencies, and calls
-  ``ModelRouteService.update_model_route`` in one caller transaction.
+  resolves the PROPOSED destination provider READ-ONLY, merges the typed
+  edits into the canonical configuration the service will actually store,
+  validates the complete merged candidate against that provider's real
+  kind/configuration (including the zero-retry rule for completion
+  profiles), and renders a reviewed NON-secret plan bound to the route
+  UUID, the destination provider UUID, and the provider context digest —
+  without writing or auditing anything.
+* ``execute_route_update_plan`` locks the exact route and the destination
+  provider (deterministic order: route, then provider), revalidates the
+  fresh expected route pre-state and provider identity/context, and calls
+  ``ModelRouteService.update_model_route`` in one caller transaction with
+  the installation ceilings.
+* ``validate_route_creation_candidate`` is the READ-ONLY configuration
+  validation applied before a NEW route is stored (provider must exist;
+  canonical merged candidate validated against the provider).
 
-The configuration fingerprint is a public digest over the reviewed
-configuration fields (identity and timestamps excluded): it is staleness
-data, not a credential and not replay authority. Every error uses fixed,
-safe vocabulary and never echoes file bodies, paths, or secret-looking
-values. Configuration validation here is NOT credential/model/SMTP
-qualification.
+The route configuration fingerprint is a ROUTE-BOUND public digest over
+the reviewed configuration pre-state (only timestamps excluded); the
+provider context digest covers the provider fields that route validation
+depends on (kind, base URL, credential env-var NAME, timeout, retries —
+enabled/display deliberately excluded: preparation stays separate from
+readiness). Both are public staleness/optimistic-guard data, never a
+credential or replay authority. Every error uses fixed, safe vocabulary
+and never echoes file bodies, paths, or secret-looking values; known
+credential SHAPES in new free-form input are refused before mutation
+(known-shape protection, not universal content sanitization).
+Configuration validation here is NOT credential/model/SMTP qualification.
 """
 
 from __future__ import annotations
@@ -67,12 +81,31 @@ from slaif_gateway.services.model_route_service import (
     CHAT_COMPLETIONS_ENDPOINT,
     ModelRouteService,
     normalize_endpoint,
+    normalize_route_configuration,
 )
 from slaif_gateway.services.provider_config_service import ProviderConfigService
 from slaif_gateway.services.record_errors import RecordNotFoundError
+from slaif_gateway.utils.redaction import redact_text
 
 _MODULE_PROVIDER_KIND = "module"
 _COMPATIBLE_PROVIDER_KIND = "openai_compatible"
+
+# Canonical review fields: exactly the stored-shape fields a reviewed plan
+# renders for current/proposed comparison (see
+# schemas.provider_route_configuration._CANONICAL_CONFIGURATION_KEYS).
+_CANONICAL_FIELDS = (
+    "requested_model",
+    "match_type",
+    "endpoint",
+    "provider",
+    "upstream_model",
+    "priority",
+    "enabled",
+    "visible_in_models",
+    "supports_streaming",
+    "capabilities",
+    "notes",
+)
 
 _PREVIEW_NOTE = (
     "Configuration review only. The gateway Codex context/admission ceiling, "
@@ -84,6 +117,7 @@ _PREVIEW_NOTE = (
 
 
 def compute_route_configuration_fingerprint(
+    route_id: str,
     *,
     requested_model: str,
     match_type: str,
@@ -97,14 +131,20 @@ def compute_route_configuration_fingerprint(
     capabilities: dict[str, Any] | None,
     notes: str | None,
 ) -> str:
-    """Public digest over the reviewed configuration fields of one route.
+    """Route-bound public digest over the reviewed configuration pre-state.
 
-    Includes capabilities, notes, and enabled; excludes identity
-    (route id) and timestamps. Used only as expected-pre-state staleness
-    data for reviewed plans — never as a credential or replay authority.
+    Binds the stable route UUID to the reviewed configuration fields
+    (capabilities, notes, enabled, endpoint, match type, provider, upstream
+    model, priority, visibility, streaming, requested model) so an
+    unchanged expected pre-state can never validate against a DIFFERENT
+    route that happens to carry identical configuration. Excludes only
+    timestamps. Used solely as expected-pre-state staleness data for
+    reviewed plans — never as a credential or replay authority. Public
+    configuration digest / optimistic guard, not a signed plan.
     """
     canonical = json.dumps(
         {
+            "route_id": route_id,
             "capabilities": capabilities,
             "enabled": enabled,
             "endpoint": endpoint,
@@ -123,8 +163,34 @@ def compute_route_configuration_fingerprint(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def compute_provider_context_fingerprint(row: ProviderConfig) -> str:
+    """Public digest over the provider configuration fields relevant to
+    route validation.
+
+    Covers kind, base URL, credential ENV-var NAME, timeout, and retry
+    count — the dependency context a reviewed route plan was validated
+    against. Display fields and the enabled flag are excluded on purpose:
+    preparation stays separate from enabled/readiness (a disabled provider
+    can still back a route preparation). Staleness data only, never a
+    credential or replay authority.
+    """
+    canonical = json.dumps(
+        {
+            "api_key_env_var": row.api_key_env_var,
+            "base_url": row.base_url,
+            "kind": row.kind,
+            "max_retries": row.max_retries,
+            "timeout_seconds": row.timeout_seconds,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _route_fingerprint(row: ModelRoute) -> str:
     return compute_route_configuration_fingerprint(
+        str(row.id),
         requested_model=row.requested_model,
         match_type=row.match_type,
         endpoint=row.endpoint,
@@ -139,30 +205,114 @@ def _route_fingerprint(row: ModelRoute) -> str:
     )
 
 
+def contains_known_secret_shape(value: str | None) -> bool:
+    """True when free-form text matches a RECOGNIZED credential shape.
+
+    Reuses the existing redaction patterns (gateway key text, bearer
+    tokens, provider keys, sensitive assignments). Detection only: it
+    never returns or logs the matched value. Known-shape protection, not
+    universal content sanitization.
+    """
+    if value is None:
+        return False
+    return redact_text(value) != value
+
+
+def _reject_known_secret_shape(value: str | None, *, field: str) -> None:
+    """Refuse new free-form input carrying a known credential shape.
+
+    Fixed safe vocabulary only: the field name is named, the value is
+    never echoed. Called BEFORE any mutation.
+    """
+    if contains_known_secret_shape(value):
+        raise ProviderRouteConfigError(
+            f"{field}: Value must not contain recognized credential patterns."
+        )
+
+
+def _canonical_route_state(
+    *,
+    requested_model: str,
+    match_type: str,
+    endpoint: str,
+    provider: str,
+    upstream_model: str | None,
+    priority: int,
+    visible_in_models: bool,
+    supports_streaming: bool,
+    enabled: bool,
+    capabilities: dict[str, Any] | None,
+    notes: str | None,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+) -> dict[str, Any]:
+    """Canonical form of one complete route state, exactly as the CRUD
+    service would store it (pure normalizer composition, 11 fields).
+
+    This is the single preview/storage parity point: the reviewed plan
+    renders this canonical form, and execution compares fresh state
+    against the same canonical form, so no default capability block or
+    field canonicalization is added after review. Raises ValueError for
+    invalid field shapes (callers convert to fixed safe errors).
+    """
+    core = normalize_route_configuration(
+        requested_model=requested_model,
+        match_type=match_type,
+        endpoint=endpoint,
+        provider=provider,
+        upstream_model=upstream_model,
+        priority=priority,
+        supports_streaming=supports_streaming,
+        capabilities=capabilities,
+        notes=notes,
+        external_tool_ceilings=external_tool_ceilings,
+    )
+    return {
+        "requested_model": core["requested_model"],
+        "match_type": core["match_type"],
+        "endpoint": core["endpoint"],
+        "provider": core["provider"],
+        "upstream_model": core["upstream_model"],
+        "priority": core["priority"],
+        "enabled": enabled,
+        "visible_in_models": visible_in_models,
+        "supports_streaming": core["supports_streaming"],
+        "capabilities": core["capabilities"],
+        "notes": core["notes"],
+    }
+
+
 def validate_merged_route_candidate(
     capabilities: dict[str, Any] | None,
     *,
     endpoint: str,
     provider: str,
-    provider_kind: str,
+    provider_row: ProviderConfig,
     requested_model: str,
     upstream_model: str,
     external_tool_ceilings: ExternalToolOperatorCeilings = (
         DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
     ),
+    profile_dir: str = "",
 ) -> dict[str, Any]:
     """Complete configuration-time validation of one merged route candidate.
 
     Reuses the strict capability-group contract and mirrors the server
     module-resolution rules (provider kind, exclusive transport selectors,
-    profile availability, and the adapter's public/upstream model
-    identity) with the existing pure parsers/loaders. No credentials are
-    loaded, no adapter is constructed, and no network call is made. This
-    validates CONFIGURATION, not credential/model readiness.
+    profile availability in the SAME configured profile directory the
+    runtime uses, the adapter's public/upstream model identity, and the
+    completion adapter's zero-retry requirement) with the existing pure
+    parsers/loaders. No credentials are loaded, no adapter is constructed,
+    and no network call is made. This validates CONFIGURATION, not
+    credential/model readiness.
     """
+    provider_kind = provider_row.kind
     document = dict(capabilities or {})
     validate_capabilities_document(
-        document, external_tool_ceilings=external_tool_ceilings
+        document,
+        external_tool_ceilings=external_tool_ceilings,
+        profile_dir=profile_dir,
     )
     if (
         UPSTREAM_LLM_CAPABILITY_KEY in document
@@ -182,7 +332,12 @@ def validate_merged_route_candidate(
             raise ProviderRouteConfigError(
                 "completion_service: A profile selector requires the chat completions endpoint."
             )
-        profile = load_profile(profile_id_from_capabilities(document))
+        if provider_row.max_retries != 0:
+            raise ProviderRouteConfigError(
+                "completion_service: The selected provider must not retry "
+                "(max_retries must be 0)."
+            )
+        profile = load_profile(profile_id_from_capabilities(document), profile_dir)
         if profile.public_model != requested_model:
             raise ProviderRouteConfigError(
                 "completion_service: The profile public model differs from the route requested model."
@@ -212,27 +367,40 @@ async def partial_update_provider_config(
 ) -> ProviderConfig:
     """Partially update one provider through the shared field service.
 
-    The row is locked (``FOR UPDATE``) before any complete service input is
-    assembled, so omitted fields preserve the fresh current values and zero
-    retries survive. Exactly one audited mutation runs in the caller
-    transaction. ``enabled`` is preserved; use the enable/disable commands.
+    New free-form input (display name, base URL, notes, reason) is refused
+    BEFORE any mutation when it carries a known credential shape, and the
+    audit reason must be nonblank (the 199-b law; the pre-existing
+    creation/HTTP reason law is preserved untouched). The row is then
+    locked (``FOR UPDATE``) before the COMPLETE intended state is
+    assembled, so omitted fields preserve the fresh current values, zero
+    retries survive, and the service captures the REAL prior values for
+    its one audit record in the caller transaction. ``enabled`` is
+    preserved; use the enable/disable commands.
+
+    Notes boundary (documented, pre-existing shared law): the shared
+    metadata repository treats ``notes=None`` as "preserve current" on
+    every caller path (including the admin form), so a clear-notes update
+    delegates ``notes=None`` and the audited OLD value is the real prior
+    value; whether the stored column is actually cleared is governed by
+    that shared repository law, not by this typed operation.
     """
     if notes is not None and clear_notes:
         raise ProviderRouteConfigError(
             "notes: Choose either --notes or --clear-notes, not both."
         )
+    if not (reason or "").strip():
+        raise ProviderRouteConfigError(
+            "reason: A nonblank audit reason is required."
+        )
+    _reject_known_secret_shape(display_name, field="display_name")
+    _reject_known_secret_shape(base_url, field="base_url")
+    _reject_known_secret_shape(notes, field="notes")
+    _reject_known_secret_shape(reason, field="reason")
+
     providers = ProviderConfigsRepository(session)
     row = await providers.get_provider_config_for_update(provider_or_id)
     if row is None:
         raise RecordNotFoundError("Provider config")
-
-    if clear_notes and row.notes is not None:
-        # The shared service deliberately preserves omitted/None notes
-        # (existing callers rely on that), so the explicit CLI clear is a
-        # single-column assignment in the SAME locked transaction, covered
-        # by the service's one audit record.
-        row.notes = None
-        await session.flush()
 
     return await ProviderConfigService(
         provider_configs_repository=providers,
@@ -265,18 +433,41 @@ def _resolve_route_id(route_id: str) -> uuid.UUID:
         raise RecordNotFoundError("Model route") from exc
 
 
-async def _load_route_and_provider_kind(
-    session: AsyncSession, route_id: str
-) -> tuple[ModelRoute, str]:
+async def _load_route_readonly(session: AsyncSession, route_id: str) -> ModelRoute:
+    """Resolve exactly one route READ-ONLY (missing is a record error)."""
     routes = ModelRoutesRepository(session)
-    providers = ProviderConfigsRepository(session)
     row = await routes.get_model_route_by_id(_resolve_route_id(route_id))
     if row is None:
         raise RecordNotFoundError("Model route")
-    provider_row = await providers.get_provider_config_by_provider(row.provider)
-    if provider_row is None:
-        raise ProviderRouteConfigError("Route provider configuration is missing.")
-    return row, provider_row.kind
+    return row
+
+
+async def _resolve_destination_provider(
+    session: AsyncSession,
+    provider: str,
+    *,
+    for_update: bool,
+    missing_error: type[ProviderRouteConfigError] | type[ProviderRouteStaleError],
+) -> ProviderConfig:
+    """Resolve the PROPOSED destination provider (not the route's old one).
+
+    Preview resolves READ-ONLY and reports a missing destination as a
+    fixed candidate error; execution locks it (after the route lock,
+    deterministic order: route, then provider) and reports a missing
+    destination as STALE — the reviewed provider context is gone.
+    """
+    providers = ProviderConfigsRepository(session)
+    if for_update:
+        row = await providers.get_provider_config_for_update(provider)
+    else:
+        row = await providers.get_provider_config_by_provider(provider)
+    if row is None:
+        raise missing_error(
+            "The destination provider configuration no longer matches the reviewed plan."
+            if for_update
+            else "The selected provider configuration is missing."
+        )
+    return row
 
 
 def _capabilities_for_mode(
@@ -296,7 +487,7 @@ def _capabilities_for_mode(
 
 def preview_route_update(
     route: ModelRoute,
-    provider_kind: str,
+    provider_row: ProviderConfig,
     *,
     requested_model: str | None = None,
     match_type: str | None = None,
@@ -313,31 +504,42 @@ def preview_route_update(
     external_tool_ceilings: ExternalToolOperatorCeilings = (
         DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
     ),
+    profile_dir: str = "",
 ) -> RouteUpdatePlan:
     """Pure: render one reviewed route update plan (no writes, no audit).
 
-    Omitted typed fields preserve the current stored values in the plan;
-    ``clear_notes`` is the reviewed clear form for notes. Raises
-    ``ProviderRouteConfigError`` for invalid candidates. The caller has
-    already resolved the route read-only and must not write on failure.
+    ``provider_row`` is the PROPOSED destination provider (resolved by the
+    caller from the plan's provider selection, not from the route's old
+    provider): the candidate is validated against its actual kind and
+    configuration, and the plan BINDS its UUID plus context digest so an
+    unrelated or later-modified provider cannot satisfy execution.
+
+    Omitted typed fields preserve the current stored values; the preview
+    block renders the CANONICAL current and proposed configurations (the
+    exact stored shape the service will write, defaults included) and the
+    changed canonical field names. Raises ``ProviderRouteConfigError`` for
+    invalid candidates. The caller has already resolved the route
+    read-only and must not write on failure.
     """
     if notes is not None and clear_notes:
         raise ProviderRouteConfigError(
             "notes: Choose either --notes or --clear-notes, not both."
         )
+    _reject_known_secret_shape(notes, field="notes")
     try:
         proposed_endpoint = normalize_endpoint(
             endpoint if endpoint is not None else route.endpoint
         )
     except ValueError as exc:
         raise ProviderRouteConfigError(str(exc)) from exc
+    proposed_provider = provider if provider is not None else route.provider
     proposed = {
         "requested_model": (
             requested_model if requested_model is not None else route.requested_model
         ),
         "match_type": match_type if match_type is not None else route.match_type,
         "endpoint": proposed_endpoint,
-        "provider": provider if provider is not None else route.provider,
+        "provider": proposed_provider,
         "upstream_model": (
             upstream_model if upstream_model is not None else route.upstream_model
         ),
@@ -369,36 +571,63 @@ def preview_route_update(
 
     fingerprint = _route_fingerprint(route)
     merged = _capabilities_for_mode(route.capabilities, mode, capabilities, patch)
+    try:
+        proposed_canonical = _canonical_route_state(
+            requested_model=proposed["requested_model"],
+            match_type=proposed["match_type"],
+            endpoint=proposed_endpoint,
+            provider=proposed_provider,
+            upstream_model=proposed["upstream_model"],
+            priority=proposed["priority"],
+            visible_in_models=proposed["visible_in_models"],
+            supports_streaming=proposed["supports_streaming"],
+            enabled=route.enabled,
+            capabilities=merged,
+            notes=proposed["notes"],
+            external_tool_ceilings=external_tool_ceilings,
+        )
+        current_canonical = _canonical_route_state(
+            requested_model=route.requested_model,
+            match_type=route.match_type,
+            endpoint=route.endpoint,
+            provider=route.provider,
+            upstream_model=route.upstream_model,
+            priority=route.priority,
+            visible_in_models=route.visible_in_models,
+            supports_streaming=route.supports_streaming,
+            enabled=route.enabled,
+            capabilities=route.capabilities,
+            notes=route.notes,
+            external_tool_ceilings=external_tool_ceilings,
+        )
+    except ValueError as exc:
+        raise ProviderRouteConfigError(str(exc)) from exc
     validate_merged_route_candidate(
-        merged,
-        endpoint=proposed_endpoint,
-        provider=proposed["provider"],
-        provider_kind=provider_kind,
-        requested_model=proposed["requested_model"],
-        upstream_model=proposed["upstream_model"],
+        proposed_canonical["capabilities"],
+        endpoint=proposed_canonical["endpoint"],
+        provider=proposed_provider,
+        provider_row=provider_row,
+        requested_model=proposed_canonical["requested_model"],
+        upstream_model=proposed_canonical["upstream_model"],
         external_tool_ceilings=external_tool_ceilings,
+        profile_dir=profile_dir,
     )
-
-    current = {
-        "requested_model": route.requested_model,
-        "match_type": route.match_type,
-        "endpoint": route.endpoint,
-        "provider": route.provider,
-        "upstream_model": route.upstream_model,
-        "priority": route.priority,
-        "visible_in_models": route.visible_in_models,
-        "supports_streaming": route.supports_streaming,
-        "notes": route.notes,
-    }
-    changed = sorted(name for name in current if current[name] != proposed[name])
-    if mode != "unchanged":
-        changed.append("capabilities")
+    changed = sorted(
+        name
+        for name in _CANONICAL_FIELDS
+        if current_canonical[name] != proposed_canonical[name]
+    )
     plan = RouteUpdatePlan(
         route_id=str(route.id),
+        expected_route_id=str(route.id),
+        expected_provider_id=str(provider_row.id),
+        expected_provider_context_fingerprint=(
+            compute_provider_context_fingerprint(provider_row)
+        ),
         requested_model=proposed["requested_model"],
         match_type=proposed["match_type"],
         endpoint=proposed_endpoint,
-        provider=proposed["provider"],
+        provider=proposed_provider,
         upstream_model=proposed["upstream_model"],
         priority=proposed["priority"],
         visible_in_models=proposed["visible_in_models"],
@@ -409,10 +638,15 @@ def preview_route_update(
         capabilities=capabilities,
         capability_patch=patch,
         expected_configuration_fingerprint=fingerprint,
-        preview={"note": _PREVIEW_NOTE, "changed_fields": changed},
+        preview={
+            "note": _PREVIEW_NOTE,
+            "changed_fields": changed,
+            "current_configuration": current_canonical,
+            "proposed_configuration": proposed_canonical,
+        },
     )
-    # Strict round-trip gate BEFORE any file write (rendered document must
-    # re-parse under the same strict contract).
+    # Strict round-trip gate BEFORE any file write (the rendered document
+    # must carry the exact reviewed bindings).
     render_route_update_plan(plan)
     return plan
 
@@ -420,11 +654,32 @@ def preview_route_update(
 async def preview_route_update_for_route(
     session: AsyncSession,
     route_id: str,
+    *,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
     **edits: Any,
 ) -> RouteUpdatePlan:
-    """READ-ONLY preview: resolve one route + provider kind, render a plan."""
-    route, provider_kind = await _load_route_and_provider_kind(session, route_id)
-    return preview_route_update(route, provider_kind, **edits)
+    """READ-ONLY preview: resolve one route and its PROPOSED destination
+    provider, then render the reviewed plan (zero writes, zero audits)."""
+    route = await _load_route_readonly(session, route_id)
+    proposed_provider = edits.get("provider")
+    if proposed_provider is None or not str(proposed_provider).strip():
+        proposed_provider = route.provider
+    provider_row = await _resolve_destination_provider(
+        session,
+        proposed_provider,
+        for_update=False,
+        missing_error=ProviderRouteConfigError,
+    )
+    return preview_route_update(
+        route,
+        provider_row,
+        external_tool_ceilings=external_tool_ceilings,
+        profile_dir=profile_dir,
+        **edits,
+    )
 
 
 async def execute_route_update_plan(
@@ -432,32 +687,53 @@ async def execute_route_update_plan(
     plan: RouteUpdatePlan,
     *,
     reason: str,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
     actor_admin_id: uuid.UUID | None = None,
 ) -> ModelRoute:
     """Apply one reviewed route plan: lock, revalidate, one audited update.
 
-    The exact route row is locked with ``FOR UPDATE``; the fresh
-    configuration fingerprint and enabled state must still match the plan
-    (and the route's provider must still exist), otherwise
-    ``ProviderRouteStaleError`` is raised with zero writes and zero
-    audits. A repeated apply of an already-applied plan is therefore
-    refused as stale — never re-mutated. The merged candidate is
-    revalidated against the fresh provider kind before the single
-    ``ModelRouteService.update_model_route`` call in the caller
-    transaction.
+    Deterministic lock order: the exact route row (``FOR UPDATE``) first,
+    then the PROPOSED destination provider. The fresh route must still
+    carry the plan's bound identity (``expected_route_id`` — an unchanged
+    expected pre-state can never apply to a different route), enabled
+    state, and route-bound configuration fingerprint; the destination
+    provider must still exist, carry the plan's bound provider identity
+    (``expected_provider_id``), and match the reviewed context digest
+    (``expected_provider_context_fingerprint`` — kind, base URL,
+    credential env-var NAME, timeout, retries). Any mismatch raises
+    ``ProviderRouteStaleError`` with zero writes and zero audits.
 
-    Documented no-op law: if the reviewed plan's complete proposed state
-    already equals the fresh locked row (possible only for a plan that
-    changed nothing), the row is returned as-is with ZERO writes and ZERO
-    audits. Any real change is applied exactly once; a second apply of the
-    same plan is refused stale because the fresh fingerprint no longer
-    matches the reviewed expected pre-state.
+    The merged candidate is canonicalized with the SAME pure normalizer
+    the service uses (installation ceilings included) and revalidated
+    against the FRESH provider row (kind, zero-retry rule, configured
+    profile directory) before the single
+    ``ModelRouteService.update_model_route`` call in the caller
+    transaction. A repeated apply of an already-applied plan is refused
+    stale because the fresh fingerprint no longer matches the reviewed
+    expected pre-state.
+
+    Documented no-op law: if the reviewed plan's complete CANONICAL
+    proposed state already equals the fresh locked row's canonical state,
+    the row is returned as-is with ZERO writes and ZERO audits. Any real
+    change is applied exactly once.
     """
+    if not (reason or "").strip():
+        raise ProviderRouteConfigError(
+            "reason: A nonblank audit reason is required."
+        )
+    _reject_known_secret_shape(reason, field="reason")
+
     routes = ModelRoutesRepository(session)
-    providers = ProviderConfigsRepository(session)
-    row = await routes.get_model_route_for_update(plan.route_id)
+    row = await routes.get_model_route_for_update(_resolve_route_id(plan.route_id))
     if row is None:
         raise RecordNotFoundError("Model route")
+    if str(row.id) != plan.expected_route_id:
+        raise ProviderRouteStaleError(
+            "The route identity no longer matches the reviewed plan."
+        )
     if row.enabled != plan.enabled:
         raise ProviderRouteStaleError(
             "The route enabled state no longer matches the reviewed plan."
@@ -466,38 +742,74 @@ async def execute_route_update_plan(
         raise ProviderRouteStaleError(
             "The route configuration no longer matches the reviewed plan."
         )
-    provider_row = await providers.get_provider_config_for_update(row.provider)
-    if provider_row is None:
+    provider_row = await _resolve_destination_provider(
+        session,
+        plan.provider,
+        for_update=True,
+        missing_error=ProviderRouteStaleError,
+    )
+    if str(provider_row.id) != plan.expected_provider_id:
         raise ProviderRouteStaleError(
-            "The route provider configuration no longer matches the reviewed plan."
+            "The destination provider identity no longer matches the reviewed plan."
         )
+    if (
+        compute_provider_context_fingerprint(provider_row)
+        != plan.expected_provider_context_fingerprint
+    ):
+        raise ProviderRouteStaleError(
+            "The destination provider context no longer matches the reviewed plan."
+        )
+
     merged = _capabilities_for_mode(
         row.capabilities, plan.capabilities_mode, plan.capabilities, plan.capability_patch
     )
+    try:
+        proposed_canonical = _canonical_route_state(
+            requested_model=plan.requested_model,
+            match_type=plan.match_type,
+            endpoint=plan.endpoint,
+            provider=plan.provider,
+            upstream_model=plan.upstream_model,
+            priority=plan.priority,
+            visible_in_models=plan.visible_in_models,
+            supports_streaming=plan.supports_streaming,
+            enabled=row.enabled,
+            capabilities=merged,
+            notes=plan.notes,
+            external_tool_ceilings=external_tool_ceilings,
+        )
+        fresh_canonical = _canonical_route_state(
+            requested_model=row.requested_model,
+            match_type=row.match_type,
+            endpoint=row.endpoint,
+            provider=row.provider,
+            upstream_model=row.upstream_model,
+            priority=row.priority,
+            visible_in_models=row.visible_in_models,
+            supports_streaming=row.supports_streaming,
+            enabled=row.enabled,
+            capabilities=row.capabilities,
+            notes=row.notes,
+            external_tool_ceilings=external_tool_ceilings,
+        )
+    except ValueError as exc:
+        raise ProviderRouteConfigError(str(exc)) from exc
     validate_merged_route_candidate(
-        merged,
-        endpoint=plan.endpoint,
+        proposed_canonical["capabilities"],
+        endpoint=proposed_canonical["endpoint"],
         provider=plan.provider,
-        provider_kind=provider_row.kind,
-        requested_model=plan.requested_model,
-        upstream_model=plan.upstream_model or plan.requested_model,
+        provider_row=provider_row,
+        requested_model=proposed_canonical["requested_model"],
+        upstream_model=proposed_canonical["upstream_model"],
+        external_tool_ceilings=external_tool_ceilings,
+        profile_dir=profile_dir,
     )
-    if (
-        merged == (row.capabilities or {})
-        and row.requested_model == plan.requested_model
-        and row.match_type == plan.match_type
-        and row.endpoint == plan.endpoint
-        and row.provider == plan.provider
-        and row.upstream_model == (plan.upstream_model or plan.requested_model)
-        and row.priority == plan.priority
-        and row.visible_in_models == plan.visible_in_models
-        and row.supports_streaming == plan.supports_streaming
-        and row.notes == plan.notes
-    ):
+    if proposed_canonical == fresh_canonical:
         return row
     return await ModelRouteService(
         model_routes_repository=routes,
         audit_repository=AuditRepository(session),
+        external_tool_ceilings=external_tool_ceilings,
     ).update_model_route(
         row.id,
         requested_model=plan.requested_model,
@@ -513,4 +825,69 @@ async def execute_route_update_plan(
         notes=plan.notes,
         actor_admin_id=actor_admin_id,
         reason=reason,
+    )
+
+
+async def validate_route_creation_candidate(
+    session: AsyncSession,
+    *,
+    requested_model: str,
+    match_type: str,
+    provider: str,
+    upstream_model: str | None,
+    priority: int,
+    visible_in_models: bool,
+    enabled: bool,
+    supports_streaming: bool,
+    notes: str | None,
+    endpoint: str,
+    capabilities: dict[str, object] | None,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
+) -> None:
+    """READ-ONLY configuration validation before a NEW route is stored.
+
+    The selected provider must already exist; the complete candidate is
+    canonicalized with the SAME pure normalizer the CRUD service applies
+    (installation ceilings included) and the merged candidate is
+    validated against the provider's actual kind and configuration
+    (endpoint, module/profile/upstream mapping, zero retries for
+    configured-completion routes). No writes, no audit, no credentials,
+    no network: this validates CONFIGURATION, not readiness.
+    """
+    _reject_known_secret_shape(notes, field="notes")
+    provider_row = await _resolve_destination_provider(
+        session,
+        provider,
+        for_update=False,
+        missing_error=ProviderRouteConfigError,
+    )
+    try:
+        canonical = _canonical_route_state(
+            requested_model=requested_model,
+            match_type=match_type,
+            endpoint=endpoint,
+            provider=provider,
+            upstream_model=upstream_model,
+            priority=priority,
+            visible_in_models=visible_in_models,
+            supports_streaming=supports_streaming,
+            enabled=enabled,
+            capabilities=capabilities,
+            notes=notes,
+            external_tool_ceilings=external_tool_ceilings,
+        )
+    except ValueError as exc:
+        raise ProviderRouteConfigError(str(exc)) from exc
+    validate_merged_route_candidate(
+        canonical["capabilities"],
+        endpoint=canonical["endpoint"],
+        provider=provider,
+        provider_row=provider_row,
+        requested_model=canonical["requested_model"],
+        upstream_model=canonical["upstream_model"],
+        external_tool_ceilings=external_tool_ceilings,
+        profile_dir=profile_dir,
     )

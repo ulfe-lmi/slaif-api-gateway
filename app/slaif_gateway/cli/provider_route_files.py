@@ -31,6 +31,12 @@ from slaif_gateway.schemas.provider_route_configuration import (
     parse_route_update_plan_file,
     render_route_update_plan,
 )
+# Ceilings are re-exported through the allowlisted route service module
+# (consumer-allowlist guard): this file grants no runtime tool authority.
+from slaif_gateway.services.model_route_service import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS,
+    ExternalToolOperatorCeilings,
+)
 
 
 def read_bounded_file(path: Path | str, *, cap: int, label: str) -> bytes:
@@ -45,34 +51,76 @@ def read_bounded_file(path: Path | str, *, cap: int, label: str) -> bytes:
     return data
 
 
-def read_capabilities_file(path: Path | str) -> dict[str, object]:
-    """Read and strictly validate one capabilities file (safe errors)."""
+def read_capabilities_file(
+    path: Path | str,
+    *,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
+) -> dict[str, object]:
+    """Read and strictly validate one capabilities file (safe errors).
+
+    Validation uses the ACTUAL installation ceilings and the configured
+    operator profile directory (199-b), never defaulted-away limits.
+    """
     data = read_bounded_file(
         path, cap=CAPABILITIES_FILE_MAX_BYTES, label="Capabilities file"
     )
     try:
-        return parse_capabilities_file(data)
+        return parse_capabilities_file(
+            data,
+            external_tool_ceilings=external_tool_ceilings,
+            profile_dir=profile_dir,
+        )
     except ProviderRouteConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
 
-def read_route_plan_file(path: Path | str) -> RouteUpdatePlan:
-    """Read and strictly parse one route update plan file (safe errors)."""
+def read_route_plan_file(
+    path: Path | str,
+    *,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
+) -> RouteUpdatePlan:
+    """Read and strictly parse one route update plan file (safe errors).
+
+    The parsed document is revalidated under the ACTUAL installation
+    ceilings and configured profile directory (199-b).
+    """
     data = read_bounded_file(path, cap=ROUTE_PLAN_FILE_MAX_BYTES, label="Route plan file")
     try:
-        return parse_route_update_plan_file(data)
+        return parse_route_update_plan_file(
+            data,
+            external_tool_ceilings=external_tool_ceilings,
+            profile_dir=profile_dir,
+        )
     except ProviderRouteConfigError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
 
-def write_route_plan_file(path: Path | str, plan: RouteUpdatePlan) -> None:
+def write_route_plan_file(
+    path: Path | str,
+    plan: RouteUpdatePlan,
+    *,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+    profile_dir: str = "",
+) -> None:
     """Write a reviewed NON-secret plan to a new 0600 file (no overwrite).
 
     The rendered document must strict-round-trip through the plan parser
-    before anything is written.
+    under the same ceilings/profile directory before anything is written.
     """
     document = render_route_update_plan(plan)
-    parse_route_update_plan_document(document)  # strict round-trip gate
+    parse_route_update_plan_document(
+        document,
+        external_tool_ceilings=external_tool_ceilings,
+        profile_dir=profile_dir,
+    )  # strict round-trip gate
     text = json.dumps(document, indent=2, sort_keys=True) + "\n"
     data = text.encode("utf-8")
     if len(data) > ROUTE_PLAN_FILE_MAX_BYTES:
