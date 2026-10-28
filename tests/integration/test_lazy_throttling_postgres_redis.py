@@ -1016,7 +1016,10 @@ def test_http_chat_waits_for_capacity_then_admits_once(
     limiter, WAITS (bounded lazy admission), and is admitted exactly once
     after request 1 finishes. While request 2 waits: zero new
     quota-reservation/ledger rows for the key and zero checked-out app DB
-    connections. After admission: exactly one normal
+    connections at the actual wait-loop sleep boundaries (observed through
+    the helper's injectable sleep seam: entry and exit of four consecutive
+    sleeps, all before the holder is released). After admission: exactly
+    one normal
     reservation/finalization pair and exactly one provider invocation per
     request.
     """
@@ -1082,6 +1085,36 @@ def test_http_chat_waits_for_capacity_then_admits_once(
     from slaif_gateway.main import create_app
 
     app = create_app(get_settings())
+    # Test-only observation of the wait loop: the helper's existing
+    # injectable sleep seam is wrapped so the waiting request is observed
+    # while it is actually asleep (entry AND exit of each bounded sleep)
+    # while request 1 still holds the slot. A random post-facto pool sample
+    # can catch a brief legitimate revalidation query BETWEEN released
+    # sleeps; the seam observes the blocked phase where the invariant lives.
+    sleep_boundary_counts: list[int] = []
+    sleep_boundaries_observed = threading.Event()
+    required_sleep_boundaries = 8  # entry + exit of 4 consecutive sleeps
+
+    real_wait_for_admission = chat_gateway.wait_for_rate_limit_admission
+
+    async def _observing_sleep(seconds: float) -> None:
+        # Entry of the blocked sleep: the waiting request must hold no app
+        # DB connection. An observer exception propagates through the
+        # request path and fails the final outcome assertions.
+        sleep_boundary_counts.append(app.state.db_engine.pool.checkedout())
+        await asyncio.sleep(seconds)
+        # Exit of the same sleep, before the next revalidation may start.
+        sleep_boundary_counts.append(app.state.db_engine.pool.checkedout())
+        if len(sleep_boundary_counts) >= required_sleep_boundaries:
+            sleep_boundaries_observed.set()
+
+    def _wait_with_observation(**kwargs: object) -> object:
+        kwargs["sleep"] = _observing_sleep
+        return real_wait_for_admission(**kwargs)
+
+    monkeypatch.setattr(
+        chat_gateway, "wait_for_rate_limit_admission", _wait_with_observation
+    )
     port = _free_port()
     headers = {"Authorization": f"Bearer {seeded.plaintext_gateway_key}"}
     base = f"http://127.0.0.1:{port}"
@@ -1127,7 +1160,23 @@ def test_http_chat_waits_for_capacity_then_admits_once(
             assert mid == baseline, (
                 f"waiting must not mutate accounting: baseline={baseline} mid={mid}"
             )
-            asyncio.run(_assert_no_checked_out_pool_connections(app))
+            # Deterministic blocked-phase observation: bounded wait (before
+            # request 1 is released) for FOUR consecutive real wait-loop
+            # sleeps, each observed at entry AND exit (so repeated real
+            # revalidation happened); then assert zero checked-out app
+            # connections at every observed boundary.
+            assert sleep_boundaries_observed.wait(timeout=30), (
+                "the waiting request never completed four observed "
+                f"wait-loop sleep boundaries: {sleep_boundary_counts}"
+            )
+            assert len(sleep_boundary_counts) >= required_sleep_boundaries, (
+                f"expected {required_sleep_boundaries} observed sleep "
+                f"boundaries, got {len(sleep_boundary_counts)}: {sleep_boundary_counts}"
+            )
+            assert all(count == 0 for count in sleep_boundary_counts), (
+                "the waiting request must hold no app DB connection at any "
+                f"observed sleep boundary: {sleep_boundary_counts}"
+            )
         finally:
             # Release the slot and drain both requests even when an
             # assertion above fails (harness cleanup, not a product path).

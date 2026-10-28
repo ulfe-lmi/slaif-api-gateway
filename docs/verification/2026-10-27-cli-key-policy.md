@@ -178,3 +178,132 @@ PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest \
 - No real Codex/provider qualification, no real SMTP, no production DB.
 - Objective 196 does not declare the full CLI field brief complete; see
   `docs/cli-field-administration.md` for implemented vs proposed (197-205).
+
+## 196-b addendum — bounded CI regression reconciliation (tests/docs only)
+
+This addendum records the 196-b continuation on the same PR
+(#352 `oap/196-typed-key-policy`). It resolves the two demonstrated
+PostgreSQL-integration CI failures with **test/doc changes only**: no
+`app/` runtime change, no new infrastructure, and the 196-a report and
+order remain immutable. The 196-a sections above (including their failure
+history) are preserved unchanged.
+
+### The two stale oracles (exact source)
+
+1. `tests/integration/test_admin_bulk_key_import_execute_postgres.py::test_admin_bulk_key_import_execute_postgres` —
+   the final provider-policy POST asserted `400` plus `"allowed_providers"`
+   in the page, i.e. it assumed the bulk-import path did not carry provider
+   policy. 196-a R5 deliberately made the shared import path carry
+   `allowed_providers` (absent/blank column = unrestricted default;
+   explicit empty list = deny-all; list = allow-list), so that blanket
+   rejection oracle was obsolete. The sample row still had NO
+   endpoint/model policy, so it still 400s — now at the service guard with
+   the stable message `Bulk key import execution failed safely. No keys
+   were created.` and unchanged state.
+2. `tests/integration/test_lazy_throttling_postgres_redis.py::test_http_chat_waits_for_capacity_then_admits_once`
+   — a coarse global pool sampler (3 samples × 0.15 s) observed one
+   checked-out app connection during a **legitimate short DB revalidation
+   that happens BETWEEN released wait sleeps**. Phase distinction: the
+   asserted invariant (no connection held by the waiting request) holds at
+   the blocked **sleep boundaries**; each retry's revalidation is a
+   deliberate short session outside the blocked phase. The old sampler
+   confuses revalidation with blocked waiting; it is a test-phase error,
+   not a runtime regression (no `app/` path changed in 196; the archived
+   `d8` baseline and the current code reproduce the phase, and isolated
+   baseline outcomes alone never proved flake).
+
+### Repairs (test-only)
+
+- Admin file: the obsolete negative is replaced by a valid authenticated
+  admin **preview → execute** proof: a complete row (owner/cohort/
+  validity/cost/token/request/model/endpoint/rate/`allowed_providers=
+  openai`/delivery `none`) previews non-mutating with the policy rendered
+  (`Providers: openai`) and executes to a new key whose persisted
+  `metadata_json` carries `allowed_providers=["openai"]` while the rest of
+  the row is preserved; an explicit empty JSON provider list previews as
+  `Providers: deny-all` and persists `allowed_providers=[]` (distinct from
+  the omitted unrestricted default, asserted on the first legacy key); the
+  minimal provider-only row is retained as a negative asserting its TRUE
+  stable remaining guard (execution-stage safe failure, unchanged state,
+  no new queued payloads) instead of obsolete unsupported-column text.
+  All prior missing-confirmation/reason/CSRF, strict-only external-tool,
+  secret-nonce/token_hash leakage, all-or-nothing, one-time
+  plaintext/channel and enqueue assertions are unchanged; count baselines
+  were extended explicitly for the two new successful imports.
+- Lazy file: only `test_http_chat_waits_for_capacity_then_admits_once` was
+  changed. It now observes the phase it asserts, through the
+  `wait_for_rate_limit_admission` helper's EXISTING injectable `sleep`
+  seam (a test-local wrapper around the chat gateway's callsite supplies
+  the observing sleep; the lazy service, revalidation, real DB session
+  lifetime, Redis code, and all final outcome assertions are untouched).
+  It records `app.state.db_engine.pool.checkedout()` at **entry AND exit**
+  of each bounded wait-loop sleep, waits deterministically (thread-safe
+  event, bounded) for **FOUR consecutive sleeps** (eight boundaries) while
+  request 1 still holds the slot — so repeated real revalidation happened —
+  and only then releases the holder. An observer exception propagates
+  through the request path and fails the final outcome assertions; the
+  bounded wait failure is a test assertion, not a thread-only warning.
+  The module-level `_assert_no_checked_out_pool_connections` helper is
+  unchanged for all other nodes.
+
+### Focused verification (actual commands, exits, JUnit counts)
+
+Environment: `PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python`
+(Python 3.12); owned services only (unique-labeled, loopback-bound,
+tmpfs-backed PostgreSQL 16 and no-persistence Redis 7, identity inspected
+before readiness, exact-ID cleanup); no ambient `DATABASE_URL`, no shared
+test DB, no Testcontainers fallback, no foreign PG version.
+
+- Admin target node (owned PG through a TEMP outside-repo launcher that
+  reuses the existing `owned_pg_url` fixture via `__wrapped__()` and sets
+  the explicitly owned `TEST_DATABASE_URL` before collection):
+  `pytest tests/integration/test_admin_bulk_key_import_execute_postgres.py::test_admin_bulk_key_import_execute_postgres`
+  → **1 passed, 0 failed, 0 errors, 0 skipped**, actual exit 0
+  (JUnit `/tmp/slaif196b/admin-provider-policy.xml`).
+- Lazy target node (real uvicorn HTTP + owned PG + owned Redis): root-
+  independently executed against the exact working-tree source
+  (`fa180549d94a79d3b8ec45e9d1fbb95615b1b84184c319208c41e53a7f1b7dc4`) →
+  **1 passed, 0 skipped**, actual exit 0
+  (JUnit `/tmp/slaif196-root/196b-permanent-lazy-independent.xml`).
+  Cited as root-provided independently inspected evidence.
+- Focused negative control (TEMP outside-repo full-source copy replacing
+  ONLY `_observing_sleep` so the app connection is held across the sleep):
+  **FAILED exactly as intended**, actual exit 1, at the new assertion
+  `the waiting request must hold no app DB connection at any observed sleep
+  boundary: [1, 1, 1, 1, 1, 1, 1, 1]` — not a timeout or setup failure
+  (JUnit `/tmp/slaif196-root/196b-permanent-lazy-negative.xml`).
+  Cited as root-provided independently inspected evidence; never a product
+  passing test.
+- The two 196-a export strictness regression nodes (unchanged):
+  `tests/unit/test_key_policy_configuration.py::test_export_stored_unknown_live_burn_member_fails_explicitly`
+  and `::test_export_stored_negative_rate_window_fails_explicitly` →
+  **2 passed, 0 skipped**, actual exit 0 (JUnit
+  `/tmp/slaif196b/export-strictness.xml`).
+- Static gates on the changed Python: `ruff check` on both changed test
+  files → all checks passed; `git diff --check` → clean.
+- Governance/doc: `tests/unit/test_oap_governance.py` (9 cases) plus the
+  documentation inventory → see commit-level result recorded in the 196-b
+  OAP report.
+
+Qualification layer: the admin and lazy nodes are REAL HTTP against a real
+uvicorn app with owned PostgreSQL/Redis and real accounting rows; no real
+provider inference, no real SMTP, no real external client. The 196-a unit
+evidence above remains fakes/pure-layer as recorded; nothing here upgrades
+it.
+
+### CI state and limits (honest, at publication)
+
+- First implementation head `7762b08` (CI run 40609965209): ONLY the
+  `PostgreSQL integration tests` job failed (381 passed / 9 skipped /
+  2 failed — exactly the two nodes above); the other nine checks passed.
+- 196-a report-only head `34850df`: final CI finished **9/10 success**,
+  the same two PG failures only.
+- At 196-b publication the fix-head CI is **PENDING, not a pass**; the
+  final normal matrix is supplied by final-head CI and the coding agent
+  never merges. All final-head merge gates (strategic review + all checks
+  successful) remain required.
+- No runtime was changed; this is a test/doc reconciliation, not a
+  completed runtime repair. Objective 196 does not declare the full CLI
+  field brief complete (197-205 remain the standing mandate), and the
+  separate 196-c bounded continuation for the out-of-scope stored
+  Responses known-field audit finding is root-activated after this handoff.
