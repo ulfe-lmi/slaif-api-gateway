@@ -291,39 +291,85 @@ slaif-gateway keys clone --execute /tmp/clone-plan.json \
   protection, not universal content sanitization.
 - Validity: exactly one mode - `copy-source-expiry` (from execution time to
   the source's fresh `valid_until`), `duration-from-now` (positive whole
-  seconds from EXECUTION time, never from dry-run time), or `absolute`.
-  Invalid or already-expired result windows are rejected at plan and at
-  execute time.
+  seconds from EXECUTION time, never from dry-run time, bounded by a
+  documented maximum of 1,000 years), or `absolute` (naive timestamps are
+  normalized to UTC so a mixed aware/naive window is compared
+  predictably and rejected instead of crashing). Invalid or
+  already-expired result windows are rejected at plan and at execute
+  time.
 - Fingerprint: SHA-256 over the source public key ID, status, validity,
   purpose/mode, and the canonical policy document. Traffic usage,
   reservations, `last_used_at`, and usage-only `updated_at` drift do NOT
   move the fingerprint; a configuration/validity/status change makes a
   stale plan refuse before any write.
+- Reviewed plan revalidation: on FIRST execution, AFTER the source-row
+  lock, the service re-derives the source fingerprint and the FRESH
+  canonical configured policy and rechecks them against the plan's
+  reviewed `policy` document, `source_public_key_id`, and
+  `requires_fenced_confirmation`. Any mismatch is refused with a fixed
+  safe error before any write: a stale source is a stale plan, and a
+  reviewed policy/identity/confirmation the (unchanged) source does not
+  back is refused, never silently ignored. The editable plan file is
+  never authority to widen or narrow the source policy.
+- Execution time: the clock is sampled AFTER the source-row lock is
+  acquired, so a source that expires while the lock is acquired is
+  refused at execute time.
+- Mixed-mode refusal: `--execute` refuses the dry-run-only flags
+  (`--source-key-id`, `--target-owner-id`, `--target-cohort-id`,
+  `--validity-*`) and `--dry-run` refuses the execute-only channel/
+  confirmation flags (`--show-plaintext`, `--secret-output-file`,
+  `--email-delivery` other than `none`,
+  `--confirm-external-tool-fenced`). On execute, the reviewed plan file
+  is the sole source of source/target/validity values.
 - Fenced external policy: the plan records the fresh confirmation
   requirement; execution requires `--confirm-external-tool-fenced` on the
   execute command. Source confirmation flags are never copied into
   execution authority.
 - Plan file: strict version-1 JSON. Unknown or duplicate fields, bad types,
   non-UTF-8, and files over the documented 128 KiB bound are rejected with
-  fixed safe errors that never echo file bodies or values. The plan never
+  fixed safe errors that never echo file bodies or values. The execute
+  read is itself bounded (at most 128 KiB + 1 byte is read), so an
+  oversized file is refused BEFORE any database access, and a missing or
+  unreadable file produces a fixed error without the path. The plan never
   contains key material, hashes, provider environment names or base URLs,
   raw metadata, or usage.
 - Retry safety (no schema): the stable `operation_uuid` plus a narrowly
-  typed receipt on the NEW target key's metadata, namespaced by
-  `(source, operation)` and scoped to the target owner, deduplicates. An
-  exact repeat returns `already-applied` with safe IDs - never a new key,
-  secret, send, or plaintext. A same-operation changed plan is refused. A
-  completed operation stays identifiable even if the source is later
-  edited or becomes ineligible.
+  typed receipt on the NEW target key's metadata deduplicates. The
+  receipt lookup is namespaced by `(source, operation)` ONLY and is
+  INDEPENDENT of the (mutable) target selection: a retry that changes the
+  target owner or cohort still finds the completed operation. Repeats
+  compare the FULL business identity (source fingerprint, canonical
+  policy fingerprint, target owner, target cohort, all four validity
+  parameters, and the fenced-confirmation requirement): an exact repeat
+  returns `already-applied` with safe IDs - never a new key, secret,
+  send, or plaintext; a same-operation changed plan is refused; a
+  receipt a completed operation no longer backs (including legacy
+  objective-198-a receipts lacking the new fields) is refused rather
+  than adopted; and MORE THAN ONE receipt for `(source, operation)` is
+  refused as ambiguous rather than silently choosing one. A completed
+  operation stays identifiable even if the source is later edited or
+  becomes ineligible.
 - Transaction: key creation, one-time secret, optional pending delivery,
   receipt, and audits commit atomically in one caller-owned transaction; a
   late audit/receipt/delivery-preparation failure rolls back ALL new rows.
   Nothing (no SMTP, no output file, no enqueue) happens before commit.
-- Supported isolation boundary: PostgreSQL default READ COMMITTED. The
+- Enforced isolation boundary: PostgreSQL READ COMMITTED is REQUIRED, not
+  only supported. Before any write, the execution reads
+  `current_setting('transaction_isolation')` (after the source-row lock);
+  a pre-established REPEATABLE READ snapshot - or any other level - is
+  refused with a fixed safe error and the operation commits nothing. The
   existing source-row `FOR UPDATE` lock serializes same-source executions
-  and the receipt query after the lock sees the prior commit. A
-  pre-established REPEATABLE READ snapshot is not a supported
-  deduplication boundary.
+  and the receipt query after the lock sees the prior commit.
+- Post-commit output recovery: the commit happens BEFORE any output
+  channel (secret file, send-now SMTP, Celery enqueue). If a selected
+  channel fails AFTER commit, the clone is NOT rolled back; the CLI
+  reports safe recovery information (target key, one-time secret, and
+  delivery IDs plus fixed guidance) and exits nonzero. The one-time
+  plaintext cannot be recovered: use `slaif-gateway email
+  send-pending-key --one-time-secret-id <uuid>` for a still-unconsumed
+  pending delivery, otherwise rotate. Re-executing an EXACTLY repeated
+  plan never clobbers an existing output file: the repeat reaches
+  receipt deduplication before any file channel.
 - No plaintext recovery: the one-time plaintext is unrecoverable after
   first output, and repeats never recover or re-send it. A still-unconsumed
   pending delivery is sent with `slaif-gateway email send-pending-key

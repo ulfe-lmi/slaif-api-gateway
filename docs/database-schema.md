@@ -891,10 +891,13 @@ table, constraint, or migration was added. Canonical shape:
   "source_gateway_key_id": "<uuid>",
   "operation_uuid": "<uuid>",
   "target_gateway_key_id": "<uuid>",
+  "target_owner_id": "<uuid>",
   "one_time_secret_id": "<uuid>",
   "email_delivery_id": "<uuid or null>",
   "source_fingerprint": "<64 hex sha256>",
+  "policy_fingerprint": "<64 hex sha256>",
   "target_cohort_id": "<uuid or null>",
+  "requires_fenced_confirmation": false,
   "validity_mode": "copy-source-expiry",
   "validity_duration_seconds": null,
   "validity_from": null,
@@ -903,20 +906,28 @@ table, constraint, or migration was added. Canonical shape:
 }
 ```
 
-The receipt is bounded safe data: UUIDs, the stable plan-identity validity
-parameters, and the source configuration fingerprint only. It never contains
-key material, token hashes, provider references, raw metadata, usage, or
-secrets. The lookup is a narrowly typed JSONB containment query namespaced by
-`(source_gateway_key_id, operation_uuid)` and scoped to the target owner.
-Same-operation repeats compare the receipt against the plan's stable identity
-(source fingerprint plus target cohort and validity parameters) and return
-`already-applied` or refuse a changed plan; the derived target validity window
-is not compared, because `duration-from-now` and `copy-source-expiry` are
-recomputed from EXECUTION time. The supported deduplication boundary is the
-PostgreSQL default READ COMMITTED isolation: the existing source-row
+The receipt is bounded safe data: UUIDs, the stable business-plan identity
+(target owner/cohort, validity parameters, fenced-confirmation
+requirement), and the source + canonical policy fingerprints only. It never
+contains key material, token hashes, provider references, raw metadata,
+usage, or secrets. The lookup is a narrowly typed JSONB containment query
+namespaced by `(source_gateway_key_id, operation_uuid)` ONLY and INDEPENDENT
+of the (mutable) target selection. Same-operation repeats compare the
+receipt against the plan's FULL business identity (source fingerprint,
+policy fingerprint, target owner, target cohort, validity parameters, and
+fenced-confirmation requirement) and return `already-applied` or refuse a
+changed plan; a receipt a completed operation no longer backs (including
+legacy objective-198-a receipts lacking the newer fields) is refused rather
+than adopted, and more than one receipt for the same `(source, operation)`
+is refused as ambiguous. The derived target validity window is not
+recomputed on repeat, because `duration-from-now` and `copy-source-expiry`
+are recomputed from EXECUTION time. The deduplication boundary is the
+PostgreSQL default READ COMMITTED isolation and it is ENFORCED: before any
+write the operation reads the current transaction's isolation level and
+refuses any level other than `read committed` (e.g. a pre-established
+REPEATABLE READ snapshot) with a fixed safe error; the existing source-row
 `FOR UPDATE` lock serializes same-source executions, and a statement after
-the lock sees the prior commit's receipt. A pre-established REPEATABLE READ
-snapshot is not a supported deduplication boundary.
+the lock sees the prior commit's receipt.
 
 ## 5.7 `quota_reservations`
 

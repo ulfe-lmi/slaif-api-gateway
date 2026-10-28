@@ -29,6 +29,7 @@ from slaif_gateway.schemas.key_clone import (
     KeyClonePlan,
     KeyClonePlanError,
     compute_source_fingerprint,
+    compute_policy_fingerprint,
     render_clone_plan,
 )
 from slaif_gateway.schemas.key_configuration import parse_key_configuration
@@ -131,6 +132,31 @@ class KeyCloneConfirmationRequiredError(KeyCloneError):
 class KeyCloneTargetValidityError(KeyCloneError):
     error_code = "key_clone_target_validity"
     message = "The requested target validity window is invalid or already expired."
+
+
+class KeyCloneUnsupportedIsolationError(KeyCloneError):
+    error_code = "key_clone_unsupported_isolation"
+    message = (
+        "Clone execution requires the supported READ COMMITTED transaction "
+        "isolation level; the active isolation is not supported."
+    )
+
+
+class KeyCloneReceiptAmbiguousError(KeyCloneError):
+    error_code = "key_clone_receipt_ambiguous"
+    message = (
+        "Multiple clone receipts matched this operation; refusing to choose "
+        "among them safely."
+    )
+
+
+class KeyCloneReviewedPolicyMismatchError(KeyCloneError):
+    error_code = "key_clone_reviewed_policy_mismatch"
+    message = (
+        "The reviewed clone plan no longer matches the source key's canonical "
+        "policy, identity, or confirmation requirement; the plan was not "
+        "executed."
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -394,7 +420,6 @@ class KeyCloneService:
         create_email_delivery: bool,
         now: datetime | None = None,
     ) -> KeyCloneResult:
-        check_now = now or datetime.now(UTC)
         source_id = uuid.UUID(plan.source_gateway_key_id)
         target_owner_id = uuid.UUID(plan.target_owner_id)
         target_cohort_id = (
@@ -403,38 +428,63 @@ class KeyCloneService:
         operation_uuid = uuid.UUID(plan.operation_uuid)
 
         # Serialize same-source executions on the existing source FOR UPDATE
-        # lock, then revalidate + dedup + create in the caller transaction.
+        # lock, then dedup + revalidate + create in the caller transaction.
         locked = await self._keys.get_gateway_key_for_update(source_id)
         if locked is None:
             raise GatewayKeyNotFoundError()
 
+        # R3: sample execution time AFTER acquiring the lock, so a source that
+        # expired while the lock was acquired is refused. An explicit now
+        # argument still wins for deterministic tests.
+        exec_now = now if now is not None else _now()
+
         # Deduplication FIRST: a completed operation stays identifiable even
-        # if the source changed (or became ineligible) after its commit. The
-        # receipt is compared against the plan's stable identity; a changed
-        # plan is refused before anything else.
-        existing = await self._keys.find_clone_receipt(
-            target_owner_id=target_owner_id,
+        # if the source later changed or became ineligible. The lookup is by
+        # (source, operation) INDEPENDENT of the (mutable) target selection.
+        receipts = await self._keys.find_clone_receipts(
             source_gateway_key_id=source_id,
             operation_uuid=operation_uuid,
         )
+        if len(receipts) > 1:
+            raise KeyCloneReceiptAmbiguousError(param="operation_uuid")
+        existing = receipts[0] if receipts else None
         if existing is not None:
             return self._already_applied(existing, plan)
 
-        self._assert_source_eligible(locked, now=check_now)
+        # R3: enforce the supported isolation boundary BEFORE any write.
+        isolation = await self._keys.current_transaction_isolation()
+        if isolation != "read committed":
+            raise KeyCloneUnsupportedIsolationError(param="transaction_isolation")
+
+        self._assert_source_eligible(locked, now=exec_now)
         self._assert_responses_live_burn_cloneable(locked)
         await self._assert_target_exists(target_owner_id, target_cohort_id)
 
         fresh_document = await self._canonical_policy_document(source_id)
         self._assert_no_known_secret_shapes(fresh_document)
         fresh_fingerprint = self._source_fingerprint(locked, fresh_document)
+
+        # R2: revalidate the reviewed business content against the fresh
+        # locked source on FIRST execution (not only an opaque digest). A
+        # changed source is stale; a reviewed policy/identity/confirmation the
+        # (unchanged) source does not back is refused. The editable plan is
+        # never authority to widen or narrow the source policy.
         if fresh_fingerprint != plan.source_fingerprint:
             raise KeyCloneStalePlanError(param="source_fingerprint")
+        if compute_policy_fingerprint(plan.policy) != compute_policy_fingerprint(
+            fresh_document
+        ):
+            raise KeyCloneReviewedPolicyMismatchError(param="policy")
+        if locked.public_key_id != plan.source_public_key_id:
+            raise KeyCloneReviewedPolicyMismatchError(param="source_public_key_id")
+        if self._requires_fenced_confirmation(locked) != plan.requires_fenced_confirmation:
+            raise KeyCloneReviewedPolicyMismatchError(param="requires_fenced_confirmation")
 
         if plan.requires_fenced_confirmation and not confirm_external_tool_fenced:
             raise KeyCloneConfirmationRequiredError(param="confirm_external_tool_fenced")
 
         valid_from, valid_until = self._target_validity(
-            plan, now=check_now, source_valid_until=locked.valid_until
+            plan, now=exec_now, source_valid_until=locked.valid_until
         )
 
         config = parse_key_configuration(fresh_document)
@@ -468,10 +518,13 @@ class KeyCloneService:
             key_result.gateway_key_id,
             source_gateway_key_id=source_id,
             operation_uuid=operation_uuid,
+            target_owner_id=target_owner_id,
             one_time_secret_id=key_result.one_time_secret_id,
             email_delivery_id=email_delivery_id,
             source_fingerprint=plan.source_fingerprint,
+            policy_fingerprint=compute_policy_fingerprint(fresh_document),
             target_cohort_id=target_cohort_id,
+            requires_fenced_confirmation=plan.requires_fenced_confirmation,
             validity_mode=plan.validity_mode,
             validity_duration_seconds=plan.validity_duration_seconds,
             validity_from=plan.validity_from,
@@ -533,19 +586,29 @@ class KeyCloneService:
 
     @staticmethod
     def _receipt_matches_plan(receipt: dict[str, object], plan: KeyClonePlan) -> bool:
-        """Exact stable plan identity: source fingerprint plus the plan-side
-        target selection and validity parameters. The derived target window
-        (recomputed from execution time for duration-from-now and
-        copy-source-expiry) is intentionally NOT compared: the first
-        committed execution's window is authoritative."""
+        """Exact stable business-plan identity.
+
+        Compares ALL execution-relevant reviewed fields: the source identity
+        and fingerprint, the reviewed policy (via its fingerprint), the target
+        owner/cohort selection, the validity parameters, and the fenced
+        confirmation requirement. Only the explicitly inert preview block is
+        excluded (it is never stored). A prior a-shape receipt missing any of
+        these new identity members does NOT match, so it cannot permit a
+        second creation (controlled refusal with safe recovery guidance).
+        """
         return (
             receipt.get("source_fingerprint") == plan.source_fingerprint
+            and receipt.get("policy_fingerprint")
+            == compute_policy_fingerprint(plan.policy)
+            and receipt.get("target_owner_id") == plan.target_owner_id
             and receipt.get("target_cohort_id") == plan.target_cohort_id
             and receipt.get("validity_mode") == plan.validity_mode
             and receipt.get("validity_duration_seconds")
             == plan.validity_duration_seconds
             and receipt.get("validity_from") == plan.validity_from
             and receipt.get("validity_until") == plan.validity_until
+            and receipt.get("requires_fenced_confirmation")
+            == plan.requires_fenced_confirmation
         )
 
 
@@ -554,7 +617,12 @@ def _seconds_to_timedelta(seconds: int | None):
 
     if seconds is None:
         raise KeyClonePlanError("validity.duration_seconds: Field is required.")
-    return timedelta(seconds=seconds)
+    try:
+        return timedelta(seconds=seconds)
+    except OverflowError as exc:
+        raise KeyClonePlanError(
+            "validity.duration_seconds: Value exceeds the bounded maximum."
+        ) from exc
 
 
 def _aware_fromiso(value: str) -> datetime:
@@ -562,3 +630,13 @@ def _aware_fromiso(value: str) -> datetime:
     if parsed.tzinfo is None:
         return parsed.replace(tzinfo=UTC)
     return parsed
+
+
+def _now() -> datetime:
+    """Execution-time clock hook.
+
+    ``execute_plan`` samples this AFTER acquiring the source lock so a source
+    that expires while the lock is being acquired is refused. Deterministic
+    tests monkeypatch this.
+    """
+    return datetime.now(UTC)

@@ -241,3 +241,158 @@ schema contracts:
   this record does not declare the full brief or the eleven DoD complete.
 - No release, RC, production, security, or compliance claim follows from
   this record.
+
+## 198-b ADDENDUM — clone plan and retry guards (same PR #354)
+
+Continuation 198-b on the SAME branch/PR repairs eight demonstrated
+limitations of the 198-a implementation (the 198-a record above is retained
+as history and is NOT rewritten). This addendum is evidence for the 198-b
+changes only; it is not a release or production-certification decision.
+
+### Corrections to demonstrated 198-a limitations
+
+1. **Retry lookup was scoped to the target owner.** The receipt lookup is
+   now namespaced by `(source, operation)` ONLY and INDEPENDENT of the
+   (mutable) target selection: `find_clone_receipt` became
+   `find_clone_receipts` (returns every match, no owner predicate), so a
+   retry that changes the target owner or cohort still finds the completed
+   operation. MORE THAN ONE receipt for `(source, operation)` is refused as
+   ambiguous (`key_clone_receipt_ambiguous`) rather than silently choosing
+   one.
+2. **The reviewed plan content was not revalidated after locking.** On
+   FIRST execution, after the source-row lock, the service now re-derives
+   the source fingerprint and the FRESH canonical policy document and
+   rechecks the plan's reviewed `policy` (via a new `policy_fingerprint`
+   over sort-keys canonical JSON), `source_public_key_id`, and
+   `requires_fenced_confirmation` against the locked source. Any mismatch is
+   refused with `key_clone_reviewed_policy_mismatch` before any write — a
+   reviewed policy the (unchanged) source does not back is refused, never
+   silently ignored; the editable plan is never authority to widen or
+   narrow the source policy. Repeat comparison covers the FULL business
+   identity (source fingerprint, policy fingerprint, target owner, target
+   cohort, all four validity parameters, fenced-confirmation requirement);
+   legacy 198-a-shape receipts lacking the new fields are refused as a
+   mismatch rather than adopted.
+3. **READ COMMITTED was documented but not enforced.** Before any write the
+   execution reads `current_setting('transaction_isolation')` (new
+   `current_transaction_isolation` repository method, after the lock) and
+   refuses any level other than `read committed`
+   (`key_clone_unsupported_isolation`), committing nothing.
+4. **Execution time was sampled before the lock.** The clock is now sampled
+   AFTER the source-row lock (R3 clock hook), so a source that expires
+   while the lock is acquired is refused.
+5. **Plan-file read was unbounded.** The execute read is bounded at
+   128 KiB + 1 byte (`_read_bounded_plan_file`); an oversized file is
+   refused with a fixed safe error BEFORE any database access, and a
+   missing/unreadable file produces a fixed error without the path.
+6. **A post-commit output/mail exception surfaced as a generic error.**
+   Post-commit secret-file/send-now/enqueue failures now produce a safe
+   `recovery` block (target key, one-time secret, delivery IDs, fixed
+   guidance; `plaintext_recoverable: false`) and exit nonzero without
+   rolling back the committed clone.
+7. **An exact repeat through `--secret-output-file` was refused pre-dedup.**
+   The pre-database `secret_output_file.exists()` check is removed: a NEW
+   operation with an already-existing output file COMMITS first, then the
+   exclusive write fails after commit (recovery block), and a TRUE exact
+   repeat reaches receipt deduplication before any file channel — it never
+   clobbers the file.
+8. **CI cache leak.** `_clean_profile_env` (autouse) in
+   `tests/unit/test_cli_key_policy_files.py` now clears the settings cache
+   in `try/finally`, so later tests in one process no longer inherit a
+   cached configured profile.
+
+Mixed-mode refusal (R4) was also added: `--execute` refuses the dry-run-only
+flags and `--dry-run` refuses the execute-only channel/confirmation flags;
+absolute validity timestamps are normalized (naive → UTC) so mixed
+aware/naive windows are compared predictably and rejected, and
+`duration-from-now` is bounded by a documented 1,000-year maximum.
+
+### Exact verification
+
+Environment: `PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest`
+(no ambient `DATABASE_URL`; PG tests against an owned disposable
+`postgres:16` instance with label prefix `slaif198a`).
+
+- `pytest tests/unit/test_key_clone_service.py tests/unit/test_cli_keys_clone.py
+  -p no:cacheprovider -q --junitxml=/tmp/slaif198/unit-clone-b.xml`
+  → **54 passed** (26 service + 28 CLI), 0 failed/0 errors/0 skipped. New
+  focused coverage: changed-owner retry still dedups; edited-reviewed-policy
+  before create refused; same operation with a different policy after commit
+  refused; unsupported (REPEATABLE READ) isolation refused before writes;
+  post-lock clock expiry refused; ambiguous multi-receipt refused; legacy
+  a-shape receipt refused; mixed-mode flag refusals; bounded plan read
+  (exactly 128 KiB + 1 read; oversized refused before any DB access);
+  existing-file exact repeat commits then recovers; file-ExistsError
+  refusal without path echo; post-commit mail failure recovery.
+- `pytest tests/integration/test_cli_key_clone_postgres.py
+  -p no:cacheprovider -q --junitxml=/tmp/slaif198/integration-clone-b.xml`
+  → **7 passed**, 0 failed/0 errors/0 skipped, against the owned PG
+  instance. Proofs: two concurrent same-source executions serialize (one
+  created, the other dedups); `--email-delivery pending` commits exactly
+  one pending delivery for the target; a real `KeyService` session at
+  `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` is refused with no rows
+  and no audits (rollback); two DIFFERENT operations for the same source
+  create two independent keys (same cohort, distinct token hashes); the
+  oversized-plan refusal and the cohort-UUID comparison are proven
+  end-to-end.
+- R6 leak regression: `test_cli_key_policy_files.py::test_create_invalid_configured_profile_fails_closed`
+  run in ONE process together with
+  `tests/unit/test_v1_chat_completions_pricing.py` and
+  `tests/unit/test_v1_endpoint_allowlist.py` → all pass; the full
+  `tests/unit/test_cli_key_policy_files.py` file is 28 passed.
+- `tests/unit/test_documentation_contract_drift.py` → **15 passed**;
+  `tests/unit/test_documentation_inventory.py` +
+  `tests/unit/test_oap_governance.py` → **22 passed**;
+  `scripts/check_documentation.py` → `OK files=125`; Ruff clean over all
+  eight changed product/test files; `git diff --check` clean.
+- Owned-PG cleanup: no leftover `slaif198a`-prefixed containers remain.
+
+### Privacy, atomicity, isolation, concurrency
+
+No key material, token hashes, provider references, raw metadata, usage, or
+secrets are stored in the receipt, echoed in errors, or added to logs; all
+new errors are fixed safe messages. Key creation, one-time secret, optional
+pending delivery, receipt, and audits still commit atomically in one
+caller-owned transaction, and nothing (no SMTP, no output file, no enqueue)
+happens before commit. READ COMMITTED is now the ENFORCED deduplication
+boundary; same-source executions serialize on the existing source-row
+`FOR UPDATE` lock, and the post-lock receipt read sees the prior commit.
+No schema, column, constraint, or migration was added; no real
+provider/model contact, real SMTP, Redis, or upstream smoke occurred.
+
+### CI state
+
+GitHub final-head CI for the 198-b head is PENDING (root-gated). The 198-a
+CI run FAILED (15/5868 PASS/1 SKIP; unit job 122804543472 / run
+40684723649) on the settings-cache leak that limitation 8 above repairs; no
+198-b CI result is claimed here and the coding agent never merges.
+
+### Documentation impact
+
+Required by AGENTS.md §5.1. 198-b changed the documented contracts:
+
+- `docs/cli-reference.md`: the `keys clone` section now documents
+  (source, operation) retry safety independent of target selection with
+  full business-identity comparison and ambiguity refusal, reviewed-plan
+  revalidation, post-lock execution time, mixed-mode refusals, bounded plan
+  read, the enforced isolation boundary, and post-commit output recovery.
+- `docs/database-schema.md`: the `clone_receipt` JSON contract gained
+  `target_owner_id`, `policy_fingerprint`, and
+  `requires_fenced_confirmation`; the lookup is documented as
+  (source, operation) only, repeat comparison as FULL business identity,
+  and READ COMMITTED as ENFORCED.
+- `docs/cli-field-administration.md`: the 198 row reflects the 198-b guards
+  (199–205 remain proposed; the objective-205
+  installed-executable-only transcript remains mandatory).
+- This file: 198-b addendum appended; `docs/verification/README.md`
+  unchanged (the record is already indexed).
+
+### Limitations
+
+- Synthetic data only: fictional owners/cohorts, fake provider
+  configuration, canned routes; no real provider/model contact, no real
+  SMTP delivery, no Redis, no upstream smoke.
+- The objective-205 installed-executable transcript is still outstanding;
+  this record does not declare the full brief or the eleven DoD complete.
+- No release, RC, production, security, or compliance claim follows from
+  this record.

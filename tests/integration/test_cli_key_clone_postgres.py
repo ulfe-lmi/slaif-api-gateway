@@ -30,7 +30,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typer.testing import CliRunner
 
@@ -46,10 +46,21 @@ from slaif_gateway.db.models import (
 )
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
+from slaif_gateway.db.repositories.email import EmailDeliveriesRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
+from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
+from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.schemas.key_clone import parse_clone_plan_document
+from slaif_gateway.services.email_delivery_service import EmailDeliveryService
+from slaif_gateway.services.email_service import EmailService
+from slaif_gateway.services.key_clone_service import (
+    KeyCloneService,
+    KeyCloneUnsupportedIsolationError,
+)
+from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.utils.secrets import generate_secret_key
 from tests.integration.db_test_utils import run_alembic_upgrade_head
 
@@ -420,7 +431,6 @@ async def _plant_usage_evidence(url: str, key_id: uuid.UUID) -> tuple[uuid.UUID,
             session.add(replay)
             await session.flush()
             return ledger.id, replay.id
-    return ledger.id, replay.id
 
 
 async def _state_snapshot(url: str, key_id: uuid.UUID) -> dict[str, object]:
@@ -821,7 +831,9 @@ def test_clone_beta_source_rates_denyall_retry_and_tamper(
         "--show-plaintext",
     )
     assert oversized_run.exit_code == 1
-    assert "131072" in oversized_run.stderr
+    # R4: the bounded reader rejects with a fixed safe message (no byte count,
+    # path, or body echo) BEFORE any database use.
+    assert "exceeds the bounded size" in oversized_run.stderr
 
     # Source unchanged.
     after = _run(_state_snapshot(url, source_id))
@@ -907,7 +919,8 @@ def test_clone_late_audit_failure_rolls_back(
         str(plan_path),
         "--reason",
         "198 must roll back",
-        "--show-plaintext",
+        "--email-delivery",
+        "pending",
         "--json",
     )
     assert failed.exit_code == 1, failed.output
@@ -991,8 +1004,10 @@ def test_clone_concurrent_same_plan_two_processes_one_applied(
         "--reason",
         "198 concurrent clone",
     ]
-    args_a = base + ["--secret-output-file", str(tmp_path / "conc-a.secret"), "--json"]
-    args_b = base + ["--secret-output-file", str(tmp_path / "conc-b.secret"), "--json"]
+    # Pending delivery (not a plaintext/file channel): exactly ONE pending
+    # delivery must exist for the operation after the concurrent race.
+    args_a = base + ["--email-delivery", "pending", "--json"]
+    args_b = base + ["--email-delivery", "pending", "--json"]
 
     env = {**os.environ, "PYTHONPATH": str(APP_DIR)}
 
@@ -1058,8 +1073,14 @@ def test_clone_concurrent_same_plan_two_processes_one_applied(
     )
     assert clone_audits == 1
 
-    # Only the created process wrote a secret file; the repeat emitted none.
-    assert (tmp_path / "conc-a.secret").exists() ^ (tmp_path / "conc-b.secret").exists()
+    # Exactly ONE pending delivery for the operation: only the created process
+    # made one; the already-applied repeat did not.
+    assert (
+        _run(
+            _count_where(url, EmailDelivery, EmailDelivery.gateway_key_id == target_id)
+        )
+        == 1
+    )
     for blob in (result_a["stdout"], result_b["stdout"]):
         assert "plaintext_key" not in blob
 
@@ -1172,3 +1193,172 @@ def test_clone_retry_after_postcommit_mail_failure(
     assert "plaintext_key" not in repeated_payload
     keys_after = _run(_count_where(url, GatewayKey, GatewayKey.id.is_not(None)))
     assert keys_after == keys_before
+
+
+# --- 198-b: REPEATABLE READ refusal (real owned PG) ----------------------------
+
+
+def test_clone_repeatableread_isolation_refused_no_rows(
+    cli_env: str, route_fixtures: str, tmp_path: Path
+) -> None:
+    url = cli_env
+    runner = CliRunner()
+    source_ctx = _run(_create_owner_context(url, "srcr"))
+    target_ctx = _run(_create_owner_context(url, "dstr"))
+
+    source = _create_key_cli(
+        runner,
+        "--allowed-model", "gpt-test-mini",
+        "--allowed-endpoint", "/v1/chat/completions",
+        owner_id=source_ctx.owner_id,
+        cohort_id=source_ctx.cohort_id,
+        secret_path=tmp_path / "src-rr.secret",
+        reason="198 rr source",
+    )
+    source_id = uuid.UUID(source["gateway_key_id"])
+
+    plan_path = tmp_path / "rr-plan.json"
+    dry = _cli(
+        runner, "keys", "clone", "--dry-run", str(plan_path),
+        "--source-key-id", str(source_id),
+        "--target-owner-id", str(target_ctx.owner_id),
+        "--validity-mode", "copy-source-expiry",
+    )
+    assert dry.exit_code == 0, dry.output
+    plan_doc = json.loads(plan_path.read_text(encoding="utf-8"))
+    operation_uuid = plan_doc["operation_uuid"]
+
+    before = _run(_state_snapshot(url, source_id))
+
+    async def run_at_rr() -> str:
+        settings = get_settings()
+        factory = _session_factory(url)
+        async with factory() as session:
+            async with session.begin():
+                await session.execute(
+                    text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                )
+                observed = (
+                    await session.execute(
+                        select(func.current_setting("transaction_isolation"))
+                    )
+                ).scalar_one()
+                keys_repo = GatewayKeysRepository(session)
+                audit_repo = AuditRepository(session)
+                key_service = KeyService(
+                    settings=settings,
+                    gateway_keys_repository=keys_repo,
+                    one_time_secrets_repository=OneTimeSecretsRepository(session),
+                    audit_repository=audit_repo,
+                    model_routes_repository=ModelRoutesRepository(session),
+                )
+                email_service = EmailDeliveryService(
+                    settings=settings,
+                    one_time_secrets_repository=OneTimeSecretsRepository(session),
+                    email_deliveries_repository=EmailDeliveriesRepository(session),
+                    gateway_keys_repository=keys_repo,
+                    owners_repository=OwnersRepository(session),
+                    audit_repository=audit_repo,
+                    email_service=EmailService(settings),
+                )
+                clone_service = KeyCloneService(
+                    settings=settings,
+                    key_service=key_service,
+                    gateway_keys_repository=keys_repo,
+                    owners_repository=OwnersRepository(session),
+                    cohorts_repository=CohortsRepository(session),
+                    email_delivery_service=email_service,
+                    audit_repository=audit_repo,
+                )
+                try:
+                    await clone_service.execute_plan(
+                        plan=parse_clone_plan_document(plan_doc),
+                        reason="198 rr refusal",
+                        actor_admin_id=None,
+                        confirm_external_tool_fenced=False,
+                        create_email_delivery=True,
+                    )
+                except KeyCloneUnsupportedIsolationError:
+                    await session.rollback()
+                    return observed
+                raise AssertionError("REPEATABLE READ isolation was not refused")
+
+    observed = _run(run_at_rr())
+    assert observed == "repeatable read"
+
+    after = _run(_state_snapshot(url, source_id))
+    assert after == before, "RR refusal must leave no new rows or audits"
+    receipts = _run(
+        _count_where(
+            url, GatewayKey,
+            GatewayKey.metadata_json.op("@>")(
+                {"clone_receipt": {"operation_uuid": operation_uuid}}
+            ),
+        )
+    )
+    assert receipts == 0, "no receipt may persist after an RR refusal"
+
+
+# --- 198-b: two NEW plans from one source -> two independent keys -------------
+
+
+def test_clone_two_new_plans_from_one_source_create_two_keys(
+    cli_env: str, route_fixtures: str, tmp_path: Path
+) -> None:
+    url = cli_env
+    runner = CliRunner()
+    source_ctx = _run(_create_owner_context(url, "srct"))
+    target_ctx = _run(_create_owner_context(url, "dstt"))
+
+    source = _create_key_cli(
+        runner,
+        "--allowed-model", "gpt-test-mini",
+        "--allowed-endpoint", "/v1/chat/completions",
+        owner_id=source_ctx.owner_id,
+        cohort_id=source_ctx.cohort_id,
+        secret_path=tmp_path / "src-t.secret",
+        reason="198 two-plan source",
+    )
+    source_id = uuid.UUID(source["gateway_key_id"])
+
+    # Two DISTINCT plans (distinct operation UUIDs) from the SAME source, both
+    # targeting the SAME existing cohort: each is a legitimate new operation
+    # and must create its own independent equivalent key (no source-only dedup).
+    plan_paths = []
+    for i in (1, 2):
+        p = tmp_path / f"two-plan-{i}.json"
+        dry = _cli(
+            runner, "keys", "clone", "--dry-run", str(p),
+            "--source-key-id", str(source_id),
+            "--target-owner-id", str(target_ctx.owner_id),
+            "--target-cohort-id", str(target_ctx.cohort_id),
+            "--validity-mode", "copy-source-expiry",
+        )
+        assert dry.exit_code == 0, dry.output
+        plan_paths.append(p)
+
+    results = []
+    for i, p in enumerate(plan_paths):
+        result = _cli(
+            runner, "keys", "clone", "--execute", str(p),
+            "--reason", f"198 two-plan {i + 1}",
+            "--show-plaintext", "--json",
+        )
+        assert result.exit_code == 0, result.output
+        results.append(json.loads(result.stdout))
+
+    ops = {r["operation_uuid"] for r in results}
+    targets = {r["target_gateway_key_id"] for r in results}
+    assert len(ops) == 2, "two distinct operations"
+    assert len(targets) == 2, "two independent target keys"
+    assert all(r["status"] == "created" for r in results)
+    assert all(r["target_public_key_id"] != "pub-source" for r in results)
+
+    # Both targets are independent, active, in the SAME existing cohort, with
+    # distinct token material.
+    cols_a = _run(_get_key(url, uuid.UUID(results[0]["target_gateway_key_id"])))
+    cols_b = _run(_get_key(url, uuid.UUID(results[1]["target_gateway_key_id"])))
+    for cols in (cols_a, cols_b):
+        assert cols["status"] == "active"
+        assert cols["cohort_id"] == target_ctx.cohort_id
+    assert cols_a["token_hash"] != cols_b["token_hash"]

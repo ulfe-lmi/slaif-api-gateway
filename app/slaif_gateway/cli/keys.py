@@ -714,6 +714,24 @@ def _created_key_dict(
     return payload
 
 
+def _read_bounded_plan_file(path: Path) -> bytes:
+    """Read at most ``MAX_CLONE_PLAN_FILE_BYTES + 1`` bytes of a plan file.
+
+    Bounding the read (instead of loading the whole file) keeps an oversized
+    file from being fully read before the size limit is enforced. Errors are
+    fixed and safe; they never echo the path or file contents.
+    """
+    cap = MAX_CLONE_PLAN_FILE_BYTES
+    try:
+        with path.open("rb") as fh:
+            data = fh.read(cap + 1)
+    except OSError as exc:
+        raise typer.BadParameter("Clone plan file is missing or unreadable.") from exc
+    if len(data) > cap:
+        raise typer.BadParameter("Clone plan file exceeds the bounded size.")
+    return data
+
+
 def _write_clone_plan_file(path: Path, document: dict[str, object]) -> None:
     """Write a reviewed NON-secret plan to a new 0600 file (no overwrite)."""
     text = json.dumps(document, indent=2, sort_keys=True, default=_json_default) + "\n"
@@ -723,7 +741,7 @@ def _write_clone_plan_file(path: Path, document: dict[str, object]) -> None:
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError as exc:
-        raise typer.BadParameter(f"Clone plan file already exists: {path}") from exc
+        raise typer.BadParameter("Clone plan file already exists.") from exc
     except OSError as exc:
         raise CliKeyError("Could not create clone plan file.") from exc
     try:
@@ -2278,7 +2296,43 @@ def clone(
                     raise typer.BadParameter(
                         "copy-source-expiry accepts no duration or absolute validity values"
                     )
+            # R4: refuse execute-only channel/confirmation options on dry-run.
+            # --reason and --actor-admin-id are shared: accepted here, but the
+            # audit note and actor apply only during execute (dry-run writes no
+            # audit row).
+            if show_plaintext:
+                raise typer.BadParameter(
+                    "--show-plaintext is execute-only; it cannot be used with --dry-run."
+                )
+            if secret_output_file is not None:
+                raise typer.BadParameter(
+                    "--secret-output-file is execute-only; it cannot be used with --dry-run."
+                )
+            if email_delivery is not EmailDeliveryMode.none:
+                raise typer.BadParameter(
+                    "--email-delivery is execute-only; it cannot be used with --dry-run."
+                )
+            if confirm_external_tool_fenced:
+                raise typer.BadParameter(
+                    "--confirm-external-tool-fenced is execute-only; it cannot be used with --dry-run."
+                )
         else:
+            # R4: refuse dry-run-only source/target/validity flags on execute;
+            # the reviewed plan file is the sole source of those values.
+            if (
+                source_key_id is not None
+                or target_owner_id is not None
+                or target_cohort_id is not None
+                or validity_mode is not None
+                or validity_duration_seconds is not None
+                or valid_from is not None
+                or valid_until is not None
+            ):
+                raise typer.BadParameter(
+                    "Clone execute reads source/target/validity from the plan "
+                    "file; do not pass --source-key-id, --target-owner-id, "
+                    "--target-cohort-id, or --validity-* with --execute."
+                )
             if not reason or not reason.strip():
                 raise typer.BadParameter("--reason is required for --execute")
             channels = sum(
@@ -2297,10 +2351,6 @@ def clone(
             if show_plaintext and secret_output_file is not None:
                 raise typer.BadParameter(
                     "Use either --show-plaintext or --secret-output-file, not both"
-                )
-            if secret_output_file is not None and secret_output_file.exists():
-                raise typer.BadParameter(
-                    f"Secret output file already exists: {secret_output_file}"
                 )
         actor = (
             _parse_uuid(actor_admin_id, field_name="actor_admin_id")
@@ -2362,12 +2412,7 @@ def clone(
                     }
                 )
         else:
-            try:
-                plan_data = Path(execute).read_bytes()  # type: ignore[union-attr]
-            except OSError as exc:
-                raise typer.BadParameter(
-                    "Clone plan file is missing or unreadable."
-                ) from exc
+            plan_data = _read_bounded_plan_file(Path(execute))  # type: ignore[union-attr]
             plan = parse_clone_plan_file(plan_data)
             result = _run_async(
                 _execute_clone_plan(
@@ -2393,14 +2438,17 @@ def clone(
                         _warn_secret_file(secret_output_file)
                 elif email_delivery is EmailDeliveryMode.send_now:
                     _warn_email_delivery_channel(email_delivery)
-                    delivery_result = _run_async(
-                        _send_pending_key_email_now(
-                            one_time_secret_id=uuid.UUID(result.one_time_secret_id),
-                            email_delivery_id=uuid.UUID(result.email_delivery_id),
-                            actor_admin_id=actor,
-                            reason=reason,
+                    try:
+                        delivery_result = _run_async(
+                            _send_pending_key_email_now(
+                                one_time_secret_id=uuid.UUID(result.one_time_secret_id),
+                                email_delivery_id=uuid.UUID(result.email_delivery_id),
+                                actor_admin_id=actor,
+                                reason=reason,
+                            )
                         )
-                    )
+                    except Exception:  # noqa: BLE001 - committed; safe recovery only
+                        post_commit_failed = True
                 elif email_delivery is EmailDeliveryMode.enqueue:
                     _warn_email_delivery_channel(email_delivery)
                     try:
@@ -2447,6 +2495,9 @@ def clone(
             if post_commit_failed:
                 payload["recovery"] = {
                     "plaintext_recoverable": False,
+                    "target_gateway_key_id": result.target_gateway_key_id,
+                    "one_time_secret_id": result.one_time_secret_id,
+                    "email_delivery_id": result.email_delivery_id,
                     "guidance": (
                         "The clone committed, but the selected output channel failed "
                         "after commit. The one-time plaintext cannot be recovered. "

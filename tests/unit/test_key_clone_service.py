@@ -37,12 +37,15 @@ from slaif_gateway.services.email_delivery_service import PendingKeyEmailResult
 from slaif_gateway.services.key_clone_service import (
     KeyCloneConfirmationRequiredError,
     KeyCloneEligibilityError,
+    KeyCloneReceiptAmbiguousError,
     KeyClonePlanMismatchError,
     KeyCloneService,
+    KeyCloneReviewedPolicyMismatchError,
     KeyCloneSourceSecretShapeError,
     KeyCloneStalePlanError,
     KeyCloneTargetMissingError,
     KeyCloneTargetValidityError,
+    KeyCloneUnsupportedIsolationError,
     KeyCloneUnsupportedSourcePolicyError,
 )
 from slaif_gateway.services.key_errors import GatewayKeyNotFoundError
@@ -176,6 +179,7 @@ class FakeKeysRepository:
         self.receipt_calls: list[tuple] = []
         self.attach_calls: list[tuple] = []
         self.found_source = True
+        self.isolation = "read committed"
 
     async def get_gateway_key_by_id(self, key_id):
         if key_id == self.source_row.id and self.found_source:
@@ -188,21 +192,23 @@ class FakeKeysRepository:
             return self.source_row
         return None
 
-    async def find_clone_receipt(
-        self, *, target_owner_id, source_gateway_key_id, operation_uuid
+    async def current_transaction_isolation(self):
+        return self.isolation
+
+    async def find_clone_receipts(
+        self, *, source_gateway_key_id, operation_uuid
     ):
-        self.receipt_calls.append((target_owner_id, source_gateway_key_id, operation_uuid))
+        self.receipt_calls.append((source_gateway_key_id, operation_uuid))
+        matches: list[GatewayKey] = []
         for target in self.targets.values():
-            if target.owner_id != target_owner_id:
-                continue
             metadata = target.metadata_json or {}
             receipt = metadata.get("clone_receipt") or {}
             if (
                 receipt.get("source_gateway_key_id") == str(source_gateway_key_id)
                 and receipt.get("operation_uuid") == str(operation_uuid)
             ):
-                return target
-        return None
+                matches.append(target)
+        return matches
 
     async def attach_clone_receipt(self, gateway_key_id, **kwargs):
         self.attach_calls.append((gateway_key_id, kwargs))
@@ -212,14 +218,17 @@ class FakeKeysRepository:
             "source_gateway_key_id": str(kwargs["source_gateway_key_id"]),
             "operation_uuid": str(kwargs["operation_uuid"]),
             "target_gateway_key_id": str(gateway_key_id),
+            "target_owner_id": str(kwargs["target_owner_id"]),
             "one_time_secret_id": str(kwargs["one_time_secret_id"]),
             "email_delivery_id": (
                 str(kwargs["email_delivery_id"]) if kwargs["email_delivery_id"] else None
             ),
             "source_fingerprint": kwargs["source_fingerprint"],
+            "policy_fingerprint": kwargs["policy_fingerprint"],
             "target_cohort_id": (
                 str(kwargs["target_cohort_id"]) if kwargs["target_cohort_id"] else None
             ),
+            "requires_fenced_confirmation": kwargs["requires_fenced_confirmation"],
             "validity_mode": kwargs["validity_mode"],
             "validity_duration_seconds": kwargs["validity_duration_seconds"],
             "validity_from": kwargs["validity_from"],
@@ -402,7 +411,7 @@ def test_build_plan_rejects_nondefault_or_malformed_responses_live_burn() -> Non
         {"version": 1, "enabled": True, "cost_margin_eur": "0.000000000", "token_margin": 7},
         {"version": 1, "enabled": True, "cost_margin_eur": "0.000000000", "token_margin": 0, "bogus": 1},
         "not-a-dict",
-        None if False else {"version": 2, "enabled": True, "cost_margin_eur": "0.000000000", "token_margin": 0},
+        {"version": 2, "enabled": True, "cost_margin_eur": "0.000000000", "token_margin": 0},
     ]
     for block in bad_blocks:
         service, *_ = _make_service(
@@ -738,3 +747,132 @@ def test_plan_round_trip_preserves_preview() -> None:
     assert plan.preview is not None
     re_rendered = render_clone_plan(plan)
     assert re_rendered == document
+
+
+# --- 198-b: stable retry namespace, reviewed policy truth, isolation/clock ----
+
+
+def test_execute_changed_owner_retry_refuses() -> None:
+    other_owner = uuid.UUID("99999999-9999-4999-8999-999999999999")
+    service, source_row, keys_repo, key_service = _make_service(
+        owner_ids=(TARGET_OWNER_ID, other_owner)
+    )
+    document = _build_plan(service)
+    first = _execute(service, document)
+    assert first.status == "created"
+
+    # Changing ONLY the (mutable) target owner under the SAME source/operation
+    # must NOT create a second key: the receipt lookup is owner-independent and
+    # the full business-plan identity mismatch refuses.
+    changed = copy.deepcopy(document)
+    changed["target_owner_id"] = str(other_owner)
+    with pytest.raises(KeyClonePlanMismatchError):
+        _execute(service, changed)
+    assert len(key_service.create_calls) == 1
+
+
+def test_execute_edited_review_policy_before_create_refuses() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(service)
+    # The operator widens the REVIEWED policy after build but before first
+    # execution; the clone must refuse rather than silently create either the
+    # source's narrower policy or the widened one.
+    edited = copy.deepcopy(document)
+    edited["policy"]["allow_all_models"] = True
+    with pytest.raises(KeyCloneReviewedPolicyMismatchError):
+        _execute(service, edited)
+    assert key_service.create_calls == []
+
+
+def test_execute_same_operation_different_policy_after_commit_mismatch() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(service)
+    _execute(service, document)
+    # A different policy under the SAME completed operation is a mismatch, not
+    # an already-applied no-op.
+    changed = copy.deepcopy(document)
+    changed["policy"]["cost_limit_eur"] = "30.00"
+    with pytest.raises(KeyClonePlanMismatchError):
+        _execute(service, changed)
+    assert len(key_service.create_calls) == 1
+
+
+def test_execute_refuses_repeatableread_isolation() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(service)
+    keys_repo.isolation = "repeatable read"
+    with pytest.raises(KeyCloneUnsupportedIsolationError):
+        _execute(service, document)
+    assert key_service.create_calls == []
+    assert service._audit.calls == []
+
+
+def test_execute_refuses_when_source_expires_while_acquiring_lock(monkeypatch) -> None:
+    import slaif_gateway.services.key_clone_service as svc_mod
+
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(service)
+    # The clock advances past the source's valid_until WHILE the lock is being
+    # acquired; the post-lock execution-time sample must see the expiry.
+    expired_now = source_row.valid_until + timedelta(seconds=1)
+
+    async def lock_and_advance_clock(key_id):
+        svc_mod._now = lambda: expired_now
+        return source_row
+
+    monkeypatch.setattr(keys_repo, "get_gateway_key_for_update", lock_and_advance_clock)
+    with pytest.raises(KeyCloneEligibilityError):
+        asyncio.run(
+            service.execute_plan(
+                plan=parse_clone_plan_document(document),
+                reason="clone",
+                actor_admin_id=ADMIN_ID,
+                confirm_external_tool_fenced=False,
+                create_email_delivery=False,
+            )
+        )
+    assert key_service.create_calls == []
+
+
+def test_execute_refuses_ambiguous_duplicate_receipts() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(service)
+    first = _execute(service, document)
+    assert first.status == "created"
+    first_target = keys_repo.targets[uuid.UUID(first.target_gateway_key_id)]
+    # Corrupted state: a second key carries the SAME (source, operation)
+    # receipt; the lookup must refuse rather than silently choose .first().
+    dup = GatewayKey(
+        id=uuid.uuid4(),
+        owner_id=TARGET_OWNER_ID,
+        public_key_id="pub-dup",
+        status="active",
+        valid_from=NOW,
+        valid_until=NOW + timedelta(days=1),
+        key_purpose="standard",
+        capability_policy_mode="standard",
+        external_tool_fence_state="none",
+        metadata_json=dict(first_target.metadata_json or {}),
+    )
+    keys_repo.targets[dup.id] = dup
+    with pytest.raises(KeyCloneReceiptAmbiguousError):
+        _execute(service, document)
+    assert len(key_service.create_calls) == 1
+
+
+def test_execute_refuses_legacy_a_shape_receipt() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(service)
+    first = _execute(service, document)
+    assert first.status == "created"
+    first_target = keys_repo.targets[uuid.UUID(first.target_gateway_key_id)]
+    # Simulate a legacy a-shape receipt lacking the new identity members.
+    receipt = dict((first_target.metadata_json or {})["clone_receipt"])
+    for field in ("policy_fingerprint", "target_owner_id", "requires_fenced_confirmation"):
+        receipt.pop(field, None)
+    metadata = dict(first_target.metadata_json or {})
+    metadata["clone_receipt"] = receipt
+    first_target.metadata_json = metadata
+    with pytest.raises(KeyClonePlanMismatchError):
+        _execute(service, document)
+    assert len(key_service.create_calls) == 1

@@ -20,7 +20,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -35,6 +35,9 @@ CLONE_PLAN_SCHEMA_VERSION = 1
 # The plan wraps a 64 KiB configuration document plus identity/validity
 # metadata; a modest, documented envelope bound keeps the file bounded.
 MAX_CLONE_PLAN_FILE_BYTES = 128 * 1024
+# Bounded maximum for duration-from-now validity: it keeps the derived window
+# representable (no timedelta overflow) with a documented, safe ceiling.
+MAX_VALIDITY_DURATION_SECONDS = 60 * 60 * 24 * 365 * 1000
 
 # Namespaced receipt key stored on the NEW target key's metadata (objective
 # 198 retry safety). It is bounded safe UUIDs/fingerprints/public state only.
@@ -142,6 +145,24 @@ def _iso_string(value: Any, name: str) -> str:
     return value
 
 
+def _aware_datetime(value: Any, name: str) -> datetime:
+    """Parse an ISO datetime, treating a naive value as UTC.
+
+    Naive-to-UTC normalization lets a mixed aware/naive absolute validity
+    window be compared predictably (and rejected) instead of raising an
+    uncaught parser TypeError.
+    """
+    if not isinstance(value, str) or not value.strip():
+        _fail(name, "Value must be an ISO datetime string.")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        _fail(name, "Value must be a valid ISO datetime string.")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 def _parse_validity(document: dict[str, Any]) -> dict[str, Any]:
     raw = document.get("validity", _ABSENT)
     if raw is _ABSENT:
@@ -176,11 +197,15 @@ def _parse_validity(document: dict[str, Any]) -> dict[str, Any]:
             _fail("validity.duration_seconds", "Field is required.")
         if isinstance(dur, bool) or not isinstance(dur, int) or dur <= 0:
             _fail("validity.duration_seconds", "Value must be a positive integer.")
+        if dur > MAX_VALIDITY_DURATION_SECONDS:
+            _fail("validity.duration_seconds", "Value exceeds the bounded maximum.")
         out["duration_seconds"] = dur
     else:  # absolute
         out["valid_from"] = _iso_string(raw.get("valid_from", _ABSENT), "validity.valid_from")
         out["valid_until"] = _iso_string(raw.get("valid_until", _ABSENT), "validity.valid_until")
-        if datetime.fromisoformat(out["valid_from"]) >= datetime.fromisoformat(out["valid_until"]):
+        if _aware_datetime(out["valid_from"], "validity.valid_from") >= _aware_datetime(
+            out["valid_until"], "validity.valid_until"
+        ):
             _fail("validity", "valid_until must be after valid_from.")
     return out
 
@@ -368,4 +393,16 @@ def compute_source_fingerprint(
         "policy": policy_document,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compute_policy_fingerprint(policy_document: dict[str, Any]) -> str:
+    """Canonical SHA-256 over the reviewed canonical policy document.
+
+    Binds the reviewed policy into the clone-receipt identity so an exact
+    repeat is compared against the SAME policy, and lets first execution
+    verify the reviewed policy still matches the fresh source. It is dedup
+    data, never authentication/replay authority.
+    """
+    canonical = json.dumps(policy_document, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

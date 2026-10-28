@@ -320,9 +320,6 @@ def test_clone_dry_run_text_output_is_safe(tmp_path: Path, monkeypatch) -> None:
 def test_clone_dry_run_service_error_is_safe(tmp_path: Path, monkeypatch) -> None:
     from slaif_gateway.services.key_clone_service import KeyCloneTargetMissingError
 
-    fake_build = _FakeBuild()
-    fake_build.calls  # keep attribute for uniformity
-
     async def _raising(**kwargs):
         raise KeyCloneTargetMissingError(param="target_owner_id")
 
@@ -431,19 +428,53 @@ def test_clone_execute_secret_output_file(tmp_path: Path, monkeypatch) -> None:
     assert PLAINTEXT_KEY not in result.stdout
 
 
-def test_clone_execute_secret_output_file_existing_fails_before_db(
+def test_clone_execute_fresh_secret_output_file_existing_commits_then_recovers(
     tmp_path: Path, monkeypatch
 ) -> None:
-    fake_execute = _FakeExecute()
+    fake_execute = _FakeExecute()  # a FRESH operation (status "created")
     monkeypatch.setattr(keys_cli, "_execute_clone_plan", fake_execute)
     plan_path = _write_plan_file(tmp_path)
     secret_path = tmp_path / "key.secret"
     secret_path.write_text("existing", encoding="utf-8")
 
-    result = runner.invoke(app, _execute_args(plan_path, "--secret-output-file", str(secret_path)))
+    result = runner.invoke(
+        app, _execute_args(plan_path, "--secret-output-file", str(secret_path), "--json")
+    )
+    # A fresh operation committed (one key created); the exclusive 0600 write
+    # then failed, so it exits nonzero with safe recovery and NEVER clobbers
+    # the pre-existing file.
     assert result.exit_code == 1
-    assert "Secret output file already exists" in result.stderr
-    assert fake_execute.calls == []
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "created"
+    assert payload["target_gateway_key_id"] == str(TARGET_KEY_ID)
+    assert "recovery" in payload
+    assert payload["recovery"]["plaintext_recoverable"] is False
+    assert "plaintext_key" not in payload
+    assert secret_path.read_text(encoding="utf-8") == "existing"
+
+
+def test_clone_execute_exact_repeat_reaches_dedup_with_existing_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake_execute = _FakeExecute(
+        result=_created_result(status="already-applied", plaintext_key=None)
+    )
+    monkeypatch.setattr(keys_cli, "_execute_clone_plan", fake_execute)
+    plan_path = _write_plan_file(tmp_path)
+    secret_path = tmp_path / "key.secret"
+    secret_path.write_text("existing", encoding="utf-8")
+
+    result = runner.invoke(
+        app, _execute_args(plan_path, "--secret-output-file", str(secret_path), "--json")
+    )
+    # The exact repeat reaches dedup (already-applied), returns the safe
+    # original IDs, and does NOT write/retrieve plaintext or clobber the file.
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "already-applied"
+    assert payload["target_gateway_key_id"] == str(TARGET_KEY_ID)
+    assert "plaintext_key" not in payload
+    assert secret_path.read_text(encoding="utf-8") == "existing"
 
 
 def test_clone_execute_email_pending_keeps_safe_output(tmp_path: Path, monkeypatch) -> None:
@@ -606,3 +637,121 @@ def test_clone_execute_confirm_flag_passes_through(tmp_path: Path, monkeypatch) 
     call = fake_execute.calls[0]
     assert call["confirm_external_tool_fenced"] is True
     assert call["actor_admin_id"] == ADMIN_ID
+
+
+# --- 198-b: mixed modes, bounded input, safe errors, post-commit recovery ------
+
+
+def test_clone_execute_refuses_dry_run_only_flags(tmp_path: Path, monkeypatch) -> None:
+    fake_execute = _FakeExecute()
+    monkeypatch.setattr(keys_cli, "_execute_clone_plan", fake_execute)
+    plan_path = _write_plan_file(tmp_path)
+    result = runner.invoke(
+        app,
+        _execute_args(
+            plan_path, "--target-owner-id", str(TARGET_OWNER_ID), "--show-plaintext"
+        ),
+    )
+    assert result.exit_code == 1
+    assert "reads source/target/validity from the plan file" in result.stderr
+    assert fake_execute.calls == []
+
+
+def test_clone_dry_run_refuses_execute_only_options(tmp_path: Path, monkeypatch) -> None:
+    fake_build = _FakeBuild()
+    monkeypatch.setattr(keys_cli, "_build_clone_plan_document", fake_build)
+
+    result = runner.invoke(app, _dry_run_args(tmp_path / "a.json", "--show-plaintext"))
+    assert result.exit_code == 1
+    assert "--show-plaintext is execute-only" in result.stderr
+    assert fake_build.calls == []
+
+    result = runner.invoke(
+        app, _dry_run_args(tmp_path / "b.json", "--email-delivery", "pending")
+    )
+    assert result.exit_code == 1
+    assert "--email-delivery is execute-only" in result.stderr
+    assert fake_build.calls == []
+
+
+def test_clone_bounded_plan_read_limits_bytes(tmp_path: Path) -> None:
+    import io
+
+    cap = 128 * 1024
+    inner = io.BytesIO(b" " * (cap + 50))
+    requested: list[int] = []
+
+    class _CountingFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n: int = -1) -> bytes:
+            requested.append(n)
+            return inner.read(n)
+
+    class _CountingPath:
+        def open(self, *a, **k):
+            return _CountingFile()
+
+    try:
+        keys_cli._read_bounded_plan_file(_CountingPath())  # type: ignore[arg-type]
+    except Exception:
+        pass
+    # The read is bounded to cap+1 (never the whole file).
+    assert requested == [cap + 1]
+
+
+def test_clone_execute_refuses_oversized_plan_before_db(tmp_path: Path, monkeypatch) -> None:
+    fake_execute = _FakeExecute()
+    monkeypatch.setattr(keys_cli, "_execute_clone_plan", fake_execute)
+    plan_path = tmp_path / "big.json"
+    plan_path.write_bytes(b"{" + b" " * (140 * 1024) + b"}")
+    result = runner.invoke(
+        app, _execute_args(plan_path, "--show-plaintext")
+    )
+    assert result.exit_code == 1
+    assert "exceeds the bounded size" in result.stderr
+    assert fake_execute.calls == []
+
+
+def test_clone_dry_run_overwrite_error_does_not_echo_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake_build = _FakeBuild()
+    monkeypatch.setattr(keys_cli, "_build_clone_plan_document", fake_build)
+    plan_path = tmp_path / "plan.json"
+    runner.invoke(app, _dry_run_args(plan_path))
+    result = runner.invoke(app, _dry_run_args(plan_path))
+    assert result.exit_code == 1
+    assert "Clone plan file already exists" in result.stderr
+    assert str(plan_path) not in result.stderr
+
+
+def test_clone_execute_postcommit_mail_exception_is_safe_recovery(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake_execute = _FakeExecute()
+    monkeypatch.setattr(keys_cli, "_execute_clone_plan", fake_execute)
+
+    async def failing_send(**kwargs):
+        raise RuntimeError("synthetic transport exception")
+
+    monkeypatch.setattr(keys_cli, "_send_pending_key_email_now", failing_send)
+    plan_path = _write_plan_file(tmp_path)
+    result = runner.invoke(
+        app, _execute_args(plan_path, "--email-delivery", "send-now", "--json")
+    )
+    # The clone committed despite the raised post-commit mail exception; the
+    # CLI exits nonzero with safe target/secret/delivery IDs and recovery, and
+    # never echoes the exception detail.
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "created"
+    assert payload["target_gateway_key_id"] == str(TARGET_KEY_ID)
+    assert payload["one_time_secret_id"] == str(ONE_TIME_SECRET_ID)
+    assert "recovery" in payload
+    assert payload["recovery"]["plaintext_recoverable"] is False
+    assert "synthetic transport exception" not in result.stdout
