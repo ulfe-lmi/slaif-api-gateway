@@ -19,10 +19,16 @@ from slaif_gateway.services.key_policy_inspection import (
     build_inspection_key,
     build_key_policy_inspection,
     explain_model_route_access,
+    safe_calibration_metadata_projection,
+    safe_provider_policy_projection,
+    safe_responses_policy_projection,
 )
 from slaif_gateway.services.endpoint_policy import canonical_endpoint_id
 
 NOW = datetime(2026, 10, 28, 12, 0, 0, tzinfo=UTC)
+
+KNOWN_SECRET_CANARY = "SyntheticCanary197b" * 3
+KNOWN_PROVIDER_SECRET = f"sk-proj-{KNOWN_SECRET_CANARY}"
 
 
 def _settings(**overrides: object) -> Settings:
@@ -600,6 +606,108 @@ def test_report_never_dumps_provider_or_secret_material() -> None:
     assert "provider_base_url" not in text
     assert "api_key_env_var" not in text
     assert "CANARY_" not in text
+
+
+def test_provider_policy_known_secret_shape_redacted_not_echoed() -> None:
+    """KNOWN auth/provider secret shapes are redacted at the display boundary."""
+    report = build_key_policy_inspection(
+        gateway_key=_gateway_key(
+            metadata_json={"allowed_providers": [KNOWN_PROVIDER_SECRET, "openai"]}
+        ),
+        settings=_settings(),
+        now=NOW,
+    )
+    allowlists = report["allowlists"]
+    assert allowlists["state"] == "allow-list"
+    assert allowlists["allowed_providers"] == ["***", "openai"]
+    assert KNOWN_SECRET_CANARY not in str(report)
+
+
+def test_responses_policy_projection_helper_states() -> None:
+    assert safe_responses_policy_projection(None) is None
+    assert safe_responses_policy_projection({"version": 1}) == {"version": 1}
+    assert safe_responses_policy_projection(
+        {"version": 1, "unsupported_field": "x"}
+    ) == {"state": "invalid"}
+    assert safe_responses_policy_projection("junk") == {"state": "invalid"}
+    # valid block with a free-form note: known secret shapes redacted
+    noted = safe_responses_policy_projection(
+        {"version": 1, "notes": f"note {KNOWN_PROVIDER_SECRET} end"}
+    )
+    assert noted == {"version": 1, "notes": "note *** end"}
+    legit = safe_responses_policy_projection({"version": 1, "notes": "legit note"})
+    assert legit == {"version": 1, "notes": "legit note"}
+
+
+def test_provider_policy_projection_helper_redacts_known_shapes() -> None:
+    projected = safe_provider_policy_projection(
+        {"allowed_providers": [KNOWN_PROVIDER_SECRET, "openai"]}
+    )
+    assert projected == {
+        "state": "allow-list",
+        "allowed_providers": ["***", "openai"],
+        "allow_all_providers": False,
+    }
+    # legitimate members pass through unchanged
+    assert safe_provider_policy_projection(
+        {"allowed_providers": ["openai"]}
+    ) == {
+        "state": "allow-list",
+        "allowed_providers": ["openai"],
+        "allow_all_providers": False,
+    }
+
+
+def test_calibration_metadata_projection_known_members_only() -> None:
+    assert safe_calibration_metadata_projection({}) == {}
+    assert safe_calibration_metadata_projection("junk") == {}
+    projected = safe_calibration_metadata_projection(
+        {
+            "creation_channel": "cli",
+            "created_from": "admin_web",
+            "operator_review_required": True,
+            "secret_internal": KNOWN_SECRET_CANARY,
+            "operator_review_required_alt": "yes",
+        }
+    )
+    assert projected == {
+        "creation_channel": "cli",
+        "created_from": "admin_web",
+        "operator_review_required": True,
+    }
+    assert KNOWN_SECRET_CANARY not in str(projected)
+    # wrong-type known members are dropped, never coerced
+    assert safe_calibration_metadata_projection(
+        {"creation_channel": 5, "operator_review_required": "yes"}
+    ) == {}
+    # known secret shapes inside kept strings are redacted
+    redacted = safe_calibration_metadata_projection(
+        {"creation_channel": KNOWN_PROVIDER_SECRET}
+    )
+    assert redacted == {"creation_channel": "***"}
+    assert KNOWN_SECRET_CANARY not in str(redacted)
+
+
+def test_report_revoked_reason_preserved_and_known_shapes_redacted() -> None:
+    normal = build_key_policy_inspection(
+        gateway_key=_gateway_key(
+            status="revoked", revoked_at=NOW, revoked_reason="quota breach"
+        ),
+        settings=_settings(),
+        now=NOW,
+    )
+    assert normal["key"]["revoked_reason"] == "quota breach"
+
+    secret = f"bad {KNOWN_PROVIDER_SECRET}"
+    report = build_key_policy_inspection(
+        gateway_key=_gateway_key(
+            status="revoked", revoked_at=NOW, revoked_reason=secret
+        ),
+        settings=_settings(),
+        now=NOW,
+    )
+    assert report["key"]["revoked_reason"] == "bad ***"
+    assert KNOWN_SECRET_CANARY not in str(report)
 
 
 # --- canonical_endpoint_id -----------------------------------------------------

@@ -89,12 +89,26 @@ Semantics:
   (`LAZY_THROTTLING_MAX_WAIT_SECONDS`, `LAZY_THROTTLING_MAX_WAITING_PER_KEY`);
   bool/float/negative values and out-of-ceiling bounds fail BEFORE any
   write (no change, no audit row).
-- `--mode reject` stores the canonical reject policy. Waiting bounds
-  supplied alongside it are validated (positive, within the ceilings) but
-  remain INACTIVE for a reject policy.
-- `--clear` removes the stored policy; reject and clear are distinct verbs
-  with the same stored outcome and cannot be combined (nor take waiting
-  bounds, except the validated-inactive reject case).
+- `--mode reject` removes the stored override (default immediate
+  rejection). The shared KeyService canonicalizes a reject policy to "no
+  stored override", so supplying waiting bounds alongside reject would be
+  silently discarded; the CLI refuses them with a fixed error BEFORE any
+  mutation (no change, no audit row). Use `--mode wait` for waiting bounds.
+- `--clear` removes the stored policy; plain reject and clear are distinct
+  verbs with the SAME stored outcome (no stored override / immediate
+  rejection); neither accepts waiting bounds, and they cannot be combined.
+- Safe default display: `keys show` / `keys list` project safe metadata only.
+  Stored Responses policies render through the strict shared validator
+  (canonical members only, or a fixed `{"state": "invalid"}` marker for
+  unknown/malformed/stale blocks); the stored provider restriction renders
+  as an explicit `allowed_providers_state` (`unrestricted` / `allow-list` /
+  `deny-all` / `invalid`) while the legacy `allowed_providers` /
+  `allow_all_providers` members keep their shape; `calibration_metadata`
+  keeps only its finite known members (`creation_channel`, `created_from`,
+  `operator_review_required`). Free-form read values (`revoked_reason`) and
+  surviving strings pass the existing known-shape redaction, so KNOWN
+  authentication/provider secret shapes cannot reach CLI output; this is
+  known-shape protection, not universal content sanitization.
 - The shared service validator is re-applied in the caller-owned
   transaction, so installations with ceilings LOWER than the schema
   defaults keep reject/clear usable without silently enlarging the active
@@ -200,15 +214,26 @@ contact, or capture:
 - `keys show <uuid-or-public-key-id>`: UUID lookup remains usable and the
   exact public key ID is also accepted. Full bearer-shaped input is
   refused with a fixed safe error and never echoed; there is no identity
-  lookup from token hash/HMAC/plaintext.
+  lookup from token hash/HMAC/plaintext. Credential-SHAPED references are
+  likewise refused BEFORE any database query: any internal whitespace,
+  a secret separator (`.`), a case-insensitive `Bearer` header prefix, or
+  any configured accepted key prefix (including `GATEWAY_KEY_PREFIX`)
+  cannot be a safe UUID/public ID and fails with the same fixed no-echo
+  error.
 - `keys list --owner-email <exact email>` uses exact owner lookup (never
   substring matching); unknown email fails with a fixed safe error.
   `--owner-id` and `--owner-email` are mutually exclusive.
 - `--cohort-id` and `--status` filters apply in SQL BEFORE the limit.
 - Bounded complete pagination: `--limit` (default 50, maximum 200) and
   `--offset`; JSON adds `paging` metadata (`limit`, `offset`, `returned`,
-  `has_more`, `next_offset`). The default `{"keys": [...]}` shape is
-  unchanged (additive metadata only).
+  `has_more`, `next_offset`). The list fetch uses a bounded lookahead of
+  ONE extra row (`limit + 1`), so `has_more` is true ONLY when an extra
+  real row exists and `next_offset` is `null` at the true end of the
+  result set - a full final page reports `has_more: false` instead of
+  claiming unknown state. Only the requested `limit` rows are returned;
+  the internal lookahead for the maximum page of 200 is bounded (201) and
+  never unbounded. The default `{"keys": [...]}` shape is unchanged
+  (additive metadata only).
 - Stable ordering: `created_at` DESC with a UUID tiebreaker, so rows with
   equal timestamps paginate without duplicates or lost rows.
 

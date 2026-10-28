@@ -4,6 +4,7 @@ safe lookup/paging, route explanation) with faked runtimes only."""
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -29,6 +30,13 @@ PUBLIC_ID = "publicid1234567890abcdefghijkl"
 BEARER = f"sk-slaif-{PUBLIC_ID}." + "A" * 43
 
 runner = CliRunner()
+HELP_ENV = {"COLUMNS": "220", "NO_COLOR": "1"}
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def _plain(text: str) -> str:
+    """ANSI-free, whitespace-normalized output for style-independent checks."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 
 def _settings(**overrides: object) -> Settings:
@@ -101,14 +109,17 @@ def _management_result() -> GatewayKeyManagementResult:
 class _FakeKeysRepository:
     def __init__(self, rows: list[SimpleNamespace]) -> None:
         self._rows = list(rows)
+        self.lookup_calls: list[tuple[str, object]] = []
 
     async def get_gateway_key_by_id(self, key_id: uuid.UUID):
+        self.lookup_calls.append(("id", key_id))
         for row in self._rows:
             if row.id == key_id:
                 return row
         return None
 
     async def get_gateway_key_by_public_key_id(self, public_key_id: str):
+        self.lookup_calls.append(("public", public_key_id))
         for row in self._rows:
             if row.public_key_id == public_key_id:
                 return row
@@ -187,10 +198,13 @@ def _invoke(*args: str) -> object:
 
 
 def test_set_lazy_throttling_help(fake_runtime) -> None:
-    result = _invoke("keys", "set-lazy-throttling", "--help")
+    result = runner.invoke(
+        app, ["keys", "set-lazy-throttling", "--help"], env=HELP_ENV
+    )
     assert result.exit_code == 0
-    assert "--max-wait-seconds" in result.output
-    assert "--clear" in result.output
+    output = _plain(result.output)
+    assert "--max-wait-seconds" in output
+    assert "--clear" in output
 
 
 def test_set_lazy_wait_requires_both_bounds(fake_runtime) -> None:
@@ -258,9 +272,9 @@ def test_set_lazy_reject_clears_stored_policy(fake_runtime) -> None:
     assert service.calls[0].lazy_throttling_policy is None
 
 
-def test_set_lazy_reject_bounds_validated_but_inactive(fake_runtime) -> None:
+def test_set_lazy_reject_with_bounds_refused_before_mutation(fake_runtime) -> None:
     _, service, _ = fake_runtime
-    ok = _invoke(
+    refused = _invoke(
         "keys",
         "set-lazy-throttling",
         str(KEY_ID),
@@ -273,23 +287,28 @@ def test_set_lazy_reject_bounds_validated_but_inactive(fake_runtime) -> None:
         "--reason",
         "r",
     )
-    assert ok.exit_code == 0, ok.output
-    assert service.calls[0].lazy_throttling_policy is None
+    assert refused.exit_code != 0
+    assert "cannot be combined" in _plain(refused.output)
+    assert service.calls == []
 
+    # Over-ceiling wait bounds are still refused with the ceiling message,
+    # and still before any mutation.
     over = _invoke(
         "keys",
         "set-lazy-throttling",
         str(KEY_ID),
         "--mode",
-        "reject",
+        "wait",
         "--max-wait-seconds",
         "9999",
+        "--max-waiting-requests",
+        "1",
         "--reason",
         "r",
     )
     assert over.exit_code != 0
-    assert "operator ceiling" in over.output
-    assert len(service.calls) == 1
+    assert "operator ceiling" in _plain(over.output)
+    assert service.calls == []
 
 
 def test_set_lazy_low_ceiling_still_allows_reject_and_clear(fake_runtime) -> None:
@@ -321,19 +340,23 @@ def test_set_lazy_flag_conflicts_rejected(fake_runtime) -> None:
 
 def test_set_lazy_requires_reason(fake_runtime) -> None:
     _, service, _ = fake_runtime
-    result = _invoke(
-        "keys",
-        "set-lazy-throttling",
-        str(KEY_ID),
-        "--mode",
-        "wait",
-        "--max-wait-seconds",
-        "5",
-        "--max-waiting-requests",
-        "1",
+    result = runner.invoke(
+        app,
+        [
+            "keys",
+            "set-lazy-throttling",
+            str(KEY_ID),
+            "--mode",
+            "wait",
+            "--max-wait-seconds",
+            "5",
+            "--max-waiting-requests",
+            "1",
+        ],
+        env=HELP_ENV,
     )
     assert result.exit_code != 0
-    assert "--reason is required" in result.output
+    assert "--reason is required" in _plain(result.output)
     assert service.calls == []
 
 
@@ -446,7 +469,6 @@ def test_policy_effective_inherited_warning_and_key_sources(
         rate_limit_requests_per_minute=1,
         metadata_json={"rate_limit_policy": {"window_seconds": 10}},
     )
-    fake_inspection_runtime  # keep fixture active
     # Re-point the runtime at the rate-configured row.
     from slaif_gateway.cli import keys as keys_module
 
@@ -567,6 +589,41 @@ def test_list_paging_json_and_backward_compat(
     assert len(set(seen)) == 3
 
 
+def test_list_exact_final_page_reports_true_end(
+    monkeypatch: pytest.MonkeyPatch, fake_runtime
+) -> None:
+    """Exactly `limit` rows total: has_more must be False at the true end."""
+    rows = _three_rows()[:2]
+    _, service, settings = fake_runtime
+    repo = _FakeKeysRepository(rows)
+    settings.LAZY_THROTTLING_MAX_WAIT_SECONDS = 120
+
+    @asynccontextmanager
+    async def _rt() -> AsyncIterator[tuple[object, object, object]]:
+        yield settings, repo, service
+
+    monkeypatch.setattr(keys_cli, "_key_runtime", _rt)
+
+    page = _invoke("keys", "list", "--limit", "2", "--json")
+    assert page.exit_code == 0, page.output
+    body = json.loads(page.output)
+    assert len(body["keys"]) == 2
+    assert body["paging"] == {
+        "limit": 2,
+        "offset": 0,
+        "returned": 2,
+        "has_more": False,
+        "next_offset": None,
+    }
+
+    # A partial final page still reports the true end.
+    partial = _invoke("keys", "list", "--limit", "2", "--offset", "1", "--json")
+    body_partial = json.loads(partial.output)
+    assert len(body_partial["keys"]) == 1
+    assert body_partial["paging"]["has_more"] is False
+    assert body_partial["paging"]["next_offset"] is None
+
+
 def test_list_owner_email_unknown_is_safe(
     monkeypatch: pytest.MonkeyPatch, fake_runtime
 ) -> None:
@@ -625,3 +682,222 @@ def test_show_unknown_reference_is_not_found(fake_runtime) -> None:
     assert result.exit_code == 1
     body = json.loads(result.output)
     assert "error" in body
+
+# --- safe default show/list display (197-b R2) ---------------------------------
+
+
+def _repoint_key_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[SimpleNamespace],
+    settings: Settings,
+    service: _FakeKeyService,
+) -> _FakeKeysRepository:
+    repo = _FakeKeysRepository(rows)
+
+    @asynccontextmanager
+    async def _rt() -> AsyncIterator[tuple[object, object, object]]:
+        yield settings, repo, service
+
+    monkeypatch.setattr(keys_cli, "_key_runtime", _rt)
+    return repo
+
+
+def test_show_and_list_do_not_leak_unsupported_policy_data(
+    monkeypatch: pytest.MonkeyPatch, fake_runtime
+) -> None:
+    canary = "private-canary-197"
+    row = _key_row(
+        metadata_json={
+            "responses_policy": {"version": 1, "private_unknown_field": canary},
+            "allowed_providers": ["openai", {"nested": canary}],
+        },
+        calibration_metadata={
+            "creation_channel": "cli",
+            "secret_internal": canary,
+            "operator_review_required": "yes",
+        },
+    )
+    _, service, settings = fake_runtime
+    _repoint_key_runtime(monkeypatch, [row], settings, service)
+
+    show = _invoke("keys", "show", str(KEY_ID), "--json")
+    assert show.exit_code == 0, show.output
+    body = json.loads(show.output)
+    assert body["responses_policy"] == {"state": "invalid"}
+    assert body["allowed_providers_state"] == "invalid"
+    assert body["allowed_providers"] is None
+    assert body["allow_all_providers"] is False
+    assert body["calibration_metadata"] == {"creation_channel": "cli"}
+    assert canary not in show.output
+
+    listing = _invoke("keys", "list", "--json")
+    assert listing.exit_code == 0, listing.output
+    listing_body = json.loads(listing.output)
+    assert listing_body["keys"][0]["responses_policy"] == {"state": "invalid"}
+    assert listing_body["keys"][0]["allowed_providers_state"] == "invalid"
+    assert canary not in listing.output
+
+
+def test_show_projects_valid_policy_states() -> None:
+    """Legitimate values are preserved, not over-redacted (state vocabulary)."""
+
+    # unrestricted (absent), deny-all, allow-list
+    assert keys_cli._provider_policy_from_gateway_key(
+        _key_row(metadata_json={"allowed_providers": None})
+    ) == {
+        "state": "unrestricted",
+        "allowed_providers": None,
+        "allow_all_providers": True,
+    }
+    assert keys_cli._provider_policy_from_gateway_key(
+        _key_row(metadata_json={"allowed_providers": []})
+    ) == {
+        "state": "deny-all",
+        "allowed_providers": [],
+        "allow_all_providers": False,
+    }
+    assert keys_cli._provider_policy_from_gateway_key(
+        _key_row(metadata_json={"allowed_providers": ["openai"]})
+    ) == {
+        "state": "allow-list",
+        "allowed_providers": ["openai"],
+        "allow_all_providers": False,
+    }
+
+    # valid responses policy projects its canonical members only
+    row = _key_row(metadata_json={"responses_policy": {"version": 1}})
+    assert (
+        keys_cli._responses_policy_from_gateway_key(row)
+        == {"version": 1}
+    )
+    # absent metadata_json -> absent policy
+    row_absent = _key_row(metadata_json=None)
+    assert keys_cli._responses_policy_from_gateway_key(row_absent) is None
+
+
+def test_show_and_list_redact_known_secret_shapes(
+    monkeypatch: pytest.MonkeyPatch, fake_runtime
+) -> None:
+    """KNOWN auth/provider secret shapes are redacted in legacy show/list."""
+    canary = "SyntheticCanary197b" * 3
+    secret = f"sk-proj-{canary}"
+    row = _key_row(
+        metadata_json={"allowed_providers": [secret, "openai"]},
+        calibration_metadata={"creation_channel": secret},
+    )
+    _, service, settings = fake_runtime
+    _repoint_key_runtime(monkeypatch, [row], settings, service)
+
+    show = _invoke("keys", "show", str(KEY_ID), "--json")
+    assert show.exit_code == 0, show.output
+    body = json.loads(show.output)
+    assert body["allowed_providers"] == ["***", "openai"]
+    assert body["allowed_providers_state"] == "allow-list"
+    assert body["calibration_metadata"] == {"creation_channel": "***"}
+    assert canary not in show.output
+
+    listing = _invoke("keys", "list", "--json")
+    assert listing.exit_code == 0, listing.output
+    assert canary not in listing.output
+    assert json.loads(listing.output)["keys"][0]["allowed_providers"] == [
+        "***",
+        "openai",
+    ]
+
+
+def test_show_revoked_reason_preserved_and_known_shapes_redacted(
+    monkeypatch: pytest.MonkeyPatch, fake_runtime
+) -> None:
+    canary = "SyntheticCanary197b" * 3
+    secret = f"sk-proj-{canary}"
+    normal_row = _key_row(status="revoked", revoked_reason="quota breach")
+    secret_row = _key_row(
+        id=uuid.UUID("55555555-5555-4555-8555-555555555555"),
+        public_key_id="publicidsecret567890abcdefghijkl",
+        status="revoked",
+        revoked_reason=f"bad {secret}",
+    )
+    _, service, settings = fake_runtime
+    _repoint_key_runtime(monkeypatch, [normal_row, secret_row], settings, service)
+
+    normal = _invoke("keys", "show", str(KEY_ID), "--json")
+    assert normal.exit_code == 0, normal.output
+    assert json.loads(normal.output)["revoked_reason"] == "quota breach"
+
+    secret_show = _invoke(
+        "keys",
+        "show",
+        "publicidsecret567890abcdefghijkl",
+        "--json",
+    )
+    assert secret_show.exit_code == 0, secret_show.output
+    body = json.loads(secret_show.output)
+    assert body["revoked_reason"] == "bad ***"
+    assert canary not in secret_show.output
+
+
+
+# --- credential-shaped reference refusal (197-b R3) -----------------------------
+
+
+def test_show_refuses_credential_shaped_references_before_lookup(
+    monkeypatch: pytest.MonkeyPatch, fake_runtime
+) -> None:
+    repo, service, settings = fake_runtime
+    cases = [
+        f"Bearer {BEARER}",
+        f"BEARER {BEARER}",
+        f"bearer:{BEARER}",
+        f"sk-slaif-{PUBLIC_ID}.short",  # malformed short credential
+        "sk-slaif-abc",  # known prefix, malformed
+        f"sk-slaif-{PUBLIC_ID}.x ",  # trailing-space handled by strip, then dot
+    ]
+    for reference in cases:
+        repo.lookup_calls.clear()
+        result = _invoke("keys", "show", reference, "--json")
+        assert result.exit_code == 1, (reference, result.output)
+        assert (
+            "Full key material cannot be used for lookup. "
+            "Use the key UUID or its public key ID."
+        ) in _plain(result.output)
+        assert reference.strip() not in result.output
+        assert repo.lookup_calls == [], (reference, repo.lookup_calls)
+        assert service.calls == []
+
+
+def test_show_refuses_configured_custom_prefix_before_lookup(
+    monkeypatch: pytest.MonkeyPatch, fake_runtime
+) -> None:
+    _, service, _ = fake_runtime
+    custom_settings = _settings(
+        GATEWAY_KEY_PREFIX="sk-test-",
+        GATEWAY_KEY_ACCEPTED_PREFIXES="sk-test-",
+    )
+
+    @asynccontextmanager
+    async def _rt() -> AsyncIterator[tuple[object, object, object]]:
+        yield custom_settings, _FakeKeysRepository([_key_row()]), service
+
+    monkeypatch.setattr(keys_cli, "_key_runtime", _rt)
+
+    result = _invoke("keys", "show", "sk-test-abcdef", "--json")
+    assert result.exit_code == 1, result.output
+    assert (
+        "Full key material cannot be used for lookup. "
+        "Use the key UUID or its public key ID."
+    ) in _plain(result.output)
+    assert "sk-test-abcdef" not in result.output
+    assert service.calls == []
+
+
+def test_show_safe_references_still_work(fake_runtime) -> None:
+    repo, _, _ = fake_runtime
+    repo.lookup_calls.clear()
+    by_uuid = _invoke("keys", "show", str(KEY_ID), "--json")
+    assert by_uuid.exit_code == 0, by_uuid.output
+    assert ("id", KEY_ID) in repo.lookup_calls
+
+    repo.lookup_calls.clear()
+    by_public = _invoke("keys", "show", PUBLIC_ID, "--json")
+    assert by_public.exit_code == 0, by_public.output
+    assert ("public", PUBLIC_ID) in repo.lookup_calls

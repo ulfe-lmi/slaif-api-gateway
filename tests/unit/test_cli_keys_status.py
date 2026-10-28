@@ -91,7 +91,8 @@ def test_keys_list_and_show_output_safe_metadata(monkeypatch) -> None:
         assert kwargs["owner_id"] == OWNER_ID
         assert kwargs["cohort_id"] == COHORT_ID
         assert kwargs["status"] == "active"
-        assert kwargs["limit"] == 5
+        # 197-b: bounded lookahead fetch (limit + 1) for accurate has_more.
+        assert kwargs["limit"] == 6
         return [_gateway_key_row()]
 
     async def fake_show(reference: str) -> SimpleNamespace:

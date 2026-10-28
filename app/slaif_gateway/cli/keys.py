@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
@@ -89,6 +90,10 @@ from slaif_gateway.services.key_policy_inspection import (
     KeyPolicyInspectionContext,
     build_key_policy_inspection,
     explain_model_route_access,
+    safe_calibration_metadata_projection,
+    safe_freeform_reason_projection,
+    safe_provider_policy_projection,
+    safe_responses_policy_projection,
 )
 from slaif_gateway.services.key_template_service import (
     KeyFromTemplateCreationResult,
@@ -466,6 +471,7 @@ def _emit_json(payload: dict[str, object]) -> None:
 
 
 def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
+    provider_policy = _provider_policy_from_gateway_key(gateway_key)
     return {
         "id": gateway_key.id,
         "public_key_id": gateway_key.public_key_id,
@@ -488,18 +494,23 @@ def _safe_gateway_key_dict(gateway_key: GatewayKey) -> dict[str, object]:
         "created_at": gateway_key.created_at,
         "updated_at": gateway_key.updated_at,
         "revoked_at": gateway_key.revoked_at,
-        "revoked_reason": gateway_key.revoked_reason,
+        "revoked_reason": safe_freeform_reason_projection(
+            gateway_key.revoked_reason
+        ),
         "allowed_models": list(gateway_key.allowed_models or []),
         "allowed_endpoints": list(gateway_key.allowed_endpoints or []),
         "allow_all_models": gateway_key.allow_all_models,
         "allow_all_endpoints": gateway_key.allow_all_endpoints,
         "key_purpose": getattr(gateway_key, "key_purpose", "standard"),
         "capability_policy_mode": getattr(gateway_key, "capability_policy_mode", "standard"),
-        "calibration_metadata": dict(getattr(gateway_key, "calibration_metadata", {}) or {}),
+        "calibration_metadata": safe_calibration_metadata_projection(
+            getattr(gateway_key, "calibration_metadata", {}) or {}
+        ),
         "template_id": getattr(gateway_key, "template_id", None),
         "template_revision_id": getattr(gateway_key, "template_revision_id", None),
-        "allowed_providers": _allowed_providers_from_gateway_key(gateway_key),
-        "allow_all_providers": _allowed_providers_from_gateway_key(gateway_key) is None,
+        "allowed_providers": provider_policy["allowed_providers"],
+        "allow_all_providers": provider_policy["allow_all_providers"],
+        "allowed_providers_state": provider_policy["state"],
         "rate_limit_policy": _rate_limit_policy_from_gateway_key(gateway_key),
         "responses_policy": _responses_policy_from_gateway_key(gateway_key),
         "chat_streaming_live_burn_policy": _chat_streaming_live_burn_policy_from_gateway_key(
@@ -531,26 +542,28 @@ def _rate_limit_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, in
     return policy or None
 
 
-def _allowed_providers_from_gateway_key(gateway_key: GatewayKey) -> list[str] | None:
-    metadata_json = getattr(gateway_key, "metadata_json", None)
-    if not isinstance(metadata_json, dict):
-        return None
-    providers = metadata_json.get("allowed_providers")
-    if providers is None:
-        return None
-    if isinstance(providers, list):
-        return [str(provider) for provider in providers if str(provider).strip()]
-    return []
+def _provider_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, object]:
+    """SAFE explicit provider state shared with the inspection report.
+
+    Preserves the legitimate ``None`` (unrestricted) versus ``[]`` (deny-all)
+    distinction; malformed stored members project to the fixed ``invalid``
+    marker instead of being stringified or echoed.
+    """
+    return safe_provider_policy_projection(getattr(gateway_key, "metadata_json", None))
 
 
 def _responses_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, object] | None:
+    """Project the stored Responses policy as safe display data.
+
+    Uses the strict shared 196 authoring validator: a valid block projects to
+    its canonical members only; unknown, malformed, or stale blocks project
+    to the fixed ``invalid`` marker. No private or unsupported stored value
+    is ever copied into CLI output.
+    """
     metadata_json = getattr(gateway_key, "metadata_json", None)
     if not isinstance(metadata_json, dict):
         return None
-    policy = metadata_json.get("responses_policy")
-    if not isinstance(policy, dict):
-        return None
-    return {str(key): value for key, value in policy.items() if isinstance(key, str)}
+    return safe_responses_policy_projection(metadata_json.get("responses_policy"))
 
 
 def _chat_streaming_live_burn_policy_from_gateway_key(gateway_key: GatewayKey) -> dict[str, object]:
@@ -1040,6 +1053,13 @@ async def _show_gateway_key(gateway_key_id: uuid.UUID) -> GatewayKey:
         return gateway_key
 
 
+# Fixed, no-echo refusal for credential-shaped lookup references.
+_FULL_KEY_LOOKUP_REFUSAL = (
+    "Full key material cannot be used for lookup. "
+    "Use the key UUID or its public key ID."
+)
+
+
 async def _resolve_gateway_key_reference(
     settings: Settings,
     keys_repository: GatewayKeysRepository,
@@ -1049,6 +1069,9 @@ async def _resolve_gateway_key_reference(
 
     Full bearer-shaped key material is refused with a fixed safe message and
     never echoed; there is no identity lookup from token hash/HMAC/plaintext.
+    Credential-shaped references (whitespace, secret separators, header
+    prefixes, or any accepted key prefix) are refused BEFORE any database
+    query.
     """
     trimmed = reference.strip()
     if not trimmed:
@@ -1056,10 +1079,11 @@ async def _resolve_gateway_key_reference(
     if is_plausible_gateway_key(
         trimmed, settings.get_gateway_key_accepted_prefixes()
     ):
-        raise CliKeyError(
-            "Full key material cannot be used for lookup. "
-            "Use the key UUID or its public key ID."
-        )
+        raise CliKeyError(_FULL_KEY_LOOKUP_REFUSAL)
+    if _is_credential_shaped_reference(
+        trimmed, settings.get_gateway_key_accepted_prefixes()
+    ):
+        raise CliKeyError(_FULL_KEY_LOOKUP_REFUSAL)
     try:
         key_id = uuid.UUID(trimmed)
     except ValueError:
@@ -1072,6 +1096,23 @@ async def _resolve_gateway_key_reference(
     if gateway_key is None:
         raise GatewayKeyNotFoundError()
     return gateway_key
+
+
+def _is_credential_shaped_reference(
+    trimmed: str, accepted_prefixes: tuple[str, ...]
+) -> bool:
+    """Fixed-shape refusal for references that cannot be a safe UUID/public ID.
+
+    Safe references never contain whitespace, a secret separator (``.``), a
+    ``Bearer`` header prefix, or any accepted gateway key prefix.
+    """
+    if any(ch.isspace() for ch in trimmed):
+        return True
+    if "." in trimmed:
+        return True
+    if re.match(r"^bearer[\s:]", trimmed, re.IGNORECASE):
+        return True
+    return any(trimmed.startswith(prefix) for prefix in accepted_prefixes)
 
 
 async def _show_gateway_key_by_reference(reference: str) -> GatewayKey:
@@ -2082,7 +2123,9 @@ def list_keys(
                 owner_email=owner_email,
                 cohort_id=_parse_uuid(cohort_id, field_name="cohort_id") if cohort_id else None,
                 status=status,
-                limit=limit,
+                # Bounded lookahead: fetch one extra row so the true end of
+                # the result set is known and has_more is never a guess.
+                limit=limit + 1,
                 offset=offset,
             )
         )
@@ -2090,8 +2133,9 @@ def list_keys(
         _handle_cli_error(exc, json_output=json_output)
         return
 
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     safe_rows = [_safe_gateway_key_dict(row) for row in rows]
-    has_more = len(safe_rows) == limit
     next_offset = offset + len(safe_rows) if has_more else None
     if json_output:
         _emit_json(
@@ -2161,6 +2205,7 @@ def policy_show(
         _handle_cli_error(exc, json_output=json_output)
         return
 
+    provider_policy = _provider_policy_from_gateway_key(gateway_key)
     payload = {
         "gateway_key_id": gateway_key.id,
         "public_key_id": gateway_key.public_key_id,
@@ -2168,8 +2213,9 @@ def policy_show(
         "allowed_endpoints": list(gateway_key.allowed_endpoints or []),
         "allow_all_models": gateway_key.allow_all_models,
         "allow_all_endpoints": gateway_key.allow_all_endpoints,
-        "allowed_providers": _allowed_providers_from_gateway_key(gateway_key),
-        "allow_all_providers": _allowed_providers_from_gateway_key(gateway_key) is None,
+        "allowed_providers": provider_policy["allowed_providers"],
+        "allow_all_providers": provider_policy["allow_all_providers"],
+        "allowed_providers_state": provider_policy["state"],
     }
     if json_output:
         _emit_json(payload)
@@ -2904,14 +2950,20 @@ def set_lazy_throttling(
         int | None,
         typer.Option(
             "--max-wait-seconds",
-            help="Positive whole seconds to wait (within the installation ceiling)",
+            help=(
+                "Positive whole seconds to wait, for --mode wait only "
+                "(within the installation ceiling)"
+            ),
         ),
     ] = None,
     max_waiting_requests: Annotated[
         int | None,
         typer.Option(
             "--max-waiting-requests",
-            help="Positive whole waiting bound (within the installation ceiling)",
+            help=(
+                "Positive whole waiting bound, for --mode wait only "
+                "(within the installation ceiling)"
+            ),
         ),
     ] = None,
     clear: Annotated[
@@ -2935,13 +2987,15 @@ def set_lazy_throttling(
       ``--max-waiting-requests`` within the installation ceilings; the shared
       KeyService validator remains the authority and is re-applied in the
       same caller-owned transaction.
-    - ``--mode reject`` stores the canonical reject policy. Any waiting bounds
-      supplied alongside it are validated (must be positive and within the
-      ceilings) but remain INACTIVE for a reject policy.
+    - ``--mode reject`` removes the stored override (default immediate
+      rejection). It cannot be combined with waiting bounds: the shared
+      KeyService canonicalizes a reject policy to "no stored override", so
+      any supplied bounds would be silently discarded; the CLI refuses them
+      before any mutation. Use ``--mode wait`` for waiting bounds.
     - ``--clear`` removes the stored policy (default immediate rejection).
-    - Reject and clear are distinct verbs with the same stored outcome; they
-      cannot be combined, and reject/clear cannot take waiting bounds except
-      the validated-inactive reject case above.
+    - Plain reject and clear are distinct verbs with the SAME stored outcome
+      (no stored override / immediate rejection); neither accepts waiting
+      bounds, and they cannot be combined with each other.
 
     Waiting never relaxes hard quota, auth, security, or pricing, and changing
     it touches only the key's lazy metadata, ``updated_at``, and one audit row.
@@ -2956,6 +3010,13 @@ def set_lazy_throttling(
         raise typer.BadParameter("Provide --mode wait, --mode reject, or --clear")
     if mode is not None and mode not in ("wait", "reject"):
         raise typer.BadParameter("--mode must be wait or reject")
+    if mode == "reject" and (
+        max_wait_seconds is not None or max_waiting_requests is not None
+    ):
+        raise typer.BadParameter(
+            "--mode reject cannot be combined with --max-wait-seconds or "
+            "--max-waiting-requests; use --mode wait for waiting bounds"
+        )
     if mode == "wait" and (
         max_wait_seconds is None or max_waiting_requests is None
     ):

@@ -42,10 +42,6 @@ from slaif_gateway.services.endpoint_policy import (
     canonical_endpoint_id,
 )
 from slaif_gateway.services.endpoint_policy_errors import EndpointNotAllowedError
-from slaif_gateway.services.external_tool_policy_contract import (
-    parse_key_external_tool_policy,
-    strict_key_policy,
-)
 from slaif_gateway.services.key_errors import InvalidGatewayKeyPolicyError
 from slaif_gateway.services.key_modes import is_trusted_calibration_key
 from slaif_gateway.services.rate_limit_policy import (
@@ -78,6 +74,7 @@ from slaif_gateway.services.routing_errors import (
     UnsupportedRouteMatchTypeError,
 )
 from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
+from slaif_gateway.utils.redaction import redact_text
 
 # Mirrors the runtime candidate bound in RouteResolutionService.resolve_model.
 ROUTE_CANDIDATE_BOUND = 1000
@@ -193,7 +190,6 @@ def build_inspection_key(
     responses_streaming_live_burn_policy = (
         default_responses_streaming_live_burn_policy()
     )
-    external_tool_policy = strict_key_policy()
     if isinstance(gateway_key.metadata_json, dict):
         providers = gateway_key.metadata_json.get("allowed_providers")
         if isinstance(providers, list):
@@ -235,12 +231,6 @@ def build_inspection_key(
             responses_streaming_live_burn_policy = (
                 default_responses_streaming_live_burn_policy()
             )
-        parsed_external_policy = parse_key_external_tool_policy(
-            gateway_key.metadata_json.get("external_tool_policy"),
-            ceilings=settings.get_external_tool_operator_ceilings(),
-        )
-        if parsed_external_policy.valid and parsed_external_policy.policy is not None:
-            external_tool_policy = parsed_external_policy.policy
 
     window_seconds = rate_limit_metadata.get("window_seconds")
     if isinstance(window_seconds, bool) or not isinstance(window_seconds, int):
@@ -285,7 +275,6 @@ def build_inspection_key(
         ),
         key_purpose=getattr(gateway_key, "key_purpose", "standard"),
         capability_policy_mode=getattr(gateway_key, "capability_policy_mode", "standard"),
-        external_tool_policy=external_tool_policy.to_metadata(),
     )
 
 
@@ -422,13 +411,21 @@ def _responses_profile_inspection(responses_policy: dict[str, object] | None) ->
     }
 
 
-def _provider_policy_inspection(metadata_json: dict[str, object] | None) -> dict[str, object]:
+def safe_provider_policy_projection(metadata_json: object) -> dict[str, object]:
     """Project the stored provider restriction as a SAFE explicit state.
 
     Preserves the legitimate ``None`` (unrestricted) versus ``[]`` (deny-all)
     distinction. Malformed members (non-string, or empty) are refused with a
     fixed ``invalid`` marker and never echoed, so private/malformed stored
     values cannot reach output.
+
+    Shared by the inspection report and the legacy CLI ``show``/``list``
+    safe displays, so both project the same finite state vocabulary.
+    Surviving string members are passed through the existing
+    :func:`redact_text` primitive, so KNOWN authentication/provider secret
+    shapes are neutralized at the display boundary. This is not universal
+    content sanitization: arbitrary unsupported private strings are handled
+    by the finite projection above, not by this redactor.
     """
     raw = metadata_json.get("allowed_providers") if isinstance(metadata_json, dict) else None
     if raw is None:
@@ -441,7 +438,7 @@ def _provider_policy_inspection(metadata_json: dict[str, object] | None) -> dict
         isinstance(raw, list)
         and all(isinstance(item, str) and item.strip() for item in raw)
     ):
-        values = [item for item in raw]
+        values = [redact_text(item) for item in raw]
         state = PROVIDER_POLICY_DENY_ALL if not values else PROVIDER_POLICY_ALLOW_LIST
         return {
             "state": state,
@@ -453,6 +450,78 @@ def _provider_policy_inspection(metadata_json: dict[str, object] | None) -> dict
         "allowed_providers": None,
         "allow_all_providers": False,
     }
+
+
+def safe_responses_policy_projection(policy: object) -> dict[str, object] | None:
+    """Project a stored key Responses policy block as safe display data.
+
+    An absent block (``None``) projects to ``None``. A valid block is
+    projected through the strict shared 196 authoring validator, so only its
+    canonical members are ever copied. Unknown, malformed, stale, or
+    non-object blocks project to the fixed ``{"state": "invalid"}`` marker;
+    no unsupported or private stored value is ever copied into CLI output.
+
+    Canonical string members (e.g. free-form ``notes``) are passed through
+    the existing :func:`redact_text` primitive so KNOWN
+    authentication/provider secret shapes cannot reach display output.
+    This is not universal content sanitization.
+    """
+    if policy is None:
+        return None
+    if not isinstance(policy, dict):
+        return {"state": "invalid"}
+    try:
+        canonical = validate_key_responses_policy(policy)
+    except InvalidGatewayKeyPolicyError:
+        return {"state": "invalid"}
+    return _redact_known_shapes(canonical)
+
+
+def _redact_known_shapes(value: object) -> object:
+    """Apply the existing redaction primitive to known secret shapes only."""
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, dict):
+        return {key: _redact_known_shapes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_known_shapes(item) for item in value]
+    return value
+
+
+def safe_freeform_reason_projection(reason: object) -> object:
+    """Project a free-form stored reason for READ displays only.
+
+    Ordinary reason text is preserved verbatim; KNOWN
+    authentication/provider secret shapes are neutralized with the existing
+    redaction primitive. Non-string values pass through unchanged. This is
+    known-shape protection in finite safe reads, not universal content
+    filtering and not a change to mutation output or storage.
+    """
+    return redact_text(reason) if isinstance(reason, str) else reason
+
+
+_CALIBRATION_METADATA_FIELDS = ("creation_channel", "created_from")
+
+
+def safe_calibration_metadata_projection(metadata: object) -> dict[str, object]:
+    """Project only the finite known calibration-metadata members.
+
+    Known members (``creation_channel``/``created_from`` as strings and
+    ``operator_review_required`` as a boolean) are preserved verbatim; every
+    unknown or malformed member is dropped, never copied, so private or
+    unsupported stored values cannot reach CLI output.
+    """
+    if not isinstance(metadata, dict):
+        return {}
+    projected: dict[str, object] = {}
+    for field in _CALIBRATION_METADATA_FIELDS:
+        value = metadata.get(field)
+        if isinstance(value, str):
+            projected[field] = redact_text(value)
+    review_required = metadata.get("operator_review_required")
+    if isinstance(review_required, bool):
+        projected["operator_review_required"] = review_required
+    return projected
 
 
 def build_key_policy_inspection(
@@ -568,7 +637,9 @@ def build_key_policy_inspection(
             "created_at": gateway_key.created_at,
             "updated_at": gateway_key.updated_at,
             "revoked_at": gateway_key.revoked_at,
-            "revoked_reason": gateway_key.revoked_reason,
+            "revoked_reason": safe_freeform_reason_projection(
+                gateway_key.revoked_reason
+            ),
             "key_purpose": gateway_key.key_purpose,
             "capability_policy_mode": gateway_key.capability_policy_mode,
             "template_id": str(gateway_key.template_id)
@@ -598,7 +669,7 @@ def build_key_policy_inspection(
             "allowed_models": list(inspection_key.allowed_models),
             "allow_all_endpoints": inspection_key.allow_all_endpoints,
             "allowed_endpoints": list(inspection_key.allowed_endpoints),
-            **_provider_policy_inspection(gateway_key.metadata_json),
+            **safe_provider_policy_projection(gateway_key.metadata_json),
         },
         "responses_profile": _responses_profile_inspection(inspection_key.responses_policy),
         "redis_configuration": {

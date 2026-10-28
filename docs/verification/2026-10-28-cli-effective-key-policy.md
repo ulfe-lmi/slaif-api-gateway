@@ -223,3 +223,149 @@ PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest \
 - No full local unit/browser/HPC matrix rerun; the normal FINAL-head CI
   is the broad gate and was still pending at record time.
 - No release, RC, production, security, or compliance claim follows.
+
+---
+
+# Objective 197-b addendum — truthful CLI pagination, safe lookup/output guards
+
+This addendum is appended to, and does NOT rewrite, the 197-a record above.
+197-a's implementation, SELF, and report remain immutable; the 197-a claims
+below are restated only where 197-b's tested evidence corrects them.
+
+## 197-a final-head CI result (stated accurately)
+
+Report-only head `e9f2e6c23274cf71c35f179002d54e0721380378` (implementation
+`22b247dfa79c9fcb3fac8b528cfa3e86b54aea79`): the unit job
+(122747119666 / run 40667776548) completed
+**3 FAILED / 5827 PASSED / 1 SKIPPED**; the other nine final-head checks
+SUCCESS, including the owned-PG job. The three failing nodes:
+
+- `tests/unit/test_cli_keys_effective_policy.py::test_set_lazy_throttling_help`
+  and `::test_set_lazy_requires_reason` — raw Rich ANSI/wrapping broke plain
+  substring assertions (style, not product behavior);
+- `tests/unit/test_documentation_contract_drift.py::test_external_tool_policy_contract_consumers_remain_allowlisted`
+  — the existing consumer guard correctly rejected the new
+  `key_policy_inspection.py` import of the external-tool policy contract.
+
+## Corrected privacy coverage (197-a "any 197 stdout" claim)
+
+The 197-a statement that no secrets, canaries, raw metadata, or
+Settings/ORM dumps reach "any 197 stdout/JSON/error" was verified for the NEW
+inspection view only. The legacy default `keys show` / `keys list` safe
+display (`_safe_gateway_key_dict`) still copied unsupported stored data:
+unknown members of a stored `responses_policy` block, stringified malformed
+`allowed_providers` members, raw `calibration_metadata` dumps, and KNOWN
+authentication/provider secret shapes embedded in kept/free-form strings
+(e.g. `revoked_reason`, provider allow-list members, calibration channel
+strings, Responses `notes`). 197-b adds the tested safe projections below
+and canary coverage for these exact legacy read paths. This is known-shape
+protection plus finite projection in already-required safe reads — not
+universal content sanitization, and not a new sanitizer framework.
+
+## Scope exception acknowledged
+
+`tests/unit/test_cli.py` was not explicitly listed in the 197-a allowed
+existing test paths, although the 197-a report claimed all paths allowed.
+Root inspected the 13-line additive paging JSON oracle and explicitly
+authorized that narrow existing change; it is retained, not reverted, and
+this addendum corrects the record.
+
+## Repairs in 197-b
+
+- **R1 pagination:** `keys list` fetches `limit + 1` (bounded lookahead;
+  201 internal for the 200 page bound) and returns only `limit` rows;
+  `has_more` is true ONLY when an extra real row exists and `next_offset` is
+  `null` at the true end (an exact full final page reports `has_more:
+  false`). Filters before paging, stable `created_at` + UUID ordering,
+  legacy `keys` array and additive `paging` JSON unchanged.
+- **R2 safe display:** shared finite projections in
+  `key_policy_inspection.py` (`safe_responses_policy_projection`,
+  `safe_provider_policy_projection`, `safe_calibration_metadata_projection`,
+  `safe_freeform_reason_projection`) now back BOTH the inspection report and
+  the legacy `show`/`list` displays: valid Responses policy canonical
+  members only or fixed `{"state": "invalid"}`; explicit
+  `allowed_providers_state` (`unrestricted`/`allow-list`/`deny-all`/
+  `invalid`) with the legacy members preserved; only finite known
+  `calibration_metadata` members; existing `redact_text` known-shape
+  redaction at every surviving display string boundary (provider members,
+  calibration strings, Responses `notes`, `revoked_reason`).
+- **R3 lookup guard:** credential-shaped references (internal whitespace,
+  `.` secret separator, case-insensitive `Bearer` header prefix, any
+  configured accepted key prefix) are refused with the same fixed no-echo
+  error BEFORE any database query; valid UUID / exact public key ID
+  behavior unchanged.
+- **R4 reject bounds:** `--mode reject` with waiting bounds fails BEFORE
+  any mutation (Typer usage error); plain reject and `--clear` remain the
+  documented distinct verbs with the SAME stored outcome (no stored
+  override / immediate rejection) and accept no waiting bounds. The shared
+  KeyService reject-canonicalization law is unchanged.
+- **R5 review/cleanup + CI guard:** non-mutating absence check in the
+  integration snapshot asserts; bare fixture expression removed; the unused
+  external-tool-policy import/parsing/DTO population was REMOVED from the
+  read-only inspection module (the parsed field was consumed nowhere in
+  inspection/rate/endpoint/route output; the `AuthenticatedGatewayKey`
+  field keeps its `None` default). The unchanged consumer-guard node now
+  passes. The two style assertions were made style-independent (ANSI strip +
+  whitespace normalization + stable terminal width) without disabling
+  product styles or changing global CI configuration.
+
+## Exact commands, counts, exits, layers (197-b)
+
+Environment: `PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python`
+(Python 3.12), same venv as 197-a.
+
+```text
+# Focused unit set (pure layer, no DB): 6 files, 123 passed, exit 0
+PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest   tests/unit/test_cli.py tests/unit/test_cli_keys_status.py   tests/unit/test_cli_keys_effective_policy.py   tests/unit/test_cli_keys_create.py tests/unit/test_key_policy_inspection.py   tests/unit/test_documentation_contract_drift.py -q -p no:cacheprovider
+# 123 passed, exit 0
+
+# Owned-PostgreSQL-16 integration, FRESH owned container (label slaif197a,
+# loopback-bound, tmpfs, identity inspected before readiness/migrations,
+# exact-ID removal in finally; no ambient DATABASE_URL/foreign PG):
+PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest   tests/integration/test_cli_key_effective_policy_postgres.py   -q -p no:cacheprovider --junitxml=/tmp/slaif197/integration-6.xml
+# 13 passed (9 retained + 4 new: exact final page, credential-shaped
+# refusal end-to-end, safe-read canaries incl. known-shape redaction,
+# reject-with-bounds no-mutation), 0 skipped, exit 0
+# JUnit: /tmp/slaif197/integration-6.xml (13/0/0/0); no leftover owned
+# container after the run (label filter verified).
+
+# Gates
+/tmp/slaif192-coding-venv/bin/python -m ruff check <all changed .py>   # OK
+git diff --check                                                        # OK
+PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python   scripts/check_documentation.py                                        # OK (files=124)
+PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest   tests/unit/test_oap_governance.py tests/unit/test_documentation_inventory.py
+# 22 passed (governance 9 + inventory 13), exit 0
+```
+
+Root independent evidence (cited, not re-run by the coding agent): focused
+123 PASS confirmed; owned-PG 13 PASS / 0 skip from integration-6.xml
+confirmed; independent CI-regression re-checks (3 PASS under forced color)
+and read-canary positive/negative probes complete.
+
+## Security / privacy / accounting statements (197-b)
+
+- Rejected credential-shaped references perform ZERO database lookups and
+  never echo the input. Zero-lookup counts and the configured custom
+  accepted-prefix case are directly proven in the unit layer (mocked
+  repository call tracking); the normal-prefix refusals, no-echo behavior,
+  and valid public-ID success are additionally proven end-to-end against
+  the owned PostgreSQL 16 (without SQL lookup-count instrumentation).
+- Known authentication/provider secret shapes in stored
+  `allowed_providers` members, `calibration_metadata` strings, Responses
+  `notes`, and `revoked_reason` are redacted at the display boundary in BOTH
+  the inspection report and the legacy `show`/`list` reads; ordinary values
+  are preserved verbatim (positive/negative canaries asserted).
+- Unsupported/arbitrary private strings are handled by the finite
+  projections (fixed invalid markers / omission), not by claiming universal
+  sanitization.
+- No mutation-result, create/show-plaintext output channel, storage, schema,
+  migration, dependency, workflow, auth, admission, accounting, or Redis
+  behavior changed; no real provider/model/client/SMTP contact.
+
+## Limitations (197-b)
+
+- Final-head CI for the 197-b implementation head is PENDING at record time;
+  root independently owns final-head CI/strategic review. No full local
+  matrix rerun was performed (the 197-a local green suites and the focused
+  runs above stand).
+- No release, RC, production, security, or compliance claim follows.

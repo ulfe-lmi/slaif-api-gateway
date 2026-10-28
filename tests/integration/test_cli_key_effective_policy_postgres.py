@@ -460,7 +460,9 @@ def test_lazy_wait_set_inspect_clear_and_isolation(
     ):
         assert before_columns[field] == after_columns[field], field
     assert after_columns["updated_at"] >= before_columns["updated_at"]
-    assert after["metadata"].pop("lazy_throttling_policy", "absent") == "absent"
+    # 197-b: non-mutating absence check (no dictionary mutation in asserts);
+    # the full snapshot comparison below additionally proves the clear.
+    assert "lazy_throttling_policy" not in after["metadata"]
     assert after["metadata"] == metadata_before
     assert after["audit_count"] == before["audit_count"] + 1
     assert after["ledger_count"] == before["ledger_count"]
@@ -1337,3 +1339,310 @@ def test_readonly_inspection_changes_nothing(
         assert f"sk-slaif-{public_key_id}" not in output
         assert OPENAI_BASE_URL not in output
         assert "fake-openai-upstream-key" not in output
+
+
+# --- 197-b: pagination true end, safe reads, credential refusals -----------------
+
+
+def test_lookup_exact_final_page_reports_true_end(cli_env: str) -> None:
+    url = cli_env
+    runner = CliRunner()
+    context = _run(_create_owner_context(url))
+
+    async def create_two():
+        factory = _session_factory(url)
+        async with factory() as session:
+            async with session.begin():
+                keys = GatewayKeysRepository(session)
+                now = datetime.now(UTC)
+                for index in range(2):
+                    await keys.create_gateway_key_record(
+                        public_key_id=f"pubexact{index}{'e' * 32}",
+                        token_hash=f"hashexact-{uuid.uuid4().hex}",
+                        owner_id=context.owner_id,
+                        cohort_id=context.cohort_id,
+                        valid_from=now,
+                        valid_until=now + timedelta(days=30),
+                        status="active",
+                    )
+
+    _run(create_two())
+    result = _cli(
+        runner,
+        "keys",
+        "list",
+        "--owner-email",
+        context.owner_email,
+        "--limit",
+        "2",
+        "--json",
+    )
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.output)
+    assert len(body["keys"]) == 2
+    assert body["paging"] == {
+        "limit": 2,
+        "offset": 0,
+        "returned": 2,
+        "has_more": False,
+        "next_offset": None,
+    }
+
+
+def test_lookup_refuses_credential_shapes_before_any_lookup(cli_env: str) -> None:
+    url = cli_env
+    runner = CliRunner()
+    context = _run(_create_owner_context(url))
+
+    async def create_one():
+        factory = _session_factory(url)
+        async with factory() as session:
+            async with session.begin():
+                keys = GatewayKeysRepository(session)
+                now = datetime.now(UTC)
+                return await keys.create_gateway_key_record(
+                    public_key_id=f"pubcredshape{'d' * 31}",
+                    token_hash=f"hashcredshape-{uuid.uuid4().hex}",
+                    owner_id=context.owner_id,
+                    cohort_id=context.cohort_id,
+                    valid_from=now,
+                    valid_until=now + timedelta(days=30),
+                    status="active",
+                )
+
+    row = _run(create_one())
+    public_key_id = row.public_key_id
+    bearer = f"sk-slaif-{public_key_id}." + "C" * 43
+
+    for reference in (
+        f"Bearer {bearer}",
+        f"BEARER {bearer}",
+        f"sk-slaif-{public_key_id}.short",
+        "sk-slaif-abc",
+    ):
+        refused = _cli(runner, "keys", "show", reference, "--json")
+        assert refused.exit_code == 1
+        assert (
+            "Full key material cannot be used for lookup. "
+            "Use the key UUID or its public key ID."
+        ) in refused.output
+        assert reference.strip() not in refused.output
+        assert reference.strip() not in refused.stderr
+
+    # The valid exact public ID still resolves.
+    ok = _cli(runner, "keys", "show", public_key_id, "--json")
+    assert ok.exit_code == 0, ok.output
+    assert json.loads(ok.output)["public_key_id"] == public_key_id
+
+
+def test_safe_reads_do_not_leak_unsupported_or_known_secret_data(
+    cli_env: str,
+) -> None:
+    url = cli_env
+    runner = CliRunner()
+    context = _run(_create_owner_context(url))
+    canary = "SyntheticCanary197b" * 3
+    secret = f"sk-proj-{canary}"
+
+    async def create_canary_rows():
+        factory = _session_factory(url)
+        async with factory() as session:
+            async with session.begin():
+                keys = GatewayKeysRepository(session)
+                now = datetime.now(UTC)
+
+                def make(public_prefix: str) -> object:
+                    return keys.create_gateway_key_record(
+                        public_key_id=public_prefix,
+                        token_hash=f"hash{uuid.uuid4().hex}",
+                        owner_id=context.owner_id,
+                        cohort_id=context.cohort_id,
+                        valid_from=now,
+                        valid_until=now + timedelta(days=30),
+                        status="active",
+                    )
+
+                bad = await make(f"pubcanarybad{'a' * 30}")
+                bad.metadata_json = {
+                    "responses_policy": {
+                        "version": 1,
+                        "private_note": canary,
+                    },
+                    "allowed_providers": ["openai", {"nested": canary}],
+                }
+                bad.calibration_metadata = {
+                    "creation_channel": "cli",
+                    "secret_internal": canary,
+                }
+
+                good = await make(f"pubcanarygood{'b' * 29}")
+                good.metadata_json = {
+                    "responses_policy": {"version": 1},
+                    "allowed_providers": ["openai"],
+                }
+                good.calibration_metadata = {
+                    "created_from": "admin_web",
+                    "operator_review_required": True,
+                }
+
+                secret_row = await make(f"pubcanarysec{'c' * 30}")
+                secret_row.metadata_json = {
+                    "allowed_providers": [secret, "openai"]
+                }
+                secret_row.calibration_metadata = {"creation_channel": secret}
+                secret_row.revoked_reason = f"bad {secret}"
+                return bad, good, secret_row
+
+    bad, good, secret_row = _run(create_canary_rows())
+
+    bad_show = json.loads(
+        _cli(runner, "keys", "show", str(bad.id), "--json").stdout
+    )
+    assert bad_show["responses_policy"] == {"state": "invalid"}
+    assert bad_show["allowed_providers_state"] == "invalid"
+    assert bad_show["allowed_providers"] is None
+    assert bad_show["allow_all_providers"] is False
+    assert bad_show["calibration_metadata"] == {"creation_channel": "cli"}
+
+    good_show = json.loads(
+        _cli(runner, "keys", "show", str(good.id), "--json").stdout
+    )
+    assert good_show["responses_policy"] == {"version": 1}
+    assert good_show["allowed_providers"] == ["openai"]
+    assert good_show["allowed_providers_state"] == "allow-list"
+    assert good_show["allow_all_providers"] is False
+    assert good_show["calibration_metadata"] == {
+        "created_from": "admin_web",
+        "operator_review_required": True,
+    }
+
+    secret_show = json.loads(
+        _cli(runner, "keys", "show", str(secret_row.id), "--json").stdout
+    )
+    assert secret_show["allowed_providers"] == ["***", "openai"]
+    assert secret_show["allowed_providers_state"] == "allow-list"
+    assert secret_show["calibration_metadata"] == {"creation_channel": "***"}
+    assert secret_show["revoked_reason"] == "bad ***"
+
+    effective_bad = _cli(
+        runner, "keys", "policy", "effective", str(bad.id), "--json"
+    )
+    assert effective_bad.exit_code == 0, effective_bad.output
+    listing = _cli(
+        runner,
+        "keys",
+        "list",
+        "--owner-email",
+        context.owner_email,
+        "--limit",
+        "10",
+        "--json",
+    )
+    assert listing.exit_code == 0, listing.output
+    for output in (effective_bad.output, listing.output, bad_show, secret_show):
+        assert canary not in str(output)
+    assert canary not in good_show and canary not in secret_show
+
+
+def test_lazy_reject_with_bounds_fails_without_mutation(
+    cli_env: str, route_fixtures: str, tmp_path: Path
+) -> None:
+    url = cli_env
+    runner = CliRunner()
+    context = _run(_create_owner_context(url))
+
+    created = _cli(
+        runner,
+        "keys",
+        "create",
+        "--owner-id",
+        str(context.owner_id),
+        "--valid-days",
+        "30",
+        "--allowed-model",
+        "gpt-test-mini",
+        "--allowed-endpoint",
+        "/v1/chat/completions",
+        "--reason",
+        "197b reject-bounds create",
+        "--secret-output-file",
+        str(tmp_path / "rejectbounds.secret"),
+        "--json",
+    )
+    assert created.exit_code == 0, created.output
+    key_id = uuid.UUID(json.loads(created.stdout)["gateway_key_id"])
+
+    wait = _cli(
+        runner,
+        "keys",
+        "set-lazy-throttling",
+        str(key_id),
+        "--mode",
+        "wait",
+        "--max-wait-seconds",
+        "30",
+        "--max-waiting-requests",
+        "2",
+        "--reason",
+        "set wait first",
+        "--json",
+    )
+    assert wait.exit_code == 0, wait.output
+
+    async def snapshot():
+        factory = _session_factory(url)
+        async with factory() as session:
+            row = await session.get(GatewayKey, key_id)
+            audit_count = (
+                await session.execute(
+                    select(func.count()).select_from(AuditLog).where(
+                        AuditLog.entity_id == key_id
+                    )
+                )
+            ).scalar_one()
+            return {
+                "updated_at": row.updated_at,
+                "metadata": dict(row.metadata_json or {}),
+                "audit_count": audit_count,
+            }
+
+    before = _run(snapshot())
+
+    refused = _cli(
+        runner,
+        "keys",
+        "set-lazy-throttling",
+        str(key_id),
+        "--mode",
+        "reject",
+        "--max-wait-seconds",
+        "3",
+        "--max-waiting-requests",
+        "1",
+        "--reason",
+        "must fail before mutation",
+        "--json",
+    )
+    # Typer usage error (exit 2): the refusal happens BEFORE any mutation.
+    assert refused.exit_code == 2
+    assert "cannot be combined" in refused.output
+    after_refused = _run(snapshot())
+    assert after_refused == before, "reject with bounds mutated state"
+
+    # Plain reject remains the documented same-outcome alias and works.
+    plain = _cli(
+        runner,
+        "keys",
+        "set-lazy-throttling",
+        str(key_id),
+        "--mode",
+        "reject",
+        "--reason",
+        "stop waiting",
+        "--json",
+    )
+    assert plain.exit_code == 0, plain.output
+    assert json.loads(plain.output)["lazy_throttling_policy"] is None
+    after_plain = _run(snapshot())
+    assert after_plain["audit_count"] == before["audit_count"] + 1
+    assert "lazy_throttling_policy" not in after_plain["metadata"]
