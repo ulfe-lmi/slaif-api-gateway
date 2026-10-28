@@ -38,7 +38,7 @@ def test_routes_help_registers_commands() -> None:
     result = runner.invoke(app, ["routes", "--help"])
 
     assert result.exit_code == 0
-    for command in ("add", "list", "show", "enable", "disable", "import"):
+    for command in ("add", "list", "show", "update", "enable", "disable", "import"):
         assert command in result.stdout
 
 

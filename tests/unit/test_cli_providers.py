@@ -34,7 +34,7 @@ def test_providers_help_registers_commands() -> None:
     result = runner.invoke(app, ["providers", "--help"])
 
     assert result.exit_code == 0
-    for command in ("add", "list", "show", "enable", "disable", "discover-models", "setup-models"):
+    for command in ("add", "list", "show", "update", "enable", "disable", "discover-models", "setup-models"):
         assert command in result.stdout
 
 

@@ -53,6 +53,19 @@ class ModelRoutesRepository:
     async def get_model_route_by_id(self, route_id: uuid.UUID) -> ModelRoute | None:
         return await self._session.get(ModelRoute, route_id)
 
+    async def get_model_route_for_update(self, route_id: uuid.UUID) -> ModelRoute | None:
+        """Administrative row-lock read for a reviewed single-row route update (199-a).
+
+        Holds ``FOR UPDATE`` on the exact route row while a plan's expected
+        pre-state is revalidated and the complete merged candidate is
+        assembled. Read-only for every other caller; runtime selection
+        semantics are unchanged.
+        """
+        result = await self._session.execute(
+            select(ModelRoute).where(ModelRoute.id == route_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
     async def list_model_routes(
         self,
         *,

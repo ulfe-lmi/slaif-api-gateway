@@ -410,6 +410,16 @@ def _parse_route_capabilities(
         return default_chat_completion_capabilities(supports_streaming=route_supports_streaming)
 
     raw = route_capabilities.get(CHAT_COMPLETIONS_CAPABILITIES_KEY)
+    return validate_chat_completion_capability_block(raw)
+
+
+def validate_chat_completion_capability_block(raw: object) -> dict[str, bool]:
+    """Pure config-time validation of a chat_completions capability block.
+
+    Public wrapper over the exact runtime metadata rules (known flags,
+    boolean values only) so configuration surfaces can reuse the same
+    acceptance without a second, drifting rule.
+    """
     if not isinstance(raw, Mapping):
         raise ChatCompletionRouteCapabilityError(
             ChatCompletionRouteCapabilityFinding(

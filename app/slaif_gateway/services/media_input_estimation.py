@@ -43,6 +43,39 @@ def text_only_input_estimate(estimate, body):
     return max(1, estimate - encoded_bytes // 3)
 
 
+def validate_media_input_estimation_block(raw):
+    """Pure config-time validation of a media_input_estimation block.
+
+    Accepts absent (None) meaning "no budgets". Returns the configured
+    positive budget values. This is the single source of the finite rules
+    the runtime estimator applies (version-1 envelope, token and frame
+    engine ceilings); configuration surfaces reuse it instead of a second,
+    drifting rule.
+    """
+    budgets = {}
+    if raw is None:
+        return budgets
+    if (
+        not isinstance(raw, Mapping)
+        or set(raw) - {"version", "image_tokens", "video_tokens", "video_frames"}
+        or type(raw.get("version")) is not int
+        or raw["version"] != 1
+    ):
+        raise MediaInputEstimateError("Invalid route media estimation policy.", param="model")
+    for kind in ("image", "video"):
+        value = raw.get(kind + "_tokens")
+        if value is not None:
+            if type(value) is not int or not 1 <= value <= 1_050_000:
+                raise MediaInputEstimateError(
+                    "Invalid route media token budget.", param="model"
+                )
+            budgets[kind] = value
+    frames = raw.get("video_frames")
+    if frames is not None and (type(frames) is not int or not 1 <= frames <= 32):
+        raise MediaInputEstimateError("Invalid route video frame budget.", param="model")
+    return budgets
+
+
 def apply_media_input_estimate(policy_result, *, route_capabilities, input_ceiling):
     """Opt-in per-model budgets affect admission/reservations, never final usage.
 
@@ -50,27 +83,9 @@ def apply_media_input_estimate(policy_result, *, route_capabilities, input_ceili
     limits have already run, and authorization remains the caller's responsibility.
     Retain the unadjusted estimate so route revalidation is idempotent.
     """
-    raw = (route_capabilities or {}).get("media_input_estimation")
-    budgets = {}
-    if raw is not None:
-        if (
-            not isinstance(raw, Mapping)
-            or set(raw) - {"version", "image_tokens", "video_tokens", "video_frames"}
-            or type(raw.get("version")) is not int
-            or raw["version"] != 1
-        ):
-            raise MediaInputEstimateError("Invalid route media estimation policy.", param="model")
-        for kind in ("image", "video"):
-            value = raw.get(kind + "_tokens")
-            if value is not None:
-                if type(value) is not int or not 1 <= value <= 1_050_000:
-                    raise MediaInputEstimateError(
-                        "Invalid route media token budget.", param="model"
-                    )
-                budgets[kind] = value
-        frames = raw.get("video_frames")
-        if frames is not None and (type(frames) is not int or not 1 <= frames <= 32):
-            raise MediaInputEstimateError("Invalid route video frame budget.", param="model")
+    budgets = validate_media_input_estimation_block(
+        (route_capabilities or {}).get("media_input_estimation")
+    )
     original = policy_result.unadjusted_input_tokens
     if original is None:
         original = policy_result.estimated_input_tokens

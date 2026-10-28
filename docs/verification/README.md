@@ -10,6 +10,17 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-28 Objective 199-a provider/route configuration parity CLI verification`](2026-10-28-cli-provider-route-configuration.md)
+  (recorded 2026-10-28) - focused unit (90 new pure + 25 actual-Typer
+  CLI) and owned-PostgreSQL-16 (19) evidence for the audited,
+  lock-protected `providers update` partial updates,
+  `routes add --capabilities-file` preparation, and the two-step reviewed
+  `routes update --dry-run/--execute` plan workflow: strict bounded files,
+  partial-vs-replacement capability semantics, configuration fingerprint
+  staleness with zero-write refusals, no-op plan law, forced late-audit
+  rollback, concurrency invalidation, and known-shape secret refusal;
+  synthetic data only, no real provider/model/SMTP claim; final-head CI
+  gated by root.
 - [`2026-10-28 Objective 198-a faithful standard-key cloning verification`](2026-10-28-cli-key-cloning.md)
   (recorded 2026-10-28) — focused unit (40 new: 19 service + 21
   actual-Typer CLI) and owned-PostgreSQL-16 (5) evidence for the

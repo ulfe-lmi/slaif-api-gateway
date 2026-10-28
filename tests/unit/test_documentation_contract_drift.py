@@ -343,6 +343,18 @@ def test_external_tool_policy_contract_consumers_remain_allowlisted() -> (
         # route metadata into the baseline and grants no runtime
         # hosted-tool authority.
         REPO_ROOT / "app/slaif_gateway/schemas/catalog_refresh.py",
+        # 199-a: the provider/route configuration schema is a read-only
+        # consumer - it validates the external_tools capabilities block
+        # against the authoritative parser and approved ceilings when
+        # merging reviewed route edit plans, and grants no runtime
+        # hosted-tool authority.
+        REPO_ROOT / "app/slaif_gateway/schemas/provider_route_configuration.py",
+        # 199-a: the shared provider/route configuration service is a
+        # config-time consumer - it validates merged external_tools
+        # candidates against the authoritative operator ceilings during
+        # reviewed plan previews/executes and grants no runtime
+        # hosted-tool authority.
+        REPO_ROOT / "app/slaif_gateway/services/provider_route_configuration.py",
         REPO_ROOT / "app/slaif_gateway/services/route_import.py",
         REPO_ROOT / "app/slaif_gateway/services/openai_web_search_contract.py",
         # 198-a: the clone service is a read-only consumer - it parses the

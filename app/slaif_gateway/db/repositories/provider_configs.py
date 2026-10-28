@@ -55,6 +55,24 @@ class ProviderConfigsRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_provider_config_for_update(self, provider_or_id: str) -> ProviderConfig | None:
+        """Administrative row-lock read for a partial provider update (199-a).
+
+        Resolves a UUID or the exact provider slug under ``FOR UPDATE`` so a
+        typed partial update can assemble complete service inputs while
+        holding the lock. Read-only for every other caller; runtime
+        selection semantics are unchanged.
+        """
+        value = str(provider_or_id).strip()
+        try:
+            identifier = uuid.UUID(value)
+        except ValueError:
+            statement = select(ProviderConfig).where(ProviderConfig.provider == value)
+        else:
+            statement = select(ProviderConfig).where(ProviderConfig.id == identifier)
+        result = await self._session.execute(statement.with_for_update())
+        return result.scalar_one_or_none()
+
     async def list_provider_configs(
         self,
         *,

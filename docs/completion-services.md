@@ -28,28 +28,83 @@ ZAP-IT can require 180 seconds to cover its bounded inference deadline. Internal
 HTTP requires the existing explicit insecure-HTTP confirmation and audit reason.
 Never put credentials into route capabilities, profile files, notes, URLs or logs.
 
-Use an exact model route on `/v1/chat/completions`, `supports_streaming=false`,
-with the matching public and upstream model from the table. Build capabilities
-using the existing service layer:
+Since objective 199 this setup is a reviewed CLI workflow (no operator
+Python). The provider creation stays DISABLED until explicitly enabled, and
+a capabilities-file route preparation stays DISABLED until the operator
+passes `--enabled` - keep both disabled until the credentials and key grants
+are reviewed:
 
-```python
-from slaif_gateway.services.chat_completion_route_capabilities import (
-    completion_service_chat_completion_capabilities,
-)
+```text
+# ZAP-IT backend (facial scoring: --provider facial_scoring,
+# --api-key-env-var FACIAL_SCORING_API_KEY, --timeout-seconds 30)
+slaif-gateway providers add --provider zap_it \
+  --api-key-env-var ZAP_IT_API_KEY --kind module \
+  --base-url https://zap-it.internal --timeout-seconds 180 \
+  --max-retries 0 --reason "module backend"
 
-capabilities = {
-    "chat_completions": completion_service_chat_completion_capabilities(),
-    "completion_service": {"version": 1, "profile": "zap-it-v1"},
+# Exact model route on /v1/chat/completions, non-streaming
+slaif-gateway routes add --requested-model zap-it-1 --match-type exact \
+  --provider zap_it --upstream-model zap-it-1 \
+  --endpoint /v1/chat/completions --no-streaming \
+  --capabilities-file /tmp/zap-it-route-caps.json \
+  --reason "completion service route (preparation)"
+
+# After reviewing credentials and key grants:
+slaif-gateway providers enable zap_it
+slaif-gateway routes enable <route-uuid>
+```
+
+The capabilities file is the COMPLETE strict document (schema version 1, at
+most 64 KiB): the narrow non-streaming text/image Chat profile plus the
+profile selector. For ZAP-IT:
+
+```json
+{
+  "schema_version": 1,
+  "capabilities": {
+    "chat_completions": {
+      "chat_text": true,
+      "chat_streaming": false,
+      "chat_function_tools": false,
+      "chat_custom_tools": false,
+      "chat_legacy_functions": false,
+      "chat_structured_outputs": false,
+      "chat_json_mode": false,
+      "chat_logprobs": false,
+      "chat_reasoning_usage": false,
+      "chat_cached_input_usage": false,
+      "hosted_web_search": false,
+      "hosted_file_search": false,
+      "hosted_code_interpreter": false,
+      "hosted_computer_use": false,
+      "hosted_image_generation": false,
+      "hosted_tool_search": false,
+      "external_mcp_connectors": false,
+      "chat_video_inputs": false,
+      "chat_image_inputs": true,
+      "chat_multimodal": true,
+      "chat_audio": false,
+      "chat_file_inputs": false,
+      "chat_audio_inputs": false,
+      "chat_audio_outputs": false,
+      "chat_service_tier_non_default": false,
+      "chat_multiple_choices": false
+    },
+    "completion_service": {"version": 1, "profile": "zap-it-v1"}
+  }
 }
 ```
 
 For facial scoring, replace the profile ID with `facial-scoring-v1` and use
-provider slug `facial_scoring`. Existing facial routes without this selector
-continue to resolve the same shared adapter and bundled facial profile; no
-key or database migration is required. Legacy adapter imports are aliases,
-not a second implementation. The registry contains one generic descriptor;
-service/provider names occur in binding/profile JSON data, not routing branches. ZAP-IT providers use the explicit selector;
-unconfigured/unknown native modules still fail closed.
+provider slug `facial_scoring` with the matching public/upstream model from
+the table. Later reviewed adjustments go through the two-step
+`routes update --dry-run/--execute` plan workflow. Existing facial routes
+without this selector continue to resolve the same shared adapter and
+bundled facial profile; no key or database migration is required. Legacy
+adapter imports are aliases, not a second implementation. The registry
+contains one generic descriptor; service/provider names occur in
+binding/profile JSON data, not routing branches. ZAP-IT providers use the
+explicit selector; unconfigured/unknown native modules still fail closed.
 
 Add an enabled pricing row for the same provider, upstream model and endpoint:
 currency `EUR`, `request_price=0`, `input_price_per_1m=0`,
@@ -63,8 +118,9 @@ capabilities and suitable request/concurrency limits. ZAP-IT's backend supports
 one active inference; use one concurrent request per key and coordinate access
 across keys with backend/operator admission. Gateway per-key concurrency does
 not create a global one-slot queue. No new keys or grants are implicit in route
-creation. Keep providers/routes disabled until their credentials and policy are
-configured. Metadata changes use the existing audited dashboard/service layer.
+creation. Keep providers/routes disabled until their credentials and policy
+are configured. These metadata changes use the audited CLI (objective 199)
+or the existing audited dashboard/service layer.
 
 ## Client examples
 
