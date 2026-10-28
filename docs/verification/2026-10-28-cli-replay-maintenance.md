@@ -341,3 +341,86 @@ same-PR continuation.
 - This record is commit-specific evidence for the 200 PR head; it does
   not certify later commits, production fitness, security, compliance,
   or scale.
+
+## 200-b ADDENDUM — real nested-command coverage in the documentation inventory checker
+
+Recorded 2026-10-28 for the same 200 PR. This addendum resolves the
+200-a "known unresolved inventory-checker failure"; the 200-a text
+above (including that failure statement as the 200-a state) remains
+unchanged historical record.
+
+### What 200-b changed (test-only, allowed paths only)
+
+- `tests/unit/test_documentation_inventory.py`: the
+  command-inventory test now resolves each module's local
+  `typer.Typer` instances against `app.add_typer(<alias>, name=...)`
+  registrations in the same module OR in importing modules, using a
+  small pure static source scan (no production imports, no settings,
+  credentials, backend profiles, or providers loaded). A sub-app whose
+  Typer object is imported from a separate module therefore resolves
+  under its ACTUAL parent namespace — `cli/codex_replay.py` ->
+  `codex replay` — instead of its file stem, so the checker now
+  demands the real registered invocations `slaif-gateway codex replay
+  inspect` / `slaif-gateway codex replay extend` (both present in
+  `docs/cli-reference.md`) and can no longer fabricate a
+  `codex-replay` alias. In-file nested apps (e.g. `keys policy`,
+  `keys external-tools`, `secrets generate`) and all top-level groups
+  keep their previous resolution. Both positional
+  `@app.command("name")` and explicit `@app.command(name="name")`
+  declarations are detected, so changing decorator spelling cannot
+  remove inventory coverage.
+- New focused self-contained regressions in the same file (pure
+  temporary source fixtures): a registered separate-file nested app
+  resolving to its parent namespace (with both command-name
+  spellings detected and an unregistered module keeping its stem
+  group), and a negative case where an undocumented nested command is
+  reported missing. A real-repository case asserts the inventory
+  contains the two true `codex replay` invocations and contains no
+  `codex-replay` alias.
+- `docs/cli-reference.md`: unchanged — it already documented the true
+  invocations in both the Codex command block and the complete
+  command inventory; no operator-facing name correction was needed.
+- This addendum.
+
+### Honest history of the rejected workaround
+
+During 200-a, the two registrations were temporarily rewritten to the
+behaviorally identical `@app.command(name=...)` spelling so the old
+scanner regex would not match them. The strategic review REJECTED
+that as coverage-removing; the standard positional decorators were
+restored before the 200-a report was published, the checker was left
+unedited (outside the 200-a allowed scope), and the failure was
+reported as known-unresolved. 200-b repairs the checker itself; the
+positional decorators are the spelling verified at the 200-a
+implementation head and remain unchanged.
+
+### Actual focused verification (200-b)
+
+Environment: `PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python`
+with `env -u DATABASE_URL -u TEST_DATABASE_URL`; no database,
+container, provider, client, SMTP, or Redis contact (this repair is
+pure static test code).
+
+- Focused batch, one run: **52 passed, 0 failed / 0 errors / 0
+  skipped**, exit 0 (`b-gov.xml`): updated
+  `test_documentation_inventory` (16 = 13 pre-existing + 3 new),
+  `test_oap_governance` (9), `test_documentation_contract_drift` (15,
+  consumer guard unchanged), `test_cli_codex_replay` (12 actual-Typer
+  registration/help proofs).
+- Product-byte preservation: `git diff <200-a implementation> -- app/`
+  is EMPTY — every product file is byte-identical to the verified
+  200-a implementation (schema/plan contract, service, repository,
+  CLI callbacks, fingerprints, transaction/lock/clock/expiry/audit
+  logic, runtime replay, accounting).
+- The 200-a owned-PG-16 suite (14) and root's independent
+  real-reference expiry-wait test are existing 200-a/root evidence and
+  were NOT rerun for this inventory fix.
+- Gates: `ruff check app/ tests/` clean;
+  `python3 scripts/check_documentation.py` -> `DOCUMENTATION_CHECK=OK
+  files=127`; `git diff --check` clean.
+- No full verification matrix was run; final-head CI remains the
+  root-gated gate and is PENDING at this addendum.
+
+The 200-a report and its historical evidence (including the then
+known-unresolved failure) are immutable and were not rewritten; the
+200-b report records this resolution.
