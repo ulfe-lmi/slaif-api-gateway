@@ -180,6 +180,7 @@ class ProviderConfigsRepository:
         timeout_seconds: int | None = None,
         max_retries: int | None = None,
         notes: str | None = None,
+        clear_notes: bool = False,
     ) -> bool:
         row = await self.get_provider_config_by_id(provider_config_id)
         if row is None:
@@ -199,7 +200,12 @@ class ProviderConfigsRepository:
             row.timeout_seconds = timeout_seconds
         if max_retries is not None:
             row.max_retries = max_retries
-        if notes is not None:
+        # 199-c: the EXPLICIT clear intent stores NULL within this same
+        # operation; the pre-existing default (clear_notes=False) keeps the
+        # historical None-means-preserve law for every other caller.
+        if clear_notes:
+            row.notes = None
+        elif notes is not None:
             row.notes = notes
 
         await self._session.flush()

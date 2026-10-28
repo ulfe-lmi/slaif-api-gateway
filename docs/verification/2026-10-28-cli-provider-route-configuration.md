@@ -333,3 +333,177 @@ JUnit receipts under `/tmp/slaif199/`.
   this publication.
 - Plan files and JUnit receipts under `/tmp/slaif199/` are disposable
   execution state, not durable evidence.
+
+## 199-c ADDENDUM — explicit note clearing and module/transport parity
+
+Recorded 2026-10-28 for the same 199 PR. This addendum describes the
+199-c amendment evidence; the 199-a text and the 199-b addendum above
+remain unchanged, and their recorded results stand as 199-a/199-b
+results. Two of those historical claims are CORRECTED here, without
+editing the old text:
+
+- **Corrected (199-b no-op caveat).** The 199-b addendum recorded that
+  `--clear-notes` delegated `notes=None` through the shared service and
+  that "the shared metadata repository's pre-existing None-skip law
+  (also used by the admin form path) governs whether the stored column
+  actually clears on real PostgreSQL." Root's own earlier inference
+  (in the 199-b order) that this None forward therefore cleared the
+  column was incorrect: the repository skipped `None`, so the stored
+  column was NOT cleared. 199-c completes the operation: an opt-in
+  `clear_notes` intent was added to
+  `ProviderConfigService.update_provider_config` and
+  `ProviderConfigsRepository.update_provider_metadata`. The shared
+  service captures the REAL prior values before mutation, the repository
+  stores NULL within that same operation, and the ONE audit records real
+  old notes -> real new null. Existing shared callers keep the
+  pre-existing default (`clear_notes=False`; `notes=None` means
+  preserve), so the admin form and all other shared behavior are
+  unchanged. Contradictory `notes` + `clear_notes` is refused before
+  mutation at both the 199 typed operation and the shared service.
+- **Corrected (199-b too-broad creation claim).** Root's actual
+  `_add_provider` + real create service probe accepted and STORED a
+  recognized synthetic `sk-proj-` canary in `providers add --notes`;
+  safe output redacted it, but the storage/input surface was unguarded.
+  199-c applies the SAME existing known-shape guard to `providers add`
+  `--display-name` / `--base-url` / `--notes` / `--reason` before any
+  database access. Known-shape protection, not universal content
+  sanitization; safe environment-variable NAMES stay literal.
+- **New (C3 parity gap).** `validate_merged_route_candidate` previously
+  checked completion contracts only when an explicit
+  `completion_service` selector was present. An unregistered
+  `module`-kind provider with no selector or legacy binding was accepted
+  at configuration time while the existing pure
+  `resolve_server_module` rejects it (`unsupported_module`); an implicit
+  legacy-bound provider with the wrong model/endpoint/retries also
+  passed; and the function did not even receive the complete streaming
+  state, although the completion adapter refuses every stream value
+  other than `false`. 199-c closes the gap with the EXISTING pure
+  resolution and parsers (no adapter construction, credentials, or
+  network): every candidate must resolve to a supported server module
+  for the provider's actual kind/slug/capabilities; the implicit
+  legacy binding gets the SAME configured profile directory, public/
+  upstream model identity, endpoint, zero-retry, and no-advertised-
+  streaming validation as an explicit selector; reviewed streaming
+  declarations (route flag or `chat_completions.chat_streaming`) are
+  refused, never silently stripped; compatible/local/vLLM/upstream/
+  video contracts keep their own endpoint rules.
+
+### What 199-c changed (allowed paths only)
+
+- `services/provider_route_configuration.py`: `supports_streaming`
+  threaded into `validate_merged_route_candidate` (required keyword at
+  all three call sites: preview, execute, creation); explicit-selector
+  kind check kept before resolution; pure `resolve_server_module`
+  wrapped into the fixed safe candidate error; completion contract
+  (endpoint, zero retries, no streaming flag/capability, profile
+  availability in the SAME configured directory, public/upstream model
+  identity) applied to explicit selector AND implicit legacy binding;
+  the 199 typed clear delegates `notes=None` + `clear_notes=True`
+  through the shared service (no direct pre-clear, no second audit).
+- `services/provider_config_service.py` (C1 ONLY):
+  `update_provider_config` gained opt-in `clear_notes: bool = False`
+  with a pre-mutation contradiction refusal and delegation of the
+  explicit intent; all other behavior unchanged.
+- `db/repositories/provider_configs.py` (C1 ONLY):
+  `update_provider_metadata` gained opt-in `clear_notes: bool = False`;
+  `True` stores NULL within the same operation, the default keeps the
+  pre-existing None-means-preserve law for every other caller.
+- `cli/providers.py`: the SAME known-shape guards as update now apply
+  to `providers add` free-form fields before any database access.
+- Tests: the four 199 suites (two unit, one CLI unit, one owned-PG);
+  `tests/unit/test_provider_config_service.py` gained ONLY the narrow
+  explicit-clear/default-None-preservation regressions (fake repository
+  mirrors the real clear-intent law). Synthetic fixtures corrected to
+  valid supported declarations: unregistered module/no-selector fakes
+  became genuinely compatible providers or explicit/profile-mapped
+  declarations, and completion fixtures advertise no streaming
+  (truly compatible providers keep streaming-free declarations).
+  `cli/routes.py` and the schema file needed no changes
+  (`supports_streaming` was already a plan/canonical field).
+
+Everything else - ModelRouteService CRUD/normalizer, the routing
+repository, the three extracted validators, registry/modules/profiles/
+adapters/data, auth/admission/pricing/FX/accounting/Redis/keys/clone/
+replay/capture, AuditRepository - is unchanged. No schema, DDL,
+dependency, workflow, UI, or sanitizer-framework changes.
+
+### Evidence (focused, not a full matrix)
+
+All runs: `env -u DATABASE_URL -u TEST_DATABASE_URL PYTHONPATH=app
+/tmp/slaif192-coding-venv/bin/python -m pytest ... -p no:cacheprovider`,
+JUnit receipts under `/tmp/slaif199/`. The genuine 199-b receipts
+(`b-unit-pure1.xml` 118, `b-unit-cli1.xml` 31, `b-affected1.xml` 298,
+`pg-b.xml` 24, `b-gov-inv-drift.xml` 37) were NOT rerun for formatting;
+the changed code justifies the affected regressions below.
+
+- Affected/touched suites in one run: **330 passed, 0 failed, 0
+  skipped** (`/tmp/slaif199/c-affected.xml`):
+  `test_chat_completion_route_capabilities` (29),
+  `test_responses_route_capabilities` (57),
+  `test_media_input_estimation` (36), `test_provider_config_service`
+  (10 = 8 + 2 new), `test_model_route_service` (4), `test_cli_providers`
+  (7), `test_cli_routes` (8), `test_provider_route_configuration` (135 =
+  118 + 17 new), `test_cli_provider_route_configuration` (35 = 31 + 4
+  new), `test_oap_governance` (9).
+- Real owned PostgreSQL 16 (unique owner label, loopback-bound,
+  tmpfs-backed; container removed on teardown, no leftovers): **31
+  passed, 0 failed, 0 skipped** in one module run
+  (`tests/integration/test_cli_provider_route_configuration_postgres.py`,
+  `/tmp/slaif199/c-pg.xml`; the 24 199-b proofs plus 7 new 199-c
+  proofs). New 199-c PG proofs: `--clear-notes` stores NULL with ONE
+  audit carrying real old text -> real new null while every sibling
+  field survives, and a forced LATE provider audit failure rolls back
+  BOTH the clear and the sibling change with no orphan audit (updated
+  row visible in the SAME transaction before the failure; retry
+  succeeds and audits real old -> null); a known credential shape in
+  `providers add --notes` is refused with zero rows/audits while
+  ordinary text and safe env-variable NAMES store literally; an
+  unregistered module-kind provider cannot back a NEW route (refused
+  before write/audit); the implicit legacy binding
+  (`facial_scoring` -> `facial-scoring-v1`) creates a valid no-selector
+  route with truthful no-streaming declarations while a wrong requested
+  model and advertised streaming are refused with zero writes/audits;
+  an explicit-selector route update advertising streaming is refused
+  before any plan file; and the implicit binding resolves through the
+  SAME configured `COMPLETION_SERVICE_PROFILE_DIR` operator directory
+  (0600 file present: accepted; absent: refused with the fixed safe
+  error).
+- Unit-layer 199-c proofs (in `c-affected.xml`): explicit clear
+  delegates `notes=None` + `clear_notes=True` with the fresh-row
+  default preserving `notes`; shared-service explicit clear stores NULL
+  with one audit (real old -> real new null) and default callers keep
+  None-preservation; unknown module without selector/binding refused;
+  legacy binding valid and wrong public model/upstream model/endpoint/
+  retries refused; explicit AND implicit streaming flag and
+  `chat_streaming` capability refusals; operator-directory implicit
+  resolution (present/absent); creation-candidate unknown module,
+  valid legacy binding, and streaming refusals; `providers add`
+  canary refusals (notes/reason/display name/base URL) with
+  not-called creation service and no canary echo, plus ordinary
+  text/env-reference acceptance.
+
+Gates: `ruff check app/ tests/` clean;
+`python3 scripts/check_documentation.py` -> `OK files=126`;
+`git diff --check` clean (recorded at the 199-c implementation commit).
+
+### Honest state
+
+- The clear operation is now REAL (NULL stored, one audit, old -> new
+  truth) for the 199 CLI surface; the shared service/repository gained
+  only the opt-in typed intent, and every pre-existing caller keeps the
+  None-means-preserve default.
+- Secret protection remains KNOWN-SHAPE protection (recognized
+  credential patterns refused on new input - now including provider
+  creation - and redacted on safe reads), not universal content
+  sanitization; `api_key_env_var` NAMES and structured fields are never
+  masked.
+- Configuration validation reuses the EXISTING pure module resolution,
+  profile/binding parsers, and loaders: it is not credential, model,
+  SMTP, or performance qualification. No real provider, client, SMTP,
+  Redis, or network contact. The 200-205 rows and the 205 full
+  executable-only transcript remain outstanding.
+- No full verification matrix, browser, or Docker Compose coverage was
+  run for 199-c; final-head CI is root-gated and its state is PENDING
+  at this publication.
+- Plan files and JUnit receipts under `/tmp/slaif199/` are disposable
+  execution state, not durable evidence.

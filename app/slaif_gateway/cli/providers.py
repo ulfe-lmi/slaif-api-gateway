@@ -278,6 +278,19 @@ def add(
         if actor_admin_id is not None
         else None
     )
+    # 199-c: the SAME known-shape input guards as update apply to creation
+    # free-form fields BEFORE any database access (the optional creation
+    # reason law is preserved - only shapes are refused).
+    for value, flag in (
+        (display_name, "--display-name"),
+        (base_url, "--base-url"),
+        (notes, "--notes"),
+        (reason, "--reason"),
+    ):
+        if contains_known_secret_shape(value):
+            raise typer.BadParameter(
+                f"{flag}: value must not contain recognized credential patterns."
+            )
     try:
         row = run_async(
             _add_provider(

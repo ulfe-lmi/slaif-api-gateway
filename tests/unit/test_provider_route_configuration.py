@@ -8,7 +8,11 @@ fakes — no database, no network, no credential loading. Objective 199-b
 extends the same contract: route-bound fingerprints, destination-provider
 identity/context bindings, canonical current/proposed preview, nonblank
 reasons, known-shape secret refusals, zero-retry completion rule, and
-strict new-document transport contract parsing.
+strict new-document transport contract parsing. Objective 199-c completes
+the parity: explicit provider-note clearing through the shared audited
+service, creation-surface known-shape guards, and complete pure
+server-module/transport validation (registered module, implicit legacy
+binding, no advertised streaming on configured-completion routes).
 """
 
 from __future__ import annotations
@@ -22,7 +26,6 @@ from typing import Any
 
 import pytest
 
-import slaif_gateway.services.provider_route_configuration as prc
 from slaif_gateway.schemas.provider_route_configuration import (
     CAPABILITIES_FILE_MAX_BYTES,
     ProviderRouteConfigError,
@@ -38,6 +41,7 @@ from slaif_gateway.schemas.provider_route_configuration import (
     validate_capabilities_document,
 )
 from slaif_gateway.services.provider_route_configuration import (
+    _route_fingerprint,
     contains_known_secret_shape,
     compute_provider_context_fingerprint,
     compute_route_configuration_fingerprint,
@@ -48,6 +52,7 @@ from slaif_gateway.services.provider_route_configuration import (
     validate_merged_route_candidate,
     validate_route_creation_candidate,
 )
+from slaif_gateway.db.repositories.provider_configs import ProviderConfigsRepository
 
 CHAT_BLOCK = {"chat_text": True, "chat_streaming": True, "chat_function_tools": False}
 CODEX_BLOCK = {
@@ -99,7 +104,7 @@ class FakeProviderRow:
     id: uuid.UUID = PROVIDER_ID
     provider: str = "mod-a"
     display_name: str = "Mod A"
-    kind: str = "module"
+    kind: str = "openai_compatible"
     base_url: str = "https://svc-a.example/api"
     api_key_env_var: str = "SVC_A_KEY"
     enabled: bool = False
@@ -764,11 +769,15 @@ class TestPreviewRouteUpdate:
             )
 
     def test_completion_model_mismatch_refused(self) -> None:
-        route = FakeRouteRow(requested_model="wrong", upstream_model="wrong")
+        route = FakeRouteRow(
+            requested_model="wrong",
+            upstream_model="wrong",
+            supports_streaming=False,
+        )
         with pytest.raises(ProviderRouteConfigError, match="profile public model"):
             preview_route_update(
                 route,
-                FakeProviderRow(),
+                FakeProviderRow(kind="module"),
                 capabilities_document={"completion_service": {"version": 1, "profile": "zap-it-v1"}},
             )
 
@@ -778,17 +787,30 @@ class TestPreviewRouteUpdate:
         # configured-completion route at configuration time.
         with pytest.raises(ProviderRouteConfigError, match="must not retry"):
             preview_route_update(
-                FakeRouteRow(),
-                FakeProviderRow(max_retries=2),
+                FakeRouteRow(supports_streaming=False),
+                FakeProviderRow(kind="module", max_retries=2),
                 capability_patch=CapabilityPatch(
                     completion_service={"version": 1, "profile": "zap-it-v1"}
                 ),
             )
 
     def test_completion_profile_valid_for_matching_route(self) -> None:
+        # 199-c: the completion adapter refuses streaming, so the valid
+        # completion fixture advertises no streaming anywhere.
+        route = FakeRouteRow(
+            supports_streaming=False,
+            capabilities={
+                "chat_completions": {
+                    "chat_text": True,
+                    "chat_streaming": False,
+                    "chat_function_tools": False,
+                },
+                "codex_limits": dict(CODEX_BLOCK),
+            },
+        )
         plan = preview_route_update(
-            FakeRouteRow(),
-            FakeProviderRow(),
+            route,
+            FakeProviderRow(kind="module"),
             capability_patch=CapabilityPatch(
                 completion_service={"version": 1, "profile": "zap-it-v1"}
             ),
@@ -891,18 +913,16 @@ def provider_update_harness(monkeypatch: pytest.MonkeyPatch):
     service = _RecordingUpdateService(row)
 
     monkeypatch.setattr(
-        prc.ProviderConfigsRepository,
+        ProviderConfigsRepository,
         "get_provider_config_for_update",
         lambda self, provider_or_id: repo.get_provider_config_for_update(provider_or_id),
     )
     monkeypatch.setattr(
-        prc,
-        "ProviderConfigService",
+        "slaif_gateway.services.provider_route_configuration.ProviderConfigService",
         lambda **_: service,
     )
     monkeypatch.setattr(
-        prc,
-        "AuditRepository",
+        "slaif_gateway.services.provider_route_configuration.AuditRepository",
         lambda session: object(),
     )
     return row, repo, service
@@ -934,7 +954,7 @@ class TestPartialUpdateProvider:
         assert call["enabled"] is False
         assert call["provider"] == "mod-a"
         assert call["display_name"] == "Mod A"
-        assert call["kind"] == "module"
+        assert call["kind"] == "openai_compatible"
         assert call["base_url"] == "https://svc-a.example/api"
         assert call["api_key_env_var"] == "SVC_A_KEY"
         assert call["notes"] == "old notes"
@@ -984,6 +1004,40 @@ class TestPartialUpdateProvider:
         assert row.notes == "real prior value"  # untouched before the service
         assert service.calls[0]["notes"] is None
         assert session.flushes == 0
+
+    def test_clear_notes_delegates_explicit_intent(self, provider_update_harness) -> None:
+        # 199-c: the typed clear intent flows through the UNCHANGED shared
+        # service (no pre-clear), so its audit captures real old -> null.
+        _row, _repo, service = provider_update_harness
+
+        async def go() -> None:
+            await partial_update_provider_config(
+                FakeSession(), "mod-a", clear_notes=True, reason="r"
+            )
+
+        import asyncio
+
+        asyncio.run(go())
+        call = service.calls[0]
+        assert call["notes"] is None
+        assert call["clear_notes"] is True
+
+    def test_default_update_keeps_none_preservation(self, provider_update_harness) -> None:
+        # 199-c: omitted notes without clear intent preserve the fresh row
+        # value and never set the clear flag (default callers unchanged).
+        _row, _repo, service = provider_update_harness
+
+        async def go() -> None:
+            await partial_update_provider_config(
+                FakeSession(), "mod-a", timeout_seconds=45, reason="r"
+            )
+
+        import asyncio
+
+        asyncio.run(go())
+        call = service.calls[0]
+        assert call["notes"] == "old notes"
+        assert call["clear_notes"] is False
 
     def test_blank_reason_refused_before_mutation(self, provider_update_harness) -> None:
         row, _repo, service = provider_update_harness
@@ -1052,7 +1106,7 @@ class TestPartialUpdateProvider:
 
     def test_missing_provider_not_found(self, provider_update_harness, monkeypatch) -> None:
         monkeypatch.setattr(
-            prc.ProviderConfigsRepository,
+            ProviderConfigsRepository,
             "get_provider_config_for_update",
             lambda self, provider_or_id: _missing(),
         )
@@ -1079,7 +1133,7 @@ def _plan_for(row: FakeRouteRow, **edits: Any) -> RouteUpdatePlan:
 
 
 def _route_fingerprint_of(row: FakeRouteRow) -> str:
-    return prc._route_fingerprint(row)
+    return _route_fingerprint(row)
 
 
 class TestExecuteRouteUpdatePlan:
@@ -1107,8 +1161,8 @@ class TestExecuteRouteUpdatePlan:
             async def get_provider_config_by_provider(self, provider: str) -> Any:
                 return provider_row
 
-        monkeypatch.setattr(prc, "ModelRoutesRepository", _Repo)
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRoutesRepository", _Repo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _PRRepo)
         return row, provider_row
 
     def test_stale_fingerprint_refused_zero_writes(self, harness) -> None:
@@ -1147,7 +1201,7 @@ class TestExecuteRouteUpdatePlan:
                 calls.append(kwargs)
                 return row
 
-        monkeypatch.setattr(prc, "ModelRouteService", lambda **_: _NoService())
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRouteService", lambda **_: _NoService())
 
         async def go() -> None:
             return await execute_route_update_plan(FakeSession(), plan, reason="r")
@@ -1168,7 +1222,7 @@ class TestExecuteRouteUpdatePlan:
                 calls.append({"route_id": route_id, **kwargs})
                 return row
 
-        monkeypatch.setattr(prc, "ModelRouteService", lambda **_: _RecordingService())
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRouteService", lambda **_: _RecordingService())
 
         async def go() -> None:
             return await execute_route_update_plan(FakeSession(), plan, reason="reviewed", actor_admin_id=None)
@@ -1245,7 +1299,7 @@ class TestExecuteRouteUpdatePlan:
                 assert str(route_id) == twin_id
                 return twin
 
-        monkeypatch.setattr(prc, "ModelRoutesRepository", _TwinRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRoutesRepository", _TwinRepo)
         plan = _plan_for(twin, priority=50)
         tampered = dataclasses.replace(
             plan,
@@ -1297,7 +1351,7 @@ class TestExecuteRouteUpdatePlan:
             async def get_provider_config_by_provider(self, provider: str) -> Any:
                 return impostor
 
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _ImpostorRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _ImpostorRepo)
 
         async def go() -> None:
             with pytest.raises(ProviderRouteStaleError, match="provider identity"):
@@ -1322,7 +1376,7 @@ class TestExecuteRouteUpdatePlan:
             async def get_provider_config_by_provider(self, provider: str) -> Any:
                 return None
 
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _GoneRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _GoneRepo)
 
         async def go() -> None:
             with pytest.raises(
@@ -1353,8 +1407,8 @@ class TestPreviewForRoute:
             async def get_provider_config_by_provider(self, provider: str) -> Any:
                 return object()
 
-        monkeypatch.setattr(prc, "ModelRoutesRepository", _Repo)
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRoutesRepository", _Repo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _PRRepo)
 
         async def go() -> None:
             await preview_route_update_for_route(FakeSession(), ROUTE_ID)
@@ -1381,8 +1435,8 @@ class TestPreviewForRoute:
             async def get_provider_config_by_provider(self, provider: str) -> Any:
                 return None
 
-        monkeypatch.setattr(prc, "ModelRoutesRepository", _Repo)
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRoutesRepository", _Repo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _PRRepo)
 
         async def go() -> None:
             await preview_route_update_for_route(FakeSession(), row.id)
@@ -1422,8 +1476,8 @@ class TestPreviewForRoute:
             async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
                 return destination
 
-        monkeypatch.setattr(prc, "ModelRoutesRepository", _Repo)
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRoutesRepository", _Repo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _PRRepo)
 
         async def go() -> RouteUpdatePlan:
             return await preview_route_update_for_route(
@@ -1461,6 +1515,7 @@ class TestValidateMergedRouteCandidate:
                 provider_row=FakeProviderRow(kind="module"),
                 requested_model="m",
                 upstream_model="m",
+                supports_streaming=False,
             )
 
     def test_completion_endpoint_mismatch_refused(self) -> None:
@@ -1472,6 +1527,7 @@ class TestValidateMergedRouteCandidate:
                 provider_row=FakeProviderRow(kind="module"),
                 requested_model="zap-it-1",
                 upstream_model="zap-it-1",
+                supports_streaming=False,
             )
 
     def test_completion_retrying_provider_refused(self) -> None:
@@ -1485,6 +1541,162 @@ class TestValidateMergedRouteCandidate:
                 provider_row=FakeProviderRow(kind="module", max_retries=2),
                 requested_model="zap-it-1",
                 upstream_model="zap-it-1",
+                supports_streaming=False,
+            )
+
+
+    # --- 199-c: complete pure module/transport parity ----------------------------------
+
+    def _completion_kwargs(self, **overrides: Any) -> dict[str, Any]:
+        base: dict[str, Any] = dict(
+            endpoint="/v1/chat/completions",
+            provider="facial_scoring",
+            requested_model="facial-manipulation-scoring",
+            upstream_model="facial-manipulation-scoring",
+            supports_streaming=False,
+        )
+        base.update(overrides)
+        return base
+
+    def test_unknown_module_without_selector_refused(self) -> None:
+        # Module-kind provider with no selector and no legacy binding:
+        # the existing pure resolver says unsupported_module, so the
+        # configuration-time candidate must refuse it too.
+        with pytest.raises(ProviderRouteConfigError, match="supported server module"):
+            validate_merged_route_candidate(
+                {"chat_completions": dict(CHAT_BLOCK)},
+                endpoint="/v1/chat/completions",
+                provider="ghost-mod",
+                provider_row=FakeProviderRow(provider="ghost-mod", kind="module"),
+                requested_model="m",
+                upstream_model="m",
+                supports_streaming=True,
+            )
+
+    def test_legacy_binding_valid_without_selector(self) -> None:
+        # Implicit binding (bindings.json: facial_scoring -> facial-scoring-v1)
+        # is a supported declaration and must pass the SAME completion
+        # contract as an explicit selector.
+        document = validate_merged_route_candidate(
+            {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+            **self._completion_kwargs(),
+            provider_row=FakeProviderRow(provider="facial_scoring", kind="module"),
+        )
+        assert "completion_service" not in document  # no fabricated selector
+
+    def test_legacy_binding_wrong_public_model_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="profile public model"):
+            validate_merged_route_candidate(
+                {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+                **self._completion_kwargs(requested_model="wrong-model"),
+                provider_row=FakeProviderRow(provider="facial_scoring", kind="module"),
+            )
+
+    def test_legacy_binding_wrong_upstream_model_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="profile upstream model"):
+            validate_merged_route_candidate(
+                {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+                **self._completion_kwargs(upstream_model="other-model"),
+                provider_row=FakeProviderRow(provider="facial_scoring", kind="module"),
+            )
+
+    def test_legacy_binding_wrong_endpoint_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="chat completions endpoint"):
+            validate_merged_route_candidate(
+                {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+                **self._completion_kwargs(endpoint="/v1/responses"),
+                provider_row=FakeProviderRow(provider="facial_scoring", kind="module"),
+            )
+
+    def test_legacy_binding_retrying_provider_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="must not retry"):
+            validate_merged_route_candidate(
+                {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+                **self._completion_kwargs(),
+                provider_row=FakeProviderRow(
+                    provider="facial_scoring", kind="module", max_retries=1
+                ),
+            )
+
+    def test_explicit_selector_streaming_flag_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="streaming"):
+            validate_merged_route_candidate(
+                {
+                    "chat_completions": {"chat_text": True, "chat_streaming": False},
+                    "completion_service": {"version": 1, "profile": "zap-it-v1"},
+                },
+                endpoint="/v1/chat/completions",
+                provider="mod-a",
+                provider_row=FakeProviderRow(kind="module"),
+                requested_model="zap-it-1",
+                upstream_model="zap-it-1",
+                supports_streaming=True,
+            )
+
+    def test_implicit_binding_streaming_flag_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="streaming"):
+            validate_merged_route_candidate(
+                {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+                **self._completion_kwargs(supports_streaming=True),
+                provider_row=FakeProviderRow(provider="facial_scoring", kind="module"),
+            )
+
+    def test_explicit_selector_chat_streaming_capability_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="advertise streaming"):
+            validate_merged_route_candidate(
+                {
+                    "chat_completions": {"chat_text": True, "chat_streaming": True},
+                    "completion_service": {"version": 1, "profile": "zap-it-v1"},
+                },
+                endpoint="/v1/chat/completions",
+                provider="mod-a",
+                provider_row=FakeProviderRow(kind="module"),
+                requested_model="zap-it-1",
+                upstream_model="zap-it-1",
+                supports_streaming=False,
+            )
+
+    def test_implicit_binding_chat_streaming_capability_refused(self) -> None:
+        with pytest.raises(ProviderRouteConfigError, match="advertise streaming"):
+            validate_merged_route_candidate(
+                {"chat_completions": {"chat_text": True, "chat_streaming": True}},
+                **self._completion_kwargs(),
+                provider_row=FakeProviderRow(provider="facial_scoring", kind="module"),
+            )
+
+    def test_operator_directory_resolves_implicit_binding(self, tmp_path) -> None:
+        # The SAME configured operator directory the runtime uses applies
+        # to implicit bindings, not only explicit selectors.
+        import os
+
+        from pathlib import Path as _Path
+
+        bundled = (
+            _Path(__file__).resolve().parents[2]
+            / "app/slaif_gateway/modules/servers/completion_service/profiles/facial-scoring-v1.json"
+        )
+        directory = tmp_path / "profiles-199c"
+        directory.mkdir()
+        target = directory / "facial-scoring-v1.json"
+        target.write_text(bundled.read_text(encoding="utf-8"), encoding="utf-8")
+        os.chmod(target, 0o600)  # operator directories enforce 0600
+        document = validate_merged_route_candidate(
+            {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+            **self._completion_kwargs(),
+            provider_row=FakeProviderRow(provider="facial_scoring", kind="module"),
+            profile_dir=str(directory),
+        )
+        assert document["chat_completions"]["chat_streaming"] is False
+
+    def test_operator_directory_missing_profile_refused(self, tmp_path) -> None:
+        directory = tmp_path / "profiles-199c-empty"
+        directory.mkdir()
+        with pytest.raises(ProviderRouteConfigError, match="valid available profile selector"):
+            validate_merged_route_candidate(
+                {"chat_completions": {"chat_text": True, "chat_streaming": False}},
+                **self._completion_kwargs(),
+                provider_row=FakeProviderRow(provider="facial_scoring", kind="module"),
+                profile_dir=str(directory),
             )
 
 
@@ -1521,7 +1733,7 @@ class TestValidateRouteCreationCandidate:
             async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
                 return None
 
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _PRRepo)
 
         async def go() -> None:
             await validate_route_creation_candidate(
@@ -1555,7 +1767,7 @@ class TestValidateRouteCreationCandidate:
             async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
                 return FakeProviderRow(kind="openai_compatible")
 
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _PRRepo)
 
         async def go() -> None:
             await validate_route_creation_candidate(FakeSession(), **_creation_kwargs())
@@ -1575,7 +1787,7 @@ class TestValidateRouteCreationCandidate:
             async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
                 return FakeProviderRow(kind="module", max_retries=2)
 
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _PRRepo)
 
         async def go() -> None:
             await validate_route_creation_candidate(
@@ -1604,7 +1816,7 @@ class TestValidateRouteCreationCandidate:
             async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
                 return FakeProviderRow()
 
-        monkeypatch.setattr(prc, "ProviderConfigsRepository", _PRRepo)
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository", _PRRepo)
         canary = "sk-proj-abcdef1234567890abcdef1234567890"
 
         async def go() -> None:
@@ -1615,4 +1827,109 @@ class TestValidateRouteCreationCandidate:
         import asyncio
 
         with pytest.raises(ProviderRouteConfigError, match="notes"):
+            asyncio.run(go())
+
+    # --- 199-c: complete module/transport parity at creation ---------------------
+
+    def test_unknown_module_refused_on_create(self, monkeypatch) -> None:
+        class _PRRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return FakeProviderRow(provider="ghost-mod", kind="module")
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return FakeProviderRow(provider="ghost-mod", kind="module")
+
+        monkeypatch.setattr(
+            "slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository",
+            _PRRepo,
+        )
+
+        async def go() -> None:
+            await validate_route_creation_candidate(
+                FakeSession(), **_creation_kwargs(provider="ghost-mod")
+            )
+
+        import asyncio
+
+        with pytest.raises(ProviderRouteConfigError, match="supported server module"):
+            asyncio.run(go())
+
+    def test_legacy_binding_valid_on_create(self, monkeypatch) -> None:
+        # Implicit legacy binding with truthful no-streaming declarations
+        # is a valid NEW route (no selector needed).
+        class _PRRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return FakeProviderRow(provider="facial_scoring", kind="module")
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return FakeProviderRow(provider="facial_scoring", kind="module")
+
+        monkeypatch.setattr(
+            "slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository",
+            _PRRepo,
+        )
+
+        async def go() -> None:
+            await validate_route_creation_candidate(
+                FakeSession(),
+                **_creation_kwargs(
+                    provider="facial_scoring",
+                    requested_model="facial-manipulation-scoring",
+                    upstream_model="facial-manipulation-scoring",
+                    supports_streaming=False,
+                    capabilities={
+                        "chat_completions": {
+                            "chat_text": True,
+                            "chat_streaming": False,
+                        }
+                    },
+                ),
+            )
+
+        import asyncio
+
+        asyncio.run(go())  # no exception: supported implicit binding
+
+    def test_completion_streaming_refused_on_create(self, monkeypatch) -> None:
+        class _PRRepo:
+            def __init__(self, session: Any) -> None:
+                pass
+
+            async def get_provider_config_by_provider(self, provider: str) -> Any:
+                return FakeProviderRow(provider="facial_scoring", kind="module")
+
+            async def get_provider_config_for_update(self, provider_or_id: str) -> Any:
+                return FakeProviderRow(provider="facial_scoring", kind="module")
+
+        monkeypatch.setattr(
+            "slaif_gateway.services.provider_route_configuration.ProviderConfigsRepository",
+            _PRRepo,
+        )
+
+        async def go() -> None:
+            await validate_route_creation_candidate(
+                FakeSession(),
+                **_creation_kwargs(
+                    provider="facial_scoring",
+                    requested_model="facial-manipulation-scoring",
+                    upstream_model="facial-manipulation-scoring",
+                    supports_streaming=True,
+                    capabilities={
+                        "chat_completions": {
+                            "chat_text": True,
+                            "chat_streaming": False,
+                        }
+                    },
+                ),
+            )
+
+        import asyncio
+
+        with pytest.raises(ProviderRouteConfigError, match="streaming"):
             asyncio.run(go())

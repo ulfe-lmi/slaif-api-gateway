@@ -50,6 +50,14 @@ class _ProvidersRepo:
     async def update_provider_metadata(self, provider_config_id, **kwargs):
         if self.row is None or self.row.id != provider_config_id:
             return False
+        clear_notes = kwargs.pop("clear_notes", False)
+        notes = kwargs.pop("notes", None)
+        # 199-c: mirror the real repository's explicit clear-intent law
+        # (default callers: notes=None still means preserve).
+        if clear_notes:
+            self.row.notes = None
+        elif notes is not None:
+            self.row.notes = notes
         for key, value in kwargs.items():
             if value is not None:
                 setattr(self.row, key, value)
@@ -260,3 +268,55 @@ async def test_module_http_requires_existing_confirmation_and_reason_boundary() 
     )
 
     assert row.kind == "module"
+
+@pytest.mark.asyncio
+async def test_provider_config_explicit_clear_notes_stores_null() -> None:
+    """199-c: explicit clear intent stores NULL in the same operation."""
+    existing = _provider(notes="real prior value")
+    service, _providers, audit = _service(existing)
+
+    updated = await service.update_provider_config(
+        str(existing.id),
+        provider="openai",
+        display_name="OpenAI",
+        kind="openai_compatible",
+        base_url="https://api.openai.example/v1",
+        api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+        enabled=True,
+        timeout_seconds=300,
+        max_retries=2,
+        notes=None,
+        clear_notes=True,
+        reason="clear notes",
+    )
+
+    assert updated.notes is None
+    assert len(audit.rows) == 1  # ONE audit, no second unaudited write
+    assert audit.rows[0]["old_values"]["notes"] == "real prior value"  # REAL old
+    assert audit.rows[0]["new_values"]["notes"] is None  # real new null
+
+
+@pytest.mark.asyncio
+async def test_provider_config_default_callers_none_preserves() -> None:
+    """199-c: default callers (notes=None, no clear intent) preserve notes."""
+    existing = _provider(notes="untouched")
+    service, _providers, audit = _service(existing)
+
+    updated = await service.update_provider_config(
+        str(existing.id),
+        provider="openai",
+        display_name="OpenAI",
+        kind="openai_compatible",
+        base_url="https://api.openai.example/v1",
+        api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+        enabled=True,
+        timeout_seconds=111,
+        max_retries=2,
+        notes=None,
+        reason="timeout tweak",
+    )
+
+    assert updated.notes == "untouched"  # None means preserve
+    assert updated.timeout_seconds == 111
+    assert audit.rows[0]["old_values"]["notes"] == "untouched"
+    assert audit.rows[0]["new_values"]["notes"] == "untouched"

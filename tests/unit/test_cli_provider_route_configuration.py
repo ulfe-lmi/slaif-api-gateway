@@ -65,7 +65,9 @@ class FakeProvider:
     id: uuid.UUID = PROVIDER_ID
     provider: str = "mod-a"
     display_name: str = "Mod A"
-    kind: str = "module"
+    # 199-c: a genuinely compatible provider — the pure module resolver
+    # must be able to resolve the review destination.
+    kind: str = "openai_compatible"
     base_url: str = "https://svc-a.example/api"
     api_key_env_var: str = "SVC_A_KEY"
     enabled: bool = False
@@ -163,6 +165,97 @@ class TestProvidersAdd:
         )
         assert result.exit_code != 0
         assert "not-a-uuid" not in result.stdout
+
+    # --- 199-c: creation-surface known-shape guards ----------------------------
+
+    def test_notes_known_secret_shape_refused_on_create(self, monkeypatch) -> None:
+        async def fake_add(**kwargs: Any) -> FakeProvider:
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(providers_cli, "_add_provider", fake_add)
+        canary = "sk-proj-abcdef1234567890abcdef1234567890"
+        result = _invoke(
+            app,
+            [
+                "providers", "add", "--provider", "mod-a",
+                "--api-key-env-var", "SVC_A_KEY",
+                "--notes", canary,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "credential patterns" in _plain(result.stderr)
+        assert canary not in result.stdout
+        assert canary not in result.stderr
+
+    def test_reason_known_secret_shape_refused_on_create(self, monkeypatch) -> None:
+        async def fake_add(**kwargs: Any) -> FakeProvider:
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(providers_cli, "_add_provider", fake_add)
+        canary = "sk-proj-abcdef1234567890abcdef1234567890"
+        result = _invoke(
+            app,
+            [
+                "providers", "add", "--provider", "mod-a",
+                "--api-key-env-var", "SVC_A_KEY",
+                "--reason", canary,
+            ],
+        )
+        assert result.exit_code != 0
+        assert "credential patterns" in _plain(result.stderr)
+        assert canary not in result.stdout
+        assert canary not in result.stderr
+
+    def test_display_name_and_base_url_secret_shapes_refused_on_create(
+        self, monkeypatch
+    ) -> None:
+        async def fake_add(**kwargs: Any) -> FakeProvider:
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(providers_cli, "_add_provider", fake_add)
+        for flag, value in (
+            ("--display-name", "Auth: Bearer abcdef1234567890"),
+            ("--base-url", "https://sk-proj-abcdef1234567890abcdef1234567890"),
+        ):
+            result = _invoke(
+                app,
+                [
+                    "providers", "add", "--provider", "mod-a",
+                    "--api-key-env-var", "SVC_A_KEY",
+                    flag, value,
+                ],
+            )
+            assert result.exit_code != 0
+            assert "credential patterns" in _plain(result.stderr)
+            assert value not in result.stdout
+            assert value not in result.stderr
+
+    def test_ordinary_text_and_env_reference_accepted_on_create(self, monkeypatch) -> None:
+        seen: dict[str, Any] = {}
+
+        async def fake_add(**kwargs: Any) -> FakeProvider:
+            seen.update(kwargs)
+            return FakeProvider()
+
+        monkeypatch.setattr(providers_cli, "_add_provider", fake_add)
+        result = _invoke(
+            app,
+            [
+                "providers", "add", "--provider", "mod-a",
+                "--api-key-env-var", "SVC_A_KEY", "--kind", "module",
+                "--display-name", "Svc A (reviewed)",
+                "--base-url", "https://svc-a.example/api",
+                "--notes", "uses SVC_A_KEY; reviewed note",
+                "--reason", "fictional module preparation",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0
+        # safe env-variable NAMES and ordinary text stay literal
+        assert seen["display_name"] == "Svc A (reviewed)"
+        assert seen["base_url"] == "https://svc-a.example/api"
+        assert seen["notes"] == "uses SVC_A_KEY; reviewed note"
+        assert seen["reason"] == "fictional module preparation"
 
 
 class TestProvidersUpdate:

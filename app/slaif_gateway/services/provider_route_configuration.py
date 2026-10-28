@@ -11,8 +11,9 @@ changes go through the existing field services with bounded context:
   resolves the PROPOSED destination provider READ-ONLY, merges the typed
   edits into the canonical configuration the service will actually store,
   validates the complete merged candidate against that provider's real
-  kind/configuration (including the zero-retry rule for completion
-  profiles), and renders a reviewed NON-secret plan bound to the route
+  kind/configuration (including pure server-module resolution, the
+  zero-retry rule, and the no-streaming limit for configured-completion
+  routes), and renders a reviewed NON-secret plan bound to the route
   UUID, the destination provider UUID, and the provider context digest —
   without writing or auditing anything.
 * ``execute_route_update_plan`` locks the exact route and the destination
@@ -42,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,9 +54,15 @@ from slaif_gateway.db.repositories.provider_configs import ProviderConfigsReposi
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.modules.servers.completion_service.profiles import (
     PROFILE_KEY,
+    load_bindings,
     load_profile,
     profile_id_from_capabilities,
 )
+from slaif_gateway.modules.servers.registry import (
+    COMPLETION_SERVICE_MODULE_ID,
+    resolve_server_module,
+)
+from slaif_gateway.providers.errors import ProviderConfigurationError
 from slaif_gateway.modules.servers.local_coding.contract import (
     LOCAL_CODING_ROUTE_CAPABILITY_KEY,
 )
@@ -291,6 +299,7 @@ def validate_merged_route_candidate(
     provider_row: ProviderConfig,
     requested_model: str,
     upstream_model: str,
+    supports_streaming: bool,
     external_tool_ceilings: ExternalToolOperatorCeilings = (
         DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
     ),
@@ -298,14 +307,20 @@ def validate_merged_route_candidate(
 ) -> dict[str, Any]:
     """Complete configuration-time validation of one merged route candidate.
 
-    Reuses the strict capability-group contract and mirrors the server
-    module-resolution rules (provider kind, exclusive transport selectors,
-    profile availability in the SAME configured profile directory the
-    runtime uses, the adapter's public/upstream model identity, and the
-    completion adapter's zero-retry requirement) with the existing pure
-    parsers/loaders. No credentials are loaded, no adapter is constructed,
-    and no network call is made. This validates CONFIGURATION, not
-    credential/model readiness.
+    Reuses the strict capability-group contract and the EXISTING pure
+    server-module resolution (provider kind, exclusive transport
+    selectors, registered module, legacy profile bindings) plus the
+    profile/binding parsers and loaders: a candidate is valid only when
+    the provider's actual kind/slug/capabilities resolve to a supported
+    server module, in the SAME configured profile directory the runtime
+    uses. Configured-completion candidates — explicit selector OR
+    implicit legacy binding — additionally require the chat completions
+    endpoint, zero provider retries, the configured profile's
+    public/upstream model identity, and NO advertised streaming (the
+    completion adapter refuses stream values other than False). No
+    credentials are loaded, no adapter is constructed, and no network
+    call is made. This validates CONFIGURATION, not credential/model
+    readiness.
     """
     provider_kind = provider_row.kind
     document = dict(capabilities or {})
@@ -323,11 +338,19 @@ def validate_merged_route_candidate(
         raise ProviderRouteConfigError(
             "candidate: The selected transport requires an openai_compatible provider kind."
         )
-    if PROFILE_KEY in document:
-        if provider_kind != _MODULE_PROVIDER_KIND:
-            raise ProviderRouteConfigError(
-                "completion_service: A profile selector requires a module provider kind."
-            )
+    if PROFILE_KEY in document and provider_kind != _MODULE_PROVIDER_KIND:
+        # Explicit selector: fixed safe vocabulary (the registry would
+        # reject this too, but this message names the selector).
+        raise ProviderRouteConfigError(
+            "completion_service: A profile selector requires a module provider kind."
+        )
+    try:
+        module = resolve_server_module(provider, provider_kind, document)
+    except ProviderConfigurationError as exc:
+        raise ProviderRouteConfigError(
+            "candidate: The selected provider does not resolve to a supported server module."
+        ) from exc
+    if module.module_id == COMPLETION_SERVICE_MODULE_ID:
         if endpoint != CHAT_COMPLETIONS_ENDPOINT:
             raise ProviderRouteConfigError(
                 "completion_service: A profile selector requires the chat completions endpoint."
@@ -337,7 +360,33 @@ def validate_merged_route_candidate(
                 "completion_service: The selected provider must not retry "
                 "(max_retries must be 0)."
             )
-        profile = load_profile(profile_id_from_capabilities(document), profile_dir)
+        # The completion adapter refuses every stream value other than
+        # False, so a reviewed configuration must not advertise streaming
+        # on the route flag or the chat capability (no silent strip).
+        if supports_streaming:
+            raise ProviderRouteConfigError(
+                "completion_service: The completion service does not support "
+                "streaming on this route."
+            )
+        chat_block = document.get("chat_completions")
+        if isinstance(chat_block, Mapping) and chat_block.get("chat_streaming") is True:
+            raise ProviderRouteConfigError(
+                "completion_service: The chat completions capability must not "
+                "advertise streaming."
+            )
+        profile_id = profile_id_from_capabilities(document) or load_bindings().providers.get(
+            str(provider).strip().lower()
+        )
+        if profile_id is None:
+            raise ProviderRouteConfigError(
+                "completion_service: Value must be a valid available profile selector."
+            )
+        try:
+            profile = load_profile(profile_id, profile_dir)
+        except ProviderConfigurationError as exc:
+            raise ProviderRouteConfigError(
+                "completion_service: Value must be a valid available profile selector."
+            ) from exc
         if profile.public_model != requested_model:
             raise ProviderRouteConfigError(
                 "completion_service: The profile public model differs from the route requested model."
@@ -377,12 +426,13 @@ async def partial_update_provider_config(
     its one audit record in the caller transaction. ``enabled`` is
     preserved; use the enable/disable commands.
 
-    Notes boundary (documented, pre-existing shared law): the shared
-    metadata repository treats ``notes=None`` as "preserve current" on
-    every caller path (including the admin form), so a clear-notes update
-    delegates ``notes=None`` and the audited OLD value is the real prior
-    value; whether the stored column is actually cleared is governed by
-    that shared repository law, not by this typed operation.
+    Clearing notes uses the explicit ``clear_notes`` intent (199-c): the
+    shared service captures the REAL prior values before mutation, the
+    metadata repository stores NULL within that same operation, and the
+    service's ONE audit records real old notes -> null. Existing shared
+    callers keep the pre-existing default (``clear_notes=False``;
+    ``notes=None`` means preserve), so admin-form and other behavior is
+    unchanged.
     """
     if notes is not None and clear_notes:
         raise ProviderRouteConfigError(
@@ -420,6 +470,7 @@ async def partial_update_provider_config(
         else row.timeout_seconds,
         max_retries=max_retries if max_retries is not None else row.max_retries,
         notes=None if clear_notes else (notes if notes is not None else row.notes),
+        clear_notes=clear_notes,
         actor_admin_id=actor_admin_id,
         reason=reason,
         confirm_insecure_http=confirm_insecure_http,
@@ -609,6 +660,7 @@ def preview_route_update(
         provider_row=provider_row,
         requested_model=proposed_canonical["requested_model"],
         upstream_model=proposed_canonical["upstream_model"],
+        supports_streaming=proposed_canonical["supports_streaming"],
         external_tool_ceilings=external_tool_ceilings,
         profile_dir=profile_dir,
     )
@@ -801,6 +853,7 @@ async def execute_route_update_plan(
         provider_row=provider_row,
         requested_model=proposed_canonical["requested_model"],
         upstream_model=proposed_canonical["upstream_model"],
+        supports_streaming=proposed_canonical["supports_streaming"],
         external_tool_ceilings=external_tool_ceilings,
         profile_dir=profile_dir,
     )
@@ -888,6 +941,7 @@ async def validate_route_creation_candidate(
         provider_row=provider_row,
         requested_model=canonical["requested_model"],
         upstream_model=canonical["upstream_model"],
+        supports_streaming=canonical["supports_streaming"],
         external_tool_ceilings=external_tool_ceilings,
         profile_dir=profile_dir,
     )

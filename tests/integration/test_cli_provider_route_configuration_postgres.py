@@ -12,6 +12,11 @@ wrong profile/kind/upstream/selector refusal; file canaries and oversize
 refusals; no dry-run writes or audits; a forced LATE audit failure with the
 updated row visible first in the SAME transaction and full rollback proof;
 and real competing-update serialization with the preserve-omitted law.
+199-c continues the SAME module: the explicit clear-note oracle restored
+(real old -> null in one audited operation, late-audit rollback of clear
+plus sibling), creation-surface known-shape refusals, and complete pure
+module/transport parity (unknown module refused, implicit legacy binding
+accepted, unsupported streaming refused) against real owned PostgreSQL.
 
 No provider HTTP, no Redis, no real upstream contact, no real SMTP.
 Ownership discipline mirrors the 198 owned fixture: unique owner label,
@@ -248,7 +253,7 @@ ZAP_CAPS = {
     "capabilities": {
         "chat_completions": {
             "chat_text": True,
-            "chat_streaming": True,
+            "chat_streaming": False,
             "chat_function_tools": True,
         },
         "codex_limits": {
@@ -344,6 +349,7 @@ def world(cli_env: str, tmp_path_factory: pytest.TempPathFactory) -> dict[str, A
         "--match-type", "exact",
         "--provider", "svc-a",
         "--upstream-model", "zap-it-1",
+        "--no-streaming",
         "--capabilities-file", str(zap_caps_file),
         "--priority", "100",
         "--reason", "two-service workflow route",
@@ -358,6 +364,7 @@ def world(cli_env: str, tmp_path_factory: pytest.TempPathFactory) -> dict[str, A
         "--match-type", "exact",
         "--provider", "svc-b",
         "--upstream-model", "facial-manipulation-scoring",
+        "--no-streaming",
         "--capabilities-file", str(facial_caps_file),
         "--priority", "100",
         "--reason", "two-service workflow route",
@@ -593,14 +600,11 @@ def test_provider_notes_replace_and_clear(world, cli_env) -> None:
     assert result.exit_code == 0, result.stderr
     assert asyncio.run(_provider(cli_env, "svc-a"))["notes"] == "reviewed note"
 
-    # 199-b R1: clear-notes delegates notes=None through the UNCHANGED
-    # shared service (no direct pre-write), so the audited OLD value is the
-    # REAL prior value, not a pre-cleared null. The shared metadata
-    # repository's pre-existing None-skip law (also used by the admin form
-    # path) governs whether the stored column changes on real PostgreSQL;
-    # that shared law is outside 199-b allowed paths (flagged for
-    # strategic follow-up) and is asserted here as the verified behavior.
+    # 199-c: the EXPLICIT clear intent stores NULL within the shared
+    # audited operation (no direct pre-write): the audited OLD value is
+    # the REAL prior value and the NEW value is the real null.
     before = asyncio.run(_provider(cli_env, "svc-a"))
+    assert before["notes"] == "reviewed note"
     counts = asyncio.run(_audit_counts(cli_env))
     result = _cli(
         "providers", "update", "svc-a", "--reason", "clear notes",
@@ -608,7 +612,11 @@ def test_provider_notes_replace_and_clear(world, cli_env) -> None:
     )
     assert result.exit_code == 0, result.stderr
     after = asyncio.run(_provider(cli_env, "svc-a"))
-    assert after["notes"] == before["notes"]  # shared repo None-skip boundary
+    assert after["notes"] is None  # the advertised clear actually clears
+    for field in ("id", "provider", "display_name", "kind", "base_url",
+                  "api_key_env_var", "enabled", "timeout_seconds",
+                  "max_retries", "created_at"):
+        assert after[field] == before[field], field  # no sibling change
     counts_after = asyncio.run(_audit_counts(cli_env))
     assert counts_after.get("provider_config_updated", 0) == (
         counts.get("provider_config_updated", 0) + 1
@@ -617,6 +625,7 @@ def test_provider_notes_replace_and_clear(world, cli_env) -> None:
     clear_audit = [a for a in audits if a["note"] == "clear notes"]
     assert len(clear_audit) == 1
     assert clear_audit[0]["old_values"]["notes"] == "reviewed note"  # REAL old
+    assert clear_audit[0]["new_values"]["notes"] is None  # real new null
 
 
 def test_provider_update_conflict_refused(world, cli_env) -> None:
@@ -719,11 +728,14 @@ def test_nested_media_update_preserves_siblings(world, cli_env) -> None:
 def test_full_replacement_is_distinct(world, cli_env) -> None:
     route_a = world["route_a"]
     new_caps = world["tmp"] / "replacement-caps.json"
+    # 199-c: a module-kind provider must keep resolving after the
+    # replacement, so the completion selector stays in the document.
     replacement = {
         "schema_version": 1,
         "capabilities": {
             "chat_completions": {"chat_text": True, "chat_streaming": False},
             "media_input_estimation": {"version": 1, "image_tokens": 512},
+            "completion_service": {"version": 1, "profile": "zap-it-v1"},
         },
     }
     new_caps.write_text(json.dumps(replacement), encoding="utf-8")
@@ -742,8 +754,10 @@ def test_full_replacement_is_distinct(world, cli_env) -> None:
     assert result.exit_code == 0, result.stderr
     after = asyncio.run(_route(cli_env, route_a))
     assert after["capabilities"] == replacement["capabilities"]
-    assert "codex_limits" not in after["capabilities"]
-    assert "completion_service" not in after["capabilities"]
+    assert "codex_limits" not in after["capabilities"]  # unrelated group gone
+    assert after["capabilities"]["completion_service"] == (
+        {"version": 1, "profile": "zap-it-v1"}
+    )  # provider still resolves
 
 
 def test_wrong_profile_kind_upstream_denied(world, cli_env) -> None:
@@ -1097,12 +1111,12 @@ def test_provider_notes_audit_old_real_value(world, cli_env) -> None:
 def test_route_provider_switch_context_stale(world, cli_env) -> None:
     """R2: a provider switch binds destination identity + context; drift is stale."""
     for slug, origin, env_ref in (
-        ("svc-d", "https://svc-d.example/api", "SVC_D_KEY"),
-        ("svc-e", "https://svc-e.example/api", "SVC_E_KEY"),
+        ("svc-d", "https://svc-d.example/v1", "SVC_D_KEY"),
+        ("svc-e", "https://svc-e.example/v1", "SVC_E_KEY"),
     ):
         result = _cli(
             "providers", "add",
-            "--provider", slug, "--kind", "module",
+            "--provider", slug, "--kind", "openai_compatible",
             "--base-url", origin, "--api-key-env-var", env_ref,
             "--max-retries", "0",
             "--reason", "provider switch fixture", "--json",
@@ -1225,6 +1239,7 @@ def test_lowered_external_tool_ceiling_denied(world, cli_env) -> None:
             "capabilities": {
                 "chat_completions": {"chat_text": True, "chat_streaming": False},
                 "media_input_estimation": {"version": 1, "image_tokens": 512},
+                "completion_service": {"version": 1, "profile": "zap-it-v1"},
                 "external_tools": {
                     "version": 1,
                     "supported_capabilities": ["provider_web_search"],
@@ -1421,3 +1436,316 @@ def test_known_secret_refusals(world, cli_env) -> None:
     assert result.exit_code == 0, result.stderr
     assert canary not in result.stdout
     assert "***" in result.stdout
+
+# --- 199-c focused PG evidence ----------------------------------------------------
+
+
+def _create_facial_bound_provider() -> None:
+    """Create the implicitly-bound legacy module provider (once, real CLI)."""
+    result = _cli(
+        "providers", "add",
+        "--provider", "facial_scoring",
+        "--display-name", "Facial Scoring (legacy bound)",
+        "--kind", "module",
+        "--base-url", "https://facial-scoring.example/api",
+        "--api-key-env-var", "FACIAL_SCORING_API_KEY",
+        "--max-retries", "0",
+        "--reason", "legacy-bound module preparation",
+        "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+
+
+async def _count_provider_rows(url: str) -> int:
+    factory = _session_factory(url)
+    async with factory() as session:
+        return len((await session.execute(select(ProviderConfig))).scalars().all())
+
+
+async def _count_routes_by_model(url: str, model: str) -> int:
+    factory = _session_factory(url)
+    async with factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(ModelRoute).where(ModelRoute.requested_model == model)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return len(rows)
+
+
+def test_provider_create_known_secret_shape_refused(world, cli_env) -> None:
+    """C2: recognized credential shapes are refused BEFORE creation writes."""
+    canary = CANARY_199B
+    before_rows = asyncio.run(_count_provider_rows(cli_env))
+    counts = asyncio.run(_audit_counts(cli_env))
+
+    result = _cli(
+        "providers", "add",
+        "--provider", "svc-g",
+        "--api-key-env-var", "SVC_G_KEY",
+        "--base-url", "https://svc-g.example/v1",
+        "--notes", canary,
+        "--reason", "creation probe",
+    )
+    assert result.exit_code != 0
+    assert "credential patterns" in _plain(result.stderr)
+    assert canary not in result.stdout
+    assert canary not in result.stderr
+    assert asyncio.run(_count_provider_rows(cli_env)) == before_rows  # zero rows
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # zero audits
+
+    # ordinary text and safe env-variable NAMES stay literal on creation
+    result = _cli(
+        "providers", "add",
+        "--provider", "svc-g",
+        "--api-key-env-var", "SVC_G_KEY",
+        "--display-name", "Svc G (reviewed)",
+        "--base-url", "https://svc-g.example/v1",
+        "--notes", "uses SVC_G_KEY; reviewed note",
+        "--reason", "ordinary creation",
+        "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["enabled"] is False  # creation stays DISABLED
+    stored = asyncio.run(_provider(cli_env, "svc-g"))
+    assert stored["notes"] == "uses SVC_G_KEY; reviewed note"
+    assert stored["display_name"] == "Svc G (reviewed)"
+
+
+def test_provider_late_audit_failure_rolls_back_clear_and_sibling(
+    world, cli_env, monkeypatch
+) -> None:
+    """C1: a LATE provider audit failure rolls back clear AND sibling."""
+    result = _cli(
+        "providers", "update", "svc-a", "--reason", "re-add notes",
+        "--notes", "rollback probe", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    before = asyncio.run(_provider(cli_env, "svc-a"))
+    assert before["notes"] == "rollback probe"
+    counts = asyncio.run(_audit_counts(cli_env))
+    provider_uuid = uuid.UUID(before["id"])
+    observed: dict[str, Any] = {}
+    forced = {"raised": False}
+
+    original = AuditRepository.add_audit_log
+
+    async def hook(self, *args: Any, **kwargs: Any) -> Any:
+        if (
+            not forced["raised"]
+            and kwargs.get("action") == "provider_config_updated"
+            and kwargs.get("entity_id") == provider_uuid
+        ):
+            # The cleared row must be visible in the SAME transaction
+            # before the LATE audit failure.
+            row = await ProviderConfigsRepository(
+                self._session
+            ).get_provider_config_by_id(provider_uuid)
+            assert row is not None
+            assert (
+                row.notes is None and row.timeout_seconds == 75
+            ), "updated row not visible in the same transaction"
+            observed["visible"] = (row.notes, row.timeout_seconds)
+            forced["raised"] = True
+            raise RuntimeError("forced late provider audit failure")
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(AuditRepository, "add_audit_log", hook)
+    result = _cli(
+        "providers", "update", "svc-a", "--reason", "clear + timeout probe",
+        "--clear-notes", "--timeout-seconds", "75", "--json",
+    )
+    assert result.exit_code != 0
+    assert observed.get("visible") == (None, 75)
+
+    after = asyncio.run(_provider(cli_env, "svc-a"))
+    assert after == before  # full rollback: clear AND sibling preserved
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # no orphan audit
+
+    # The retry now succeeds and audits the REAL prior value -> null.
+    result = _cli(
+        "providers", "update", "svc-a", "--reason", "clear + timeout retry",
+        "--clear-notes", "--timeout-seconds", "75", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    final = asyncio.run(_provider(cli_env, "svc-a"))
+    assert final["notes"] is None
+    assert final["timeout_seconds"] == 75
+    audits = asyncio.run(_provider_audits(cli_env, "svc-a"))
+    retry_audit = [a for a in audits if a["note"] == "clear + timeout retry"]
+    assert len(retry_audit) == 1
+    assert retry_audit[0]["old_values"]["notes"] == "rollback probe"
+    assert retry_audit[0]["new_values"]["notes"] is None
+
+
+def test_unknown_module_route_create_refused(world, cli_env) -> None:
+    """C3: an unregistered module provider cannot back a NEW route."""
+    result = _cli(
+        "providers", "add",
+        "--provider", "ghost-mod",
+        "--kind", "module",
+        "--base-url", "https://ghost.example/api",
+        "--api-key-env-var", "GHOST_KEY",
+        "--max-retries", "0",
+        "--reason", "unregistered module preparation",
+        "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    counts = asyncio.run(_audit_counts(cli_env))
+    result = _cli(
+        "routes", "add",
+        "--requested-model", "ghost-model-199c",
+        "--match-type", "exact",
+        "--provider", "ghost-mod",
+        "--priority", "30",
+        "--reason", "unsupported module route",
+    )
+    assert result.exit_code != 0
+    assert "supported server module" in _plain(result.stderr)
+    assert asyncio.run(_count_routes_by_model(cli_env, "ghost-model-199c")) == 0
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # no writes/audits
+
+
+def test_legacy_bound_route_create_valid_and_wrong_model_refused(world, cli_env) -> None:
+    """C3: the implicit legacy binding resolves on real PG create."""
+    _create_facial_bound_provider()
+    counts = asyncio.run(_audit_counts(cli_env))
+
+    # negative first: wrong requested model for the bound profile
+    result = _cli(
+        "routes", "add",
+        "--requested-model", "wrong-model-199c",
+        "--match-type", "exact",
+        "--provider", "facial_scoring",
+        "--upstream-model", "wrong-model-199c",
+        "--no-streaming",
+        "--priority", "30",
+        "--reason", "bound profile wrong model",
+    )
+    assert result.exit_code != 0
+    assert "profile public model" in _plain(result.stderr)
+    assert asyncio.run(_count_routes_by_model(cli_env, "wrong-model-199c")) == 0
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # no writes/audits
+
+    # positive: the SAME bundled profile directory the runtime uses
+    result = _cli(
+        "routes", "add",
+        "--requested-model", "facial-manipulation-scoring",
+        "--match-type", "exact",
+        "--provider", "facial_scoring",
+        "--upstream-model", "facial-manipulation-scoring",
+        "--no-streaming",
+        "--priority", "30",
+        "--reason", "legacy-bound route preparation",
+        "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    route_id = json.loads(result.stdout)["id"]
+    row = asyncio.run(_route(cli_env, route_id))
+    assert row["supports_streaming"] is False
+    assert row["capabilities"]["chat_completions"]["chat_streaming"] is False
+    assert "completion_service" not in row["capabilities"]  # no fabricated selector
+    world["route_facial"] = route_id
+
+
+def test_legacy_bound_streaming_refused_on_create(world, cli_env) -> None:
+    """C3: advertised streaming (route flag + default chat block) is refused."""
+    counts = asyncio.run(_audit_counts(cli_env))
+    result = _cli(
+        "routes", "add",
+        "--requested-model", "facial-manipulation-scoring",
+        "--match-type", "exact",
+        "--provider", "facial_scoring",
+        "--upstream-model", "facial-manipulation-scoring",
+        "--priority", "33",
+        "--reason", "streaming on a completion route",
+    )
+    assert result.exit_code != 0
+    assert "streaming" in _plain(result.stderr)
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # no writes/audits
+
+
+def test_explicit_selector_streaming_refused_on_update(world, cli_env) -> None:
+    """C3: an explicit-selector route cannot advertise streaming either."""
+    route_b = world["route_b"]
+    counts = asyncio.run(_audit_counts(cli_env))
+    before = asyncio.run(_route(cli_env, route_b))
+    result = _cli(
+        "routes", "update", route_b, "--dry-run", str(world["tmp"] / "streaming-plan"),
+        "--streaming",
+    )
+    assert result.exit_code != 0
+    assert "streaming" in _plain(result.stderr)
+    assert not (world["tmp"] / "streaming-plan").exists()
+    assert asyncio.run(_route(cli_env, route_b)) == before  # zero writes
+    assert asyncio.run(_audit_counts(cli_env)) == counts  # zero audits
+
+
+def test_legacy_bound_operator_directory_resolution(world, cli_env) -> None:
+    """C3: implicit bindings honor the SAME configured operator directory."""
+    from pathlib import Path
+
+    from slaif_gateway.modules.servers.completion_service.profiles import load_profile
+
+    bundled_path = (
+        Path(__file__).resolve().parents[2]
+        / "app/slaif_gateway/modules/servers/completion_service/profiles/facial-scoring-v1.json"
+    )
+    saved = os.environ.get("COMPLETION_SERVICE_PROFILE_DIR")
+    try:
+        # case 1: operator directory WITH the bound profile file -> implicit OK
+        profile_dir = world["tmp"] / "profiles-199c-bound"
+        profile_dir.mkdir()
+        target = profile_dir / "facial-scoring-v1.json"
+        target.write_text(bundled_path.read_text(encoding="utf-8"), encoding="utf-8")
+        os.chmod(target, 0o600)  # operator directories enforce 0600
+        os.environ["COMPLETION_SERVICE_PROFILE_DIR"] = str(profile_dir)
+        get_settings.cache_clear()
+        result = _cli(
+            "routes", "add",
+            "--requested-model", "facial-manipulation-scoring",
+            "--match-type", "exact",
+            "--provider", "facial_scoring",
+            "--upstream-model", "facial-manipulation-scoring",
+            "--no-streaming",
+            "--priority", "31",
+            "--reason", "legacy-bound operator-dir route",
+            "--json",
+        )
+        assert result.exit_code == 0, result.stderr
+        route_id = json.loads(result.stdout)["id"]
+        row = asyncio.run(_route(cli_env, route_id))
+        assert row["capabilities"]["chat_completions"]["chat_streaming"] is False
+        assert "completion_service" not in row["capabilities"]
+
+        # case 2: operator directory WITHOUT the bound profile -> refused
+        counts = asyncio.run(_audit_counts(cli_env))
+        empty_dir = world["tmp"] / "profiles-199c-empty"
+        empty_dir.mkdir()
+        os.environ["COMPLETION_SERVICE_PROFILE_DIR"] = str(empty_dir)
+        get_settings.cache_clear()
+        result = _cli(
+            "routes", "add",
+            "--requested-model", "facial-manipulation-scoring",
+            "--match-type", "exact",
+            "--provider", "facial_scoring",
+            "--upstream-model", "facial-manipulation-scoring",
+            "--no-streaming",
+            "--priority", "32",
+            "--reason", "bound profile unavailable",
+        )
+        assert result.exit_code != 0
+        assert "valid available profile selector" in _plain(result.stderr)
+        assert asyncio.run(_audit_counts(cli_env)) == counts  # no writes/audits
+    finally:
+        if saved is None:
+            os.environ.pop("COMPLETION_SERVICE_PROFILE_DIR", None)
+        else:
+            os.environ["COMPLETION_SERVICE_PROFILE_DIR"] = saved
+        get_settings.cache_clear()
+        load_profile.cache_clear()

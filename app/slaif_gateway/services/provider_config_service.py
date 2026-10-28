@@ -118,10 +118,15 @@ class ProviderConfigService:
         timeout_seconds: int,
         max_retries: int,
         notes: str | None,
+        clear_notes: bool = False,
         actor_admin_id: uuid.UUID | None = None,
         reason: str | None = None,
         confirm_insecure_http: bool = False,
     ) -> ProviderConfig:
+        # 199-c: explicit clear intent is opt-in; existing callers keep the
+        # pre-existing default (clear_notes=False; notes=None means preserve).
+        if notes is not None and clear_notes:
+            raise ValueError("notes: Choose either notes or clear_notes, not both.")
         row = await self.get_provider_config(provider_or_id)
         old_values = _safe_audit_values(row)
         normalized_provider = _canonical_provider_slug(provider)
@@ -149,7 +154,8 @@ class ProviderConfigService:
             api_key_env_var=normalized_env_var,
             timeout_seconds=_positive_int(timeout_seconds, "Timeout seconds"),
             max_retries=_non_negative_int(max_retries, "Max retries"),
-            notes=_clean_optional(notes),
+            notes=None if clear_notes else _clean_optional(notes),
+            clear_notes=clear_notes,
         )
         if not updated:
             raise RecordNotFoundError("Provider config")

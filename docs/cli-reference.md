@@ -553,7 +553,11 @@ slaif-gateway providers update svc-a --reason "raise timeout" --timeout-seconds 
   default 300), `--max-retries` (non-negative, 0 valid, default 2), and
   `--actor-admin-id`. Deliberate default change: an omitted
   `--enabled/--disabled` at creation now leaves the provider DISABLED; only
-  an explicit `--enabled` activates a new provider.
+  an explicit `--enabled` activates a new provider. Recognized secret
+  shapes in `--display-name`, `--base-url`, `--notes`, or `--reason` are
+  refused before any database access with the SAME fixed no-echo error as
+  update (known-shape protection, not universal sanitization); safe
+  environment-variable NAMES and ordinary text remain literal.
 - `providers update PROVIDER` partially updates display name, base URL,
   kind, credential environment-variable name, timeout, retries, and notes.
   `--reason` is required and must be nonblank. Recognized secret shapes in
@@ -562,13 +566,14 @@ slaif-gateway providers update svc-a --reason "raise timeout" --timeout-seconds 
   UPDATE before the complete service input is assembled, so omission means
   preserve and a stored zero retry count survives. There is no `--enabled`
   flag: use `providers enable|disable`. `--notes` and `--clear-notes` are
-  mutually exclusive; the explicit clear delegates `notes=None` through the
-  UNCHANGED shared provider service (no direct pre-clear in the 199 paths),
-  so the one audit record carries the REAL prior notes value. The shared
-  metadata repository's pre-existing None-skip law (also used by the admin
-  form path) governs whether the stored column actually clears on real
-  PostgreSQL; that shared law is outside the 199 allowed paths and is
-  documented here as verified behavior, flagged for strategic follow-up.
+  mutually exclusive (refused before mutation). `--clear-notes` uses the
+  EXPLICIT clear intent through the shared audited service: the REAL prior
+  value is captured before mutation, the repository stores NULL within that
+  same operation, and the ONE audit record carries the real old notes value
+  and the real new null (no direct pre-clear, no second audit, no nested
+  write). Existing shared callers keep the pre-existing default
+  (`notes=None` means preserve), so the admin form and all other shared
+  behavior are unchanged.
 
 **Route creation with a strict capabilities file**
 
@@ -673,13 +678,24 @@ slaif-gateway routes update <route-uuid> --execute /tmp/route-plan.json \
   the absolute, non-symlink operator directory configured through
   `COMPLETION_SERVICE_PROFILE_DIR` (files must be regular, non-symlink,
   0600, and at most 64 KiB; when an operator directory is configured, the
-  bundled directory is not visible). A completion profile requires a
-  `module`-kind provider on the chat completions endpoint with
-  `max_retries=0` (the completion adapter's zero-retry rule), and the
-  profile's public/upstream model must match the route's requested/upstream
-  model. These are configuration-time checks: they validate configuration,
-  not credential or model readiness, and perform no credential loading,
-  adapter construction, or network call.
+  bundled directory is not visible). Every candidate (new route and
+  reviewed update) must additionally resolve, through the EXISTING pure
+  server-module resolution, to a supported server module for the
+  provider's actual kind/slug/capabilities - an unregistered
+  `module`-kind provider with no selector and no legacy binding is
+  refused before any write or audit. A completion route - explicit
+  `completion_service` selector OR the implicit legacy profile binding for
+  the provider slug - requires a `module`-kind provider on the chat
+  completions endpoint with `max_retries=0` (the completion adapter's
+  zero-retry rule), the profile's public/upstream model must match the
+  route's requested/upstream model, and the configuration must not
+  advertise streaming (the route `supports_streaming` flag or the
+  `chat_completions.chat_streaming` capability): the completion adapter
+  refuses stream values other than `false`, so reviewed streaming
+  declarations are refused rather than silently stripped. These are
+  configuration-time checks: they validate configuration, not credential
+  or model readiness, and perform no credential loading, adapter
+  construction, or network call.
 
 ## Usage, email, and reconciliation
 

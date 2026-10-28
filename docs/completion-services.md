@@ -107,16 +107,26 @@ binding/profile JSON data, not routing branches. ZAP-IT providers use the
 explicit selector; unconfigured/unknown native modules still fail closed.
 
 Route configuration that selects a completion profile is validated at
-CONFIGURATION time, before any write (objective 199): the provider must be
-a `module` kind on the chat completions endpoint with `max_retries=0` (the
-completion adapter's zero-retry rule), the profile must exist in the SAME
-profile directory the runtime uses - the bundled directory, or the
-absolute, non-symlink operator directory configured through
-`COMPLETION_SERVICE_PROFILE_DIR` (files regular, non-symlink, 0600, at most
-64 KiB; when an operator directory is configured, the bundled directory is
-not visible) - and the profile's public/upstream model must match the
-route's requested/upstream model. These are configuration-time checks: they
-validate configuration, not credential or model readiness, and perform no
+CONFIGURATION time, before any write (objective 199): the complete
+candidate must first resolve, through the EXISTING pure server-module
+resolution, to a supported server module - an unregistered `module`-kind
+provider with no selector and no legacy binding is refused before any
+write or audit. Configured-completion routes - an explicit
+`completion_service` selector OR the implicit legacy profile binding for
+the provider slug - additionally require a `module` kind on the chat
+completions endpoint with `max_retries=0` (the completion adapter's
+zero-retry rule), the profile in the SAME profile directory the runtime
+uses - the bundled directory, or the absolute, non-symlink operator
+directory configured through `COMPLETION_SERVICE_PROFILE_DIR` (files
+regular, non-symlink, 0600, at most 64 KiB; when an operator directory is
+configured, the bundled directory is not visible) - and the profile's
+public/upstream model must match the route's requested/upstream model.
+The configuration must not advertise streaming (the route
+`supports_streaming` flag or the `chat_completions.chat_streaming`
+capability): the completion adapter refuses stream values other than
+`false`, so reviewed streaming declarations are refused, never silently
+stripped. These are configuration-time checks: they validate
+configuration, not credential or model readiness, and perform no
 credential loading, adapter construction, or network call.
 
 Add an enabled pricing row for the same provider, upstream model and endpoint:
