@@ -17,6 +17,16 @@ from typing import Annotated, Any
 import typer
 
 from slaif_gateway.cli.common import CliError, write_secret_file
+from slaif_gateway.cli.key_policy_files import (
+    PROVIDER_ABSENT,
+    build_configuration_from_explicit_flags,
+    policy_source_callback,
+    policy_sources,
+    read_policy_file,
+    provider_flags_value,
+    validate_policy_file_conflicts,
+    was_explicit,
+)
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.db.repositories.audit import AuditRepository
@@ -27,6 +37,8 @@ from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsReposit
 from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.db.repositories.routing import ModelRoutesRepository
 from slaif_gateway.db.session import get_sessionmaker
+from slaif_gateway.modules.clients.codex_0162 import bootstrap_codex_compatibility_profile
+from slaif_gateway.modules.codex_profile_data import CodexProfileDataError
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     CreateGatewayKeyInput,
@@ -38,6 +50,7 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
+    UpdateGatewayKeyConfigurationInput,
     UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
@@ -65,6 +78,9 @@ from slaif_gateway.services.key_errors import GatewayKeyNotFoundError, KeyManage
 from slaif_gateway.services.key_modes import (
     CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY,
     KEY_PURPOSE_TRUSTED_CALIBRATION,
+)
+from slaif_gateway.services.key_policy_configuration import (
+    build_create_gateway_key_input,
 )
 from slaif_gateway.services.key_service import KeyService
 from slaif_gateway.services.key_template_service import (
@@ -102,6 +118,19 @@ class EmailDeliveryMode(str, Enum):
     enqueue = "enqueue"
 
 
+def _bootstrap_codex_profile(settings: Settings) -> None:
+    """Bootstrap the configured Codex profile before R4 pin authoring.
+
+    Idempotent for same-config initialization; an invalid configured file
+    fails closed with a fixed safe message instead of falling back to the
+    packaged default.
+    """
+    try:
+        bootstrap_codex_compatibility_profile(settings.CODEX_COMPATIBILITY_PROFILE_FILE)
+    except CodexProfileDataError as exc:
+        raise CliKeyError(exc.safe_message) from exc
+
+
 @dataclass(frozen=True, slots=True)
 class KeyEmailDeliveryCliResult:
     """Safe combined metadata for key creation/rotation and optional delivery."""
@@ -118,6 +147,7 @@ async def _key_runtime() -> AsyncIterator[tuple[Settings, GatewayKeysRepository,
         raise CliDatabaseConfigError(
             "DATABASE_URL is not configured. Set DATABASE_URL and try again."
         )
+    _bootstrap_codex_profile(settings)
 
     try:
         session_factory = get_sessionmaker(settings)
@@ -144,6 +174,7 @@ async def _key_email_runtime() -> AsyncIterator[tuple[Settings, KeyService, Emai
         raise CliDatabaseConfigError(
             "DATABASE_URL is not configured. Set DATABASE_URL and try again."
         )
+    _bootstrap_codex_profile(settings)
 
     try:
         session_factory = get_sessionmaker(settings)
@@ -691,6 +722,38 @@ def _validate_secret_output_options(
         raise typer.BadParameter(f"Secret output file already exists: {secret_output_file}")
 
 
+def _require_explicit_key_handling_for_typed_surface(
+    *,
+    typed_surface: bool,
+    show_plaintext: bool,
+    secret_output_file: Path | None,
+    email_delivery_mode: EmailDeliveryMode,
+) -> None:
+    """Reject typed key-policy creation without an explicit key channel.
+
+    New typed surfaces (a policy file or explicit provider parity flags)
+    must not inherit the legacy implicit one-time plaintext print. An
+    explicit choice - --show-plaintext, a new 0600 --secret-output-file,
+    or an explicit --email-delivery mode - is required before any creation
+    happens. Legacy flag-free creation keeps its documented pre-existing
+    default behavior.
+    """
+    if not typed_surface:
+        return
+    if (
+        show_plaintext
+        or secret_output_file is not None
+        or email_delivery_mode is not EmailDeliveryMode.none
+    ):
+        return
+    raise typer.BadParameter(
+        "Typed key-policy creation requires an explicit one-time key choice "
+        "before creation: --show-plaintext, --secret-output-file PATH, or "
+        "--email-delivery pending/send-now/enqueue. Only legacy flag-free "
+        "creation prints the one-time plaintext key by default."
+    )
+
+
 def _warn_plaintext_display() -> None:
     typer.secho(
         "Warning: plaintext key is shown once. Store it now; it cannot be recovered later.",
@@ -1036,6 +1099,18 @@ async def _update_policy(payload: UpdateGatewayKeyPolicyInput) -> GatewayKeyMana
         return await service.update_gateway_key_policy(payload)
 
 
+async def _update_configuration(
+    payload: UpdateGatewayKeyConfigurationInput,
+) -> GatewayKeyManagementResult:
+    async with _key_runtime() as (_, _, service):
+        return await service.update_gateway_key_configuration(payload)
+
+
+async def _export_configuration(gateway_key_id: uuid.UUID) -> dict[str, object]:
+    async with _key_runtime() as (_, _, service):
+        return await service.export_gateway_key_configuration(gateway_key_id)
+
+
 async def _update_external_tool_policy(
     payload: UpdateGatewayKeyExternalToolPolicyInput,
 ) -> GatewayKeyManagementResult:
@@ -1194,6 +1269,7 @@ def keys() -> None:
 
 @app.command("create")
 def create(
+    ctx: typer.Context,
     owner_id: Annotated[str, typer.Option("--owner-id", help="Owner UUID")],
     cohort_id: Annotated[str | None, typer.Option("--cohort-id", help="Cohort UUID")] = None,
     valid_from: Annotated[
@@ -1210,41 +1286,98 @@ def create(
     ] = None,
     cost_limit_eur: Annotated[
         str | None,
-        typer.Option("--cost-limit-eur", help="Cost limit in EUR"),
+        typer.Option(
+            "--cost-limit-eur",
+            help="Cost limit in EUR",
+            callback=policy_source_callback,
+        ),
     ] = None,
     token_limit_total: Annotated[
         int | None,
-        typer.Option("--token-limit-total", help="Total token limit"),
+        typer.Option(
+            "--token-limit-total",
+            help="Total token limit",
+            callback=policy_source_callback,
+        ),
     ] = None,
     request_limit_total: Annotated[
         int | None,
-        typer.Option("--request-limit-total", help="Total request limit"),
+        typer.Option(
+            "--request-limit-total",
+            help="Total request limit",
+            callback=policy_source_callback,
+        ),
     ] = None,
     allowed_models: Annotated[
         list[str] | None,
-        typer.Option("--allowed-model", help="Allowed model; repeatable"),
+        typer.Option(
+            "--allowed-model",
+            help="Allowed model; repeatable",
+            callback=policy_source_callback,
+        ),
     ] = None,
     allowed_endpoints: Annotated[
         list[str] | None,
-        typer.Option("--allowed-endpoint", help="Allowed endpoint; repeatable"),
+        typer.Option(
+            "--allowed-endpoint",
+            help="Allowed endpoint; repeatable",
+            callback=policy_source_callback,
+        ),
     ] = None,
     allow_all_models: Annotated[
         bool,
         typer.Option(
-            "--allow-all-models/--no-allow-all-models", help="Allow all route-backed models"
+            "--allow-all-models/--no-allow-all-models",
+            help="Allow all route-backed models",
+            callback=policy_source_callback,
         ),
     ] = False,
     allow_all_endpoints: Annotated[
         bool,
         typer.Option(
-            "--allow-all-endpoints/--no-allow-all-endpoints", help="Allow all implemented endpoints"
+            "--allow-all-endpoints/--no-allow-all-endpoints",
+            help="Allow all implemented endpoints",
+            callback=policy_source_callback,
         ),
     ] = False,
+    allowed_providers: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--allowed-provider",
+            help="Allowed upstream provider; repeatable",
+            callback=policy_source_callback,
+        ),
+    ] = None,
+    provider_all: Annotated[
+        bool,
+        typer.Option(
+            "--provider-all",
+            help="Unrestricted provider access (no provider allow-list)",
+            callback=policy_source_callback,
+        ),
+    ] = False,
+    provider_none: Annotated[
+        bool,
+        typer.Option(
+            "--provider-none",
+            help="Deny all providers (empty provider allow-list)",
+            callback=policy_source_callback,
+        ),
+    ] = False,
+    policy_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy-file",
+            help="Versioned key-configuration policy file (only policy source)",
+            callback=policy_source_callback,
+        ),
+    ] = None,
     rate_limit_requests_per_minute: Annotated[
         int | None,
         typer.Option(
             "--rate-limit-requests-per-minute",
             help="Redis operational request limit per key per window",
+            callback=policy_source_callback,
         ),
     ] = None,
     rate_limit_tokens_per_minute: Annotated[
@@ -1252,6 +1385,7 @@ def create(
         typer.Option(
             "--rate-limit-tokens-per-minute",
             help="Redis operational estimated-token limit per key per window",
+            callback=policy_source_callback,
         ),
     ] = None,
     rate_limit_concurrent_requests: Annotated[
@@ -1259,6 +1393,7 @@ def create(
         typer.Option(
             "--rate-limit-concurrent-requests",
             help="Redis operational concurrent request limit per key",
+            callback=policy_source_callback,
         ),
     ] = None,
     rate_limit_window_seconds: Annotated[
@@ -1266,6 +1401,7 @@ def create(
         typer.Option(
             "--rate-limit-window-seconds",
             help="Redis operational rate-limit window in seconds",
+            callback=policy_source_callback,
         ),
     ] = None,
     chat_streaming_live_burn_enabled: Annotated[
@@ -1276,6 +1412,7 @@ def create(
                 "Enable Chat Completions streaming live-burn monitoring for "
                 "/v1/chat/completions stream=true"
             ),
+            callback=policy_source_callback,
         ),
     ] = True,
     chat_streaming_live_burn_cost_margin_eur: Annotated[
@@ -1286,6 +1423,7 @@ def create(
                 "Chat streaming live-burn cost margin in EUR; positive stops early, "
                 "zero stops near the boundary, negative allows bounded overrun"
             ),
+            callback=policy_source_callback,
         ),
     ] = None,
     chat_streaming_live_burn_token_margin: Annotated[
@@ -1296,6 +1434,7 @@ def create(
                 "Chat streaming live-burn output token margin; positive stops early, "
                 "zero stops near the boundary, negative allows bounded overrun"
             ),
+            callback=policy_source_callback,
         ),
     ] = None,
     external_tool_mode: Annotated[
@@ -1306,6 +1445,7 @@ def create(
                 "strict_bounded or external_tool_fenced; runtime supports only exact "
                 "OpenAI Responses web_search with matching key/route policy"
             ),
+            callback=policy_source_callback,
         ),
     ] = STRICT_BOUNDED,
     external_tool_capabilities: Annotated[
@@ -1313,6 +1453,7 @@ def create(
         typer.Option(
             "--external-tool-capability",
             help="Reviewed external capability ID; repeatable",
+            callback=policy_source_callback,
         ),
     ] = None,
     external_tool_destination_ids: Annotated[
@@ -1320,6 +1461,7 @@ def create(
         typer.Option(
             "--external-tool-destination-id",
             help="Reviewed opaque connector:/remote_mcp: destination ID; repeatable",
+            callback=policy_source_callback,
         ),
     ] = None,
     external_tool_max_calls: Annotated[
@@ -1327,6 +1469,7 @@ def create(
         typer.Option(
             "--external-tool-max-calls",
             help="Positive future provider-tool call cap; zero for strict mode",
+            callback=policy_source_callback,
         ),
     ] = 0,
     acknowledge_single_request_overrun: Annotated[
@@ -1334,6 +1477,7 @@ def create(
         typer.Option(
             "--acknowledge-single-request-overrun",
             help="Acknowledge the fenced single-request overrun and hold behavior",
+            callback=policy_source_callback,
         ),
     ] = False,
     confirm_external_tool_fenced: Annotated[
@@ -1342,6 +1486,7 @@ def create(
             "--confirm-external-tool-fenced",
             "--confirm",
             help="Second confirmation required for fenced future policy",
+            callback=policy_source_callback,
         ),
     ] = False,
     actor_admin_id: Annotated[
@@ -1372,6 +1517,7 @@ def create(
         typer.Option(
             "--trusted-calibration/--standard",
             help="Create a trusted organizer calibration key with broad discovery policy",
+            callback=policy_source_callback,
         ),
     ] = False,
     confirm_trusted_calibration: Annotated[
@@ -1379,6 +1525,7 @@ def create(
         typer.Option(
             "--confirm-trusted-calibration",
             help="Required acknowledgement for trusted calibration keys",
+            callback=policy_source_callback,
         ),
     ] = False,
 ) -> None:
@@ -1389,6 +1536,18 @@ def create(
     --chat-streaming-live-burn-enabled / --no-chat-streaming-live-burn,
     --chat-streaming-live-burn-cost-margin-eur, and
     --chat-streaming-live-burn-token-margin.
+
+    Provider flags: --allowed-provider (repeatable), --provider-all, and
+    --provider-none are mutually exclusive. --policy-file makes a versioned
+    key-configuration file the only source of policy configuration; it may
+    only be combined with identity, validity, reason, actor, output, and
+    delivery flags.
+
+    Typed policy surfaces require an explicit one-time key choice before
+    creation: with --policy-file or any explicit provider flag, one of
+    --show-plaintext, --secret-output-file PATH, or --email-delivery
+    pending/send-now/enqueue is required. Legacy flag-free creation keeps
+    its pre-existing default of printing the one-time plaintext key once.
     """
     try:
         _validate_secret_output_options(
@@ -1413,54 +1572,132 @@ def create(
         return
 
     parsed_valid_from = _parse_datetime(valid_from, field_name="valid_from") or datetime.now(UTC)
-    key_purpose = KEY_PURPOSE_TRUSTED_CALIBRATION if trusted_calibration else "standard"
-    capability_policy_mode = (
-        CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY if trusted_calibration else "standard"
-    )
-    payload = CreateGatewayKeyInput(
-        owner_id=_parse_uuid(owner_id, field_name="owner_id"),
-        cohort_id=_parse_uuid(cohort_id, field_name="cohort_id") if cohort_id else None,
-        valid_from=parsed_valid_from,
-        valid_until=_valid_until_from_options(
-            valid_from=parsed_valid_from,
-            valid_until=valid_until,
-            valid_days=valid_days,
-        ),
-        cost_limit_eur=_parse_decimal(cost_limit_eur, field_name="cost_limit_eur"),
-        token_limit_total=token_limit_total,
-        request_limit_total=request_limit_total,
-        allowed_models=list(allowed_models or []),
-        allowed_endpoints=list(allowed_endpoints or []),
-        allow_all_models=allow_all_models,
-        allow_all_endpoints=allow_all_endpoints,
-        key_purpose=key_purpose,
-        capability_policy_mode=capability_policy_mode,
-        calibration_metadata={"creation_channel": "cli"} if trusted_calibration else {},
-        confirm_trusted_calibration=confirm_trusted_calibration,
-        rate_limit_policy=_rate_limit_policy_from_options(
-            requests_per_minute=rate_limit_requests_per_minute,
-            tokens_per_minute=rate_limit_tokens_per_minute,
-            concurrent_requests=rate_limit_concurrent_requests,
-            window_seconds=rate_limit_window_seconds,
-        ),
-        chat_streaming_live_burn_policy=_chat_streaming_live_burn_policy_from_options(
-            enabled=chat_streaming_live_burn_enabled,
-            cost_margin_eur=chat_streaming_live_burn_cost_margin_eur,
-            token_margin=chat_streaming_live_burn_token_margin,
-        ),
-        external_tool_policy=_external_tool_policy_from_options(
-            mode=external_tool_mode,
-            capabilities=external_tool_capabilities,
-            destination_ids=external_tool_destination_ids,
-            max_calls=external_tool_max_calls,
-            acknowledge_single_request_overrun=acknowledge_single_request_overrun,
-        ),
-        confirm_external_tool_fenced=confirm_external_tool_fenced,
-        created_by_admin_id=(
-            _parse_uuid(actor_admin_id, field_name="actor_admin_id") if actor_admin_id else None
-        ),
-        note=reason,
-    )
+    sources = policy_sources(ctx)
+    try:
+        if was_explicit(sources, "policy_file"):
+            # A policy file may carry an exact client-module pin. Every CLI
+            # process starts with only the packaged registry, so the
+            # configured Codex profile must be bootstrapped BEFORE the
+            # authoring validator compares pins - not after the DB runtime
+            # opens. A misconfigured profile file fails closed with a fixed
+            # safe message (no packaged fallback).
+            _bootstrap_codex_profile(get_settings())
+            validate_policy_file_conflicts(sources)
+            _require_explicit_key_handling_for_typed_surface(
+                typed_surface=True,
+                show_plaintext=show_plaintext,
+                secret_output_file=secret_output_file,
+                email_delivery_mode=email_delivery,
+            )
+            configuration = read_policy_file(policy_file)
+            # Explicit confirmation control may accompany the file: the
+            # file's own field wins when present, otherwise the explicit
+            # CLI flag supplies the acknowledgement.
+            if (
+                was_explicit(sources, "confirm_external_tool_fenced")
+                and confirm_external_tool_fenced
+                and not configuration.has("confirm_external_tool_fenced")
+            ):
+                configuration.confirm_external_tool_fenced = True
+            payload = build_create_gateway_key_input(
+                config=configuration,
+                owner_id=_parse_uuid(owner_id, field_name="owner_id"),
+                cohort_id=_parse_uuid(cohort_id, field_name="cohort_id")
+                if cohort_id
+                else None,
+                valid_from=parsed_valid_from,
+                valid_until=_valid_until_from_options(
+                    valid_from=parsed_valid_from,
+                    valid_until=valid_until,
+                    valid_days=valid_days,
+                ),
+                created_by_admin_id=(
+                    _parse_uuid(actor_admin_id, field_name="actor_admin_id")
+                    if actor_admin_id
+                    else None
+                ),
+                note=reason,
+            )
+        else:
+            key_purpose = KEY_PURPOSE_TRUSTED_CALIBRATION if trusted_calibration else "standard"
+            capability_policy_mode = (
+                CAPABILITY_POLICY_MODE_TRUSTED_CALIBRATION_DISCOVERY
+                if trusted_calibration
+                else "standard"
+            )
+            provider_value = provider_flags_value(
+                sources,
+                allowed_providers=allowed_providers,
+                provider_all=provider_all,
+                provider_none=provider_none,
+            )
+            # Legacy flag-free creation keeps its pre-existing default; only
+            # an explicit provider parity choice is a new typed surface.
+            if provider_value is not PROVIDER_ABSENT:
+                _require_explicit_key_handling_for_typed_surface(
+                    typed_surface=True,
+                    show_plaintext=show_plaintext,
+                    secret_output_file=secret_output_file,
+                    email_delivery_mode=email_delivery,
+                )
+            payload = CreateGatewayKeyInput(
+                owner_id=_parse_uuid(owner_id, field_name="owner_id"),
+                cohort_id=_parse_uuid(cohort_id, field_name="cohort_id")
+                if cohort_id
+                else None,
+                valid_from=parsed_valid_from,
+                valid_until=_valid_until_from_options(
+                    valid_from=parsed_valid_from,
+                    valid_until=valid_until,
+                    valid_days=valid_days,
+                ),
+                cost_limit_eur=_parse_decimal(cost_limit_eur, field_name="cost_limit_eur"),
+                token_limit_total=token_limit_total,
+                request_limit_total=request_limit_total,
+                allowed_models=list(allowed_models or []),
+                allowed_endpoints=list(allowed_endpoints or []),
+                allow_all_models=allow_all_models,
+                allow_all_endpoints=allow_all_endpoints,
+                key_purpose=key_purpose,
+                capability_policy_mode=capability_policy_mode,
+                calibration_metadata={"creation_channel": "cli"}
+                if trusted_calibration
+                else {},
+                confirm_trusted_calibration=confirm_trusted_calibration,
+                rate_limit_policy=_rate_limit_policy_from_options(
+                    requests_per_minute=rate_limit_requests_per_minute,
+                    tokens_per_minute=rate_limit_tokens_per_minute,
+                    concurrent_requests=rate_limit_concurrent_requests,
+                    window_seconds=rate_limit_window_seconds,
+                ),
+                chat_streaming_live_burn_policy=_chat_streaming_live_burn_policy_from_options(
+                    enabled=chat_streaming_live_burn_enabled,
+                    cost_margin_eur=chat_streaming_live_burn_cost_margin_eur,
+                    token_margin=chat_streaming_live_burn_token_margin,
+                ),
+                external_tool_policy=_external_tool_policy_from_options(
+                    mode=external_tool_mode,
+                    capabilities=external_tool_capabilities,
+                    destination_ids=external_tool_destination_ids,
+                    max_calls=external_tool_max_calls,
+                    acknowledge_single_request_overrun=acknowledge_single_request_overrun,
+                ),
+                confirm_external_tool_fenced=confirm_external_tool_fenced,
+                created_by_admin_id=(
+                    _parse_uuid(actor_admin_id, field_name="actor_admin_id")
+                    if actor_admin_id
+                    else None
+                ),
+                note=reason,
+                allowed_providers=None
+                if provider_value is PROVIDER_ABSENT
+                else provider_value,
+            )
+    except typer.BadParameter:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc, json_output=json_output)
+        return
     try:
         if email_delivery == EmailDeliveryMode.none:
             cli_result = KeyEmailDeliveryCliResult(
@@ -1744,24 +1981,77 @@ def policy_show(
 @policy_app.command("update")
 def policy_update(
     gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+    ctx: typer.Context,
     allowed_models: Annotated[
         list[str] | None,
-        typer.Option("--allowed-model", help="Allowed model ID; repeatable"),
+        typer.Option(
+            "--allowed-model",
+            help="Allowed model ID; repeatable",
+            callback=policy_source_callback,
+        ),
     ] = None,
     allowed_endpoints: Annotated[
         list[str] | None,
-        typer.Option("--allowed-endpoint", help="Allowed /v1 endpoint path; repeatable"),
+        typer.Option(
+            "--allowed-endpoint",
+            help="Allowed /v1 endpoint path; repeatable",
+            callback=policy_source_callback,
+        ),
     ] = None,
     allow_all_models: Annotated[
         bool,
         typer.Option(
-            "--allow-all-models/--no-allow-all-models", help="Allow all route-backed models"
+            "--allow-all-models/--no-allow-all-models",
+            help="Allow all route-backed models",
+            callback=policy_source_callback,
         ),
     ] = False,
     allow_all_endpoints: Annotated[
         bool,
         typer.Option(
-            "--allow-all-endpoints/--no-allow-all-endpoints", help="Allow all implemented endpoints"
+            "--allow-all-endpoints/--no-allow-all-endpoints",
+            help="Allow all implemented endpoints",
+            callback=policy_source_callback,
+        ),
+    ] = False,
+    allowed_providers: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--allowed-provider",
+            help="Allowed upstream provider; repeatable",
+            callback=policy_source_callback,
+        ),
+    ] = None,
+    provider_all: Annotated[
+        bool,
+        typer.Option(
+            "--provider-all",
+            help="Unrestricted provider access (no provider allow-list)",
+            callback=policy_source_callback,
+        ),
+    ] = False,
+    provider_none: Annotated[
+        bool,
+        typer.Option(
+            "--provider-none",
+            help="Deny all providers (empty provider allow-list)",
+            callback=policy_source_callback,
+        ),
+    ] = False,
+    policy_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--policy-file",
+            help="Versioned key-configuration policy file (only policy source)",
+            callback=policy_source_callback,
+        ),
+    ] = None,
+    confirm_external_tool_fenced: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-external-tool-fenced",
+            help="Explicit acknowledgement for a fenced external-tool policy",
+            callback=policy_source_callback,
         ),
     ] = False,
     actor_admin_id: Annotated[
@@ -1771,16 +2061,62 @@ def policy_update(
     reason: Annotated[str | None, typer.Option("--reason", help="Required audit reason")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
-    """Update endpoint/model request policy for one gateway key."""
+    """Update endpoint/model request policy for one gateway key.
+
+    Omitted policy flags preserve the current values; an explicit flag
+    changes exactly that member. Use --policy-file for a full typed
+    configuration.
+    """
     try:
+        sources = policy_sources(ctx)
+        if was_explicit(sources, "policy_file"):
+            # Same pre-authoring bootstrap as create: a file may carry an
+            # exact client-module pin, and every CLI process starts with
+            # only the packaged registry. A misconfigured profile file
+            # fails closed with a fixed safe message (no packaged fallback).
+            _bootstrap_codex_profile(get_settings())
+            validate_policy_file_conflicts(sources)
+            configuration = read_policy_file(policy_file)
+            # Explicit confirmation control may accompany the file: the
+            # file's own field wins when present, otherwise the explicit
+            # CLI flag supplies the acknowledgement.
+            if (
+                was_explicit(sources, "confirm_external_tool_fenced")
+                and confirm_external_tool_fenced
+                and not configuration.has("confirm_external_tool_fenced")
+            ):
+                configuration.confirm_external_tool_fenced = True
+        else:
+            configuration = build_configuration_from_explicit_flags(
+                sources,
+                allowed_models=allowed_models,
+                allowed_endpoints=allowed_endpoints,
+                allow_all_models=allow_all_models,
+                allow_all_endpoints=allow_all_endpoints,
+            )
+            provider_value = provider_flags_value(
+                sources,
+                allowed_providers=allowed_providers,
+                provider_all=provider_all,
+                provider_none=provider_none,
+            )
+            if provider_value is not PROVIDER_ABSENT:
+                configuration.allowed_providers = provider_value
+            if (
+                was_explicit(sources, "confirm_external_tool_fenced")
+                and confirm_external_tool_fenced
+            ):
+                configuration.confirm_external_tool_fenced = True
+        if configuration.is_empty():
+            raise typer.BadParameter(
+                "No requested policy change: provide at least one explicit "
+                "policy flag or --policy-file."
+            )
         result = _run_async(
-            _update_policy(
-                UpdateGatewayKeyPolicyInput(
+            _update_configuration(
+                UpdateGatewayKeyConfigurationInput(
                     gateway_key_id=_parse_uuid(gateway_key_id, field_name="gateway_key_id"),
-                    allowed_models=list(allowed_models or []),
-                    allowed_endpoints=list(allowed_endpoints or []),
-                    allow_all_models=allow_all_models,
-                    allow_all_endpoints=allow_all_endpoints,
+                    configuration=configuration,
                     actor_admin_id=(
                         _parse_uuid(actor_admin_id, field_name="actor_admin_id")
                         if actor_admin_id
@@ -1800,6 +2136,20 @@ def policy_update(
         return
     _echo_kv(safe_result)
 
+
+@policy_app.command("export")
+def policy_export(
+    gateway_key_id: Annotated[str, typer.Argument(help="Gateway key UUID")],
+) -> None:
+    """Export the key's administtered policy as a version-1 configuration document."""
+    try:
+        document = _run_async(
+            _export_configuration(_parse_uuid(gateway_key_id, field_name="gateway_key_id"))
+        )
+    except Exception as exc:  # noqa: BLE001
+        _handle_cli_error(exc)
+        return
+    _emit_json(document)
 
 @external_tools_app.command("show")
 def external_tools_show(

@@ -13,6 +13,7 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
 from slaif_gateway.db.repositories.one_time_secrets import OneTimeSecretsRepository
 from slaif_gateway.schemas.rate_limits import parse_lazy_throttling_policy_metadata
+from slaif_gateway.schemas.key_configuration import KeyConfiguration, key_configuration_export
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
     CreateGatewayKeyInput,
@@ -24,12 +25,24 @@ from slaif_gateway.schemas.keys import (
     RotatedGatewayKeyResult,
     SuspendGatewayKeyInput,
     UpdateGatewayKeyChatStreamingLiveBurnInput,
+    UpdateGatewayKeyConfigurationInput,
     UpdateGatewayKeyExternalToolPolicyInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyLazyThrottlingInput,
     UpdateGatewayKeyPolicyInput,
     UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
+)
+from slaif_gateway.services.key_policy_configuration import (
+    KeyConfigurationExportError,
+    canonical_rate_policy_members,
+    is_quota_group_present,
+    is_request_policy_group_present,
+    proposed_matches_stored_binding,
+    quota_group_values,
+    request_policy_group_values,
+    UNBOUND,
+    stored_module_binding,
 )
 from slaif_gateway.services.external_tool_policy_contract import (
     EXTERNAL_TOOL_FENCED,
@@ -72,6 +85,9 @@ from slaif_gateway.services.key_modes import (
 from slaif_gateway.services.key_policy_validation import (
     GatewayKeyPolicy,
     validate_gateway_key_policy,
+)
+from slaif_gateway.services.responses_policy_validation import (
+    validate_key_responses_policy,
 )
 from slaif_gateway.services.responses_streaming_live_burn import (
     default_responses_streaming_live_burn_policy,
@@ -746,6 +762,417 @@ class KeyService:
             new_values=self._chat_streaming_live_burn_audit_values(gateway_key),
         )
         return self._management_result(gateway_key, updated_at=now)
+
+    async def update_gateway_key_configuration(
+        self,
+        payload: UpdateGatewayKeyConfigurationInput,
+    ) -> GatewayKeyManagementResult:
+        """Apply a presence-aware typed key-configuration update.
+
+        Omission law: only the fields PRESENT in the configuration are
+        requested changes; absent fields preserve the key's current state.
+        Every resulting value is prepared and validated under the row lock
+        (route-aware request policy, rate per-member patch, complete
+        live-burn blocks, finite fenced-quota invariant, client-module
+        migration law) BEFORE any write. Key material, status, validity,
+        counters, reservations, and holds are never touched; one audit
+        record covers the update and every write stays in the
+        caller-owned transaction.
+        """
+        cleaned_reason = payload.reason.strip() if payload.reason else ""
+        if not cleaned_reason:
+            raise InvalidGatewayKeyPolicyError(
+                "Enter an audit reason before updating key configuration.",
+                param="reason",
+            )
+        config = payload.configuration
+        if config.is_empty():
+            raise InvalidGatewayKeyPolicyError(
+                "No requested key configuration change.",
+                param="configuration",
+            )
+
+        gateway_key = await self._get_gateway_key(payload.gateway_key_id)
+        self._require_not_external_tool_fenced(
+            gateway_key, operation="configuration update"
+        )
+
+        raw_metadata = (
+            gateway_key.metadata_json
+            if isinstance(gateway_key.metadata_json, dict)
+            else {}
+        )
+
+        # ---- Prepare and validate the complete resulting state ----------
+        quotas_requested = is_quota_group_present(config)
+        resulting_cost, resulting_tokens, resulting_requests = quota_group_values(
+            config,
+            current_cost_limit_eur=gateway_key.cost_limit_eur,
+            current_token_limit_total=gateway_key.token_limit_total,
+            current_request_limit_total=gateway_key.request_limit_total,
+        )
+        resulting_cost = self._validate_optional_positive_decimal(
+            resulting_cost, param="cost_limit_eur"
+        )
+        self._validate_optional_positive_int(
+            resulting_tokens, param="token_limit_total"
+        )
+        self._validate_optional_positive_int(
+            resulting_requests, param="request_limit_total"
+        )
+
+        request_requested = is_request_policy_group_present(config)
+        if request_requested:
+            (
+                allowed_models,
+                allow_all_models,
+                allowed_endpoints,
+                allow_all_endpoints,
+            ) = request_policy_group_values(
+                config,
+                current_allowed_models=gateway_key.allowed_models,
+                current_allow_all_models=gateway_key.allow_all_models,
+                current_allowed_endpoints=gateway_key.allowed_endpoints,
+                current_allow_all_endpoints=gateway_key.allow_all_endpoints,
+            )
+            request_policy = await self._validate_request_policy(
+                allowed_models=allowed_models,
+                allowed_endpoints=allowed_endpoints,
+                allow_all_models=allow_all_models,
+                allow_all_endpoints=allow_all_endpoints,
+            )
+
+        providers_requested = config.has("allowed_providers")
+
+        responses_requested = config.has("responses_policy")
+        resulting_responses = None
+        existing_binding = stored_module_binding(raw_metadata.get("responses_policy"))
+        if responses_requested:
+            if config.responses_policy is not None:
+                resulting_responses = validate_key_responses_policy(
+                    config.responses_policy
+                )
+        # Migration law (the current resolver is the authority): a key whose
+        # stored block carries a client-module binding - a currently
+        # resolvable identity (explicit registered pin or the implicit legacy
+        # five-gate shape) OR a stale/unregistered/malformed stored pin - may
+        # only retain that exact binding, including deauthorizing grants while
+        # retaining the same pin. A stale binding is NOT initial binding:
+        # re-pinning it to the current registered identity (or to any other
+        # identity), or clearing it, requires the reviewed client-module
+        # migration workflow. Only a genuinely unbound key may be initially
+        # bound through a configuration update.
+        if responses_requested and existing_binding is not UNBOUND:
+            if resulting_responses is None:
+                raise InvalidGatewayKeyPolicyError(
+                    "Clearing a Responses policy that binds a client module "
+                    "identity is not allowed here; use the reviewed "
+                    "client-module migration workflow.",
+                    param="responses_policy.client_module",
+                )
+            if not proposed_matches_stored_binding(
+                existing_binding, resulting_responses
+            ):
+                raise InvalidGatewayKeyPolicyError(
+                    "Changing the client module identity of an existing key is "
+                    "not allowed here; use the reviewed client-module migration "
+                    "workflow.",
+                    param="responses_policy.client_module",
+                )
+
+        rate_requested = config.has("rate_limit_policy")
+        resulting_rate: dict[str, int | None] = {}
+        if rate_requested and config.rate_limit_policy is not None:
+            # Strict vocabulary FIRST: unknown members (including legacy
+            # aliases with no canonical spelling) and ambiguous alias pairs
+            # fail before any projection or merge - an ignored member is
+            # never a successful configuration. The historical
+            # concurrent_requests alias canonicalizes to
+            # max_concurrent_requests.
+            canonical_members = canonical_rate_policy_members(
+                config.rate_limit_policy
+            )
+            # Per-member patch: absent members keep the current configured
+            # overrides; explicit null resets the member (inherit).
+            merged_rate: dict[str, object] = dict(
+                self._rate_limit_policy_from_key(gateway_key) or {}
+            )
+            for member, value in canonical_members.items():
+                merged_rate[member] = value
+            resulting_rate = self._validate_rate_limit_policy(dict(merged_rate))
+
+        lazy_requested = config.has("lazy_throttling_policy")
+        resulting_lazy = None
+        if lazy_requested:
+            resulting_lazy = self._validate_lazy_throttling_policy(
+                config.lazy_throttling_policy
+            )
+
+        live_burn_requested = config.has("chat_streaming_live_burn_policy")
+        resulting_live_burn = None
+        if live_burn_requested:
+            live_burn_block = config.chat_streaming_live_burn_policy
+            if not isinstance(live_burn_block, dict) or not {
+                "enabled",
+                "cost_margin_eur",
+                "token_margin",
+            } <= set(live_burn_block):
+                raise InvalidGatewayKeyPolicyError(
+                    "Chat streaming live-burn configuration carries complete "
+                    "blocks with enabled, cost_margin_eur, and token_margin.",
+                    param="chat_streaming_live_burn_policy",
+                )
+            resulting_live_burn = self._validate_chat_streaming_live_burn_policy(
+                live_burn_block
+            )
+
+        external_requested = config.has("external_tool_policy")
+        resulting_external = self._external_tool_policy_from_key(gateway_key)
+        if external_requested:
+            resulting_external = self._validate_external_tool_policy(
+                config.external_tool_policy,
+                key_purpose=str(
+                    getattr(gateway_key, "key_purpose", KEY_PURPOSE_STANDARD)
+                ),
+                request_limit_total=resulting_requests,
+                token_limit_total=resulting_tokens,
+                cost_limit_eur=resulting_cost,
+                confirmed=(
+                    bool(config.confirm_external_tool_fenced)
+                    if config.has("confirm_external_tool_fenced")
+                    else False
+                ),
+                reason=cleaned_reason,
+                require_reason=True,
+            )
+        # Final-state cross-check: a retained (or newly set) fenced policy
+        # must keep its finite quota prerequisites, exactly as the existing
+        # quota mutator law requires.
+        if resulting_external.mode == EXTERNAL_TOOL_FENCED:
+            self._validate_external_tool_limits(
+                request_limit_total=resulting_requests,
+                token_limit_total=resulting_tokens,
+                cost_limit_eur=resulting_cost,
+            )
+
+        # ---- Write phase (caller-owned transaction) ----------------------
+        old_values = self._configuration_audit_values(gateway_key)
+        now = self._now()
+
+        if quotas_requested:
+            updated = await self._gateway_keys_repository.update_gateway_key_limits(
+                gateway_key.id,
+                cost_limit_eur=resulting_cost,
+                token_limit_total=resulting_tokens,
+                request_limit_total=resulting_requests,
+            )
+            if not updated:
+                raise GatewayKeyNotFoundError()
+            gateway_key.cost_limit_eur = resulting_cost
+            gateway_key.token_limit_total = resulting_tokens
+            gateway_key.request_limit_total = resulting_requests
+
+        if request_requested:
+            updated = await self._gateway_keys_repository.update_gateway_key_request_policy(
+                gateway_key.id,
+                allowed_models=request_policy.allowed_models,
+                allowed_endpoints=request_policy.allowed_endpoints,
+                allow_all_models=request_policy.allow_all_models,
+                allow_all_endpoints=request_policy.allow_all_endpoints,
+            )
+            if not updated:
+                raise GatewayKeyNotFoundError()
+            gateway_key.allowed_models = request_policy.allowed_models
+            gateway_key.allowed_endpoints = request_policy.allowed_endpoints
+            gateway_key.allow_all_models = request_policy.allow_all_models
+            gateway_key.allow_all_endpoints = request_policy.allow_all_endpoints
+
+        metadata = dict(raw_metadata)
+        if providers_requested:
+            metadata = self._metadata_with_provider_policy(
+                metadata, config.allowed_providers
+            )
+        if responses_requested:
+            metadata = self._metadata_with_responses_policy(
+                metadata, resulting_responses
+            )
+        if rate_requested:
+            updated = await self._gateway_keys_repository.update_gateway_key_rate_limit_policy(
+                gateway_key.id,
+                requests_per_minute=resulting_rate.get("requests_per_minute"),
+                tokens_per_minute=resulting_rate.get("tokens_per_minute"),
+                max_concurrent_requests=resulting_rate.get("max_concurrent_requests"),
+                window_seconds=resulting_rate.get("window_seconds"),
+            )
+            if not updated:
+                raise GatewayKeyNotFoundError()
+            gateway_key.rate_limit_requests_per_minute = resulting_rate.get(
+                "requests_per_minute"
+            )
+            gateway_key.rate_limit_tokens_per_minute = resulting_rate.get(
+                "tokens_per_minute"
+            )
+            gateway_key.max_concurrent_requests = resulting_rate.get(
+                "max_concurrent_requests"
+            )
+            metadata = self._metadata_with_rate_limit_window(metadata, resulting_rate)
+        if lazy_requested:
+            metadata = self._metadata_with_lazy_throttling_policy(
+                metadata, resulting_lazy
+            )
+        if live_burn_requested:
+            metadata = self._metadata_with_chat_streaming_live_burn_policy(
+                metadata, resulting_live_burn
+            )
+        if external_requested:
+            metadata = self._metadata_with_external_tool_policy(
+                metadata, resulting_external
+            )
+
+        if metadata != raw_metadata:
+            updated = await self._gateway_keys_repository.update_gateway_key_metadata(
+                gateway_key.id,
+                metadata_json=metadata,
+            )
+            if not updated:
+                raise GatewayKeyNotFoundError()
+            gateway_key.metadata_json = metadata
+
+        self._set_updated_at(gateway_key, now)
+        await self._audit_gateway_key_change(
+            action="update_key_configuration",
+            gateway_key=gateway_key,
+            actor_admin_id=payload.actor_admin_id,
+            reason=cleaned_reason,
+            old_values=old_values,
+            new_values=self._configuration_audit_values(gateway_key),
+        )
+        return self._management_result(gateway_key, updated_at=now)
+
+    async def export_gateway_key_configuration(
+        self,
+        gateway_key_id: object,
+    ) -> dict[str, object]:
+        """Render the key's administtered policy state as a version-1 document.
+
+        Faithful full-config export: known policy groups are always emitted
+        (explicit null when absent) so export-then-create AND
+        export-then-update reproduce the source key's configured semantics
+        on any target. Stored blocks are inspected RAW with strict typed
+        validators: malformed or unsupported policy fails the export
+        explicitly instead of falling back to runtime-safe defaults. A fresh
+        operation confirmation is NEVER emitted - confirmations are
+        operation controls, not inherited configuration.
+        """
+        gateway_key = await self._get_gateway_key(gateway_key_id)
+        raw_metadata = (
+            gateway_key.metadata_json
+            if isinstance(gateway_key.metadata_json, dict)
+            else {}
+        )
+        config = KeyConfiguration()
+        config.allowed_models = list(gateway_key.allowed_models or [])
+        config.allow_all_models = bool(gateway_key.allow_all_models)
+        config.allowed_endpoints = list(gateway_key.allowed_endpoints or [])
+        config.allow_all_endpoints = bool(gateway_key.allow_all_endpoints)
+
+        raw_providers = raw_metadata.get("allowed_providers")
+        if raw_providers is None:
+            config.allowed_providers = None
+        elif isinstance(raw_providers, list) and all(
+            isinstance(item, str) and item.strip() for item in raw_providers
+        ):
+            config.allowed_providers = [item.strip() for item in raw_providers]
+        else:
+            raise KeyConfigurationExportError(
+                "Stored provider policy is not a valid provider allow-list.",
+                param="allowed_providers",
+            )
+
+        raw_responses = raw_metadata.get("responses_policy")
+        if raw_responses is None:
+            config.responses_policy = None
+        elif not isinstance(raw_responses, dict):
+            raise KeyConfigurationExportError(
+                param="responses_policy",
+            )
+        else:
+            try:
+                config.responses_policy = validate_key_responses_policy(raw_responses)
+            except InvalidGatewayKeyPolicyError as exc:
+                raise KeyConfigurationExportError(
+                    param=exc.param,
+                ) from exc
+
+        raw_rate_metadata = raw_metadata.get("rate_limit_policy")
+        if raw_rate_metadata is not None:
+            if not isinstance(raw_rate_metadata, dict) or any(
+                key != "window_seconds" for key in raw_rate_metadata
+            ):
+                raise KeyConfigurationExportError(
+                    param="rate_limit_policy",
+                )
+            window = raw_rate_metadata.get("window_seconds")
+            if window is not None and (
+                isinstance(window, bool) or not isinstance(window, int)
+            ):
+                raise KeyConfigurationExportError(
+                    param="rate_limit_policy",
+                )
+        projected_rate = self._rate_limit_policy_from_key(gateway_key)
+        config.rate_limit_policy = dict(projected_rate) if projected_rate else None
+
+        raw_lazy = raw_metadata.get("lazy_throttling_policy")
+        if raw_lazy is None:
+            config.lazy_throttling_policy = None
+        elif not isinstance(raw_lazy, dict):
+            raise KeyConfigurationExportError(param="lazy_throttling_policy")
+        else:
+            try:
+                # Strict authoring validator: malformed/unknown/ceiling-
+                # exceeding stored blocks fail the export explicitly.
+                config.lazy_throttling_policy = self._validate_lazy_throttling_policy(
+                    raw_lazy
+                )
+            except InvalidGatewayKeyLimitsError as exc:
+                raise KeyConfigurationExportError(
+                    param=exc.param or "lazy_throttling_policy",
+                ) from exc
+
+        raw_live_burn = raw_metadata.get(CHAT_STREAMING_LIVE_BURN_METADATA_KEY)
+        if raw_live_burn is None:
+            config.chat_streaming_live_burn_policy = (
+                default_chat_streaming_live_burn_policy().to_metadata()
+            )
+        else:
+            try:
+                config.chat_streaming_live_burn_policy = (
+                    self._validate_chat_streaming_live_burn_policy(raw_live_burn)
+                    .to_metadata()
+                )
+            except InvalidGatewayKeyPolicyError as exc:
+                raise KeyConfigurationExportError(
+                    param=exc.param or "chat_streaming_live_burn_policy",
+                ) from exc
+
+        raw_external = raw_metadata.get("external_tool_policy")
+        if raw_external is None:
+            config.external_tool_policy = strict_key_policy().to_metadata()
+        else:
+            parsed_external = parse_key_external_tool_policy(
+                raw_external,
+                ceilings=self._settings.get_external_tool_operator_ceilings(),
+            )
+            if not parsed_external.valid or parsed_external.policy is None:
+                raise KeyConfigurationExportError(
+                    param="external_tool_policy",
+                )
+            config.external_tool_policy = parsed_external.policy.to_metadata()
+
+        config.cost_limit_eur = gateway_key.cost_limit_eur
+        config.token_limit_total = gateway_key.token_limit_total
+        config.request_limit_total = gateway_key.request_limit_total
+        return key_configuration_export(config)
 
     async def reset_gateway_key_usage(
         self,
@@ -1614,6 +2041,135 @@ class KeyService:
             "allow_all_models": gateway_key.allow_all_models,
             "allow_all_endpoints": gateway_key.allow_all_endpoints,
         }
+
+    def _configuration_audit_values(self, gateway_key: GatewayKey) -> dict[str, object]:
+        """Full administtered-policy projection for one configuration audit."""
+        return {
+            "gateway_key_id": str(gateway_key.id),
+            "public_key_id": gateway_key.public_key_id,
+            "allowed_models": list(gateway_key.allowed_models or []),
+            "allowed_endpoints": list(gateway_key.allowed_endpoints or []),
+            "allowed_providers": self._allowed_providers_from_key(gateway_key),
+            "allow_all_models": gateway_key.allow_all_models,
+            "allow_all_endpoints": gateway_key.allow_all_endpoints,
+            "responses_policy": self._responses_policy_audit_projection(
+                (gateway_key.metadata_json or {}).get("responses_policy")
+                if isinstance(gateway_key.metadata_json, dict)
+                else None
+            ),
+            "rate_limit_policy": self._rate_limit_policy_from_key(gateway_key),
+            "lazy_throttling_policy": self._lazy_throttling_policy_from_key(gateway_key),
+            "chat_streaming_live_burn_policy": self._chat_streaming_live_burn_policy_from_key(
+                gateway_key
+            ).to_metadata(),
+            "external_tool_policy": self._external_tool_policy_from_key(gateway_key).to_metadata(),
+            "cost_limit_eur": (
+                str(gateway_key.cost_limit_eur)
+                if gateway_key.cost_limit_eur is not None
+                else None
+            ),
+            "token_limit_total": gateway_key.token_limit_total,
+            "request_limit_total": gateway_key.request_limit_total,
+        }
+
+    # Allowlisted responses-policy fields projected into configuration
+    # audits. Unknown stored keys are counted with a fixed marker and never
+    # copied; wrong-typed known values are omitted the same way.
+    _RESPONSES_AUDIT_FIELDS: frozenset[str] = frozenset(
+        {
+            "version",
+            "allowed_capabilities",
+            "allowed_local_tool_types",
+            "client_module",
+            "hosted_tools_allowed",
+            "stateful",
+            "storage",
+            "background",
+            "multimodal",
+            "notes",
+        }
+    )
+    _RESPONSES_AUDIT_TOOL_TYPES: frozenset[str] = frozenset({"function", "custom"})
+    _RESPONSES_AUDIT_PIN_KEYS: tuple[str, ...] = ("id", "version", "fixture_sha256")
+    _RESPONSES_AUDIT_NOTES_MAX = 1000
+
+    @classmethod
+    def _responses_policy_audit_projection(
+        cls, raw_policy: object
+    ) -> dict[str, object] | str | None:
+        """Secret-safe allowlisted projection of the stored Responses policy.
+
+        Only reviewed field names with safe types are projected. Unknown
+        names/values and wrong-typed known fields never reach the audit:
+        they increment a fixed ``unsupported_fields`` count instead. A
+        non-object stored block projects to the fixed ``"unsupported"``
+        marker.
+        """
+        if raw_policy is None:
+            return None
+        if not isinstance(raw_policy, dict):
+            return "unsupported"
+        projected: dict[str, object] = {}
+        unsupported = 0
+        for key in sorted(set(raw_policy) - cls._RESPONSES_AUDIT_FIELDS):
+            unsupported += 1
+        if "version" in raw_policy:
+            version = raw_policy["version"]
+            if isinstance(version, int) and not isinstance(version, bool):
+                projected["version"] = version
+            else:
+                unsupported += 1
+        if "allowed_capabilities" in raw_policy:
+            caps = raw_policy["allowed_capabilities"]
+            if isinstance(caps, list) and all(isinstance(c, str) for c in caps):
+                projected["allowed_capabilities"] = sorted(caps)
+            else:
+                unsupported += 1
+        if "allowed_local_tool_types" in raw_policy:
+            tool_types = raw_policy["allowed_local_tool_types"]
+            if isinstance(tool_types, list) and all(
+                isinstance(t, str) and t in cls._RESPONSES_AUDIT_TOOL_TYPES
+                for t in tool_types
+            ):
+                projected["allowed_local_tool_types"] = list(tool_types)
+            else:
+                unsupported += 1
+        if "client_module" in raw_policy:
+            pin = raw_policy["client_module"]
+            if (
+                isinstance(pin, dict)
+                and set(pin) == set(cls._RESPONSES_AUDIT_PIN_KEYS)
+                and all(
+                    isinstance(pin[key], str) and pin[key].strip()
+                    for key in cls._RESPONSES_AUDIT_PIN_KEYS
+                )
+            ):
+                projected["client_module"] = {
+                    key: pin[key] for key in cls._RESPONSES_AUDIT_PIN_KEYS
+                }
+            else:
+                unsupported += 1
+        if "hosted_tools_allowed" in raw_policy:
+            hosted = raw_policy["hosted_tools_allowed"]
+            if isinstance(hosted, list) and not hosted:
+                projected["hosted_tools_allowed"] = []
+            else:
+                unsupported += 1
+        for flag in ("stateful", "storage", "background", "multimodal"):
+            if flag in raw_policy:
+                if raw_policy[flag] is False:
+                    projected[flag] = False
+                else:
+                    unsupported += 1
+        if "notes" in raw_policy:
+            notes = raw_policy["notes"]
+            if isinstance(notes, str) and len(notes) <= cls._RESPONSES_AUDIT_NOTES_MAX:
+                projected["notes"] = notes
+            else:
+                unsupported += 1
+        if unsupported:
+            projected["unsupported_fields"] = unsupported
+        return projected
 
     @staticmethod
     def _usage_audit_values(gateway_key: GatewayKey) -> dict[str, object]:

@@ -116,7 +116,9 @@ class KeyImportRowPreview:
     request_limit: int | None = None
     allowed_models: tuple[str, ...] = ()
     allowed_endpoints: tuple[str, ...] = ()
-    allowed_providers: tuple[str, ...] = ()
+    #: ``None`` = column absent (unrestricted, the create default); ``()``
+    #: = explicit deny-all; a tuple = allow-list.
+    allowed_providers: tuple[str, ...] | None = None
     allow_all_models: bool = False
     allow_all_endpoints: bool = False
     allow_all_providers: bool = False
@@ -138,7 +140,13 @@ class KeyImportRowPreview:
 
     @property
     def allowed_providers_summary(self) -> str:
-        return _policy_summary(self.allowed_providers, allow_all=self.allow_all_providers)
+        if self.allow_all_providers:
+            return "all (unrestricted)"
+        if self.allowed_providers is None:
+            return "unrestricted (default)"
+        if not self.allowed_providers:
+            return "deny-all"
+        return ", ".join(self.allowed_providers)
 
     @property
     def rate_limit_summary(self) -> str:
@@ -379,16 +387,6 @@ def build_key_import_execution_plan(
             "Bulk send-now email delivery is not implemented; use enqueue, pending, or none."
         )
 
-    for row in preview.rows:
-        if row.allowed_providers:
-            raise ValueError(
-                "allowed_providers is not supported by the current key creation service."
-            )
-        if row.allow_all_providers:
-            raise ValueError(
-                "allow_all_providers is not supported by the current key creation service."
-            )
-
     plaintext_display_required = preview.plaintext_display_required
     if plaintext_display_required and not confirm_plaintext_display:
         raise ValueError("Confirm one-time plaintext display before importing keys.")
@@ -615,7 +613,9 @@ def key_import_preview_to_dict(preview: KeyImportPreview) -> dict[str, object]:
                 "request_limit": row.request_limit,
                 "allowed_models": list(row.allowed_models),
                 "allowed_endpoints": list(row.allowed_endpoints),
-                "allowed_providers": list(row.allowed_providers),
+                "allowed_providers": None
+                if row.allowed_providers is None
+                else list(row.allowed_providers),
                 "allow_all_models": row.allow_all_models,
                 "allow_all_endpoints": row.allow_all_endpoints,
                 "allow_all_providers": row.allow_all_providers,
@@ -711,9 +711,14 @@ def _validate_one_row(
     allowed_endpoints = _optional_import_list(
         row.get("allowed_endpoints"), field_name="allowed_endpoints"
     )
-    allowed_providers = _optional_import_list(
-        row.get("allowed_providers"), field_name="allowed_providers"
-    )
+    # Omission vs explicit empty is significant: an absent/blank column is
+    # the unrestricted default, an explicit empty list denies ALL providers.
+    if _is_blank(row.get("allowed_providers")):
+        allowed_providers: tuple[str, ...] | None = None
+    else:
+        allowed_providers = tuple(
+            _optional_import_list(row.get("allowed_providers"), field_name="allowed_providers")
+        )
     allow_all_models = _optional_bool(row.get("allow_all_models"), field_name="allow_all_models")
     allow_all_endpoints = _optional_bool(
         row.get("allow_all_endpoints"), field_name="allow_all_endpoints"
@@ -721,6 +726,12 @@ def _validate_one_row(
     allow_all_providers = _optional_bool(
         row.get("allow_all_providers"), field_name="allow_all_providers"
     )
+    if allow_all_providers and allowed_providers:
+        raise ValueError(
+            "allow_all_providers cannot be combined with an explicit provider list."
+        )
+    if allow_all_providers:
+        allowed_providers = None
     rate_limit_policy = _rate_limit_policy(row)
     chat_streaming_live_burn_policy = _chat_streaming_live_burn_policy(row)
     email_delivery_mode = _email_delivery_mode(
@@ -752,7 +763,9 @@ def _validate_one_row(
         request_limit=request_limit,
         allowed_models=tuple(allowed_models),
         allowed_endpoints=tuple(allowed_endpoints),
-        allowed_providers=tuple(allowed_providers),
+        # None (omitted/blank/allow-all) stays None; an explicit empty
+        # tuple means deny-all and must not be coerced.
+        allowed_providers=None if allowed_providers is None else tuple(allowed_providers),
         allow_all_models=allow_all_models,
         allow_all_endpoints=allow_all_endpoints,
         allow_all_providers=allow_all_providers,
@@ -1103,6 +1116,9 @@ def _create_gateway_key_input_from_row(
         request_limit_total=row.request_limit,
         allowed_models=list(row.allowed_models),
         allowed_endpoints=list(row.allowed_endpoints),
+        # None preserves the unrestricted default; an explicit empty list
+        # from the row is the deny-all policy and must reach the service.
+        allowed_providers=None if row.allowed_providers is None else list(row.allowed_providers),
         allow_all_models=row.allow_all_models,
         allow_all_endpoints=row.allow_all_endpoints,
         rate_limit_policy=dict(row.rate_limit_policy) if row.rate_limit_policy else None,

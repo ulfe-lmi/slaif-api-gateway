@@ -48,7 +48,7 @@ slaif-gateway keys create|create-from-template|list|show
 slaif-gateway keys suspend|activate|revoke|extend|rotate
 slaif-gateway keys set-limits|set-rate-limits|set-chat-streaming-live-burn
 slaif-gateway keys reset-usage
-slaif-gateway keys policy show|update
+slaif-gateway keys policy show|update|export
 slaif-gateway keys external-tools show|update
 slaif-gateway templates create-from-calibration
 slaif-gateway calibration summarize
@@ -58,10 +58,120 @@ Plaintext key output is one-time only. Prefer `--secret-output-file` for an
 owner-only file or explicitly confirmed plaintext output. Lost keys are rotated,
 not recovered. Reserved-counter repair has additional confirmation requirements.
 
-The lazy (waiting) throttling policy is not a CLI flag. It is managed through
-the admin dashboard key create/detail forms (the same KeyService and audit
-path) and is stored in the key's validated metadata; the CLI key commands do
-not read, change, or reset it.
+The lazy (waiting) throttling policy has no dedicated CLI flag yet: a
+standalone setter remains deferred (see
+`docs/cli-field-administration.md`, objective 197). Since objective 196,
+the typed `--policy-file` authoring surface and `keys policy export` DO
+read and write the validated `lazy_throttling_policy` block through the
+same KeyService and audit path; the admin dashboard key create/detail
+forms remain an applicable path as well.
+
+### Typed key-policy configuration (`--policy-file`)
+
+`keys create` and `keys policy update` accept a bounded versioned policy
+file (`--policy-file`, at most 64 KiB, strict JSON). The file is the ONLY
+source of policy configuration when provided: combining it with any
+explicit policy flag is rejected. Identity, validity, reason/actor,
+secret-output, and delivery flags may accompany the file, and the explicit
+`--confirm-external-tool-fenced` control may supply the acknowledgement when
+the file omits its own `confirm_external_tool_fenced` field (the file's own
+field wins when present). `keys policy export` renders the stored key policy
+as the same version-1 document, so an export can be reviewed and consumed by
+create or update.
+
+Schema version 1 fields (unknown fields, duplicate keys, and NaN/Infinity
+are rejected; all errors are fixed safe messages that never echo file
+bodies or operator-supplied values):
+
+| Field | Semantics |
+| --- | --- |
+| `schema_version` | Exactly `1` (integer). |
+| `allowed_models` / `allowed_endpoints` | List of values; explicit `null` is the empty list. Omitted on update: preserve. |
+| `allow_all_models` / `allow_all_endpoints` | Boolean. Omitted on update: preserve. |
+| `allowed_providers` | `null` = UNRESTRICTED; `[]` = deny ALL providers; list = allow-list. Omitted on update: preserve. Never truthiness-collapsed. |
+| `responses_policy` | `null` clears the block; an object is a COMPLETE replacement block (strictly validated; no partial member merge). Omitted on update: preserve. |
+| `rate_limit_policy` | `null` clears every per-key override (inherit the deployment); an object carries nullable members `requests_per_minute`, `tokens_per_minute`, `max_concurrent_requests` (positive integers or `null`; `null` inherits that member). An omitted member keeps the current override (per-member patch); the historical `concurrent_requests` spelling canonicalizes to `max_concurrent_requests`, and unknown members are rejected, never silently ignored. |
+| `lazy_throttling_policy` | `null` removes the stored policy; an object is a complete block. Omitted on update: preserve. |
+| `cost_limit_eur` / `token_limit_total` / `request_limit_total` | `null` = UNLIMITED for that quota. Omitted on update: preserve. |
+| `chat_streaming_live_burn_policy` | Complete block only (`null` is not accepted - use `keys set-chat-streaming-live-burn` to disable). Omitted on update: preserve. |
+| `external_tool_policy` | `null` removes the fenced policy (strict bounded default); an object is a complete block. Omitted on update: preserve. |
+| `confirm_external_tool_fenced` | Boolean operation acknowledgement for fenced blocks. It is an operation control, not inherited configuration: exports never emit it and an exported document never carries it into a later operation. A fresh acknowledgement (file field or explicit flag) is required whenever a fenced `external_tool_policy` block is SUPPLIED by the operation - including supplying the unchanged full-export block. Merely omitting the block while updating unrelated fields (providers, rates, quotas) does not create a new confirmation requirement. The existing finite-quota and external-tool fence guards still apply on every path. |
+
+Create defaults differ from update preservation: on create, omitted policy
+fields take the documented service defaults (unrestricted providers, no
+Responses authority, deployment-inherited rates); on update, omitted fields
+preserve the loaded current values. `keys policy update` with no requested
+change is rejected - it never silently resets policy.
+
+Provider flags without a file remain mutually exclusive: use exactly one of
+`--allowed-provider` (repeatable), `--provider-all`, or `--provider-none`.
+
+Default secret output on typed surfaces: with `--policy-file` or any
+explicit provider flag, `keys create` requires an explicit one-time key
+choice BEFORE creation - `--show-plaintext`, `--secret-output-file PATH`
+(a new 0600 file), or `--email-delivery pending/send-now/enqueue`. The
+pre-existing legacy flag-free `keys create` intentionally keeps its
+documented default of printing the one-time plaintext key once, so the
+typed surfaces are secret-guarded while that legacy exception remains
+usable; do not read this as every CLI default being secret-free. The
+existing `--json` guard is unchanged: JSON output never includes the
+plaintext key unless `--show-plaintext` or `--secret-output-file` is
+explicit.
+
+Responses/Codex authoring (strict, fail-closed):
+
+- Finite capability vocabulary (current runtime-known capabilities minus the
+  reserved generic authority shapes `background`/`storage`/`multimodal`,
+  which fail closed as positive authored grants); unknown fields and values,
+  duplicates, bool/float versions, and unknown capability names are
+  rejected.
+- Codex prerequisite closure is enforced: `codex_client_tools` requires
+  `codex_request_envelope`; `codex_streaming_tool_events` requires client
+  tools; `codex_encrypted_reasoning_replay` requires the envelope;
+  `codex_compaction` requires streaming tool events plus encrypted
+  reasoning replay.
+- Local tool types pair with reviewed capabilities: `function` requires
+  `function_tools` or the Codex client-tools grant; `custom` requires
+  `custom_tools` or the client-tools grant; the client-tools grant requires
+  the full local tool type set.
+- `client_module` is an exact registered identity
+  (`id`/`version`/`fixture_sha256`); stale pins fail with a migration
+  hint. A pin never grants authority by itself: an explicit block
+  retaining the same pin with no or empty capabilities is a valid
+  deauthorization state.
+- The configured `CODEX_COMPATIBILITY_PROFILE_FILE` (when set) is
+  bootstrapped in the same CLI process BEFORE pin authoring, so a fresh
+  `keys create`/`keys policy update` validates pins against the configured
+  profile, not the packaged default. An invalid configured profile file
+  fails closed with a fixed safe message.
+
+Client-module migration law: a key whose stored Responses block carries a
+client-module binding - a currently resolvable identity (explicit registered
+pin or the implicit historical five-gate shape) OR a stale/unregistered/
+malformed stored pin - may only retain that exact binding through a
+configuration update. Re-pinning (including straight to the current
+registered identity), replacing, or clearing a bound policy is refused with
+migration guidance; only a genuinely unbound key may be initially bound.
+Use the reviewed client-module migration workflow for identity changes.
+
+Examples (fictional identities):
+
+```bash
+# Deny all providers for one key, preserving everything else
+slaif-gateway keys policy update <gateway-key-id> --provider-none --reason "provider audit"
+
+# Full typed create from a reviewed policy file
+slaif-gateway keys create --owner-id <owner-uuid> --valid-days 30 \
+  --policy-file ./key-policy.json --reason "onboarding" \
+  --secret-output-file ./new-key.secret
+
+# Export, review, and apply only a provider change
+slaif-gateway keys policy export <gateway-key-id>
+slaif-gateway keys policy update <gateway-key-id> --provider-all --reason "lift provider restriction"
+```
+
+`docs/cli-field-administration.md` lists which key-configuration fields the
+CLI currently administers and which remain proposed for later objectives.
 
 ## Providers, routes, pricing, and FX
 
@@ -372,6 +482,7 @@ report. Full contract:
 
 ## Related documentation
 
+- [CLI key-configuration field administration](cli-field-administration.md)
 - [Configuration](configuration.md)
 - [QUICKSTART](../QUICKSTART.md)
 - [First-time operator guide](first-time-operator-guide.md)
@@ -433,6 +544,7 @@ slaif-gateway keys reset-usage
 slaif-gateway keys rotate
 slaif-gateway keys policy show
 slaif-gateway keys policy update
+slaif-gateway keys policy export
 slaif-gateway keys external-tools show
 slaif-gateway keys external-tools update
 slaif-gateway openai-assisted pricing-proposal
