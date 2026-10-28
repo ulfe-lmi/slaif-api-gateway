@@ -15,7 +15,7 @@ from slaif_gateway.schemas.keys import (
     GatewayKeyManagementResult,
     RevokeGatewayKeyInput,
     SuspendGatewayKeyInput,
-    UpdateGatewayKeyPolicyInput,
+    UpdateGatewayKeyConfigurationInput,
 )
 from slaif_gateway.services.key_errors import GatewayKeyAlreadyRevokedError
 
@@ -137,18 +137,20 @@ def test_keys_list_and_show_output_safe_metadata(monkeypatch) -> None:
 
 
 def test_policy_show_and_update_use_safe_policy_payloads(monkeypatch) -> None:
-    seen: dict[str, UpdateGatewayKeyPolicyInput] = {}
+    seen: dict[str, UpdateGatewayKeyConfigurationInput] = {}
 
     async def fake_show(gateway_key_id: uuid.UUID) -> SimpleNamespace:
         assert gateway_key_id == GATEWAY_KEY_ID
         return _gateway_key_row()
 
-    async def fake_update(payload: UpdateGatewayKeyPolicyInput) -> GatewayKeyManagementResult:
+    async def fake_update(
+        payload: UpdateGatewayKeyConfigurationInput,
+    ) -> GatewayKeyManagementResult:
         seen["payload"] = payload
         return _management_result("active")
 
     monkeypatch.setattr(keys_cli, "_show_gateway_key", fake_show)
-    monkeypatch.setattr(keys_cli, "_update_policy", fake_update)
+    monkeypatch.setattr(keys_cli, "_update_configuration", fake_update)
 
     show_result = runner.invoke(app, ["keys", "policy", "show", str(GATEWAY_KEY_ID), "--json"])
     update_result = runner.invoke(
@@ -177,8 +179,14 @@ def test_policy_show_and_update_use_safe_policy_payloads(monkeypatch) -> None:
     assert update_result.exit_code == 0
     payload = seen["payload"]
     assert payload.gateway_key_id == GATEWAY_KEY_ID
-    assert payload.allowed_models == ["gpt-5.2"]
-    assert payload.allowed_endpoints == ["/v1/models", "/v1/chat/completions"]
+    configuration = payload.configuration
+    assert configuration.has("allowed_models")
+    assert configuration.allowed_models == ["gpt-5.2"]
+    assert configuration.has("allowed_endpoints")
+    assert configuration.allowed_endpoints == ["/v1/models", "/v1/chat/completions"]
+    # Omitted members are ABSENT (preserve), not silently defaulted.
+    assert not configuration.has("allowed_providers")
+    assert not configuration.has("allow_all_models")
     assert payload.actor_admin_id == ADMIN_ID
     assert payload.reason == "Fix request policy"
     assert "token_hash" not in update_result.stdout

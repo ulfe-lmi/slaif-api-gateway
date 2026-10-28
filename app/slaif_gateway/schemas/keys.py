@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
+from slaif_gateway.schemas.key_configuration import KeyConfiguration
+
 
 @dataclass(slots=True)
 class CreateGatewayKeyInput:
@@ -167,6 +169,21 @@ class UpdateGatewayKeyExternalToolPolicyInput:
     gateway_key_id: uuid.UUID
     external_tool_policy: dict[str, object]
     confirm_external_tool_fenced: bool = False
+    actor_admin_id: uuid.UUID | None = None
+    reason: str | None = None
+
+
+@dataclass(slots=True)
+class UpdateGatewayKeyConfigurationInput:
+    """Input for a presence-aware typed key-configuration update.
+
+    Only the fields present in ``configuration`` are requested changes;
+    absent fields preserve the key's current state. A required audit reason
+    accompanies every update.
+    """
+
+    gateway_key_id: uuid.UUID
+    configuration: KeyConfiguration
     actor_admin_id: uuid.UUID | None = None
     reason: str | None = None
 

@@ -358,7 +358,7 @@ def test_execution_plan_requires_confirmation_reason_and_valid_rows() -> None:
         )
 
 
-def test_execution_plan_rejects_send_now_and_provider_policy() -> None:
+def test_execution_plan_rejects_send_now_and_accepts_provider_policy() -> None:
     configured = _context(email_delivery_enabled=True, smtp_configured=True, celery_configured=True)
     send_now = _preview(
         [_valid_row(email_delivery_mode="send-now", allowed_providers="")], context=configured
@@ -373,14 +373,33 @@ def test_execution_plan_rejects_send_now_and_provider_policy() -> None:
             confirm_import=True,
             confirm_plaintext_display=True,
         )
-    with pytest.raises(ValueError, match="allowed_providers"):
-        build_key_import_execution_plan(
-            provider_policy,
-            actor_admin_id=ADMIN_ID,
-            reason="bulk import",
-            confirm_import=True,
-            confirm_plaintext_display=True,
-        )
+    # R5: the provider policy is a supported import column; the plan builds
+    # and carries the explicit allow-list unchanged.
+    plan = build_key_import_execution_plan(
+        provider_policy,
+        actor_admin_id=ADMIN_ID,
+        reason="bulk import",
+        confirm_import=True,
+        confirm_plaintext_display=True,
+    )
+    assert plan.total_rows == 1
+    assert plan.rows[0].allowed_providers == ("openai", "openrouter")
+
+
+def test_preview_rejects_empty_provider_list_combined_with_allow_all() -> None:
+    # An explicit EMPTY list is deny-all; it contradicts allow-all even
+    # when empty (only an absent/blank column is the unrestricted default).
+    preview = _preview([_valid_row(allowed_providers="[]", allow_all_providers="true")])
+    assert preview.valid_count == 0
+    assert preview.invalid_count == 1
+    row = preview.rows[0]
+    assert row.status == "invalid"
+    assert any("allow_all_providers" in error for error in row.errors)
+
+    # Blank (omitted) column plus allow-all stays valid and unrestricted.
+    blank = _preview([_valid_row(allowed_providers="", allow_all_providers="true")])
+    assert blank.valid_count == 1
+    assert blank.rows[0].allowed_providers is None
 
 
 def test_execution_plan_builds_for_supported_modes() -> None:

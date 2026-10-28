@@ -207,4 +207,15 @@ on record. They are dated, commit-specific evidence, not certifications.
   branding mount; test-only container bootstrap, no provider/model/email
   access; final-head CI, strategic review, and guarded merge pending.
 
+- [`2026-10-27 objective 196-a typed CLI key-policy verification`](2026-10-27-cli-key-policy.md)
+  - focused objective record for typed CLI key-policy configuration:
+  68 new unit cases (strict authoring validator, version-1 schema safe
+  errors, partial-update laws, fresh-subprocess configured-profile
+  bootstrap proof), 145 affected existing unit cases (two oracles updated
+  exactly where mandated), and 5 real owned-PostgreSQL integration cases
+  (file-only create/export, preserving provider updates, distinct
+  null-vs-empty provider persistence, atomic bound-key repin rejection,
+  bulk-import provider parity); no schema migration, no provider/model/
+  email access, not a release decision.
+
 - [Qwen Codex live smoke and regression evidence](codex-qwen38-live-smoke.md)

@@ -325,6 +325,9 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str, monk
         assert key.rate_limit_requests_per_minute == 60
         assert key.token_hash
         assert not key.token_hash.startswith("sk-")
+        # Legacy behavior: an omitted provider column stays unrestricted
+        # (no allowed_providers member in the stored metadata).
+        assert "allowed_providers" not in (key.metadata_json or {})
         _assert_plaintext_not_persisted(migrated_postgres_url, plaintext_keys)
 
         pending_json = json.dumps(
@@ -471,7 +474,134 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str, monk
         assert "sk-provider-secret" not in secret_input.text
         assert asyncio.run(_counts(migrated_postgres_url)) == after_mixed
 
+        # 196-b R1: the shared import path now carries the provider policy
+        # (196-a R5), so the old blanket "unsupported column" oracle is
+        # obsolete. Prove the authenticated admin preview -> execute flow
+        # end to end with a complete row (model/endpoint/quota/delivery).
+        provider_policy_csv = (
+            "owner_email,cohort_id,valid_days,cost_limit_eur,token_limit_total,"
+            "request_limit_total,allowed_models,allowed_endpoints,"
+            "rate_limit_requests_per_minute,allowed_providers,email_delivery_mode\n"
+            f"{owner_email},{cohort_id},30,10.00,100000,1000,"
+            "gpt-test,/v1/chat/completions,60,openai,none\n"
+        )
+        provider_preview = client.post(
+            "/admin/keys/bulk-import/preview",
+            data={
+                "csrf_token": csrf,
+                "import_format": "csv",
+                "import_text": provider_policy_csv,
+            },
+        )
+        assert provider_preview.status_code == 200
+        assert "Providers: openai" in provider_preview.text
+        # Preview is non-mutating.
+        assert asyncio.run(_counts(migrated_postgres_url)) == after_mixed
+
         provider_policy = client.post(
+            "/admin/keys/bulk-import/execute",
+            data={
+                "csrf_token": csrf,
+                "import_format": "csv",
+                "import_text": provider_policy_csv,
+                "confirm_import": "true",
+                "confirm_plaintext_display": "true",
+                "reason": "provider policy key import",
+            },
+        )
+        assert provider_policy.status_code == 200
+        provider_plaintext = _plaintext_keys_from_html(provider_policy.text)
+        assert len(provider_plaintext) == 1
+        assert provider_policy.text.count(provider_plaintext[0]) == 1
+        after_provider_policy = asyncio.run(_counts(migrated_postgres_url))
+        assert after_provider_policy["gateway_keys"] == after_mixed["gateway_keys"] + 1
+        assert after_provider_policy["one_time_secrets"] == after_mixed["one_time_secrets"] + 1
+        assert after_provider_policy["email_deliveries"] == after_mixed["email_deliveries"]
+        assert after_provider_policy["audit_logs"] == after_mixed["audit_logs"] + 1
+
+        # The chosen restriction persists on the new key only, and the rest
+        # of the row (model/endpoint/quota/cohort/rate) is preserved.
+        provider_keys = [
+            k
+            for k in asyncio.run(_created_keys(migrated_postgres_url))
+            if k.owner_id == owner_id
+            and (k.metadata_json or {}).get("allowed_providers") == ["openai"]
+        ]
+        assert len(provider_keys) == 1
+        provider_key = provider_keys[0]
+        assert provider_key.cost_limit_eur == Decimal("10.00")
+        assert provider_key.token_limit_total == 100000
+        assert provider_key.request_limit_total == 1000
+        assert provider_key.allowed_models == ["gpt-test"]
+        assert provider_key.allowed_endpoints == ["/v1/chat/completions"]
+        assert provider_key.rate_limit_requests_per_minute == 60
+        assert provider_key.cohort_id == cohort_id
+        assert provider_key.status == "active"
+        _assert_plaintext_not_persisted(
+            migrated_postgres_url, plaintext_keys + pending_plaintext + provider_plaintext
+        )
+
+        # An explicit empty provider list (JSON) is deny-all, persisted
+        # distinctly from the omitted (unrestricted) default.
+        deny_all_json = json.dumps(
+            [
+                {
+                    "owner_id": str(owner_id),
+                    "valid_days": "15",
+                    "cost_limit_eur": "5.00",
+                    "allow_all_models": True,
+                    "allow_all_endpoints": True,
+                    "allowed_providers": [],
+                    "email_delivery_mode": "none",
+                }
+            ]
+        )
+        deny_all_preview = client.post(
+            "/admin/keys/bulk-import/preview",
+            data={"csrf_token": csrf, "import_format": "json", "import_text": deny_all_json},
+        )
+        assert deny_all_preview.status_code == 200
+        assert "Providers: deny-all" in deny_all_preview.text
+        assert asyncio.run(_counts(migrated_postgres_url)) == after_provider_policy
+
+        deny_all = client.post(
+            "/admin/keys/bulk-import/execute",
+            data={
+                "csrf_token": csrf,
+                "import_format": "json",
+                "import_text": deny_all_json,
+                "confirm_import": "true",
+                "confirm_plaintext_display": "true",
+                "reason": "provider deny-all key import",
+            },
+        )
+        assert deny_all.status_code == 200
+        deny_all_plaintext = _plaintext_keys_from_html(deny_all.text)
+        assert len(deny_all_plaintext) == 1
+        after_deny_all = asyncio.run(_counts(migrated_postgres_url))
+        assert after_deny_all["gateway_keys"] == after_provider_policy["gateway_keys"] + 1
+        assert after_deny_all["one_time_secrets"] == after_provider_policy["one_time_secrets"] + 1
+        assert after_deny_all["email_deliveries"] == after_provider_policy["email_deliveries"]
+        assert after_deny_all["audit_logs"] == after_provider_policy["audit_logs"] + 1
+        deny_all_keys = [
+            k
+            for k in asyncio.run(_created_keys(migrated_postgres_url))
+            if k.owner_id == owner_id
+            and (k.metadata_json or {}).get("allowed_providers") == []
+        ]
+        assert len(deny_all_keys) == 1
+        assert deny_all_keys[0].cost_limit_eur == Decimal("5.00")
+        assert deny_all_keys[0].status == "active"
+        _assert_plaintext_not_persisted(
+            migrated_postgres_url,
+            plaintext_keys + pending_plaintext + provider_plaintext + deny_all_plaintext,
+        )
+
+        # A provider policy alone is still not a complete key: with no
+        # endpoint/model policy the execution fails safely at the service
+        # guard and mutates nothing (the obsolete "unsupported column" text
+        # is gone because the column is now supported).
+        provider_only = client.post(
             "/admin/keys/bulk-import/execute",
             data={
                 "csrf_token": csrf,
@@ -479,9 +609,10 @@ def test_admin_bulk_key_import_execute_postgres(migrated_postgres_url: str, monk
                 "import_text": f"owner_email,valid_days,allowed_providers\n{owner_email},30,openai\n",
                 "confirm_import": "true",
                 "confirm_plaintext_display": "true",
-                "reason": "provider policy unsupported",
+                "reason": "provider policy without endpoint policy",
             },
         )
-        assert provider_policy.status_code == 400
-        assert "allowed_providers" in provider_policy.text
-        assert asyncio.run(_counts(migrated_postgres_url)) == after_mixed
+        assert provider_only.status_code == 400
+        assert "Bulk key import execution failed safely. No keys were created." in provider_only.text
+        assert asyncio.run(_counts(migrated_postgres_url)) == after_deny_all
+        assert len(queued_payloads) == 2
