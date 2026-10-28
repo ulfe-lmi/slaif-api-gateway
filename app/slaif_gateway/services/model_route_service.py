@@ -234,6 +234,52 @@ def normalize_endpoint(value: str) -> str:
     return endpoint
 
 
+def normalize_route_configuration(
+    *,
+    requested_model: str,
+    match_type: str,
+    endpoint: str,
+    provider: str,
+    upstream_model: str | None,
+    priority: int,
+    supports_streaming: bool,
+    capabilities: dict[str, object] | None,
+    notes: str | None,
+    external_tool_ceilings: ExternalToolOperatorCeilings = (
+        DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS
+    ),
+) -> dict[str, object]:
+    """Pure canonical form of one route configuration, exactly as the CRUD
+    service would store it (normalization only: no reads, writes, or audit).
+
+    This is the single preview/storage parity point for reviewed
+    configuration plans (199-b): reviewed plans render this canonical form,
+    and execution compares fresh state against the same canonical form, so
+    no default capability block or field canonicalization is added after
+    review. It composes the same private normalizers the CRUD bodies use;
+    it does not duplicate their normalization law.
+    """
+    normalized_requested_model = _required_text(requested_model, "Requested model")
+    return {
+        "requested_model": normalized_requested_model,
+        "match_type": _normalize_match_type(match_type),
+        "endpoint": normalize_endpoint(endpoint),
+        "provider": _required_text(provider, "Provider"),
+        "upstream_model": (
+            _clean_optional(upstream_model) or normalized_requested_model
+        ),
+        "priority": priority,
+        "supports_streaming": supports_streaming,
+        "capabilities": _ensure_default_capabilities(
+            capabilities,
+            supports_streaming=supports_streaming,
+            endpoint=normalize_endpoint(endpoint),
+            external_tool_ceilings=external_tool_ceilings,
+        ),
+        "notes": _clean_optional(notes),
+    }
+
+
 def _ensure_default_capabilities(
     capabilities: dict[str, object] | None,
     *,

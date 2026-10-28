@@ -39,6 +39,22 @@ context window. Image tool-result history and user-image content use the same
 estimator without changing their contents. Extracted video frames represented
 as input images receive one image budget each.
 
+Since objective 199, partial budget edits are a reviewed CLI plan step: the
+three `--media-*` flags merge the selected leaves only (omitted leaves and all
+sibling capability groups are preserved), and the plan must be executed
+unchanged:
+
+```text
+slaif-gateway routes update <route-uuid> --dry-run /tmp/media-plan.json \
+  --media-image-tokens 16896 --media-video-tokens 65536 --media-video-frames 4
+
+slaif-gateway routes update <route-uuid> --execute /tmp/media-plan.json \
+  --reason "reviewed media budget"
+```
+
+A complete `media_input_estimation` group can also ship inside a
+`--capabilities-file` COMPLETE replacement document.
+
 The same estimate feeds TPM admission, cost/token reservation and interruption
 accounting. Provider-reported actual usage/cost remains authoritative on success.
 The engine retains the unadjusted count so lazy-wait route revalidation computes

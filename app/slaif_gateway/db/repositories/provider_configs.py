@@ -55,6 +55,24 @@ class ProviderConfigsRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_provider_config_for_update(self, provider_or_id: str) -> ProviderConfig | None:
+        """Administrative row-lock read for a partial provider update (199-a).
+
+        Resolves a UUID or the exact provider slug under ``FOR UPDATE`` so a
+        typed partial update can assemble complete service inputs while
+        holding the lock. Read-only for every other caller; runtime
+        selection semantics are unchanged.
+        """
+        value = str(provider_or_id).strip()
+        try:
+            identifier = uuid.UUID(value)
+        except ValueError:
+            statement = select(ProviderConfig).where(ProviderConfig.provider == value)
+        else:
+            statement = select(ProviderConfig).where(ProviderConfig.id == identifier)
+        result = await self._session.execute(statement.with_for_update())
+        return result.scalar_one_or_none()
+
     async def list_provider_configs(
         self,
         *,
@@ -162,6 +180,7 @@ class ProviderConfigsRepository:
         timeout_seconds: int | None = None,
         max_retries: int | None = None,
         notes: str | None = None,
+        clear_notes: bool = False,
     ) -> bool:
         row = await self.get_provider_config_by_id(provider_config_id)
         if row is None:
@@ -181,7 +200,12 @@ class ProviderConfigsRepository:
             row.timeout_seconds = timeout_seconds
         if max_retries is not None:
             row.max_retries = max_retries
-        if notes is not None:
+        # 199-c: the EXPLICIT clear intent stores NULL within this same
+        # operation; the pre-existing default (clear_notes=False) keeps the
+        # historical None-means-preserve law for every other caller.
+        if clear_notes:
+            row.notes = None
+        elif notes is not None:
             row.notes = notes
 
         await self._session.flush()

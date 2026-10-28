@@ -522,7 +522,16 @@ def _parse_route_capabilities(route_capabilities: Mapping[str, object] | None) -
             )
         )
 
-    raw = route_capabilities.get(RESPONSES_CAPABILITIES_KEY)
+    return validate_responses_capability_block(route_capabilities.get(RESPONSES_CAPABILITIES_KEY))
+
+
+def validate_responses_capability_block(raw: object) -> dict[str, bool]:
+    """Pure config-time validation of a responses capability block.
+
+    Public wrapper over the exact runtime metadata rules (known flags,
+    boolean values only) so configuration surfaces can reuse the same
+    acceptance without a second, drifting rule.
+    """
     if not isinstance(raw, Mapping):
         raise ResponsesRouteCapabilityError(
             ResponsesRouteCapabilityFinding(
