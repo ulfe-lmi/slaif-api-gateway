@@ -9,6 +9,7 @@ from typing import Annotated
 
 import typer
 
+from slaif_gateway.cli.codex_replay import app as codex_replay_app
 from slaif_gateway.cli.common import (
     CliDatabaseConfigError,
     cli_db_session,
@@ -49,6 +50,8 @@ from slaif_gateway.services.codex_qualification import (
 )
 
 app = typer.Typer(help="Inspect Codex protocol qualification and render a safe user profile")
+
+app.add_typer(codex_replay_app, name="replay")
 
 
 @app.command("presets")
