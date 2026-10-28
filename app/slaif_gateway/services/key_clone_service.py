@@ -30,6 +30,7 @@ from slaif_gateway.schemas.key_clone import (
     KeyClonePlanError,
     compute_source_fingerprint,
     compute_policy_fingerprint,
+    parse_clone_plan_document,
     render_clone_plan,
 )
 from slaif_gateway.schemas.key_configuration import parse_key_configuration
@@ -154,8 +155,8 @@ class KeyCloneReviewedPolicyMismatchError(KeyCloneError):
     error_code = "key_clone_reviewed_policy_mismatch"
     message = (
         "The reviewed clone plan no longer matches the source key's canonical "
-        "policy, identity, or confirmation requirement; the plan was not "
-        "executed."
+        "policy, identity, validity, or confirmation requirement; the plan "
+        "was not executed."
     )
 
 
@@ -406,6 +407,13 @@ class KeyCloneService:
                 "recomputed from EXECUTION time and the fresh source."
             ),
         }
+        # Consumable dry-run guarantee: the returned document must satisfy
+        # the SAME strict version-1 schema and bounds that execute re-parses
+        # (reusing the parser, not a second duration rule). A successful
+        # dry-run therefore always yields a plan the operator can execute;
+        # an out-of-bounds build (e.g. an over-maximum duration) fails here
+        # with a fixed safe error - no file, no audit, no mutation.
+        parse_clone_plan_document(document)
         return document
 
     # -- execute -------------------------------------------------------------
@@ -477,6 +485,18 @@ class KeyCloneService:
             raise KeyCloneReviewedPolicyMismatchError(param="policy")
         if locked.public_key_id != plan.source_public_key_id:
             raise KeyCloneReviewedPolicyMismatchError(param="source_public_key_id")
+        # C1: a reviewed COPY-SOURCE-EXPIRY plan must still match the FRESH
+        # locked source's actual expiry (normalized ISO comparison). A
+        # tampered reviewed date is refused, never silently substituted.
+        if plan.validity_mode == VALIDITY_COPY_SOURCE_EXPIRY:
+            reviewed_expiry = plan.source_valid_until_preview
+            if (
+                reviewed_expiry is None
+                or _aware_fromiso(reviewed_expiry) != locked.valid_until
+            ):
+                raise KeyCloneReviewedPolicyMismatchError(
+                    param="source_valid_until"
+                )
         if self._requires_fenced_confirmation(locked) != plan.requires_fenced_confirmation:
             raise KeyCloneReviewedPolicyMismatchError(param="requires_fenced_confirmation")
 
@@ -523,6 +543,8 @@ class KeyCloneService:
             email_delivery_id=email_delivery_id,
             source_fingerprint=plan.source_fingerprint,
             policy_fingerprint=compute_policy_fingerprint(fresh_document),
+            source_public_key_id=plan.source_public_key_id,
+            source_valid_until=plan.source_valid_until_preview,
             target_cohort_id=target_cohort_id,
             requires_fenced_confirmation=plan.requires_fenced_confirmation,
             validity_mode=plan.validity_mode,
@@ -589,15 +611,19 @@ class KeyCloneService:
         """Exact stable business-plan identity.
 
         Compares ALL execution-relevant reviewed fields: the source identity
-        and fingerprint, the reviewed policy (via its fingerprint), the target
-        owner/cohort selection, the validity parameters, and the fenced
-        confirmation requirement. Only the explicitly inert preview block is
-        excluded (it is never stored). A prior a-shape receipt missing any of
-        these new identity members does NOT match, so it cannot permit a
-        second creation (controlled refusal with safe recovery guidance).
+        (public key ID) and fingerprint, the reviewed policy (via its
+        fingerprint), the target owner/cohort selection, the validity
+        parameters (including the reviewed copy-source-expiry source expiry),
+        and the fenced confirmation requirement. Only the explicitly inert
+        preview block is excluded (it is never stored). A prior a/b-shape
+        receipt missing any of these identity members does NOT match, so it
+        cannot permit a second creation (controlled refusal with safe
+        recovery guidance).
         """
         return (
-            receipt.get("source_fingerprint") == plan.source_fingerprint
+            receipt.get("source_public_key_id") == plan.source_public_key_id
+            and receipt.get("source_valid_until") == plan.source_valid_until_preview
+            and receipt.get("source_fingerprint") == plan.source_fingerprint
             and receipt.get("policy_fingerprint")
             == compute_policy_fingerprint(plan.policy)
             and receipt.get("target_owner_id") == plan.target_owner_id

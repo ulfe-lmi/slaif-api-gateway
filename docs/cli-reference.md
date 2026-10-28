@@ -306,11 +306,16 @@ slaif-gateway keys clone --execute /tmp/clone-plan.json \
   lock, the service re-derives the source fingerprint and the FRESH
   canonical configured policy and rechecks them against the plan's
   reviewed `policy` document, `source_public_key_id`, and
-  `requires_fenced_confirmation`. Any mismatch is refused with a fixed
-  safe error before any write: a stale source is a stale plan, and a
-  reviewed policy/identity/confirmation the (unchanged) source does not
-  back is refused, never silently ignored. The editable plan file is
-  never authority to widen or narrow the source policy.
+  `requires_fenced_confirmation`; for COPY-SOURCE-EXPIRY plans the
+  reviewed `validity.source_valid_until` is additionally compared
+  (normalized ISO datetime) against the fresh locked source's actual
+  expiry. Any mismatch is refused with a fixed safe error before any
+  write: a stale source is a stale plan, and a reviewed
+  policy/identity/validity/confirmation the (unchanged) source does not
+  back is refused, never silently ignored (another expiry is never
+  substituted while claiming the exact reviewed plan executed). The
+  editable plan file is never authority to widen or narrow the source
+  policy.
 - Execution time: the clock is sampled AFTER the source-row lock is
   acquired, so a source that expires while the lock is acquired is
   refused at execute time.
@@ -333,22 +338,35 @@ slaif-gateway keys clone --execute /tmp/clone-plan.json \
   unreadable file produces a fixed error without the path. The plan never
   contains key material, hashes, provider environment names or base URLs,
   raw metadata, or usage.
+- Consumable dry-run: a SUCCESSFUL dry-run always yields an executable
+  plan. Before the file is written, the built document is re-validated
+  with the SAME strict version-1 schema and bounds that execute re-parses
+  (no second duration rule): an out-of-bounds build (for example a
+  duration-from-now over the documented 1,000-year maximum) fails with a
+  fixed safe error - no plan file, no audit, no mutation. Normal short
+  durations, naive-as-UTC valid absolute windows, and copy-source-expiry
+  remain usable.
 - Retry safety (no schema): the stable `operation_uuid` plus a narrowly
   typed receipt on the NEW target key's metadata deduplicates. The
   receipt lookup is namespaced by `(source, operation)` ONLY and is
   INDEPENDENT of the (mutable) target selection: a retry that changes the
   target owner or cohort still finds the completed operation. Repeats
-  compare the FULL business identity (source fingerprint, canonical
-  policy fingerprint, target owner, target cohort, all four validity
-  parameters, and the fenced-confirmation requirement): an exact repeat
-  returns `already-applied` with safe IDs - never a new key, secret,
-  send, or plaintext; a same-operation changed plan is refused; a
-  receipt a completed operation no longer backs (including legacy
-  objective-198-a receipts lacking the new fields) is refused rather
-  than adopted; and MORE THAN ONE receipt for `(source, operation)` is
-  refused as ambiguous rather than silently choosing one. A completed
-  operation stays identifiable even if the source is later edited or
-  becomes ineligible.
+  compare the FULL business identity (source public key ID, source
+  fingerprint, canonical policy fingerprint, target owner, target cohort,
+  all four validity parameters including the reviewed copy-source-expiry
+  source expiry, and the fenced-confirmation requirement): an exact
+  repeat returns `already-applied` with safe IDs - never a new key,
+  secret, send, or plaintext; a same-operation changed plan (public ID,
+  reviewed expiry, policy, target, validity, or confirmation) is refused;
+  a receipt a completed operation no longer backs (including legacy
+  objective-198-a/b receipts lacking any identity member) is refused
+  rather than adopted; and MORE THAN ONE match (the lookup is bounded to
+  two) is refused as ambiguous rather than silently choosing one. Only
+  the explicitly inert preview block may vary. A completed operation
+  stays identifiable even if the source is later edited or becomes
+  ineligible: an ACTUAL source edit changes the source fingerprint (a
+  fresh plan would be stale) but the ORIGINAL exact repeat still dedups
+  to the same target.
 - Transaction: key creation, one-time secret, optional pending delivery,
   receipt, and audits commit atomically in one caller-owned transaction; a
   late audit/receipt/delivery-preparation failure rolls back ALL new rows.

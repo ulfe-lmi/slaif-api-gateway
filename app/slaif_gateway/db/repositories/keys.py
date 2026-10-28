@@ -133,6 +133,10 @@ class GatewayKeysRepository:
         Returns every match so the caller can refuse an ambiguous result
         rather than silently choosing one. The receipt is a bounded safe JSONB
         member (UUIDs + fingerprints only).
+
+        Bounded: at most TWO matches are ever materialized (limit 2) - two
+        are sufficient to prove ambiguity; a corrupted third receipt adds no
+        decision information and no unbounded scan cost.
         """
         from slaif_gateway.schemas.key_clone import CLONE_RECEIPT_METADATA_KEY
 
@@ -144,7 +148,7 @@ class GatewayKeysRepository:
         }
         statement = select(GatewayKey).where(
             GatewayKey.metadata_json.contains(needle),
-        )
+        ).limit(2)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
@@ -172,6 +176,8 @@ class GatewayKeysRepository:
         email_delivery_id: uuid.UUID | None,
         source_fingerprint: str,
         policy_fingerprint: str,
+        source_public_key_id: str,
+        source_valid_until: str | None,
         target_cohort_id: uuid.UUID | None,
         requires_fenced_confirmation: bool,
         validity_mode: str,
@@ -184,8 +190,8 @@ class GatewayKeysRepository:
         Flush-only; the caller owns the transaction boundary. The receipt
         carries safe UUIDs, the stable business-plan identity (target
         owner/cohort, validity parameters, confirmation requirement, and the
-        source + policy fingerprints) only - never key material, provider
-        references, or secrets.
+        source public identity + source/policy fingerprints) only - never
+        key material, provider references, or secrets.
         """
         from slaif_gateway.schemas.key_clone import CLONE_RECEIPT_METADATA_KEY
 
@@ -202,6 +208,8 @@ class GatewayKeysRepository:
             "email_delivery_id": str(email_delivery_id) if email_delivery_id else None,
             "source_fingerprint": source_fingerprint,
             "policy_fingerprint": policy_fingerprint,
+            "source_public_key_id": source_public_key_id,
+            "source_valid_until": source_valid_until,
             "target_cohort_id": str(target_cohort_id) if target_cohort_id else None,
             "requires_fenced_confirmation": requires_fenced_confirmation,
             "validity_mode": validity_mode,

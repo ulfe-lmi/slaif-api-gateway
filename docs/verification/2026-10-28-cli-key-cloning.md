@@ -396,3 +396,167 @@ Required by AGENTS.md §5.1. 198-b changed the documented contracts:
   this record does not declare the full brief or the eleven DoD complete.
 - No release, RC, production, security, or compliance claim follows from
   this record.
+
+## 198-c ADDENDUM — complete reviewed-plan binding and consumable dry-run (same PR #354)
+
+Continuation 198-c on the SAME branch/PR completes the reviewed-plan
+binding and the consumable dry-run contract, plus two test hygiene repairs.
+The 198-a record and the 198-b ADDENDUM above are retained as history and
+are NOT rewritten. This addendum is evidence for the 198-c changes only; it
+is not a release or production-certification decision.
+
+### Corrections to demonstrated 198-b limitations
+
+1. **A completed operation whose `source_public_key_id` was changed still
+   returned `already-applied`.** The receipt now stores
+   `source_public_key_id` and the repeat comparison includes it: a
+   changed reviewed public ID on a completed operation is refused
+   (`key_clone_plan_mismatch`), never re-applied.
+2. **The reviewed COPY-SOURCE-EXPIRY `validity.source_valid_until` was not
+   bound.** First execution now compares the reviewed source-expiry value
+   to the fresh locked source's actual expiry (normalized ISO datetime
+   comparison) and refuses a mismatch BEFORE any write
+   (`key_clone_reviewed_policy_mismatch`) — another expiry is never
+   substituted while claiming the exact reviewed plan executed. The
+   receipt stores the reviewed value (`source_valid_until`; `null` for the
+   other validity modes) and repeats compare it, so a differently dated
+   repeat of a completed operation is refused. An ACTUAL source validity
+   edit after completion does NOT change a completed operation: the
+   ORIGINAL exact repeat still returns `already-applied` for the same
+   target (dedup precedes staleness; the source fingerprint change only
+   makes a FRESH plan stale).
+3. **A successful dry-run could produce a non-consumable plan.** The
+   builder returned a 100,000,000,000-second duration plan that
+   `parse_clone_plan_document` immediately refused under the documented
+   bound. `build_plan` now re-validates the built document with the SAME
+   strict version-1 schema and bounds (reusing the parser; no second
+   duration rule) BEFORE returning: the documented maximum stays
+   consumable, maximum+1 and impossible datetime/duration windows fail
+   predictably with a fixed safe error — no echo, no DB mutation, no
+   audit, no plan file.
+4. **Test hygiene (review threads PRRT_kwDOSLm-qM6xIbdN /
+   PRRT_kwDOSLm-qM6xIbdj).** The CLI bounded-read test's empty broad
+   `except/pass` was replaced with an assertion of the EXPECTED fixed
+   error (`Clone plan file exceeds the bounded size`, no path echo),
+   retaining the cap+1 and before-DB oracles. The post-lock-clock test no
+   longer assigns `svc_mod._now` directly (leaked lambda); it uses
+   dotted-target `monkeypatch.setattr` so teardown restores the clock,
+   with the duplicate module import removed and the semantic
+   expiry-during-lock test kept.
+
+### Final receipt representation (no new authority)
+
+The smallest bounded typed representation was chosen: two extra safe
+identity fields on the existing JSONB receipt
+(`source_public_key_id`, `source_valid_until`) — no signatures, jobs,
+general serializer, or new authority. The source/policy fingerprints
+remain dedup data, never authentication/replay authority. Old unmerged
+receipt shapes (198-a/b) lacking any required identity member fail
+CONTROLLED (`key_clone_plan_mismatch`) rather than becoming "no receipt /
+new creation". The ambiguity lookup is bounded by a SQL `LIMIT 2`: two
+matches prove ambiguity; a corrupted third receipt adds no decision
+information and no unbounded scan cost.
+
+### Exact verification
+
+Environment: `PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python -m pytest`
+(no ambient `DATABASE_URL`; PG tests against an owned disposable
+`postgres:16` instance, label prefix `slaif198a`; inspect before
+readiness/migration; exact-ID cleanup).
+
+- `pytest tests/unit/test_key_clone_service.py tests/unit/test_cli_keys_clone.py
+  -p no:cacheprovider -q --junitxml=/tmp/slaif198/unit-clone-c.xml`
+  → **62 passed** (34 service + 28 CLI), 0 failed / 0 errors / 0 skipped.
+  New focused regressions: copy-expiry reviewed mismatch refused before
+  create (no create, no audit); changed public ID on completed operation
+  refused; changed reviewed expiry on completed operation refused;
+  original repeat after an ACTUAL source expiry edit still
+  `already-applied` for the same target; inert preview change remains
+  inert; receipt carries the complete business identity (no `sk-`
+  material); dry-run strict round trip at the documented maximum
+  (consumable); duration maximum+1 fails safely (fixed message, value not
+  echoed).
+- `pytest tests/integration/test_cli_key_clone_postgres.py
+  -p no:cacheprovider -q --junitxml=/tmp/slaif198/integration-clone-c.xml`
+  → **8 passed** (the 7 retained owned-PG cases + 1 NEW bounded
+  regression), 0 failed / 0 errors / 0 skipped. The new
+  `test_clone_reviewed_identity_and_expiry_binding` proves against owned
+  PostgreSQL: an exact valid copy-source-expiry plan creates; a
+  contradictory reviewed expiry on a FRESH plan's first execution refuses
+  with NO new rows and NO audits; changed reviewed public ID / changed
+  reviewed expiry repeats refuse with NO duplicate key; and after an
+  ACTUAL source validity edit (`UPDATE gateway_keys SET valid_until`) the
+  original exact repeat still returns the same target. The existing
+  two-new-plans case now also asserts both targets' canonical policy
+  exports equal the source's and that the source row is unchanged; the
+  concurrency case now asserts the CHILD CLI `exit_code == 0` in both
+  processes (OS-helper exit 0 alone does not report the CLI exit).
+- Root repro re-run (fresh receipts, old evidence preserved):
+  `198-c-independent-recheck.json` and
+  `198-c-independent-recheck-2.json` under
+  `review-artifacts/cli-feature-round/`. The probe was adapted in two
+  harness-only places (its unguarded `build_plan` call now legitimately
+  raises under the consumable-dry-run contract; the
+  `different_source_expiry_repeat` case sequence was reordered so it
+  repeats AFTER completion, preserving its intent). Result: changed
+  public ID repeat refused; tampered reviewed expiry first execution
+  refused with 0 creates; differently dated repeat refused with 1 create;
+  over-maximum duration plan refused by the builder
+  (`KeyClonePlanError`). All previously fixed b cases remain fixed.
+- `tests/unit/test_documentation_contract_drift.py` → 15 passed (the
+  unchanged consumer guard included);
+  `tests/unit/test_documentation_inventory.py` +
+  `tests/unit/test_oap_governance.py` → 22 passed;
+  `scripts/check_documentation.py` → `OK files=125`; Ruff clean over all
+  five changed product/test files; `git diff --check` clean.
+- Owned-PG cleanup: no leftover `slaif198a`-prefixed containers remain.
+
+### Privacy, atomicity, isolation, concurrency
+
+The two new receipt members are bounded safe public identity data (a
+public key ID string and an ISO datetime / null) — no key material, token
+hashes, provider references, raw metadata, usage, or secrets; all new
+errors are fixed safe messages. Atomicity, the enforced READ COMMITTED
+boundary, source-row lock serialization, and no-plaintext-recovery are
+unchanged. No schema, column, constraint, or migration was added. No real
+provider/model contact, real SMTP, Redis, or upstream smoke occurred.
+
+### CI state
+
+GitHub final-head CI for the 198-c head is PENDING (root-gated; no CI
+result is claimed here). The 198-b report-head checks all ten SUCCESS
+were observed at 2026-10-28T13:18Z (the old 15-failure cache leak stayed
+repaired), but the independent source-contract gaps repaired above and
+the two open review threads still block merge; green CI is necessary, not
+sufficient. The coding agent never merges.
+
+### Documentation impact
+
+Required by AGENTS.md §5.1. 198-c changed the documented contracts:
+
+- `docs/cli-reference.md`: the `keys clone` section now documents the
+  consumed consumable-dry-run guarantee, the reviewed copy-source-expiry
+  expiry revalidation (never substituted), and the FULL business identity
+  (source public key ID + reviewed copy-source-expiry expiry) with
+  two-bounded ambiguity lookup and retry-after-actual-source-edit
+  behavior.
+- `docs/database-schema.md`: the `clone_receipt` JSON contract gained
+  `source_public_key_id` and `source_valid_until`; the lookup is
+  documented as bounded to two matches; repeat comparison as the FULL
+  business identity; old-shape receipts as controlled refusal; actual
+  source edits as non-identity-changing for completed operations.
+- `docs/cli-field-administration.md`: the 198 row reflects the 198-c
+  binding and consumable-dry-run behavior (199-205 remain proposed; the
+  objective-205 installed-executable-only transcript remains mandatory).
+- This file: 198-c addendum appended; `docs/verification/README.md`
+  unchanged (the record is already indexed).
+
+### Limitations
+
+- Synthetic data only: fictional owners/cohorts, fake provider
+  configuration, canned routes; no real provider/model contact, no real
+  SMTP delivery, no Redis, no upstream smoke.
+- The objective-205 installed-executable transcript is still outstanding;
+  this record does not declare the full brief or the eleven DoD complete.
+- No release, RC, production, security, or compliance claim follows from
+  this record.

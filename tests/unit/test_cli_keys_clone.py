@@ -13,6 +13,8 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from slaif_gateway.cli import keys as keys_cli
@@ -696,10 +698,12 @@ def test_clone_bounded_plan_read_limits_bytes(tmp_path: Path) -> None:
         def open(self, *a, **k):
             return _CountingFile()
 
-    try:
+    with pytest.raises(typer.BadParameter) as excinfo:
         keys_cli._read_bounded_plan_file(_CountingPath())  # type: ignore[arg-type]
-    except Exception:
-        pass
+    # The oversized refusal is the EXPECTED fixed safe error (no path or
+    # body echo), not a swallowed exception.
+    assert "exceeds the bounded size" in str(excinfo.value)
+    assert str(tmp_path) not in str(excinfo.value)
     # The read is bounded to cap+1 (never the whole file).
     assert requested == [cap + 1]
 

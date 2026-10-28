@@ -896,6 +896,8 @@ table, constraint, or migration was added. Canonical shape:
   "email_delivery_id": "<uuid or null>",
   "source_fingerprint": "<64 hex sha256>",
   "policy_fingerprint": "<64 hex sha256>",
+  "source_public_key_id": "<public key id>",
+  "source_valid_until": "<ISO datetime or null>",
   "target_cohort_id": "<uuid or null>",
   "requires_fenced_confirmation": false,
   "validity_mode": "copy-source-expiry",
@@ -907,27 +909,38 @@ table, constraint, or migration was added. Canonical shape:
 ```
 
 The receipt is bounded safe data: UUIDs, the stable business-plan identity
-(target owner/cohort, validity parameters, fenced-confirmation
-requirement), and the source + canonical policy fingerprints only. It never
-contains key material, token hashes, provider references, raw metadata,
-usage, or secrets. The lookup is a narrowly typed JSONB containment query
-namespaced by `(source_gateway_key_id, operation_uuid)` ONLY and INDEPENDENT
-of the (mutable) target selection. Same-operation repeats compare the
-receipt against the plan's FULL business identity (source fingerprint,
-policy fingerprint, target owner, target cohort, validity parameters, and
-fenced-confirmation requirement) and return `already-applied` or refuse a
-changed plan; a receipt a completed operation no longer backs (including
-legacy objective-198-a receipts lacking the newer fields) is refused rather
-than adopted, and more than one receipt for the same `(source, operation)`
-is refused as ambiguous. The derived target validity window is not
-recomputed on repeat, because `duration-from-now` and `copy-source-expiry`
-are recomputed from EXECUTION time. The deduplication boundary is the
-PostgreSQL default READ COMMITTED isolation and it is ENFORCED: before any
-write the operation reads the current transaction's isolation level and
-refuses any level other than `read committed` (e.g. a pre-established
-REPEATABLE READ snapshot) with a fixed safe error; the existing source-row
-`FOR UPDATE` lock serializes same-source executions, and a statement after
-the lock sees the prior commit's receipt.
+(source public key ID, target owner/cohort, all validity parameters
+including the reviewed copy-source-expiry source expiry, and the
+fenced-confirmation requirement), and the source + canonical policy
+fingerprints only. `source_valid_until` is the REVIEWED
+copy-source-expiry date (verified equal to the fresh source's actual
+expiry at first execution); it is `null` for the other validity modes. It
+never contains key material, token hashes, provider references, raw
+metadata, usage, or secrets. The lookup is a narrowly typed JSONB
+containment query namespaced by `(source_gateway_key_id, operation_uuid)`
+ONLY and INDEPENDENT of the (mutable) target selection, bounded by a SQL
+`LIMIT 2`: two matches are sufficient to prove ambiguity, so a corrupted
+third receipt adds no decision information and no unbounded scan cost.
+Same-operation repeats compare the receipt against the plan's FULL
+business identity (source public key ID, source fingerprint, policy
+fingerprint, target owner, target cohort, validity parameters including
+the reviewed copy-source-expiry source expiry, and fenced-confirmation
+requirement) and return `already-applied` or refuse a changed plan; a
+receipt a completed operation no longer backs (including legacy
+objective-198-a/b receipts lacking any of the identity members) is refused
+rather than adopted, and more than one received match is refused as
+ambiguous. Only the explicitly inert preview block may vary without
+affecting identity; an ACTUAL source edit after completion does not
+change a completed operation (the original exact repeat still dedups).
+The derived target validity window is not recomputed on repeat, because
+`duration-from-now` and `copy-source-expiry` are recomputed from EXECUTION
+time. The deduplication boundary is the PostgreSQL default READ COMMITTED
+isolation and it is ENFORCED: before any write the operation reads the
+current transaction's isolation level and refuses any level other than
+`read committed` (e.g. a pre-established REPEATABLE READ snapshot) with a
+fixed safe error; the existing source-row `FOR UPDATE` lock serializes
+same-source executions, and a statement after the lock sees the prior
+commit's receipt.
 
 ## 5.7 `quota_reservations`
 

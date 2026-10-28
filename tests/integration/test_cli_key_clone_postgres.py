@@ -1033,6 +1033,10 @@ def test_clone_concurrent_same_plan_two_processes_one_applied(
     assert pb.returncode == 0, err_b[-2000:]
     result_a = json.loads(out_a.strip().splitlines()[-1])
     result_b = json.loads(out_b.strip().splitlines()[-1])
+    # The OS helper exit 0 alone does not report the CLI exit: assert the
+    # actual CLI exit code from inside each child.
+    assert result_a["exit_code"] == 0, json.loads(result_a["stdout"])
+    assert result_b["exit_code"] == 0, json.loads(result_b["stdout"])
 
     statuses = sorted(
         [
@@ -1320,6 +1324,7 @@ def test_clone_two_new_plans_from_one_source_create_two_keys(
         reason="198 two-plan source",
     )
     source_id = uuid.UUID(source["gateway_key_id"])
+    before = _run(_state_snapshot(url, source_id))
 
     # Two DISTINCT plans (distinct operation UUIDs) from the SAME source, both
     # targeting the SAME existing cohort: each is a legitimate new operation
@@ -1362,3 +1367,158 @@ def test_clone_two_new_plans_from_one_source_create_two_keys(
         assert cols["status"] == "active"
         assert cols["cohort_id"] == target_ctx.cohort_id
     assert cols_a["token_hash"] != cols_b["token_hash"]
+
+    # Both targets' canonical policy exports equal the source's (exact
+    # configured-policy equality), and the source itself is unchanged.
+    src_export = _cli(runner, "keys", "policy", "export", str(source_id))
+    for r in results:
+        tgt_export = _cli(
+            runner, "keys", "policy", "export", r["target_gateway_key_id"]
+        )
+        assert json.loads(tgt_export.stdout) == json.loads(src_export.stdout)
+    after = _run(_state_snapshot(url, source_id))
+    assert after["key_columns"] == before["key_columns"]
+
+
+# --- 198-c: complete reviewed identity + expiry binding (owned PG) -----------
+
+
+def test_clone_reviewed_identity_and_expiry_binding(
+    cli_env: str, route_fixtures: str, tmp_path: Path
+) -> None:
+    url = cli_env
+    runner = CliRunner()
+    source_ctx = _run(_create_owner_context(url, "srcx"))
+    target_ctx = _run(_create_owner_context(url, "dstx"))
+
+    source = _create_key_cli(
+        runner,
+        "--allowed-model", "gpt-test-mini",
+        "--allowed-endpoint", "/v1/chat/completions",
+        owner_id=source_ctx.owner_id,
+        cohort_id=source_ctx.cohort_id,
+        secret_path=tmp_path / "src-x.secret",
+        reason="198-c identity source",
+    )
+    source_id = uuid.UUID(source["gateway_key_id"])
+
+    # An exact valid plan (copy-source-expiry) creates.
+    p1 = tmp_path / "id-plan-1.json"
+    dry = _cli(
+        runner, "keys", "clone", "--dry-run", str(p1),
+        "--source-key-id", str(source_id),
+        "--target-owner-id", str(target_ctx.owner_id),
+        "--validity-mode", "copy-source-expiry",
+    )
+    assert dry.exit_code == 0, dry.output
+    plan1 = json.loads(p1.read_text(encoding="utf-8"))
+
+    created = _cli(
+        runner, "keys", "clone", "--execute", str(p1),
+        "--reason", "198-c exact valid plan",
+        "--show-plaintext", "--json",
+    )
+    assert created.exit_code == 0, created.output
+    payload = json.loads(created.stdout)
+    assert payload["status"] == "created"
+    target_id = payload["target_gateway_key_id"]
+
+    def _counts() -> tuple[int, int, int]:
+        return (
+            _run(_count_where(url, GatewayKey, GatewayKey.id.is_not(None))),
+            _run(_count_where(url, AuditLog, AuditLog.action == "gateway_key_cloned")),
+            _run(_count_where(url, OneTimeSecret, OneTimeSecret.id.is_not(None))),
+        )
+
+    base = _counts()
+
+    # Contradictory reviewed expiry on a FRESH plan (first execution) refuses
+    # with no new rows and no audits.
+    p2 = tmp_path / "id-plan-2.json"
+    dry2 = _cli(
+        runner, "keys", "clone", "--dry-run", str(p2),
+        "--source-key-id", str(source_id),
+        "--target-owner-id", str(target_ctx.owner_id),
+        "--validity-mode", "copy-source-expiry",
+    )
+    assert dry2.exit_code == 0, dry2.output
+    plan2 = json.loads(p2.read_text(encoding="utf-8"))
+    plan2["validity"]["source_valid_until"] = (
+        datetime.fromisoformat(plan2["validity"]["source_valid_until"])
+        + timedelta(days=90)
+    ).isoformat()
+    p3 = tmp_path / "id-plan-2-tampered.json"
+    p3.write_text(json.dumps(plan2, indent=2) + "\n", encoding="utf-8")
+    refused_expiry = _cli(
+        runner, "keys", "clone", "--execute", str(p3),
+        "--reason", "198-c contradictory expiry",
+        "--show-plaintext", "--json",
+    )
+    assert refused_expiry.exit_code == 1
+    assert "key_clone_reviewed_policy_mismatch" in refused_expiry.stdout
+    assert _counts() == base
+
+    # Changed reviewed source public ID on the completed operation refuses
+    # (no duplicate key).
+    t_pub = dict(plan1)
+    t_pub["source_public_key_id"] = "contradictory-public-id"
+    t_pub_path = tmp_path / "id-plan-1-pubid.json"
+    t_pub_path.write_text(json.dumps(t_pub, indent=2) + "\n", encoding="utf-8")
+    refused_pub = _cli(
+        runner, "keys", "clone", "--execute", str(t_pub_path),
+        "--reason", "198-c changed publicID repeat",
+        "--show-plaintext", "--json",
+    )
+    assert refused_pub.exit_code == 1
+    assert "key_clone_plan_mismatch" in refused_pub.stdout
+    assert _counts() == base
+
+    # Changed reviewed expiry on the completed operation refuses (no
+    # duplicate key).
+    t_exp = dict(plan1)
+    t_exp["validity"] = dict(t_exp["validity"])
+    t_exp["validity"]["source_valid_until"] = (
+        datetime.fromisoformat(t_exp["validity"]["source_valid_until"])
+        + timedelta(days=90)
+    ).isoformat()
+    t_exp_path = tmp_path / "id-plan-1-expiry.json"
+    t_exp_path.write_text(json.dumps(t_exp, indent=2) + "\n", encoding="utf-8")
+    refused_exp = _cli(
+        runner, "keys", "clone", "--execute", str(t_exp_path),
+        "--reason", "198-c changed expiry repeat",
+        "--show-plaintext", "--json",
+    )
+    assert refused_exp.exit_code == 1
+    assert "key_clone_plan_mismatch" in refused_exp.stdout
+    assert _counts() == base
+
+    # An ACTUAL source validity edit does not change a completed operation:
+    # the original exact repeat still returns the same target.
+    async def _extend_source_expiry() -> None:
+        factory = _session_factory(url)
+        async with factory() as session:
+            async with session.begin():
+                current = (
+                    await session.execute(
+                        select(GatewayKey.valid_until).where(GatewayKey.id == source_id)
+                    )
+                ).scalar_one()
+                await session.execute(
+                    text(
+                        "UPDATE gateway_keys SET valid_until = :new "
+                        "WHERE id = :id"
+                    ),
+                    {"new": current + timedelta(days=45), "id": source_id},
+                )
+
+    _run(_extend_source_expiry())
+    repeated = _cli(
+        runner, "keys", "clone", "--execute", str(p1),
+        "--reason", "198-c repeat after real source edit",
+        "--show-plaintext", "--json",
+    )
+    assert repeated.exit_code == 0, repeated.output
+    repeated_payload = json.loads(repeated.stdout)
+    assert repeated_payload["status"] == "already-applied"
+    assert repeated_payload["target_gateway_key_id"] == target_id
+    assert _counts() == base

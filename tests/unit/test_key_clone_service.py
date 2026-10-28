@@ -225,6 +225,8 @@ class FakeKeysRepository:
             ),
             "source_fingerprint": kwargs["source_fingerprint"],
             "policy_fingerprint": kwargs["policy_fingerprint"],
+            "source_public_key_id": kwargs["source_public_key_id"],
+            "source_valid_until": kwargs["source_valid_until"],
             "target_cohort_id": (
                 str(kwargs["target_cohort_id"]) if kwargs["target_cohort_id"] else None
             ),
@@ -808,8 +810,6 @@ def test_execute_refuses_repeatableread_isolation() -> None:
 
 
 def test_execute_refuses_when_source_expires_while_acquiring_lock(monkeypatch) -> None:
-    import slaif_gateway.services.key_clone_service as svc_mod
-
     service, source_row, keys_repo, key_service = _make_service()
     document = _build_plan(service)
     # The clock advances past the source's valid_until WHILE the lock is being
@@ -817,7 +817,11 @@ def test_execute_refuses_when_source_expires_while_acquiring_lock(monkeypatch) -
     expired_now = source_row.valid_until + timedelta(seconds=1)
 
     async def lock_and_advance_clock(key_id):
-        svc_mod._now = lambda: expired_now
+        # Dotted-target monkeypatch so teardown restores the real clock (the
+        # direct module assignment leaked the lambda beyond this test).
+        monkeypatch.setattr(
+            "slaif_gateway.services.key_clone_service._now", lambda: expired_now
+        )
         return source_row
 
     monkeypatch.setattr(keys_repo, "get_gateway_key_for_update", lock_and_advance_clock)
@@ -876,3 +880,143 @@ def test_execute_refuses_legacy_a_shape_receipt() -> None:
     with pytest.raises(KeyClonePlanMismatchError):
         _execute(service, document)
     assert len(key_service.create_calls) == 1
+
+
+# --- 198-c: complete reviewed business identity ------------------------------
+
+
+def test_execute_copy_source_expiry_reviewed_mismatch_refuses_before_create() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(
+        service,
+        validity_mode=VALIDITY_COPY_SOURCE_EXPIRY,
+        validity_duration_seconds=None,
+    )
+    # Tamper ONLY the reviewed copy-source-expiry date; the fresh locked
+    # source still has the original expiry. First execution must refuse
+    # before any write - never substitute another expiry.
+    tampered = copy.deepcopy(document)
+    tampered["validity"]["source_valid_until"] = (
+        (source_row.valid_until + timedelta(days=300)).isoformat()
+    )
+    with pytest.raises(KeyCloneReviewedPolicyMismatchError):
+        _execute(service, tampered)
+    assert key_service.create_calls == []
+    assert service._audit.calls == []
+
+
+def test_execute_changed_source_public_id_on_completed_operation_refuses() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(service)
+    first = _execute(service, document)
+    assert first.status == "created"
+    tampered = copy.deepcopy(document)
+    tampered["source_public_key_id"] = "contradictory-public-id"
+    with pytest.raises(KeyClonePlanMismatchError):
+        _execute(service, tampered)
+    assert len(key_service.create_calls) == 1
+
+
+def test_execute_changed_reviewed_expiry_on_completed_operation_refuses() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(
+        service,
+        validity_mode=VALIDITY_COPY_SOURCE_EXPIRY,
+        validity_duration_seconds=None,
+    )
+    first = _execute(service, document)
+    assert first.status == "created"
+    tampered = copy.deepcopy(document)
+    tampered["validity"]["source_valid_until"] = (
+        (source_row.valid_until + timedelta(days=300)).isoformat()
+    )
+    with pytest.raises(KeyClonePlanMismatchError):
+        _execute(service, tampered)
+    assert len(key_service.create_calls) == 1
+
+
+def test_execute_original_repeat_after_real_source_expiry_edit_still_already_applied() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(
+        service,
+        validity_mode=VALIDITY_COPY_SOURCE_EXPIRY,
+        validity_duration_seconds=None,
+    )
+    first = _execute(service, document)
+    assert first.status == "created"
+    # An ACTUAL source validity edit changes the source fingerprint (a fresh
+    # execution would be stale) but must NOT change the identity of a
+    # completed operation: the ORIGINAL repeat still dedups.
+    source_row.valid_until = source_row.valid_until + timedelta(days=45)
+    repeated = _execute(service, document)
+    assert repeated.status == "already-applied"
+    assert repeated.target_gateway_key_id == first.target_gateway_key_id
+    assert len(key_service.create_calls) == 1
+
+
+def test_inert_preview_change_does_not_affect_execution() -> None:
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(service)
+    first = _execute(service, document)
+    assert first.status == "created"
+    # Only the explicitly inert preview block may vary without affecting
+    # execution identity.
+    varied = copy.deepcopy(document)
+    varied["preview"] = {
+        "valid_from": "2026-10-28T13:00:00+00:00",
+        "valid_until": "2026-10-29T13:00:00+00:00",
+        "note": "operator-annotated preview text",
+    }
+    repeated = _execute(service, varied)
+    assert repeated.status == "already-applied"
+    assert repeated.target_gateway_key_id == first.target_gateway_key_id
+    assert len(key_service.create_calls) == 1
+
+
+def test_receipt_carries_complete_business_identity() -> None:
+    from slaif_gateway.schemas.key_clone import CLONE_RECEIPT_METADATA_KEY
+
+    service, source_row, keys_repo, key_service = _make_service()
+    document = _build_plan(
+        service,
+        validity_mode=VALIDITY_COPY_SOURCE_EXPIRY,
+        validity_duration_seconds=None,
+    )
+    first = _execute(service, document)
+    assert first.status == "created"
+    target = keys_repo.targets[uuid.UUID(first.target_gateway_key_id)]
+    receipt = (target.metadata_json or {})[CLONE_RECEIPT_METADATA_KEY]
+    assert receipt["source_public_key_id"] == "pub-source"
+    assert receipt["source_valid_until"] == source_row.valid_until.isoformat()
+    # No key material or provider references in the bounded safe receipt.
+    for value in receipt.values():
+        assert not (isinstance(value, str) and value.startswith("sk-"))
+
+
+# --- 198-c: consumable dry-run (strict round trip) ----------------------------
+
+
+def test_build_plan_duration_at_documented_maximum_remains_consumable() -> None:
+    from slaif_gateway.schemas.key_clone import MAX_VALIDITY_DURATION_SECONDS
+
+    service, *_ = _make_service()
+    document = _build_plan(
+        service, validity_duration_seconds=MAX_VALIDITY_DURATION_SECONDS
+    )
+    # A successful dry-run document must re-parse with the SAME strict schema
+    # (including the preview block) - the operator can execute what was shown.
+    plan = parse_clone_plan_document(document)
+    assert plan.validity_duration_seconds == MAX_VALIDITY_DURATION_SECONDS
+
+
+def test_build_plan_duration_over_documented_maximum_fails_safely() -> None:
+    from slaif_gateway.schemas.key_clone import MAX_VALIDITY_DURATION_SECONDS
+
+    service, *_ = _make_service()
+    over = MAX_VALIDITY_DURATION_SECONDS + 1
+    with pytest.raises(KeyClonePlanError) as excinfo:
+        _build_plan(service, validity_duration_seconds=over)
+    # Fixed safe error: bounded vocabulary only; the generated value, any DB
+    # state, audit, or plan file is never involved.
+    assert "bounded maximum" in str(excinfo.value)
+    assert str(over) not in str(excinfo.value)
