@@ -311,3 +311,114 @@ recorded; nothing here upgrades it.
   field brief complete (197-205 remain the standing mandate), and the
   separate 196-c bounded continuation for the out-of-scope stored
   Responses known-field audit finding is root-activated after this handoff.
+
+## 196-c addendum — safe audit projection of malformed stored Responses values
+
+This addendum records the 196-c continuation on the same PR
+(#352 `oap/196-typed-key-policy`): a **pure projection-privacy repair**.
+When an operator updates an unrelated field (e.g. a provider-only patch),
+the configuration audit must not copy unsupported arbitrary stored
+Responses values into its old/new values. Request acceptance and
+stored-policy behavior are unchanged - the audit output is the behavior
+fixed; no runtime, schema, or other product behavior changed. This is a
+legacy-malformed-metadata audit issue, not a reproduced live-client
+authentication bypass, and no real client/provider/PG evidence is
+claimed here. All earlier sections (196-a,
+196-b addendum, and the root export-probe correction) are preserved
+unchanged.
+
+### Exact bug boundary
+
+With a legacy row whose stored `metadata_json["responses_policy"]` held
+values the current authoring contract would refuse, a real
+`update_gateway_key_configuration` provider-only patch
+(`allowed_providers=[]`) succeeded and copied the canaries into one
+audit's old/new values: case 1 `allowed_capabilities` containing an
+arbitrary unknown string; case 2 a `client_module` with the correct
+`id`/`version`/`fixture_sha256` keys but arbitrary non-identity strings.
+The audit projection accepted ALL string capabilities and ANY non-empty
+string pin triple, so the field-name allowlist alone was insufficient.
+Root receipt: `196-audit-malformed-known-values-probe.json` (real update
+service with repository fakes; no real secret, DB, or incoming-request
+test). The incoming strict authoring already rejects both shapes; this
+was a projection leak only.
+
+### Fix (minimal product diff)
+
+`KeyService._responses_policy_audit_projection` is the ONLY changed
+product function (its private constants/imports narrowed accordingly;
+the shared authoring validator/registry were imported for reuse, not
+modified):
+
+- `allowed_capabilities` values are now checked against the finite
+  reviewed `SUPPORTED_RESPONSES_CAPABILITIES` vocabulary in addition to
+  the existing list/str type check; anything else increments the fixed
+  `unsupported_fields` count and is never copied.
+- `client_module` is projected only when the pin-only block (version 1,
+  the authoring contract's only version) passes the EXISTING strict
+  authoring validator (`validate_key_responses_policy`): exact keys,
+  non-empty strings, module registered in this installation, matching
+  current version/fixture. Unknown, stale, or malformed pins increment
+  the same fixed count; nothing is echoed and the projection never
+  raises on its own inputs, so a failure in the audit projection itself
+  cannot abort an unrelated provider/rate update (one pre-existing
+  pre-projection failure mode remains; see "Layers and limitations").
+- Legitimate stored policies keep useful semantic audit values: known
+  supported capabilities project sorted, and a current registered pin —
+  including a retained pin with zero capability grants (a valid
+  deauthorization state) — projects its canonical identity with no
+  auto-added grants.
+- Mutation semantics are unchanged: the provider-only update still
+  changes only providers/`updated_at` plus one audit in the
+  caller-owned transaction, and the raw stored Responses metadata is
+  never rewritten by audit normalization (tests assert the raw stored
+  policy values are unchanged afterwards; no byte-serialization proof
+  was run).
+
+### Focused verification (actual results, 0 skipped)
+
+Pure unit layer (existing repository fakes; no DB, no network, no real
+provider/mail/client):
+
+- `tests/unit/test_key_policy_configuration.py` (whole focused file) =
+  **56 passed, 0 skipped, actual exit 0** (52 prior cases unchanged + 4
+  new: the two exact reproduced known-field value canaries with old/new
+  audit + `caplog` absence and fixed safe counts; malformed types and
+  stale registered pin fallback with unchanged stored metadata; positive
+  supported capability + current registered pin, including pin-only
+  zero-grants). JUnit `/tmp/slaif196c/key-policy-config.xml`.
+- Related `tests/unit/test_key_service_policy_update.py` = **19 passed,
+  0 skipped, actual exit 0**. JUnit
+  `/tmp/slaif196c/policy-update.xml`.
+- Static gates: `ruff check` on the two changed Python files — all
+  checks passed; `git diff --check` — clean. `scripts/check_documentation.py`
+  and the 9 OAP governance + 13 documentation inventory cases are
+  recorded with actual results in the 196-c OAP report.
+
+### Layers and limitations
+
+- Root-independent recheck (cited as root-provided independent
+  evidence, receipt `196-c-root-audit-independent-recheck1.json` at this
+  working-tree source): 7 successful provider-only updates — unknown /
+  mixed / wrong-typed capabilities, malformed and stale pins — all with
+  exactly one audit, raw stored policy unchanged, canaries absent from
+  BOTH audit values, and meaningful projections for the valid current
+  pin-only and supported-capability cases.
+- Malformed-stored-case scope: the audit projection covers values that
+  reach it. One pre-existing shape is OUTSIDE this audit-only repair and
+  remains unfixed: a stored `allowed_capabilities` list containing a
+  non-string (e.g. a dict) without an explicit `client_module` raises
+  `TypeError` in the unchanged `stored_module_binding` legacy resolver
+  BEFORE any write or audit (no state or audit mutation; the direct
+  projection of that block is canary-absent, and the new strict
+  authoring rejects it). That is a nonblocking unsupported corrupt-
+  stored-DB shape, not a remaining audit leak; arbitrary corrupt stored
+  JSON is not claimed universally updatable.
+- Synthetic legacy-metadata proof only (fakes): it is distinct from, and
+  does NOT substitute for, real client/provider evidence. No
+  PG/Redis/browser/CLI re-run was performed in 196-c; the qualified
+  196-a and 196-b layers are cited unchanged (196-b addendum above).
+- No runtime auth/admission/accounting/Redis/forwarding change; no
+  schema, migration, or new key/migration instruction; no release claim.
+  Objective 196 does not declare the full CLI field brief complete
+  (197-205 remain the standing mandate).

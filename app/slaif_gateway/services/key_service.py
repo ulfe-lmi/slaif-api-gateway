@@ -93,6 +93,7 @@ from slaif_gateway.services.key_policy_validation import (
     validate_gateway_key_policy,
 )
 from slaif_gateway.services.responses_policy_validation import (
+    SUPPORTED_RESPONSES_CAPABILITIES,
     validate_key_responses_policy,
 )
 from slaif_gateway.services.responses_streaming_live_burn import (
@@ -2104,8 +2105,10 @@ class KeyService:
         }
 
     # Allowlisted responses-policy fields projected into configuration
-    # audits. Unknown stored keys are counted with a fixed marker and never
-    # copied; wrong-typed known values are omitted the same way.
+    # audits. Unknown stored keys, wrong-typed known values, capability
+    # values outside the finite supported vocabulary, and module pins that
+    # are not the current registered identity are counted with a fixed
+    # marker and never copied (no name/value/pin is ever echoed).
     _RESPONSES_AUDIT_FIELDS: frozenset[str] = frozenset(
         {
             "version",
@@ -2121,7 +2124,6 @@ class KeyService:
         }
     )
     _RESPONSES_AUDIT_TOOL_TYPES: frozenset[str] = frozenset({"function", "custom"})
-    _RESPONSES_AUDIT_PIN_KEYS: tuple[str, ...] = ("id", "version", "fixture_sha256")
     _RESPONSES_AUDIT_NOTES_MAX = 1000
 
     @classmethod
@@ -2130,11 +2132,18 @@ class KeyService:
     ) -> dict[str, object] | str | None:
         """Secret-safe allowlisted projection of the stored Responses policy.
 
-        Only reviewed field names with safe types are projected. Unknown
-        names/values and wrong-typed known fields never reach the audit:
-        they increment a fixed ``unsupported_fields`` count instead. A
+        Only reviewed field names with safe values are projected. Unknown
+        names, wrong-typed known values, capability values outside the
+        finite supported vocabulary, and module pins that are not the
+        current registered identity never reach the audit: they increment
+        a fixed ``unsupported_fields`` count instead (names, values, and
+        pins are never echoed). A stale or unrecognized pin projects as
+        unsupported while the stored DB metadata is left untouched; a
+        current registered pin - including a retained pin with zero
+        capability grants - still projects its semantic identity. A
         non-object stored block projects to the fixed ``"unsupported"``
-        marker.
+        marker. This projection never raises: an unrenderable stored
+        policy must not abort an unrelated configuration update.
         """
         if raw_policy is None:
             return None
@@ -2152,7 +2161,10 @@ class KeyService:
                 unsupported += 1
         if "allowed_capabilities" in raw_policy:
             caps = raw_policy["allowed_capabilities"]
-            if isinstance(caps, list) and all(isinstance(c, str) for c in caps):
+            if isinstance(caps, list) and all(
+                isinstance(c, str) and c in SUPPORTED_RESPONSES_CAPABILITIES
+                for c in caps
+            ):
                 projected["allowed_capabilities"] = sorted(caps)
             else:
                 unsupported += 1
@@ -2167,17 +2179,22 @@ class KeyService:
                 unsupported += 1
         if "client_module" in raw_policy:
             pin = raw_policy["client_module"]
-            if (
-                isinstance(pin, dict)
-                and set(pin) == set(cls._RESPONSES_AUDIT_PIN_KEYS)
-                and all(
-                    isinstance(pin[key], str) and pin[key].strip()
-                    for key in cls._RESPONSES_AUDIT_PIN_KEYS
-                )
-            ):
-                projected["client_module"] = {
-                    key: pin[key] for key in cls._RESPONSES_AUDIT_PIN_KEYS
-                }
+            # A stored pin is projected only when it is a CURRENT
+            # registered identity: the pin-only block (version 1 is the
+            # authoring contract's only version) passes the existing strict
+            # authoring validator (exact keys, non-empty strings,
+            # registered module, matching version/fixture). Unknown,
+            # stale, or malformed pins are counted, never copied, and
+            # never abort the unrelated update.
+            if isinstance(pin, dict):
+                try:
+                    canonical = validate_key_responses_policy(
+                        {"version": 1, "client_module": dict(pin)}
+                    )
+                except InvalidGatewayKeyPolicyError:
+                    unsupported += 1
+                else:
+                    projected["client_module"] = canonical["client_module"]
             else:
                 unsupported += 1
         if "hosted_tools_allowed" in raw_policy:

@@ -1082,6 +1082,120 @@ async def test_configuration_audit_never_copies_unknown_stored_fields() -> None:
         assert values["responses_policy"] == {"version": 1, "unsupported_fields": 1}
 
 
+async def _audit_update_stored_policy(stored_block: object) -> tuple:
+    """Real provider-only configuration update over a row carrying the
+    given raw stored Responses policy (existing repository fakes)."""
+    row = FakeGatewayKeyRow(metadata_json={"responses_policy": stored_block})
+    service, repo, _, audit, _ = make_key_service(row)
+    config = KeyConfiguration()
+    config.allowed_providers = []
+    await service.update_gateway_key_configuration(_update_payload(row, config))
+    return row, repo, audit
+
+
+@pytest.mark.asyncio
+async def test_configuration_audit_rejects_unknown_stored_capability_values(caplog) -> None:
+    canary = "SYNTHETIC_OPERATOR_PRIVATE_CAPABILITY_196C"
+    assert canary not in SUPPORTED_RESPONSES_CAPABILITIES
+    stored = {"version": 1, "allowed_capabilities": [canary]}
+    row, _, audit = await _audit_update_stored_policy(stored)
+    # The unrelated provider update succeeds with exactly one audit, and
+    # the raw stored DB policy is untouched.
+    assert len(audit.calls) == 1
+    assert audit.calls[0]["action"] == "update_key_configuration"
+    assert row.metadata_json["responses_policy"] == stored
+    # The canary never reaches BOTH old/new audit values or captured logs;
+    # the field is a fixed safe count, not a copy.
+    blob = json.dumps(audit.calls, default=str)
+    assert canary not in blob
+    assert canary not in caplog.text
+    for values in (audit.calls[0]["old_values"], audit.calls[0]["new_values"]):
+        assert values["responses_policy"] == {"version": 1, "unsupported_fields": 1}
+
+
+@pytest.mark.asyncio
+async def test_configuration_audit_rejects_malformed_stored_module_pin_values(caplog) -> None:
+    canary_id = "synthetic-unregistered-module-196c"
+    stored = {
+        "version": 1,
+        "client_module": {
+            "id": canary_id,
+            "version": "9",
+            "fixture_sha256": "f" * 64,
+        },
+    }
+    row, _, audit = await _audit_update_stored_policy(stored)
+    assert len(audit.calls) == 1
+    assert audit.calls[0]["action"] == "update_key_configuration"
+    assert row.metadata_json["responses_policy"] == stored
+    blob = json.dumps(audit.calls, default=str)
+    assert canary_id not in blob
+    assert canary_id not in caplog.text
+    for values in (audit.calls[0]["old_values"], audit.calls[0]["new_values"]):
+        assert values["responses_policy"] == {"version": 1, "unsupported_fields": 1}
+
+
+@pytest.mark.asyncio
+async def test_configuration_audit_marks_malformed_stored_types_unsupported() -> None:
+    # Wrong types on known fields count, never copy, never abort the
+    # unrelated update.
+    row, _, audit = await _audit_update_stored_policy(
+        {
+            "version": 1,
+            "allowed_capabilities": "function_tools",  # not a list
+            "client_module": [dict(PIN_0162)],  # not an object
+        }
+    )
+    assert len(audit.calls) == 1
+    for values in (audit.calls[0]["old_values"], audit.calls[0]["new_values"]):
+        assert values["responses_policy"] == {"version": 1, "unsupported_fields": 2}
+    assert row.metadata_json["responses_policy"]["allowed_capabilities"] == "function_tools"
+
+    # Non-string pin members are unsupported (validator rejects before any
+    # registry lookup).
+    row, _, audit = await _audit_update_stored_policy(
+        {"version": 1, "client_module": {"id": 7, "version": "1", "fixture_sha256": "x"}}
+    )
+    assert len(audit.calls) == 1
+    for values in (audit.calls[0]["old_values"], audit.calls[0]["new_values"]):
+        assert values["responses_policy"] == {"version": 1, "unsupported_fields": 1}
+
+    # A stale registered pin (right id, outdated version/fixture) is
+    # unsupported in the audit while the stored metadata is unchanged.
+    row, _, audit = await _audit_update_stored_policy(
+        {"version": 1, "client_module": dict(STALE_0162_V1)}
+    )
+    assert len(audit.calls) == 1
+    for values in (audit.calls[0]["old_values"], audit.calls[0]["new_values"]):
+        assert values["responses_policy"] == {"version": 1, "unsupported_fields": 1}
+    assert row.metadata_json["responses_policy"]["client_module"] == dict(STALE_0162_V1)
+
+
+@pytest.mark.asyncio
+async def test_configuration_audit_projects_supported_stored_policy_and_current_pin() -> None:
+    assert "function_tools" in SUPPORTED_RESPONSES_CAPABILITIES
+    # Supported capability + current registered pin: the audit keeps useful
+    # semantic values (no unsupported count).
+    stored = {
+        "version": 1,
+        "allowed_capabilities": ["function_tools"],
+        "client_module": dict(PIN_0162),
+    }
+    row, _, audit = await _audit_update_stored_policy(stored)
+    assert len(audit.calls) == 1
+    for values in (audit.calls[0]["old_values"], audit.calls[0]["new_values"]):
+        assert values["responses_policy"] == stored
+    assert row.metadata_json["responses_policy"] == stored
+
+    # A retained pin with zero capability grants is a valid deauthorization
+    # state: the pin projects, and no grants are auto-added.
+    stored_pin_only = {"version": 1, "client_module": dict(PIN_0162)}
+    row, _, audit = await _audit_update_stored_policy(stored_pin_only)
+    assert len(audit.calls) == 1
+    for values in (audit.calls[0]["old_values"], audit.calls[0]["new_values"]):
+        assert values["responses_policy"] == stored_pin_only
+
+
 def _make_create_config(providers: object) -> KeyConfiguration:
     config = KeyConfiguration()
     if providers is not ABSENT:
