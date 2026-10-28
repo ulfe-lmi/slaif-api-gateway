@@ -75,6 +75,33 @@ def _service(session) -> ProviderConfigService:
     )
 
 
+def _refuse_known_secret_shapes(
+    *,
+    display_name: str | None,
+    base_url: str | None,
+    notes: str | None,
+    reason: str | None,
+) -> None:
+    """Refuse known credential shapes in creation free-form fields.
+
+    One bounded check shared by the Typer ``add`` command and the async
+    ``_add_provider`` entry point (199-c/199-d), invoked BEFORE any
+    database access so a direct helper call cannot bypass it. Fixed safe
+    vocabulary only: the flag is named, the value is never echoed.
+    Known-shape protection, not a sanitizer framework.
+    """
+    for value, flag in (
+        (display_name, "--display-name"),
+        (base_url, "--base-url"),
+        (notes, "--notes"),
+        (reason, "--reason"),
+    ):
+        if contains_known_secret_shape(value):
+            raise typer.BadParameter(
+                f"{flag}: value must not contain recognized credential patterns."
+            )
+
+
 async def _add_provider(
     *,
     provider: str,
@@ -90,6 +117,12 @@ async def _add_provider(
     max_retries: int,
     actor_admin_id,
 ) -> ProviderConfig:
+    _refuse_known_secret_shapes(
+        display_name=display_name,
+        base_url=base_url,
+        notes=notes,
+        reason=reason,
+    )
     async with cli_db_session() as (_, session):
         return await _service(session).create_provider_config(
             provider=provider,
@@ -278,19 +311,17 @@ def add(
         if actor_admin_id is not None
         else None
     )
-    # 199-c: the SAME known-shape input guards as update apply to creation
-    # free-form fields BEFORE any database access (the optional creation
-    # reason law is preserved - only shapes are refused).
-    for value, flag in (
-        (display_name, "--display-name"),
-        (base_url, "--base-url"),
-        (notes, "--notes"),
-        (reason, "--reason"),
-    ):
-        if contains_known_secret_shape(value):
-            raise typer.BadParameter(
-                f"{flag}: value must not contain recognized credential patterns."
-            )
+    # 199-c/199-d: the SAME known-shape input guards as update apply to
+    # creation free-form fields BEFORE any database access (the optional
+    # creation reason law is preserved - only shapes are refused). The
+    # shared check also runs inside _add_provider, so the public refusal
+    # stays correct even when tests replace the async helper.
+    _refuse_known_secret_shapes(
+        display_name=display_name,
+        base_url=base_url,
+        notes=notes,
+        reason=reason,
+    )
     try:
         row = run_async(
             _add_provider(

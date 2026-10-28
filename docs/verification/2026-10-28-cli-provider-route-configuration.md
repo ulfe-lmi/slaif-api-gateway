@@ -507,3 +507,122 @@ Gates: `ruff check app/ tests/` clean;
   at this publication.
 - Plan files and JUnit receipts under `/tmp/slaif199/` are disposable
   execution state, not durable evidence.
+
+## 199-d ADDENDUM — creation entry guard and precise test claims
+
+Recorded 2026-10-28 for the same 199 PR. This addendum describes the
+199-d amendment evidence; the 199-a text and the 199-b/199-c addenda
+above remain unchanged, and their recorded results stand as 199-a/199-b/
+199-c results. One historical boundary claim is CORRECTED here, without
+editing the old text:
+
+- **Corrected (199-c guard placement).** The 199-c addendum recorded
+  that "the SAME known-shape guards as update now apply to `providers
+  add` free-form fields before any database access." In fact that guard
+  sat only in the Typer `add` command handler: the public CLI correctly
+  refused known-shaped credentials, but the private async
+  `_add_provider` helper itself was unguarded — a direct helper call
+  (as tests do when they replace the Typer surface) still opened the
+  database context and invoked the actual core creation service with a
+  recognized synthetic credential in `notes`. That is a PRIVATE-helper
+  boundary nonconformance, not a demonstrated public CLI/HTTP
+  authentication bypass. 199-d completes the 199-c C2 requirement ("put
+  the protection where actual async CLI creation cannot bypass it"):
+  one small shared check (`_refuse_known_secret_shapes`) now runs at
+  BOTH entry points — in the Typer `add` command (the existing public
+  refusal is retained even when tests replace the async helper) and at
+  the top of the ACTUAL async `_add_provider`, before `cli_db_session`
+  is opened. Known-shape protection only; no sanitizer/framework; the
+  core service and repository are unchanged.
+
+### What 199-d changed (allowed paths only)
+
+- `cli/providers.py` (the only product file): the new small shared
+  `_refuse_known_secret_shapes` check for the SAME four free-form fields
+  (`display_name`/`base_url`/`notes`/`reason`), invoked by the Typer
+  `add` command (replacing its previous inline loop with the same fixed
+  no-echo errors) AND by the actual async `_add_provider` before any
+  database access. The public CLI refusal, the optional-creation-reason
+  law, environment-variable-reference NAMES, the disabled default, the
+  timeout/retry values, and the output behavior are all unchanged.
+- `tests/unit/test_cli_provider_route_configuration.py`:
+  - Two new 199-d direct-helper regressions: the ACTUAL async
+    `_add_provider` is called directly with a recognized canary in each
+    field while the DB context is instrumented to fail if reached
+    (fixed refusal asserted, no canary echo, no DB open, no service
+    call), plus one positive ordinary-text/env-NAME/optional-reason
+    case reaching a recording service. No database or backend contact.
+  - `test_tampered_plan_forwarded_and_detected_stale` renamed to
+    `test_tampered_plan_strictly_parsed_and_forwarded`: its MOCKED
+    execute proves strict parsing and forwarding of the tampered
+    document exactly as stored — not actual service staleness. The
+    comment now says what the mock proves: the plan's expected
+    configuration fingerprint binds the SOURCE configuration at review
+    time (the assertion shows it is unchanged by the proposed
+    priority), and proposed values are revalidated against current
+    policy at execute time.
+- `tests/unit/test_provider_route_configuration.py`:
+  - `test_route_identity_swap_refused`: the unused
+    `row`/`_provider_row` assignment was removed (CodeQuality threads);
+    the harness fixture, its dependency execution, the tampered
+    identity, the expected exception, and the zero-write law are
+    unchanged.
+  - One new focused actual-service test,
+    `test_proposed_value_revalidation_distinct_from_source_staleness`:
+    a valid proposed scalar edit (source priority 100, proposed 50)
+    applies exactly once while the source is unchanged (no stale
+    refusal), and an actual source mutation behind the plan then refuses
+    the SAME plan stale with no further writes or audits. Editing a
+    valid scalar is not in itself an authentication or staleness breach.
+- Docs: this addendum (operator docs unchanged; public behavior
+  unchanged).
+
+No core service/repository/route-service/schema changes. No signed
+plans, proposal integrity signatures, new digest fields, approval
+receipts, migrations, dependencies, workflows, UI, or trust-model
+changes. Everything else is unchanged.
+
+### Evidence (focused, not a full matrix)
+
+All runs: `env -u DATABASE_URL -u TEST_DATABASE_URL PYTHONPATH=app
+/tmp/slaif192-coding-venv/bin/python -m pytest ... -p no:cacheprovider`,
+JUnit receipts under `/tmp/slaif199/`. The 199-c receipts
+(`c-affected.xml` 330, `c-pg.xml` 31, `c-gov-inv-drift.xml` 37) were
+NOT rerun and remain 199-c evidence. NO owned-PostgreSQL run was
+performed for 199-d: the guard executes before any database access and
+is proven at the unit layer, and the 199-c creation no-write/no-audit
+PG proofs remain the PostgreSQL proof for creation. No 199-d PG,
+full-matrix, browser, or Docker Compose evidence is claimed.
+
+- The two affected unit suites in one run: **173 passed, 0 failed, 0
+  skipped** (`/tmp/slaif199/d-affected.xml`):
+  `test_provider_route_configuration` (136 = 135 + 1 new) and
+  `test_cli_provider_route_configuration` (37 = 35 + 2 new).
+- `test_cli_providers` (help/signature suite): **7 passed, 0 failed, 0
+  skipped** (`/tmp/slaif199/d-cli-providers.xml`).
+- Governance/inventory/drift in one run after the docs append: **37
+  passed, 0 failed, 0 skipped** (`/tmp/slaif199/d-gov.xml`):
+  `test_oap_governance` (9), `test_documentation_inventory` (13),
+  `test_documentation_contract_drift` (15). These 37 are disjoint from
+  the 173 above (the 199-c 330-run overlap note with its own
+  governance 9 does not apply to 199-d, which did not rerun those
+  affected suites).
+
+Gates: `ruff check app/ tests/` clean;
+`python3 scripts/check_documentation.py` -> `OK files=126`;
+`git diff --check` clean (recorded at the 199-d implementation commit).
+
+### Honest state
+
+- The creation guard now covers the public Typer command AND the actual
+  async helper entry point; protection remains KNOWN-SHAPE protection
+  (recognized credential patterns refused on new input, redacted on
+  safe reads), not universal content sanitization.
+- No public behavior change: public CLI refusals, output, defaults, and
+  laws are unchanged; only the private-helper boundary gained the
+  shared check.
+- Final-head CI for the new 199-d SELF is PENDING at this publication;
+  final-head checks and strategic review remain root gates. No 200-205
+  rows or 205 full executable-only transcript claim follows.
+- Plan files and JUnit receipts under `/tmp/slaif199/` are disposable
+  execution state, not durable evidence.

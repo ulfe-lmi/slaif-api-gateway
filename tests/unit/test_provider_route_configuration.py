@@ -1255,6 +1255,43 @@ class TestExecuteRouteUpdatePlan:
 
         asyncio.run(go())
 
+    def test_proposed_value_revalidation_distinct_from_source_staleness(
+        self, harness, monkeypatch
+    ) -> None:
+        # 199-d: expected_configuration_fingerprint binds the SOURCE
+        # pre-state at review time, NOT the plan's proposed values. A
+        # valid operator-edited proposal is revalidated against current
+        # policy and applies while the source is unchanged; only an
+        # actual source mutation behind the plan makes it stale (zero
+        # writes, zero audits). Editing a valid scalar is not in itself
+        # an authentication or staleness breach.
+        row, _provider_row = harness
+        plan = _plan_for(row, priority=50)  # source priority is 100
+        calls: list[dict[str, Any]] = []
+
+        class _RecordingService:
+            async def update_model_route(self, route_id: Any, **kwargs: Any) -> Any:
+                calls.append({"route_id": route_id, **kwargs})
+                return row
+
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRouteService", lambda **_: _RecordingService())
+
+        async def go() -> None:
+            # 1) source unchanged: proposed scalar (50) differs from the
+            #    reviewed pre-state (100) but is valid; it applies once.
+            await execute_route_update_plan(FakeSession(), plan, reason="reviewed")
+            # 2) source then mutated behind the plan: the SAME plan is
+            #    refused stale with no further writes or audits.
+            row.priority = 77
+            with pytest.raises(ProviderRouteStaleError, match="configuration"):
+                await execute_route_update_plan(FakeSession(), plan, reason="r")
+
+        import asyncio
+
+        asyncio.run(go())
+        assert len(calls) == 1
+        assert calls[0]["priority"] == 50
+
     def test_blank_reason_refused_before_locks(self, harness) -> None:
         _row, _provider_row = harness
         async def go() -> None:
@@ -1287,7 +1324,6 @@ class TestExecuteRouteUpdatePlan:
         # never reuse the reviewed expected pre-state: even if the expected
         # fingerprint were recomputed for the twin row, the bound
         # expected_route_id still refuses it.
-        row, _provider_row = harness
         twin_id = "22222222-3333-4444-8555-666666666666"
         twin = FakeRouteRow(id=twin_id)
 

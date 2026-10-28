@@ -17,10 +17,13 @@ import json
 import stat
 import re
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from slaif_gateway.cli import providers as providers_cli
@@ -256,6 +259,107 @@ class TestProvidersAdd:
         assert seen["base_url"] == "https://svc-a.example/api"
         assert seen["notes"] == "uses SVC_A_KEY; reviewed note"
         assert seen["reason"] == "fictional module preparation"
+
+    # --- 199-d: the actual async creation entry point is guarded ----------
+
+    @pytest.mark.asyncio
+    async def test_add_provider_helper_refuses_known_secret_shapes_before_db(
+        self, monkeypatch
+    ) -> None:
+        # 199-d D1: the shared known-shape check runs inside the ACTUAL
+        # async _add_provider BEFORE cli_db_session is opened, so a direct
+        # helper call cannot bypass the refusal. The Typer-level refusal
+        # above is retained independently (tests may replace this helper).
+        opened = False
+        service_calls = 0
+
+        class _DbBarrier:
+            def __call__(self) -> Any:
+                nonlocal opened
+                opened = True
+                raise AssertionError("cli_db_session must not be opened")
+
+        def _recording_service(session: Any) -> Any:
+            nonlocal service_calls
+            service_calls += 1
+            return object()
+
+        monkeypatch.setattr(providers_cli, "cli_db_session", _DbBarrier())
+        monkeypatch.setattr(providers_cli, "_service", _recording_service)
+        for field_name, canary in (
+            ("display_name", "Auth: Bearer abcdef1234567890"),
+            ("base_url", "https://sk-proj-abcdef1234567890abcdef1234567890"),
+            ("notes", "sk-proj-abcdef1234567890abcdef1234567890"),
+            ("reason", "sk-proj-abcdef1234567890abcdef1234567890"),
+        ):
+            kwargs: dict[str, Any] = dict(
+                provider="mod-a",
+                display_name=None,
+                base_url=None,
+                api_key_env_var="SVC_A_KEY",
+                enabled=False,
+                notes=None,
+                kind="module",
+                reason=None,
+                confirm_insecure_http=False,
+                timeout_seconds=300,
+                max_retries=2,
+                actor_admin_id=None,
+            )
+            kwargs[field_name] = canary
+            with pytest.raises(typer.BadParameter, match="credential patterns") as excinfo:
+                await providers_cli._add_provider(**kwargs)
+            # fixed safe vocabulary only: no canary echo in the refusal
+            assert canary not in str(excinfo.value)
+        assert opened is False
+        assert service_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_add_provider_helper_ordinary_creation_reaches_service(
+        self, monkeypatch
+    ) -> None:
+        # 199-d D1 positive: ordinary text, env-reference NAMES and an
+        # optional creation reason pass the guard and reach the service.
+        opened = False
+        row = FakeProvider()
+
+        @asynccontextmanager
+        async def _db_ctx() -> Any:
+            nonlocal opened
+            opened = True
+            yield "token", object()
+
+        calls: dict[str, Any] = {}
+
+        class _RecordingService:
+            async def create_provider_config(self, **kwargs: Any) -> Any:
+                calls.update(kwargs)
+                return row
+
+        monkeypatch.setattr(providers_cli, "cli_db_session", lambda: _db_ctx())
+        monkeypatch.setattr(providers_cli, "_service", lambda session: _RecordingService())
+        result = await providers_cli._add_provider(
+            provider="mod-a",
+            display_name="Svc A (reviewed)",
+            base_url="https://svc-a.example/api",
+            api_key_env_var="SVC_A_KEY",
+            enabled=False,
+            notes="uses SVC_A_KEY; reviewed note",
+            kind="module",
+            reason="fictional module preparation",
+            confirm_insecure_http=False,
+            timeout_seconds=300,
+            max_retries=2,
+            actor_admin_id=None,
+        )
+        assert result is row
+        assert opened is True
+        # safe env-variable NAMES and ordinary text stay literal
+        assert calls["display_name"] == "Svc A (reviewed)"
+        assert calls["base_url"] == "https://svc-a.example/api"
+        assert calls["notes"] == "uses SVC_A_KEY; reviewed note"
+        assert calls["reason"] == "fictional module preparation"
+        assert calls["enabled"] is False
 
 
 class TestProvidersUpdate:
@@ -674,7 +778,7 @@ class TestRoutesUpdateExecute:
         payload = json.loads(result.stdout)
         assert payload["priority"] == 50
 
-    def test_tampered_plan_forwarded_and_detected_stale(self, tmp_path, monkeypatch) -> None:
+    def test_tampered_plan_strictly_parsed_and_forwarded(self, tmp_path, monkeypatch) -> None:
         route = FakeRoute()
         _fake_preview_for(route, monkeypatch)
         plan_path = tmp_path / "plan.json"
@@ -697,10 +801,16 @@ class TestRoutesUpdateExecute:
             app,
             ["routes", "update", ROUTE_ID, "--execute", str(plan_path), "--reason", "r"],
         )
-        # The tampered document still strict-parses and is forwarded to the
-        # execute helper exactly as stored. The plan's expected fingerprint
-        # was computed for priority=50, so the service/PG layer refuses the
-        # mismatch as stale (proven in the service unit + PG tests).
+        # What this recording mock proves: the tampered document still
+        # strict-parses and the tampered proposed value is forwarded to the
+        # execute helper exactly as stored, while the plan's expected
+        # configuration fingerprint stays bound to the SOURCE configuration
+        # at review time (unchanged by the proposed priority). Proposed
+        # values are revalidated against current policy at execute time: a
+        # valid edit may apply while the source is unchanged, and it is an
+        # actual source mutation that the service/PG staleness guards
+        # refuse (proven in the service unit tests). This mock decides
+        # neither.
         assert result.exit_code == 0, result.stderr
         assert executed["plan"].priority == 999
         original = parse_route_update_plan_file(
