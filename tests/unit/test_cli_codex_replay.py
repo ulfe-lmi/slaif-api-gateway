@@ -463,3 +463,38 @@ class TestExecuteMixedModeRefusals:
         assert canary not in result.stdout
         assert canary not in result.stderr
         assert fake_service.applies == []
+
+
+class TestExecuteRangeProvenance:
+    """200-d: the execute JSON identifies the saved range/exclusion
+    descriptors as reviewed-plan metadata, keeping them distinct from
+    the operation-derived outcome fields."""
+
+    def test_execute_json_labels_range_descriptors_as_reviewed_plan(
+        self, fake_service, tmp_path
+    ) -> None:
+        plan_path = tmp_path / "plan.json"
+        plan_path.write_text(
+            json.dumps(render_replay_extend_plan(_plan())), encoding="utf-8"
+        )
+        result = _invoke(
+            app,
+            [
+                "codex", "replay", "extend",
+                "--execute", str(plan_path),
+                "--reason", "resume long-running conversation",
+                "--json",
+            ],
+        )
+        assert result.exit_code == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["range_descriptors_source"] == "reviewed_plan"
+        # The descriptors are the reviewed plan's own metadata...
+        stamped = NOW.isoformat().replace("+00:00", "Z")
+        assert payload["old_expiry_range"] == [stamped, stamped]
+        assert payload["new_expiry_range"] == [stamped, stamped]
+        assert payload["exclusion_counts"]["expired_not_included"] == 1
+        # ...while the outcome fields stay operation-derived.
+        assert payload["applied"] is True
+        assert payload["already_applied"] is False
+        assert payload["updated_references"] == 2

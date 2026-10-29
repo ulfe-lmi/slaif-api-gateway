@@ -618,3 +618,150 @@ runs).
 - The writer's honest static semantics intentionally leave a partial
   file at the exact output path after a forced write failure
   (documented); no cleanup/rebinding machinery was added.
+
+## 200-d ADDENDUM — reviewed-target consistency on first apply and repeat
+
+Recorded 2026-10-29 for the same 200 PR. This addendum resolves the
+known remaining gap recorded in the immutable 200-c report (root's
+strict-parse probe: a valid preview with ONLY `ttl_seconds` edited
+accepted and applied a target different from the advertised one;
+receipts `200-c-reviewed-target-consistency-probe.json` and, for the
+repeat-path follow-up, `200-d-draft-edited-repeat-target-probe.json`).
+The 200-a/b/c text above remains unchanged record.
+
+### Factual correction to the 200-c per-file unit counts
+
+The immutable 200-c report stated the new unit suites as
+"`test_codex_replay_maintenance` 48 + `test_cli_codex_replay` 17".
+Grouping the actual `c-unit-new.xml` test cases by class shows the
+per-file split was **53 service-file tests + 21 CLI-file tests =
+65** (the 173 affected total decomposes as 24 + 57 + 27 + 53 + 21).
+The totals, pass/fail/skip results, and every other 200-c claim are
+unchanged; the immutable 200-c report and its historical text were NOT
+edited (root receipt `200-c-unit-per-file-count-correction.json`).
+From 200-d onward the per-file counts in this record are derived
+from the JUnit test cases, not estimated.
+
+### What 200-d changed (allowed paths only)
+
+Product — EXACTLY two files; the 200-c schema/file-I/O file and
+everything else under `app/` are byte-identical to the 200-c
+implementation (`d86bc0d…`):
+
+- **`services/codex_replay_maintenance.py` (decision guards only; no
+  lock/clock/flow change).** The expected post-state is now
+  RECOMPUTED once from the fresh locked rows, the actual
+  classification, and the SELECTED TTL (`max(old, created + TTL)` per
+  eligible row), and that single recomputed digest guards BOTH
+  decision paths:
+  - FIRST apply, BEFORE any mutation: the recomputed post-state must
+    equal the plan's `expected_post_state_fingerprint`, AND the saved
+    report descriptors (old/new expiry ranges via the same
+    max(old, created + TTL) formula as the preview, and exclusion
+    counts) must agree with the freshly derived eligible rows —
+    including a zero-diff first apply. A TTL-only, post-fingerprint-
+    only, range-only, or exclusion-count-only edit of an otherwise
+    valid (strictly parsed) plan is refused with the existing fixed
+    safe stale vocabulary and zero expiry writes / zero audits.
+  - Already-applied repeat: the recomputed post-state must ALSO
+    equal the saved post-state fingerprint, so a TTL-only edit of an
+    applied plan that would require a DIFFERENT post-state fails
+    stale instead of being reported `already_applied`; an edit with
+    no actual post-state effect still reports the honest no-op. The
+    unchanged plan remains exactly as idempotent as before.
+  No new plan fields, schema, signature, receipt, or table; no
+  authority inferred from a hash; no signing framework. The already-
+  applied path still does not reconstruct historical pre-apply
+  ranges (no invented history, no new receipt).
+- **`cli/codex_replay.py` (execute output label only).** The execute
+  JSON carries one small additive field,
+  `range_descriptors_source: "reviewed_plan"`, identifying its
+  exclusion-count and old/new range descriptors as REVIEWED-PLAN
+  metadata (validated for consistency before any write) rather than
+  newly measured historical values; the applied / already_applied /
+  updated_references fields remain operation-derived. No command or
+  existing field changed.
+
+Tests (allowed paths only): `tests/unit/test_codex_replay_maintenance.
+py` gains `TestReviewedTargetConsistency` (8 tests: TTL-only edit
+refused with zero changes and the unedited plan still applying;
+post-fingerprint-only edit refused; first-apply range-only edit
+refused; exclusion-count-only edit refused; zero-diff first-apply
+range edit refused while the honest zero-diff plan is a plain no-op;
+a regenerated 180-day plan applies exactly `created + 180d` with
+truthful audit ranges and an idempotent repeat; an edited-TTL repeat
+after a real 180d apply refuses stale with no extra write/audit while
+the unchanged plan stays idempotent; a shorter no-effect TTL edit
+after apply reports the honest no-op);
+`tests/unit/test_cli_codex_replay.py` gains
+`TestExecuteRangeProvenance` (execute JSON labels the descriptors as
+reviewed-plan metadata and keeps the outcome fields
+operation-derived); `tests/integration/test_cli_codex_replay_
+maintenance_postgres.py` gains ONE focused case (15 → 16): save a
+valid default-TTL plan, edit ONLY `ttl_seconds` to 180 days, execute
+the strict file through the CLI => fixed refusal with ALL reference
+columns byte-equal and zero audits; then a genuine 180-day preview
+applies exactly `created + 180d` with one accurate audit (stored as
+ISO strings in the audit JSONB) and every other column unchanged; a
+normal repeat adds no audit.
+
+### Actual focused verification (200-d)
+
+Environment: `PYTHONPATH=app /tmp/slaif192-coding-venv/bin/python`
+with `env -u DATABASE_URL -u TEST_DATABASE_URL`; no ambient
+`DATABASE_URL`, no foreign PostgreSQL/Redis; JUnit receipts under
+`/tmp/slaif200a/` (disposable).
+
+- New unit suites (pure layer + actual-Typer, no DB): **74 passed,
+  0 failed / 0 errors / 0 skipped**, exit 0 (`d-unit-new.xml`) —
+  per JUnit classes: service file 53 (incl. the 8 new
+  `TestReviewedTargetConsistency`) + CLI file 21 (incl. the 1 new
+  `TestExecuteRangeProvenance`).
+- Focused affected batch: **182 passed, 0 failed / 0 errors / 0
+  skipped**, exit 0 (`d-unit-affected.xml`) — unchanged
+  `test_codex_replay_service` 24, `test_codex_replay_limits` 57,
+  `test_cli_codex` 27, plus the 74 new-suite tests (INCLUDED).
+- Owned-PostgreSQL-16 suite: **16 passed, 0 failed / 0 errors / 0
+  skipped**, exit 0 (`d-pg.xml`) — the 15 ordered proofs (including
+  the real reference-row waiter and the 20,451-reference scale)
+  re-run unchanged at these bytes plus the new 16th target-
+  consistency case.
+- Governance/inventory/drift: **40 passed, 0 failed / 0 errors / 0
+  skipped**, exit 0 (`d-gov.xml`): `test_documentation_inventory`
+  16 (file byte-unchanged), `test_oap_governance` 9,
+  `test_documentation_contract_drift` 15.
+- Gates: `ruff check app/ tests/` clean;
+  `python3 scripts/check_documentation.py` -> `DOCUMENTATION_CHECK=OK
+  files=127`; `git diff --check` clean.
+- Product-byte preservation: `git diff d86bc0d -- app/` shows
+  EXACTLY `services/codex_replay_maintenance.py` and
+  `cli/codex_replay.py`; the 200-c schema/file-I/O file, the replay
+  repository, runtime replay, and all other product files are
+  byte-identical to 200-c; `tests/unit/test_documentation_
+  inventory.py` byte-identical.
+- The two independent root real-PG clock/membership 200-c proofs are
+  root evidence at c bytes and were NOT rerun (this change does not
+  alter the pre-lock, clock, or membership flow).
+
+### Documentation impact (200-d)
+
+- `docs/cli-reference.md`: the extend paragraph now states the
+  before-write re-verification of the reviewed post-state
+  fingerprint and saved report descriptors under the SELECTED TTL
+  (both decision paths, no-effect edits keep the honest no-op) and
+  the `range_descriptors_source: reviewed_plan` execute-output label.
+- `docs/cli-field-administration.md`: the objective-200 row carries
+  the same additions.
+- This addendum (including the 200-c per-file count correction).
+
+### Limitations (200-d)
+
+- No full verification matrix was run; final-head CI remains the
+  root-gated gate and is PENDING at this addendum.
+- The guards are consistency/reporting laws, not tamper-proof or
+  signed approval: a fully authorized operator can author a new
+  self-consistent plan; the recommended workflow when changing the
+  TTL is to generate and review a new dry-run, not to edit one field
+  of an inconsistent plan.
+- The already-applied path still cannot (and does not attempt to)
+  reconstruct the original pre-apply expiry range from current rows.

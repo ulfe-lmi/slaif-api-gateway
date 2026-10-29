@@ -1226,3 +1226,220 @@ class TestFinalScopeRecheckRegressions:
         assert result.applied is True
         assert result.updated_references == 1
         assert len(audit.entries) == 1
+
+
+class TestReviewedTargetConsistency:
+    """200-d: a first apply must agree with the reviewed plan under the
+    SELECTED TTL. A TTL-only edit, a post-fingerprint-only edit, a
+    range-only edit, and an exclusion-count-only edit of an otherwise
+    valid (strictly parsed) plan are all refused stale with zero
+    writes and zero audits; a legitimately regenerated plan applies
+    exactly original creation + selected TTL with truthful ranges."""
+
+    TTL_180 = 15_552_000  # 180 days, within 1..31,536,000
+
+    def _setup(self) -> tuple[Any, FakeMaintenanceRepository, FakeAuditRepository]:
+        service, repository, audit = _service()
+        repository.key_states = [_key_state()]
+        repository.rows = [_row()]
+        return service, repository, audit
+
+    def _preview(self, service: CodexReplayMaintenanceService, **kwargs: Any):
+        kwargs.setdefault("scope", ReplayScope(key_id=KEY_A))
+        kwargs.setdefault("now", NOW)
+        return _run(service.preview_replay_extend(**kwargs))
+
+    def test_ttl_only_edit_fails_stale_with_zero_changes(self) -> None:
+        service, repository, audit = self._setup()
+        plan = self._preview(service)
+        # A strictly parsed plan with ONLY the selected TTL changed
+        # (the reviewed ranges and all three fingerprints untouched):
+        # the re-derived post-state under the edited TTL no longer
+        # matches the reviewed post-state fingerprint.
+        edited = parse_replay_extend_plan_document(
+            render_replay_extend_plan(replace(plan, ttl_seconds=self.TTL_180))
+        )
+        assert edited.ttl_seconds == self.TTL_180
+        with pytest.raises(ReplayMaintenanceStaleError):
+            _run(service.apply_replay_extend(plan=edited, reason="edited ttl", now=NOW))
+        assert repository.extend_calls == []
+        assert audit.entries == []
+        # The unedited reviewed plan still applies exactly.
+        result = _run(
+            service.apply_replay_extend(plan=plan, reason="reviewed", now=NOW)
+        )
+        assert result.applied is True
+        assert result.updated_references == 1
+
+    def test_post_fingerprint_only_edit_fails_stale(self) -> None:
+        service, repository, audit = self._setup()
+        plan = self._preview(service)
+        edited = parse_replay_extend_plan_document(
+            render_replay_extend_plan(
+                replace(plan, expected_post_state_fingerprint="01" * 32)
+            )
+        )
+        with pytest.raises(ReplayMaintenanceStaleError):
+            _run(
+                service.apply_replay_extend(plan=edited, reason="edited post fp", now=NOW)
+            )
+        assert repository.extend_calls == []
+        assert audit.entries == []
+
+    def test_first_apply_range_only_edit_fails_stale(self) -> None:
+        service, repository, audit = self._setup()
+        plan = self._preview(service)
+        edited = parse_replay_extend_plan_document(
+            render_replay_extend_plan(
+                replace(plan, new_expiry_max=NOW + timedelta(days=300))
+            )
+        )
+        with pytest.raises(ReplayMaintenanceStaleError):
+            _run(service.apply_replay_extend(plan=edited, reason="edited range", now=NOW))
+        assert repository.extend_calls == []
+        assert audit.entries == []
+
+    def test_first_apply_exclusion_count_only_edit_fails_stale(self) -> None:
+        service, repository, audit = self._setup()
+        plan = self._preview(service)
+        assert plan.exclusion_counts["expired_not_included"] == 0
+        edited = parse_replay_extend_plan_document(
+            render_replay_extend_plan(
+                replace(
+                    plan,
+                    exclusion_counts=dict(
+                        plan.exclusion_counts, expired_not_included=1
+                    ),
+                )
+            )
+        )
+        with pytest.raises(ReplayMaintenanceStaleError):
+            _run(
+                service.apply_replay_extend(plan=edited, reason="edited exclusions", now=NOW)
+            )
+        assert repository.extend_calls == []
+        assert audit.entries == []
+
+    def test_zero_diff_first_apply_range_edit_fails_stale(self) -> None:
+        service, repository, audit = self._setup()
+        # Everything already beyond the target: eligible, zero updates.
+        repository.rows = [
+            _row(created=NOW - timedelta(days=10), expires=NOW + timedelta(days=999))
+        ]
+        plan = self._preview(service)
+        assert plan.new_expiry_min == plan.old_expiry_min
+        edited = parse_replay_extend_plan_document(
+            render_replay_extend_plan(
+                replace(plan, new_expiry_max=NOW + timedelta(days=400))
+            )
+        )
+        with pytest.raises(ReplayMaintenanceStaleError):
+            _run(
+                service.apply_replay_extend(
+                    plan=edited, reason="zero-diff edit", now=NOW
+                )
+            )
+        assert repository.extend_calls == []
+        assert audit.entries == []
+        # The honest zero-diff plan is a no-op (not stale, no duplicate).
+        result = _run(
+            service.apply_replay_extend(plan=plan, reason="zero-diff", now=NOW)
+        )
+        assert result.applied is False
+        assert result.already_applied is False
+        assert result.updated_references == 0
+        assert repository.extend_calls == []
+        assert audit.entries == []
+
+    def test_regenerated_180_day_plan_applies_exact_created_plus_180d(self) -> None:
+        service, repository, audit = self._setup()
+        plan = self._preview(service, ttl_seconds=self.TTL_180)
+        created = NOW - timedelta(days=10)
+        target = created + timedelta(seconds=self.TTL_180)
+        # The regenerated preview advertises the actual target.
+        assert plan.new_expiry_min == target == plan.new_expiry_max
+        result = _run(
+            service.apply_replay_extend(plan=plan, reason="reviewed 180d", now=NOW)
+        )
+        assert result.applied is True
+        assert result.already_applied is False
+        assert result.updated_references == 1
+        assert repository.extend_calls == [[(repository.rows[0].id, target)]]
+        assert len(audit.entries) == 1
+        entry = audit.entries[0]
+        assert entry["old_values"]["ttl_seconds"] == self.TTL_180
+        assert entry["old_values"]["old_expiry_range"] == [
+            created + timedelta(days=90),
+            created + timedelta(days=90),
+        ]
+        assert entry["new_values"]["new_expiry_range"] == [target, target]
+        # A normal repeat of the SAME plan stays idempotent.
+        row = repository.rows[0]
+        repository.rows = [
+            _row(row_id=row.id, created=row.created_at, expires=target)
+        ]
+        repeat = _run(
+            service.apply_replay_extend(plan=plan, reason="repeat", now=NOW)
+        )
+        assert repeat.applied is False
+        assert repeat.already_applied is True
+        assert len(audit.entries) == 1
+
+    def test_edited_ttl_after_apply_fails_stale_not_already_applied(self) -> None:
+        service, repository, audit = self._setup()
+        plan = self._preview(service, ttl_seconds=self.TTL_180)
+        row = repository.rows[0]
+        created = row.created_at
+        target_180 = created + timedelta(seconds=self.TTL_180)
+        first = _run(
+            service.apply_replay_extend(plan=plan, reason="reviewed 180d", now=NOW)
+        )
+        assert first.applied is True
+        assert len(audit.entries) == 1
+        # The apply landed: the row now carries the 180d target.
+        repository.rows = [
+            _row(row_id=row.id, created=created, expires=target_180)
+        ]
+        # The SAME saved plan with ONLY ttl_seconds changed to 365d:
+        # the selected TTL would require a DIFFERENT post-state, so the
+        # repeat must not be reported as already applied.
+        edited = parse_replay_extend_plan_document(
+            render_replay_extend_plan(replace(plan, ttl_seconds=TTL_365))
+        )
+        with pytest.raises(ReplayMaintenanceStaleError):
+            _run(
+                service.apply_replay_extend(plan=edited, reason="edited repeat", now=NOW)
+            )
+        assert len(repository.extend_calls) == 1  # no extra write
+        assert len(audit.entries) == 1  # no extra audit
+        # The unchanged plan remains idempotent.
+        repeat = _run(
+            service.apply_replay_extend(plan=plan, reason="repeat", now=NOW)
+        )
+        assert repeat.applied is False
+        assert repeat.already_applied is True
+        assert len(audit.entries) == 1
+
+    def test_no_effect_ttl_edit_after_apply_reports_honest_noop(self) -> None:
+        service, repository, audit = self._setup()
+        plan = self._preview(service, ttl_seconds=self.TTL_180)
+        row = repository.rows[0]
+        created = row.created_at
+        target_180 = created + timedelta(seconds=self.TTL_180)
+        _run(service.apply_replay_extend(plan=plan, reason="reviewed 180d", now=NOW))
+        repository.rows = [
+            _row(row_id=row.id, created=created, expires=target_180)
+        ]
+        # A SHORTER edited TTL (30d) has no actual post-state effect:
+        # the row already sits beyond the 30d target. Honest no-op.
+        edited = parse_replay_extend_plan_document(
+            render_replay_extend_plan(replace(plan, ttl_seconds=2_592_000))
+        )
+        result = _run(
+            service.apply_replay_extend(plan=edited, reason="shorter no-effect", now=NOW)
+        )
+        assert result.applied is False
+        assert result.already_applied is True
+        assert result.updated_references == 0
+        assert len(repository.extend_calls) == 1
+        assert len(audit.entries) == 1

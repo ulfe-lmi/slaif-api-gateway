@@ -294,6 +294,13 @@ def extend(
             "exclusion_counts": plan.exclusion_counts,
             "old_expiry_range": [_iso(plan.old_expiry_min), _iso(plan.old_expiry_max)],
             "new_expiry_range": [_iso(plan.new_expiry_min), _iso(plan.new_expiry_max)],
+            # Provenance: the exclusion counts and range descriptors
+            # above are REVIEWED-PLAN metadata (validated for
+            # consistency with the locked rows before any write), not
+            # newly measured historical values; the applied /
+            # already_applied / updated_references fields added below
+            # are derived from the actual operation.
+            "range_descriptors_source": "reviewed_plan",
         }
         try:
             async def _apply():

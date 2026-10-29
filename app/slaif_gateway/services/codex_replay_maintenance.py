@@ -651,8 +651,55 @@ class CodexReplayMaintenanceService:
         ):
             raise _stale_error()
 
+        # The expected post-state RECOMPUTED from the fresh locked rows,
+        # the actual classification, and the SELECTED TTL. A consistent
+        # plan carries it as expected_post_state_fingerprint; it guards
+        # BOTH decision paths: the first apply (before any mutation) and
+        # the already-applied repeat (a TTL-only edit that would require
+        # a different post-state cannot be reported as already applied).
+        fresh_post = _fingerprint(
+            markers + _expected_post_entries(rows, states, plan.ttl_seconds)
+        )
+
         if actual_full == plan.expected_source_fingerprint:
-            # Reviewed pre-state confirmed: first apply path.
+            # Reviewed pre-state confirmed: first apply path. BEFORE any
+            # mutation, the reviewed plan must agree with the FRESH
+            # locked state under the SELECTED TTL (a TTL-only edit of an
+            # otherwise valid plan is refused here, not only on the
+            # already-applied repeat path):
+            if fresh_post != plan.expected_post_state_fingerprint:
+                raise _stale_error()
+            # And, for a first apply only, the saved report descriptors
+            # (old/new expiry ranges and exclusion counts) must agree
+            # with the freshly derived eligible-row ranges/reasons,
+            # using the same max(old, created + TTL) formula as the
+            # preview - including a zero-diff first apply. A plan whose
+            # descriptors do not describe THIS operation is refused
+            # before any write or audit.
+            fresh_old = [
+                row.expires_at
+                for row, (state, _why) in zip(rows, states)
+                if state == "eligible"
+            ]
+            fresh_new = [
+                max(
+                    row.expires_at,
+                    row.created_at + timedelta(seconds=plan.ttl_seconds),
+                )
+                for row, (state, _why) in zip(rows, states)
+                if state == "eligible"
+            ]
+            if (
+                (min(fresh_old) if fresh_old else None) != plan.old_expiry_min
+                or (max(fresh_old) if fresh_old else None) != plan.old_expiry_max
+                or (min(fresh_new) if fresh_new else None) != plan.new_expiry_min
+                or (max(fresh_new) if fresh_new else None) != plan.new_expiry_max
+                or any(
+                    plan.exclusion_counts.get(code, 0) != count
+                    for code, count in reasons.items()
+                )
+            ):
+                raise _stale_error()
             if not updates:
                 # No-op under the reviewed pre-state: zero writes, zero audits.
                 return ReplayExtendResult(
@@ -707,16 +754,23 @@ class CodexReplayMaintenanceService:
         # (full identity, original creation, and eligibility state
         # unchanged) now carry EXACTLY the reviewed target (max(old,
         # created + TTL)) for every eligible row. No writes, no duplicate
-        # audit. A key-set, row/ledger/version identity, or eligibility
-        # state change (for example an expiry boundary crossed while
-        # waiting for the row lock), or an unrelated extension landing
-        # beyond the reviewed target, fails stale instead. An external
-        # change landing on exactly the reviewed target is indistinguishable
-        # from a prior apply and is reported as already applied (safe:
-        # zero writes, zero audit, identical final state).
+        # audit. The RECOMPUTED post-state under the selected TTL must
+        # also agree with the saved post-state fingerprint, so a TTL-only
+        # edit of an applied plan that would require a DIFFERENT
+        # post-state fails stale instead of reporting already applied
+        # (an edit with no actual post-state effect still reports the
+        # honest no-op). A key-set, row/ledger/version identity, or
+        # eligibility state change (for example an expiry boundary
+        # crossed while waiting for the row lock), or an unrelated
+        # extension landing beyond the reviewed target, fails stale
+        # instead. An external change landing on exactly the reviewed
+        # target is indistinguishable from a prior apply and is reported
+        # as already applied (safe: zero writes, zero audit, identical
+        # final state).
         if (
             actual_state == plan.expected_source_state_fingerprint
             and actual_full == plan.expected_post_state_fingerprint
+            and fresh_post == plan.expected_post_state_fingerprint
         ):
             return ReplayExtendResult(
                 applied=False,

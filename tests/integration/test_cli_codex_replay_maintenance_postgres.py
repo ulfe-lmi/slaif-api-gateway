@@ -1431,6 +1431,95 @@ def test_zero_ref_key_join_during_reference_lock_wait_fails_stale(
     assert _cohort_key_count(url, cohort) == 2
 
 
+def test_edited_ttl_only_plan_refused_then_genuine_180d_plan_applies(
+    world: dict[str, Any], cli_env: str, plan_dir: Path
+) -> None:
+    url = cli_env
+    ttl_180 = 15_552_000  # 180 days
+    cohort, key_id, row_id, created = _new_key_with_reference(
+        url, "replay-target", "target-consistency"
+    )
+    plan_path = plan_dir / "target-consistency-365.json"
+    result = _cli(
+        "codex", "replay", "extend", "--cohort-id", str(cohort),
+        "--output", str(plan_path), "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["selected_keys"] == 1
+    assert payload["eligible_references"] == 1
+    # Strictly parse the reviewed plan and edit ONLY ttl_seconds to
+    # 180 days (reviewed ranges and all three fingerprints untouched).
+    document = json.loads(plan_path.read_text(encoding="utf-8"))
+    document["ttl_seconds"] = ttl_180
+    forged_path = plan_dir / "target-consistency-180-forged.json"
+    forged_path.write_text(
+        json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    os.chmod(forged_path, 0o600)
+    snapshots_before = _snapshot_rows(url, key_id)
+    expiries_before = _row_expiries(url, key_id)
+    audits_before = _audits_count(url)
+    result = _cli(
+        "codex", "replay", "extend", "--execute", str(forged_path),
+        "--reason", "edited ttl only", "--json",
+    )
+    assert result.exit_code == 1
+    error_payload = json.loads(result.stdout)
+    assert error_payload["error"]["code"] == "invalid_value"
+    assert "pre-state no longer matches" in error_payload["error"]["message"]
+    assert _snapshot_rows(url, key_id) == snapshots_before
+    assert _row_expiries(url, key_id) == expiries_before
+    assert _audits_count(url) == audits_before
+    # A GENUINE 180-day preview applies exactly created + 180 days with
+    # one accurate audit; a normal repeat adds no audit.
+    honest_path = plan_dir / "target-consistency-180.json"
+    result = _cli(
+        "codex", "replay", "extend", "--cohort-id", str(cohort),
+        "--ttl-seconds", str(ttl_180),
+        "--output", str(honest_path), "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    target = created + timedelta(seconds=ttl_180)
+    assert payload["new_expiry_range"] == [_iso_z(target), _iso_z(target)]
+    result = _cli(
+        "codex", "replay", "extend", "--execute", str(honest_path),
+        "--reason", "genuine 180d plan", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["applied"] is True
+    assert payload["already_applied"] is False
+    assert payload["updated_references"] == 1
+    audits = _audits_for_action(url)
+    assert len(audits) == audits_before + 1
+    entry = audits[-1]
+    assert entry.old_values["ttl_seconds"] == ttl_180
+    # The audit JSONB carries the ranges as ISO strings.
+    assert [
+        datetime.fromisoformat(value)
+        for value in entry.old_values["old_expiry_range"]
+    ] == [created + timedelta(days=90), created + timedelta(days=90)]
+    assert [
+        datetime.fromisoformat(value) for value in entry.new_values["new_expiry_range"]
+    ] == [target, target]
+    after = _snapshot_rows(url, key_id)
+    assert set(after) == set(snapshots_before)
+    for rid, before in snapshots_before.items():
+        assert after[rid] == before[:13] + (target,)
+    result = _cli(
+        "codex", "replay", "extend", "--execute", str(honest_path),
+        "--reason", "repeat genuine 180d", "--json",
+    )
+    assert result.exit_code == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["applied"] is False
+    assert payload["already_applied"] is True
+    assert payload["updated_references"] == 0
+    assert _audits_count(url) == audits_before + 1
+
+
 def test_edited_plan_counts_refused_with_real_file(
     world: dict[str, Any], cli_env: str, plan_dir: Path
 ) -> None:

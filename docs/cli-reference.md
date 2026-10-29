@@ -820,9 +820,19 @@ reviewed scope membership AFTER the key locks and AGAIN after the
 reference-row locks, and re-derives eligible counts AFTER all locks
 (the saved plan's fingerprints and counts are public optimistic
 guards, not signed authority - drift is refused stale with zero
-writes), updates
-only `expires_at` of exactly the eligible reviewed rows, and records
-ONE bounded audit. A repeated apply is recognized as already-applied
+writes). Before any write, the reviewed post-state fingerprint AND
+the saved report descriptors (old/new expiry ranges, exclusion
+counts) are re-verified against the fresh locked rows under the
+SELECTED TTL, so a TTL-only or descriptor-only edit of an otherwise
+valid plan is refused stale - including on an already-applied repeat
+whose selected TTL would require a different post-state, while an
+edit with no actual post-state effect keeps the honest no-op.
+Execute then updates only `expires_at` of exactly the eligible
+reviewed rows, and records ONE bounded audit; the execute JSON
+labels its exclusion/range descriptors as reviewed-plan metadata
+(`range_descriptors_source: reviewed_plan`) while the
+applied/already-applied/updated fields are derived from the actual
+operation. A repeated apply is recognized as already-applied
 with no duplicate audit; a zero-diff apply makes no writes or audits;
 a transaction or audit failure rolls back everything. Ceilings: 1,000
 selected keys, 50,000 inspected references, 100 route/model groups;
