@@ -144,6 +144,29 @@ class AuditRepository:
     async def get_audit_log_for_admin_detail(self, audit_log_id: uuid.UUID) -> AuditLog | None:
         return await self._session.get(AuditLog, audit_log_id)
 
+    async def get_latest_email_error_for_delivery(
+        self, email_delivery_id: uuid.UUID
+    ) -> AuditLog | None:
+        """202-a: latest exact email-error audit entry for one delivery.
+
+        Exact entity_type `email_delivery` + exact entity_id, actions
+        limited to the two known error-recording actions; deterministic
+        `(created_at DESC, id DESC)` tie-break. Not a broad admin
+        substring/action search.
+        """
+        statement = (
+            select(AuditLog)
+            .where(
+                AuditLog.action.in_(("email_key_failed", "email_key_ambiguous")),
+                AuditLog.entity_type == "email_delivery",
+                AuditLog.entity_id == email_delivery_id,
+            )
+            .order_by(desc(AuditLog.created_at), desc(AuditLog.id))
+            .limit(1)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def count_recent_admin_login_failures(
         self,
         *,

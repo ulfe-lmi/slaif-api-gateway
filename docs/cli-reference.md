@@ -701,7 +701,7 @@ slaif-gateway routes update <route-uuid> --execute /tmp/route-plan.json \
 
 ```text
 slaif-gateway usage summarize|export|live-burn-summary
-slaif-gateway email test|send-pending-key
+slaif-gateway email test|send-pending-key|list|show
 slaif-gateway quota list-expired-reservations
 slaif-gateway quota list-provider-completed-recovery
 slaif-gateway quota list-external-tool-fences|list-external-tool-holds
@@ -712,6 +712,93 @@ slaif-gateway quota reconcile-provider-completed|reconcile-external-tool-hold
 Reconciliation commands default to inspection or dry-run where documented.
 Execute modes require explicit confirmation and an audit reason. They use
 PostgreSQL evidence and do not call providers to reconstruct an outcome.
+
+### Email delivery inspection and safe retries
+
+`email list` and `email show <delivery-uuid>` are READ-ONLY inspection
+commands. They never decrypt one-time secrets, render or send email,
+consume material, insert audit rows, or enqueue work; an empty or missing
+result is distinct from a store-unavailable or invalid-parameter error,
+and invalid inputs fail nonzero without echoing supplied values.
+
+```text
+slaif-gateway email list [--delivery-id <uuid>] [--key-id <uuid>]
+                         [--owner-id <uuid>] [--owner-email <exact email>]
+                         [--status pending|sending|sent|failed|ambiguous|cancelled]
+                         [--created-from <aware-UTC ISO>] [--created-until <aware-UTC ISO>]
+                         [--limit 1..100 (default 50)] [--offset 0..1000000]
+                         [--json]
+slaif-gateway email show <delivery-uuid> [--json]
+```
+
+- Filters combine with SQL `AND` BEFORE deterministic
+  `(created_at DESC, id DESC)` paging; at most `limit + 1` rows are
+  fetched, and `--json` reports `items`, `limit`, `offset`, `has_more`,
+  and `next_offset` (no unbounded all-history materialization).
+- `--owner-email` is EXACT after the same strip/lower normalization as
+  owner management — never substring identity. `--status` accepts only the
+  six PERSISTED statuses; `queued` is not a database status and is
+  rejected.
+- Time bounds are explicit aware UTC instants (naive or reversed windows
+  are refused). Bounds are inclusive.
+- Output is allowlisted metadata only: delivery/owner/key/one-time-secret
+  UUIDs, the recorded recipient, persisted status, created/sent/failed
+  timestamps, the service-derived secret lifecycle/sendability, and the
+  safe last-recorded failure (a finite known email error code with action,
+  time, and provenance `last recorded audit error`). No subject, rendered
+  or template body, raw error prose, SMTP/provider message IDs, encrypted
+  payload/nonce, plaintext key, hash/HMAC, or credentials.
+- The last-recorded failure is the LATEST audit row with action
+  `email_key_failed` or `email_key_ambiguous`, exact
+  `entity_type = email_delivery` and exact delivery UUID, ordered by
+  `created_at` then `id`. Unknown/missing codes report `unavailable`; a
+  `sent` row can retain a historical failure, labeled by provenance, never
+  as the current attempt's error.
+- `email show` reports the secret lifecycle with the existing meanings:
+  `present` (pending usable material — NOT proof the email was sent),
+  `consumed`, `expired`, `unavailable`, plus `can_send` and a fixed
+  blocking reason when not safely sendable.
+- The reported recipient is PREPARED-ATTEMPT metadata: an attempt prepared
+  by this code records, in the existing sending commit, the exact
+  destination prepared for that attempt (the current owner email), so
+  inspection reflects the recipient prepared for THAT attempt. Untouched
+  older rows and rows that were never prepared may retain creation-time
+  metadata, and the actual historical destination of a pre-upgrade attempt
+  is unknown and is never reconstructed or backfilled. The field never
+  infers or rewrites historical destinations and proves nothing about SMTP
+  acceptance or mailbox arrival.
+
+`email send-pending-key` (the sender action) additionally accepts:
+
+```text
+--retry-failed            Explicitly retry an existing FAILED delivery
+--reason <text>           Bounded nonblank audit note (UTF-8, <= 1024 bytes)
+```
+
+- A selected delivery whose persisted status is `failed` requires
+  `--retry-failed` AND a nonblank `--reason` in BOTH synchronous
+  (`--send-now`) and `--enqueue` modes; the checks run BEFORE any
+  send/queue. `--retry-failed` itself requires `--email-delivery-id`, and
+  a non-failed selected row refuses the flag.
+- `--reason` values containing recognized credential patterns are refused
+  without echo whenever the reason is persisted (retry in either mode,
+  or enqueue intent).
+- Enqueue mode records a bounded safe enqueue-REQUEST intent audit
+  (action `email_key_enqueue_requested`: selected IDs, actor, reason, and
+  explicit intent) via the existing audit repository BEFORE dispatch; the
+  commit must succeed first, and an audit failure prevents dispatch. The
+  one-time secret is attributed through the safe reference field
+  `one_time_reference_id` (the secret-bearing key name is dropped by the
+  global durable metadata sanitizer). The Celery task payload remains
+  EXACTLY the existing three UUIDs — no reason, body, secret, boolean,
+  policy, or context crosses the broker; the worker revalidates actual
+  sendability at execution.
+- `queued` in the CLI result means broker submission only — NOT a
+  persisted delivery status and NOT a worker acknowledgement. `sent`
+  means recorded SMTP acceptance/finalization — NOT confirmed inbox
+  arrival. A queue failure after the committed intent is reported
+  nonzero and leaves the honest intent; it never changes the delivery to
+  sent/queued or mutates/consumes the secret.
 
 ## Codex and diagnostics
 
@@ -1141,6 +1228,8 @@ slaif-gateway diagnostics request show
 slaif-gateway diagnostics cleanup
 slaif-gateway email test
 slaif-gateway email send-pending-key
+slaif-gateway email list
+slaif-gateway email show
 slaif-gateway fx add
 slaif-gateway fx list
 slaif-gateway fx latest

@@ -57,6 +57,7 @@ class _EmailDelivery:
     gateway_key_id: uuid.UUID | None
     one_time_secret_id: uuid.UUID | None
     status: str = "pending"
+    created_at: datetime | None = None
     provider_message_id: str | None = None
     error_message: str | None = None
     sent_at: datetime | None = None
@@ -71,6 +72,10 @@ class _OneTimeRepo:
         return self.row if one_time_secret_id == self.row.id else None
 
     async def get_one_time_secret_for_update(self, one_time_secret_id: uuid.UUID):
+        return self.row if one_time_secret_id == self.row.id else None
+
+    async def get_one_time_secret_for_update_fresh(self, one_time_secret_id: uuid.UUID):
+        # 202-a: same selection; fake state is always current.
         return self.row if one_time_secret_id == self.row.id else None
 
     async def mark_one_time_secret_consumed(self, one_time_secret_id: uuid.UUID, *, consumed_at: datetime) -> bool:
@@ -99,6 +104,28 @@ class _EmailRepo:
 
     async def get_email_delivery_for_update(self, email_delivery_id: uuid.UUID):
         return self.rows.get(email_delivery_id)
+
+    async def get_email_delivery_for_update_fresh(self, email_delivery_id: uuid.UUID):
+        # 202-a: same selection as get_email_delivery_for_update; the fake
+        # rows are always current (no stale identity-map in unit doubles).
+        return self.rows.get(email_delivery_id)
+
+    async def has_blocking_email_delivery_attempt(
+        self,
+        one_time_secret_id: uuid.UUID,
+        *,
+        statuses: tuple[str, ...] = ("sending", "sent", "ambiguous"),
+    ):
+        # 202-a: whole same-secret set (fake has no tail beyond the dict).
+        return any(
+            row.one_time_secret_id == one_time_secret_id and row.status in statuses
+            for row in self.rows.values()
+        )
+
+    async def has_email_delivery_attempt(self, one_time_secret_id: uuid.UUID):
+        return any(
+            row.one_time_secret_id == one_time_secret_id for row in self.rows.values()
+        )
 
     async def mark_sending(self, email_delivery_id: uuid.UUID, *, started_at: datetime):
         row = self.rows[email_delivery_id]
@@ -452,4 +479,576 @@ async def test_email_delivery_service_marks_ambiguous_after_finalization_failure
     )
 
     assert retry.status == "ambiguous"
+    assert len(sender.sent_bodies) == 1
+
+
+# --- 202-a send-boundary guards (focused, fake-repository evidence) ----------
+
+
+class _MultiSecretRepo:
+    def __init__(self, rows: list[_OneTimeSecret]) -> None:
+        self.rows = {row.id: row for row in rows}
+
+    async def get_one_time_secret_by_id(self, one_time_secret_id: uuid.UUID):
+        return self.rows.get(one_time_secret_id)
+
+    async def get_one_time_secret_for_update(self, one_time_secret_id: uuid.UUID):
+        return self.rows.get(one_time_secret_id)
+
+    async def get_one_time_secret_for_update_fresh(self, one_time_secret_id: uuid.UUID):
+        # 202-a: same selection; fake state is always current.
+        return self.rows.get(one_time_secret_id)
+
+    async def mark_one_time_secret_consumed(self, one_time_secret_id: uuid.UUID, *, consumed_at: datetime) -> bool:
+        row = self.rows.get(one_time_secret_id)
+        if row is None or row.consumed_at is not None:
+            return False
+        row.status = "consumed"
+        row.consumed_at = consumed_at
+        return True
+
+    async def mark_one_time_secret_revoked_or_expired(self, one_time_secret_id: uuid.UUID, *, status: str) -> bool:
+        row = self.rows.get(one_time_secret_id)
+        if row is None:
+            return False
+        row.status = status
+        return True
+
+
+def _two_secret_setup(*, email_repo: _EmailRepo | None = None):
+    """Owner/key with TWO pending gateway-key secrets (same owner/key)."""
+    encryption_key = generate_secret_key()
+    owner = _Owner(id=uuid.uuid4())
+    gateway_key = _GatewayKey(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+        valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+
+    def _secret() -> _OneTimeSecret:
+        encrypted = encrypt_secret(
+            json.dumps(
+                {
+                    "plaintext_key": "sk-slaif-public.once-only-secret",
+                    "gateway_key_id": str(gateway_key.id),
+                    "owner_id": str(owner.id),
+                    "purpose": "gateway_key_email",
+                }
+            ),
+            encryption_key,
+        )
+        return _OneTimeSecret(
+            id=uuid.uuid4(),
+            purpose="gateway_key_email",
+            owner_id=owner.id,
+            gateway_key_id=gateway_key.id,
+            encrypted_payload=encrypted.ciphertext,
+            nonce=encrypted.nonce,
+            expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        )
+
+    secret_a = _secret()
+    secret_b = _secret()
+    sender = _EmailService()
+    service = EmailDeliveryService(
+        settings=Settings(
+            ENABLE_EMAIL_DELIVERY=True,
+            SMTP_HOST="localhost",
+            SMTP_FROM="noreply@example.org",
+            ONE_TIME_SECRET_ENCRYPTION_KEY=encryption_key,
+            PUBLIC_BASE_URL="https://api.ulfe.slaif.si/v1",
+        ),
+        one_time_secrets_repository=_MultiSecretRepo([secret_a, secret_b]),
+        email_deliveries_repository=email_repo or _EmailRepo(),
+        gateway_keys_repository=_KeyRepo(gateway_key),
+        owners_repository=_OwnerRepo(owner),
+        audit_repository=_AuditRepo(),
+        email_service=sender,
+    )
+    return service, secret_a, secret_b, sender
+
+
+@pytest.mark.asyncio
+async def test_send_refuses_mismatched_secret_same_owner_key() -> None:
+    # 202-a root probe: a DIFFERENT secret UUID with matching owner/key must
+    # be refused at the shared locked send boundary (exact binding).
+    service, secret_a, secret_b, sender = _two_secret_setup()
+    delivery_repo = service._email_deliveries_repository
+    delivery = await delivery_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="pending",
+    )
+
+    result = await service.send_pending_key_email(
+        one_time_secret_id=secret_b.id,
+        email_delivery_id=delivery.id,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "email_delivery_selection_required"
+    assert sender.sent_bodies == []
+    assert secret_a.consumed_at is None
+    assert secret_b.consumed_at is None
+    assert delivery.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_selected_foreign_owner_binding_refused_before_decryption(monkeypatch) -> None:
+    # 202-a root probe: a selected delivery whose bound secret belongs to a
+    # DIFFERENT owner/key must be refused before the real crypto runs.
+    service, secret, email_repo, _audit_repo, sender, _plaintext_key = _service()
+    foreign_owner = _Owner(id=uuid.uuid4())
+    foreign_key = _GatewayKey(
+        id=uuid.uuid4(),
+        owner_id=foreign_owner.id,
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+        valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    foreign_secret = _OneTimeSecret(
+        id=uuid.uuid4(),
+        purpose="gateway_key_email",
+        owner_id=foreign_owner.id,
+        gateway_key_id=foreign_key.id,
+        encrypted_payload="foreign-ciphertext-never-decrypted",
+        nonce="foreign-nonce",
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    service._one_time_secrets_repository = _OneTimeRepo(foreign_secret)
+    delivery = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret.owner_id,
+        gateway_key_id=secret.gateway_key_id,
+        one_time_secret_id=foreign_secret.id,
+        status="pending",
+    )
+
+    decrypt_calls = 0
+
+    def no_decrypt(*args, **kwargs):
+        nonlocal decrypt_calls
+        decrypt_calls += 1
+        raise AssertionError("real crypto must not run for a foreign binding")
+
+    monkeypatch.setattr("slaif_gateway.services.secret_service.decrypt_secret", no_decrypt)
+
+    result = await service.send_pending_key_email(
+        one_time_secret_id=foreign_secret.id,
+        email_delivery_id=delivery.id,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "email_delivery_not_sendable"
+    assert "does not match" in result.error_message
+    assert decrypt_calls == 0
+    assert sender.sent_bodies == []
+    assert foreign_secret.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_selected_revoked_secret_refused_before_decryption(monkeypatch) -> None:
+    # 202-a: revoked selected material keeps the existing pre-crypto
+    # classification and never invokes the real crypto.
+    service, secret, email_repo, _audit_repo, sender, _plaintext_key = _service()
+    secret.status = "revoked"
+    delivery = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret.owner_id,
+        gateway_key_id=secret.gateway_key_id,
+        one_time_secret_id=secret.id,
+        status="pending",
+    )
+
+    decrypt_calls = 0
+
+    def no_decrypt(*args, **kwargs):
+        nonlocal decrypt_calls
+        decrypt_calls += 1
+        raise AssertionError("real crypto must not run for revoked material")
+
+    monkeypatch.setattr("slaif_gateway.services.secret_service.decrypt_secret", no_decrypt)
+
+    result = await service.send_pending_key_email(
+        one_time_secret_id=secret.id,
+        email_delivery_id=delivery.id,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "one_time_secret_already_consumed"
+    assert decrypt_calls == 0
+    assert sender.sent_bodies == []
+    assert secret.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_sendability_agrees_with_sender_for_blocked_same_secret_row() -> None:
+    # 202-a shared-sendability consistency: a selected PENDING row whose
+    # same secret has another AMBIGUOUS attempt must report can_send=False
+    # (read-only result agrees with the sender; no decryption).
+    email_repo = _EmailRepo()
+    service, secret_a, _secret_b, _sender = _two_secret_setup(email_repo=email_repo)
+    selected = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="pending",
+    )
+    await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="ambiguous",
+    )
+
+    sendability = await service.get_key_email_delivery_sendability(selected.id)
+
+    assert sendability.can_send is False
+    assert "sending, sent, or ambiguous" in (sendability.blocking_reason or "")
+
+    clean = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="pending",
+    )
+    # the ambiguous row still blocks this clean pending sibling too
+    clean_sendability = await service.get_key_email_delivery_sendability(clean.id)
+    assert clean_sendability.can_send is False
+
+
+@pytest.mark.asyncio
+async def test_send_refuses_unknown_selected_delivery_without_implicit_creation() -> None:
+    # 202-a root probe: a supplied missing delivery UUID is a missing/unsafe
+    # selected target, NEVER implicit creation of another delivery.
+    service, secret_a, _secret_b, sender = _two_secret_setup()
+    delivery_repo = service._email_deliveries_repository
+
+    result = await service.send_pending_key_email(
+        one_time_secret_id=secret_a.id,
+        email_delivery_id=uuid.uuid4(),
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "email_delivery_selection_required"
+    assert delivery_repo.rows == {}
+    assert sender.sent_bodies == []
+    assert secret_a.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_omitted_selector_blocked_by_prior_ambiguous_attempt() -> None:
+    # 202-a root probe: omitting the selector for the same secret must NOT
+    # create a fresh attempt around a prior ambiguous row.
+    email_repo = _EmailRepo()
+    service, secret_a, _secret_b, sender = _two_secret_setup(email_repo=email_repo)
+    prior = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="ambiguous",
+    )
+
+    result = await service.send_pending_key_email(one_time_secret_id=secret_a.id)
+
+    assert result.status == "failed"
+    assert result.error_code == "email_delivery_selection_required"
+    assert list(email_repo.rows) == [prior.id]
+    assert prior.status == "ambiguous"
+    assert sender.sent_bodies == []
+    assert secret_a.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_selected_retryable_row_blocked_by_prior_sending_attempt() -> None:
+    # A different retryable row selected while another same-secret row is
+    # `sending` must be refused (no convenient-row bypass).
+    email_repo = _EmailRepo()
+    service, secret_a, _secret_b, sender = _two_secret_setup(email_repo=email_repo)
+    in_flight = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="sending",
+    )
+    retryable = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="failed",
+    )
+
+    result = await service.send_pending_key_email(
+        one_time_secret_id=secret_a.id,
+        email_delivery_id=retryable.id,
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "email_delivery_selection_required"
+    assert in_flight.status == "sending"
+    assert retryable.status == "failed"
+    assert sender.sent_bodies == []
+    assert secret_a.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_no_id_refused_when_prior_failed_history_exists() -> None:
+    # 202-a: no-ID is a genuine initial creation only. Retained failed
+    # history must be retried via selected-ID / explicit retry, never by
+    # silently creating a fresh row.
+    email_repo = _EmailRepo()
+    service, secret_a, _secret_b, sender = _two_secret_setup(email_repo=email_repo)
+    failed = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="failed",
+    )
+
+    result = await service.send_pending_key_email(one_time_secret_id=secret_a.id)
+
+    assert result.status == "failed"
+    assert result.error_code == "email_delivery_selection_required"
+    assert list(email_repo.rows) == [failed.id]
+    assert failed.status == "failed"
+    assert sender.sent_bodies == []
+    assert secret_a.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_no_id_refused_when_prior_cancelled_history_exists() -> None:
+    email_repo = _EmailRepo()
+    service, secret_a, _secret_b, sender = _two_secret_setup(email_repo=email_repo)
+    cancelled = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="cancelled",
+    )
+
+    result = await service.send_pending_key_email(one_time_secret_id=secret_a.id)
+
+    assert result.status == "failed"
+    assert result.error_code == "email_delivery_selection_required"
+    assert list(email_repo.rows) == [cancelled.id]
+    assert sender.sent_bodies == []
+    assert secret_a.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_selected_failed_retry_still_works_with_clean_history() -> None:
+    # The legitimate path: select the FAILED row explicitly (the service
+    # shared layer permits failed retries; the CLI adds flag/reason).
+    email_repo = _EmailRepo()
+    service, secret_a, _secret_b, sender = _two_secret_setup(email_repo=email_repo)
+    failed = await email_repo.create_email_delivery(
+        recipient_email="ada@example.org",
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret_a.owner_id,
+        gateway_key_id=secret_a.gateway_key_id,
+        one_time_secret_id=secret_a.id,
+        status="failed",
+    )
+
+    result = await service.send_pending_key_email(
+        one_time_secret_id=secret_a.id,
+        email_delivery_id=failed.id,
+    )
+
+    assert result.status == "sent"
+    assert failed.status == "sent"
+    assert secret_a.consumed_at is not None
+    assert len(sender.sent_bodies) == 1
+    assert len(email_repo.rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_expired_after_lock_wait_is_not_decrypted() -> None:
+    # 202-a: the fresh instant chosen AFTER owning the secret lock rejects
+    # expired material BEFORE decryption (no stale pre-wait clock use).
+    email_repo = _EmailRepo()
+    service, secret_a, _secret_b, sender = _two_secret_setup(email_repo=email_repo)
+    secret_a.expires_at = datetime.now(UTC) + timedelta(seconds=1)
+    # the fresh (post-lock) instant is already past expiry
+    service._now_factory = lambda: datetime.now(UTC) + timedelta(seconds=60)
+
+    result = await service.send_pending_key_email(one_time_secret_id=secret_a.id)
+
+    assert result.status == "failed"
+    assert result.error_code == "one_time_secret_expired"
+    assert sender.sent_bodies == []
+    assert secret_a.status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_consumed_after_lock_wait_is_not_decrypted() -> None:
+    email_repo = _EmailRepo()
+    service, secret_a, _secret_b, sender = _two_secret_setup(email_repo=email_repo)
+    secret_a.status = "consumed"
+    consumed_at = datetime.now(UTC)
+    secret_a.consumed_at = consumed_at
+
+    result = await service.send_pending_key_email(one_time_secret_id=secret_a.id)
+
+    assert result.status == "failed"
+    assert result.error_code == "one_time_secret_already_consumed"
+    assert sender.sent_bodies == []
+
+
+# --- 202-b prepared-recipient metadata (focused fake-repository evidence) ----
+
+
+def _service_with_owner(*, email_service: _EmailService | None = None, email_repo: _EmailRepo | None = None):
+    """Like ``_service()`` but also returns the owner row (202-b)."""
+    encryption_key = generate_secret_key()
+    owner = _Owner(id=uuid.uuid4())
+    gateway_key = _GatewayKey(
+        id=uuid.uuid4(),
+        owner_id=owner.id,
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+        valid_until=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    plaintext_key = "sk-slaif-public.once-only-secret"
+    encrypted = encrypt_secret(
+        json.dumps(
+            {
+                "plaintext_key": plaintext_key,
+                "gateway_key_id": str(gateway_key.id),
+                "owner_id": str(owner.id),
+                "purpose": "gateway_key_email",
+            }
+        ),
+        encryption_key,
+    )
+    secret = _OneTimeSecret(
+        id=uuid.uuid4(),
+        purpose="gateway_key_email",
+        owner_id=owner.id,
+        gateway_key_id=gateway_key.id,
+        encrypted_payload=encrypted.ciphertext,
+        nonce=encrypted.nonce,
+        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    if email_repo is None:
+        email_repo = _EmailRepo()
+    audit_repo = _AuditRepo()
+    sender = email_service or _EmailService()
+    service = EmailDeliveryService(
+        settings=Settings(
+            ENABLE_EMAIL_DELIVERY=True,
+            SMTP_HOST="localhost",
+            SMTP_FROM="noreply@example.org",
+            ONE_TIME_SECRET_ENCRYPTION_KEY=encryption_key,
+            PUBLIC_BASE_URL="https://api.ulfe.slaif.si/v1",
+        ),
+        one_time_secrets_repository=_OneTimeRepo(secret),
+        email_deliveries_repository=email_repo,
+        gateway_keys_repository=_KeyRepo(gateway_key),
+        owners_repository=_OwnerRepo(owner),
+        audit_repository=audit_repo,
+        email_service=sender,
+    )
+    return service, secret, email_repo, audit_repo, sender, owner, plaintext_key
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["sent", "smtp_failure", "finalization_failure"])
+async def test_email_delivery_service_prepared_recipient_refreshes_to_current_owner_email(outcome: str) -> None:
+    """202-b: the persisted recipient is prepared for THIS actual attempt.
+
+    The owner address is edited after the pending delivery row exists.
+    The existing sending commit records exactly the prepared SMTP target
+    (current Owner.email); the outcome then follows the existing
+    sent/failed/ambiguous law with the prepared recipient retained.
+    """
+    old_recipient = "ada-old-202b@example.org"
+    current_email = "ada-current-202b@example.org"
+    if outcome == "smtp_failure":
+        service, secret, email_repo, _audit_repo, _sender, owner, _key = _service_with_owner(
+            email_service=_EmailService(fail=True)
+        )
+    elif outcome == "finalization_failure":
+        service, secret, email_repo, _audit_repo, _sender, owner, _key = _service_with_owner(
+            email_repo=_FinalizationFailingEmailRepo()
+        )
+    else:
+        service, secret, email_repo, _audit_repo, _sender, owner, _key = _service_with_owner()
+    owner.email = current_email  # edited after the row was created
+    delivery = await email_repo.create_email_delivery(
+        recipient_email=old_recipient,
+        subject="Subject",
+        template_name="gateway_key_email",
+        owner_id=secret.owner_id,
+        gateway_key_id=secret.gateway_key_id,
+        one_time_secret_id=secret.id,
+        status="pending",
+    )
+    result = await service.send_pending_key_email(
+        one_time_secret_id=secret.id,
+        email_delivery_id=delivery.id,
+    )
+    expected = {"sent": "sent", "smtp_failure": "failed", "finalization_failure": "ambiguous"}[outcome]
+    assert result.status == expected
+    if outcome == "smtp_failure":
+        # Existing failure-result shape: the returned result reports no
+        # recipient; the persisted row carries the prepared one (the
+        # sending commit happened before SMTP).
+        assert result.recipient_email is None
+    else:
+        assert result.recipient_email == current_email
+    row = email_repo.rows[delivery.id]
+    # The PERSISTED row (not just the returned result) carries the prepared
+    # recipient in every outcome; the obsolete creation address is gone.
+    assert row.recipient_email == current_email
+    assert row.status == expected
+    if outcome == "sent":
+        assert secret.status == "consumed"
+    elif outcome == "smtp_failure":
+        assert secret.status == "pending"
+        assert secret.consumed_at is None
+
+
+@pytest.mark.asyncio
+async def test_email_delivery_service_no_id_initial_creation_uses_current_owner_email() -> None:
+    """202-b control: the legitimate no-ID first creation uses the SAME
+    current Owner.email target (no refresh needed, no behavior change)."""
+    service, secret, email_repo, _audit_repo, sender, owner, _key = _service_with_owner()
+    owner.email = "ada-current-202b@example.org"
+    result = await service.send_pending_key_email(one_time_secret_id=secret.id)
+    assert result.status == "sent"
+    row = email_repo.rows[result.email_delivery_id]
+    assert row.recipient_email == owner.email == result.recipient_email
     assert len(sender.sent_bodies) == 1

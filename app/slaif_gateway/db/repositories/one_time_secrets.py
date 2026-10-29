@@ -51,6 +51,24 @@ class OneTimeSecretsRepository:
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def get_one_time_secret_for_update_fresh(self, one_time_secret_id: uuid.UUID) -> OneTimeSecret | None:
+        """202-a: FOR UPDATE lock PLUS current-state refresh.
+
+        `populate_existing` re-reads the row's columns so a value loaded
+        before a blocking lock wait is not served from the stale ORM
+        identity map. Selection/lock semantics match
+        `get_one_time_secret_for_update`; crypto/consumption semantics are
+        untouched.
+        """
+        statement = (
+            select(OneTimeSecret)
+            .where(OneTimeSecret.id == one_time_secret_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def mark_one_time_secret_consumed(
         self,
         one_time_secret_id: uuid.UUID,
