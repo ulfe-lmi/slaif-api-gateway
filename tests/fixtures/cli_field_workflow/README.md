@@ -95,7 +95,7 @@ framework and creates no general catalog/fixture machinery.
   external Codex client catalog; the client-module pin is a separate matter
   not covered by the canonical key export.
 
-## Current state (205-c handoff)
+## Current state (205-d handoff)
 
 Implemented and executed through the installed console: DoD0 (installed
 identity), DoD1 (lookup/bounded paging, full-bearer refusal), DoD2 (effective
@@ -107,10 +107,35 @@ gateway with provider/allow-list/disable controls), DoD7 (two configured
 completion services + capabilities routes prepared disabled, inspected,
 separately activated), and DoD8 (stable-ID context/media route updates via
 reviewed plans, stale-plan and mixed-mode refusals, multi-route, preserved
-key policy/material, route-linked history). DoD9 (one-time delivery
-lifecycle), DoD10 (gateway-recorded failure diagnostics), and DoD11 (replay
-maintenance) are NOT yet implemented here and remain mandatory for the final
-205 PR.
+key policy/material, route-linked history). New in 205-d: DoD9 (one-time
+delivery lifecycle against the owned loopback SMTP sink: pending channel,
+real send-now, exact repeat refusal, definite 550 refusal + safe explicit
+retry, and labeled sending/ambiguous/expired fixture states inspected before
+any unsafe probe), DoD11 (reviewed replay-reference expiry maintenance:
+schema-valid planted rows, configured-default-TTL dry-run, mixed-mode
+refusal, monotonic apply, already-applied repeat, and an explicit
+`--include-expired` second plan), and the installed `config show` finite
+process-configuration inspection (exact 45-field allowlist, configured vs
+default provenance, and invalid-Settings no-echo/no-traceback). DoD10
+(gateway-recorded failure diagnostics) remains NOT implemented here and is
+mandatory for the final 205 PR.
+
+205-d fixture additions: the SMTP sink gained a minimal deterministic IO
+fault (`refuse_data` is a LATCH, not one-shot: while armed, EVERY DATA
+command is refused with `550 5.0.0 Synthetic fixture refusal` until
+explicitly cleared; each refusal is counted in `refusals` and never
+recorded as an acceptance; the DoD9 case proves exactly one refusal,
+proves preflight refusals add no SMTP attempts while armed, and
+explicitly clears the latch before the safe `--retry-failed` retry);
+`run_cli` accepts a per-call `env` override merged over `cli_env`;
+`MAIL_ENV` enables email delivery for the mail cases only; `REPLAY_ENV`
+supplies an explicit 30-day `CODEX_REPLAY_REFERENCE_TTL_SECONDS`; planted
+history helpers (`_plant_dod9_history`, `_plant_dod11_history`) are labeled
+fixture setup with constant synthetic payloads/digests and their callers
+convert any driver failure into a fixed safe assertion with no exception
+chain; and generated keys / planted replay identifiers are registered as
+secrets before any retention. The `codex_replay_references` CHECK
+constraints are preserved (never relaxed) by using schema-valid rows.
 
 The NEW CLI privacy defect confirmed under 205-a (credential-shaped numeric
 input echoed completely in native usage errors, exit 2; root receipts

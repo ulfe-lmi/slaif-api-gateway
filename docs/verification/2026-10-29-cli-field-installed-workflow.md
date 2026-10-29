@@ -581,3 +581,186 @@ volume is used by the final test bytes.
   proof.
 - No schema, key-policy, or migration of any kind in 205; no merge, no
   tag/release, no real provider/client/mail, no Redis.
+
+## 205-d continuation (outcomes 9 and 11 + installed config inspection)
+
+Recorded 2026-10-29. Tests/documentation only; the product remains
+frozen at `420fb8f` (root baseline `205-d-product-baseline.json`: 466
+product + 1734 non-allowed paths byte-identical across the round). All
+evidence below is through per-run FRESH wheels built from that pinned
+source (payload-verified, 432 files) and installed into FRESH owned
+venvs under the per-run pytest temp tree — literal final-run identity
+below; wheel SHAs differ per build (wheel metadata), payload identity
+against `420fb8f` is the binding fact, and no run reused the 205-b/c
+venv bytes. The owned labeled PostgreSQL 16 + loopback SMTP sink
+fixture is unchanged; no product edits, no scratch Docker, no real
+provider/client/mail.
+
+### Outcome 9 (one-time delivery lifecycle, loopback SMTP) — EXECUTED PASSED
+
+`test_dod9_mail_delivery_and_inspection`, every operator action a
+subprocess of the installed console:
+
+- Clone from the fully-routable positive source `k_student`
+  (dry-run 0600 plan; execute with EXACTLY ONE channel,
+  `--email-delivery pending`; no plaintext, and the pending channel
+  reports no delivery-status key — the prepared row's `pending` state
+  is proven by installed `email show`, not by a send result).
+- Installed `email show`/`email list` inspect the prepared pending
+  delivery: flat item payload + `one_time_secret` lifecycle;
+  recipient bound to the owner's CURRENT email.
+- Actual `send-pending-key --send-now`: ONE SMTP DATA acceptance on the
+  owned loopback sink; the FULL generated key is read from the MIME
+  transfer-decoded body (the wire key line is longer than the MIME
+  generator's wrap width, so a raw wire fragment is not the complete
+  key) and registered before any retention; the secret is consumed and
+  the sent row shows `one_time_secret.status = consumed`.
+- Exact repeat: refused, no second SMTP send, no re-consumption.
+- Second clone plus a minimal deterministic fixture 550 refusal:
+  `smtp_send_error` failed state with `last_recorded_failure`; no
+  automatic retry (missing flag refused), blank `--reason` refused, and
+  an explicit `--retry-failed` with a nonblank reason retries safely
+  (same secret, key material unchanged; the distinct key observed in
+  the second accepted message is registered from the decoded body).
+- Clearly labeled PRE-EXISTING fixture states (a `sending` delivery, an
+  `ambiguous` delivery, and a `pending` delivery bound to an EXPIRED
+  secret; ORM setup only, recipients bound to the owner's current
+  email) are first inspected through the installed read-only commands
+  (fixed per-state blocking reasons and lifecycle statuses), THEN each
+  unsafe send is refused with ZERO additional SMTP; the expired-secret
+  post-state is delivery `failed` +
+  `last_recorded_failure = one_time_secret_expired`.
+- Invariants: `usage_ledger` unchanged, +5 keys / +5 deliveries, the
+  clone source row unchanged; 25 labeled records persisted for the case.
+
+### Outcome 11 (reviewed replay-reference expiry maintenance) — EXECUTED PASSED
+
+`test_dod11_replay_expiry_maintenance` under an explicitly configured
+`CODEX_REPLAY_REFERENCE_TTL_SECONDS = 2592000` (exactly 30 days) in the
+installed CLI subprocess environment:
+
+- Five schema-valid planted references (all `reasoning` kind;
+  provider/upstream matching the ACTUAL route; the
+  `codex_replay_references` CHECK constraints are preserved, never
+  relaxed), each with its own ledger: an eligible short-expiry row, an
+  eligible no-shorten row, a default-excluded expired row, an
+  unavailable-HMAC-v2 row, and a non-finalized-ledger row.
+- Installed `inspect` (5 references, 4 active, 1 expired, 1 active
+  in-validity key) → reviewed `extend` dry-run under the CONFIGURED
+  default TTL (new 0600 plan; 2 eligible; exact exclusion counts) →
+  mixed-mode `--execute` + edit-flag refusal (exit 2, fixed stderr, no
+  echo) → `--execute` applies EXACTLY ONE value change (the extended
+  row lands exactly on created+TTL, monotonic, original creation time
+  preserved) → the exact repeat reports `already_applied` with zero
+  writes and zero duplicate audits.
+- Column-level preservation: ONLY `expires_at` changes, and only on the
+  extended row(s); digests, route, model, source linkage, bound ledger
+  rows, and the full key row (policy/quotas/material) are unchanged.
+- A SECOND reviewed plan with explicit `--include-expired` previews and
+  applies ONLY the previously excluded expired reference (exactly
+  created+TTL); final inspection: 5 active, 0 expired.
+- Every planted private identifier/digest is registered before any
+  retained projection. The FINAL fixture behavior converts any
+  planting driver failure into a fixed safe assertion with no
+  exception chain, so the final bytes retain no raw SQL in evidence.
+  Qualification: the FIRST failed artifact
+  (`205d-dod11-cfg-1`, predating that boundary) DID retain the planted
+  synthetic `item_id_hmac` three times through raw driver parameters
+  in its failure text; it was sanitized in place after root review and
+  is reported only as a sanitized derivative (see chronology).
+
+### Installed `config show` evidence — EXECUTED PASSED
+
+`test_dod_config_process_inspection` (every invocation a FRESH installed
+subprocess, so per-call overrides are process-local by construction):
+the EXACT 45-field allowlist with the fixed per-entry restart scope;
+the fixed process-local `snapshot_scope`; the exact fixed limitations;
+configured-vs-default provenance per entry; explicit overrides through
+the subprocess environment (30-day TTL and 311 tokens report
+`configured` with the overridden values); the fixed text-mode scope
+header; and a generated credential-shaped canary in a numeric setting
+yields the fixed `configuration_unavailable` payload, exit 1, NO value
+echo, and NO raw traceback.
+
+### JUnit chronology (205-d; overlapping slice runs; never summed)
+
+| Artifact | Cases | Result | Notes |
+|---|---|---|---|
+| `205d-dod9-1.xml` | 1 | 1 FAIL | Fixture source choice: `k_policy` carries deliberately disabled M2/M3 routes; clone CREATE's enabled-model validation refused it (root-confirmed fixture issue, not a product defect) |
+| `205d-dod9-2.xml` | 1 | 1 FAIL | Draft oracle: the pending-channel payload carries no `email_delivery_status` key |
+| `205d-dod9-3.xml` (SHA `b8ccb884a96eded49a5d53c9557c608104e2905f12c5d3520977f0fb0facaf31`) | 1 | 1 PASS, 95.610 s | First green mail slice; root accepted as INTERMEDIATE |
+| `205d-dod11-cfg-1.xml` (original SHA `0ea3c78ef7a31fc30a80c267b108a99f3143db8b610f11ef625b245fdcfe3cef`) | 2 | 1 FAIL + 1 PASS, 0 skip, 41.195 s | The replay case failed on the `function_call` insertion (the `kind_shape` CHECK requires call/tool fields for that kind); the draft's `note` item kind was a separate invalid row never reached. The config case passed. The raw failure retained the planted synthetic `item_id_hmac` three times through raw driver parameters; after root review the artifact was sanitized IN PLACE (fixed placeholder), re-ordered to valid XML (declaration first, provenance comment after; sanitized SHA `c90319460e2a627fab1ea60b0726fa24d589574276d1ac0794c5dad4be94fc7a`), and is reported as a SANITIZED derivative, not raw JUnit |
+| `205d-dod11-cfg-2.xml` (SHA `61261643babefc0b2b554d76fe6de05862845c5d9e881e50b9ffcab37963c7b2`) | 2 | 2 PASS, 68.681 s | Schema-valid replay + strengthened config checks |
+| `205d-final-1.xml` (SHA `0785c368733445d8854217ca9672607aeccdefb3ee2e92aebc8cd7259617739c`) | 3 | 3 PASS, 0 skip, 126.858 s | Final D combined run on final bytes: DoD9 92.140 s + DoD11 25.177 s + config 9.200 s |
+
+### Final D-run installation identity (literal)
+
+- Source: `420fb8f6d9377f569d126d08f4c9e4146fc7250b` (git-archive
+  pristine copy under the per-run pytest temp tree).
+- FRESH wheel `slaif_api_gateway-0.1.0-py3-none-any.whl`, SHA256
+  `f2f77aa1b98e887a186ae1fcfcae42bba93e0ae5f77205d931010130eeb3f1c7`
+  (rebuilt per run; 432 payload files verified against the pinned
+  source — the 205-c wheel `cf7e114f…` must NOT be attributed to D).
+- The stale reused venv was rejected by the payload gate and a FRESH
+  owned venv was created:
+  `/tmp/pytest-of-janezp/pytest-1583/slaif205-field0/venv` (Python
+  3.12.15); installed payload 432 files verified against the selected
+  wheel.
+- Installed console
+  `/tmp/pytest-of-janezp/pytest-1583/slaif205-field0/venv/bin/slaif-gateway`,
+  executed with neutral cwd and `PYTHONPATH` absent, outside the
+  checkout.
+- Owned PostgreSQL 16 container
+  `9a857a02a0c1d45a13d6042d0ffc2d5992b3e40aab1f3fd9492960e38b41bbdc`
+  (loopback port 38111, run-token name/labels, tmpfs) removed in
+  teardown; verified absent (`docker ps -a --filter name=slaif205`
+  empty after the round).
+- Per-run tokens (each with its own fresh wheel/venv): dod9-3
+  `694007033c6945be`, dod11-cfg-1 `ad11a1afa9874eab`, dod11-cfg-2
+  `3118cfd99f284964`, final `140866e465ea4fe2`.
+
+### Final D-run transcript (run `140866e465ea4fe2`)
+
+37 actual labeled records (25 dod9 + 8 dod11 + 4 dodcfg), 9 negative
+exits, persisted 0600 under an owned 0700 per-run directory outside the
+checkout (transcript SHA `4ce929a4155b86a59b2a7cb65754fa28b7dad8430d619d5a34d6eb40c1497674`,
+identity SHA `2dfe9ba906d54782a905fcd0110e17a8fe38ff1b4a6c383ae2695e3bbaf93c09`);
+canary-absence assertions cover both generated keys, all planted replay
+identifiers/digests, and the config canary.
+
+### ROOT independent evidence (root runs, not agent runs)
+
+- Root parsed `205d-dod9-3` and the run transcript `694007033c6945be`:
+  25 actual labeled records / 7 negative exits, private modes and
+  canary shape clean, 432 source/wheel/installed bytes independently
+  matching `420fb8f`, all 466 product paths unchanged, exact PG absent;
+  two sink acceptances + one definite 550 refusal proven by the source
+  assertions.
+- Root independently verified the original failed
+  `205d-dod11-cfg-1` XML (2 cases: replay 1 FAIL / config 1 PASS,
+  0 skip, 41.195 s, SHA `0ea3c78e…`; no full gateway-key shapes or DB
+  URL passwords present) and its sanitized form (SHA `c9031946…`).
+- Root parsed the config artifact `ad11a1afa9874eab`: 4 actual CLI
+  records, the exact 45 allowlist fields, default TTL 31536000 vs
+  configured 2592000, rate 100 vs 311, all-45 recreate scopes, fixed
+  `configuration_unavailable` / exit 1 / empty stderr / no traceback —
+  accepted as INTERMEDIATE actual config evidence.
+- The root draft reviews drove the fixture source choice (`k_student`),
+  the pre-probe lifecycle inspection, the schema-valid replay rows, the
+  explicit `--include-expired` plan, full-row preservation, planted
+  ID/digest registration, the safe planting boundary, and the
+  strengthened config assertions.
+
+### Limitations (205-d) / carry-forward
+
+- Outcome 10 (gateway-recorded failure investigations) remains UNPROVEN
+  and mandatory in a later same-PR suffix.
+- The final fresh-installation ALL-ELEVEN run and the complete
+  all-eleven transcript remain mandatory; this D transcript covers only
+  the three D outcomes (37 records).
+- The mail/replay history rows are labeled ORM fixture setup (synthetic
+  payloads, constant digests), not operator actions; the SMTP layer is
+  an owned loopback synthetic (no real mail); the replay rows do not
+  prove replay playback, provider qualification, or authentication.
+- No schema, migration, or settings change in 205-d; no merge, no
+  release, no production, security, or compliance claim.

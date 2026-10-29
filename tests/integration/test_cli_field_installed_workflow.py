@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import email
 import hashlib
 import http.server
 import json
@@ -44,6 +45,7 @@ import re
 import secrets
 import shutil
 import socket
+import stat
 import subprocess
 import tarfile
 import threading
@@ -58,8 +60,17 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from slaif_gateway.db.models import CodexReplayReference, UsageLedger
+from slaif_gateway.db.models import (
+    CodexReplayReference,
+    EmailDelivery,
+    OneTimeSecret,
+    UsageLedger,
+)
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.codex_replay import (
+    CodexReplayReferenceInsert,
+    CodexReplayReferencesRepository,
+)
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # --- Accepted source / wheel / installation identity -----------------------
@@ -455,6 +466,10 @@ class SmtpSink:
     def __init__(self) -> None:
         self.port = self._bind()
         self.received: list[dict[str, str]] = []
+        #: Minimal deterministic IO fault (fixture only): when armed, the
+        #: next DATA command is refused with a 550 and never recorded.
+        self.refuse_data = False
+        self.refusals = 0
         self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server.bind(("127.0.0.1", self.port))
@@ -515,6 +530,10 @@ class SmtpSink:
                         rcpt_to = cmd.split(":", 1)[1].strip()
                         conn.sendall(b"250 2.1.5 Ok\r\n")
                     elif upper.startswith("DATA"):
+                        if self.refuse_data:
+                            self.refusals += 1
+                            conn.sendall(b"550 5.0.0 Synthetic fixture refusal\r\n")
+                            continue
                         in_data = True
                         data_chunks = []
                         conn.sendall(b"354 End data with <CR><LF>.<CR><LF>\r\n")
@@ -863,14 +882,18 @@ class FieldEnvironment:
         any_failure: bool = False,
         timeout: int = 120,
         label: str = "",
+        env: dict[str, str] | None = None,
     ) -> CliResult:
         argv = [str(self.artifacts.console), *args]
         if json_output:
             argv.append("--json")
+        proc_env = dict(self.cli_env)
+        if env:
+            proc_env.update(env)
         proc = subprocess.run(
             argv,
             cwd=str(self.operator_dir),
-            env=self.cli_env,
+            env=proc_env,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -995,11 +1018,12 @@ class FieldEnvironment:
         run_dir = ARTIFACT_DIR / "transcripts" / RUN_TOKEN
         run_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(run_dir, 0o700)
+        payload_records = [self._safe_record(record) for record in self.transcript]
         payload = {
             "run_token": RUN_TOKEN,
             "outcome": outcome,
             "record_count": len(self.transcript),
-            "records": list(self.transcript),
+            "records": payload_records,
         }
         identity = dict(self.identity)
         identity.update(
@@ -1033,6 +1057,21 @@ class FieldEnvironment:
                 if str(record.get("label", "")).startswith(outcome)
             ],
         }
+
+    def _safe_record(self, record: dict[str, object]) -> dict[str, object]:
+        """Reapply the current safe projection at serialization time.
+
+        Secrets registered AFTER a CLI call was captured (for example a
+        key token observed transiently through the SMTP sink) must also be
+        scrubbed from the persisted transcript bytes, not only from
+        records captured later."""
+        safe = dict(record)
+        for name in ("stdout", "stderr"):
+            if isinstance(safe.get(name), str):
+                safe[name] = self.safe(safe[name])
+        if isinstance(safe.get("argv"), list):
+            safe["argv"] = [self.safe(str(a)) for a in safe["argv"]]
+        return safe
 SEED_SCRIPT = r"""
 import asyncio
 import json
@@ -3058,6 +3097,8 @@ def test_dod5_filtered_model_discovery(field_workflow: FieldEnvironment) -> None
     )
 
 
+
+
 # --------------------------------------------------------------------------
 # DoD 7: two configured completion services (order 205-c section 5).
 # Fictional module providers/pricing/routes through the EXISTING installed
@@ -3861,6 +3902,1086 @@ def test_dod8_stable_route_context_media_updates(
         "dod8-routes-show-mixed-check",
         "dod8-routes-list-after",
         "dod8-policy-export-after",
+    }
+    assert set(persisted["labeled"]) == expected_labels
+    persisted_bytes = (
+        transcript_path.read_bytes() + identity_path.read_bytes()
+    )
+    secret_in_persisted = any(
+        secret.encode("utf-8") in persisted_bytes for secret in env._secrets
+    )
+    assert not secret_in_persisted, (
+        "a generated secret is present in the persisted transcript/identity"
+    )
+
+
+# ---------------------------------------------------------------------------
+# DoD9 (205-d): installed once-only mail delivery and inspection
+# ---------------------------------------------------------------------------
+
+# Mail-enabled owned subprocess settings (loopback sink only; no real SMTP).
+MAIL_ENV = {"ENABLE_EMAIL_DELIVERY": "true"}
+
+# DoD11: explicit configured replay reference lifetime (exactly 30 days),
+# supplied through the installed CLI subprocess environment.
+REPLAY_TTL_SECONDS = 2592000
+REPLAY_ENV = {"CODEX_REPLAY_REFERENCE_TTL_SECONDS": str(REPLAY_TTL_SECONDS)}
+
+
+def _smtp_data_body(data: str) -> str:
+    """Decode the SMTP DATA message's MIME transfer encoding to text.
+
+    The serialized message may be transfer-encoded (for example
+    quoted-printable when the body is not ASCII) and its long lines are
+    wrapped by the MIME generator, so raw substring or whitespace
+    splitting on the wire bytes is not a reliable read of the logical
+    body.
+    """
+    message = email.message_from_string(data)
+    payload = message.get_payload(decode=True)
+    if payload is None:
+        return data
+    return payload.decode("utf-8", "replace")
+
+
+def _extract_key_token(body: str, prefix: str) -> str:
+    """Extract the full generated key token from a decoded email body.
+
+    All whitespace is removed first so a MIME line wrap inside the token
+    cannot truncate it; the key shape is ``<prefix><public_id>.<secret>``
+    and the token run stops at the template's closing quote. Returns
+    ``""`` when the prefix is absent.
+    """
+    normalized = re.sub(r"\s+", "", body)
+    start = normalized.find(prefix)
+    if start < 0:
+        return ""
+    match = re.match(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", normalized[start + len(prefix):])
+    return prefix + (match.group(0) if match else "")
+
+
+async def _plant_dod9_history(
+    orm_url: str, owner_id: uuid.UUID, allowed_model: str, owner_email: str
+) -> dict[str, dict[str, str]]:
+    """Plant DoD9 historical delivery states (fixture setup, one session).
+
+    Three clearly labeled PRE-EXISTING (key, one-time-secret, delivery)
+    triples for unsafe-state inspection: a `sending` delivery, an
+    `ambiguous` delivery, and a `pending` delivery bound to an EXPIRED
+    one-time secret. Fixture setup only: constant synthetic payloads that
+    are never decryptable or sent; these rows are not operator actions and
+    do not pretend to prove SMTP-accepted/DB-failed handling.
+
+    Every planted delivery is bound to the owner's CURRENT email address
+    (recipient == owner.email), so the unsafe-state cases reach their
+    intended delivery-status / secret-expiry guards rather than any
+    recipient-binding confound.
+    """
+    engine = create_async_engine(orm_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    past = now - timedelta(days=3)
+    try:
+        async with factory() as session:
+            async with session.begin():
+                planted: dict[str, dict[str, str]] = {}
+                for tag, delivery_status, secret_status in (
+                    ("sending", "sending", "pending"),
+                    ("ambiguous", "ambiguous", "pending"),
+                    ("expired", "pending", "expired"),
+                ):
+                    key = await GatewayKeysRepository(
+                        session
+                    ).create_gateway_key_record(
+                        public_key_id=f"pk_hist_205d_{tag}_{uuid.uuid4().hex[:8]}",
+                        token_hash=uuid.uuid4().hex * 2,
+                        owner_id=owner_id,
+                        valid_from=past,
+                        valid_until=now + timedelta(days=30),
+                        allowed_models=[allowed_model],
+                    )
+                    secret = OneTimeSecret(
+                        purpose="gateway_key_email",
+                        owner_id=owner_id,
+                        gateway_key_id=key.id,
+                        encrypted_payload="synthetic-205d-encrypted-payload",
+                        nonce="synthetic-205d-nonce",
+                        encryption_key_version=1,
+                        expires_at=(
+                            now + timedelta(days=30)
+                            if secret_status == "pending"
+                            else now - timedelta(days=1)
+                        ),
+                        consumed_at=None,
+                        status=secret_status,
+                        created_at=past,
+                    )
+                    session.add(secret)
+                    await session.flush()
+                    delivery = EmailDelivery(
+                        owner_id=owner_id,
+                        gateway_key_id=key.id,
+                        one_time_secret_id=secret.id,
+                        recipient_email=owner_email,
+                        subject="205-d historical delivery fixture",
+                        template_name="gateway_key_email",
+                        status=delivery_status,
+                        created_at=past,
+                    )
+                    session.add(delivery)
+                    await session.flush()
+                    planted[tag] = {
+                        "key_id": str(key.id),
+                        "secret_id": str(secret.id),
+                        "delivery_id": str(delivery.id),
+                    }
+                return planted
+    finally:
+        await engine.dispose()
+
+
+def test_dod9_mail_delivery_and_inspection(field_workflow: FieldEnvironment) -> None:
+    env = field_workflow
+    m = env.manifest
+    prefix = env.cli_env["GATEWAY_KEY_PREFIX"]
+    sink = env.smtp
+    plans = env.operator_dir / "dod9-plans"
+    plans.mkdir(exist_ok=True)
+
+    def _count(table: str) -> int:
+        return int(env.sql(f"SELECT count(*) AS c FROM {table}")[0]["c"])
+
+    base_keys = _count("gateway_keys")
+    base_deliveries = _count("email_deliveries")
+    base_ledger = _count("usage_ledger")
+    base_msgs = len(sink.received)
+    base_refusals = sink.refusals
+    assert base_msgs == 0 and base_refusals == 0
+    # Clone source: k_student is the fully-routable positive source (M1 +
+    # M4 keep enabled routes); k_policy deliberately carries disabled M2/M3
+    # routes and would refuse clone CREATE's enabled-model validation.
+    k_source_before = _full_key_row(env, m["k_student"])
+
+    # Clearly labeled PRE-EXISTING fixture states (fixture setup, NOT
+    # operator actions): sending / ambiguous / expired-secret histories.
+    orm_url = env.driver_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    try:
+        hist = asyncio.run(
+            _plant_dod9_history(
+                orm_url,
+                uuid.UUID(str(m["owner_seed"])),
+                m["models"]["m1"],
+                m["owner_seed_email"],
+            )
+        )
+    except Exception:
+        raise AssertionError(
+            "dod9 fixture planting failed (fixed safe detail; no SQL retained)"
+        ) from None
+
+    # 1) Newly cloned key, EXACTLY-ONE explicit delivery channel:
+    # --email-delivery pending (no file, no show-plaintext).
+    plan1 = plans / "dod9-clone-1.json"
+    env.run_cli(
+        "keys", "clone",
+        "--dry-run", str(plan1),
+        "--source-key-id", m["k_student"],
+        "--target-owner-id", m["owner_seed"],
+        "--validity-mode", "copy-source-expiry",
+        label="dod9-clone-dry-run-1",
+    )
+    assert plan1.is_file()
+    assert stat.S_IMODE(plan1.stat().st_mode) == 0o600
+    cloned = env.run_cli(
+        "keys", "clone",
+        "--execute", str(plan1),
+        "--reason", "205-d mail qualification clone",
+        "--email-delivery", "pending",
+        label="dod9-clone-execute-1",
+    ).json
+    target1 = str(cloned["target_gateway_key_id"])
+    secret1 = str(cloned["one_time_secret_id"])
+    delivery1 = str(cloned["email_delivery_id"])
+    assert cloned["status"] == "created"
+    # The pending channel performs NO send and reports NO delivery status:
+    # the prepared row's actual pending state is proven by `email show`
+    # below, not by a send result.
+    assert "email_delivery_status" not in cloned
+    assert "plaintext_key" not in cloned
+    plaintext_in_output = prefix in env.transcript[-1]["stdout"]
+    assert not plaintext_in_output, "clone output exposed key material"
+
+    # 2) Inspect the prepared pending delivery through installed commands.
+    shown = env.run_cli(
+        "email", "show", delivery1, env=MAIL_ENV, label="dod9-email-show-pending-1"
+    ).json
+    assert shown["status"] == "pending"
+    assert shown["recipient_email"] == m["owner_seed_email"]
+    assert shown["one_time_secret_id"] == secret1
+    listed = env.run_cli(
+        "email", "list", "--delivery-id", delivery1, env=MAIL_ENV,
+        label="dod9-email-list-pending-1",
+    ).json
+    assert [item["delivery_id"] for item in listed["items"]] == [delivery1]
+
+    # 3) Actual synchronous send; ONE SMTP DATA acceptance on the sink.
+    sent = env.run_cli(
+        "email", "send-pending-key",
+        "--one-time-secret-id", secret1,
+        "--email-delivery-id", delivery1,
+        "--reason", "initial 205-d send",
+        "--send-now",
+        env=MAIL_ENV,
+        label="dod9-send-now-1",
+    ).json
+    assert sent["status"] == "sent"
+    assert sent["email_delivery_id"] == delivery1
+    assert sent["one_time_secret_id"] == secret1
+    assert len(sink.received) == base_msgs + 1
+    assert sink.refusals == base_refusals
+    message = sink.received[-1]
+    assert message["to"].strip("<>") == m["owner_seed_email"]
+    # Decode the MIME transfer encoding and read the FULL logical body:
+    # the key line is longer than the MIME generator's wrap width, so a
+    # raw wire-bytes fragment is not the complete generated key.
+    key1 = _extract_key_token(_smtp_data_body(message["data"]), prefix)
+    key1_observed = key1.startswith(prefix) and len(key1) > len(prefix) + 12
+    # Register the transiently observed FULL key BEFORE any persistence.
+    env.register_secret(key1, "dod9-cloned-key-1")
+    assert key1_observed, "generated key not observed transiently via the sink"
+    secret_row = env.sql(
+        "SELECT status, consumed_at FROM one_time_secrets WHERE id = $1", secret1
+    )[0]
+    assert secret_row["status"] == "consumed"
+    assert secret_row["consumed_at"]
+    shown_sent = env.run_cli(
+        "email", "show", delivery1, env=MAIL_ENV, label="dod9-email-show-sent-1"
+    ).json
+    assert shown_sent["status"] == "sent"
+    assert shown_sent["sent_at"]
+    assert shown_sent["one_time_secret"]["status"] == "consumed"
+
+    # 4) Exact repeat: refused, no additional SMTP send, no re-consumption.
+    repeat = env.run_cli(
+        "email", "send-pending-key",
+        "--one-time-secret-id", secret1,
+        "--email-delivery-id", delivery1,
+        "--send-now",
+        env=MAIL_ENV,
+        expect=1,
+        label="dod9-send-now-repeat-1",
+    ).json
+    assert repeat["status"] == "failed"
+    assert len(sink.received) == base_msgs + 1
+    assert sink.refusals == base_refusals
+    secret_row = env.sql(
+        "SELECT status, consumed_at FROM one_time_secrets WHERE id = $1", secret1
+    )[0]
+    assert secret_row["status"] == "consumed"
+
+    # 5) Second newly cloned key; minimal definite sink refusal (fixture IO
+    # fault, not business-service mocking).
+    plan2 = plans / "dod9-clone-2.json"
+    env.run_cli(
+        "keys", "clone",
+        "--dry-run", str(plan2),
+        "--source-key-id", m["k_student"],
+        "--target-owner-id", m["owner_seed"],
+        "--validity-mode", "copy-source-expiry",
+        label="dod9-clone-dry-run-2",
+    )
+    cloned2 = env.run_cli(
+        "keys", "clone",
+        "--execute", str(plan2),
+        "--reason", "205-d mail qualification clone second",
+        "--email-delivery", "pending",
+        label="dod9-clone-execute-2",
+    ).json
+    target2 = str(cloned2["target_gateway_key_id"])
+    secret2 = str(cloned2["one_time_secret_id"])
+    delivery2 = str(cloned2["email_delivery_id"])
+    assert target2 != target1
+    key2_before = env.sql(
+        "SELECT id, public_key_id, token_hash FROM gateway_keys WHERE id = $1",
+        target2,
+    )[0]
+    sink.refuse_data = True
+    refused = env.run_cli(
+        "email", "send-pending-key",
+        "--one-time-secret-id", secret2,
+        "--email-delivery-id", delivery2,
+        "--reason", "second 205-d send",
+        "--send-now",
+        env=MAIL_ENV,
+        expect=1,
+        label="dod9-send-now-2-refused",
+    ).json
+    assert refused["status"] == "failed"
+    assert refused["error_code"] == "smtp_send_error"
+    assert sink.refusals == base_refusals + 1
+    assert len(sink.received) == base_msgs + 1
+    shown_failed = env.run_cli(
+        "email", "show", delivery2, env=MAIL_ENV, label="dod9-email-show-failed-2"
+    ).json
+    assert shown_failed["status"] == "failed"
+    assert shown_failed["failed_at"]
+    assert (
+        shown_failed["last_recorded_failure"]["error_code"] == "smtp_send_error"
+    )
+
+    # No automatic retry: the next refusals add no SMTP attempt at all.
+    no_flag = env.run_cli(
+        "email", "send-pending-key",
+        "--one-time-secret-id", secret2,
+        "--email-delivery-id", delivery2,
+        "--send-now",
+        env=MAIL_ENV,
+        expect=1,
+        label="dod9-retry-missing-flag-2",
+    ).json
+    assert no_flag["error"]["code"] == "invalid_parameter"
+    assert "FAILED" in no_flag["error"]["message"]
+    blank = env.run_cli(
+        "email", "send-pending-key",
+        "--one-time-secret-id", secret2,
+        "--email-delivery-id", delivery2,
+        "--retry-failed",
+        "--reason", "   ",
+        "--send-now",
+        env=MAIL_ENV,
+        expect=1,
+        label="dod9-retry-blank-reason-2",
+    ).json
+    assert blank["error"]["code"] == "invalid_parameter"
+    assert sink.refusals == base_refusals + 1
+    assert len(sink.received) == base_msgs + 1
+
+    # Explicit --retry-failed with exact selection + nonblank reason: one
+    # safe retry to success, no replacement key or secret.
+    sink.refuse_data = False
+    retried = env.run_cli(
+        "email", "send-pending-key",
+        "--one-time-secret-id", secret2,
+        "--email-delivery-id", delivery2,
+        "--reason", "explicit 205-d retry after synthetic SMTP refusal",
+        "--retry-failed",
+        "--send-now",
+        env=MAIL_ENV,
+        label="dod9-retry-failed-2",
+    ).json
+    assert retried["status"] == "sent"
+    assert retried["one_time_secret_id"] == secret2
+    assert len(sink.received) == base_msgs + 2
+    assert sink.refusals == base_refusals + 1
+    # The retry message carries the SAME target key material; observe the
+    # full token from the decoded body and register it before persistence.
+    key2_token = _extract_key_token(
+        _smtp_data_body(sink.received[-1]["data"]), prefix
+    )
+    key2_observed = (
+        key2_token.startswith(prefix) and len(key2_token) > len(prefix) + 12
+    )
+    env.register_secret(key2_token, "dod9-cloned-key-2")
+    assert key2_observed, "retried key not observed transiently via the sink"
+    distinct_keys = key2_token != key1
+    assert distinct_keys, "retry reused the first clone's key material"
+    key2_after = env.sql(
+        "SELECT id, public_key_id, token_hash FROM gateway_keys WHERE id = $1",
+        target2,
+    )[0]
+    key2_unchanged = key2_before == key2_after
+    assert key2_unchanged, "retry replaced key material"
+    listed2 = env.run_cli(
+        "email", "list", "--key-id", target2, env=MAIL_ENV, label="dod9-email-list-key-2"
+    ).json
+    assert [item["delivery_id"] for item in listed2["items"]] == [delivery2]
+    secrets2 = int(
+        env.sql(
+            "SELECT count(*) AS c FROM one_time_secrets WHERE gateway_key_id = $1",
+            target2,
+        )[0]["c"]
+    )
+    assert secrets2 == 1
+
+    # 5b) ACTUAL installed read-only inspection of the planted unsafe
+    # lifecycles BEFORE any send probe: each planted delivery must show its
+    # delivery status, current-owner recipient binding, exact secret
+    # binding, and the one-time-secret lifecycle with the fixed blocking
+    # reason. A refusal response alone is not the inspection proof.
+    expected_lifecycle = {
+        "sending": (
+            "sending",
+            "present",
+            "This delivery is already in progress. Do not retry automatically; rotate the key if delivery cannot be confirmed.",
+        ),
+        "ambiguous": (
+            "ambiguous",
+            "present",
+            "SMTP may have accepted this email, but finalization did not complete. Do not retry; rotate the key if receipt cannot be confirmed.",
+        ),
+        "expired": (
+            "pending",
+            "expired",
+            "The one-time secret is expired; rotate the key and create a new delivery.",
+        ),
+    }
+    for tag, (delivery_status, secret_status, blocking_reason) in (
+        expected_lifecycle.items()
+    ):
+        h = hist[tag]
+        pre_show = env.run_cli(
+            "email", "show", h["delivery_id"], env=MAIL_ENV,
+            label=f"dod9-email-show-hist-{tag}-pre",
+        ).json
+        assert pre_show["status"] == delivery_status, tag
+        assert pre_show["recipient_email"] == m["owner_seed_email"], tag
+        assert pre_show["one_time_secret_id"] == h["secret_id"], tag
+        assert pre_show["gateway_key_id"] == h["key_id"], tag
+        assert pre_show["one_time_secret"]["status"] == secret_status, tag
+        assert pre_show["one_time_secret"]["can_send"] is False, tag
+        assert (
+            pre_show["one_time_secret"]["blocking_reason"] == blocking_reason
+        ), tag
+        pre_listed = env.run_cli(
+            "email", "list", "--delivery-id", h["delivery_id"], env=MAIL_ENV,
+            label=f"dod9-email-list-hist-{tag}-pre",
+        ).json
+        assert (
+            [item["delivery_id"] for item in pre_listed["items"]]
+            == [h["delivery_id"]]
+        ), tag
+        assert pre_listed["items"][0]["status"] == delivery_status, tag
+
+    # 6) Clearly labeled PRE-EXISTING fixture states: unsafe retry/resend
+    # refused with NO additional SMTP attempt. These are planted fixture
+    # rows (not actual IO) and do not prove SMTP-accepted/DB-failed handling.
+    for tag, expected_code, expected_status in (
+        ("sending", "email_delivery_in_progress", "failed"),
+        ("ambiguous", "email_delivery_ambiguous", "ambiguous"),
+        ("expired", "one_time_secret_expired", "failed"),
+    ):
+        h = hist[tag]
+        before_msgs = len(sink.received)
+        before_refusals = sink.refusals
+        result = env.run_cli(
+            "email", "send-pending-key",
+            "--one-time-secret-id", h["secret_id"],
+            "--email-delivery-id", h["delivery_id"],
+            "--send-now",
+            env=MAIL_ENV,
+            expect=1,
+            label=f"dod9-hist-{tag}-refused",
+        ).json
+        assert result["status"] == expected_status
+        assert result["error_code"] == expected_code
+        assert len(sink.received) == before_msgs
+        assert sink.refusals == before_refusals
+    expired_after = env.run_cli(
+        "email", "show", hist["expired"]["delivery_id"], env=MAIL_ENV,
+        label="dod9-email-show-expired-after",
+    ).json
+    # Actual post-state: the expired-secret attempt records the delivery
+    # as failed (no SMTP acceptance occurred).
+    assert expired_after["status"] == "failed"
+    assert expired_after["one_time_secret"]["status"] == "expired"
+    assert expired_after["one_time_secret"]["can_send"] is False
+    assert (
+        expired_after["last_recorded_failure"]["error_code"]
+        == "one_time_secret_expired"
+    )
+
+    # 7) One key / one bound lifecycle, no usage duplication, unrelated
+    # state unchanged.
+    secrets1 = int(
+        env.sql(
+            "SELECT count(*) AS c FROM one_time_secrets WHERE gateway_key_id = $1",
+            target1,
+        )[0]["c"]
+    )
+    assert secrets1 == 1
+    assert _count("usage_ledger") == base_ledger
+    assert _count("gateway_keys") == base_keys + 5
+    assert _count("email_deliveries") == base_deliveries + 5
+    k_source_after = _full_key_row(env, m["k_student"])
+    source_unchanged = k_source_before == k_source_after
+    assert source_unchanged, "clone source key row changed"
+
+    # 8) Persist the safe requirement-indexed transcript for this case.
+    persisted = env.persist_transcript("dod9")
+    run_dir = Path(persisted["directory"])
+    transcript_path = Path(persisted["paths"]["transcript"])
+    identity_path = Path(persisted["paths"]["identity"])
+    assert (run_dir.stat().st_mode & 0o777) == 0o700
+    assert (transcript_path.stat().st_mode & 0o777) == 0o600
+    assert (identity_path.stat().st_mode & 0o777) == 0o600
+    assert _sha256_file(transcript_path) == persisted["sha256"]["transcript"]
+    assert _sha256_file(identity_path) == persisted["sha256"]["identity"]
+    assert persisted["record_count"] == len(env.transcript)
+    expected_labels = {
+        "dod9-clone-dry-run-1",
+        "dod9-clone-execute-1",
+        "dod9-email-show-pending-1",
+        "dod9-email-list-pending-1",
+        "dod9-send-now-1",
+        "dod9-email-show-sent-1",
+        "dod9-send-now-repeat-1",
+        "dod9-clone-dry-run-2",
+        "dod9-clone-execute-2",
+        "dod9-send-now-2-refused",
+        "dod9-email-show-failed-2",
+        "dod9-retry-missing-flag-2",
+        "dod9-retry-blank-reason-2",
+        "dod9-retry-failed-2",
+        "dod9-email-list-key-2",
+        "dod9-email-show-hist-sending-pre",
+        "dod9-email-list-hist-sending-pre",
+        "dod9-email-show-hist-ambiguous-pre",
+        "dod9-email-list-hist-ambiguous-pre",
+        "dod9-email-show-hist-expired-pre",
+        "dod9-email-list-hist-expired-pre",
+        "dod9-hist-sending-refused",
+        "dod9-hist-ambiguous-refused",
+        "dod9-hist-expired-refused",
+        "dod9-email-show-expired-after",
+    }
+    assert set(persisted["labeled"]) == expected_labels
+    persisted_bytes = (
+        transcript_path.read_bytes() + identity_path.read_bytes()
+    )
+    secret_in_persisted = any(
+        secret.encode("utf-8") in persisted_bytes for secret in env._secrets
+    )
+    assert not secret_in_persisted, (
+        "a generated secret is present in the persisted transcript/identity"
+    )
+
+
+# ---------------------------------------------------------------------------
+# DoD11 (205-d): installed reviewed replay-reference expiry maintenance
+# ---------------------------------------------------------------------------
+# Fixture setup only: clearly labeled PRE-EXISTING reference/ledger rows
+# through the installed package's own ORM objects (explicitly allowed
+# setup), then ALL operator business actions through the installed console.
+# The planted rows are schema-valid (the codex_replay_references CHECK
+# constraints are preserved; this test never relaxes a database check).
+
+
+def _iso_z(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
+
+
+async def _plant_dod11_history(
+    orm_url: str,
+    key_id: uuid.UUID,
+    route_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    provider: str,
+    upstream_model: str,
+) -> dict[str, dict[str, object]]:
+    """Plant DoD11 replay reference states (fixture setup, one session).
+
+    Five clearly labeled PRE-EXISTING references bound to ONE active,
+    in-validity key, each with its own ledger (constant synthetic digests,
+    no gateway-key plaintext). Every row satisfies the actual
+    ``codex_replay_references`` CHECK constraints (kind ``reasoning`` keeps
+    null call/tool fields; provider/upstream match the ACTUAL route):
+
+    - ``extend``:        finalized v1, created now-20d, expires now+5d
+      (eligible; extended to created+TTL);
+    - ``noshorten``:     finalized v1, created now-5d, expires now+200d
+      (eligible; max() keeps the later stored expiry, no write);
+    - ``expired``:       finalized v1, created now-10d, expires now-2d
+      (excluded by the default run; restored by the explicit
+      --include-expired plan);
+    - ``hmacv2``:        finalized v2, created now-1d, expires now+30d
+      (excluded: hmac_version_unavailable);
+    - ``pendingledger``: non-finalized ledger, v1, created now-1d,
+      expires now+30d (excluded: ledger_not_finalized).
+
+    These rows are not operator actions and do not prove replay playback,
+    provider qualification, or authentication.
+    """
+    engine = create_async_engine(orm_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    day = timedelta(days=1)
+    specs = {
+        "extend": (1, True, now - 20 * day, now + 5 * day),
+        "noshorten": (1, True, now - 5 * day, now + 200 * day),
+        "expired": (1, True, now - 10 * day, now - 2 * day),
+        "hmacv2": (2, True, now - day, now + 30 * day),
+        "pendingledger": (1, False, now - day, now + 30 * day),
+    }
+    planted: dict[str, dict[str, object]] = {}
+    try:
+        async with factory() as session:
+            async with session.begin():
+                for tag, (version, finalized, created, expires) in specs.items():
+                    request_id = f"req-205d11-{tag}-{uuid.uuid4().hex[:8]}"
+                    ledger = UsageLedger(
+                        request_id=request_id,
+                        gateway_key_id=key_id,
+                        owner_id=owner_id,
+                        endpoint="/v1/responses",
+                        provider=provider,
+                        success=True if finalized else None,
+                        accounting_status="finalized" if finalized else "pending",
+                        started_at=created,
+                        finished_at=created,
+                    )
+                    session.add(ledger)
+                    await session.flush()
+                    reference_id = uuid.uuid4()
+                    item_id_hmac = hashlib.sha256(
+                        f"item-205d11-{tag}".encode("utf-8")
+                    ).hexdigest()
+                    await CodexReplayReferencesRepository(session).upsert_many(
+                        [
+                            CodexReplayReferenceInsert(
+                                id=reference_id,
+                                gateway_key_id=key_id,
+                                usage_ledger_id=ledger.id,
+                                source_request_id=request_id,
+                                provider=provider,
+                                route_id=route_id,
+                                upstream_model=upstream_model,
+                                item_kind="reasoning",
+                                item_id_hmac=item_id_hmac,
+                                call_id_hmac=None,
+                                hmac_key_version=version,
+                                tool_namespace=None,
+                                tool_name=None,
+                                created_at=created,
+                                expires_at=expires,
+                            )
+                        ]
+                    )
+                    planted[tag] = {
+                        "reference_id": str(reference_id),
+                        "ledger_id": str(ledger.id),
+                        "request_id": request_id,
+                        "item_id_hmac": item_id_hmac,
+                        "created": created,
+                        "expires": expires,
+                    }
+    finally:
+        await engine.dispose()
+    return planted
+
+
+def _full_row(env: FieldEnvironment, table: str, row_id: str) -> dict[str, object]:
+    return env.sql(f"SELECT * FROM {table} WHERE id = $1", row_id)[0]
+
+
+def _changed_columns(
+    before: dict[str, object], after: dict[str, object]
+) -> list[str]:
+    return sorted(c for c in before if str(before[c]) != str(after[c]))
+
+
+def test_dod11_replay_expiry_maintenance(field_workflow: FieldEnvironment) -> None:
+    env = field_workflow
+    m = env.manifest
+    key_id = str(m["k_student"])
+    route_id = str(m["route_a"])
+    plans = env.operator_dir / "dod11-plans"
+    plans.mkdir(exist_ok=True)
+    audit_before = _audit_count(env)
+
+    # Clearly labeled PRE-EXISTING fixture states (fixture setup, NOT
+    # operator actions). The fixed safe caller boundary keeps any raw
+    # driver/SQL detail out of retained evidence.
+    orm_url = env.driver_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    try:
+        planted = asyncio.run(
+            _plant_dod11_history(
+                orm_url,
+                uuid.UUID(key_id),
+                uuid.UUID(route_id),
+                uuid.UUID(str(m["owner_seed"])),
+                "openai",
+                "fixture-a",
+            )
+        )
+    except Exception:
+        raise AssertionError(
+            "dod11 fixture planting failed (fixed safe detail; no SQL retained)"
+        ) from None
+
+    # Register every planted private identifier/digest BEFORE any retained
+    # projection or SQL inspection.
+    for tag, row in planted.items():
+        env.register_secret(str(row["reference_id"]), f"dod11-{tag}-reference-id")
+        env.register_secret(str(row["ledger_id"]), f"dod11-{tag}-ledger-id")
+        env.register_secret(str(row["request_id"]), f"dod11-{tag}-request-id")
+        env.register_secret(str(row["item_id_hmac"]), f"dod11-{tag}-item-hmac")
+
+    # Pre-state snapshots: the full key row, every reference row, every
+    # ledger row (column-level preservation oracles).
+    key_before = _full_key_row(env, key_id)
+    ref_before = {
+        tag: _full_row(env, "codex_replay_references", str(row["reference_id"]))
+        for tag, row in planted.items()
+    }
+    ledger_before = {
+        tag: _full_row(env, "usage_ledger", str(row["ledger_id"]))
+        for tag, row in planted.items()
+    }
+
+    # 1) Actual installed inspection under the explicit configured TTL.
+    inspected = env.run_cli(
+        "codex", "replay", "inspect", "--key-id", key_id,
+        env=REPLAY_ENV, label="dod11-inspect-pre",
+    ).json
+    assert inspected["configured_ttl_seconds"] == REPLAY_TTL_SECONDS
+    assert inspected["keys"] == 1
+    assert inspected["keys_active_or_valid"] == 1
+    assert inspected["references"] == 5
+    assert inspected["active_references"] == 4
+    assert inspected["expired_references"] == 1
+    assert inspected["per_key"][0]["key_id"] == key_id
+    assert inspected["per_key"][0]["key_status"] == "active"
+
+    # 2) Reviewed dry-run plan under the CONFIGURED default TTL (no
+    # explicit --ttl-seconds flag), written to a NEW 0600 file.
+    plan_file = plans / "dod11-extend-1.json"
+    extend = env.run_cli(
+        "codex", "replay", "extend",
+        "--key-id", key_id,
+        "--output", str(plan_file),
+        env=REPLAY_ENV, label="dod11-extend-dry-run",
+    ).json
+    assert extend["mode"] == "dry-run"
+    assert extend["plan_file"] == str(plan_file)
+    assert extend["ttl_is_configured_default"] is True
+    assert extend["ttl_seconds"] == REPLAY_TTL_SECONDS
+    assert extend["configured_ttl_seconds"] == REPLAY_TTL_SECONDS
+    assert extend["include_expired"] is False
+    assert extend["selected_keys"] == 1
+    assert extend["eligible_references"] == 2
+    assert extend["exclusion_counts"] == {
+        "key_not_active_or_valid": 0,
+        "ledger_not_finalized": 1,
+        "unsupported_kind": 0,
+        "hmac_version_unavailable": 1,
+        "outside_lifetime": 0,
+        "expired_not_included": 1,
+    }
+    ext = planted["extend"]
+    ns = planted["noshorten"]
+    assert extend["old_expiry_range"] == [
+        _iso_z(ext["expires"]),  # type: ignore[arg-type]
+        _iso_z(ns["expires"]),  # type: ignore[arg-type]
+    ]
+    assert extend["new_expiry_range"] == [
+        _iso_z(ext["created"] + timedelta(seconds=REPLAY_TTL_SECONDS)),  # type: ignore[arg-type]
+        _iso_z(ns["expires"]),  # type: ignore[arg-type]
+    ]
+    assert plan_file.is_file()
+    assert stat.S_IMODE(plan_file.stat().st_mode) == 0o600
+
+    # 3) Mixed-mode law: --execute with a preview/edit flag is refused
+    # (exit 2, fixed stderr, no plan read, no database access).
+    mixed = env.run_cli(
+        "codex", "replay", "extend",
+        "--execute", str(plan_file),
+        "--ttl-seconds", "1234",
+        env=REPLAY_ENV, expect=2, label="dod11-extend-mixed-refused",
+    )
+    mixed_fixed = "reviewed plan file only" in mixed.safe_stderr
+    assert mixed_fixed, "mixed-mode refusal did not carry the fixed message"
+    mixed_echo = "1234" in mixed.safe_stderr or plan_file.name in mixed.safe_stderr
+    assert not mixed_echo, "mixed-mode refusal echoed supplied values"
+    assert _audit_count(env) == audit_before
+
+    # 4) Apply the reviewed plan: exactly ONE value change (monotonic).
+    applied = env.run_cli(
+        "codex", "replay", "extend",
+        "--execute", str(plan_file),
+        "--reason", "205-d reviewed replay expiry extension",
+        env=REPLAY_ENV, label="dod11-extend-execute",
+    ).json
+    assert applied["mode"] == "execute"
+    assert applied["applied"] is True
+    assert applied["already_applied"] is False
+    assert applied["updated_references"] == 1
+    assert applied["range_descriptors_source"] == "reviewed_plan"
+    assert _audit_count(env) == audit_before + 1
+
+    # 5) Exact persisted post-state after the first apply: the extended
+    # row lands exactly on created+TTL; the no-shorten row keeps its later
+    # stored expiry; every excluded row is untouched. Column-level
+    # preservation: ONLY expires_at may change, and only on the extended
+    # row; digests/route/model/source/ledger/key/quotas are all preserved.
+    def _ref(tag: str) -> dict[str, object]:
+        return _full_row(
+            env, "codex_replay_references", str(planted[tag]["reference_id"])
+        )
+
+    expected_after_1 = {
+        "extend": ext["created"] + timedelta(seconds=REPLAY_TTL_SECONDS),
+        "noshorten": ns["expires"],
+        "expired": planted["expired"]["expires"],
+        "hmacv2": planted["hmacv2"]["expires"],
+        "pendingledger": planted["pendingledger"]["expires"],
+    }
+    for tag, want in expected_after_1.items():
+        row = _ref(tag)
+        expiry_same = datetime.fromisoformat(str(row["expires_at"])) == want
+        assert expiry_same, f"{tag}: expiry not the exact reviewed target"
+        created_same = (
+            datetime.fromisoformat(str(row["created_at"]))
+            == planted[tag]["created"]
+        )
+        assert created_same, f"{tag}: original creation time changed"
+        owner_same = str(row["gateway_key_id"]) == key_id
+        assert owner_same, f"{tag}: key ownership changed"
+    assert _changed_columns(ref_before["extend"], _ref("extend")) == ["expires_at"]
+    for tag in ("noshorten", "expired", "hmacv2", "pendingledger"):
+        assert not _changed_columns(ref_before[tag], _ref(tag)), (
+            f"{tag}: an untouched reference column changed"
+        )
+    for tag in planted:
+        assert not _changed_columns(
+            ledger_before[tag],
+            _full_row(env, "usage_ledger", str(planted[tag]["ledger_id"])),
+        ), f"{tag}: the bound ledger row changed"
+    assert not _changed_columns(key_before, _full_key_row(env, key_id)), (
+        "the replay key row (policy/quotas/material) changed"
+    )
+    ref_after_1 = {tag: _ref(tag) for tag in planted}
+
+    # 6) Exact repeat: already applied, zero writes, zero duplicate audits.
+    repeated = env.run_cli(
+        "codex", "replay", "extend",
+        "--execute", str(plan_file),
+        "--reason", "205-d repeat of the applied extension",
+        env=REPLAY_ENV, label="dod11-extend-repeat",
+    ).json
+    assert repeated["applied"] is False
+    assert repeated["already_applied"] is True
+    assert repeated["updated_references"] == 0
+    assert _audit_count(env) == audit_before + 1
+
+    # 7) SECOND reviewed plan: the explicitly expired reference is
+    # restored by the --include-expired preview (all other rows unchanged),
+    # then applied as its own exact no-op-free operation.
+    plan2_file = plans / "dod11-extend-2.json"
+    extend2 = env.run_cli(
+        "codex", "replay", "extend",
+        "--key-id", key_id,
+        "--include-expired",
+        "--output", str(plan2_file),
+        env=REPLAY_ENV, label="dod11-extend2-dry-run",
+    ).json
+    assert extend2["mode"] == "dry-run"
+    assert extend2["plan_file"] == str(plan2_file)
+    assert extend2["include_expired"] is True
+    assert extend2["ttl_is_configured_default"] is True
+    assert extend2["selected_keys"] == 1
+    assert extend2["eligible_references"] == 3
+    assert extend2["exclusion_counts"] == {
+        "key_not_active_or_valid": 0,
+        "ledger_not_finalized": 1,
+        "unsupported_kind": 0,
+        "hmac_version_unavailable": 1,
+        "outside_lifetime": 0,
+        "expired_not_included": 0,
+    }
+    c = planted["expired"]
+    assert extend2["old_expiry_range"] == [
+        _iso_z(c["expires"]),  # type: ignore[arg-type]
+        _iso_z(ns["expires"]),  # type: ignore[arg-type]
+    ]
+    assert extend2["new_expiry_range"] == [
+        _iso_z(ext["created"] + timedelta(seconds=REPLAY_TTL_SECONDS)),  # type: ignore[arg-type]
+        _iso_z(ns["expires"]),  # type: ignore[arg-type]
+    ]
+    assert plan2_file.is_file()
+    assert stat.S_IMODE(plan2_file.stat().st_mode) == 0o600
+
+    applied2 = env.run_cli(
+        "codex", "replay", "extend",
+        "--execute", str(plan2_file),
+        "--reason", "205-d explicit include-expired restoration",
+        env=REPLAY_ENV, label="dod11-extend2-execute",
+    ).json
+    assert applied2["applied"] is True
+    assert applied2["already_applied"] is False
+    assert applied2["updated_references"] == 1
+    assert _audit_count(env) == audit_before + 2
+
+    # 8) Exact post-state after the explicit expired restoration: ONLY the
+    # expired row changed (exactly to created+TTL); every other row, all
+    # ledgers, and the key row are byte-for-byte unchanged from the
+    # first-apply snapshots.
+    c_after = _ref("expired")
+    assert _changed_columns(ref_after_1["expired"], c_after) == ["expires_at"]
+    assert (
+        datetime.fromisoformat(str(c_after["expires_at"]))
+        == c["created"] + timedelta(seconds=REPLAY_TTL_SECONDS)
+    )
+    for tag in ("extend", "noshorten", "hmacv2", "pendingledger"):
+        assert not _changed_columns(ref_after_1[tag], _ref(tag)), (
+            f"{tag}: the second plan touched an unrelated row"
+        )
+    for tag in planted:
+        assert not _changed_columns(
+            ledger_before[tag],
+            _full_row(env, "usage_ledger", str(planted[tag]["ledger_id"])),
+        ), f"{tag}: the bound ledger row changed"
+    assert not _changed_columns(key_before, _full_key_row(env, key_id)), (
+        "the replay key row changed after the second plan"
+    )
+
+    # 9) Post-state inspection: the restored row is active again.
+    inspected_after = env.run_cli(
+        "codex", "replay", "inspect", "--key-id", key_id,
+        env=REPLAY_ENV, label="dod11-inspect-post",
+    ).json
+    assert inspected_after["references"] == 5
+    assert inspected_after["active_references"] == 5
+    assert inspected_after["expired_references"] == 0
+
+    # 10) Persist the safe requirement-indexed transcript for this case.
+    persisted = env.persist_transcript("dod11")
+    run_dir = Path(persisted["directory"])
+    transcript_path = Path(persisted["paths"]["transcript"])
+    identity_path = Path(persisted["paths"]["identity"])
+    assert (run_dir.stat().st_mode & 0o777) == 0o700
+    assert (transcript_path.stat().st_mode & 0o777) == 0o600
+    assert (identity_path.stat().st_mode & 0o777) == 0o600
+    assert _sha256_file(transcript_path) == persisted["sha256"]["transcript"]
+    assert _sha256_file(identity_path) == persisted["sha256"]["identity"]
+    assert persisted["record_count"] == len(env.transcript)
+    expected_labels = {
+        "dod11-inspect-pre",
+        "dod11-extend-dry-run",
+        "dod11-extend-mixed-refused",
+        "dod11-extend-execute",
+        "dod11-extend-repeat",
+        "dod11-extend2-dry-run",
+        "dod11-extend2-execute",
+        "dod11-inspect-post",
+    }
+    assert set(persisted["labeled"]) == expected_labels
+    persisted_bytes = (
+        transcript_path.read_bytes() + identity_path.read_bytes()
+    )
+    secret_in_persisted = any(
+        secret.encode("utf-8") in persisted_bytes for secret in env._secrets
+    )
+    assert not secret_in_persisted, (
+        "a generated secret is present in the persisted transcript/identity"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Config (205-d section 6): installed finite process-configuration
+# inspection. Every CLI invocation below is a FRESH installed subprocess,
+# so per-call environment overrides are process-local by construction.
+# ---------------------------------------------------------------------------
+
+
+def test_dod_config_process_inspection(field_workflow: FieldEnvironment) -> None:
+    env = field_workflow
+
+    # 1) Base snapshot: the EXACT 45-field allowlist, process-local scope,
+    # the fixed restart scope on every entry, the exact fixed limitations,
+    # and configured/default provenance per entry.
+    base = env.run_cli("config", "show", label="dodcfg-show-base").json
+    config = base["config"]
+    assert config["snapshot_scope"] == "current CLI process cached Settings"
+    assert config["limitations"] == [
+        "snapshot is the CURRENT CLI process's cached Settings, not live API/worker state",
+        "configured/default source comes from this process's model_fields_set",
+        "no database, network, broker, or provider access was performed",
+        "no credential values or secret file contents are exposed",
+        "a configured database URL is not connectivity or authentication proof",
+        "external reverse-proxy request-size limits are NOT observed by this command",
+    ]
+    entries = config["settings"]
+    assert len(entries) == 45
+    fixed_restart_scope = (
+        "process restart; Compose env_file changes require recreating the "
+        "affected containers (a plain restart does not reload them)"
+    )
+    for name, entry in entries.items():
+        assert set(entry) == {"value", "source", "restart_scope"}, name
+        assert entry["restart_scope"] == fixed_restart_scope, name
+    assert entries["CODEX_REPLAY_REFERENCE_TTL_SECONDS"]["source"] == "default"
+    assert entries["DEFAULT_RATE_LIMIT_REQUESTS_PER_MINUTE"]["source"] == "default"
+    # cli_env supplies this value for every fixture subprocess.
+    assert entries["DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE"]["value"] == 100
+    assert entries["DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE"]["source"] == "configured"
+
+    # 2) Explicit overrides through the subprocess environment report the
+    # configured source and the overridden values in a FRESH process.
+    shown = env.run_cli(
+        "config", "show",
+        env={
+            "CODEX_REPLAY_REFERENCE_TTL_SECONDS": str(REPLAY_TTL_SECONDS),
+            "DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE": "311",
+        },
+        label="dodcfg-show-overridden",
+    ).json
+    entries = shown["config"]["settings"]
+    assert len(entries) == 45
+    assert entries["CODEX_REPLAY_REFERENCE_TTL_SECONDS"]["value"] == REPLAY_TTL_SECONDS
+    assert (
+        entries["CODEX_REPLAY_REFERENCE_TTL_SECONDS"]["source"] == "configured"
+    )
+    assert entries["DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE"]["value"] == 311
+    assert entries["DEFAULT_RATE_LIMIT_TOKENS_PER_MINUTE"]["source"] == "configured"
+
+    # 3) Text mode: fixed operator-readable scope header.
+    text = env.run_cli(
+        "config", "show", json_output=False, label="dodcfg-show-text"
+    )
+    header_ok = (
+        "Process configuration snapshot (current CLI process; not live "
+        "API/worker state):" in text.stdout
+    )
+    assert header_ok, "text snapshot missing the fixed scope header"
+
+    # 4) Invalid numeric Settings value (generated credential-shaped
+    # canary in a numeric field): fixed safe unavailable payload, exit 1,
+    # NO echoed value and NO raw traceback.
+    canary = f"sk-slaif-{secrets.token_hex(24)}"
+    env.register_secret(canary, "dodcfg-invalid-numeric")
+    invalid = env.run_cli(
+        "config", "show",
+        env={"SMTP_PORT": canary},
+        expect=1,
+        label="dodcfg-show-invalid",
+    )
+    assert invalid.json["error"]["code"] == "configuration_unavailable"
+    assert invalid.json["error"]["message"] == (
+        "Process configuration could not be loaded. Check the deployment "
+        "environment and try again."
+    )
+    raw = invalid.stdout + invalid.stderr
+    no_traceback = "Traceback" not in raw
+    assert no_traceback, "invalid-numeric refusal leaked a raw traceback"
+    canary_echo = canary in raw
+    assert not canary_echo, "invalid-numeric refusal echoed the supplied value"
+
+    # 5) Persist the safe requirement-indexed transcript for this case.
+    persisted = env.persist_transcript("dodcfg")
+    run_dir = Path(persisted["directory"])
+    transcript_path = Path(persisted["paths"]["transcript"])
+    identity_path = Path(persisted["paths"]["identity"])
+    assert (run_dir.stat().st_mode & 0o777) == 0o700
+    assert (transcript_path.stat().st_mode & 0o777) == 0o600
+    assert (identity_path.stat().st_mode & 0o777) == 0o600
+    assert _sha256_file(transcript_path) == persisted["sha256"]["transcript"]
+    assert _sha256_file(identity_path) == persisted["sha256"]["identity"]
+    assert persisted["record_count"] == len(env.transcript)
+    expected_labels = {
+        "dodcfg-show-base",
+        "dodcfg-show-overridden",
+        "dodcfg-show-text",
+        "dodcfg-show-invalid",
     }
     assert set(persisted["labeled"]) == expected_labels
     persisted_bytes = (

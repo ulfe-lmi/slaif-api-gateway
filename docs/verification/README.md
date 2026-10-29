@@ -32,6 +32,22 @@ on record. They are dated, commit-specific evidence, not certifications.
   canary-clean); outcomes 9-11, config-show, the complete all-eleven
   transcript, and the final fresh all-eleven run remain mandatory in
   later same-PR suffixes.
+  Same-PR 205-d continuation (recorded in the same file, product still
+  frozen at `420fb8f`): outcome 9 (one-time delivery lifecycle against the
+  owned loopback SMTP sink: pending channel, real send-now with full
+  MIME-decoded key observation, exact repeat refusal, definite 550 refusal
+  + safe explicit retry, and labeled sending/ambiguous/expired fixture
+  states inspected before any unsafe probe) and outcome 11 (reviewed
+  replay-reference expiry maintenance: schema-valid planted rows,
+  configured-default-TTL dry-run, mixed-mode refusal, monotonic apply,
+  already-applied repeat, explicit `--include-expired` second plan,
+  column-level preservation) executed and green, plus the installed
+  `config show` finite process-configuration evidence (exact 45-field
+  allowlist, configured vs default provenance, invalid-Settings
+  no-echo/no-traceback) in the final D combined run (3/3 PASS, 0 skip,
+  37-record labeled transcript); outcome 10, the complete all-eleven
+  transcript, and the final fresh all-eleven run remain mandatory in
+  later same-PR suffixes.
 
 - [`2026-10-29 Objective 204 CLI record edits and process configuration inspection verification`](2026-10-29-cli-record-edits-and-config.md)
   (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +
