@@ -41,6 +41,24 @@ class CohortsRepository:
     async def get_cohort_by_id(self, cohort_id: uuid.UUID) -> Cohort | None:
         return await self._session.get(Cohort, cohort_id)
 
+    async def get_cohort_for_update(self, cohort_id: uuid.UUID) -> Cohort | None:
+        """Lock one cohort row and repopulate its stored attributes.
+
+        Partial edits call this FIRST in the caller-owned transaction so
+        the row lock is held before any provided field is merged with
+        the current stored values; the ``populate_existing`` execution
+        option refreshes an already-identity-mapped instance with the
+        locked row (same pattern as the key-repository locked lookup).
+        """
+        statement = (
+            select(Cohort)
+            .where(Cohort.id == cohort_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def get_cohort_by_name(self, name: str) -> Cohort | None:
         statement = select(Cohort).where(Cohort.name == name)
         result = await self._session.execute(statement)

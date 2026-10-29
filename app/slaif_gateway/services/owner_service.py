@@ -9,6 +9,7 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
+from slaif_gateway.schemas.record_edits import OwnerUpdatePatch
 
 
 class OwnerService:
@@ -94,6 +95,91 @@ class OwnerService:
             if institution is None:
                 raise RecordNotFoundError("Institution")
 
+        updated = await self._owners.update_owner_metadata(
+            parsed_id,
+            name=_require_text(name, "Owner name"),
+            surname=_require_text(surname, "Owner surname"),
+            email=normalized_email,
+            institution_id=institution_id,
+            external_id=_clean_optional(external_id),
+            notes=_clean_optional(notes),
+            is_active=is_active,
+        )
+        if updated is None:
+            raise RecordNotFoundError("Owner")
+        await self._audit.add_audit_log(
+            action="owner_updated",
+            entity_type="owner",
+            admin_user_id=actor_admin_id,
+            entity_id=updated.id,
+            old_values=old_values,
+            new_values=_safe_audit_values(updated),
+            note=_clean_optional(reason),
+        )
+        return updated
+
+    async def update_owner_partial(
+        self,
+        owner_id: uuid.UUID | str,
+        *,
+        patch: OwnerUpdatePatch,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str,
+    ) -> Owner:
+        """Apply a typed partial edit to ONE owner (caller-owned txn).
+
+        Locks the target row FIRST, merges the provided fields with the
+        fresh stored values, then reuses the existing complete-update
+        normalization/validation, repository write, and the exact
+        ``owner_updated`` audit. A late failure propagates so the caller
+        transaction rolls back the row and the provisional audit.
+        """
+        parsed_id = _parse_owner_id(owner_id)
+        existing = await self._owners.get_owner_for_update(parsed_id)
+        if existing is None:
+            raise RecordNotFoundError("Owner")
+
+        # Merge provided fields with the CURRENT stored values (omitted
+        # flags preserve everything, including nullable fields and
+        # is_active=False).
+        name = patch.name if patch.name is not None else existing.name
+        surname = patch.surname if patch.surname is not None else existing.surname
+        email = patch.email if patch.email is not None else existing.email
+        institution_id = (
+            None
+            if patch.clear_institution
+            else patch.institution_id
+            if patch.institution_id is not None
+            else existing.institution_id
+        )
+        external_id = (
+            None
+            if patch.clear_external_id
+            else patch.external_id
+            if patch.external_id is not None
+            else existing.external_id
+        )
+        notes = (
+            None
+            if patch.clear_notes
+            else patch.notes
+            if patch.notes is not None
+            else existing.notes
+        )
+        is_active = patch.is_active if patch.is_active is not None else existing.is_active
+
+        # Existing complete-update normalization/validation on the merged
+        # values.
+        normalized_email = _normalize_email(email)
+        duplicate = await self._owners.get_owner_by_email(normalized_email)
+        if duplicate is not None and duplicate.id != existing.id:
+            raise DuplicateRecordError("Owner", "email")
+        if institution_id is not None:
+            institution = await self._institutions.get_institution_by_id(institution_id)
+            if institution is None:
+                raise RecordNotFoundError("Institution")
+
+        old_values = _safe_audit_values(existing)
         updated = await self._owners.update_owner_metadata(
             parsed_id,
             name=_require_text(name, "Owner name"),
