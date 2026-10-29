@@ -12,12 +12,17 @@ on record. They are dated, commit-specific evidence, not certifications.
 
 - [`2026-10-29 Objective 205-a installed CLI field administration workflows verification (PARTIAL handoff)`](2026-10-29-cli-field-installed-workflow.md)
   (recorded 2026-10-29) - actual installed `slaif-gateway` console from a
-  payload-verified wheel of accepted source `5e59a02` in an owned venv,
-  on an owned labeled PostgreSQL 16 container with a loopback SMTP sink:
+  payload-verified wheel of accepted source `5e59a02` in an owned venv, on
+  an owned labeled PostgreSQL 16 container with a loopback SMTP sink:
   outcomes 1-4 and 6 executed and green in the final byte-matched module
-  run (6/6 PASS, 0 skip); outcomes 5, 7-11 and the config-show evidence
-  not yet executed (same-PR 205-b); records the confirmed new
-  numeric-echo CLI product gap deferred to 205-b.
+  run (6/6 PASS, 0 skip). Same-PR 205-b continuation (recorded in the same
+  file): the confirmed numeric-echo CLI product gap fixed in source
+  `420fb8f` (shared no-echo conversion at 17 positions; 110 new + 136
+  existing unit PASS, 0 skip), first six outcomes re-qualified 6/6 PASS on
+  the fresh wheel `042eb23a` in a fresh owned venv (root-verified 432-file
+  identity + 17-position installed canary); outcomes 5, 7-11, config-show,
+  the persisted operator transcript, and the final fresh all-eleven run
+  remain mandatory in later same-PR suffixes.
 
 - [`2026-10-29 Objective 204 CLI record edits and process configuration inspection verification`](2026-10-29-cli-record-edits-and-config.md)
   (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +

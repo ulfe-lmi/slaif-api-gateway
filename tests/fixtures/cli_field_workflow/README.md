@@ -1,8 +1,9 @@
-# 205-a installed CLI field-workflow fixture
+# 205 installed CLI field-workflow fixture
 
-Fictional, owned, disposable fixture for the 205-a installed CLI
+Fictional, owned, disposable fixture for the objective-205 installed CLI
 field-administration workflow qualification
-(`tests/integration/test_cli_field_installed_workflow.py`). It exists only to
+(`tests/integration/test_cli_field_installed_workflow.py`), currently
+executed under work orders 205-a and 205-b (same PR). It exists only to
 run operator business actions through the ACTUAL installed `slaif-gateway`
 console and to assert durable PostgreSQL state. It is not a shared test
 framework and creates no general catalog/fixture machinery.
@@ -25,15 +26,30 @@ framework and creates no general catalog/fixture machinery.
 
 ## Source / wheel / installed identity
 
-- Source: accepted objective-204 merge commit
-  `5e59a023154bfebc998ef4e0a7089a3151fda0e2` (`SOURCE_SHA`), pinned and
-  fetched shallow-safely (`git fetch --depth 1 origin <SHA>` when absent).
+- Source: `420fb8f6d9377f569d126d08f4c9e4146fc7250b` (`SOURCE_SHA`), the
+  205-b implementation commit carrying the bounded no-echo numeric fix.
+  Pinned and fetched shallow-safely (`git fetch --depth 1 origin <SHA>` when
+  absent). Shallow archival was verified in owned scratch: a fresh depth-1
+  clone of origin lacks the commit, the narrow fetch obtains it, and
+  `git archive` yields a payload whose commit tree hash
+  (`1213f89b985f514204821790d79ddb2b24710b76`) matches the local commit
+  exactly.
 - Wheel: built with `python -m build` from that exact source into the owned
   venv, OR reused from an already payload-verified wheel of the same source.
   The ACTUAL selected wheel SHA256 is recorded in the run identity (no manual
   ZIP hash is required for a verified reuse). On qualification runs so far the
   selected wheel is
-  `5c5bbdb405c7b84f4434a3cfc28f6c15cae2c4947f61d32540149e61b3f6ec55`.
+  `042eb23ac7042d2e77c4af4dca6d80d52f0968a328b33d03c8d0f825c07dad6f`
+  (205-b run); the earlier 205-a wheel
+  `5c5bbdb405c7b84f4434a3cfc28f6c15cae2c4947f61d32540149e61b3f6ec55` is
+  stale for this source and is rejected by the payload gate, not reused.
+- Stale-venv rejection: a previously reused venv is rejected and replaced by
+  a fresh owned venv whenever its installed payload differs from the SELECTED
+  wheel; a matching path/version alone is never treated as usable.
+- Setup subprocess hygiene: the build venv, `python -m build`, fresh-venv
+  creation, and `pip install` run with a scrubbed environment (no inherited
+  `PYTHONPATH`), and `pip` runs from a neutral cwd, so the source-tree
+  egg-info cannot make pip treat the same-version wheel as already installed.
 - Installed payload: the installed `slaif_gateway` file set is compared
   exactly against the SELECTED wheel payload (file names + sha256); the
   console lives in the owned venv and `slaif_gateway.__file__` is asserted to
@@ -61,7 +77,7 @@ framework and creates no general catalog/fixture machinery.
   process is started. No real OpenAI/OpenRouter backend, no real client, no
   Redis, no real mail anywhere in this fixture.
 
-## Current state (205-a handoff)
+## Current state (205-b handoff)
 
 Implemented and executed through the installed console: DoD0 (installed
 identity), DoD1 (lookup/bounded paging, full-bearer refusal), DoD2 (effective
@@ -73,13 +89,21 @@ edit), DoD9 (one-time delivery lifecycle), DoD10 (gateway-recorded failure
 diagnostics), and DoD11 (replay maintenance) are NOT yet implemented here and
 remain mandatory for the final 205 PR.
 
-A confirmed NEW CLI product defect (credential-shaped numeric input echoed in
-`set-lazy-throttling` usage stderr, exit 2) is recorded in the strategic
-receipt `205-installed-lazy-numeric-canary-probe.json` and is out of the
-205-a no-product-edit scope; it is deferred to the same-PR 205-b
-continuation. The ordinary usage-error law itself (native Typer BadParameter
--> exit 2, stderr, no JSON, even with `--json`) is documented 197 behavior
-and is asserted, not treated as a defect.
+The NEW CLI privacy defect confirmed under 205-a (credential-shaped numeric
+input echoed completely in native usage errors, exit 2; root receipts
+`205-installed-lazy-numeric-canary-probe.json` and
+`205-installed-new-numeric-surface-canary-probe.json`) is FIXED in source
+commit `420fb8f` by the shared no-echo conversion helper at the 17 observed
+positions (root recheck `205-b-root-fixed-installed-numeric-probe.json`: all
+17 fixed). The ordinary usage-error channel itself (native Typer usage
+refusal, exit 2, stderr, no JSON, even with `--json`) remains documented 197
+behavior and is asserted, not treated as a defect.
+
+Transcript persistence: the safe requirement-indexed argv/output/exit
+projections and the run identity are kept IN MEMORY for assertions only; this
+fixture does not yet write or export a persisted operator transcript file.
+That persistence is carried forward to the next same-PR qualifier, and the
+final fresh-installation all-eleven run must export it.
 
 ## Reproducible invocation
 

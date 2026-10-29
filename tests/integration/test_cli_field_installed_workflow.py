@@ -57,7 +57,7 @@ from pathlib import Path
 import pytest
 
 # --- Accepted source / wheel / installation identity -----------------------
-SOURCE_SHA = "5e59a023154bfebc998ef4e0a7089a3151fda0e2"
+SOURCE_SHA = "420fb8f6d9377f569d126d08f4c9e4146fc7250b"
 #: The wheel SHA256 of the artifact actually SELECTED for this run is
 #: computed and recorded (``identity["wheel_sha256"]``). An ordinary build
 #: of the same source can carry a different ZIP hash (timestamps); the
@@ -186,7 +186,9 @@ def _wheel_payload_matches(pristine: Path, wheel: Path, tmp_base: Path) -> int:
     by the builder (observed for 4 .gitkeep files) and are excluded.
     """
     extracted = tmp_base / "wheel-extract"
-    extracted.mkdir(parents=True)
+    # exist_ok: a previously rejected candidate wheel may already have used
+    # this owned extraction dir; only its children are cleared below.
+    extracted.mkdir(parents=True, exist_ok=True)
     for stale in extracted.iterdir():
         if stale.is_dir():
             shutil.rmtree(stale)
@@ -230,7 +232,11 @@ def _build_wheel(pristine: Path, tmp_base: Path) -> tuple[Path, int]:
     """
     build_env = tmp_base / "buildenv"
     subprocess.run(
-        ["python3", "-m", "venv", str(build_env)], capture_output=True, timeout=300, check=True
+        ["python3", "-m", "venv", str(build_env)],
+        capture_output=True,
+        timeout=300,
+        check=True,
+        env=_scrubbed_setup_env(),
     )
     build_py = build_env / "bin" / "python"
     subprocess.run(
@@ -238,6 +244,7 @@ def _build_wheel(pristine: Path, tmp_base: Path) -> tuple[Path, int]:
         capture_output=True,
         timeout=900,
         check=True,
+        env=_scrubbed_setup_env(),
     )
     outdir = tmp_base / "dist"
     subprocess.run(
@@ -245,11 +252,25 @@ def _build_wheel(pristine: Path, tmp_base: Path) -> tuple[Path, int]:
         capture_output=True,
         timeout=900,
         check=True,
+        cwd=str(tmp_base),
+        env=_scrubbed_setup_env(),
     )
     wheel = outdir / WHEEL_FILE_NAME
     assert wheel.is_file(), "standard wheel build produced no wheel"
     payload = _wheel_payload_matches(pristine, wheel, tmp_base)
     return wheel, payload
+
+
+def _scrubbed_setup_env() -> dict[str, str]:
+    """Env for setup subprocesses: the source-tree PYTHONPATH must not leak.
+
+    With PYTHONPATH=app (and the repository cwd) visible, pip's working-set
+    check finds the source-tree 0.1.0 egg-info and treats a same-version
+    wheel as already installed, leaving the fresh venv empty.
+    """
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    return env
 
 
 def _python_for_venv() -> str:
@@ -363,9 +384,21 @@ def _resolve_artifacts(tmp_base: Path) -> Artifacts:
     wheel_sha = _sha256_file(wheel)
 
     venv_root: Path | None = None
+    # The last _wheel_payload_matches call extracted the SELECTED wheel
+    # (reused candidate or freshly built wheel) to this directory.
+    wheel_pkg = tmp_base / "wheel-extract" / "slaif_gateway"
+    assert wheel_pkg.is_dir(), "selected wheel payload extraction missing"
     if (ARTIFACT_DIR / "venv2").is_dir() and _venv_is_usable(ARTIFACT_DIR / "venv2"):
-        venv_root = ARTIFACT_DIR / "venv2"
-        steps.append(f"reused verified owned venv {venv_root}")
+        try:
+            _installed_payload_matches(ARTIFACT_DIR / "venv2", wheel_pkg)
+        except AssertionError:
+            steps.append(
+                "stale reused venv rejected: installed payload differs from the "
+                "selected wheel; replacing with a fresh owned venv"
+            )
+        else:
+            venv_root = ARTIFACT_DIR / "venv2"
+            steps.append(f"reused verified owned venv {venv_root}")
     if venv_root is None:
         venv_root = tmp_base / "venv"
         subprocess.run(
@@ -373,22 +406,21 @@ def _resolve_artifacts(tmp_base: Path) -> Artifacts:
             capture_output=True,
             timeout=300,
             check=True,
+            env=_scrubbed_setup_env(),
         )
         subprocess.run(
             [str(venv_root / "bin" / "python"), "-m", "pip", "install", "--quiet", str(wheel)],
             capture_output=True,
             timeout=900,
             check=True,
+            cwd=str(tmp_base),
+            env=_scrubbed_setup_env(),
         )
         assert _venv_is_usable(venv_root), "fresh owned venv failed identity check"
         steps.append(f"created owned venv {venv_root} and installed {wheel.name}")
 
     console = venv_root / "bin" / "slaif-gateway"
     assert console.is_file(), "installed console missing in owned venv"
-    # The last _wheel_payload_matches call extracted the SELECTED wheel
-    # (reused candidate or freshly built wheel) to this directory.
-    wheel_pkg = tmp_base / "wheel-extract" / "slaif_gateway"
-    assert wheel_pkg.is_dir(), "selected wheel payload extraction missing"
     installed_payload = _installed_payload_matches(venv_root, wheel_pkg)
     steps.append(
         f"verified installed application payload vs selected wheel "

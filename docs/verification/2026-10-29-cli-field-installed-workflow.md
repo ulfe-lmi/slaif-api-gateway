@@ -1,11 +1,15 @@
 # 205-a verification record — installed CLI field administration workflows
 
-**Status: PARTIAL (205-a scope-boundary handoff).** This record documents what
-was actually executed through the installed `slaif-gateway` console for work
-order `oap/orders/205-a-cli-field-workflow-qualification.md` (unique PR for
+**Status: PARTIAL (205-a scope-boundary handoff; 205-b continuation recorded
+below).** This record documents what was actually executed through the
+installed `slaif-gateway` console for work order
+`oap/orders/205-a-cli-field-workflow-qualification.md` (unique PR for
 objective 205; same-PR 205-b continuation reserved by root). Outcomes 5,
 7, 8, 9, 10, 11 and the runtime-configuration evidence are NOT yet executed
-and remain mandatory for the final 205 PR. Nothing below claims them.
+and remain mandatory for the final 205 PR. Nothing below claims them. The
+same-PR 205-b continuation (bounded no-echo numeric repair + re-qualified
+first slices) is recorded in the final section of this file; objective 205
+as a whole remains PARTIAL.
 
 ## Installation and identity (executed)
 
@@ -159,5 +163,142 @@ settings/CI byte was changed under 205-a.
   never contacted.
 - SMTP sink is armed but the one-time delivery lifecycle (outcome 9) is not
   yet exercised.
-- The numeric-echo defect above is unresolved by design of this handoff.
 - No merge, no tag/release, no real provider/client/mail, no Redis.
+
+## 205-b continuation (bounded numeric repair + re-qualified first slices)
+
+**Status: bounded round complete for its numeric repair + first slices; full
+205 remains PARTIAL** (outcomes 5, 7-11, config-show, and the final fresh
+all-eleven run are carried forward to later same-PR suffixes).
+
+### Product fix (implementation commit `420fb8f`)
+
+The 205-confirmed defect (complete credential-shaped numeric input echoed in
+native usage errors before the command body) is fixed by ONE shared
+no-echo whole-number conversion helper
+(`app/slaif_gateway/cli/common.py::parse_int_option`), applied at the 17
+observed positions in `app/slaif_gateway/cli/keys.py` (clone
+`--validity-duration-seconds`; list `--limit`/`--offset`;
+`set-lazy-throttling` `--max-wait-seconds`/`--max-waiting-requests`),
+`app/slaif_gateway/cli/providers.py` (add/update `--timeout-seconds`/
+`--max-retries`), `app/slaif_gateway/cli/routes.py` (update-only:
+`--codex-context-window-tokens`, `--codex-default-max-output-tokens`,
+`--codex-max-output-tokens`, `--media-image-tokens`, `--media-video-tokens`,
+`--media-video-frames`, `--priority`), and
+`app/slaif_gateway/cli/codex_replay.py` (extend `--ttl-seconds`).
+
+Semantics: conversion mirrors the installed Typer/Click `int` conversion
+exactly (same int payload for every previously accepted value); omitted flags
+still yield their documented defaults; explicit `0` is distinct from omitted
+(`None`); signed route priority incl. 0/negative is preserved; existing
+domain constraints, ceilings, mixed-mode/clear guards, flag spellings,
+defaults, and help are unchanged. Invalid values (non-numeric text, floats,
+bool-like words, blanks, recognized credential shapes, over-limit digit
+strings) are refused with the fixed message
+`<option> must be a whole number` — never echoing the value — before any
+database, provider, queue, or SMTP access.
+
+Bounded malformed-value error difference (documented, tested):
+
+| Command / option(s) | Channel | Exit |
+|---|---|---|
+| `keys clone --validity-duration-seconds` | JSON `{"error":{"code":"invalid_parameter",...}}` inside the command's existing safe error handler | 1 |
+| all other 16 positions above | native Typer usage refusal, fixed message, stderr, no JSON payload (even with `--json`) | 2 |
+
+Missing/unknown-option errors and all other error channels are unchanged;
+this is not a promise that all Typer usage errors become JSON.
+
+### Unit evidence (agent pytest, JUnit authoritative)
+
+- NEW `tests/unit/test_cli_numeric_privacy.py`: 110 PASS, 0 failures, 0
+  errors, 0 skipped, 33.13 s (JUnit `205b-numeric-privacy-2`,
+  sha256 `33e7d67b7c59267307d18f7117ecbcc8f67c90f40ec412e3c910691794385715`).
+  Coverage: 17 canary positions (fixed refusal, complete canary absent from
+  stdout/stderr/logs, no traceback, no operation-layer reach) + invalid-shape
+  refusals with boolean-only failure representations + valid payload controls
+  (limit lookahead, explicit-0 domain refusals, lazy 30/4, clone 3600,
+  providers 45/0 + omitted `None`, routes signed `-5`/400000 + omitted
+  `None`, extend 3600 + omitted `None`) + 17 shared-helper
+  Click-parity/fixed-error cases.
+- Affected existing CLI units (7 files, unchanged bytes): 136 PASS, 0
+  failures, 0 skipped, 62.79 s (JUnit `205b-existing-cli`, sha256
+  `ab70adace897ca02343c50f42d5eeaa7623a89020b544a2479518aa30c3503c2`):
+  `test_cli_keys_clone.py`, `test_cli_keys_effective_policy.py`,
+  `test_cli_keys_status.py`, `test_cli_provider_route_configuration.py`,
+  `test_cli_providers.py`, `test_cli_routes.py`,
+  `test_cli_codex_replay.py`.
+
+### Installation identity for the 205-b slice (executed)
+
+- Source: `420fb8f6d9377f569d126d08f4c9e4146fc7250b` (the 205-b
+  implementation commit), pinned shallow-safely; shallow archival verified in
+  owned scratch (fresh depth-1 clone of origin lacks the commit; narrow
+  `git fetch --depth 1 origin <SHA>`; `git archive` payload tree
+  `1213f89b985f514204821790d79ddb2b24710b76` equals the local commit tree).
+- Wheel: `slaif_api_gateway-0.1.0-py3-none-any.whl`, actual selected
+  SHA256 `042eb23ac7042d2e77c4af4dca6d80d52f0968a328b33d03c8d0f825c07dad6f`,
+  built from that exact committed source; installed into a FRESH owned venv
+  (Python 3.12.15) under the pytest temp tree, outside the checkout,
+  `PYTHONPATH` absent. The stale 205-a venv was rejected by the new
+  installed-payload-vs-selected-wheel gate and replaced.
+- Root independently verified the fixed installation: all 432
+  wheel/source/installed application files match committed `420fb8f` (root
+  evidence, not an agent run).
+- Schema clarification: at the `0026` migration head the database holds
+  34 public tables = 33 product tables (including `request_diagnostics`) +
+  `alembic_version`. Objective 205 adds NO new schema, NO key-policy
+  migration, and NO migration of any kind.
+
+### Installed first-six-case slice (executed, owned PG 16)
+
+JUnit `205b-installed-slice` (2026-10-29T14:39:06Z, sha256
+`f4d7d6fcf9d471cfa3748bb652b5b509250917ffb8799d02246cfd0bc83b8db3`):
+6 tests, 0 failures, 0 errors, 0 skipped, 242.46 s, pytest exit 0 —
+`test_dod0_installed_identity`, `test_dod1_lookup_and_bounded_paging`,
+`test_dod2_effective_policy_and_route_explanation`,
+`test_dod3_record_operations`, `test_dod4_exact_student_beta_and_chat_clones`,
+`test_dod6_rates_lazy_and_exact37_batch` — i.e. outcomes 1-4 and 6 plus the
+DoD0 installed-identity acceptance, re-qualified on the fixed wheel.
+
+Failed-run chronology (preserved, not summed, not passes): before the green
+run, two earlier attempts each produced 6 setup ERRORs — (a)
+`FileExistsError` in the wheel-extraction step on the stale-candidate
+-> fresh-build path (fixture needed `exist_ok` on the owned extraction dir),
+and (b) the fresh owned venv failing its identity check because the setup
+subprocesses inherited `PYTHONPATH=app`, making pip treat the same-version
+wheel as already installed. Both were fixture-setup defects corrected in the
+NEW test file; the original failed XML/log paths were subsequently REUSED by
+the green run (overwritten), so the failed-run metadata/hash/cause is
+preserved in the root receipt `205-b-setup-and-interim-evidence.json` rather
+than in local artifacts. No reconstruction or repeat was performed.
+
+### ROOT independent evidence for 205-b (root runs, not agent runs)
+
+- `205-b-early-root-helper-probe.json` — source-level helper probe: 8
+  Click-parity + 2 omission/default + 8 fixed-error controls (no DB; not
+  installed proof).
+- `205-b-root-fixed-wheel-installed-identity.json` — fixed installed
+  identity: 432 wheel/source/installed app files match committed `420fb8f`,
+  Python 3.12.15, outside-checkout with `PYTHONPATH` absent.
+- `205-b-root-fixed-installed-numeric-probe.json` — actual installed
+  17-position canary probe on the fixed wheel: ALL PASS (fixed numeric
+  refusal, nonzero exit, complete canary absent, no traceback, no
+  `command_failed`).
+- `205-b-installed-slice-evidence.json` — final six-PASS slice receipt with
+  actual selected wheel SHA256 and identity facts.
+- `205-b-setup-and-interim-evidence.json` — preserved failed first-six
+  setup-ERROR metadata/hash/cause and the adjusted 110-PASS unit run.
+
+### Carry-forward to later SAME-205-PR suffixes
+
+| Item | State after 205-b |
+|---|---|
+| Outcome 5 (discovery grant + real filtered `GET /v1/models`) | UNPROVEN — not executed |
+| Outcome 7 (two configured completion services) | UNPROVEN — not executed |
+| Outcome 8 (explicit activation + stable route edit) | UNPROVEN — not executed |
+| Outcome 9 (one-time delivery lifecycle, loopback SMTP) | UNPROVEN — not executed |
+| Outcome 10 (gateway-recorded failure investigations) | UNPROVEN — not executed |
+| Outcome 11 (reviewed replay maintenance) | UNPROVEN — not executed |
+| `config show` evidence (valid snapshot + invalid-Settings no-echo) | UNPROVEN — not executed |
+| Persisted safe requirement-indexed operator transcript (argv/output/exit/identity export) | NOT IMPLEMENTED — in-memory projections only for assertions; next qualifier persists, final fresh all-eleven exports |
+| Final fresh-installation all-eleven module run | NOT EXECUTED — mandatory for objective completion |

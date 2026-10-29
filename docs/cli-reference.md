@@ -13,6 +13,41 @@ Use `slaif-gateway <group> <command> --help` for the complete option contract.
 Never put plaintext credentials, keys, passwords, or content into audit reasons
 or command-line arguments.
 
+## Numeric option parsing (no-echo)
+
+The integer options of the following commands are converted at the CLI
+boundary by a shared no-echo whole-number helper BEFORE any database,
+provider, queue, or SMTP work:
+
+- `keys list` `--limit` / `--offset`
+- `keys clone` `--validity-duration-seconds`
+- `keys set-lazy-throttling` `--max-wait-seconds` / `--max-waiting-requests`
+- `providers add` and `providers update` `--timeout-seconds` /
+  `--max-retries`
+- `routes update` `--codex-context-window-tokens`,
+  `--codex-default-max-output-tokens`, `--codex-max-output-tokens`,
+  `--media-image-tokens`, `--media-video-tokens`, `--media-video-frames`,
+  `--priority`
+- `codex replay extend` `--ttl-seconds`
+
+Invalid values (non-numeric text, floats, bool-like words, blanks,
+recognized credential shapes, digit strings beyond the conversion limit) are
+refused with the fixed message `<option> must be a whole number`, without
+quoting or echoing the value and without any state change. Valid values
+convert to exactly the same integers the previous option-level parser
+accepted; `0` is a valid explicit value and is distinct from omitting the
+flag (the documented default applies); signed route priority keeps its
+0/negative values; existing domain constraints and ceilings are unchanged.
+
+Error channel: `keys clone --validity-duration-seconds` reports the refusal
+as JSON `invalid_parameter` (exit 1) through the command's existing safe
+error handler. The other positions refuse through the native Typer
+usage-error path (exit 2, stderr, no JSON payload, even with `--json`),
+consistent with the documented usage-error behavior; only the echo of the
+invalid value is removed. This is not a promise that all Typer
+missing/unknown-option errors become JSON, and it does not change valid
+numeric values, service law, or permissions.
+
 ## Bootstrap and database
 
 ```text
