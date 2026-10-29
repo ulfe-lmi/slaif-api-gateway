@@ -22,6 +22,7 @@ from slaif_gateway.api.health import router as health_router
 from slaif_gateway.api.metrics import router as metrics_router
 from slaif_gateway.api.middleware import MetricsMiddleware, RequestIdMiddleware
 from slaif_gateway.api.request_capture import install_request_capture
+from slaif_gateway.api.request_diagnostics import install_request_diagnostics
 from slaif_gateway.api.openai_compat import router as openai_compat_router
 from slaif_gateway.config import Settings, get_settings
 from slaif_gateway.lifespan import build_lifespan
@@ -61,6 +62,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/admin/static", StaticFiles(directory=str(static_dir)), name="admin_static")
 
     app.add_middleware(MetricsMiddleware)
+    # Default-OFF failure-diagnostics observer: added inside RequestId (so
+    # the server diagnostic and client request IDs exist on the scope
+    # state) and inside the capture observer (which stays outermost).
+    install_request_diagnostics(app, app_settings)
     app.add_middleware(RequestIdMiddleware, settings=app_settings)
     # Outermost default-OFF capture observer; added last so it reads the diagnostic ID.
     install_request_capture(app, app_settings)

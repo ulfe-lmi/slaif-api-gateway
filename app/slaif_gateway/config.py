@@ -429,6 +429,18 @@ class Settings(BaseSettings):
     # Empty resolves the installed package version; set to override.
     REQUEST_CAPTURE_APP_VERSION: str = ""
 
+    # -- content-free request-failure diagnostics (default OFF) ------------
+    # Startup configuration: changing any of these requires restarting the
+    # API workers.  Defaults do not persist new diagnostic records; disabling
+    # recording never prevents reading/cleaning retained records.
+    REQUEST_DIAGNOSTICS_ENABLED: bool = False
+    # Retention window for retained diagnostics: 1s .. 30d.
+    REQUEST_DIAGNOSTICS_RETENTION_SECONDS: int = 604800
+    # Hard retained-record cap enforced under concurrent writers: 1 .. 100000.
+    REQUEST_DIAGNOSTICS_MAX_RECORDS: int = 10000
+    # Bounded best-effort write timeout: 10 .. 1000 ms.
+    REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS: int = 100
+
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
     @model_validator(mode="after")
@@ -464,6 +476,7 @@ class Settings(BaseSettings):
         self._validate_calibration_settings()
         self.get_external_tool_operator_ceilings()
         self._validate_request_id_header()
+        self._validate_request_diagnostics_settings()
         self._validate_local_coding_secret_settings()
         self._validate_database_settings()
         self._validate_redis_rate_limit_settings()
@@ -982,6 +995,20 @@ class Settings(BaseSettings):
         if any(ord(ch) < 33 or ord(ch) == 127 for ch in header):
             raise ValueError("REQUEST_ID_HEADER cannot contain control characters")
         self.REQUEST_ID_HEADER = header
+
+    def _validate_request_diagnostics_settings(self) -> None:
+        if not 1 <= self.REQUEST_DIAGNOSTICS_RETENTION_SECONDS <= 2_592_000:
+            raise ValueError(
+                "REQUEST_DIAGNOSTICS_RETENTION_SECONDS must be between 1 and 2592000"
+            )
+        if not 1 <= self.REQUEST_DIAGNOSTICS_MAX_RECORDS <= 100_000:
+            raise ValueError(
+                "REQUEST_DIAGNOSTICS_MAX_RECORDS must be between 1 and 100000"
+            )
+        if not 10 <= self.REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS <= 1000:
+            raise ValueError(
+                "REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS must be between 10 and 1000"
+            )
 
     @staticmethod
     def _validate_production_secret(name: str, value: str | None) -> None:

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 TARGET_REVISION_0004 = "0004_email_secrets_and_background_jobs"
 TARGET_HEAD_0005 = "0005_fix_gateway_key_prefix_default"
-CURRENT_HEAD = "0025_catalog_refresh_applications"
+CURRENT_HEAD = "0026_request_diagnostics"
 SAFE_TEST_DATABASE_NAME = re.compile(
     r"^(?:restore_test|restore_local_[a-z0-9]+|test_slaif_gateway|slaif_gateway_test|slaif_test)$"
 )

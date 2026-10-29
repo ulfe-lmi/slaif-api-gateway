@@ -876,6 +876,44 @@ settings.
 Unexpected failures render a fixed generic `command_failed` error and never
 echo exception details; known facility errors keep their fixed reason codes.
 
+```text
+slaif-gateway diagnostics status|request show|cleanup
+```
+
+The content-free request-failure diagnostics facility (default OFF; see
+[configuration.md](configuration.md#request-failure-diagnostics-default-off))
+exposes three read/operate commands over the shared typed service. Stored
+fields are content-free, bounded, and secret-free by the service projection,
+so the CLI echoes exactly the retained typed fields and nothing else. A
+lookup ID never establishes authentication authority.
+
+- `diagnostics status [--json]` reports recording status and the retained-
+  dataset summary, distinguishing recording-disabled, store-unavailable,
+  and empty retained dataset; it works whether or not recording is enabled.
+  `recording_enabled` is the setting loaded by the CALLING CLI process,
+  not a live inspection of the API workers (no worker heartbeat or config
+  registry exists): run it in the intended deployment environment and keep
+  the workers on consistent, reloaded settings; retained rows alone cannot
+  prove the current recording state of any worker.
+- `diagnostics request show --request-id ID [--namespace any|gateway|client]
+  [--json]` resolves ONE retained record by recorded client or gateway
+  request ID. Client IDs are nonunique (and can equal another request's
+  gateway ID): the namespace is explicit (`any` by default; never inferred
+  from a prefix), ambiguous matches are bounded at 100 candidates with an
+  honest count/overflow and the gateway diagnostic IDs offered for
+  disambiguation. Outcomes are typed (`found` / `ambiguous` / `not_found` /
+  `unavailable`); exit 0 for the first three, exit 1 for an unavailable
+  store or configuration failure.
+- `diagnostics cleanup [--json]` physically prunes ONE bounded batch of
+  expired records from the diagnostics table only. There is no background
+  expiry daemon: idle storage needs repeated cleanup (or the bounded prune
+  that runs on writes). Exit 0 on a completed operation (store-unavailable is
+  reported in the payload as exit 1); 1 on configuration or unexpected
+  failure.
+
+No record editing, raw SQL, secret recovery, or audit-log retention changes
+exist in this surface.
+
 ## Catalog refresh (collect, review, verify, apply)
 
 Bounded catalog refresh: bounded live official-source collection, one typed
@@ -1098,6 +1136,9 @@ slaif-gateway db check-config
 slaif-gateway db show-url
 slaif-gateway db upgrade
 slaif-gateway db current
+slaif-gateway diagnostics status
+slaif-gateway diagnostics request show
+slaif-gateway diagnostics cleanup
 slaif-gateway email test
 slaif-gateway email send-pending-key
 slaif-gateway fx add

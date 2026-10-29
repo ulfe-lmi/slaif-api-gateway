@@ -40,12 +40,16 @@ class OpenAICompatibleError(Exception):
         error_type: str | None = None,
         code: str | None = None,
         param: str | None = None,
+        diagnostics_facts: dict[str, object] | None = None,
     ) -> None:
         self.message = message
         self.status_code = status_code
         self.error_type = error_type or _default_error_type(status_code)
         self.code = code
         self.param = param
+        # Private typed observation facts (bounded, content-free) for the
+        # diagnostics facility only.  Never part of the public error JSON.
+        self.diagnostics_facts = diagnostics_facts
         super().__init__(message)
 
 
@@ -211,11 +215,42 @@ def _http_error_rejection_facts(exc: StarletteHTTPException) -> dict[str, Any]:
     }
 
 
+def _record_diagnostic_facts(request: Request, facts: object) -> None:
+    """Merge private typed diagnostics facts onto the per-request scope.
+
+    Observation-only, best-effort, and bounded to the known diagnostics
+    fields (token estimates, ceiling limits).  Never changes the response.
+    """
+    try:
+        from collections.abc import Mapping
+
+        from slaif_gateway.services.request_diagnostics import (
+            record_scope_diagnostics,
+        )
+
+        if not isinstance(facts, Mapping):
+            return
+        selected = {
+            key: facts.get(key)
+            for key in (
+                "source",
+                "estimated_input_tokens",
+                "output_allowance_tokens",
+                "context_window_tokens",
+                "limits",
+            )
+        }
+        record_scope_diagnostics(request.scope, **selected)
+    except Exception:  # noqa: BLE001 - observability must never affect the response
+        pass
+
+
 async def openai_compatible_error_handler(
     request: Request,
     exc: OpenAICompatibleError,
 ) -> JSONResponse:
     _record_local_rejection(request, exc)
+    _record_diagnostic_facts(request, exc.diagnostics_facts)
     if exc.status_code == 401 or exc.error_type == "authentication_error":
         increment_auth_failure(exc.code)
     return openai_error_response(

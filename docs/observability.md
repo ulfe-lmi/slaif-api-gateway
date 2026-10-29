@@ -92,3 +92,48 @@ bounded in every other respect:
 Configuration and operator procedure: [configuration.md](configuration.md)
 (Operator Request Capture) and
 [runbooks/incoming-request-capture.md](runbooks/incoming-request-capture.md).
+
+## Request failure diagnostics (default OFF)
+
+The content-free request-failure diagnostics facility is a bounded
+operational index for FAILED terminal `/v1` outcomes — it deliberately adds
+NO new telemetry channels and stores NO request content:
+
+- **Failure-only, content-free.** At most one bounded typed record per
+  failed request: the public error code/param, the bounded classifier
+  reason, actual observed numeric decision facts (e.g. context-window
+  estimate/context/ceiling and output allowance for Codex rejections),
+  route identity (configured pattern/UUID only — never a raw model suffix
+  or URL value), key identity where auth succeeded, deployment revision,
+  and the actual observed wire status/stream outcome. No bodies, prompts,
+  tool arguments/results, media, headers, queries, raw paths, or
+  credentials. Unknown fact FIELDS drop the write (never guessed), while
+  unsafe optional code/reason/param PATH VALUES are projected to
+  unavailable with the remaining failure facts preserved. The serialized
+  record is hard-bounded to 8 KiB. Successful completions produce no
+  record.
+- **Correlated by diagnostic ID.** Every `/v1` response carries
+  `X-SLAIF-Diagnostic-ID`; a recorded failure is retrievable with
+  `slaif-gateway diagnostics request show --request-id ...` (stable gateway
+  ID or recorded client ID, explicit namespace, ambiguity bounded at 100).
+  Lookup IDs never establish authentication authority.
+- **Best effort; response decisions unchanged.** One awaited write at
+  terminal outcome in an independent bounded transaction under the
+  configured write timeout; the awaited write may add bounded completion
+  latency (up to the write timeout plus bounded cleanup), but any write
+  failure (timeout, capacity, unavailable store) drops the record without
+  changing the response, admission, accounting, or cancellation. There is
+  no background expiry daemon: expired rows are pruned on writes and by
+  `diagnostics cleanup`.
+- **Log-binding protection.** Known incoming authentication aliases copied
+  into the request-ID log binding are masked/omitted at the log boundary
+  (the wire `X-Request-ID` echo and auth decisions are unchanged); this
+  reuses the existing redaction primitives and is known-shape protection,
+  not universal content sanitization.
+- **Independent of capture.** The facility is default OFF, complements —
+  and can never replace or arm — the operator request-capture facility,
+  which remains the only request-content exception.
+
+Configuration: [configuration.md](configuration.md) (Request Failure
+Diagnostics, default OFF). Verification:
+[verification/2026-10-29-cli-request-diagnostics.md](verification/2026-10-29-cli-request-diagnostics.md).

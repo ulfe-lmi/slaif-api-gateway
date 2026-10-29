@@ -10,6 +10,21 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-29 Objective 201-a content-free request-failure diagnostics verification`](2026-10-29-cli-request-diagnostics.md)
+  (recorded 2026-10-29) - focused unit (61 new: 25 service + 24
+  middleware + 8 actual-Typer CLI + 4 alembic), owned-PostgreSQL-16
+  service (11) and real-app API (11) evidence for the default-OFF,
+  content-free `request_diagnostics` table and
+  `slaif-gateway diagnostics status/request show/cleanup` surface:
+  finite vocabularies, known-secret client-ID masking (fail-closed),
+  true concurrent cap with idempotent repeat no-op, 8 KiB/64-char
+  bounds, write-timeout boundary with byte-identical public responses,
+  deterministic replay-reference authorize-then-expire chronology, and
+  row/CLI/log canaries; plus 727 unchanged consumer/head-literal/
+  governance passes and root independent actual-PG probes (schema,
+  repeat-at-capacity, param bound, disabled-history/CLI); synthetic
+  data only, no real client/provider/model/SMTP claim; final-head CI
+  gated by root.
 - [`2026-10-28 Objective 200-a Codex replay reference inspection and reviewed expiry extension verification`](2026-10-28-cli-replay-maintenance.md)
   (recorded 2026-10-28) - focused unit (42 new: 30 service/plan + 12
   actual-Typer CLI) and owned-PostgreSQL-16 (14) evidence for the
