@@ -60,17 +60,32 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from slaif_gateway.config import Settings
 from slaif_gateway.db.models import (
     CodexReplayReference,
     EmailDelivery,
     OneTimeSecret,
     UsageLedger,
 )
-from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.codex_replay import (
     CodexReplayReferenceInsert,
     CodexReplayReferencesRepository,
 )
+from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from slaif_gateway.db.repositories.one_time_secrets import (
+    OneTimeSecretsRepository,
+)
+from slaif_gateway.db.repositories.pricing import PricingRulesRepository
+from slaif_gateway.db.repositories.provider_configs import (
+    ProviderConfigsRepository,
+)
+from slaif_gateway.db.repositories.routing import ModelRoutesRepository
+from slaif_gateway.db.repositories.usage import UsageLedgerRepository
+from slaif_gateway.schemas.keys import CreateGatewayKeyInput
+from slaif_gateway.services.codex_replay_service import CodexReplayService
+from slaif_gateway.services.key_service import KeyService
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # --- Accepted source / wheel / installation identity -----------------------
@@ -584,7 +599,15 @@ class _ProviderRequestHandler(http.server.BaseHTTPRequestHandler):
             else "unknown"
         )
         stream = bool(isinstance(doc, dict) and doc.get("stream"))
-        if model.endswith("-failstream") and stream:
+        if self.path.rstrip("/").endswith("/responses"):
+            # Bounded synthetic Responses upstream (IO substitution only).
+            if stream and model.endswith("-failstream"):
+                status = self._send_responses_stream_failure(model)
+            elif stream:
+                status = self._send_responses_stream(model)
+            else:
+                status = self._send_responses(model)
+        elif model.endswith("-failstream") and stream:
             status = self._send_terminal_stream_failure()
         elif stream:
             status = self._send_stream(model)
@@ -672,6 +695,76 @@ class _ProviderRequestHandler(http.server.BaseHTTPRequestHandler):
         }))
         return 200
 
+    # -- bounded synthetic Responses upstream (order 205-e section 4) -------
+
+    def _send_responses(self, model: str) -> int:
+        # Exact bounded success JSON for the replay positive control
+        # (synthetic IO, not a real backend).
+        body = json.dumps(
+            {
+                "id": "resp-205e-fixture",
+                "object": "response",
+                "status": "completed",
+                "model": model,
+                "output": [],
+                "usage": {
+                    "input_tokens": 6,
+                    "output_tokens": 8,
+                    "total_tokens": 14,
+                },
+                "store": False,
+            }
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return 200
+
+    def _send_responses_stream(self, model: str) -> int:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self._write_sse_line(json.dumps({
+            "type": "response.created",
+            "response": {"id": "resp-205e-stream", "status": "in_progress"},
+        }))
+        self._write_sse_line(json.dumps({
+            "type": "response.completed",
+            "response": {
+                "id": "resp-205e-stream",
+                "status": "completed",
+                "model": model,
+                "output": [],
+            },
+        }))
+        self._write_sse_line("[DONE]")
+        return 200
+
+    def _send_responses_stream_failure(self, model: str) -> int:
+        # Wire status 200; the second event is an UNSUPPORTED event type, so
+        # the gateway terminates the stream with a terminal failure. The
+        # optional generated canary rides the first event's id so the test
+        # can prove response content is never retained.
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        first_id = (
+            self.mock.response_canary
+            if self.mock.response_canary
+            else "resp-205e-failstream"
+        )
+        self._write_sse_line(json.dumps({
+            "type": "response.created",
+            "response": {"id": first_id, "status": "in_progress"},
+        }))
+        self._write_sse_line(json.dumps({
+            "type": "response.not_a_supported_event",
+        }))
+        self._write_sse_line("[DONE]")
+        return 200
+
 
 class ProviderMock:
     """Owned loopback synthetic upstream (documented IO substitution)."""
@@ -689,6 +782,10 @@ class ProviderMock:
             ("127.0.0.1", self.port), handler
         )
         self.request_log: list[dict[str, object]] = []
+        # Optional generated response canary (set per test): embedded in the
+        # responses SSE failure event so the test can prove the recorded
+        # store/CLI/export never retain response content.
+        self.response_canary: str = ""
         threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
 
     @property
@@ -848,13 +945,17 @@ class FieldEnvironment:
         if value:
             self._secrets[value] = f"<REDACTED:{label}>"
 
-    def start_gateway(self) -> GatewayServer:
+    def start_gateway(
+        self, env_overrides: dict[str, str] | None = None
+    ) -> GatewayServer:
         """Start the ACTUAL installed gateway on owned loopback.
 
         Delegates to the owning fixture, which constructs the process and
-        registers it for exact teardown before readiness completes."""
+        registers it for exact teardown before readiness completes.
+        ``env_overrides`` (optional) are merged over the default process
+        environment; the default behavior is unchanged when omitted."""
         assert self._gateway_launcher is not None, "gateway launcher not attached"
-        return self._gateway_launcher()
+        return self._gateway_launcher(env_overrides)
 
     def safe(self, text: str) -> str:
         """Safe projection: replace every known generated secret value."""
@@ -1007,6 +1108,45 @@ class FieldEnvironment:
         except json.JSONDecodeError:
             parsed = raw.decode("utf-8", "replace")
         return status, parsed
+
+    def gateway_request_with_headers(
+        self,
+        method: str,
+        path: str,
+        bearer: str | None = None,
+        body: object | None = None,
+        extra_headers: dict[str, str] | None = None,
+    ) -> tuple[int, object, dict[str, str]]:
+        """Like :meth:`gateway_request`, but also returns the lower-cased
+        response headers. The response's ``X-SLAIF-Diagnostic-ID`` is the
+        correlation authority for diagnostics lookups (never time/IP/body
+        guesses). The body is the JSON parse when possible, else the raw
+        decoded text (finite SSE included)."""
+        req = urllib.request.Request(
+            f"{self.gateway_url}{path}",
+            data=json.dumps(body).encode("utf-8") if body is not None else None,
+            method=method,
+        )
+        req.add_header("Content-Type", "application/json")
+        if bearer is not None:
+            req.add_header("Authorization", f"Bearer {bearer}")
+        for name, value in (extra_headers or {}).items():
+            req.add_header(name, value)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                raw = resp.read()
+                status = resp.status
+                headers = {k.lower(): v for k, v in resp.headers.items()}
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            status = exc.code
+            headers = {k.lower(): v for k, v in exc.headers.items()}
+        text = raw.decode("utf-8", "replace")
+        try:
+            parsed: object = json.loads(text) if text else None
+        except json.JSONDecodeError:
+            parsed = text
+        return status, parsed, headers
 
     def persist_transcript(self, outcome: str) -> dict[str, object]:
         """Persist the labeled in-memory transcript and the safe installation
@@ -1452,17 +1592,36 @@ class _OwnedFieldEnvironment:
         self._operator_dir = tmp_base / "operator"
 
     # -- installed gateway (order 205-c section 4) --------------------------
-    def start_gateway(self) -> GatewayServer:
+    def start_gateway(
+        self, env_overrides: dict[str, str] | None = None
+    ) -> GatewayServer:
         """Start the ACTUAL installed ``slaif_gateway.main:app`` on owned
         loopback against the owned PG. The process is registered for exact
         teardown before readiness completes, so a startup failure still
         cleans up (GatewayServer stops its own process on every failure
-        path)."""
+        path).
+
+        Combined module runs: if a previous test (e.g. DoD5) already started
+        the gateway, the EXACT prior owned process is stopped and joined
+        before the handle is replaced, so the run never leaks a live child.
+        ``env_overrides`` (optional) are merged over the default process
+        environment; the default behavior is unchanged when omitted."""
         assert self._env is not None, "start_gateway before environment setup"
+        if self._gateway is not None:
+            prior = self._gateway
+            prior.stop()
+            if prior.proc.poll() is None:
+                raise AssertionError(
+                    "prior owned gateway did not terminate (fixed detail)"
+                )
+            self._gateway = None
         env = self._env
+        proc_env = dict(env.cli_env)
+        if env_overrides:
+            proc_env.update(env_overrides)
         gateway = GatewayServer(
             venv_py=env.artifacts.venv_py,
-            env=dict(env.cli_env),
+            env=proc_env,
             cwd=env.operator_dir,
         )
         self._gateway = gateway  # registered; _teardown stops it
@@ -4993,3 +5152,874 @@ def test_dod_config_process_inspection(field_workflow: FieldEnvironment) -> None
     assert not secret_in_persisted, (
         "a generated secret is present in the persisted transcript/identity"
     )
+
+# --------------------------------------------------------------------------
+# DoD 10: actual gateway-recorded compatibility-failure diagnostics
+# (order 205-e section 5) — real installed gateway + real installed CLI,
+# request content capture OFF. No diagnostic rows are planted: every stored
+# record comes from the middleware observer on an actual HTTP response.
+# --------------------------------------------------------------------------
+
+M10_RESP = "slaif205e-model-responses"
+M10_RESP_FAIL = "slaif205e-model-responses-failstream"
+M10_CODEX = "slaif205e-model-codex"
+M10_REPLAY = "slaif205e-model-replay"
+U10_RESP = "fixture-responses-205e"
+U10_RESP_FAIL = "fixture-responses-205e-failstream"
+# The seeded route_a requested model (defined inside SEED_SCRIPT; the
+# endpoint-denial case needs a chat-allowed model for the chat-only key).
+M10_CHAT = "slaif205a-model-a"
+DIAG_ID_HEADER = "x-slaif-diagnostic-id"
+# The CLI reads its own process Settings (205-c process-scope law): the
+# operator CLI for this case declares the same explicit owned overrides
+# the gateway process runs with (recording enabled, maximum write timeout).
+DIAG_CLI_ENV = {
+    "REQUEST_DIAGNOSTICS_ENABLED": "true",
+    "REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS": "1000",
+}
+# The pinned historical 0147 tuple (native 201): the exact five Codex gates
+# plus the full local tool set.
+CODEX_POLICY_0147 = {
+    "version": 1,
+    "allowed_capabilities": [
+        "codex_request_envelope",
+        "codex_client_tools",
+        "codex_streaming_tool_events",
+        "codex_encrypted_reasoning_replay",
+        "codex_compaction",
+    ],
+    "allowed_local_tool_types": ["function", "custom"],
+}
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class _D10ReplayCandidate:
+    item_kind: str
+    item_id: str | None
+    call_id: str | None = None
+    tool_namespace: str | None = None
+    tool_name: str | None = None
+
+
+def _d10_settings(orm_url: str, cli_env: dict[str, str]) -> Settings:
+    """Fixture-process Settings bound to the EXACT fixture credentials
+    (so keys created in-process validate against the gateway process)."""
+    return Settings(
+        DATABASE_URL=orm_url,
+        APP_ENV=cli_env.get("APP_ENV", "development"),
+        TOKEN_HMAC_SECRET_V1=cli_env["TOKEN_HMAC_SECRET_V1"],
+        TOKEN_HMAC_SECRET=cli_env["TOKEN_HMAC_SECRET"],
+        ACTIVE_HMAC_KEY_VERSION=cli_env["ACTIVE_HMAC_KEY_VERSION"],
+        ONE_TIME_SECRET_ENCRYPTION_KEY=cli_env["ONE_TIME_SECRET_ENCRYPTION_KEY"],
+        GATEWAY_KEY_PREFIX=cli_env["GATEWAY_KEY_PREFIX"],
+    )
+
+
+async def _plant_dod10_world(
+    orm_url: str,
+    cli_env: dict[str, str],
+    mock_base_url: str,
+    owner_id: str,
+    cohort_id: str,
+) -> dict[str, str]:
+    """Labeled fixture setup (NOT operator business work): re-point the
+    seeded "openai" provider config at the owned loopback ProviderMock and
+    create four labeled routes + pricing and four labeled keys (native 201
+    shapes) that the ACTUAL installed gateway will exercise:
+
+    - ``route_resp``:      responses route, function/custom tools OFF
+      (unsupported function-tool capability case);
+    - ``route_resp_fail``: responses streaming route whose upstream model
+      makes the mock emit an UNSUPPORTED SSE event (stream failure case);
+    - ``route_codex``:     Codex route with the exact numeric codex_limits
+      contract 400/64/256 (context-window rejection case);
+    - ``route_replay``:    Codex route for the replay reference case.
+
+    Product-equivalent ORM/services inside the pytest process; no
+    request_diagnostics row is ever created here.
+    """
+    engine = create_async_engine(orm_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            async with session.begin():
+                providers = ProviderConfigsRepository(session)
+                provider = await providers.get_provider_config_by_provider(
+                    "openai"
+                )
+                assert provider is not None, "seeded openai provider missing"
+                provider.base_url = mock_base_url
+
+                routes = ModelRoutesRepository(session)
+                pricing = PricingRulesRepository(session)
+                now = datetime.now(UTC)
+                resp_caps = {
+                    "responses": {
+                        "text": True,
+                        "stateless": True,
+                        "streaming": True,
+                        "function_tools": False,
+                        "custom_tools": False,
+                    }
+                }
+                codex_caps = {
+                    "responses": {
+                        "text": True,
+                        "stateless": True,
+                        "codex_request_envelope": True,
+                        "codex_encrypted_reasoning_replay": True,
+                        "codex_client_tools": True,
+                        "codex_streaming_tool_events": True,
+                    },
+                    "codex_limits": {
+                        "context_window_tokens": 400,
+                        "default_max_output_tokens": 64,
+                        "max_output_tokens": 256,
+                    },
+                }
+                codex_accounting = {
+                    "codex_accounting": {
+                        "long_context_threshold_tokens": 272000,
+                        "long_context_input_multiplier": "1.5",
+                        "long_context_output_multiplier": "1.5",
+                        "cache_write_input_price_per_1m": "1.250000000",
+                    }
+                }
+                r_resp = await routes.create_model_route(
+                    requested_model=M10_RESP, provider="openai",
+                    upstream_model=U10_RESP, match_type="exact",
+                    endpoint="/v1/responses", priority=1,
+                    visible_in_models=True, supports_streaming=True,
+                    capabilities=resp_caps,
+                    notes="205-e labeled responses fixture route",
+                )
+                r_resp_fail = await routes.create_model_route(
+                    requested_model=M10_RESP_FAIL, provider="openai",
+                    upstream_model=U10_RESP_FAIL, match_type="exact",
+                    endpoint="/v1/responses", priority=1,
+                    visible_in_models=True, supports_streaming=True,
+                    capabilities=resp_caps,
+                    notes="205-e labeled responses stream-failure route",
+                )
+                r_codex = await routes.create_model_route(
+                    requested_model=M10_CODEX, provider="openai",
+                    upstream_model=M10_CODEX, match_type="exact",
+                    endpoint="/v1/responses", priority=1,
+                    visible_in_models=True, supports_streaming=True,
+                    capabilities=codex_caps,
+                    notes="205-e labeled codex context-fixture route",
+                )
+                r_replay = await routes.create_model_route(
+                    requested_model=M10_REPLAY, provider="openai",
+                    upstream_model=M10_REPLAY, match_type="exact",
+                    endpoint="/v1/responses", priority=1,
+                    visible_in_models=True, supports_streaming=True,
+                    capabilities=codex_caps,
+                    notes="205-e labeled codex replay-fixture route",
+                )
+                for upstream in (U10_RESP, U10_RESP_FAIL):
+                    await pricing.create_pricing_rule(
+                        provider="openai", upstream_model=upstream,
+                        endpoint="/v1/responses",
+                        valid_from=now - timedelta(days=1),
+                        currency="EUR",
+                        input_price_per_1m=Decimal("1.000000000"),
+                        output_price_per_1m=Decimal("1.000000000"),
+                        request_price=Decimal("0.000000000"),
+                        notes="205-e labeled fixture pricing",
+                    )
+                for upstream in (M10_CODEX, M10_REPLAY):
+                    await pricing.create_pricing_rule(
+                        provider="openai", upstream_model=upstream,
+                        endpoint="/v1/responses",
+                        valid_from=now - timedelta(days=1),
+                        currency="EUR",
+                        input_price_per_1m=Decimal("1.000000000"),
+                        cached_input_price_per_1m=Decimal("0.250000000"),
+                        output_price_per_1m=Decimal("1.000000000"),
+                        reasoning_price_per_1m=Decimal("2.000000000"),
+                        request_price=Decimal("0.000000000"),
+                        pricing_metadata=codex_accounting,
+                        notes="205-e labeled codex fixture pricing",
+                    )
+
+                key_service = KeyService(
+                    settings=_d10_settings(orm_url, cli_env),
+                    gateway_keys_repository=GatewayKeysRepository(session),
+                    one_time_secrets_repository=OneTimeSecretsRepository(
+                        session
+                    ),
+                    audit_repository=AuditRepository(session),
+                )
+
+                def _key_input(models, endpoints, policy=None, note=""):
+                    return CreateGatewayKeyInput(
+                        owner_id=uuid.UUID(owner_id),
+                        cohort_id=uuid.UUID(cohort_id),
+                        valid_from=now - timedelta(minutes=5),
+                        valid_until=now + timedelta(days=1),
+                        cost_limit_eur=Decimal("10.000000000"),
+                        token_limit_total=100_000,
+                        request_limit_total=100,
+                        allowed_models=models,
+                        allowed_endpoints=endpoints,
+                        key_purpose="standard",
+                        capability_policy_mode="standard",
+                        calibration_metadata={},
+                        confirm_trusted_calibration=False,
+                        responses_policy=policy,
+                        note=note,
+                    )
+
+                k_diag = await key_service.create_gateway_key(
+                    _key_input(
+                        [M10_RESP, M10_RESP_FAIL], ["/v1/responses"],
+                        note="205-e labeled diagnostics key",
+                    )
+                )
+                k_chatonly = await key_service.create_gateway_key(
+                    _key_input(
+                        [M10_CHAT], ["/v1/chat/completions"],
+                        note="205-e labeled chat-only endpoint key",
+                    )
+                )
+                k_codex = await key_service.create_gateway_key(
+                    _key_input(
+                        [M10_CODEX], ["/v1/responses"],
+                        policy=CODEX_POLICY_0147,
+                        note="205-e labeled codex context key",
+                    )
+                )
+                k_replay = await key_service.create_gateway_key(
+                    _key_input(
+                        [M10_REPLAY], ["/v1/responses"],
+                        policy=CODEX_POLICY_0147,
+                        note="205-e labeled codex replay key",
+                    )
+                )
+        return {
+            "route_resp": str(r_resp.id),
+            "route_resp_fail": str(r_resp_fail.id),
+            "route_codex": str(r_codex.id),
+            "route_replay": str(r_replay.id),
+            "k_diag": str(k_diag.gateway_key_id),
+            "k_chatonly": str(k_chatonly.gateway_key_id),
+            "k_codex": str(k_codex.gateway_key_id),
+            "k_replay": str(k_replay.gateway_key_id),
+            "k_diag_plain": k_diag.plaintext_key,
+            "k_chatonly_plain": k_chatonly.plaintext_key,
+            "k_codex_plain": k_codex.plaintext_key,
+            "k_replay_plain": k_replay.plaintext_key,
+        }
+    finally:
+        await engine.dispose()
+
+
+async def _seed_dod10_replay_reference(
+    orm_url: str,
+    cli_env: dict[str, str],
+    key_id: str,
+    owner_id: str,
+    cohort_id: str,
+    route_id: str,
+    model: str,
+    item_id: str,
+    source_request_id: str,
+) -> tuple[datetime, datetime]:
+    """Genuine service-persisted replay reference (fixture setup, NOT
+    operator work): a successful FINALIZED ledger plus the reference
+    persisted by the ACTUAL CodexReplayService at now-60s (inside the key
+    validity) with the long default lifetime — the same deterministic
+    chronology law as native 201 / the 205-d replay case."""
+    engine = create_async_engine(orm_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    seed_now = datetime.now(UTC) - timedelta(seconds=60)
+    try:
+        async with factory() as session:
+            async with session.begin():
+                usage = UsageLedgerRepository(session)
+                ledger = await usage.create_success_record(
+                    request_id=source_request_id,
+                    gateway_key_id=uuid.UUID(key_id),
+                    owner_id=uuid.UUID(owner_id),
+                    cohort_id=uuid.UUID(cohort_id),
+                    endpoint="/v1/responses",
+                    provider="openai",
+                    started_at=seed_now,
+                    finished_at=seed_now,
+                    requested_model=model,
+                    resolved_model=model,
+                    streaming=False,
+                )
+                replay = CodexReplayService(
+                    repository=CodexReplayReferencesRepository(session),
+                    settings=_d10_settings(orm_url, cli_env),
+                )
+                persisted = await replay.persist_validated_references(
+                    candidates=(
+                        _D10ReplayCandidate(
+                            item_kind="reasoning",
+                            item_id=item_id,
+                            call_id=None,
+                            tool_namespace=None,
+                            tool_name=None,
+                        ),
+                    ),
+                    gateway_key_id=uuid.UUID(key_id),
+                    usage_ledger_id=ledger.id,
+                    source_request_id=source_request_id,
+                    provider="openai",
+                    route_id=uuid.UUID(route_id),
+                    upstream_model=model,
+                    now=seed_now,
+                )
+                assert persisted == 1
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT created_at, expires_at FROM "
+                        "codex_replay_references WHERE gateway_key_id = :kid"
+                    ),
+                    {"kid": uuid.UUID(key_id)},
+                )
+            ).one()
+            return row[0], row[1]
+    finally:
+        await engine.dispose()
+
+
+def _diag_cli_lookup(
+    env: FieldEnvironment,
+    request_id: str,
+    *,
+    namespace: str = "gateway",
+    label: str = "dod10-lookup",
+    want: str = "found",
+    attempts: int = 16,
+) -> CliResult:
+    """Bounded readiness poll against the ACTUAL correlation ID (the
+    observer writes after the forwarded response, so network completion
+    can precede the DB commit). Indexed actual CLI retries; no arbitrary
+    sleeps of record, no fabricated rows."""
+    last: CliResult | None = None
+    for attempt in range(1, attempts + 1):
+        last = env.run_cli(
+            "diagnostics", "request", "show",
+            "--request-id", request_id, "--namespace", namespace,
+            label=f"{label}-{attempt}", env=DIAG_CLI_ENV,
+        )
+        payload = last.json if isinstance(last.json, dict) else {}
+        if payload.get("outcome") == want:
+            return last
+        time.sleep(0.5)
+    got = (last.json if isinstance(last.json, dict) else {}).get("outcome")
+    raise AssertionError(
+        f"{label}: lookup outcome {got!r} never reached {want!r} "
+        "(fixed detail; no row content retained)"
+    )
+
+
+def _dod10_key_state(env: FieldEnvironment, key_id: str) -> dict[str, object]:
+    """Exact per-key accounting state (fixture SQL assertion)."""
+    counters = env.sql(
+        "SELECT cost_used_eur, tokens_used_total, requests_used_total, "
+        "cost_reserved_eur, tokens_reserved_total, requests_reserved_total "
+        "FROM gateway_keys WHERE id = $1",
+        key_id,
+    )
+    ledger = env.sql(
+        "SELECT accounting_status, success FROM usage_ledger "
+        "WHERE gateway_key_id = $1",
+        key_id,
+    )
+    reservations = env.sql(
+        "SELECT status FROM quota_reservations WHERE gateway_key_id = $1",
+        key_id,
+    )
+
+    def _flag(value: object) -> str:
+        if value is True:
+            return "true"
+        if value is False:
+            return "false"
+        return "none"
+
+    return {
+        "counters": counters[0] if counters else None,
+        "ledger_rows": len(ledger),
+        "ledger_states": sorted(
+            (str(r.get("accounting_status")), _flag(r.get("success")))
+            for r in ledger
+        ),
+        "reservation_states": sorted(str(r["status"]) for r in reservations),
+    }
+
+
+def _dod10_store_contains(env: FieldEnvironment, needle: str) -> bool:
+    """Boolean-only content scan of the ENTIRE diagnostics store."""
+    rows = env.sql("SELECT * FROM request_diagnostics")
+    return any(
+        needle in str(value) for row in rows for value in row.values()
+    )
+
+
+def test_dod10_actual_gateway_recorded_diagnostics(
+    field_workflow: FieldEnvironment,
+) -> None:
+    env = field_workflow
+    m = env.manifest
+    orm_url = env.database_url
+
+    # Labeled fixture setup (NOT operator business work): owned loopback
+    # ProviderMock + re-pointed provider base_url + labeled routes/keys.
+    # The mock's FULL lifetime (seeding, gateway startup, and every case
+    # below) runs inside this try/finally, so a startup failure cannot
+    # leak the second mock.
+    mock = ProviderMock()
+    try:
+        try:
+            planted = asyncio.run(
+                _plant_dod10_world(
+                    orm_url, env.cli_env, mock.base_url,
+                    m["owner_seed"], m["cohort_seed"],
+                )
+            )
+        except Exception:
+            raise AssertionError(
+                "dod10 fixture planting failed (fixed safe detail; no "
+                "SQL retained)"
+            ) from None
+
+        for label in ("k_diag_plain", "k_chatonly_plain", "k_codex_plain",
+                      "k_replay_plain"):
+            env.register_secret(planted[label], f"dod10-{label}")
+        body_canary = "dod10-body-canary-" + secrets.token_hex(16)
+        resp_canary = "dod10-resp-canary-" + secrets.token_hex(16)
+        mock.response_canary = resp_canary
+        fake_upstream = "sk-proj-" + secrets.token_hex(24)
+        env.register_secret(fake_upstream, "dod10-fake-upstream-key")
+
+        # The ACTUAL installed gateway with explicit owned process overrides:
+        # diagnostics recording ON, content capture deterministically OFF,
+        # the valid maximum write timeout (production default unchanged).
+        # Starting it also proves the EXACT prior owned process (DoD5 in a
+        # combined module run) was stopped and terminated.
+        capture_dir = env.operator_dir / "dod10-capture"
+        env.start_gateway(env_overrides={
+            "REQUEST_DIAGNOSTICS_ENABLED": "true",
+            "REQUEST_CAPTURE_ENABLED": "false",
+            "REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS": "1000",
+            "REQUEST_CAPTURE_DIR": str(capture_dir),
+            "OPENAI_UPSTREAM_API_KEY": fake_upstream,
+        })
+        # ---- 1. Pre-auth 401: recorded with NO key identity --------------
+        state_diag_base = _dod10_key_state(env, planted["k_diag"])
+        assert state_diag_base["ledger_rows"] == 0
+        status, _payload, headers = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer="sk-slaif-" + "0" * 40,
+            body={"model": M10_RESP, "input": body_canary},
+        )
+        assert status == 401, f"preauth expected 401, got {status}"
+        diag_401 = headers.get(DIAG_ID_HEADER)
+        assert diag_401, "no X-SLAIF-Diagnostic-ID correlation header"
+        rec = _diag_cli_lookup(env, diag_401, label="dod10-preauth").json
+        record = rec["record"]
+        assert record["http_status"] == 401
+        assert record["stream_outcome"] == "http_rejection"
+        assert record["gateway_key_id"] is None
+        # The client sent NO X-Request-ID: the retained client ID is the
+        # middleware-generated request ID (a deliberately retained safe
+        # correlation ID in req-<uuid> shape), not client content.
+        client_id_val = record["client_request_id"]
+        assert client_id_val is None or re.fullmatch(
+            r"req-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}"
+            r"-[0-9a-f]{4}-[0-9a-f]{12}",
+            client_id_val,
+        )
+        assert record["route_id"] is None
+        # pre-auth never attributes a key/owner/route/ledger: no stored
+        # row claims any labeled key (never guess an owner)
+        claimed = {
+            row.get("gateway_key_id")
+            for row in env.sql("SELECT gateway_key_id FROM request_diagnostics")
+        }
+        labeled_keys = {
+            planted["k_diag"], planted["k_chatonly"],
+            planted["k_codex"], planted["k_replay"], m["k_student"],
+        }
+        assert claimed.isdisjoint(labeled_keys), (
+            "a stored row claims a labeled key for the pre-auth 401"
+        )
+        assert _dod10_key_state(env, planted["k_diag"]) == state_diag_base
+
+        # ---- 2. Authenticated endpoint denial ----------------------------
+        status, payload, headers = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer=planted["k_chatonly_plain"],
+            body={"model": M10_CHAT, "input": "bounded"},
+        )
+        assert status == 403, f"endpoint denial expected 403, got {status}"
+        public_code = payload["error"]["code"]
+        assert public_code == "endpoint_not_allowed"
+        rec = _diag_cli_lookup(
+            env, headers.get(DIAG_ID_HEADER), label="dod10-endpoint"
+        ).json["record"]
+        assert rec["error_code"] == public_code
+        assert rec["http_status"] == 403
+        assert rec["stream_outcome"] == "http_rejection"
+        assert rec["endpoint_template"] == "/v1/responses"
+        # endpoint policy rejects BEFORE route resolution: no route facts
+        assert rec["route_id"] is None
+        assert rec["route_pattern"] is None
+        assert rec["gateway_key_id"] == planted["k_chatonly"]
+        state_chatonly = _dod10_key_state(env, planted["k_chatonly"])
+        assert state_chatonly["ledger_rows"] == 0
+        assert state_chatonly["reservation_states"] == []
+
+        # ---- 3. Unsupported function-tool capability ---------------------
+        fn_body = {
+            "model": M10_RESP,
+            "input": "bounded " + body_canary,
+            "tools": [{
+                "type": "function",
+                "name": "lookup",
+                "description": "lookup thing",
+                "parameters": {"type": "object", "properties": {}},
+            }],
+        }
+        status, payload, headers = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer=planted["k_diag_plain"], body=fn_body,
+        )
+        assert 400 <= status < 500, f"function tool denial, got {status}"
+        public_code = payload["error"]["code"]
+        assert public_code == "responses_function_tool_capability_not_supported"
+        rec = _diag_cli_lookup(
+            env, headers.get(DIAG_ID_HEADER), label="dod10-functool"
+        ).json["record"]
+        assert rec["error_code"] == public_code
+        assert rec["http_status"] == status
+        assert rec["stream_outcome"] == "http_rejection"
+        # the ACTUALLY RESOLVED route identity at the trusted boundary
+        assert rec["route_id"] == planted["route_resp"]
+        assert rec["route_pattern"] == M10_RESP
+        assert rec["gateway_key_id"] == planted["k_diag"]
+        assert _dod10_key_state(env, planted["k_diag"]) == state_diag_base
+
+        # ---- 4. Codex context-window rejection ---------------------------
+        status, payload, headers = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer=planted["k_codex_plain"],
+            body={
+                "model": M10_CODEX,
+                "input": "x" * 3000,
+                "prompt_cache_key": "dod10-context",
+            },
+        )
+        assert status == 400, f"context rejection expected 400, got {status}"
+        public_code = payload["error"]["code"]
+        assert public_code == "responses_codex_context_window_exceeded"
+        rec = _diag_cli_lookup(
+            env, headers.get(DIAG_ID_HEADER), label="dod10-context"
+        ).json["record"]
+        assert rec["error_code"] == public_code
+        assert rec["http_status"] == 400
+        assert rec["stream_outcome"] == "http_rejection"
+        assert rec["route_id"] == planted["route_codex"]
+        assert rec["route_pattern"] == M10_CODEX
+        # actual decision numbers and configured ceilings, not hints
+        assert rec["source"] == "responses_route_limits"
+        assert rec["context_window_tokens"] == 400
+        assert rec["estimated_input_tokens"] is not None
+        assert rec["estimated_input_tokens"] > 336
+        assert rec["limits"] == {
+            "max_output_tokens": 256,
+            "max_input_tokens": 1050000,
+            "context_window_tokens": 400,
+        }
+        assert rec["output_allowance_tokens"] == 64
+        assert rec["gateway_key_id"] == planted["k_codex"]
+        state_codex = _dod10_key_state(env, planted["k_codex"])
+        assert state_codex["ledger_rows"] == 0
+        assert state_codex["reservation_states"] == []
+
+        # ---- 5. Unsupported provider stream event (wire 200) -------------
+        state_stream_before = _dod10_key_state(env, planted["k_diag"])
+        status, body, headers = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer=planted["k_diag_plain"],
+            body={"model": M10_RESP_FAIL, "input": "bounded", "stream": True},
+        )
+        assert status == 200, f"stream wire status expected 200, got {status}"
+        assert isinstance(body, str)
+        assert body.count("responses_stream_event_not_supported") == 1
+        rec = _diag_cli_lookup(
+            env, headers.get(DIAG_ID_HEADER), label="dod10-stream"
+        ).json["record"]
+        assert rec["stream_outcome"] == "stream_failure"
+        # the record keeps the ACTUAL wire status, not a success guess
+        assert rec["http_status"] == 200
+        assert rec["source"] == "responses_stream_failure"
+        assert rec["error_code"] == "responses_stream_event_not_supported"
+        assert rec["route_pattern"] == M10_RESP_FAIL
+        assert rec["gateway_key_id"] == planted["k_diag"]
+        state_stream_after = _dod10_key_state(env, planted["k_diag"])
+        # the interruption finalizes exactly one failed ledger row and one
+        # released reservation; reserved counters fully back to baseline
+        assert state_stream_after["ledger_rows"] == (
+            state_stream_before["ledger_rows"] + 1
+        )
+        assert ("failed", "false") in state_stream_after["ledger_states"]
+        assert "released" in state_stream_after["reservation_states"]
+        counters = state_stream_after["counters"]
+        assert float(counters["cost_reserved_eur"]) == 0.0
+        assert int(counters["tokens_reserved_total"]) == 0
+        assert int(counters["requests_reserved_total"]) == 0
+
+        # ---- 6. Replay: genuine reference positive, then expired ---------
+        item_id = "rs-205e-" + secrets.token_hex(12)
+        source_request_id = "req-205e-" + secrets.token_hex(12)
+        env.register_secret(item_id, "dod10-replay-item-id")
+        created_at, expires_at = asyncio.run(
+            _seed_dod10_replay_reference(
+                orm_url, env.cli_env, planted["k_replay"],
+                m["owner_seed"], m["cohort_seed"],
+                planted["route_replay"], M10_REPLAY,
+                item_id, source_request_id,
+            )
+        )
+        assert created_at < expires_at
+        assert expires_at > datetime.now(UTC), (
+            "seeded reference must still be active (long initial lifetime)"
+        )
+        replay_body = {
+            "model": M10_REPLAY,
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": item_id,
+                    "encrypted_content": "enc-205e",
+                }
+            ],
+        }
+        ledger_before = _dod10_key_state(env, planted["k_replay"])["ledger_rows"]
+        assert ledger_before == 1  # the seeded finalized ledger only
+        status, _payload, headers = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer=planted["k_replay_plain"], body=replay_body,
+        )
+        assert status == 200, (
+            f"replay positive expected 200, got {status} (synthetic IO "
+            "control, not backend qualification)"
+        )
+        ok_diag = headers.get(DIAG_ID_HEADER)
+        assert ok_diag, "no correlation header on the replay positive 200"
+        # a successful 200 never records (bounded negative poll)
+        nf = _diag_cli_lookup(
+            env, ok_diag, label="dod10-replay-ok", want="not_found",
+            attempts=6,
+        )
+        assert nf.json["outcome"] == "not_found"
+        assert _dod10_key_state(env, planted["k_replay"])["ledger_rows"] == (
+            ledger_before + 1
+        )
+
+        # Deterministic expiry: ONLY the selected reference moves, to a
+        # timestamp after creation but already before the gateway's current
+        # time (no sleep, no race, chronology CHECK preserved).
+        env.sql(
+            "UPDATE codex_replay_references SET expires_at = "
+            "created_at + interval '30 seconds' WHERE gateway_key_id = $1",
+            planted["k_replay"],
+        )
+        saved = env.sql(
+            "SELECT expires_at FROM codex_replay_references "
+            "WHERE gateway_key_id = $1",
+            planted["k_replay"],
+        )
+        assert len(saved) == 1
+        saved_expires = datetime.fromisoformat(str(saved[0]["expires_at"]))
+        assert created_at < saved_expires < datetime.now(UTC)
+
+        state_before_deny = _dod10_key_state(env, planted["k_replay"])
+        status, payload, headers = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer=planted["k_replay_plain"], body=replay_body,
+        )
+        assert status == 404, f"expired replay expected 404, got {status}"
+        public_code = payload["error"]["code"]
+        # the public code is deliberately opaque (not_found vs expired is
+        # not disclosed)
+        assert public_code == "responses_codex_replay_reference_not_found"
+        rec = _diag_cli_lookup(
+            env, headers.get(DIAG_ID_HEADER), label="dod10-replay-expired"
+        ).json["record"]
+        assert rec["error_code"] == public_code
+        assert rec["http_status"] == 404
+        assert rec["stream_outcome"] == "http_rejection"
+        # replay verification precedes route resolution: no route facts
+        assert rec["route_id"] is None
+        assert rec["route_pattern"] is None
+        assert rec["gateway_key_id"] == planted["k_replay"]
+        # the denied replay changed NO accounting state
+        assert _dod10_key_state(env, planted["k_replay"]) == state_before_deny
+
+        # ---- 7. Ambiguous client ID: two genuine failures, one ID --------
+        client_id = "dod10-client-" + secrets.token_hex(8)
+        _s, _p, h_first = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer=planted["k_diag_plain"], body=fn_body,
+            extra_headers={"X-Request-ID": client_id},
+        )
+        _s, _p, h_second = env.gateway_request_with_headers(
+            "POST", "/v1/responses",
+            bearer=planted["k_diag_plain"], body=fn_body,
+            extra_headers={"X-Request-ID": client_id},
+        )
+        g_first = h_first.get(DIAG_ID_HEADER)
+        g_second = h_second.get(DIAG_ID_HEADER)
+        assert g_first and g_second and g_first != g_second
+        amb = _diag_cli_lookup(
+            env, client_id, namespace="any", label="dod10-ambiguous",
+            want="ambiguous",
+        )
+        assert amb.json["match_count"] == 2
+        candidates = {
+            c["gateway_request_id"] for c in amb.json["candidates"]
+        }
+        assert candidates == {g_first, g_second}
+        # the offered gateway IDs disambiguate to the exact rows
+        for gateway_id in (g_first, g_second):
+            found = _diag_cli_lookup(
+                env, gateway_id, label=f"dod10-amb-{gateway_id[:8]}",
+                attempts=3,
+            )
+            assert found.json["record"]["gateway_request_id"] == gateway_id
+
+        # ---- 8. CLI status / not-found / typed unavailable ---------------
+        retained = env.sql(
+            "SELECT count(*) AS c FROM request_diagnostics"
+        )
+        retained_n = int(retained[0]["c"])
+        st = env.run_cli(
+            "diagnostics", "status", "--json", label="dod10-status-json",
+            env=DIAG_CLI_ENV,
+        ).json
+        assert st["recording_enabled"] is True
+        assert st["store_available"] is True
+        assert st["retained_records"] == retained_n
+        assert st["write_timeout_ms"] == 1000
+        assert st["max_records"] == 10000
+        assert st["retention_seconds"] == 604800
+        txt = env.run_cli(
+            "diagnostics", "status", json_output=False,
+            label="dod10-status-text", env=DIAG_CLI_ENV,
+        )
+        assert txt.stdout.startswith("recording enabled;")
+
+        absent = env.run_cli(
+            "diagnostics", "request", "show",
+            "--request-id", "dod10-not-present", "--namespace", "any",
+            label="dod10-not-found", env=DIAG_CLI_ENV,
+        )
+        assert absent.exit_code == 0
+        assert absent.json["outcome"] == "not_found"
+
+        # typed unavailable: a controlled CLI process with a syntactically
+        # valid but unreachable owned-loopback DB URL (never the shared PG)
+        fake_dbpass = "dod10-unreachable-" + secrets.token_hex(16)
+        env.register_secret(fake_dbpass, "dod10-unreachable-db-password")
+        unreachable_url = (
+            f"postgresql+asyncpg://diag205e:{fake_dbpass}"
+            "@127.0.0.1:1/diag205e-unreachable"
+        )
+        env.register_secret(unreachable_url, "dod10-unreachable-database-url")
+        bad_env = {
+            "DATABASE_URL": unreachable_url,
+            "REQUEST_DIAGNOSTICS_ENABLED": "true",
+        }
+        st_un = env.run_cli(
+            "diagnostics", "status", "--json",
+            label="dod10-status-unavailable", env=bad_env,
+        )
+        assert st_un.exit_code == 0
+        assert st_un.json["store_available"] is False
+        assert st_un.json["recording_enabled"] is True
+        sh_un = env.run_cli(
+            "diagnostics", "request", "show",
+            "--request-id", diag_401, "--namespace", "gateway",
+            label="dod10-show-unavailable", expect=1, env=bad_env,
+        )
+        assert sh_un.json["outcome"] == "unavailable"
+
+        # ---- 9. Capture OFF + content-free store + safe export -----------
+        capture_files = []
+        if capture_dir.exists():
+            capture_files = [
+                str(p.relative_to(capture_dir))
+                for p in capture_dir.rglob("*")
+                if p.is_file()
+            ]
+        assert not capture_files, (
+            "request capture artifacts were created while capture is OFF"
+        )
+        assert not _dod10_store_contains(env, body_canary), (
+            "request body content reached the stored diagnostics"
+        )
+        assert not _dod10_store_contains(env, resp_canary), (
+            "response content reached the stored diagnostics"
+        )
+        assert not _dod10_store_contains(env, fake_upstream), (
+            "a generated upstream credential reached the stored diagnostics"
+        )
+        assert not _dod10_store_contains(env, item_id), (
+            "a raw replay item id reached the stored diagnostics"
+        )
+
+        # Persist the safe requirement-indexed transcript for this case.
+        persisted = env.persist_transcript("dod10")
+        run_dir = Path(persisted["directory"])
+        transcript_path = Path(persisted["paths"]["transcript"])
+        identity_path = Path(persisted["paths"]["identity"])
+        assert (run_dir.stat().st_mode & 0o777) == 0o700
+        assert (transcript_path.stat().st_mode & 0o777) == 0o600
+        assert (identity_path.stat().st_mode & 0o777) == 0o600
+        assert _sha256_file(transcript_path) == persisted["sha256"]["transcript"]
+        assert _sha256_file(identity_path) == persisted["sha256"]["identity"]
+        assert persisted["record_count"] == len(env.transcript)
+        labeled = set(persisted["labeled"])
+        for required in (
+            "dod10-preauth-1", "dod10-endpoint-1", "dod10-functool-1",
+            "dod10-context-1", "dod10-stream-1", "dod10-replay-ok-1",
+            "dod10-replay-expired-1", "dod10-ambiguous-1",
+            "dod10-status-json", "dod10-status-text", "dod10-not-found",
+            "dod10-status-unavailable", "dod10-show-unavailable",
+        ):
+            # the first successful poll attempt carries the "-1" suffix
+            assert any(
+                lbl == required or lbl.startswith(required)
+                for lbl in labeled
+            ), f"missing labeled record {required}"
+        persisted_bytes = (
+            transcript_path.read_bytes() + identity_path.read_bytes()
+        )
+        secret_in_persisted = any(
+            secret.encode("utf-8") in persisted_bytes
+            for secret in env._secrets
+        )
+        assert not secret_in_persisted, (
+            "a generated secret is present in the persisted "
+            "transcript/identity"
+        )
+        canary_in_persisted = (
+            body_canary.encode("utf-8") in persisted_bytes
+            or resp_canary.encode("utf-8") in persisted_bytes
+        )
+        assert not canary_in_persisted, (
+            "a generated body/response canary is present in the persisted "
+            "transcript/identity"
+        )
+    finally:
+        mock.stop()

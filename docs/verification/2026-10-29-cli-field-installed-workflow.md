@@ -753,8 +753,9 @@ identifiers/digests, and the config canary.
 
 ### Limitations (205-d) / carry-forward
 
-- Outcome 10 (gateway-recorded failure investigations) remains UNPROVEN
-  and mandatory in a later same-PR suffix.
+- Outcome 10 (gateway-recorded failure investigations): UNPROVEN at the
+  205-d point — SUPERSEDED by the 205-e section below, where outcome 10
+  was executed and PASSED.
 - The final fresh-installation ALL-ELEVEN run and the complete
   all-eleven transcript remain mandatory; this D transcript covers only
   the three D outcomes (37 records).
@@ -764,3 +765,188 @@ identifiers/digests, and the config canary.
   prove replay playback, provider qualification, or authentication.
 - No schema, migration, or settings change in 205-d; no merge, no
   release, no production, security, or compliance claim.
+
+## 205-e continuation (outcome 10: actual gateway-recorded diagnostics)
+
+Recorded 2026-10-29. Tests/documentation only; the product remains
+frozen at `420fb8f`. This section proves outcome 10: an operator
+investigates ACTUAL installed-gateway-recorded compatibility failures
+through ACTUAL installed `diagnostics status` / `diagnostics request
+show` commands, with request content capture OFF. No diagnostic rows are
+planted: every stored record comes from the real middleware observer on
+an actual HTTP response of the ACTUAL installed
+`slaif_gateway.main:app`.
+
+### Outcome 10 — EXECUTED PASSED
+
+`test_dod10_actual_gateway_recorded_diagnostics` (final run: 1 PASS, 0
+skip, 80.531 s; JUnit `205e-dod10-4`, sha256
+`94aa0cedf256ed35519fe809a9beeb86168031c2752282f95d0796227021f91c`):
+
+Gateway process (owned loopback, real uvicorn child of the installed
+console venv) with explicit owned overrides:
+`REQUEST_DIAGNOSTICS_ENABLED=true`, `REQUEST_CAPTURE_ENABLED=false`
+(deterministic OFF with an owned capture directory that is asserted
+empty afterwards), `REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS=1000` (the
+valid maximum, to tolerate cold writes; production default 100 ms
+unchanged), and a generated fake value for the actual configured
+server-credential env name (`OPENAI_UPSTREAM_API_KEY`, registered before
+retention).
+
+Labeled fixture setup (product-equivalent ORM/services in the pytest
+process — clearly NOT operator business work, and never a
+`request_diagnostics` plant): the seeded `openai` provider config's
+`base_url` re-pointed at the owned loopback `ProviderMock`; four labeled
+routes + pricing (a plain responses route with function/custom tools
+OFF, a responses stream-failure route, and two Codex routes with the
+exact numeric `codex_limits` contract 400/64/256 plus
+`codex_accounting` pricing metadata); four labeled keys via
+`KeyService` (responses key, chat-only endpoint key, Codex-context key
+and Codex-replay key carrying the pinned historical 0147 five-gate
+policy tuple); and, for the replay case, a genuine service-persisted
+reference: a successful FINALIZED ledger (`UsageLedgerRepository.
+create_success_record`) plus `CodexReplayService.
+persist_validated_references` at now-60 s inside key validity with the
+long default lifetime (same deterministic chronology law as native 201
+and the 205-d replay case).
+
+Every stored record is correlated by its OWN response
+`X-SLAIF-Diagnostic-ID` header (never time/IP/body-length/prefix
+guesses), with a bounded labeled CLI retry poll (the observer writes
+after the forwarded response; network completion can precede the DB
+commit). The six actual HTTP-to-CLI outcomes:
+
+1. **Pre-auth 401** (invalid bearer): recorded
+   (`http_rejection`, 401) with NO key identity — `gateway_key_id`
+   null, no row claims any labeled key (never guess an owner), zero
+   ledger/reservation side effects; the client sent no `X-Request-ID`,
+   so the retained client ID is only the middleware-generated
+   `req-<uuid>` safe correlation ID.
+2. **Authenticated endpoint denial** (chat-only key →
+   `/v1/responses`): public `endpoint_not_allowed`, 403; resolved key
+   UUID present but NO route facts (endpoint policy rejects before
+   route resolution); zero ledger/reservation rows.
+3. **Unsupported function-tool capability**: public
+   `responses_function_tool_capability_not_supported`; the ACTUALLY
+   RESOLVED route identity (route UUID + configured pattern) at the
+   trusted resolution boundary; key UUID; no quota/ledger mutation.
+4. **Codex context-window rejection**: public
+   `responses_codex_context_window_exceeded`, 400; actual decision
+   facts from the real decision (`source=responses_route_limits`,
+   `context_window_tokens=400`, `estimated_input_tokens` > 336,
+   `output_allowance_tokens=64`, exact `limits` dict with the
+   configured ceilings) — no inferred byte-size facts, no admission
+   mutation.
+5. **Expired retained reference**: the genuine service-persisted
+   reference first AUTHORIZES a real API replay (200 against the owned
+   synthetic provider — synthetic IO, not backend qualification; a
+   successful 200 never records; +1 ledger). Then ONLY the selected
+   reference's expiry moves to created+30 s (after creation, already
+   before the gateway's current time; chronology CHECK preserved), and
+   the same request is denied 404 with the deliberately opaque public
+   `responses_codex_replay_reference_not_found`: the CLI reports only
+   retained safe facts (no route facts — replay verification precedes
+   route resolution; key UUID present; no accounting change). No
+   missing-vs-expired certainty is invented.
+6. **Unsupported provider stream event**: the owned mock emits
+   `response.created` then `response.not_a_supported_event`; actual
+   wire HTTP 200 PLUS the terminal failure in the stream (the fixed
+   failure code exactly once); the CLI record keeps the ACTUAL wire
+   status (`stream_failure`, `http_status=200`,
+   `source=responses_stream_failure`,
+   `error_code=responses_stream_event_not_supported`); accounting
+   finalizes exactly one `failed`/success=False ledger row and one
+   `released` reservation with zero residual reserved counters.
+
+CLI surface (installed `diagnostics` commands, each an indexed
+transcript record): `status --json` (recording enabled, store
+available, retained count equals the actual store row count,
+`write_timeout_ms=1000` from the CLI process's OWN declared overrides
+— the 205-c process-scope law), `status` text (`recording enabled;`),
+an absent ID → typed `not_found` (exit 0), two GENUINE failures
+sharing one safe client `X-Request-ID` → `ambiguous` with
+`match_count=2` and the two gateway diagnostic IDs offered as
+candidates, each disambiguating to its exact row; and a TYPED
+`unavailable` via a controlled CLI process with a syntactically valid
+but unreachable owned-loopback DB URL (status: exit 0 with
+`store_available=false`; `request show`: `outcome=unavailable`, exit 1)
+— the shared PG was never stopped or mutated to simulate it.
+
+Privacy: content capture OFF with the owned capture directory asserted
+empty; distinct generated body/response canaries (plus the generated
+fake upstream credential and the raw replay item ID) asserted absent
+from the ENTIRE stored `request_diagnostics` table, the CLI outputs,
+and the persisted transcript/identity (safe substitutions re-applied at
+serialization). The retained safe correlation IDs (diagnostic /
+`req-<uuid>` / client IDs) are deliberately retained and are not
+canaries.
+
+### JUnit chronology (205-e; overlapping slice runs; never summed)
+
+| Artifact (time) | tests | failures | sha256 (prefix) |
+|---|---|---|---|
+| `205e-dod10-1` 18:32 | 1 | 1 | 5d798f07 — fixture SQL inspection used named `:k` placeholders against the positional-arg helper (failure before any HTTP) |
+| `205e-dod10-2` 18:33 | 1 | 1 | c14df3a5 — draft over-assertion: `client_request_id` retains the middleware-generated `req-<uuid>` safe correlation ID when the client sends none (not null) |
+| `205e-dod10-3` 18:36 | 1 | 1 | 5a9b1307 — CLI `status` reports the CLI process's OWN `write_timeout_ms` (100 default) unless the same override is declared in the CLI env (205-c process-scope law) |
+| `205e-dod10-4` 18:40 (SHA `94aa0cedf256ed35519fe809a9beeb86168031c2752282f95d0796227021f91c`) | 1 | 0 | 94aa0ced — FINAL DoD10, 1 PASS 0 skip, 80.531 s |
+
+All failures are NEW-test fixture/oracle corrections against the actual
+existing law; no product defect was demonstrated and none was patched.
+
+### Installation identity (final DoD10 run; literal)
+
+- Source `420fb8f6d9377f569d126d08f4c9e4146fc7250b`; FRESH wheel SHA256
+  `e83dbc0614a4e84fb97c73a14ad4495ff205bf3662582e4260f02f2b1664ef76`
+  (432 payload files verified; per-run fresh build, same law as
+  205-d).
+- FRESH owned venv `/tmp/pytest-of-janezp/pytest-1587/slaif205-field0/venv`
+  (Python 3.12.15); installed payload 432 files verified; neutral cwd,
+  `PYTHONPATH` absent, outside the checkout.
+- Owned PostgreSQL 16 container `9da0cf15b96617b7b85ca9505409be2fb8bb4beabe1b2cc52f36673fc8d7b058`
+  (loopback port 44393, run-token name/labels, tmpfs) removed in
+  teardown; `docker ps -a --filter name=slaif205` empty after the
+  round.
+
+### Gateway lifecycle fixture correction (order 205-e §4)
+
+`_OwnedFieldEnvironment.start_gateway` previously overwrote its single
+`self._gateway` handle: in a combined module run DoD5's live gateway
+would have leaked. It now (a) accepts optional `env_overrides` merged
+over the default process environment (default behavior unchanged) and
+(b) stops AND joins the EXACT prior owned process before replacement,
+asserting actual termination. The combined DoD5+DoD10 execution that
+exercises this path is deferred to the final fresh 13-case run per the
+root direction (not repeated here); the cleanup code is in place in
+this round's bytes.
+
+### Transcript (run `fe92daf1677148f7`)
+
+15 actual labeled CLI records (all outcome-10 operator actions; 0
+unlabeled, 1 negative exit — the typed-unavailable `request show`),
+persisted 0600 under an owned 0700 per-run directory outside the
+checkout (transcript sha256
+`048fb568274d0869bae0af131be5b58fba26be60905f1de2469cd89e145590c0`,
+identity sha256
+`5ebfeb6be3dc28a0aa582b1a534eafe9c387131b190f726b5924f6f10f4f53bc`).
+This is a PARTIAL transcript (outcome 10 only in this focused run);
+the final fresh all-eleven-plus run must export every outcome.
+
+### Limitations (205-e) / carry-forward
+
+- The FOCUSED run executes DoD10 alone; the combined DoD5+DoD10 module
+  run (exercising the exact prior-gateway stop/replace path and the
+  changed HTTP/start_gateway consumer compatibility) is deferred to the
+  final fresh 13-case run (identity + all 11 + config + DoD10).
+- The final fresh-installation ALL-13 run and the complete indexed
+  transcript remain mandatory; no all-eleven/all-thirteen claim follows
+  from this section.
+- The HTTP stimuli are synthetic (owned loopback gateway + owned
+  ProviderMock IO substitution); the replay positive 200 is synthetic
+  IO, not real Codex/backend qualification; the fixture keys/routes/
+  pricing/reference are labeled ORM/service setup, never operator
+  business work and never `request_diagnostics` plants.
+- No product, schema, migration, or settings change in 205-e; no
+  merge, release, production, security, or compliance claim. The whole
+  objective 205 remains PARTIAL until the fresh all-13 run, the
+  complete transcript, the full original-brief audit, and the
+  final-head/strategic merge gates pass.

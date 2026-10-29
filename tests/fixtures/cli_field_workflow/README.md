@@ -95,7 +95,7 @@ framework and creates no general catalog/fixture machinery.
   external Codex client catalog; the client-module pin is a separate matter
   not covered by the canonical key export.
 
-## Current state (205-d handoff)
+## Current state (205-e handoff)
 
 Implemented and executed through the installed console: DoD0 (installed
 identity), DoD1 (lookup/bounded paging, full-bearer refusal), DoD2 (effective
@@ -116,9 +116,19 @@ schema-valid planted rows, configured-default-TTL dry-run, mixed-mode
 refusal, monotonic apply, already-applied repeat, and an explicit
 `--include-expired` second plan), and the installed `config show` finite
 process-configuration inspection (exact 45-field allowlist, configured vs
-default provenance, and invalid-Settings no-echo/no-traceback). DoD10
-(gateway-recorded failure diagnostics) remains NOT implemented here and is
-mandatory for the final 205 PR.
+default provenance, and invalid-Settings no-echo/no-traceback). New in
+205-e: DoD10 (gateway-recorded failure diagnostics: the REAL middleware
+observer records actual HTTP failures of the ACTUAL installed gateway —
+pre-auth 401, endpoint denial, unsupported function-tool capability, Codex
+context-window rejection, expired retained replay reference, unsupported
+provider stream event after wire 200 — and the installed `diagnostics
+status` / `diagnostics request show` commands retrieve and disambiguate
+them by their own `X-SLAIF-Diagnostic-ID`, with capture OFF, content-free
+store canaries, and typed unavailable/not-found/ambiguous outcomes). All
+eleven DoD outcomes plus the config inspection are now implemented and
+executed in this module (each in its own focused run); the FINAL
+fresh-installation combined run of all cases with the complete indexed
+transcript remains mandatory for the final 205 PR.
 
 205-d fixture additions: the SMTP sink gained a minimal deterministic IO
 fault (`refuse_data` is a LATCH, not one-shot: while armed, EVERY DATA
@@ -136,6 +146,28 @@ convert any driver failure into a fixed safe assertion with no exception
 chain; and generated keys / planted replay identifiers are registered as
 secrets before any retention. The `codex_replay_references` CHECK
 constraints are preserved (never relaxed) by using schema-valid rows.
+
+205-e fixture additions: the `ProviderMock` gained a bounded synthetic
+Responses upstream (exact success JSON for the replay positive control and
+an SSE sequence `response.created` then
+`response.not_a_supported_event` for the stream-failure case; IO
+substitution only, no startup hooks or service fakes, and the retained
+log holds only path/model/stream/status); `start_gateway` accepts optional
+`env_overrides` (default behavior unchanged) and, in a combined module
+run, stops AND joins the EXACT prior owned gateway process before
+replacing the handle (proving termination) so DoD5's gateway can never
+leak; `gateway_request_with_headers` returns the response headers
+(`X-SLAIF-Diagnostic-ID` is the correlation authority for lookups);
+`_plant_dod10_world` / `_seed_dod10_replay_reference` are labeled fixture
+setup (product-equivalent ORM/services, clearly not operator business
+work) — the provider `base_url` re-point at the owned mock, four labeled
+routes/pricing, four labeled `KeyService` keys (Codex keys carry the
+pinned historical 0147 five-gate policy tuple), and a GENUINE
+service-persisted replay reference (finalized ledger via
+`UsageLedgerRepository.create_success_record` +
+`CodexReplayService.persist_validated_references` at now-60 s) — and they
+never create `request_diagnostics` rows; every diagnostic row in the case
+comes from the real middleware observer.
 
 The NEW CLI privacy defect confirmed under 205-a (credential-shaped numeric
 input echoed completely in native usage errors, exit 2; root receipts

@@ -46,8 +46,24 @@ on record. They are dated, commit-specific evidence, not certifications.
   allowlist, configured vs default provenance, invalid-Settings
   no-echo/no-traceback) in the final D combined run (3/3 PASS, 0 skip,
   37-record labeled transcript); outcome 10, the complete all-eleven
-  transcript, and the final fresh all-eleven run remain mandatory in
+  transcript, and the final fresh all-eleven run remained mandatory in
   later same-PR suffixes.
+  Same-PR 205-e continuation (recorded in the same file, product still
+  frozen at `420fb8f`): outcome 10 (gateway-recorded failure diagnostics)
+  executed and green through the ACTUAL installed gateway observer +
+  installed `diagnostics` commands: pre-auth 401 without key attribution,
+  endpoint denial with resolved key but no route facts, unsupported
+  function-tool capability, Codex context-window rejection with actual
+  decision numbers/ceilings, a genuine service-persisted replay reference
+  authorizing then denying after ONLY its expiry moved, and an unsupported
+  provider stream event after wire 200 with failed-then-released
+  accounting; plus CLI status/not-found/ambiguous/typed-unavailable
+  outcomes, capture OFF with an empty owned capture dir, and
+  content-free store/transcript canaries (focused run 1/1 PASS, 0 skip,
+  15-record labeled transcript). The final fresh combined run of all
+  cases (identity + all 11 + config + DoD10, including the DoD5+DoD10
+  gateway-replacement path) with the complete indexed transcript remains
+  mandatory in the final same-PR phase.
 
 - [`2026-10-29 Objective 204 CLI record edits and process configuration inspection verification`](2026-10-29-cli-record-edits-and-config.md)
   (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +
