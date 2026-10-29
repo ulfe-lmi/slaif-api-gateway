@@ -765,3 +765,137 @@ with `env -u DATABASE_URL -u TEST_DATABASE_URL`; no ambient
   of an inconsistent plan.
 - The already-applied path still cannot (and does not attempt to)
   reconstruct the original pre-apply expiry range from current rows.
+
+## 200-e ADDENDUM — held-fence reconciliation tests isolated to their own reservation (TESTS ONLY)
+
+### Scope and exact change (200-e)
+
+The two old integration tests that verify held-fence durability —
+`test_external_tool_fence_postgres.py::test_held_fence_blocks_and_never_auto_releases`
+and
+`test_external_tool_hold_postgres.py::test_hold_survives_engine_restart_expiry_and_ordinary_reconciliation`
+— invoked the GLOBAL expired-pending batch reconcile
+(`ReservationReconciliationService.reconcile_expired_pending_reservations`)
+while testing only their own held reservation. When they ran after another
+test had left an unrelated expired ordinary reservation whose ledger carries
+`needs_reconciliation=True` in the shared session database, the unchanged
+production guard correctly raised
+`ReconciliationInvariantError("Provider completed before accounting
+finalization failed; do not release as zero-cost stale reservation")` and the
+test failed. That is a cross-test isolation failure, not an accounting
+regression; the guard was never weakened and no core method was faked or
+returned an empty candidate list.
+
+The repair (tests only; per-file private; no new committed harness):
+
+- Each file now contains a tiny test-local
+  `_OwnQuotaReservationsRepository(QuotaReservationsRepository)` that
+  overrides ONLY `list_expired_pending_reservations`: the real
+  PostgreSQL-backed pending/expired predicate with the test's own reservation
+  UUID filtered at DB selection time, BEFORE the bounded limit, so unrelated
+  expired rows can never crowd the owned row out of the selection. All other
+  repository methods, including the per-reservation get-for-update, are the
+  unchanged production methods, and the unchanged service performs the real
+  candidate conversion, guards, and mutations.
+- The scoped batch now asserts exactly `checked_count == candidate_count ==
+  skipped_count == 1` and `reconciled_count == 0` (the own held-fence
+  reservation is skipped by the external-tool-review law), retains every
+  original oracle (reservation still `pending`, key fence state still
+  `held`, the hold `list_holds` candidate intact with
+  `partial_total_tokens == 0`), and adds reserved-counters-unchanged
+  assertions against the pre-batch key snapshot.
+- No production change: the entire `app/` tree is byte-identical to 200-d
+  (including `app/slaif_gateway/services/reservation_reconciliation.py` and
+  `app/slaif_gateway/db/repositories/quota.py`); the generic global
+  candidate query and the ordinary provider-completed fail-closed law remain
+  unchanged, and their existing coverage was not removed, skipped, xfailed,
+  or suppressed. No monkeypatches, no conftest/shared-fixture framework, no
+  new DB infrastructure.
+
+### Verification evidence (200-e)
+
+Agent-run evidence (this execution):
+
+- The two real pytest nodes on a fresh owned PostgreSQL 16 (existing
+  `owned_pg_url` fixture: fixed Unix socket, unique owner label, loopback
+  binding, tmpfs data dir, identity inspected before migration, exact-ID
+  removal afterward):
+  two pytest nodes, `test_external_tool_fence_postgres.py::test_held_fence_blocks_and_never_auto_releases` and
+  `test_external_tool_hold_postgres.py::test_hold_survives_engine_restart_expiry_and_ordinary_reconciliation`,
+  via `pytest <node1> <node2>` with `TEST_DATABASE_URL` pointed only at the freshly created owned
+  endpoint — JUnit `tests=2 failures=0 errors=0 skipped=0`, actualexit0;
+  owned container `9d1a8885f6aa` (owner
+  `slaif200a-d46ce96333b8480c80991527a3657b62`) removed after the run.
+- Governance/inventory/drift: 40 = 16 + 9 + 15, JUnit
+  `tests=40 failures=0 errors=0 skipped=0`, actualexit0.
+- Ruff (pinned 59-rule set) over `app/ tests/`: all checks passed.
+  `scripts/check_documentation.py`: OK (127 files). `git diff --check`:
+  clean.
+- Preservation: `git diff ce4a1ec5eaf9ef3ac43791e5a538d8aed4d3b9f6 -- app/`
+  (200-d literal implementation parent) is empty; the only tracked
+  changes are the two named test files plus `oap/active`.
+
+Root-independent evidence (root-run; credited as root evidence, not an agent
+run):
+
+- Post-fix isolation harness (strategic receipt
+  `review-artifacts/cli-feature-round/200-e-independent-after-isolation-proof.json`,
+  2026-10-29T00:36:39Z, root terminal 49936 CLOSED actualexit0): ONE pytest
+  harness (`tests=1 failures=0 errors=0 skipped=0`, 7.85s) calls both actual
+  test functions on a fresh DB (both PASS), then both again with 102
+  unrelated expired provider-completed/`needs_reconciliation` rows present —
+  more than the production list's default 100-row first page (both PASS, and
+  ALL foreign rows/ledgers/key reserved counters unchanged) — and a direct
+  ordinary single-reservation reconcile on a foreign row STILL raises the
+  exact fixed provider-completed reason. It ran at exactly the 200-e test
+  file SHAs (`0edc0d90...` fence / `8a3af6de...` hold; sources stable during
+  the proof) and removed its exact owned container
+  (`slaif200-root-recon-isolation-after-e-4793f7727f01430fba9e522b23394127`).
+- D final-head CI receipt
+  `200-d-final-ci-success-observed-during-e.json` (2026-10-29T00:19:31Z).
+
+### CI context (200-e) — exact and honest
+
+- C-SELF `032a3af` (CI run 40789904468, job 123172757105): PostgreSQL
+  integration `2 failed / 448 passed / 9 skipped`; the failures were exactly
+  the two tests repaired here. That is real historical flake evidence, not a
+  claim that the old tests pass with foreign candidates.
+- D-SELF `f38d92d`: ALL 10 final-head checks SUCCESS (PostgreSQL completed
+  2026-10-29T00:12:10Z). The 200-e activation order's "dSELF checks partly
+  pending" wording was a stale snapshot at activation; current GitHub truth
+  is D green.
+- The new E-SELF still requires ALL 10 final-head checks; they are PENDING at
+  this addendum and remain the broad mandatory root-gated gate before any
+  201 activation.
+
+### Factual documentation correction (200-e) — exact recorded JUnit counts
+
+The immutable 200-d report's attempted correction of the c counts copied the
+d counts and made the impossible claim 53+21=65. That d correction was itself
+wrong; this addendum is its correction. The genuine per-file counts, from the
+recorded JUnit XMLs (root `200-c-unit-per-file-count-correction.json`), are:
+
+| Recorded run | Service maintenance file | CLI replay file | Other unchanged files | Actual total |
+|---|---:|---:|---|---:|
+| c-unit-new.xml | 45 | 20 | none | 65 |
+| c-unit-affected.xml | 45 | 20 | replay_service24 + replay_limits57 + cli_codex27 | 173 |
+| d-unit-new.xml | 53 | 21 | none | 74 |
+| d-unit-affected.xml | 53 | 21 | replay_service24 + replay_limits57 + cli_codex27 | 182 |
+
+Both c/d governance runs 40 = inventory 16 + governance 9 + drift 15; c
+owned PG 15, d owned PG 16. All of these focused runs had 0 fail/error/skip.
+The c/d per-file wording errors did NOT change the genuine 65/173/74/182
+totals or outcomes; old reports are preserved and not edited. The 200-e
+test-isolation evidence above has its own counts and does not replace the c/d
+proofs.
+
+### Limitations (200-e)
+
+- No full verification matrix was rerun; final-head CI for the new E-SELF
+  remains the broad mandatory root-gated gate and is PENDING at this
+  addendum.
+- The scoped selector is test-local dependency injection, not a production
+  path: the production global batch keeps the exact same query/limit/guard
+  semantics.
+- No API/provider/mail/client qualification follows; the full CLI goal
+  201–205 and all 11 installed-executable DoD items remain unproven.

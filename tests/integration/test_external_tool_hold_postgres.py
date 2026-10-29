@@ -9,10 +9,10 @@ from dataclasses import replace
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from slaif_gateway.db.models import ModelRoute
+from slaif_gateway.db.models import ModelRoute, QuotaReservation
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.keys import GatewayKeysRepository
@@ -484,6 +484,43 @@ async def test_rolled_back_hold_has_no_ledger_fence_counters_or_audit():
         await engine.dispose()
 
 
+class _OwnQuotaReservationsRepository(QuotaReservationsRepository):
+    """Test-local candidate selector for this test's own reservation only.
+
+    The real PostgreSQL-backed expired-pending predicate is applied
+    with the owned reservation UUID filtered at DB selection time,
+    BEFORE the bounded limit, so unrelated expired rows committed by
+    other tests can never crowd the owned row out of the selection.
+    All other repository methods, including the per-reservation
+    get-for-update, are the unchanged production methods, and the
+    unchanged service performs the real candidate conversion, guards,
+    and mutations.
+    """
+
+    def __init__(self, session, own_reservation_id: uuid.UUID) -> None:
+        super().__init__(session)
+        self._own_reservation_id = own_reservation_id
+
+    async def list_expired_pending_reservations(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> list[QuotaReservation]:
+        statement = (
+            select(QuotaReservation)
+            .where(
+                QuotaReservation.id == self._own_reservation_id,
+                QuotaReservation.status == "pending",
+                QuotaReservation.expires_at <= now,
+            )
+            .order_by(QuotaReservation.expires_at.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+
 @pytest.mark.asyncio
 async def test_hold_survives_engine_restart_expiry_and_ordinary_reconciliation():
     engine, sessions, key_id, reservation_id, request_id, _ = await _fixture()
@@ -518,9 +555,15 @@ async def test_hold_survives_engine_restart_expiry_and_ordinary_reconciliation()
                 {"past": datetime.now(UTC) - timedelta(minutes=1), "id": reservation_id},
             )
         async with sessions() as session:
+            before_batch = await GatewayKeysRepository(session).get_gateway_key_by_id(key_id)
+            await session.commit()
+        assert before_batch is not None
+        async with sessions() as session:
             summary = await ReservationReconciliationService(
                 gateway_keys_repository=GatewayKeysRepository(session),
-                quota_reservations_repository=QuotaReservationsRepository(session),
+                quota_reservations_repository=_OwnQuotaReservationsRepository(
+                    session, own_reservation_id=reservation_id
+                ),
                 usage_ledger_repository=UsageLedgerRepository(session),
                 audit_repository=AuditRepository(session),
             ).reconcile_expired_pending_reservations(now=datetime.now(UTC))
@@ -533,10 +576,17 @@ async def test_hold_survives_engine_restart_expiry_and_ordinary_reconciliation()
                 usage_ledger_repository=UsageLedgerRepository(session),
                 audit_repository=AuditRepository(session),
             ).list_holds(limit=10)
+            # Scoped batch: exactly the own held-fence reservation,
+            # skipped by the external-tool-review law, nothing reconciled.
+            assert summary.checked_count == 1
+            assert summary.candidate_count == 1
+            assert summary.skipped_count == 1
             assert summary.reconciled_count == 0
-            assert summary.skipped_count >= 1
             assert key is not None and key.external_tool_fence_state == "held"
             assert reservation is not None and reservation.status == "pending"
+            assert key.cost_reserved_eur == before_batch.cost_reserved_eur
+            assert key.tokens_reserved_total == before_batch.tokens_reserved_total
+            assert key.requests_reserved_total == before_batch.requests_reserved_total
             matching = [candidate for candidate in candidates if candidate.reservation_id == reservation_id]
             assert len(matching) == 1 and matching[0].partial_total_tokens == 0
     finally:
