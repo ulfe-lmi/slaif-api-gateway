@@ -2062,6 +2062,7 @@ nonce text not null
 encryption_key_version integer not null default 1
 expires_at timestamptz not null
 consumed_at timestamptz null
+status text not null default 'pending'
 created_at timestamptz not null
 ```
 
@@ -2072,13 +2073,24 @@ gateway_key_email
 gateway_key_rotation_email
 ```
 
+Allowed `status` values:
+
+```text
+pending
+consumed
+expired
+revoked
+```
+
 Constraints/indexes:
 
 ```text
+index(status, expires_at)
 index(gateway_key_id)
 index(expires_at)
 index(consumed_at)
 check(purpose in ('gateway_key_email', 'gateway_key_rotation_email'))
+check(status in ('pending', 'consumed', 'expired', 'revoked'))
 ```
 
 Rules:

@@ -1294,6 +1294,19 @@ blocked and operators should rotate the key if receipt cannot be confirmed.
 Ambiguous email delivery handling is documented in
 [`runbooks/ambiguous-email-delivery.md`](runbooks/ambiguous-email-delivery.md).
 
+CLI email inspection (`email list` / `email show`) is bounded metadata
+access: strictly read-only (no decryption, rendering, sending,
+consumption, mutation, enqueue, or network), exact-identity filters only,
+allowlisted output fields, and fixed safe not-found/unavailable/invalid
+outcomes. The last-recorded failure projection reuses existing audit rows
+(exact entity, finite known error codes, unknown values reported as
+`unavailable`) without exposing raw error prose. Enqueue mode adds one
+bounded operator intent audit (safe selected IDs, actor, bounded reason,
+explicit intent; the one-time secret is referenced through the safe field
+`one_time_reference_id` because the durable metadata sanitizer drops
+secret-bearing key names) committed before dispatch, and the Celery task
+payload remains exactly the existing three UUIDs — no reason, body,
+secret, boolean, policy, or context crosses the broker.
 ## Redaction And Logging
 
 Structured logging redacts configured/custom gateway key prefixes, bearer keys,

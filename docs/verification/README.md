@@ -10,6 +10,27 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-29 Objective 202-a email delivery inspection and safe explicit retries verification`](2026-10-29-cli-email-inspection.md)
+  (recorded 2026-10-29) - focused affected unit batch (145 PASS: 18 new
+  inspection + 3 new page-parse cases in the existing CLI suite + 2 new
+  pre-decryption binding cases in the existing sender suite, plus 79
+  unchanged consumers) and owned-PostgreSQL-16 actual-CLI +
+  actual-service evidence (12) for the read-only
+  `slaif-gateway email list/show` inspection surface and the explicit
+  `--retry-failed`/enqueue-intent semantics: exact AND-combined SQL
+  filters before deterministic paging of a 110-row tied-timestamp batch
+  (owner email exact, never substring), no-echo page parsing, allowlisted
+  metadata with safe historical audit error codes, zero-side-effect
+  read-only proofs, exact delivery/secret binding and same-secret
+  prior-attempt guards refused before decryption (real crypto hooks),
+  causally correlated lock-wait concurrency with t0 < expiry < t1
+  fresh-clock boundary, intent audit committed before dispatch with the
+  existing three-UUID broker payload and safe
+  `one_time_reference_id` reference; fake SMTP/Celery only, no real
+  mail/broker, no schema change (head stays 0026/33 tables); root
+  independent owned-PG baseline/fixed rechecks and CLI/dispatch/parser
+  probes credited separately; not the 205 installed-wheel transcript;
+  final-head CI gated by root.
 - [`2026-10-29 Objective 201-a content-free request-failure diagnostics verification`](2026-10-29-cli-request-diagnostics.md)
   (recorded 2026-10-29) - focused unit (61 new: 25 service + 24
   middleware + 8 actual-Typer CLI + 4 alembic), owned-PostgreSQL-16

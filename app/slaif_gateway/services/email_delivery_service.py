@@ -22,6 +22,9 @@ from slaif_gateway.services.email_errors import (
     EmailDeliveryInProgressError,
     EmailDeliveryNotSendableError,
     EmailError,
+    OneTimeSecretAlreadyConsumedError,
+    OneTimeSecretExpiredError,
+    OneTimeSecretNotFoundError,
 )
 from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.services.email_templates import (
@@ -33,6 +36,33 @@ from slaif_gateway.services.secret_service import SecretService
 from slaif_gateway.utils.redaction import redact_text
 
 KEY_EMAIL_PURPOSES = ("gateway_key_email", "gateway_key_rotation_email")
+
+
+_MSG_SELECTION_NOT_FOUND = (
+    "The selected email delivery UUID was not found; select an existing delivery or omit the selector for an initial creation."
+)
+_MSG_SELECTION_MISMATCHED_SECRET = (
+    "The selected email delivery is backed by a different one-time secret."
+)
+_MSG_SELECTION_BLOCKED_ATTEMPT = (
+    "A prior delivery attempt for this one-time secret is sending, sent, or ambiguous; a new or different delivery cannot safely bypass it."
+)
+_MSG_SELECTION_PRIOR_HISTORY = (
+    "This one-time secret already has delivery history; select an existing delivery UUID explicitly instead of creating a new attempt."
+)
+
+
+class EmailDeliverySelectionError(EmailError):
+    """Raised when an explicit delivery selection is missing or unsafe.
+
+    202-a: a supplied delivery UUID that does not exist, or a prior
+    same-secret sending/sent/ambiguous attempt, is a fixed
+    selection-required/unsafe result. It never marks another delivery
+    failed, creates a substitute row, decrypts/consumes/sends another
+    secret, or queues work.
+    """
+
+    error_code = "email_delivery_selection_required"
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +153,20 @@ class EmailDeliveryService:
             )
             delivery_id_for_failure = prepared.email_delivery_id
             await self._commit_or_flush()
+        except EmailDeliverySelectionError as exc:
+            # Fixed selection-required/unsafe result: no delivery row is
+            # marked failed, no substitute row is created, no secret is
+            # touched, and no audit/queue side effect occurs.
+            return PendingKeyEmailResult(
+                email_delivery_id=delivery_id_for_failure or email_delivery_id or uuid.UUID(int=0),
+                one_time_secret_id=one_time_secret_id,
+                gateway_key_id=None,
+                owner_id=None,
+                recipient_email=None,
+                status="failed",
+                error_code=exc.error_code,
+                error_message=redact_text(exc.safe_message),
+            )
         except EmailDeliveryNotSendableError as exc:
             return PendingKeyEmailResult(
                 email_delivery_id=delivery_id_for_failure or email_delivery_id or uuid.UUID(int=0),
@@ -316,6 +360,16 @@ class EmailDeliveryService:
             secret=secret,
             checked_at=checked_at,
         )
+        if blocking_reason is None and delivery.one_time_secret_id is not None:
+            # 202-a shared-sendability consistency: the actual sender
+            # refuses a selected pending/failed row whose same secret has
+            # another sending/sent/ambiguous attempt (bounded EXISTS, no
+            # decryption, no second validator). This read-only result
+            # must agree so inspection and enqueue never over-report.
+            if await self._email_deliveries_repository.has_blocking_email_delivery_attempt(
+                delivery.one_time_secret_id
+            ):
+                blocking_reason = _MSG_SELECTION_BLOCKED_ATTEMPT
         if secret is not None:
             if secret.status == "consumed" or secret.consumed_at is not None:
                 secret_status = "consumed"
@@ -333,45 +387,97 @@ class EmailDeliveryService:
             blocking_reason=blocking_reason,
         )
 
-    async def _resolve_email_delivery(
-        self,
-        *,
-        email_delivery_id: uuid.UUID | None,
-        owner_id: uuid.UUID,
-        gateway_key_id: uuid.UUID,
-        one_time_secret_id: uuid.UUID,
-        recipient_email: str,
-        subject: str,
-    ):
-        if email_delivery_id is not None:
-            existing = await self._email_deliveries_repository.get_email_delivery_for_update(email_delivery_id)
-            if existing is not None:
-                return existing
-
-        return await self._email_deliveries_repository.create_email_delivery(
-            recipient_email=recipient_email,
-            subject=subject,
-            template_name="gateway_key_email",
-            owner_id=owner_id,
-            gateway_key_id=gateway_key_id,
-            one_time_secret_id=one_time_secret_id,
-            status="pending",
-        )
-
     async def _prepare_key_email_delivery_attempt(
         self,
         *,
         one_time_secret_id: uuid.UUID,
         email_delivery_id: uuid.UUID | None,
     ) -> _PreparedKeyEmailDelivery:
-        now = self._now()
+        # Established lock order: the selected delivery row FIRST, then
+        # the one-time secret. No inverse lock ordering.
+        existing = None
         if email_delivery_id is not None:
-            existing = await self._email_deliveries_repository.get_email_delivery_for_update(email_delivery_id)
-            if existing is not None and existing.status not in {"pending", "failed"}:
+            # A supplied missing delivery UUID is a missing/unsafe selected
+            # target: NEVER implicit creation of another delivery (202-a).
+            existing = await self._email_deliveries_repository.get_email_delivery_for_update_fresh(email_delivery_id)
+            if existing is None:
+                raise EmailDeliverySelectionError(_MSG_SELECTION_NOT_FOUND)
+            if existing.status not in {"pending", "failed"}:
                 raise _email_delivery_not_sendable_error(
                     existing.status,
                     "Only pending or failed key email deliveries can be sent.",
                 )
+            if existing.one_time_secret_id != one_time_secret_id:
+                raise EmailDeliverySelectionError(_MSG_SELECTION_MISMATCHED_SECRET)
+
+        # 202-a: own the existing secret lock ourselves AFTER the
+        # selected-delivery lock, then choose a FRESH instant under both
+        # already-owned current locks. Metadata/identity/history checks
+        # run under those locks BEFORE any decryption or render, so stale
+        # or expired material is never decrypted after a lock wait.
+        secret_row = await self._one_time_secrets_repository.get_one_time_secret_for_update_fresh(
+            one_time_secret_id
+        )
+        if secret_row is None:
+            raise OneTimeSecretNotFoundError("One-time secret was not found")
+        now = self._now()
+        if secret_row.status == "consumed" or secret_row.consumed_at is not None:
+            raise OneTimeSecretAlreadyConsumedError("One-time secret was already consumed")
+        if secret_row.status == "expired":
+            raise OneTimeSecretExpiredError("One-time secret has expired")
+        if secret_row.expires_at <= now:
+            # Mirror the existing SecretService expiry law (mark expired).
+            await self._one_time_secrets_repository.mark_one_time_secret_revoked_or_expired(
+                one_time_secret_id,
+                status="expired",
+            )
+            raise OneTimeSecretExpiredError("One-time secret has expired")
+
+        # Fresh re-verification of the selected row under the owned locks
+        # (never the stale pre-wait ORM identity map).
+        if existing is not None:
+            existing = await self._email_deliveries_repository.get_email_delivery_for_update_fresh(email_delivery_id)
+            if existing is None:
+                raise EmailDeliverySelectionError(_MSG_SELECTION_NOT_FOUND)
+            if existing.status not in {"pending", "failed"}:
+                raise _email_delivery_not_sendable_error(
+                    existing.status,
+                    "Only pending or failed key email deliveries can be sent.",
+                )
+            if existing.one_time_secret_id != one_time_secret_id:
+                raise EmailDeliverySelectionError(_MSG_SELECTION_MISMATCHED_SECRET)
+        if await self._email_deliveries_repository.has_blocking_email_delivery_attempt(one_time_secret_id):
+            raise EmailDeliverySelectionError(_MSG_SELECTION_BLOCKED_ATTEMPT)
+        if email_delivery_id is None and await self._email_deliveries_repository.has_email_delivery_attempt(one_time_secret_id):
+            # No-ID is a genuine initial creation only; retained history
+            # (even failed) requires selected-ID / explicit retry.
+            raise EmailDeliverySelectionError(_MSG_SELECTION_PRIOR_HISTORY)
+
+        if existing is not None:
+            # 202-a: non-pending (e.g. revoked) selected material keeps the
+            # existing pre-crypto classification without invoking the
+            # SecretService.
+            if secret_row.status != "pending":
+                raise OneTimeSecretAlreadyConsumedError("One-time secret is no longer pending")
+            # Reuse the EXISTING blocking-reason helper on the FRESH owned
+            # selected/secret metadata BEFORE any decryption: a foreign
+            # owner/key binding or a non-deliverable purpose is refused
+            # without invoking the real crypto.
+            pre_decrypt_reason = _email_delivery_send_blocking_reason(
+                delivery_status=existing.status,
+                delivery_owner_id=existing.owner_id,
+                delivery_gateway_key_id=existing.gateway_key_id,
+                delivery_secret_id=existing.one_time_secret_id,
+                secret=secret_row,
+                checked_at=now,
+            )
+            if pre_decrypt_reason is not None:
+                raise _email_delivery_not_sendable_error(existing.status, pre_decrypt_reason)
+
+        # The unchanged SecretService follows: its repeated FOR UPDATE
+        # lookup is a no-op under the same lock we already own (no second
+        # wait), and it revalidates with the fresh instant before
+        # decrypting.
         secret_service = SecretService(
             settings=self._settings,
             one_time_secrets_repository=self._one_time_secrets_repository,
@@ -405,14 +511,20 @@ class EmailDeliveryService:
             raise EmailError("Key email metadata is incomplete")
 
         subject = gateway_key_email_subject(rotation=decrypted.row.purpose == "gateway_key_rotation_email")
-        email_delivery = await self._resolve_email_delivery(
-            email_delivery_id=email_delivery_id,
-            owner_id=owner.id,
-            gateway_key_id=gateway_key.id,
-            one_time_secret_id=decrypted.row.id,
-            recipient_email=owner.email,
-            subject=subject,
-        )
+        if existing is not None:
+            email_delivery = existing
+        else:
+            # Legitimate no-ID FIRST creation: both no-history guards above
+            # hold under the secret lock, so no silent new-row bypass.
+            email_delivery = await self._email_deliveries_repository.create_email_delivery(
+                recipient_email=owner.email,
+                subject=subject,
+                template_name="gateway_key_email",
+                owner_id=owner.id,
+                gateway_key_id=gateway_key.id,
+                one_time_secret_id=decrypted.row.id,
+                status="pending",
+            )
         blocking_reason = _email_delivery_send_blocking_reason(
             delivery_status=email_delivery.status,
             delivery_owner_id=email_delivery.owner_id,
@@ -578,6 +690,8 @@ def _email_delivery_send_blocking_reason(
         return "This delivery is not backed by a one-time secret; rotate the key and create a new delivery."
     if secret is None:
         return "The one-time secret is unavailable; rotate the key and create a new delivery."
+    if secret.id != delivery_secret_id:
+        return "The one-time secret does not match this email delivery."
     if secret.purpose not in KEY_EMAIL_PURPOSES:
         return "The one-time secret is not valid for key email delivery."
     if secret.status == "consumed" or secret.consumed_at is not None:

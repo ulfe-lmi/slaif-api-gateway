@@ -207,6 +207,109 @@ class EmailDeliveriesRepository:
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def list_email_deliveries_for_inspection(
+        self,
+        *,
+        delivery_id: uuid.UUID | None = None,
+        gateway_key_id: uuid.UUID | None = None,
+        owner_id: uuid.UUID | None = None,
+        owner_email_normalized: str | None = None,
+        status: str | None = None,
+        created_from: datetime | None = None,
+        created_until: datetime | None = None,
+        limit: int,
+        offset: int,
+    ) -> list[EmailDelivery]:
+        """Exact, AND-combined inspection filters applied in SQL BEFORE paging.
+
+        202-a: deterministic `(created_at DESC, id DESC)` ordering; the
+        caller passes `limit + 1` to derive an honest `has_more`. Owner
+        email is an EXACT normalized match (never a GUI substring guess);
+        creation bounds are inclusive.
+        """
+        statement: Select[tuple[EmailDelivery]] = select(EmailDelivery)
+        if delivery_id is not None:
+            statement = statement.where(EmailDelivery.id == delivery_id)
+        if gateway_key_id is not None:
+            statement = statement.where(EmailDelivery.gateway_key_id == gateway_key_id)
+        if owner_id is not None:
+            statement = statement.where(EmailDelivery.owner_id == owner_id)
+        if owner_email_normalized is not None:
+            statement = statement.join(EmailDelivery.owner).where(
+                func.lower(Owner.email) == owner_email_normalized
+            )
+        if status is not None:
+            statement = statement.where(EmailDelivery.status == status)
+        if created_from is not None:
+            statement = statement.where(EmailDelivery.created_at >= created_from)
+        if created_until is not None:
+            statement = statement.where(EmailDelivery.created_at <= created_until)
+
+        statement = statement.order_by(
+            EmailDelivery.created_at.desc(), EmailDelivery.id.desc()
+        ).limit(limit).offset(offset)
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def has_blocking_email_delivery_attempt(
+        self,
+        one_time_secret_id: uuid.UUID,
+        *,
+        statuses: tuple[str, ...] = ("sending", "sent", "ambiguous"),
+    ) -> bool:
+        """202-a: bounded EXISTS over the WHOLE same-secret set (indexed).
+
+        `limit(1)` on the `one_time_secret_id` index: no page/tail can miss
+        a blocking attempt, and no history rows are materialized.
+        """
+        statement = (
+            select(EmailDelivery.id)
+            .where(
+                EmailDelivery.one_time_secret_id == one_time_secret_id,
+                EmailDelivery.status.in_(statuses),
+            )
+            .limit(1)
+        )
+        result = await self._session.execute(statement)
+        return result.first() is not None
+
+    async def has_email_delivery_attempt(
+        self,
+        one_time_secret_id: uuid.UUID,
+    ) -> bool:
+        """202-a: bounded EXISTS of ANY prior delivery row for this exact secret.
+
+        The no-ID path may only create the FIRST delivery for a secret;
+        existing history (any status) requires an explicit selected-ID
+        retry, never a silent new-row bypass.
+        """
+        statement = (
+            select(EmailDelivery.id)
+            .where(EmailDelivery.one_time_secret_id == one_time_secret_id)
+            .limit(1)
+        )
+        result = await self._session.execute(statement)
+        return result.first() is not None
+
+    async def get_email_delivery_for_update_fresh(
+        self, email_delivery_id: uuid.UUID
+    ) -> EmailDelivery | None:
+        """202-a: FOR UPDATE lock PLUS current-state refresh.
+
+        `populate_existing` re-reads the row's columns so a row loaded
+        before a blocking lock wait is not served from the stale ORM
+        identity map. Selection semantics match
+        `get_email_delivery_for_update`.
+        """
+        statement = (
+            select(EmailDelivery)
+            .where(EmailDelivery.id == email_delivery_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
 
 def _email_delivery_admin_statement() -> Select[tuple[EmailDelivery]]:
     return select(EmailDelivery).options(
