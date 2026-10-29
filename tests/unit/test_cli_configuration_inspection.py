@@ -20,7 +20,6 @@ from typer.testing import CliRunner
 
 import slaif_gateway.cli.configuration as configuration_cli
 import slaif_gateway.cli.main as main_cli
-from slaif_gateway.cli.main import app
 from slaif_gateway.config import Settings
 from slaif_gateway.services.configuration_inspection import (
     CONFIG_INSPECTION_ALLOWLIST,
@@ -29,6 +28,11 @@ from slaif_gateway.services.configuration_inspection import (
     inspect_process_configuration,
     render_process_configuration_text,
 )
+
+# One consistent module-import style for the CLI entry point: the module
+# alias serves the callback monkeypatches, and the SAME app object serves
+# every invocation below.
+app = main_cli.app
 
 # Recognized provider-key shape used as a SYNTHETIC invalid numeric
 # Settings value (never a real credential).

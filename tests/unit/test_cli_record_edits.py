@@ -10,6 +10,7 @@ law and safe resulting metadata output.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -40,6 +41,17 @@ ACTOR = uuid.uuid4()
 STAMP = datetime(2026, 10, 29, 12, 0, 0, tzinfo=UTC)
 
 _runner = CliRunner()
+
+# Renderer-stable terminal + ANSI/whitespace-independent assertions
+# (established project pattern: tests/unit/test_cli.py,
+# tests/unit/test_cli_key_batch.py).
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+TERM_ENV = {"COLUMNS": "220", "NO_COLOR": "1"}
+
+
+def _plain(text: str) -> str:
+    """ANSI-free, whitespace-normalized output for style-independent checks."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 
 # --- honest fakes ----------------------------------------------------------
@@ -764,15 +776,25 @@ def test_cli_owner_update_errors_are_fixed_and_no_echo(monkeypatch: pytest.Monke
     assert CANARY not in (canary_result.stderr or "")
 
 
-def test_cli_owner_update_reason_is_required() -> None:
+def test_cli_owner_update_reason_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # CI sets GITHUB_ACTIONS, so typer's rich console forces terminal
+    # styling and interleaves per-segment ANSI codes inside the option
+    # name (the literal flag is never contiguous in raw output). Force
+    # the same ANSI-rich rendering test-locally and assert on the
+    # ANSI/whitespace-independent form.
+    import typer.rich_utils as _rich_utils
+
+    monkeypatch.setattr(_rich_utils, "FORCE_TERMINAL", True)
     result = _runner.invoke(
         owners_cli.app,
         ["update", str(uuid.uuid4()), "--name", "n"],
-        env={"NO_COLOR": "1"},
+        env=TERM_ENV,
     )
     # Typer missing-required-option error (click usage error), non-zero.
     assert result.exit_code != 0
-    assert "--reason" in (result.output or "")
+    assert "--reason" in _plain(result.output or "")
 
 
 def test_cli_cohort_update_json_and_errors(monkeypatch: pytest.MonkeyPatch) -> None:

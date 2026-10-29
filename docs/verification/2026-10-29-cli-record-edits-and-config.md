@@ -2,6 +2,12 @@
 
 Date: 2026-10-29
 
+Corrected in 204-c (prose only): the native-run chronology (full-file run
+predates the late-audit case strengthening), the lock-wait observer
+phrasing, and the stored-current-canary evidence attribution. See the
+immutable 204-c report for the clarification of the immutable B
+report's overclaim. No transaction machinery or native-test change.
+
 Environment: local Codex checkout of `ulfe-lmi/slaif-api-gateway`,
 branch `oap/204-record-edits-config-inspection` (objective 204, PR #360,
 continuation 204-b), Python 3.12 venv (`/tmp/slaif192-coding-venv`,
@@ -110,8 +116,14 @@ summaries; zero skips):
 
 Owned-PostgreSQL-16 layer (actual owned `postgres:16`, loopback + tmpfs,
 label `slaif204b.*`, identity inspected before migration, exact container
-removed) — `tests/integration/test_cli_record_edits_postgres.py`, 8 PASS,
-0 skip:
+removed) — `tests/integration/test_cli_record_edits_postgres.py`:
+
+- full-file run BEFORE the late-audit case strengthening (before its
+  audit add+flush body was added): 8 PASS, 0 skip;
+- AFTER the strengthening, ONLY the changed late-audit case re-run with a
+  fresh owned fixture: 1 PASS, 0 skip (overlaps the 8; not a 9th unique
+  case). The earlier full-file run did NOT execute the later
+  audit-insertion body.
 
 - actual Typer entrypoint owner move to an existing institution: every
   omitted metadata/flag preserved (incl. `is_active=False`, `external_id`,
@@ -123,7 +135,8 @@ removed) — `tests/integration/test_cli_record_edits_postgres.py`, 8 PASS,
   and no echo;
 - late audit fault under a caller-owned transaction: the genuinely
   flushed provisional audit (real add+flush, recorded ID) and the row BOTH
-  rolled back (fresh-session absence proof);
+  rolled back (fresh-session absence proof) — evidence from the targeted
+  post-strengthening re-run above, not the earlier full-file run;
 - cohort partial/clears preserve unrequested fields and the member key
   row; naive datetime interpreted as UTC; name strip normalization;
   invalid FINAL MERGED window / duplicate name / unknown cohort /
@@ -131,9 +144,11 @@ removed) — `tests/integration/test_cli_record_edits_postgres.py`, 8 PASS,
   association;
 - controlled causal lock-wait for BOTH record types: competitor owns the
   row lock BEFORE the updater starts (readiness barrier), exact holder /
-  waiter correlation via `pg_blocking_pids` with
-  `pg_stat_clear_snapshot()` before each poll (fresh autocommit observer,
-  no sleeps alone); competitor changes an OMITTED field and commits only
+  waiter correlation via `pg_blocking_pids` in an independent observer
+  session that explicitly clears the statistics snapshot
+  (`pg_stat_clear_snapshot()`) before each poll (the default AsyncSession
+  is not autocommit; no sleeps alone); competitor changes an OMITTED
+  field and commits only
   after the wait is observed; the updater merges AFTER the fresh populated
   lock read and preserves the committed omitted field; audit old/new
   reflects the latest stored row.
@@ -144,8 +159,14 @@ Independent root-side receipts credited (root evidence, not agent runs):
 arguments + legacy mock interception + real deferred import still raising
 Settings ValidationError before dispatch);
 `204-b-partial-record-boundary-probe.json` (baseline reproduction of the
-stored-canary audit-leak, later fixed and covered by the native
-regressions above); `204-b-direct-blank-patch-probe.json`,
+stored-canary audit-leak at the fake-audit-capture level — not proof of
+persisted real-audit leakage, because the real `AuditRepository` also
+sanitizes values; fixed in the shared guard, which refuses unsafe fresh
+current metadata before mutation/return/audit, and covered by the
+UNIT-level regressions above plus the root
+actual-shared-service/FAKE-repository rechecks; the native PG file covers
+the PROVIDED note canary, not the retained-current metadata cases);
+`204-b-direct-blank-patch-probe.json`,
 `204-b-config-and-input-boundary-probe.json`, and
 `204-b-ordinary-metadata-value-probe.json` (supplied-blank, text restart
 line, and ordinary-value boundary findings, all addressed in source with

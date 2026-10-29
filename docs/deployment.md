@@ -250,7 +250,6 @@ example, not live proxy truth. Validate Nginx changes with `nginx -t` and
 reload as described there.
 
 ## Diagnostic Logging
-## Diagnostic Logging
 
 Production should normally stay at `LOG_LEVEL=INFO` with
 `STRUCTURED_LOGS=true`, so API logs remain structured JSON and suitable for
