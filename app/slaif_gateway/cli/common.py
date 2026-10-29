@@ -99,6 +99,29 @@ def parse_decimal(value: str | None, *, field_name: str) -> Decimal | None:
         raise typer.BadParameter(f"{field_name} must be a decimal value") from exc
 
 
+def parse_int_option(
+    value: str | None, *, field_name: str, default: int | None = None
+) -> int | None:
+    """Parse a whole-number CLI option without echoing invalid input.
+
+    Mirrors the installed Typer/Click int conversion exactly (``int`` of a
+    decimal literal: optional sign, surrounding whitespace, digit
+    underscores), so every value the previous option-level parser accepted
+    converts to the SAME int payload. Omitted input returns ``default``.
+    Invalid input — including recognized credential shapes, floats,
+    bool-like words, blanks, non-numeric text, and digit strings beyond
+    Python's conversion limit — fails with a fixed message naming only the
+    option, never the value, before any database, provider, queue, or SMTP
+    access.
+    """
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise typer.BadParameter(f"{field_name} must be a whole number") from exc
+
+
 def require_positive_limit(limit: int) -> None:
     """Validate common positive limit options."""
     if limit <= 0:

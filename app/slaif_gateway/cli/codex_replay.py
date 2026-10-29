@@ -12,6 +12,7 @@ from slaif_gateway.cli.common import (
     cli_db_session,
     emit_json,
     handle_cli_error,
+    parse_int_option,
     run_async,
 )
 from slaif_gateway.config import get_settings
@@ -197,7 +198,7 @@ def extend(
     cohort_id: ScopeCohortOption = None,
     all_active: ScopeAllOption = False,
     ttl_seconds: Annotated[
-        int | None,
+        str | None,
         typer.Option(
             "--ttl-seconds",
             help="Positive lifetime in seconds (1..31536000); omitted uses the configured TTL",
@@ -261,6 +262,7 @@ def extend(
             )
             raise typer.Exit(code=2)
     try:
+        ttl_seconds = parse_int_option(ttl_seconds, field_name="--ttl-seconds")
         if ttl_seconds is not None and (
             ttl_seconds < MIN_REFERENCE_TTL_SECONDS
             or ttl_seconds > MAX_REFERENCE_TTL_SECONDS

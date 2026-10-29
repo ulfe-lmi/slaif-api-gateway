@@ -12,6 +12,7 @@ from slaif_gateway.cli.common import (
     echo_kv,
     emit_json,
     handle_cli_error,
+    parse_int_option,
     parse_uuid,
     require_positive_limit,
     run_async,
@@ -490,17 +491,17 @@ def update(
     ] = None,
     # Typed partial capability leaves (dry-run only).
     codex_context_window_tokens: Annotated[
-        int | None, typer.Option("--codex-context-window-tokens")
+        str | None, typer.Option("--codex-context-window-tokens")
     ] = None,
     codex_default_max_output_tokens: Annotated[
-        int | None, typer.Option("--codex-default-max-output-tokens")
+        str | None, typer.Option("--codex-default-max-output-tokens")
     ] = None,
     codex_max_output_tokens: Annotated[
-        int | None, typer.Option("--codex-max-output-tokens")
+        str | None, typer.Option("--codex-max-output-tokens")
     ] = None,
-    media_image_tokens: Annotated[int | None, typer.Option("--media-image-tokens")] = None,
-    media_video_tokens: Annotated[int | None, typer.Option("--media-video-tokens")] = None,
-    media_video_frames: Annotated[int | None, typer.Option("--media-video-frames")] = None,
+    media_image_tokens: Annotated[str | None, typer.Option("--media-image-tokens")] = None,
+    media_video_tokens: Annotated[str | None, typer.Option("--media-video-tokens")] = None,
+    media_video_frames: Annotated[str | None, typer.Option("--media-video-frames")] = None,
     chat_capability: Annotated[
         list[str] | None,
         typer.Option("--chat-capability", help="NAME=true|false; repeatable"),
@@ -533,7 +534,7 @@ def update(
     upstream_model: Annotated[
         str | None, typer.Option("--upstream-model", help="New upstream model")
     ] = None,
-    priority: Annotated[int | None, typer.Option("--priority", help="New priority (lower wins)")] = None,
+    priority: Annotated[str | None, typer.Option("--priority", help="New priority (lower wins)")] = None,
     visible_in_models: Annotated[
         bool | None, typer.Option("--visible/--hidden", help="New /v1/models visibility")
     ] = None,
@@ -563,6 +564,19 @@ def update(
         raise typer.BadParameter("Choose --dry-run PATH or --execute PATH.")
     if dry_run is not None and execute is not None:
         raise typer.BadParameter("Choose either --dry-run or --execute, not both.")
+    codex_context_window_tokens = parse_int_option(
+        codex_context_window_tokens, field_name="--codex-context-window-tokens"
+    )
+    codex_default_max_output_tokens = parse_int_option(
+        codex_default_max_output_tokens, field_name="--codex-default-max-output-tokens"
+    )
+    codex_max_output_tokens = parse_int_option(
+        codex_max_output_tokens, field_name="--codex-max-output-tokens"
+    )
+    media_image_tokens = parse_int_option(media_image_tokens, field_name="--media-image-tokens")
+    media_video_tokens = parse_int_option(media_video_tokens, field_name="--media-video-tokens")
+    media_video_frames = parse_int_option(media_video_frames, field_name="--media-video-frames")
+    priority = parse_int_option(priority, field_name="--priority")
     actor = (
         parse_uuid(actor_admin_id, field_name="actor-admin-id")
         if actor_admin_id is not None

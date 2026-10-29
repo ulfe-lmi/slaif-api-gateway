@@ -11,6 +11,7 @@ from slaif_gateway.cli.common import (
     echo_kv,
     emit_json,
     handle_cli_error,
+    parse_int_option,
     parse_uuid,
     require_positive_limit,
     run_async,
@@ -287,13 +288,13 @@ def add(
         typer.Option("--kind", help="Provider kind: openai_compatible or module"),
     ] = "openai_compatible",
     timeout_seconds: Annotated[
-        int,
+        str,
         typer.Option("--timeout-seconds", help="Positive upstream timeout in seconds"),
-    ] = 300,
+    ] = "300",
     max_retries: Annotated[
-        int,
+        str,
         typer.Option("--max-retries", help="Non-negative upstream retry count (0 valid)"),
-    ] = 2,
+    ] = "2",
     reason: Annotated[str | None, typer.Option("--reason", help="Audit reason")] = None,
     actor_admin_id: Annotated[
         str | None,
@@ -306,6 +307,8 @@ def add(
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
     """Create provider metadata without storing provider secrets."""
+    timeout_seconds = parse_int_option(timeout_seconds, field_name="--timeout-seconds")
+    max_retries = parse_int_option(max_retries, field_name="--max-retries")
     actor = (
         parse_uuid(actor_admin_id, field_name="actor-admin-id")
         if actor_admin_id is not None
@@ -420,11 +423,11 @@ def update(
         ),
     ] = None,
     timeout_seconds: Annotated[
-        int | None,
+        str | None,
         typer.Option("--timeout-seconds", help="New positive upstream timeout in seconds"),
     ] = None,
     max_retries: Annotated[
-        int | None,
+        str | None,
         typer.Option("--max-retries", help="New non-negative upstream retry count (0 valid)"),
     ] = None,
     notes: Annotated[str | None, typer.Option("--notes", help="Replace administrative notes")] = None,
@@ -443,6 +446,8 @@ def update(
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
     """Partially update one provider; omitted fields preserve current values."""
+    timeout_seconds = parse_int_option(timeout_seconds, field_name="--timeout-seconds")
+    max_retries = parse_int_option(max_retries, field_name="--max-retries")
     if notes is not None and clear_notes:
         raise typer.BadParameter("Choose either --notes or --clear-notes, not both.")
     if not (reason or "").strip():
