@@ -9,6 +9,11 @@ from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
 from slaif_gateway.services.record_errors import DuplicateRecordError, RecordNotFoundError
+from slaif_gateway.schemas.record_edits import (
+    OwnerUpdatePatch,
+    assert_owner_update_patch_safe,
+    assert_owner_current_metadata_safe,
+)
 
 
 class OwnerService:
@@ -85,20 +90,62 @@ class OwnerService:
             raise RecordNotFoundError("Owner")
         old_values = _safe_audit_values(existing)
 
+        normalized_email = await self._validate_owner_update_values(
+            email, owner_id=parsed_id, institution_id=institution_id
+        )
+        return await self._commit_owner_update(
+            parsed_id,
+            name=name,
+            surname=surname,
+            email=normalized_email,
+            institution_id=institution_id,
+            external_id=external_id,
+            notes=notes,
+            is_active=is_active,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+            old_values=old_values,
+        )
+
+    async def _validate_owner_update_values(
+        self,
+        email: str,
+        *,
+        owner_id: uuid.UUID,
+        institution_id: uuid.UUID | None,
+    ) -> str:
+        """Existing complete-update email/institution law (shared)."""
         normalized_email = _normalize_email(email)
         duplicate = await self._owners.get_owner_by_email(normalized_email)
-        if duplicate is not None and duplicate.id != existing.id:
+        if duplicate is not None and duplicate.id != owner_id:
             raise DuplicateRecordError("Owner", "email")
         if institution_id is not None:
             institution = await self._institutions.get_institution_by_id(institution_id)
             if institution is None:
                 raise RecordNotFoundError("Institution")
+        return normalized_email
 
+    async def _commit_owner_update(
+        self,
+        parsed_id: uuid.UUID,
+        *,
+        name: str,
+        surname: str,
+        email: str,
+        institution_id: uuid.UUID | None,
+        external_id: str | None,
+        notes: str | None,
+        is_active: bool,
+        actor_admin_id: uuid.UUID | None,
+        reason: str | None,
+        old_values: dict[str, object],
+    ) -> Owner:
+        """Existing repository write + exact owner_updated audit (shared)."""
         updated = await self._owners.update_owner_metadata(
             parsed_id,
             name=_require_text(name, "Owner name"),
             surname=_require_text(surname, "Owner surname"),
-            email=normalized_email,
+            email=_normalize_email(email),
             institution_id=institution_id,
             external_id=_clean_optional(external_id),
             notes=_clean_optional(notes),
@@ -116,6 +163,88 @@ class OwnerService:
             note=_clean_optional(reason),
         )
         return updated
+
+    async def update_owner_partial(
+        self,
+        owner_id: uuid.UUID | str,
+        *,
+        patch: OwnerUpdatePatch,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str,
+    ) -> Owner:
+        """Apply a typed partial edit to ONE owner (caller-owned txn).
+
+        Enforces the shared patch boundary, then locks the target row
+        FIRST, merges the provided fields with the fresh stored values,
+        and DELEGATES to the same shared normalization/validation and
+        repository-write/audit helpers as the existing complete update
+        (no duplicated validation/write/audit body). A late failure
+        propagates so the caller transaction rolls back the row and the
+        provisional audit.
+
+        The FRESH stored editable metadata of the selected row is guarded
+        before the audit snapshot/write, so an existing recognized
+        secret-shape value (omitted or explicitly cleared) is refused
+        with zero writes/audits instead of leaking into the audit.
+        """
+        assert_owner_update_patch_safe(patch, reason=reason)
+        parsed_id = _parse_owner_id(owner_id)
+        existing = await self._owners.get_owner_for_update(parsed_id)
+        if existing is None:
+            raise RecordNotFoundError("Owner")
+        assert_owner_current_metadata_safe(
+            name=existing.name,
+            surname=existing.surname,
+            email=existing.email,
+            external_id=existing.external_id,
+            notes=existing.notes,
+        )
+
+        # Merge provided fields with the CURRENT stored values (omitted
+        # flags preserve everything, including nullable fields and
+        # is_active=False).
+        name = patch.name if patch.name is not None else existing.name
+        surname = patch.surname if patch.surname is not None else existing.surname
+        email = patch.email if patch.email is not None else existing.email
+        institution_id = (
+            None
+            if patch.clear_institution
+            else patch.institution_id
+            if patch.institution_id is not None
+            else existing.institution_id
+        )
+        external_id = (
+            None
+            if patch.clear_external_id
+            else patch.external_id
+            if patch.external_id is not None
+            else existing.external_id
+        )
+        notes = (
+            None
+            if patch.clear_notes
+            else patch.notes
+            if patch.notes is not None
+            else existing.notes
+        )
+        is_active = patch.is_active if patch.is_active is not None else existing.is_active
+
+        normalized_email = await self._validate_owner_update_values(
+            email, owner_id=parsed_id, institution_id=institution_id
+        )
+        return await self._commit_owner_update(
+            parsed_id,
+            name=name,
+            surname=surname,
+            email=normalized_email,
+            institution_id=institution_id,
+            external_id=external_id,
+            notes=notes,
+            is_active=is_active,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+            old_values=_safe_audit_values(existing),
+        )
 
     async def list_owners(
         self,

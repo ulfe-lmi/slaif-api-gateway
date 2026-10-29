@@ -34,12 +34,77 @@ review command help before using it in shared terminals.
 
 ```text
 slaif-gateway institutions create|list|show
-slaif-gateway cohorts create|list|show
-slaif-gateway owners create|list|show
+slaif-gateway cohorts create|list|show|update
+slaif-gateway owners create|list|show|update
 ```
 
 These commands manage the current owner/institution/cohort records. They do not
 create provider routes or keys implicitly.
+
+### Partial owner/cohort edits (`owners update`, `cohorts update`)
+
+```text
+slaif-gateway owners update OWNER_UUID
+slaif-gateway cohorts update COHORT_UUID
+```
+
+Single-record partial edits through the shared record services:
+
+- Omitted flags preserve ALL current values, including nullable fields and
+  `is_active=False`; a supplied value replaces exactly that field.
+- Explicit clears exist ONLY for nullable fields (`--clear-institution`,
+  `--clear-external-id`, `--clear-notes` for owners;
+  `--clear-description`, `--clear-starts-at`, `--clear-ends-at` for
+  cohorts) and are refused together with a simultaneous replacement of the
+  same field. A no-field patch is refused.
+- `--reason` is required (nonblank, bounded) and is stored on the exact
+  existing `owner_updated` / `cohort_updated` audit entry together with the
+  locked old/new values and the optional `--actor-admin-id`.
+- Owners use a tri-state `--active` / `--inactive` (default absent =
+  preserve). Cohorts expose `name`/`description`/`starts_at`/`ends_at` only;
+  there is no cohort-institution association, and dates follow the existing
+  UTC-aware CLI convention (naive values are interpreted as UTC).
+- The cohort date window is validated on the FINAL MERGED values: an omitted
+  start/end still participates, so a one-field patch cannot bypass
+  `ends_at > starts_at`.
+- Existing shared law applies on the merged values: normalized
+  duplicate/invalid email, duplicate cohort name, unknown institution/cohort,
+  and finite recognized credential-shape refusals (fixed safe errors, no
+  value echo) for both provided values and the fresh current row metadata.
+- The target row is locked (`SELECT ... FOR UPDATE`) before the merge; a
+  late validation/write/audit failure rolls back the row and the
+  provisional audit together (caller-owned transaction, no internal commit).
+- The owner update response includes `external_id` so an edited external ID
+  is visible to the operator. Existing key IDs, membership, key material,
+  validity, and usage/accounting state are unchanged by these edits.
+
+### Process configuration inspection (`config show`)
+
+```text
+slaif-gateway config show [--json]
+```
+
+Read-only inspection of the CURRENT CLI process's cached `Settings`
+snapshot through a finite reviewed allowlist of numeric/nullable-numeric
+budget and lifetime settings (Codex replay reference TTL, default/hard
+token bounds, Chat/Responses request and media budgets, default rate
+limits, and bounded lazy-throttling ceilings). Each entry reports the
+effective value, its source (`configured` when explicitly supplied to this
+process, otherwise `default`), and the restart scope: a process restart;
+Compose `env_file` changes require recreating the affected containers.
+
+Honest boundaries:
+
+- This is the current CLI process's cached snapshot, NOT live API/worker
+  state; other processes may hold different settings.
+- No database/network/broker/provider access is performed, and a configured
+  database URL is not connectivity or authentication proof.
+- No credential values, secret file contents, or environment dumps are
+  exposed, and the external reverse-proxy request-size limit is NOT
+  observed by this command.
+- An invalid Settings environment maps to the fixed safe
+  `configuration_unavailable` error (text and JSON) with a nonzero exit;
+  the invalid value and any traceback are never echoed.
 
 ## Gateway keys and templates
 
@@ -1289,6 +1354,8 @@ slaif-gateway codex replay extend
 slaif-gateway cohorts create
 slaif-gateway cohorts list
 slaif-gateway cohorts show
+slaif-gateway cohorts update
+slaif-gateway config show
 slaif-gateway db check-config
 slaif-gateway db show-url
 slaif-gateway db upgrade
@@ -1333,6 +1400,7 @@ slaif-gateway openai-assisted route-proposal
 slaif-gateway owners create
 slaif-gateway owners list
 slaif-gateway owners show
+slaif-gateway owners update
 slaif-gateway pricing add
 slaif-gateway pricing list
 slaif-gateway pricing show

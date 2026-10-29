@@ -15,6 +15,7 @@ from slaif_gateway.cli.calibration import app as calibration_app
 from slaif_gateway.cli.catalog_refresh import app as catalog_refresh_app
 from slaif_gateway.cli.cohorts import app as cohorts_app
 from slaif_gateway.cli.codex import app as codex_app
+from slaif_gateway.cli.configuration import app as configuration_app
 from slaif_gateway.cli.db import app as db_app
 from slaif_gateway.cli.diagnostics import app as diagnostics_app
 from slaif_gateway.cli.email import app as email_app
@@ -45,6 +46,7 @@ app.add_typer(catalog_refresh_app, name="catalog-refresh")
 app.add_typer(institutions_app, name="institutions")
 app.add_typer(cohorts_app, name="cohorts")
 app.add_typer(codex_app, name="codex")
+app.add_typer(configuration_app, name="config")
 app.add_typer(owners_app, name="owners")
 app.add_typer(db_app, name="db")
 app.add_typer(diagnostics_app, name="diagnostics")
@@ -106,6 +108,14 @@ def main(
 ) -> None:
     """SLAIF API Gateway CLI root."""
     effective_log_level = _resolve_cli_log_level(verbose=verbose, log_level=log_level)
+    if ctx.invoked_subcommand == "config":
+        # 204-b: the config inspection constructs its OWN Settings and
+        # maps an invalid Settings environment to its fixed safe
+        # unavailable payload; the root callback must not run
+        # get_settings() before the config group for this reason only.
+        # (No debug log here: logging configuration itself needs
+        # Settings, which this branch deliberately defers.)
+        return
     settings = get_settings()
     logging_settings = (
         settings.model_copy(update={"LOG_LEVEL": effective_log_level})

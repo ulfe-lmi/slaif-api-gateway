@@ -41,7 +41,9 @@ from slaif_gateway.services.email_delivery_service import (
 from slaif_gateway.services.email_inspection import EmailInspectionService
 from slaif_gateway.services.email_service import EmailService
 from slaif_gateway.services.provider_route_configuration import contains_known_secret_shape
-from slaif_gateway.workers.tasks_email import send_pending_key_email_task
+
+# 204-b import-boundary seam (see _PendingKeyEmailTaskSeam): the workers
+# task module is NOT imported at CLI module import.
 
 # Consistent with the existing operator audit-reason bound
 # (services/openai_compatible_setup.py: 1024 UTF-8 bytes).
@@ -49,6 +51,31 @@ _RETRY_REASON_MAX_BYTES = 1024
 
 
 app = typer.Typer(help="Test and send configured email deliveries")
+
+
+class _PendingKeyEmailTaskSeam:
+    """Deferred-call seam for the fixed Celery enqueue task (204-b).
+
+    The workers task module constructs the Celery app at import time and
+    validates Settings, so the CLI must not import it at module import:
+    an invalid Settings environment would otherwise crash the whole CLI
+    (settings traceback) before command dispatch. The seam keeps the
+    existing module attribute name so existing test mocks keep working
+    unchanged; it resolves the fixed task only when ``delay`` is actually
+    called and delegates with the EXACT same arguments (no payload,
+    preflight, audit, or ordering change).
+    """
+
+    def delay(self, *args: object) -> object:
+        from slaif_gateway.workers.tasks_email import (
+            send_pending_key_email_task,
+        )
+
+        return send_pending_key_email_task.delay(*args)
+
+
+send_pending_key_email_task = _PendingKeyEmailTaskSeam()
+
 
 
 @app.command("test")

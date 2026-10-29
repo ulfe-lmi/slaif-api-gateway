@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 import typer
@@ -18,6 +19,10 @@ from slaif_gateway.cli.common import (
 from slaif_gateway.db.models import Cohort
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
+from slaif_gateway.schemas.record_edits import (
+    CohortUpdatePatch,
+    parse_cohort_update_patch,
+)
 from slaif_gateway.services.cohort_service import CohortService
 
 app = typer.Typer(help="Manage cohorts")
@@ -85,6 +90,26 @@ async def _show_cohort(cohort_id: str) -> Cohort:
         return await service.get_cohort(parse_uuid(cohort_id, field_name="cohort_id"))
 
 
+async def _update_cohort(
+    *,
+    cohort_id: str,
+    patch: CohortUpdatePatch,
+    actor_admin_id: uuid.UUID | None,
+    reason: str,
+) -> Cohort:
+    async with cli_db_session() as (_, session):
+        service = CohortService(
+            cohorts_repository=CohortsRepository(session),
+            audit_repository=AuditRepository(session),
+        )
+        return await service.update_cohort_partial(
+            cohort_id,
+            patch=patch,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        )
+
+
 @app.callback()
 def cohorts() -> None:
     """Manage cohorts."""
@@ -111,6 +136,52 @@ def create(
                 description=description,
                 starts_at=starts_at,
                 ends_at=ends_at,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+
+    payload = _safe_cohort_dict(cohort)
+    if json_output:
+        emit_json(payload)
+        return
+    echo_kv(payload)
+
+
+@app.command("update")
+def update(
+    cohort_id: Annotated[str, typer.Argument(help="Cohort UUID")],
+    reason: Annotated[str, typer.Option("--reason", help="Required audit reason for this edit")],
+    name: Annotated[str | None, typer.Option("--name", help="Replace the cohort name")] = None,
+    description: Annotated[str | None, typer.Option("--description", help="Replace the cohort description")] = None,
+    clear_description: Annotated[bool, typer.Option("--clear-description", help="Clear the cohort description")] = False,
+    starts_at: Annotated[str | None, typer.Option("--starts-at", help="Replace the ISO start datetime")] = None,
+    clear_starts_at: Annotated[bool, typer.Option("--clear-starts-at", help="Clear the start datetime")] = False,
+    ends_at: Annotated[str | None, typer.Option("--ends-at", help="Replace the ISO end datetime")] = None,
+    clear_ends_at: Annotated[bool, typer.Option("--clear-ends-at", help="Clear the end datetime")] = False,
+    actor_admin_id: Annotated[str | None, typer.Option("--actor-admin-id", help="Recording admin UUID")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Update one cohort (omitted fields are preserved)."""
+    try:
+        patch, actor, cleaned_reason = parse_cohort_update_patch(
+            name=name,
+            description=description,
+            clear_description=clear_description,
+            starts_at=starts_at,
+            clear_starts_at=clear_starts_at,
+            ends_at=ends_at,
+            clear_ends_at=clear_ends_at,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        )
+        cohort = run_async(
+            _update_cohort(
+                cohort_id=cohort_id,
+                patch=patch,
+                actor_admin_id=actor,
+                reason=cleaned_reason,
             )
         )
     except Exception as exc:  # noqa: BLE001

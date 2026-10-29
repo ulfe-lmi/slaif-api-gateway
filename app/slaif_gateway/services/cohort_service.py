@@ -13,6 +13,11 @@ from slaif_gateway.services.record_errors import (
     RecordNotFoundError,
     UnsupportedRecordOperationError,
 )
+from slaif_gateway.schemas.record_edits import (
+    CohortUpdatePatch,
+    assert_cohort_update_patch_safe,
+    assert_cohort_current_metadata_safe,
+)
 
 
 class CohortService:
@@ -88,18 +93,127 @@ class CohortService:
             raise RecordNotFoundError("Cohort")
         old_values = _safe_audit_values(existing)
 
+        normalized_name = await self._validate_cohort_update_values(
+            name, cohort_id=parsed_id, starts_at=starts_at, ends_at=ends_at
+        )
+        return await self._commit_cohort_update(
+            parsed_id,
+            name=normalized_name,
+            description=description,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+            old_values=old_values,
+        )
+
+    async def update_cohort_partial(
+        self,
+        cohort_id: uuid.UUID | str,
+        *,
+        patch: CohortUpdatePatch,
+        actor_admin_id: uuid.UUID | None = None,
+        reason: str,
+    ) -> Cohort:
+        """Apply a typed partial edit to ONE cohort (caller-owned txn).
+
+        Enforces the shared patch boundary, then locks the target row
+        FIRST, merges the provided fields with the fresh stored values
+        (the FINAL merged date window is validated, so an omitted side
+        still participates), and DELEGATES to the same shared
+        normalization/validation and repository-write/audit helpers as
+        the existing complete update (no duplicated body). A late failure
+        propagates so the caller transaction rolls back the row and the
+        provisional audit.
+
+        The FRESH stored editable metadata of the selected row is guarded
+        before the audit snapshot/write, so an existing recognized
+        secret-shape value (omitted or explicitly cleared) is refused
+        with zero writes/audits instead of leaking into the audit.
+        """
+        assert_cohort_update_patch_safe(patch, reason=reason)
+        parsed_id = _parse_cohort_id(cohort_id)
+        existing = await self._cohorts.get_cohort_for_update(parsed_id)
+        if existing is None:
+            raise RecordNotFoundError("Cohort")
+        assert_cohort_current_metadata_safe(
+            name=existing.name, description=existing.description
+        )
+
+        # Merge provided fields with the CURRENT stored values (omitted
+        # flags preserve everything, including nullable fields).
+        name = patch.name if patch.name is not None else existing.name
+        description = (
+            None
+            if patch.clear_description
+            else patch.description
+            if patch.description is not None
+            else existing.description
+        )
+        starts_at = (
+            None
+            if patch.clear_starts_at
+            else patch.starts_at
+            if patch.starts_at is not None
+            else existing.starts_at
+        )
+        ends_at = (
+            None
+            if patch.clear_ends_at
+            else patch.ends_at
+            if patch.ends_at is not None
+            else existing.ends_at
+        )
+
+        normalized_name = await self._validate_cohort_update_values(
+            name, cohort_id=parsed_id, starts_at=starts_at, ends_at=ends_at
+        )
+        return await self._commit_cohort_update(
+            parsed_id,
+            name=normalized_name,
+            description=description,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+            old_values=_safe_audit_values(existing),
+        )
+
+    async def _validate_cohort_update_values(
+        self,
+        name: str,
+        *,
+        cohort_id: uuid.UUID,
+        starts_at: datetime | None,
+        ends_at: datetime | None,
+    ) -> str:
+        """Existing complete-update name/window/duplicate law (shared)."""
         normalized_name = name.strip()
         if not normalized_name:
             raise ValueError("Cohort name cannot be empty")
         if starts_at is not None and ends_at is not None and ends_at <= starts_at:
             raise ValueError("ends_at must be after starts_at")
         duplicate = await self._cohorts.get_cohort_by_name(normalized_name)
-        if duplicate is not None and duplicate.id != existing.id:
+        if duplicate is not None and duplicate.id != cohort_id:
             raise DuplicateRecordError("Cohort", "name")
+        return normalized_name
 
+    async def _commit_cohort_update(
+        self,
+        parsed_id: uuid.UUID,
+        *,
+        name: str,
+        description: str | None,
+        starts_at: datetime | None,
+        ends_at: datetime | None,
+        actor_admin_id: uuid.UUID | None,
+        reason: str | None,
+        old_values: dict[str, object],
+    ) -> Cohort:
+        """Existing repository write + exact cohort_updated audit (shared)."""
         updated = await self._cohorts.update_cohort_metadata(
             parsed_id,
-            name=normalized_name,
+            name=name,
             description=_clean_optional(description),
             starts_at=starts_at,
             ends_at=ends_at,

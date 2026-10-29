@@ -204,6 +204,51 @@ Before production use:
 The server-side OpenAI upstream secret is `OPENAI_UPSTREAM_API_KEY`.
 `OPENAI_API_KEY` is reserved for clients carrying gateway-issued keys.
 
+## Changing Settings (Environment, Restart Scope, And `config show`)
+
+The operator CLI reads the environment of the shell that starts it; a shell
+does NOT auto-load `.env`. Two common patterns:
+
+```bash
+# 1) Export the intended deployment values in the shell, then run the CLI
+set -a; source .env; set +a
+slaif-gateway config show --json
+
+# 2) Or run the CLI inside the API container, where Compose already
+#    injected the service environment (adjust the service name as needed)
+docker compose exec -it api slaif-gateway config show
+```
+
+`slaif-gateway config show` reports the CURRENT CLI process's cached
+`Settings` snapshot (finite reviewed allowlist, no credential values). It is
+NOT live API/worker state: if the CLI shell and the containers were started
+from different environments, the reported snapshot reflects only the CLI
+process.
+
+Restart scope for environment-driven settings:
+
+- Changing Compose `env_file` / `.env` content requires RECREATING the
+  affected containers (`docker compose up -d --force-recreate api worker
+  scheduler`); a plain `docker compose restart` does not reload a
+  container's existing environment.
+- A process restart loads a changed environment only when its supervisor
+  actually supplies it (Compose `env_file`, Kubernetes config, systemd unit,
+  etc.).
+- Use `config show` after recreation to confirm the intended values in the
+  process you expect; a configured database URL is not connectivity or
+  authentication proof.
+
+Example: `CODEX_REPLAY_REFERENCE_TTL_SECONDS` changes affect only NEWLY
+persisted replay reference expiries; the existing
+`slaif-gateway codex replay inspect/extend` commands manage already-persisted
+references separately.
+
+External reverse-proxy request-size limits are NOT observed by `config show`.
+The shipped Nginx examples set `client_max_body_size 128m` inside
+`location /v1/` (see [Streaming And Nginx](#streaming-and-nginx)); that is an
+example, not live proxy truth. Validate Nginx changes with `nginx -t` and
+reload as described there.
+
 ## Diagnostic Logging
 
 Production should normally stay at `LOG_LEVEL=INFO` with

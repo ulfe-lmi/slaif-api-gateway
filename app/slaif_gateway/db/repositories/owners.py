@@ -50,6 +50,24 @@ class OwnersRepository:
     async def get_owner_by_id(self, owner_id: uuid.UUID) -> Owner | None:
         return await self._session.get(Owner, owner_id)
 
+    async def get_owner_for_update(self, owner_id: uuid.UUID) -> Owner | None:
+        """Lock one owner row and repopulate its stored attributes.
+
+        Partial edits call this FIRST in the caller-owned transaction so
+        the row lock is held before any provided field is merged with
+        the current stored values; the ``populate_existing`` execution
+        option refreshes an already-identity-mapped instance with the
+        locked row (same pattern as the key-repository locked lookup).
+        """
+        statement = (
+            select(Owner)
+            .where(Owner.id == owner_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def get_owner_by_email(self, email: str) -> Owner | None:
         statement = select(Owner).where(Owner.email == email)
         result = await self._session.execute(statement)

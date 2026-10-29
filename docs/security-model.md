@@ -1380,6 +1380,32 @@ value into an error message and before any write, artifact, or output;
 ordinary values and the existing per-key validation/error law are
 unchanged. This is not DLP and makes no claim about arbitrary content.
 
+### Partial record edits and process configuration inspection (objective 204)
+
+`owners update` and `cohorts update` are single-record partial edits through
+the shared record services (locked row first, merge, then the existing
+complete-update normalization/validation/write/audit; no internal commit, so
+a late failure rolls back the row and the provisional audit together). At the
+new partial boundary, finite recognized credential VALUE shapes
+(`redact_text` patterns: bearer, gateway/provider key, credential
+assignments) in a PROVIDED value, in the audit reason, or in the FRESH
+current metadata of the selected row are refused with fixed no-echo errors
+before any write or audit snapshot, so a stored known shape can never be
+copied into the new `owner_updated` / `cohort_updated` audit, even by an
+unrelated edit or an explicit clear. Ordinary free-form values (words such
+as "session", "token", or "secretariat") are NOT classified as credentials;
+existing complete-update and admin-form semantics are unchanged.
+
+`config show` reports only a finite reviewed allowlist of numeric/nullable
+numeric budget and lifetime settings from the CURRENT CLI process's cached
+`Settings` snapshot. It exposes no provider/HMAC/session/admin/SMTP/database
+/Redis credential values, no secret file content, no environment dump, and
+performs no DB/network/broker/provider access. An invalid Settings
+environment maps to the fixed safe `configuration_unavailable` error with a
+nonzero exit; the invalid value and any traceback are never echoed. The
+snapshot is qualified in every output as current-process state, not live
+API/worker state.
+
 ## Admin Web Sessions And CSRF
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 import typer
@@ -18,6 +19,10 @@ from slaif_gateway.db.models import Owner
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
 from slaif_gateway.db.repositories.owners import OwnersRepository
+from slaif_gateway.schemas.record_edits import (
+    OwnerUpdatePatch,
+    parse_owner_update_patch,
+)
 from slaif_gateway.services.owner_service import OwnerService
 
 app = typer.Typer(help="Manage key owners")
@@ -95,6 +100,27 @@ async def _show_owner(owner_id_or_email: str) -> Owner:
         return await service.get_owner(owner_id_or_email)
 
 
+async def _update_owner(
+    *,
+    owner_id: str,
+    patch: OwnerUpdatePatch,
+    actor_admin_id: uuid.UUID | None,
+    reason: str,
+) -> Owner:
+    async with cli_db_session() as (_, session):
+        service = OwnerService(
+            owners_repository=OwnersRepository(session),
+            institutions_repository=InstitutionsRepository(session),
+            audit_repository=AuditRepository(session),
+        )
+        return await service.update_owner_partial(
+            owner_id,
+            patch=patch,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        )
+
+
 @app.callback()
 def owners() -> None:
     """Manage key owners."""
@@ -125,6 +151,61 @@ def create(
         return
 
     payload = _safe_owner_dict(owner)
+    if json_output:
+        emit_json(payload)
+        return
+    echo_kv(payload)
+
+
+@app.command("update")
+def update(
+    owner_id: Annotated[str, typer.Argument(help="Owner UUID")],
+    reason: Annotated[str, typer.Option("--reason", help="Required audit reason for this edit")],
+    name: Annotated[str | None, typer.Option("--name", help="Replace the owner first name")] = None,
+    surname: Annotated[str | None, typer.Option("--surname", help="Replace the owner surname")] = None,
+    email: Annotated[str | None, typer.Option("--email", help="Replace the owner email")] = None,
+    institution_id: Annotated[str | None, typer.Option("--institution-id", help="Replace the institution UUID")] = None,
+    clear_institution: Annotated[bool, typer.Option("--clear-institution", help="Clear the institution link")] = False,
+    external_id: Annotated[str | None, typer.Option("--external-id", help="Replace the external ID")] = None,
+    clear_external_id: Annotated[bool, typer.Option("--clear-external-id", help="Clear the external ID")] = False,
+    notes: Annotated[str | None, typer.Option("--notes", help="Replace the administrative notes")] = None,
+    clear_notes: Annotated[bool, typer.Option("--clear-notes", help="Clear the administrative notes")] = False,
+    active: Annotated[bool, typer.Option("--active", help="Set active (omit to preserve current state)")] = False,
+    inactive: Annotated[bool, typer.Option("--inactive", help="Set inactive (omit to preserve current state)")] = False,
+    actor_admin_id: Annotated[str | None, typer.Option("--actor-admin-id", help="Recording admin UUID")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
+) -> None:
+    """Update one key owner (omitted fields are preserved)."""
+    try:
+        patch, actor, cleaned_reason = parse_owner_update_patch(
+            name=name,
+            surname=surname,
+            email=email,
+            institution_id=institution_id,
+            clear_institution=clear_institution,
+            external_id=external_id,
+            clear_external_id=clear_external_id,
+            notes=notes,
+            clear_notes=clear_notes,
+            active=active,
+            inactive=inactive,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+        )
+        owner = run_async(
+            _update_owner(
+                owner_id=owner_id,
+                patch=patch,
+                actor_admin_id=actor,
+                reason=cleaned_reason,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        handle_cli_error(exc, json_output=json_output)
+        return
+
+    payload = _safe_owner_dict(owner)
+    payload["external_id"] = owner.external_id
     if json_output:
         emit_json(payload)
         return
