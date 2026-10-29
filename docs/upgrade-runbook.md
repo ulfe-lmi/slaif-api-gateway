@@ -34,6 +34,44 @@ restored backup and recovery time objective (RTO) as measured restore plus
 verification time. Those measurements are local operational evidence; the
 project offers no RPO, RTO, or availability SLA.
 
+## CLI field-configuration round (objectives 196-205)
+
+The field-configuration round delivered objectives 196-204 (typed key-policy,
+effective/lazy/lookup, faithful cloning, provider/route parity, replay-reference
+maintenance, content-free request diagnostics, delivery inspection, batch
+administration, and owner/cohort edits plus process-configuration inspection)
+and objective 205. Objectives 196-204 are merged into `main`; objective 205 is
+qualification evidence (the single complete executable-only installed
+transcript) and adds NO product schema, NO module-identity or key-policy
+migration, and NO automatic key rotation - its only product change is the
+accepted 17-position safe numeric-input conversion fix (205-b).
+
+- **Migration:** the only schema migration in this round's lineage is
+  `0026` (`request_diagnostics`, from objective 201). Run `alembic upgrade
+  head`; it applies `0026` when not already present. Objective 205 adds none.
+- **Data preservation:** the upgrade does not alter issued key material,
+  policy, quotas, usage, or replay ownership. Keys, policy/batch edits, and
+  extended replay-reference expiries made before the upgrade persist and remain
+  visible to the new CLI.
+- **Runtime recreation:** any change to runtime environment/Settings (for
+  example diagnostics recording, request-capture settings, or the replay TTL)
+  requires recreating the affected containers (`api`/`worker`/`scheduler`).
+  `config show` is a PROCESS-LOCAL snapshot of the calling CLI process; it does
+  not observe live workers. Configure workers consistently and reload/recreate
+  them rather than assuming a config snapshot reflects live processes.
+- **CLI checks after upgrade (safe, read-only; use `--json` when scripting):**
+  `slaif-gateway keys policy effective <KEY_ID>`, `slaif-gateway codex replay
+  inspect --all-active`, `slaif-gateway config show`, `slaif-gateway
+  diagnostics status`.
+- **Rollback is not undo:** returning to an older binary does NOT reverse
+  issued keys, policy/batch edits, or extended reference expiries - there is no
+  shortening/recovery SQL backdoor. The `0026` diagnostics table is additive;
+  do not casually drop it, and do not restore a pre-upgrade database while
+  accounting writers are running (follow the stopped-writer/backup/restore
+  procedure). Returning to a pre-`420` CLI restores its older numeric-parser
+  behavior (credential-shaped numeric input is no longer refused no-echo).
+  These are instructions, not production-execution or release authority.
+
 ## Codex client-module migration (pinned Codex keys)
 
 The bounded `client_module` compatibility migration moves one pinned key

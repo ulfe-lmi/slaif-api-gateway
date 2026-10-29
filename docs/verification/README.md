@@ -60,10 +60,19 @@ on record. They are dated, commit-specific evidence, not certifications.
   accounting; plus CLI status/not-found/ambiguous/typed-unavailable
   outcomes, capture OFF with an empty owned capture dir, and
   content-free store/transcript canaries (focused run 1/1 PASS, 0 skip,
-  15-record labeled transcript). The final fresh combined run of all
-  cases (identity + all 11 + config + DoD10, including the DoD5+DoD10
-  gateway-replacement path) with the complete indexed transcript remains
-  mandatory in the final same-PR phase.
+  15-record labeled transcript). Same-PR 205-f continuation (recorded in
+  the same file, product still frozen at `420fb8f`): the SINGLE FINAL
+  COMPLETION run — one fresh complete installed workflow of ALL 13 cases
+  (installation identity + all 11 outcomes + configuration) executed
+  13/13 PASS, 0 skip, on a fresh source-verified wheel `4e4c76fb` in a
+  fresh owned venv (root-verified 432-file identity), with DoD5 then
+  DoD10 actually exercising the prior-gateway stop/replace path, the
+  complete 206-record indexed operator transcript (0 unlabeled, 33
+  expected negative exits, 0700/0600, canary-clean), the single
+  full-scope brief coverage table, and consolidated operator/upgrade
+  documentation; the earlier "remains mandatory in the final same-PR
+  phase" carry-forward is SUPERSEDED by that final section. Strategic
+  merge and actual-main verification remain pending.
 
 - [`2026-10-29 Objective 204 CLI record edits and process configuration inspection verification`](2026-10-29-cli-record-edits-and-config.md)
   (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +

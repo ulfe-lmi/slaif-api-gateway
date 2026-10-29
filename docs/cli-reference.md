@@ -673,7 +673,9 @@ slaif-gateway keys policy update <gateway-key-id> --provider-all --reason "lift 
 ```
 
 `docs/cli-field-administration.md` lists which key-configuration fields the
-CLI currently administers and which remain proposed for later objectives.
+CLI administers today and the objective that implemented each; as of objective
+205 every objective named in the field brief is implemented (see its
+"Completion status" section).
 
 ## Providers, routes, pricing, and FX
 

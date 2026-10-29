@@ -1,8 +1,11 @@
 # CLI key-configuration field administration
 
 This page is the authoritative list of which gateway-key configuration
-fields the CLI administers today and which remain proposed. It is updated
-per objective; it NEVER declares the full historical brief complete.
+fields the CLI administers today and which (if any) remain proposed. It is
+updated per objective. As of objective 205 (PR 361) every objective named in
+the field brief is implemented; the complete executable-only installed
+transcript and its qualification evidence live in
+`docs/verification/2026-10-29-cli-field-installed-workflow.md`.
 
 Status legend:
 
@@ -65,14 +68,36 @@ Status legend:
 | --- | --- | --- |
 | (No gateway-key configuration fields.) | `diagnostics status` / `diagnostics request show` / `diagnostics cleanup` | Operational diagnostics surface, not key-field administration: shared typed read-only service over the content-free `request_diagnostics` table. `status` distinguishes recording-disabled / store-unavailable / empty retained dataset (works while recording is off). `request show --request-id ... [--namespace any|gateway|client]` resolves one retained record by recorded client or gateway ID (explicit namespace, never prefix-inferred; ambiguity bounded at 100 with honest count/overflow and gateway-ID disambiguation; typed outcomes `found`/`ambiguous`/`not_found`/`unavailable`; a lookup ID never grants authority). `cleanup` prunes ONE bounded batch of expired rows from that table only (no background expiry daemon). Output is the retained typed projection only: content-free, bounded, secret-free; unexpected failures render a fixed generic `command_failed` without echoing details. |
 
-## Proposed for later objectives (NOT implemented)
+## Implemented in objective 202 (email-delivery inspection)
 
-| Field / capability | Proposed objective |
-| --- | --- |
-| Delivery inspection (pending/queued email state) | 202 |
-| Batch key operations beyond the existing bulk import | 203 |
-| Owner/cohort edits plus non-secret key-configuration inspection (NOT generic key editing) | 204 |
-| Full executable-only transcript and qualification evidence | 205 |
+| Field / group | CLI surface | Notes |
+| --- | --- | --- |
+| One-time delivery lifecycle inspection | `email list` / `email show` | Bounded, JSON/paginated read-only inspection of retained delivery rows by delivery UUID, gateway-key UUID, owner and time range. Returns the recorded recipient field, status, timestamps, safe failure code, and whether the one-time secret is pending/consumed/expired. Never returns the secret or rendered body. Sendability reuses the shared `EmailDeliveryService` predicate (no decryption, no second validator): a `sending`/`sent`/`ambiguous` same-secret attempt makes the selected pending/failed row non-sendable, and both `list`/`show` reporting and `send-pending-key` enqueue agree. `email send-pending-key` remains the action: enqueue intent is distinct from SMTP acceptance, distinct from inbox delivery; a consumed/ambiguous/sent row is not blindly requeued; explicit `--retry-failed` is the only safe retry and only when the service permits it. |
+
+## Implemented in objective 203 (batch key administration)
+
+| Field / group | CLI surface | Notes |
+| --- | --- | --- |
+| Reviewed batch rate/policy changes | `keys batch plan` / `keys batch apply` | Two-step reviewed plan over a cohort or an explicit UUID set. Preview resolves exact UUIDs, reports selected/changed/unchanged counts, and applies the active-status filter at the DB boundary (only ACTIVE members selected; the cohort preview reports no per-key exclusions). Explicit-UUID selection names revoked/suspended members only as EXCLUDED (never selected, never changed). New membership added after preview makes the saved plan STALE: apply refuses with `key_batch_stale` (zero changes/audits). Apply is atomic through the shared per-key service with one audit per changed key and untouched usage/reservations/material; the saved plan is a staleness guard, not signed authority. Editing existing keys is NOT a cohort default for future keys. |
+
+## Implemented in objective 204 (owner/cohort edits + configuration inspection)
+
+| Field / group | CLI surface | Notes |
+| --- | --- | --- |
+| Owner/cohort record edits (shared-service, audited) | `owners update` / `cohorts update` | `--reason` required and nonblank; omitted fields preserved; explicit `--clear-*` verbs for supported nullable fields; conflicting replacement+clear refused; unknown UUID refused. Moving an owner to an institution preserves `is_active`/`external_id`/`notes` and member keys. No invented cohort-institution relationship (the surface carries no institution flag). |
+| Finite process-configuration inspection | `config show` (`--json` / text) | Safe, allow-listed, PROCESS-LOCAL snapshot of the 45-field non-secret allowlist with effective value, configured-vs-default provenance, and per-entry restart scope. Process-local scope: it reports the CALLING CLI process's loaded Settings, not live API workers, which must be configured consistently (workers need reloaded/consistent settings; retained history cannot prove current recording). Invalid settings (e.g. a credential-shaped value in a numeric field) yield a fixed `configuration_unavailable` no-echo error (exit 1, no traceback). |
+
+## Completion status
+
+All objectives named in the field brief are implemented: typed key-policy
+(196), effective/lazy/lookup (197), faithful cloning (198), provider/route
+parity (199), replay-reference maintenance (200), content-free request
+diagnostics (201), delivery inspection (202), batch administration (203), and
+owner/cohort edits plus process-configuration inspection (204). The single
+complete executable-only installed transcript and its qualification evidence
+(objective 205 — all eleven section-12 outcomes plus installation identity and
+configuration) is delivered by PR 361; see
+`docs/verification/2026-10-29-cli-field-installed-workflow.md`.
 
 ## Intentionally not CLI surfaces
 

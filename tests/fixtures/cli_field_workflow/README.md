@@ -68,8 +68,8 @@ framework and creates no general catalog/fixture machinery.
 
 ## IO substitutions
 
-- SMTP: loopback sink (active in the fixture; unused for delivery in the
-  current slice).
+- SMTP: loopback sink (active in the fixture; used by DoD9's one-time
+  delivery lifecycle; no real SMTP).
 - Provider upstream: the seed still uses a fictional provider `base_url`
   (`https://openai-fixture.example.invalid/v1`), never contacted. Since
   205-c the existing `GatewayServer` helper is WIRED: DoD5 starts the ACTUAL
@@ -95,7 +95,7 @@ framework and creates no general catalog/fixture machinery.
   external Codex client catalog; the client-module pin is a separate matter
   not covered by the canonical key export.
 
-## Current state (205-e handoff)
+## Current state (205-f final)
 
 Implemented and executed through the installed console: DoD0 (installed
 identity), DoD1 (lookup/bounded paging, full-bearer refusal), DoD2 (effective
@@ -125,10 +125,13 @@ provider stream event after wire 200 — and the installed `diagnostics
 status` / `diagnostics request show` commands retrieve and disambiguate
 them by their own `X-SLAIF-Diagnostic-ID`, with capture OFF, content-free
 store canaries, and typed unavailable/not-found/ambiguous outcomes). All
-eleven DoD outcomes plus the config inspection are now implemented and
-executed in this module (each in its own focused run); the FINAL
-fresh-installation combined run of all cases with the complete indexed
-transcript remains mandatory for the final 205 PR.
+13 cases (DoD0 identity + all eleven outcomes + config) are implemented
+and executed in this module: each outcome in its own focused run through
+205-e, and then in the SINGLE FINAL fresh complete 13-case installed run
+of 205-f (13/13 PASS, 0 skip), which exported the complete 206-record
+indexed operator transcript and actually exercised the DoD5-then-DoD10
+gateway stop/replace path. The 205-e "remains mandatory" carry-forward
+is SUPERSEDED by that final run (verification record, 205-f section).
 
 205-d fixture additions: the SMTP sink gained a minimal deterministic IO
 fault (`refuse_data` is a LATCH, not one-shot: while armed, EVERY DATA
@@ -193,10 +196,10 @@ credentials are registered before retention and asserted absent by canary
 checks; the directory survives PG/process teardown and pytest temp cleanup
 by construction. A persistence failure surfaces as an evidence failure while
 teardown always completes. Retention is operator-controlled (remove the run
-directory after review). This is a PARTIAL transcript: it covers the NEW
-C cases only; the previously executed six outcomes are not retroactively
-re-transcribed, and the final fresh all-eleven run must export every
-outcome.
+directory after review). This description is SUPERSEDED by 205-f: the single final fresh
+13-case run exported the complete indexed transcript for every
+CLI-bearing outcome (206 labeled records), including the old six cases,
+whose actual invocations carry requirement-indexed labels.
 
 ## Reproducible invocation
 

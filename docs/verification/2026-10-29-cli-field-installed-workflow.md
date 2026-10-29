@@ -1,17 +1,26 @@
 # 205-a verification record — installed CLI field administration workflows
 
-**Status: PARTIAL (205-a scope-boundary handoff; 205-b and 205-c
-continuations recorded below).** This record documents what was actually
-executed through the installed `slaif-gateway` console for work order
+**Status: COMPLETE for the objective-205 CLI field qualification
+(final 205-f single complete 13-case run, final section below).** This
+record documents what was actually executed through the installed
+`slaif-gateway` console for work order
 `oap/orders/205-a-cli-field-workflow-qualification.md` (unique PR for
-objective 205; same-PR 205-b and 205-c continuations on the same PR).
-Outcomes 5, 7, 8 are now EXECUTED by the 205-c continuation (final section);
-outcomes 9, 10, 11 and the runtime-configuration evidence are NOT yet
-executed and remain mandatory for the final 205 PR. The safe persisted
-operator transcript/identity export is implemented by 205-c for the NEW C
-cases (the complete all-eleven export is deferred to the final fresh run).
-Nothing above claims any unexecuted outcome. Objective 205 as a whole
-remains PARTIAL.
+objective 205; same-PR continuations 205-b, 205-c, 205-d, 205-e, and
+205-f on the same PR). The original 205-a header text — "outcomes 9,
+10, 11 and the runtime-configuration evidence are NOT yet executed and
+remain mandatory for the final 205 PR" and "Objective 205 as a whole
+remains PARTIAL" — is SUPERSEDED by the 205-f section below: ALL eleven
+outcomes, installation identity, and runtime-configuration inspection
+were executed in ONE fresh complete 13-case installed run with the
+complete 206-record indexed operator transcript. Objective 205's
+implementation/qualification scope is complete; the strategic merge and
+the actual-main verification remain pending (root-owned), and no
+release/tag claim follows. The per-outcome rows in the 205-a table that
+read "NOT EXECUTED" are historical state at the 205-a point and were
+each subsequently executed as recorded in the 205-c, 205-d, 205-e, and
+205-f sections.
+Nothing in the historical sections below claims an unexecuted outcome
+as current.
 
 ## Installation and identity (executed)
 
@@ -172,7 +181,11 @@ settings/CI byte was changed under 205-a.
 
 **Status: bounded round complete for its numeric repair + first slices; full
 205 remains PARTIAL** (outcomes 5, 7-11, config-show, and the final fresh
-all-eleven run are carried forward to later same-PR suffixes).
+all-eleven run are carried forward to later same-PR suffixes) —
+SUPERSEDED: every carried-forward item was completed by the 205-d,
+205-e, and 205-f sections below (outcomes 9/11 + config in 205-d,
+outcome 10 in 205-e, and the single final fresh 13-case run + complete
+transcript + full-scope audit in 205-f).
 
 ### Product fix (implementation commit `420fb8f`)
 
@@ -330,12 +343,22 @@ than in local artifacts. No reconstruction or repeat was performed.
 | Persisted safe requirement-indexed operator transcript (argv/output/exit/identity export) | NOT IMPLEMENTED — in-memory projections only for assertions; next qualifier persists, final fresh all-eleven exports |
 | Final fresh-installation all-eleven module run | NOT EXECUTED — mandatory for objective completion |
 
+State-table note: the rows marked UNPROVEN / NOT IMPLEMENTED / NOT DONE
+/ PARTIAL / NOT EXECUTED above describe the state at the point of that
+section only. The carried-forward items were subsequently completed by
+the 205-c (outcomes 5/7/8 + persisted transcript), 205-d (outcomes 9/11
++ config), 205-e (outcome 10), and 205-f (final fresh 13-case run,
+complete transcript, full-scope audit) sections.
 ## 205-c continuation (outcomes 5, 7, 8 + persisted operator transcript)
 
 **Status: bounded round complete for outcomes 5, 7, 8 and the safe
 persisted transcript/identity export; full 205 remains PARTIAL**
 (outcomes 9, 10, 11, config-show, and the final fresh all-eleven run are
-carried forward to later same-PR suffixes). No product byte changed in
+carried forward to later same-PR suffixes) — SUPERSEDED: all
+carried-forward items were completed by the 205-d (outcomes 9/11 +
+config), 205-e (outcome 10), and 205-f (single final fresh 13-case run,
+complete transcript, full-scope audit) sections below. No product byte
+changed in
 205-c: source stayed frozen at `420fb8f` (466 product paths byte-identical
 per root baseline `205-c-product-baseline.json`); only the allowed test and
 documentation paths changed.
@@ -567,6 +590,12 @@ volume is used by the final test bytes.
 | Persisted all-eleven transcript (every outcome + identity) | PARTIAL — new C cases only (66 records); final fresh run must export all |
 | Final fresh-installation all-eleven module run | NOT EXECUTED — mandatory for objective completion |
 
+State-table note: the rows marked UNPROVEN / NOT IMPLEMENTED / NOT DONE
+/ PARTIAL / NOT EXECUTED above describe the state at the point of that
+section only. The carried-forward items were subsequently completed by
+the 205-c (outcomes 5/7/8 + persisted transcript), 205-d (outcomes 9/11
++ config), 205-e (outcome 10), and 205-f (final fresh 13-case run,
+complete transcript, full-scope audit) sections.
 ### Limitations (205-c)
 
 - The C evidence is installed-CLI + owned-gateway + owned-PG proof with
@@ -758,7 +787,9 @@ identifiers/digests, and the config canary.
   was executed and PASSED.
 - The final fresh-installation ALL-ELEVEN run and the complete
   all-eleven transcript remain mandatory; this D transcript covers only
-  the three D outcomes (37 records).
+  the three D outcomes (37 records) — SUPERSEDED by the 205-f section
+  below: the final fresh ALL-13 run was executed (13/13 PASS, 0 skip)
+  and the complete 206-record indexed transcript was exported.
 - The mail/replay history rows are labeled ORM fixture setup (synthetic
   payloads, constant digests), not operator actions; the SMTP layer is
   an owned loopback synthetic (no real mail); the replay rows do not
@@ -936,10 +967,15 @@ the final fresh all-eleven-plus run must export every outcome.
 - The FOCUSED run executes DoD10 alone; the combined DoD5+DoD10 module
   run (exercising the exact prior-gateway stop/replace path and the
   changed HTTP/start_gateway consumer compatibility) is deferred to the
-  final fresh 13-case run (identity + all 11 + config + DoD10).
+  final fresh 13-case run (identity + all 11 + config + DoD10) —
+  SUPERSEDED by the 205-f section below: the single final 13-case run
+  executed DoD5 and DoD10 together, actually exercising the
+  prior-owned-gateway stop/join/replace path.
 - The final fresh-installation ALL-13 run and the complete indexed
   transcript remain mandatory; no all-eleven/all-thirteen claim follows
-  from this section.
+  from this section — SUPERSEDED by the 205-f section below: the final
+  fresh ALL-13 run executed 13/13 PASS, 0 skip, and exported the
+  complete 206-record indexed transcript.
 - The HTTP stimuli are synthetic (owned loopback gateway + owned
   ProviderMock IO substitution); the replay positive 200 is synthetic
   IO, not real Codex/backend qualification; the fixture keys/routes/
@@ -949,4 +985,162 @@ the final fresh all-eleven-plus run must export every outcome.
   merge, release, production, security, or compliance claim. The whole
   objective 205 remains PARTIAL until the fresh all-13 run, the
   complete transcript, the full original-brief audit, and the
-  final-head/strategic merge gates pass.
+  final-head/strategic merge gates pass — the first three conditions
+  are satisfied by the 205-f section below; the final-head/strategic
+  merge gates remain pending (root-owned).
+
+## 205-f continuation (final completion — single complete 13-case run)
+
+Recorded 2026-10-29. Tests/documentation only; the product remains
+frozen at `420fb8f`. Single final completion per work order
+`oap/orders/205-f-final-cli-completion.md` (same PR #361): one planned
+fresh complete installed workflow of the current 13 cases (installation
+identity + all eleven outcomes + configuration), the complete indexed
+operator transcript, and the single full-scope coverage audit (order
+§4). No new infrastructure, no duplicated evidence, no repeated
+inventories, no rerun of unchanged suites; accepted 196-204 and
+205-a..e component evidence is reused where cited.
+
+### Labeling the old six cases (order §5)
+
+The ACTUAL `run_cli` / `_export_policy` / `_policy_view` invocations of
+the historical six cases (DoD0-4, 6) now carry requirement-indexed
+labels `dodN-<token>-<NN>` (new: DoD1 12, DoD2 4, DoD3 16, DoD4 22,
+DoD6 24; DoD4's 32 run records include pre-existing labels). Every
+business assertion, identity gate, and privacy boundary unchanged; the
+explicit DoD5/7/8/9/10/11/config labels preserved; no record cleared or
+reconstructed. Test-file SHA256
+`e2d297dbd4517c57da711f851de9b9b82d7e6a6164f86f0402149f7782f3ffde`
+(pre-label E bytes documented in the 205-e section).
+
+### Final 13-case run — EXECUTED PASSED
+
+JUnit `/tmp/slaif205/205f-final-1.xml` SHA256
+`aa1dac6adee04598a9c46ec1e281c7705985ad2fe0ef96907259c36fc17db164`:
+**13 tests, 0 failures, 0 errors, 0 skipped, 527.933 s, exit 0**
+(JUnit authoritative; addopts suppress the console summary). Execution
+order / seconds: DoD0 33.601, DoD1 27.550, DoD2 9.086, DoD3 38.192,
+DoD4 78.379, DoD6 56.207, DoD5 33.977, DoD7 58.473, DoD8 59.930, DoD9
+58.370, DoD11 24.565, config 8.136, DoD10 40.799. DoD5 and DoD10 both
+executed in this single run, so the prior-owned-gateway stop/join/
+replace path (205-e fixture correction) was ACTUALLY exercised; no
+separate DoD5+DoD10 run was performed.
+
+Outcome coverage in the single run: DoD0 installed identity (actual
+installation/help probes + `identity.json`; no pretend CLI command);
+DoD1 lookup/bounded paging/full-bearer refusal; DoD2 effective policy +
+route explanation; DoD3 record operations; DoD4 exact student/beta +
+TWO chat clones; DoD5 filtered model-discovery grant; DoD6 rates/lazy/
+exact-37 batch; DoD7 two configured completion services; DoD8 stable-
+route context/media updates; DoD9 mail delivery + inspection; DoD10
+actual gateway-recorded diagnostics; DoD11 replay expiry maintenance;
+config process inspection.
+
+### Installation identity (final run; literal)
+
+- Source `420fb8f6d9377f569d126d08f4c9e4146fc7250b` → pristine `git
+  archive`; FRESH wheel SHA256
+  `4e4c76fbeab1b271cac34d62b082fc2afb9849bcdfad4405699e0ee1be8dff3e`
+  (`wheel_reused=false`; 432 payload files verified against the
+  pristine source and the installed venv payload).
+- FRESH owned venv
+  `/tmp/pytest-of-janezp/pytest-1588/slaif205-field0/venv` (Python
+  3.12.15); a stale reused-venv candidate was rejected by the payload
+  gate (recorded in `artifact_steps`).
+- Console `…/venv/bin/slaif-gateway`; neutral outside-checkout cwd,
+  `PYTHONPATH` absent, inherited credentials scrubbed.
+- Owned PG16 container
+  `8de527ee9a74165700fd05c468497c8a9a19eaa10a56a377f29ea595579c1db3`
+  (loopback 54487, run-token name/labels, tmpfs) — verified ABSENT
+  after the run.
+
+### Persisted operator transcript (run `f222c484261f49de`; COMPLETE)
+
+`/tmp/slaif205/transcripts/f222c484261f49de/` outside the checkout:
+directory 0700, `transcript.json` 0600, `identity.json` 0600;
+**206 actual CLI records, 0 unlabeled, 33 expected negative exits**
+(DoD1 12, DoD2 4, DoD3 16, DoD4 32, DoD5 14, DoD6 24, DoD7 26, DoD8
+26, DoD9 25, DoD10 15, DoD11 8, config 4; DoD0 is identity-probe-based
+and contributes no CLI records). `transcript.json` SHA256
+`ed95d03ce2fc5e3c954945625e9dc5b75f5488e2212f19da99c764bdf37f0405`;
+`identity.json` SHA256
+`8832d6032498efdc2062a4008850b82f36b37fb52fb8ad56cf80749186592c97`.
+Each record retains the actual safe argv/exit/stdout/stderr
+projection; known-secret substitution (both full SMTP-generated keys,
+all known credential/private replay values, request/response canaries)
+is re-applied at final serialization and asserted absent; no
+body/header/password/SQL exception dumps; discarded gateway logs are
+NOT claimed to have been scanned (log privacy reuses the native 201
+proof).
+
+### Full-scope coverage audit (order §4; single table)
+
+| Brief section | What the final delivery must establish | Final-run evidence (this section) | Reused component evidence and honest limitations |
+|---|---|---|---|
+| §3 existing functionality | Reuse the actually supported owner/institution/cohort CRUD, lifecycle/limits, policy endpoint grants, email, provider/route activation, codex profile/preset/migration, request-capture controls, password-stdin and usage filters; make the supported path discoverable (the 48 reconstructed interventions are not 48 new commands) | All 13 cases drive ONLY real installed `slaif-gateway` commands (transcript argv is the actual argv); `docs/cli-field-administration.md` maps every field group to its implemented command/objective; `docs/cli-reference.md` cross-references it | Reused existing commands plus the implemented actual gaps — not 48 new commands; nothing re-implemented for this qualification |
+| §4 typed policy and cloning | Strict versioned create/update/export; provider `None` vs `[]`; omission-preserving updates; lifetime NULL quota = unlimited vs rate NULL override = inherit; unknown/conflicting inputs and unsupported module/hosted authority fail closed; canonical standard-key clone preserves every reviewed dimension + inherited overrides with explicit validity/fingerprints/audit, independent new material/IDs/zero usage/replay ownership, safe retry/post-commit delivery | DoD2 (configured vs effective + route explanation, members/sources, unlimited vs inherited), DoD4 (exact student/beta + TWO independent chat clones into ONE existing cohort: dry-run plans, one secure channel per execute, canonical export parity incl. nontrivial Codex/Responses pin + bounded lazy policy, inherited members, zero copied usage, source unchanged, exact-repeat dedup by source+operation, stale/unknown-field refusals, deny-all provider distinct), DoD3 (create-once + normalized duplicate refusal + owner move preserving omissions) | Native 198 clone/retry/rollback proofs (merged); calibration/template limitations remain explicit; cloning is an explicit typed channel |
+| §5 waiting | Dedicated shared audited lazy setter; one request/10 s, concurrency 1, bounded wait/reject/clear; installation ceilings; untouched quota/material/expiry; configuration proof is not a live-Redis admission qualification | DoD6 (rates + lazy: within-ceiling apply, overbound refusal, `--mode reject` and `--clear` transitions from valid waiting states preserving rates/quotas/material/expiry) | Process-local proof on the owned fixture; no Redis exists anywhere in this record; no live-Redis admission claim follows |
+| §6 providers/routes | Two disabled completion-service preparations (safe ENV-variable NAMES, custom timeout/zero retries/pricing), explicit separate activation; stable route UUID; deep partial merge vs full replacement; context 400000 plus second-route/media changes; output/key/client-data/unrelated state preserved; stale/mixed-mode safeguards; gateway ceiling distinct from physical model/client context | DoD7 (two providers via actual `providers add` prepared disabled, inspected, separately activated, canonical policy export) + DoD8 (stable-UUID context/media updates via reviewed plans, stale/mixed-mode refusal, second explicit route, unchanged key policy/material/client-module/profile data and pre-existing ledger/replay route linkage, Decimal price equality) | 199-qualified fictional completion provider/profile shapes reused as data; provider IO is the synthetic loopback seam; no named-service branch or credential-auth claim from enabling metadata |
+| §7 replay maintenance | Content-free inspect/review/apply; target the ORIGINAL created_at + selected TTL; monotonic/no shortening; expired only explicit; same-key finalized-ledger/HMAC eligibility and ownership/route/model/source preserved; idempotency/audit/caps/atomicity; reuse accepted native 200 scale/concurrency/rollback proof | DoD11 (schema-valid planted rows; configured-default-TTL dry-run; mixed-mode refusal; monotonic apply; already-applied repeat no-op; explicit `--include-expired` second plan; column-level preservation of digest/route/model/source/quotas) | Native 200 scale/concurrency/rollback proofs (merged, in main); no new 20k-row run; no reconstruction/transfer/shortening command exists or is claimed |
+| §8 effective/lookup/diagnostics/mail | Configured vs effective/source and actual enabled pairs; safe exact lookup/complete bounded paging; actual correlated failures before admission and after HTTP 200; auth-only key attribution; no guessing/content capture; honest ambiguous/notfound/unavailable and retention limits; mail list/show over pending/sent/failed/expired/sending/ambiguous with exactly-once consumed secret and explicit safe failed retry; enqueue intent != SMTP acceptance != inbox delivery | DoD1 (list/show by UUID/public ID/exact owner email, complete bounded paging, full-bearer lookup refusal without echo), DoD2, DoD9 (pending channel, real send-now with full MIME-decoded key observation, exact repeat refusal, definite 550 refusal + safe explicit retry, planted sending/ambiguous/expired inspected before any unsafe probe), DoD10 (six actual HTTP-to-CLI failures: pre-auth 401, endpoint denial, capability, context window, expired-reference positive-then-opaque-404, HTTP-200 stream failure with failed-ledger/released-reservation accounting; CLI not_found/ambiguous/disambiguation/typed-unavailable; capture OFF + empty owned capture dir + content-free store/transcript canaries) | Synthetic SMTP/provider seams; prepared-recipient guarantee scoped to attempts prepared by this code after upgrade (202-b); historical rows may retain creation-time metadata |
+| §9 batch and edits | Reviewed exact-37 scope; active defaults; new/revoked membership/stale refusal; bounded complete selection; shared-service atomic updates/audit and untouched usage; editing existing keys is not a cohort default for future keys; owner/cohort edits preserve omissions and supported institution-on-owner semantics | DoD6 (exact-37 cohort batch: READ-ONLY preview, zero writes/audits, atomic apply with exact 37 audits, stale refusal after new-member creation, bounded complete selection) + DoD3 (owner/cohort partial edits with omission/clear rules and conflict/negative refusals) | 203 (batch) and 204 (record edits + late-audit rollback) proofs, merged; no invented cohort-institution relation; edit scope is per-record, not cohort default |
+| §10-11 runtime/common | Safe finite 45-field process-local configuration values/source/restart; invalid-Settings fixed no-echo errors; portable env/file/Compose guidance; API/worker/scheduler recreation only as applicable; proxy 128m example distinct from endpoint/media limits; stable JSON, documented usage/error exits, audit consistency, secret protection | config case (exact 45-field allowlist, configured-vs-default provenance, all-45 recreate scopes, fixed `configuration_unavailable`/exit 1/empty stderr/no traceback) + DoD0 identity; `docs/upgrade-runbook.md` "CLI field-configuration round" section (Alembic 0026 from 201, no 205 schema, runtime recreation for env changes, safe read-only CLI checks, "rollback is not undo" + pre-420 numeric-parser note) | 204 config-inspection proof, merged; `config show` is the CALLING process's snapshot — it does not observe live workers; no `MAX_REQUEST_BODY` invented; shipped nginx 128m example kept distinct from real proxy settings and gateway endpoint/media ceilings; the no-echo numeric fix covers the 17 NEW typed positions (205-b) only — no claim that every legacy usage error is JSON or every legacy key-creation path secret-free |
+
+§12 outcomes: all eleven literal outcomes plus identity/configuration
+are established by the single complete 13-case run and the complete
+actual indexed transcript above (per-outcome counts in the transcript
+subsection; hashes in the run/identity subsections); no Python/SQL
+business bypass is presented as operator action — every operator
+action is a subprocess of the installed console, and fixture seeding is
+clearly labeled product-equivalent ORM/service setup kept separate from
+operator actions.
+
+### ROOT independent evidence (credited as root, not agent pytest)
+
+- Root independently verified all 432 files of the FRESH wheel
+  `4e4c76fb…` against committed source `420fb8f…`, the current
+  application tree, and the installed pytest-1588 venv (exact
+  file-set/hash PASS; outside checkout, `PYTHONPATH` absent).
+- Root confirmed the final JUnit (13 PASS / 0 fail / 0 error / 0 skip),
+  the 206-record / 33-negative-exit / 0-blank-label artifact
+  `f222c484261f49de` (0700/0600, canary-clean), and the independent
+  absence of the exact owned PG `8de527ee…`. No additional identity
+  run, PG suite, or duplicated evidence file was produced in this
+  round.
+
+### Superseded carry-forward claims
+
+The 205-a header ("outcomes 9, 10, 11 and the runtime-configuration
+evidence are NOT yet executed"; "Objective 205 as a whole remains
+PARTIAL"), the 205-b/205-c "full 205 remains PARTIAL" status lines and
+state-table rows, the 205-d "the final fresh-installation ALL-ELEVEN
+run and the complete all-eleven transcript remain mandatory" bullet,
+and the 205-e carry-forward bullets (combined DoD5+DoD10 run; final
+fresh ALL-13 run + complete indexed transcript; "whole objective 205
+remains PARTIAL until …") are SUPERSEDED by this section (marked
+inline above).
+
+### Local verification (final, pre-publication)
+
+Ruff on the touched Python (clean), `git diff --check` (OK),
+`scripts/check_documentation.py` (`DOCUMENTATION_CHECK=OK files=132`),
+focused OAP governance units (9/9), module collection (13 tests). No
+product diff in the IMPL commit (zero changes under `app/`,
+`alembic/`, `pyproject.toml`, `Dockerfile`, `.env.example`).
+
+### Limitations (final)
+
+- Every provider/client/SMTP interaction in this record is an owned
+  synthetic loopback seam; no real provider/client/mail/Redis/
+  production/HPC claim; no performance/scale claim (native 200/201
+  proofs reused, not rerun).
+- Strategic merge, final-head GitHub checks, and the actual-main
+  three-workflow verification remain PENDING (root-owned); no
+  release/tag or goal-completion claim — goal completion follows the
+  actual-main verification.
+- The transcript is the complete indexed run of THIS module (206
+  records); it is not a claim about discarded gateway logs or any
+  deployment outside this run.
+- The historical 205-d synthetic-digest failure redaction remains as
+  disclosed in the immutable 205-d report; nothing here rewrites it or
+  claims private execution history universally secret-free.

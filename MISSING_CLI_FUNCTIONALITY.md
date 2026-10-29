@@ -7,6 +7,16 @@
 **Status:** implementation brief; commands marked **proposed** do not exist yet.
 This report changes no application behavior or production configuration.
 
+**Implementation status (2026-10-29, appended note — historical body below
+unchanged):** every objective named in this brief (objectives 196-204) is
+implemented and merged into `main`. Objective 205 — the single complete
+executable-only installed transcript and its qualification evidence, covering
+all eleven section-12 outcomes plus installation identity and configuration —
+is delivered by PR 361. Current per-field CLI status:
+`docs/cli-field-administration.md`. Final full-scope coverage table, the actual
+final artifact, and honest limitations:
+`docs/verification/2026-10-29-cli-field-installed-workflow.md`.
+
 ## 1. The operational problem
 
 During live administration, an operator repeatedly needed short Python programs

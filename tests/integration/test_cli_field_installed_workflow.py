@@ -1937,38 +1937,40 @@ def test_dod1_lookup_and_bounded_paging(field_workflow: FieldEnvironment) -> Non
     m = env.manifest
 
     # Institution lookup: list + show by name.
-    listed = env.run_cli("institutions", "list").json
+    listed = env.run_cli("institutions", "list", label="dod1-institutions-list-01").json
     assert "Seed Institution 205" in {row["name"] for row in listed["institutions"]}
-    shown = env.run_cli("institutions", "show", "Seed Institution 205").json
+    shown = env.run_cli("institutions", "show", "Seed Institution 205", label="dod1-institutions-show-02").json
     assert shown["id"] == m["institution_seed"]
 
     # Owner lookup: exact email list, show by UUID and by email.
-    owners_listed = env.run_cli("owners", "list", "--email", m["owner_seed_email"]).json
+    owners_listed = env.run_cli("owners", "list", "--email", m["owner_seed_email"], label="dod1-owners-list-03").json
     assert [row["id"] for row in owners_listed["owners"]] == [m["owner_seed"]]
-    assert env.run_cli("owners", "show", m["owner_seed"]).json["email"] == m["owner_seed_email"]
-    assert env.run_cli("owners", "show", m["owner_seed_email"]).json["id"] == m["owner_seed"]
+    assert env.run_cli("owners", "show", m["owner_seed"], label="dod1-owners-show-04").json["email"] == m["owner_seed_email"]
+    assert env.run_cli("owners", "show", m["owner_seed_email"], label="dod1-owners-show-05").json["id"] == m["owner_seed"]
 
     # Cohort lookup.
-    cohorts_listed = env.run_cli("cohorts", "list").json
+    cohorts_listed = env.run_cli("cohorts", "list", label="dod1-cohorts-list-06").json
     assert m["cohort_seed"] in {row["id"] for row in cohorts_listed["cohorts"]}
-    assert env.run_cli("cohorts", "show", m["cohort_seed"]).json["name"] == "Seed Cohort 205"
+    assert env.run_cli("cohorts", "show", m["cohort_seed"], label="dod1-cohorts-show-07").json["name"] == "Seed Cohort 205"
 
     # Key lookup by public key ID and by exact owner email.
-    by_public = env.run_cli("keys", "show", m["k_policy_public"]).json
+    by_public = env.run_cli("keys", "show", m["k_policy_public"], label="dod1-keys-show-08").json
     assert by_public["id"] == m["k_policy"]
     by_email = env.run_cli(
-        "keys", "list", "--owner-email", m["owner_seed_email"], "--limit", "100"
+        "keys", "list", "--owner-email", m["owner_seed_email"], "--limit", "100",
+        label="dod1-keys-list-09",
     ).json
     assert m["k_policy"] in {row["id"] for row in by_email["keys"]}
 
     # Complete bounded paging over the 39-row cohort (37 active + revoked +
     # suspended controls), no overlap, no loss.
-    page1 = env.run_cli("keys", "list", "--cohort-id", m["cohort37"], "--limit", "20").json
+    page1 = env.run_cli("keys", "list", "--cohort-id", m["cohort37"], "--limit", "20", label="dod1-keys-list-10").json
     assert page1["paging"]["returned"] == 20
     assert page1["paging"]["has_more"] is True
     assert page1["paging"]["next_offset"] == 20
     page2 = env.run_cli(
-        "keys", "list", "--cohort-id", m["cohort37"], "--limit", "20", "--offset", "20"
+        "keys", "list", "--cohort-id", m["cohort37"], "--limit", "20", "--offset", "20",
+        label="dod1-keys-list-11",
     ).json
     assert page2["paging"]["returned"] == 19
     assert page2["paging"]["has_more"] is False
@@ -1980,7 +1982,7 @@ def test_dod1_lookup_and_bounded_paging(field_workflow: FieldEnvironment) -> Non
 
     # Full bearer-shaped lookup refuses WITHOUT echo (fixed safe message).
     bearer = "sk-slaif-" + "0" * 8 + secrets.token_hex(16)
-    refused = env.run_cli("keys", "show", bearer, expect=1)
+    refused = env.run_cli("keys", "show", bearer, expect=1, label="dod1-keys-show-12")
     combined = refused.stdout + refused.stderr
     assert "Full key material cannot be used for lookup" in combined
     assert "public key ID" in combined
@@ -2000,7 +2002,7 @@ def test_dod2_effective_policy_and_route_explanation(field_workflow: FieldEnviro
     m = env.manifest
     models = m["models"]
 
-    report = env.run_cli("keys", "policy", "effective", m["k_policy"]).json
+    report = env.run_cli("keys", "policy", "effective", m["k_policy"], label="dod2-keys-policy-01").json
     assert report["scope"] == "configuration-only"
     rate = report["rate_limits"]
     # Configured versus inherited rate members with explicit sources.
@@ -2039,6 +2041,7 @@ def test_dod2_effective_policy_and_route_explanation(field_workflow: FieldEnviro
     allowed = env.run_cli(
         "keys", "policy", "explain-route", m["k_policy"],
         "--model", models["m1"], "--endpoint", "/v1/chat/completions",
+        label="dod2-keys-policy-02",
     ).json
     assert allowed["verdict"] == "resolved"
     assert allowed["blocker"] is None
@@ -2048,6 +2051,7 @@ def test_dod2_effective_policy_and_route_explanation(field_workflow: FieldEnviro
     disabled = env.run_cli(
         "keys", "policy", "explain-route", m["k_policy"],
         "--model", models["m2"], "--endpoint", "/v1/chat/completions",
+        label="dod2-keys-policy-03",
     ).json
     assert disabled["verdict"] == "blocked"
     assert disabled["blocker"] == "model-route-disabled"
@@ -2055,6 +2059,7 @@ def test_dod2_effective_policy_and_route_explanation(field_workflow: FieldEnviro
     disallowed = env.run_cli(
         "keys", "policy", "explain-route", m["k_policy"],
         "--model", models["m4"], "--endpoint", "/v1/chat/completions",
+        label="dod2-keys-policy-04",
     ).json
     assert disallowed["verdict"] == "blocked"
     assert disallowed["blocker"] == "model-not-allowed-for-key"
@@ -2073,19 +2078,21 @@ def test_dod3_record_operations(field_workflow: FieldEnvironment) -> None:
     created = env.run_cli(
         "institutions", "create", "--name", "Field Institution 205",
         "--country", "SI", "--notes", "field qualification target",
+        label="dod3-institutions-create-01",
     ).json
     inst_id = created["id"]
     assert created["name"] == "Field Institution 205"
-    assert env.run_cli("institutions", "show", inst_id).json["name"] == "Field Institution 205"
+    assert env.run_cli("institutions", "show", inst_id, label="dod3-institutions-show-02").json["name"] == "Field Institution 205"
 
     # Normalized (whitespace-padded) duplicate is refused; count unchanged.
-    before = len(env.run_cli("institutions", "list").json["institutions"])
+    before = len(env.run_cli("institutions", "list", label="dod3-institutions-list-03").json["institutions"])
     dup = env.run_cli(
-        "institutions", "create", "--name", "  Field Institution 205  ", any_failure=True
+        "institutions", "create", "--name", "  Field Institution 205  ", any_failure=True,
+        label="dod3-institutions-create-04",
     )
     dup_text = (dup.stdout + dup.stderr).lower()
     assert "already" in dup_text or "exist" in dup_text
-    after = env.run_cli("institutions", "list").json["institutions"]
+    after = env.run_cli("institutions", "list", label="dod3-institutions-list-05").json["institutions"]
     assert len(after) == before
 
     # (b) Owner created under the new institution; list/show resolve it.
@@ -2093,25 +2100,29 @@ def test_dod3_record_operations(field_workflow: FieldEnvironment) -> None:
         "owners", "create", "--name", "Field", "--surname", "Participant",
         "--email", "field-participant-205a@example.invalid",
         "--institution-id", inst_id, "--notes", "new field owner",
+        label="dod3-owners-create-06",
     ).json
     owner_id = owner["id"]
     assert owner["institution_id"] == inst_id
-    assert owner_id in {row["id"] for row in env.run_cli("owners", "list").json["owners"]}
+    assert owner_id in {row["id"] for row in env.run_cli("owners", "list", label="dod3-owners-list-07").json["owners"]}
 
     # (c) Cohort created; supported cohort edit with omission/clear rules.
     cohort = env.run_cli(
-        "cohorts", "create", "--name", "Field Cohort 205", "--description", "initial"
+        "cohorts", "create", "--name", "Field Cohort 205", "--description", "initial",
+        label="dod3-cohorts-create-08",
     ).json
     cohort_id = cohort["id"]
     edited = env.run_cli(
         "cohorts", "update", cohort_id, "--reason", "update field cohort description",
         "--description", "updated",
+        label="dod3-cohorts-update-09",
     ).json
     assert edited["description"] == "updated"
     assert edited["name"] == "Field Cohort 205"  # omitted field preserved
     cleared = env.run_cli(
         "cohorts", "update", cohort_id, "--reason", "clear field cohort description",
         "--clear-description",
+        label="dod3-cohorts-update-10",
     ).json
     assert cleared["description"] is None
 
@@ -2119,9 +2130,10 @@ def test_dod3_record_operations(field_workflow: FieldEnvironment) -> None:
     no_reason = env.run_cli(
         "cohorts", "update", cohort_id, "--description", "should not land",
         any_failure=True,
+        label="dod3-cohorts-update-11",
     )
     assert "reason" in (no_reason.stdout + no_reason.stderr).lower()
-    assert env.run_cli("cohorts", "show", cohort_id).json["description"] is None
+    assert env.run_cli("cohorts", "show", cohort_id, label="dod3-cohorts-show-12").json["description"] is None
 
     # (d) owners update: move the pre-existing owner to the NEW institution,
     # preserving omitted metadata / is_active / external_id / member keys.
@@ -2129,6 +2141,7 @@ def test_dod3_record_operations(field_workflow: FieldEnvironment) -> None:
         "owners", "update", m["owner_move"],
         "--reason", "move owner to field institution",
         "--institution-id", inst_id,
+        label="dod3-owners-update-13",
     ).json
     assert moved["id"] == m["owner_move"]
     assert moved["institution_id"] == inst_id
@@ -2146,6 +2159,7 @@ def test_dod3_record_operations(field_workflow: FieldEnvironment) -> None:
     env.run_cli(
         "owners", "update", m["owner_move"], "--reason", "conflict probe",
         "--external-id", "conflicting", "--clear-external-id", any_failure=True,
+        label="dod3-owners-update-14",
     )
     assert env.sql("SELECT external_id FROM owners WHERE id = $1", m["owner_move"])[0][
         "external_id"
@@ -2155,6 +2169,7 @@ def test_dod3_record_operations(field_workflow: FieldEnvironment) -> None:
     unknown = env.run_cli(
         "owners", "update", str(uuid.uuid4()), "--reason", "unknown owner probe",
         "--notes", "should not land", any_failure=True,
+        label="dod3-owners-update-15",
     )
     assert unknown.exit_code != 0
 
@@ -2173,6 +2188,7 @@ def test_dod3_record_operations(field_workflow: FieldEnvironment) -> None:
     final = env.run_cli(
         "cohorts", "update", cohort_id, "--reason", "final field cohort edit",
         "--description", "final",
+        label="dod3-cohorts-update-16",
     ).json
     assert final["description"] == "final"
 
@@ -2197,8 +2213,10 @@ _POLICY_VIEW_FIELDS = (
 )
 
 
-def _policy_view(env: FieldEnvironment, key_id: str) -> dict[str, object]:
-    row = env.run_cli("keys", "show", key_id).json
+def _policy_view(
+    env: FieldEnvironment, key_id: str, label: str = ""
+) -> dict[str, object]:
+    row = env.run_cli("keys", "show", key_id, label=label).json
     return {field: row[field] for field in _POLICY_VIEW_FIELDS}
 
 
@@ -2244,9 +2262,9 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
     src_student_before = _full_key_row(env, src_student)
     src_chat_before = _full_key_row(env, src_chat)
     src_deny_before = _full_key_row(env, src_deny)
-    export_student = _export_policy(env, src_student)
-    export_chat = _export_policy(env, src_chat)
-    export_deny = _export_policy(env, src_deny)
+    export_student = _export_policy(env, src_student, label="dod4-export-policy-01")
+    export_chat = _export_policy(env, src_chat, label="dod4-export-policy-02")
+    export_deny = _export_policy(env, src_deny, label="dod4-export-policy-03")
 
     audit_before = _audit_count(env)
     assert _clone_cohort_count(env, str(m["cohort_clone_target"])) == 0
@@ -2258,6 +2276,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         "--dry-run", str(plans / "both.json"),
         "--execute", str(plans / "both2.json"),
         any_failure=True,
+        label="dod4-keys-clone-04",
     )
     assert both.json["error"]["code"] == "invalid_parameter"
     for flag, label in (
@@ -2271,6 +2290,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
             "--validity-mode", "copy-source-expiry",
             flag, *(["dry-file.txt"] if flag == "--secret-output-file" else []),
             any_failure=True,
+            label="dod4-keys-clone-05",
         )
         assert probe.json["error"]["code"] == "invalid_parameter", label
 
@@ -2294,7 +2314,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         ]
         if cohort is not None:
             args += ["--target-cohort-id", cohort]
-        planned = env.run_cli(*args).json
+        planned = env.run_cli(*args, label="dod4-call-06").json
         plan_files[name] = plan_file
         assert planned["source_gateway_key_id"] == source
         assert planned["validity"]["mode"] == "copy-source-expiry"
@@ -2323,6 +2343,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         "--reason", "unknown typed field probe",
         "--secret-output-file", str(plans / "secret-unknown.txt"),
         any_failure=True,
+        label="dod4-keys-clone-07",
     )
     assert unknown.json["error"]["code"] == "cli_error"
     assert "bogus_typed_field" not in unknown.json["error"]["message"]
@@ -2334,6 +2355,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
     no_channel = env.run_cli(
         "keys", "clone", "--execute", str(plan_files["denyall"]),
         "--reason", "no channel probe", any_failure=True,
+        label="dod4-keys-clone-08",
     )
     assert no_channel.json["error"]["code"] == "invalid_parameter"
     two_channels = env.run_cli(
@@ -2342,6 +2364,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         "--secret-output-file", str(plans / "two.txt"),
         "--show-plaintext",
         any_failure=True,
+        label="dod4-keys-clone-09",
     )
     assert two_channels.json["error"]["code"] == "invalid_parameter"
     assert (plans / "two.txt").exists() is False  # refused before any write
@@ -2355,6 +2378,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
             "keys", "clone", "--execute", str(plan_files[name]),
             "--reason", f"clone {name} target",
             "--secret-output-file", str(secret_file),
+            label="dod4-keys-clone-10",
         ).json
         assert result["status"] == "created", result
         target = str(result["target_gateway_key_id"])
@@ -2417,7 +2441,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         assert row["valid_until"] == source_before["valid_until"]
         assert row["valid_from"] > source_before["valid_from"]
         # FULL canonical configuration equality via the installed export.
-        assert _export_policy(env, target) == export_of[name]
+        assert _export_policy(env, target, label="dod4-export-policy-11") == export_of[name]
         # Actual nullable configured columns equal the source row-for-row.
         for column in (
             "cost_limit_eur", "token_limit_total", "request_limit_total",
@@ -2480,12 +2504,13 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
     assert export_student["lazy_throttling_policy"] == export_chat["lazy_throttling_policy"]
     # Deny-all control: empty provider allow-list, distinct from unrestricted.
     assert export_deny["allowed_providers"] == []
-    assert _policy_view(env, targets_out["denyall"])["allowed_providers_state"] == "deny-all"
-    assert _policy_view(env, src_student)["allowed_providers_state"] == "unrestricted"
+    assert _policy_view(env, targets_out["denyall"], label="dod4-policy-view-12")["allowed_providers_state"] == "deny-all"
+    assert _policy_view(env, src_student, label="dod4-policy-view-13")["allowed_providers_state"] == "unrestricted"
 
     # Effective-source views on the actual nullable configured rate columns.
     chat_eff = env.run_cli(
-        "keys", "policy", "effective", targets_out["chat1"]
+        "keys", "policy", "effective", targets_out["chat1"],
+        label="dod4-keys-policy-14",
     ).json["rate_limits"]
     assert chat_eff["requests_per_window"] == {
         "configured": 42, "effective": 42, "source": "key",
@@ -2493,7 +2518,8 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
     assert chat_eff["window_seconds"]["configured"] == 30
     assert chat_eff["window_seconds"]["source"] == "key"
     student_eff = env.run_cli(
-        "keys", "policy", "effective", targets_out["student"]
+        "keys", "policy", "effective", targets_out["student"],
+        label="dod4-keys-policy-15",
     ).json["rate_limits"]
     assert student_eff["requests_per_window"]["configured"] is None
     assert student_eff["requests_per_window"]["source"] == "none"
@@ -2526,6 +2552,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         "keys", "clone", "--execute", str(plan_files["chat1"]),
         "--reason", "exact repeat of completed clone plan",
         "--secret-output-file", str(plans / "secret-repeat.txt"),
+        label="dod4-keys-clone-16",
     ).json
     assert repeat["status"] == "already-applied"
     assert str(repeat["target_gateway_key_id"]) == targets_out["chat1"]
@@ -2549,11 +2576,13 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         "--target-owner-id", str(m["owner_clone_target"]),
         "--target-cohort-id", str(m["cohort_clone_target2"]),
         "--validity-mode", "copy-source-expiry",
+        label="dod4-keys-clone-17",
     )
     env.run_cli(
         "keys", "set-rate-limits", src_chat,
         "--requests-per-minute", "43",
         "--reason", "stale-plan source mutation",
+        label="dod4-keys-set-rate-limits-18",
     ).assert_ok("source rate mutation")
     # The deliberate source mutation writes its own single audit row; the
     # stale refusal and the dedup re-run must add nothing beyond it.
@@ -2564,6 +2593,7 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         "--reason", "stale never-executed plan probe",
         "--secret-output-file", str(plans / "secret-stale.txt"),
         any_failure=True,
+        label="dod4-keys-clone-19",
     )
     assert stale.json["error"]["code"] == "key_clone_stale_plan"
     assert (plans / "secret-stale.txt").exists() is False
@@ -2576,16 +2606,18 @@ def test_dod4_exact_student_beta_and_chat_clones(field_workflow: FieldEnvironmen
         "keys", "clone", "--execute", str(plan_files["chat1"]),
         "--reason", "repeat of completed plan after source mutation",
         "--secret-output-file", str(plans / "secret-repeat2.txt"),
+        label="dod4-keys-clone-20",
     ).json
     assert repeat2["status"] == "already-applied"
     assert str(repeat2["target_gateway_key_id"]) == targets_out["chat1"]
     assert (plans / "secret-repeat2.txt").exists() is False
-    assert _export_policy(env, targets_out["chat1"]) == export_chat
+    assert _export_policy(env, targets_out["chat1"], label="dod4-export-policy-21") == export_chat
     assert _audit_count(env) == audit_after_mutation  # dedup writes no audit
     # The executed chat1 target is unchanged by the source mutation.
     assert _full_key_row(env, targets_out["chat1"]) == target_chat1_before
     chat1_eff = env.run_cli(
-        "keys", "policy", "effective", targets_out["chat1"]
+        "keys", "policy", "effective", targets_out["chat1"],
+        label="dod4-keys-policy-22",
     ).json["rate_limits"]
     assert chat1_eff["requests_per_window"] == {
         "configured": 42, "effective": 42, "source": "key",
@@ -2617,6 +2649,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "--requests-per-minute", "1", "--window-seconds", "10",
         "--concurrent-requests", "1",
         "--reason", "field qualification operational rate",
+        label="dod6-keys-set-rate-limits-01",
     ).json
     assert result["rate_limit_policy"] == {
         "requests_per_minute": 1,
@@ -2624,7 +2657,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "max_concurrent_requests": 1,
     }
     row_after = _full_key_row(env, k)
-    rate_view = env.run_cli("keys", "policy", "effective", k).json["rate_limits"]
+    rate_view = env.run_cli("keys", "policy", "effective", k, label="dod6-keys-policy-02").json["rate_limits"]
     assert rate_view["requests_per_window"] == {
         "configured": 1, "effective": 1, "source": "key",
     }
@@ -2665,6 +2698,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
     env.run_cli(
         "keys", "set-rate-limits", k, "--requests-per-minute", "0",
         "--reason", "non-positive probe", any_failure=True,
+        label="dod6-keys-set-rate-limits-03",
     )
     assert _full_key_row(env, k) == row_after
 
@@ -2675,9 +2709,10 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "--mode", "wait", "--max-wait-seconds", "30",
         "--max-waiting-requests", "4",
         "--reason", "field qualification lazy wait",
+        label="dod6-keys-set-lazy-throttling-04",
     ).assert_ok("lazy set")
     row_after_lazy_set = _full_key_row(env, k)
-    lazy = env.run_cli("keys", "policy", "effective", k).json["lazy_throttling"]
+    lazy = env.run_cli("keys", "policy", "effective", k, label="dod6-keys-policy-05").json["lazy_throttling"]
     assert lazy["mode"] == "wait"
     assert lazy["max_wait_seconds"] == 30
     assert lazy["max_waiting_requests"] == 4
@@ -2689,6 +2724,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
     bad_mode = env.run_cli(
         "keys", "set-lazy-throttling", k, "--mode", "bogus",
         "--reason", "invalid mode probe", any_failure=True,
+        label="dod6-keys-set-lazy-throttling-06",
     )
     assert bad_mode.exit_code == 2
     assert "wait or reject" in bad_mode.stderr
@@ -2700,6 +2736,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "--mode", "wait", "--max-wait-seconds", "5000",
         "--max-waiting-requests", "4",
         "--reason", "excessive wait probe", any_failure=True,
+        label="dod6-keys-set-lazy-throttling-07",
     )
     assert over_wait.exit_code == 2
     assert "operator ceiling" in over_wait.stderr
@@ -2708,6 +2745,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "--mode", "wait", "--max-wait-seconds", "30",
         "--max-waiting-requests", "999",
         "--reason", "excessive waiting probe", any_failure=True,
+        label="dod6-keys-set-lazy-throttling-08",
     )
     assert over_waiting.exit_code == 2
     assert "operator ceiling" in over_waiting.stderr
@@ -2715,19 +2753,20 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
     assert _full_key_row(env, k) == row_after_lazy_set
     # --mode reject from a valid wait state removes the stored override
     # (default immediate rejection); rates and material are preserved.
-    rates_before = env.run_cli("keys", "policy", "effective", k).json["rate_limits"]
+    rates_before = env.run_cli("keys", "policy", "effective", k, label="dod6-keys-policy-09").json["rate_limits"]
     env.run_cli(
         "keys", "set-lazy-throttling", k, "--mode", "reject",
         "--reason", "lazy reject transition from wait",
+        label="dod6-keys-set-lazy-throttling-10",
     ).assert_ok("lazy reject")
-    lazy_reject = env.run_cli("keys", "policy", "effective", k).json["lazy_throttling"]
+    lazy_reject = env.run_cli("keys", "policy", "effective", k, label="dod6-keys-policy-11").json["lazy_throttling"]
     assert lazy_reject["mode"] == "reject"
     assert lazy_reject["stored_state"] == "absent"
     assert lazy_reject["source"] == "default"
     # In reject mode the numeric members are the inert schema defaults, not
     # a configured wait (mode/stored_state/source carry the distinction).
     assert (
-        env.run_cli("keys", "policy", "effective", k).json["rate_limits"]
+        env.run_cli("keys", "policy", "effective", k, label="dod6-keys-policy-12").json["rate_limits"]
         == rates_before
     )
     # Re-establish the wait override, then --clear: a distinct verb with the
@@ -2737,17 +2776,19 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "--mode", "wait", "--max-wait-seconds", "30",
         "--max-waiting-requests", "4",
         "--reason", "lazy re-wait before clear",
+        label="dod6-keys-set-lazy-throttling-13",
     ).assert_ok("lazy re-wait")
     env.run_cli(
         "keys", "set-lazy-throttling", k, "--clear",
         "--reason", "lazy clear transition",
+        label="dod6-keys-set-lazy-throttling-14",
     ).assert_ok("lazy clear")
-    lazy_cleared = env.run_cli("keys", "policy", "effective", k).json["lazy_throttling"]
+    lazy_cleared = env.run_cli("keys", "policy", "effective", k, label="dod6-keys-policy-15").json["lazy_throttling"]
     assert lazy_cleared["mode"] == "reject"
     assert lazy_cleared["stored_state"] == "absent"
     assert lazy_cleared["source"] == "default"
     assert (
-        env.run_cli("keys", "policy", "effective", k).json["rate_limits"]
+        env.run_cli("keys", "policy", "effective", k, label="dod6-keys-policy-16").json["rate_limits"]
         == rates_before
     )
     # The lazy transitions only touched the lazy override plus updated_at.
@@ -2768,8 +2809,9 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
     env.run_cli(
         "keys", "set-rate-limits", k, "--clear-all",
         "--reason", "reset operational rate to deployment inheritance",
+        label="dod6-keys-set-rate-limits-17",
     ).assert_ok("rate clear-all")
-    cleared = env.run_cli("keys", "policy", "effective", k).json["rate_limits"]
+    cleared = env.run_cli("keys", "policy", "effective", k, label="dod6-keys-policy-18").json["rate_limits"]
     assert cleared["requests_per_window"] == {
         "configured": None, "effective": None, "source": "none",
     }
@@ -2799,6 +2841,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "--cohort-id", cohort37,
         "--policy-file", str(policy_file),
         "--plan-file", str(plan_file),
+        label="dod6-keys-batch-19",
     ).json
     p = plan["plan"]
     assert p["selection_kind"] == "cohort"
@@ -2824,6 +2867,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "--allowed-endpoint", "/v1/chat/completions",
         "--reason", "new cohort member created after batch preview",
         "--secret-output-file", str(member_secret),
+        label="dod6-keys-create-20",
     ).json
     member_secret.unlink()
     new_key_id = str(created["gateway_key_id"])
@@ -2845,6 +2889,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "--plan-file", str(plan_file),
         "--reason", "stale cohort plan apply probe",
         any_failure=True,
+        label="dod6-keys-batch-21",
     )
     # KeyBatchStaleError is a KeyManagementError subclass carrying its own
     # fixed safe error code: the installed boundary surfaces that code
@@ -2870,6 +2915,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         *key_args,
         "--policy-file", str(policy_file),
         "--plan-file", str(plan2_file),
+        label="dod6-keys-batch-22",
     ).json
     p2 = plan2["plan"]
     assert p2["selection_kind"] == "keys"
@@ -2889,6 +2935,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         *probe_args,
         "--policy-file", str(policy_file),
         "--plan-file", str(probe_file),
+        label="dod6-keys-batch-23",
     ).json
     pp = probe["plan"]
     assert pp["selection_kind"] == "keys"
@@ -2905,6 +2952,7 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
         "keys", "batch", "apply",
         "--plan-file", str(plan2_file),
         "--reason", "apply reviewed exact-37 batch",
+        label="dod6-keys-batch-24",
     ).json
     assert applied["status"] == "applied"
     assert applied["selected_count"] == 37
