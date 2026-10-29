@@ -417,6 +417,71 @@ def test_plan_file_oversize_and_exclusive_write(tmp_path: Path) -> None:
     assert "new writable file" in str(exc.value)
 
 
+def test_plan_file_writer_closes_descriptor_on_success_and_injected_faults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The exclusive writer closes its exact descriptor on success and on
+    both injected fault paths (203-b durable evidence for the static
+    false-positive disposition; production IO code unchanged)."""
+    import os
+
+    plan = parse_key_batch_plan(_valid_plan_document())
+    real_open = os.open
+    real_fdopen = os.fdopen
+
+    def _track_open() -> list[int]:
+        fds: list[int] = []
+
+        def _tracking_open(*args: object, **kwargs: object) -> int:
+            fd = real_open(*args, **kwargs)  # type: ignore[arg-type]
+            fds.append(fd)
+            return fd
+
+        monkeypatch.setattr(os, "open", _tracking_open)
+        return fds
+
+    def _closed(fds: list[int]) -> None:
+        assert fds
+        for fd in fds:
+            with pytest.raises(OSError):
+                os.fstat(fd)
+
+    # Success: the exact write descriptor is closed.
+    fds = _track_open()
+    write_key_batch_plan_file(tmp_path / "fd-success.json", plan)
+    _closed(fds)
+    monkeypatch.setattr(os, "open", real_open)
+
+    # Injected os.fdopen failure: the exact descriptor is still closed.
+    fds = _track_open()
+
+    def _boom_fdopen(*args: object, **kwargs: object) -> object:
+        raise OSError("injected fdopen failure")
+
+    monkeypatch.setattr(os, "fdopen", _boom_fdopen)
+    with pytest.raises(KeyBatchError) as exc:
+        write_key_batch_plan_file(tmp_path / "fd-fdopen-fail.json", plan)
+    assert "could not be written" in str(exc.value)
+    _closed(fds)
+    monkeypatch.setattr(os, "fdopen", real_fdopen)
+
+    # Injected stream.write failure: the exact descriptor is still closed.
+    fds = _track_open()
+
+    def _failing_write_fdopen(fd: int, *args: object, **kwargs: object) -> object:
+        stream = real_fdopen(fd, *args, **kwargs)
+
+        def _broken_write(_data: object) -> int:
+            raise OSError("injected stream write failure")
+
+        stream.write = _broken_write
+        return stream
+
+    monkeypatch.setattr(os, "fdopen", _failing_write_fdopen)
+    with pytest.raises(KeyBatchError) as exc:
+        write_key_batch_plan_file(tmp_path / "fd-write-fail.json", plan)
+    assert "could not be written" in str(exc.value)
+    _closed(fds)
 # ---------------------------------------------------------------------------
 # service: plan (read-only preview)
 # ---------------------------------------------------------------------------

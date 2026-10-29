@@ -1349,8 +1349,9 @@ explicit confirmation.
 
 `keys batch plan` is a READ ONLY preview: it locks the exact selected key
 rows, renders the canonical before/after/diff through the existing shared
-policy law, and exits its caller transaction WITHOUT commit. It writes zero
-key/audit/material/usage state and generates no secrets.
+policy law, and exits its caller transaction normally (a no-write
+transaction may still COMMIT). It writes zero key/audit/material/usage
+state and generates no secrets.
 
 `keys batch apply` commits exactly ONE caller-owned transaction containing
 every per-key update through the EXISTING `update_key_configuration` law

@@ -31,8 +31,8 @@ ordinary image rebuild/recreate (migration head stays 0026/33 tables).
 - Preview law: locks the exact rows in sorted UUID order, re-derives the
   canonical before/after/diff and the deterministic source/post
   fingerprints through the EXISTING shared policy law, and exits the
-  caller transaction WITHOUT commit (zero writes, zero audits, zero
-  material/state change).
+  caller transaction normally (a no-write transaction may still COMMIT;
+  zero writes, zero audits, zero material/state change).
 - Apply law: re-locks the exact rows, re-resolves cohort membership
   AFTER the last potentially blocking selected-key lock, re-derives every
   target under the locks (saved display values never trusted), validates
@@ -188,13 +188,14 @@ other fixture data is direct SQL seed (labeled as such). The 13 cases:
   `tests/unit/test_documentation_contract_drift.py` (15),
   `tests/unit/test_documentation_asof.py` (13) — **44 PASS / 0 skip**;
   `python3 scripts/check_documentation.py` ->
-  `DOCUMENTATION_CHECK=OK files=129`.
+  `DOCUMENTATION_CHECK=OK files=130` (re-verified in 203-b; the earlier
+  129 figure in this record predates the final documentation set).
 
 ## Negative and boundary evidence
 
 - No partial batch state: every refusal (stale, overflow, duplicate,
-  missing, fenced, known-shape, reason) leaves zero key/audit/material
-  state (unit + owned-PG).
+  missing, fenced, known-shape, reason) causes zero CHANGES to existing
+  keys, audits, or material (unit + owned-PG).
 - No secret echo: canary values never appear in stdout/stderr in text or
   JSON mode (policy content, pathname, reason, retained config); the
   known-shape guard fires BEFORE route/model validation can reflect a

@@ -189,9 +189,13 @@ def _state_context(row: GatewayKey) -> dict[str, Any]:
 class KeyBatchService:
     """Reviewed key-configuration batch orchestration (flush-only).
 
-    Callers own the transaction boundary (the CLI opens one caller-owned
-    session transaction; plan exits it without commit, apply commits
-    only after the whole batch is validated and applied).
+    Callers own the transaction boundary (the CLI opens ONE caller-owned
+    session transaction for BOTH operations): a successful plan exits
+    that read-only transaction normally (a no-write transaction may
+    still COMMIT), releases its locks, and writes ZERO
+    key/config/audit/material state; apply commits only after the whole
+    batch is validated and applied, and a failed atomic apply
+    propagates and rolls back all changes.
     """
 
     def __init__(

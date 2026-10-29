@@ -7,6 +7,7 @@ tests/integration/test_cli_key_batch_postgres.py.
 from __future__ import annotations
 
 import json
+import re
 import dataclasses
 import uuid
 from contextlib import asynccontextmanager
@@ -39,6 +40,16 @@ KID = str(uuid.UUID("33333333-3333-4333-8333-333333333333"))
 OWNER = str(uuid.UUID("44444444-4444-4444-8444-444444444444"))
 
 _runner = CliRunner()
+
+# Renderer-stable terminal + ANSI/whitespace-independent assertions
+# (established project pattern: tests/unit/test_cli.py).
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+TERM_ENV = {"COLUMNS": "220", "NO_COLOR": "1"}
+
+
+def _plain(text: str) -> str:
+    """ANSI-free, whitespace-normalized output for style-independent checks."""
+    return " ".join(_ANSI_RE.sub("", text).split())
 
 
 def _plan() -> KeyBatchPlan:
@@ -316,7 +327,7 @@ def test_database_not_configured(
 
 
 def test_apply_fresh_fenced_confirmation_flag_passthrough(
-    tmp_path: Path, stub_runtime
+    tmp_path: Path, stub_runtime, monkeypatch
 ) -> None:
     plan_file = tmp_path / "plan.json"
     from slaif_gateway.schemas.key_batch import write_key_batch_plan_file
@@ -338,9 +349,21 @@ def test_apply_fresh_fenced_confirmation_flag_passthrough(
     )
     assert res.exit_code == 0, res.output
     assert stub_runtime.apply_calls[1]["confirm"] is True
-    help_res = _runner.invoke(cli_app, ["keys", "batch", "apply", "--help"])
+    # CI sets GITHUB_ACTIONS, so typer's rich console forces terminal
+    # styling and interleaves per-segment ANSI codes inside the option
+    # name (the literal flag is never contiguous in raw output). Force the
+    # same ANSI-rich rendering test-locally and assert on the ANSI/
+    # whitespace-independent form.
+    import typer.rich_utils as _rich_utils
+
+    monkeypatch.setattr(_rich_utils, "FORCE_TERMINAL", True)
+    help_res = _runner.invoke(
+        cli_app,
+        ["keys", "batch", "apply", "--help"],
+        env=TERM_ENV,
+    )
     assert help_res.exit_code == 0
-    assert "--confirm-external-tool-fenced" in help_res.output
+    assert "--confirm-external-tool-fenced" in _plain(help_res.output)
 
 
 def test_plan_path_credential_shape_refused_no_echo(

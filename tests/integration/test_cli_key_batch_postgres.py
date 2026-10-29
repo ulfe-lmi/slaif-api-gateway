@@ -1065,7 +1065,8 @@ def test_controlled_pg_lock_wait_cohort_join_refused(cli_env: str):
                         outcome.append(result.status)
                     except KeyBatchStaleError:
                         outcome.append("stale")
-            # ROLLBACK on exit (nothing was written, but the law is honored).
+            # Normal exit (nothing was written; a no-write transaction
+            # may still COMMIT).
 
         competitor_task = asyncio.create_task(_competitor())
 

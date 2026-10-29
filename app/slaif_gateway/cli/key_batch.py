@@ -66,9 +66,13 @@ app = typer.Typer(help="Review and apply key-configuration batches")
 async def _batch_runtime() -> AsyncIterator[tuple[KeyService, KeyBatchService]]:
     """Same caller-owned key runtime plus the shared batch service.
 
-    Plan exits the caller transaction WITHOUT commit (read-only preview
-    releases its locks); apply commits only after the whole batch is
-    validated and applied (a failure rolls back all keys and audits).
+    Both operations run inside the ONE caller transaction
+    (``session.begin()``): a successful plan exits that read-only
+    transaction normally (a no-write transaction may still COMMIT),
+    releases its locks, and writes ZERO key/config/audit/material
+    state; apply commits only after the whole batch is validated and
+    applied, and a failed atomic apply propagates and rolls back all
+    changes.
     """
     settings = get_settings()
     if not settings.DATABASE_URL:
