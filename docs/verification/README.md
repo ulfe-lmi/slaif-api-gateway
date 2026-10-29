@@ -20,9 +20,18 @@ on record. They are dated, commit-specific evidence, not certifications.
   `420fb8f` (shared no-echo conversion at 17 positions; 110 new + 136
   existing unit PASS, 0 skip), first six outcomes re-qualified 6/6 PASS on
   the fresh wheel `042eb23a` in a fresh owned venv (root-verified 432-file
-  identity + 17-position installed canary); outcomes 5, 7-11, config-show,
-  the persisted operator transcript, and the final fresh all-eleven run
-  remain mandatory in later same-PR suffixes.
+  identity + 17-position installed canary). Same-PR 205-c continuation
+  (recorded in the same file, product still frozen at `420fb8f`): outcome
+  5 (real filtered `GET /v1/models` through the installed owned gateway
+  with provider/allow-list/disable controls), outcome 7 (two configured
+  completion services + routes prepared disabled, inspected, separately
+  activated), and outcome 8 (stable-ID context/media route updates via
+  reviewed plans, stale-plan refusal, multi-route) executed and green in
+  the final combined run (3/3 PASS, 0 skip), plus the safe persisted
+  0600/0700 operator transcript/identity export (66 labeled records,
+  canary-clean); outcomes 9-11, config-show, the complete all-eleven
+  transcript, and the final fresh all-eleven run remain mandatory in
+  later same-PR suffixes.
 
 - [`2026-10-29 Objective 204 CLI record edits and process configuration inspection verification`](2026-10-29-cli-record-edits-and-config.md)
   (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +

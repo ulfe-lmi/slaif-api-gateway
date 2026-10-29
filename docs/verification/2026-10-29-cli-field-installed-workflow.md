@@ -1,15 +1,17 @@
 # 205-a verification record — installed CLI field administration workflows
 
-**Status: PARTIAL (205-a scope-boundary handoff; 205-b continuation recorded
-below).** This record documents what was actually executed through the
-installed `slaif-gateway` console for work order
+**Status: PARTIAL (205-a scope-boundary handoff; 205-b and 205-c
+continuations recorded below).** This record documents what was actually
+executed through the installed `slaif-gateway` console for work order
 `oap/orders/205-a-cli-field-workflow-qualification.md` (unique PR for
-objective 205; same-PR 205-b continuation reserved by root). Outcomes 5,
-7, 8, 9, 10, 11 and the runtime-configuration evidence are NOT yet executed
-and remain mandatory for the final 205 PR. Nothing below claims them. The
-same-PR 205-b continuation (bounded no-echo numeric repair + re-qualified
-first slices) is recorded in the final section of this file; objective 205
-as a whole remains PARTIAL.
+objective 205; same-PR 205-b and 205-c continuations on the same PR).
+Outcomes 5, 7, 8 are now EXECUTED by the 205-c continuation (final section);
+outcomes 9, 10, 11 and the runtime-configuration evidence are NOT yet
+executed and remain mandatory for the final 205 PR. The safe persisted
+operator transcript/identity export is implemented by 205-c for the NEW C
+cases (the complete all-eleven export is deferred to the final fresh run).
+Nothing above claims any unexecuted outcome. Objective 205 as a whole
+remains PARTIAL.
 
 ## Installation and identity (executed)
 
@@ -28,8 +30,9 @@ as a whole remains PARTIAL.
   payload. Root independently verified the installed package bytes against
   the accepted source (root evidence, not an agent run).
 - Migrations: run from the pristine pinned source (the wheel does not ship
-  migrations) to the `0026` head; the fixture asserts 33 public tables and
-  the presence of `request_diagnostics` before seeding.
+  migrations) to the `0026` head; the fixture asserts 34 public tables
+  (= 33 product tables, including `request_diagnostics`, plus
+  `alembic_version`) before seeding.
 - Every operator action under test is a subprocess of the venv console from an
   owned operator directory OUTSIDE the checkout, with `PYTHONPATH` unset and
   inherited credentials scrubbed. DoD0 asserts the installed identity facts
@@ -326,3 +329,255 @@ than in local artifacts. No reconstruction or repeat was performed.
 | `config show` evidence (valid snapshot + invalid-Settings no-echo) | UNPROVEN — not executed |
 | Persisted safe requirement-indexed operator transcript (argv/output/exit/identity export) | NOT IMPLEMENTED — in-memory projections only for assertions; next qualifier persists, final fresh all-eleven exports |
 | Final fresh-installation all-eleven module run | NOT EXECUTED — mandatory for objective completion |
+
+## 205-c continuation (outcomes 5, 7, 8 + persisted operator transcript)
+
+**Status: bounded round complete for outcomes 5, 7, 8 and the safe
+persisted transcript/identity export; full 205 remains PARTIAL**
+(outcomes 9, 10, 11, config-show, and the final fresh all-eleven run are
+carried forward to later same-PR suffixes). No product byte changed in
+205-c: source stayed frozen at `420fb8f` (466 product paths byte-identical
+per root baseline `205-c-product-baseline.json`); only the allowed test and
+documentation paths changed.
+
+### Installation identity for the 205-c runs (executed)
+
+- Source: `420fb8f6d9377f569d126d08f4c9e4146fc7250b` (the 205-b
+  implementation commit; B-later commits are product-equivalent), pinned
+  shallow-safely in the owned pristine archive.
+- Final combined run (`205c-final-1`): FRESH wheel
+  `slaif_api_gateway-0.1.0-py3-none-any.whl`, actual selected SHA256
+  `cf7e114f1ebdcb8d8f22cccd4f106c08bcb061268fac14dac67eebf97c0db9c1`,
+  built from that exact pinned source; the fixture records the ACTUAL
+  selected wheel SHA (not a manual ZIP hash) and re-verifies the payload
+  (432 wheel payload files) for both reuse and fresh builds. FRESH owned
+  venv under the pytest temp tree, outside the checkout, `PYTHONPATH`
+  absent, Python 3.12.15, installed console
+  `.../pytest-1575/slaif205-field0/venv/bin/slaif-gateway`; installed
+  payload verified 432 files. Each slice run recorded its own selected
+  wheel SHA the same way.
+- Owned PostgreSQL 16 container, unique per run: run-token name/labels,
+  loopback-only published port, 512 MiB tmpfs data dir, ownership/labels
+  inspected BEFORE migrations, exact-ID/label cleanup after. Final run
+  container `b6259642ed72af21eec139bd7d941e3265b702a9ae29c41a0c5dabcea93c6c13`
+  (port 55845) removed in teardown. Verified after the final run: no
+  `slaif205*` container remains.
+- The installed gateway (outcome 5) is the ACTUAL installed
+  `slaif_gateway.main:app` on an owned loopback port against the owned PG,
+  scrubbed explicit fictional settings, capture explicitly OFF. Synthetic
+  HTTP stimulus only: no provider inference, no real client, no real
+  credentials, no Redis, no real mail.
+
+### Outcome 5 — actual filtered model discovery (EXECUTED PASSED)
+
+`test_dod5_filtered_model_discovery` (14 labeled transcript records):
+installed console issues a dedicated synthetic standard key with ONE
+explicit secure output channel (`keys create --secret-output-file`; the
+generated value is registered before retention); actual `GET /v1/models`
+is denied OpenAI-shaped before the grant; a canary-bearing `keys show`
+lookup is refused with the fixed no-echo message; installed
+`keys policy update` adds `/v1/models` while explicitly retaining the
+inference endpoint (endpoint arrays REPLACE); the filtered `GET /v1/models`
+then succeeds with exactly the enabled permitted model and meaningful
+controls: model-allowlist exclusion, `--allowed-provider openai` /
+`--provider-none` / `--provider-all`, and `providers disable/enable` plus
+`routes disable/enable` each flipping the returned list. Preservation is
+asserted on the effective policy sections, the canonical export (differs
+ONLY in `allowed_endpoints` in the final state), the key metadata column,
+and key material/expiry (boolean compares). Read-only discovery is not
+provider inference or cost qualification.
+
+### Outcome 7 — two configured completion services (EXECUTED PASSED)
+
+`test_dod7_two_configured_completion_services` (26 labeled records):
+TWO fictional module providers (`svc-a`/`svc-b`) prepared via installed
+`providers add` DISABLED (distinct origins/env-reference NAMES only,
+custom timeouts 30/180, zero retries; bundled profiles `zap-it-v1` /
+`facial-scoring-v1` with their exact public/upstream/profile mappings,
+module kind, non-streaming, zero-retry contracts) and TWO capabilities-file
+routes prepared disabled (`--no-streaming`); both pairs inspected via
+`providers show/list`, `routes show/list`, `pricing list` (exact
+`Decimal == Decimal` money semantics at the `Numeric(18,9)` scale); three
+fixed-message refusals exercised (streaming on a non-streaming profile,
+kind mismatch, retry provider `max_retries 1` → must-not-retry); then
+SEPARATE explicit `providers enable` + `routes enable` for BOTH pairs; a
+partial `providers update svc-a --timeout-seconds 45` preserves omitted
+siblings, explicit zero, and the unrelated `openai` provider
+byte-identical. No provider HTTP, no real credentials, no generalized
+compatibility claim.
+
+### Outcome 8 — stable route context/media updates (EXECUTED PASSED)
+
+`test_dod8_stable_route_context_media_updates` (26 labeled records):
+two dedicated exact-match routes (`slaif205a-model-e`/`fixture-e` and
+`slaif205a-model-f`/`fixture-f`) prepared disabled with coherent LOW
+codex/media capability data. A clearly separated fictional historical
+linkage (pre-existing key + usage-ledger row + replay reference bound to
+the first route) is planted by `_plant_dod8_history`: a FIXTURE SETUP
+helper running the product-equivalent ORM (same committed `420fb8f`
+source bytes) inside the pytest process — NOT an installed operator CLI
+action — with constant synthetic digests only; the planted ledger row is
+`pending`, NOT a successful-finalized replay-eligibility record.
+Snapshots before mutation: the meaningful existing key's canonical policy
+export + full row + material/expiry, the installed COMPLETION-SERVICE
+SERVER profile data fingerprint
+(`modules/servers/completion_service/profiles/*.json` — server data, not
+an external Codex client catalog; the client-module pin is a separate
+matter not covered by the canonical key export), every unrelated
+route/provider, and the audit count. Then:
+`routes update <uuid> --dry-run PLAN` (read-only, private 0600 plan) then
+`--execute PLAN --reason` moving the selected context genuinely
+105000 → 400000 (+1 audit, sibling route untouched); a second plan moving
+media image/video token and frame leaves (codex preserved, +1 audit); a
+SEPARATE plan for the second route (context 420000 + media image 1200,
++1 audit, first route untouched). Re-applying the stale first plan is
+refused with JSON `invalid_value` ("no longer matches") and zero
+additional mutation/audit; mixed edit-flag + plan mode is a native Typer
+usage refusal (exit 2, fixed renderer-normalized stderr, no JSON). Stable
+route UUID/`created_at`, pre-existing ledger/replay ROUTE-link rows,
+key policy export + material, profile-data fingerprint, and all unrelated
+routes/providers are asserted unchanged. No delete/recreate, no raw-SQL
+mutation, no shared-service bypass.
+
+### Persisted operator transcript and identity (order §7, executed)
+
+`FieldEnvironment.persist_transcript` writes per-run, outside the
+checkout, into a 0700 directory:
+`/tmp/slaif205/transcripts/<RUN_TOKEN>/transcript.json` and
+`identity.json`, both 0600, never overwriting another run; the paths,
+SHA256, and record/label counts are asserted by the test. Final combined
+run `29b67e22ffd54baf`: 66 records (14 + 26 + 26), 0 unlabeled,
+transcript SHA256
+`549a089680d10ddbae597ca1c93639057c99cd8abcfa31c714c843bb45d67fde`,
+identity SHA256
+`94a2aa1411298b780b387e0a6a4063dbbc7660f293e1dc12dae72b6c35c09021`.
+Records carry actual requirement-indexed argv boundaries/output
+projections/exit codes plus safe run/installation identity; the
+refused-bearer record shows argv masking (`<REFUSED-BEARER-SHAPE>`), and
+canary checks prove every generated secret absent from the persisted
+files. Source/tests/fixture-setup SQL and ORM plants are separately
+explained in this record and never presented as operator CLI actions.
+This is a PARTIAL transcript: only the NEW C cases are recorded. The
+previously executed six outcomes are not retroactively re-transcribed,
+and NO all-eleven transcript exists yet; the final fresh all-eleven run
+must export every outcome.
+
+### JUnit chronology (205-c slice runs; overlapping, never summed)
+
+All runs: `tests/integration/test_cli_field_installed_workflow.py`,
+JUnit XML authoritative (repository addopts suppress the console
+summary), zero skips in every run, UTC 2026-10-29:
+
+| Artifact (time) | tests | failures | note (sha256 prefix) |
+|---|---|---|---|
+| `205c-dod5-1` 15:41 | 1 | 1 | draft `GatewayServer` not yet wired (`start_gateway` AttributeError) — fixture wiring gap (7b7e9018) |
+| `205c-dod5-2` 15:47 | 1 | 0 | green before the provider allow-list/disable controls were added (01b85d54) |
+| `205c-dod5-3` 15:55 | 1 | 0 | final DoD5 with meaningful provider/allow-list controls, 14 labels; root independently verified (e277aa3c) |
+| `205c-dod7-1` 15:57 | 1 | 1 | money oracle: `Numeric(18,9)` renders `0.010000000`; corrected to `Decimal == Decimal` (no float/tolerance) (3b36a7d0) |
+| `205c-dod7-2` 15:59 | 1 | 0 | final DoD7, 26 labels (12df8ebc) |
+| `205c-dod8-1` 16:00 | 1 | 1 | mixed-mode oracle: a `typer.BadParameter` raised in the command body is a NATIVE Typer usage error (exit 2, fixed stderr, no JSON); oracle corrected to the installed behavior (7bd52dd0) |
+| `205c-dod8-2` 16:02 | 1 | 0 | DoD8 v1 (pre multi-route/key-policy extension) (93095a4d) |
+| `205c-dod8-3` 16:10 | 1 | 1 | extended DoD8: raw string-bound asyncpg SQL fixture defect in the history planting (fixture defect, not product) (ea9e11ef) |
+| `205c-dod8-4` 16:12 | 1 | 1 | same fixture defect, variant SQL (44ade823) |
+| `205c-dod8-5` 16:13 | 1 | 1 | same fixture defect, `make_interval` variant (65e49cf2) |
+| `205c-dod8-6` 16:25 | 1 | 0 | extended DoD8 with ORM planting (`_plant_dod8_history`, 199 reference pattern); root-verified expanded case: 26 records, 0 blank labels, two UUIDs at 400000/420000, stale + mixed refusals, proper PG cleanup (7e1b97bc) |
+| `205c-combined-1` 16:05 | 3 | 0 | first combined run on the PRE-EXTENSION test bytes (weaker outcome 8); superseded by the final run, NOT evidence for the final DoD8 (cae0c207) |
+| `205c-final-1` 16:29 | 3 | 0 | FINAL combined run of the final test bytes + persisted transcript: `test_dod5_filtered_model_discovery`, `test_dod7_two_configured_completion_services`, `test_dod8_stable_route_context_media_updates` (fd8f167e) |
+
+The intermediate failures are NEW-test-file fixture/oracle corrections
+(gateway wiring, Decimal-scale money oracle, native-usage-error oracle,
+raw-SQL fixture binding); each was corrected in the allowed test file and
+re-run. They are not product failures and are not summed as unique cases.
+
+### ROOT independent evidence for 205-c (root runs, not agent runs)
+
+- `205-c-product-baseline.json` — product/preserved-path baseline (466
+  product paths, 1732 non-allowed existing paths, protected untracked
+  hashes) binding the frozen `420fb8f` tree for the round.
+- `205-c-final-combined-root-review.json` — root re-verified the final
+  combined JUnit (3 PASS, 0 skip, 184.77 s, SHA256
+  `fd8f167eb7ccb856b204bcb5cf3f135e3f4584b12c4cad38b682cbb94a27f9cb`)
+  with the actual cumulative 66-record transcript (14 + 26 + 26, all
+  indexed, 0700/0600 private), and independently byte-verified ALL 432
+  source/wheel/installed application files at `420fb8f` after the run —
+  INCLUDING the installed client-compatibility JSON (the client-data
+  boundary) — against actual wheel SHA256
+  `cf7e114f1ebdcb8d8f22cccd4f106c08bcb061268fac14dac67eebf97c0db9c1`;
+  exact owned PG container absent after teardown.
+
+### Scratch-container deviation (corrected, disclosed)
+
+While investigating the `205c-dod8-3/4/5` fixture SQL defect, a throwaway
+PostgreSQL 16 container `slaif205-scratch` (exact ID
+`f4e53597cc085cedeb9e163dcb2e6666314d73513434d6d74c4292da251bc8f5`) was
+temporarily created on a fixed loopback port WITHOUT the required
+run/owner labels and tmpfs data dir — a deviation from the owned
+unique-run/labeled/tmpfs setup contract. Root detected it by
+metadata-only inspection.
+
+Container cleanup: the exact container was stopped and removed (ONLY that
+container; unrelated containers untouched), and no Config.Env/password
+content was retained in any artifact. Because it was removed with
+`docker rm` (no `-v`) while the `postgres:16` image declares a data
+VOLUME, the attached anonymous volume survived container removal.
+
+Volume ownership is an INFERENCE, not an independently verified
+mount/event mapping (no docker event record or prior-mount record for the
+volume exists; the root bounded volume-event query returned no matching
+records). The inference basis: (a) the logged creation command (agent
+session record, 2026-10-29T16:14:34.804Z: `docker run -d --name
+slaif205-scratch -e POSTGRES_USER=u -e POSTGRES_PASSWORD=<REDACTED> -e
+POSTGRES_DB=d -p 127.0.0.1:55432:5432 postgres:16` — no tmpfs, no named
+volume, no `--rm`) combined with the data VOLUME declared by the
+`postgres:16` image, under which the Docker engine necessarily created
+exactly one anonymous volume at container creation (2026-10-29T16:14:34Z);
+(b) of all 120 host volumes, exactly ONE volume
+(`f95b26cf1c21e0b7b38fb6b72fcf17ea35e243d8c1c47bb6177f77f283497080`) was
+created at that exact second — the newest volume on the host, with no
+other volume created in the 16:00–17:00 window; (c) it carries the
+`com.docker.volume.anonymous` label and had no mount points after the
+container removal, so no other candidate exists.
+
+Volume cleanup: given (a)–(c) with a unique candidate, that exact volume
+was removed (no `volume prune`, no timestamp-only guesses, no unrelated
+deletion); the host volume count returned from 120 to 119 and the
+remaining volumes are untouched. Limit: without an independent
+mount/event record, the ownership determination rests on the creation
+command + declared image VOLUME + unique anonymous CreatedAt — an
+inference with a single candidate, not a direct provenance record.
+
+After both cleanups, no `slaif205*` container and no attributable scratch
+storage remain. The fixture SQL was NOT "fixed" by changing
+product/schema: the final DoD8 history planting uses the existing 199 ORM
+reference pattern inside the owned fixture, and no scratch container or
+volume is used by the final test bytes.
+
+### Carry-forward to later SAME-205-PR suffixes
+
+| Item | State after 205-c |
+|---|---|
+| Outcome 5 (discovery grant + real filtered `GET /v1/models`) | EXECUTED PASSED (this section) |
+| Outcome 7 (two configured completion services) | EXECUTED PASSED (this section) |
+| Outcome 8 (explicit activation + stable route edit) | EXECUTED PASSED (this section) |
+| Outcome 9 (one-time delivery lifecycle, loopback SMTP) | UNPROVEN — not executed |
+| Outcome 10 (gateway-recorded failure investigations) | UNPROVEN — not executed |
+| Outcome 11 (reviewed replay maintenance) | UNPROVEN — not executed |
+| `config show` evidence (valid snapshot + invalid-Settings no-echo) | UNPROVEN — not executed |
+| Portable environment / Compose-recreate / proxy guidance + P0/P1 audit + stale 202-204 doc corrections | NOT DONE — order §9 remainder |
+| Persisted all-eleven transcript (every outcome + identity) | PARTIAL — new C cases only (66 records); final fresh run must export all |
+| Final fresh-installation all-eleven module run | NOT EXECUTED — mandatory for objective completion |
+
+### Limitations (205-c)
+
+- The C evidence is installed-CLI + owned-gateway + owned-PG proof with
+  synthetic HTTP/provider/SMTP IO and fictional historical setup; it is
+  not real-provider/client/backend qualification, not measured
+  performance, and not evidence for the unexecuted outcomes.
+- `_profile_data_fingerprint` covers installed completion-service server
+  data only; the installed client data is covered separately by the root
+  post-run 432 payload comparison (ROOT independent evidence above).
+- The outcome-8 planted history is fixture setup via product-equivalent
+  ORM (pending ledger), never an operator action or replay-eligibility
+  proof.
+- No schema, key-policy, or migration of any kind in 205; no merge, no
+  tag/release, no real provider/client/mail, no Redis.

@@ -3,7 +3,7 @@
 Fictional, owned, disposable fixture for the objective-205 installed CLI
 field-administration workflow qualification
 (`tests/integration/test_cli_field_installed_workflow.py`), currently
-executed under work orders 205-a and 205-b (same PR). It exists only to
+executed under work orders 205-a, 205-b, and 205-c (same PR). It exists only to
 run operator business actions through the ACTUAL installed `slaif-gateway`
 console and to assert durable PostgreSQL state. It is not a shared test
 framework and creates no general catalog/fixture machinery.
@@ -68,26 +68,49 @@ framework and creates no general catalog/fixture machinery.
 
 ## IO substitutions
 
-- SMTP: loopback sink (active in the fixture).
-- Provider upstream: the test module contains DRAFT, NOT YET WIRED
-  `ProviderMock` (loopback stdlib HTTP upstream) and `GatewayServer`
-  (uvicorn of the installed `slaif_gateway.main:app`) classes for the later
-  outcomes (DoD5-11); the current seed still uses a fictional provider
-  `base_url` (`https://openai-fixture.example.invalid/v1`) and no gateway
-  process is started. No real OpenAI/OpenRouter backend, no real client, no
-  Redis, no real mail anywhere in this fixture.
+- SMTP: loopback sink (active in the fixture; unused for delivery in the
+  current slice).
+- Provider upstream: the seed still uses a fictional provider `base_url`
+  (`https://openai-fixture.example.invalid/v1`), never contacted. Since
+  205-c the existing `GatewayServer` helper is WIRED: DoD5 starts the ACTUAL
+  installed `slaif_gateway.main:app` on an owned loopback port against the
+  owned PG (scrubbed explicit fictional settings, capture OFF, transient log
+  drain, fixed safe readiness, bounded stop, no raw subprocess output in
+  assertions). No real OpenAI/OpenRouter backend, no real client, no Redis,
+  no real mail anywhere in this fixture.
 
-## Current state (205-b handoff)
+## Fixture setup that is NOT operator action
+
+- `SEED_SCRIPT` (above) and the 205-c helper `_plant_dod8_history` insert
+  pre-existing rows through the pytest process using the product-equivalent
+  ORM (same committed `420fb8f` source bytes as the installed payload),
+  following the native 199 reference pattern. They create fictional
+  historical linkage (e.g. a pre-existing key + a `pending` usage-ledger row
+  + a replay reference bound to a route) with constant synthetic digests
+  only. The DoD8 ledger is `pending`, NOT a successful-finalized
+  replay-eligibility record. These rows are never presented as operator CLI
+  actions.
+- `_profile_data_fingerprint` hashes the installed COMPLETION-SERVICE SERVER
+  profile data (`modules/servers/completion_service/profiles/*.json`), not an
+  external Codex client catalog; the client-module pin is a separate matter
+  not covered by the canonical key export.
+
+## Current state (205-c handoff)
 
 Implemented and executed through the installed console: DoD0 (installed
 identity), DoD1 (lookup/bounded paging, full-bearer refusal), DoD2 (effective
 policy + route explanation), DoD3 (institution/owner/cohort record
 operations), DoD4 (exact student/beta + two chat clones), DoD6 (rates, bounded
-lazy configuration, exact-37 cohort batch). DoD5 (discovery grant through the
-live gateway), DoD7-8 (provider/route completion configurations and route
-edit), DoD9 (one-time delivery lifecycle), DoD10 (gateway-recorded failure
-diagnostics), and DoD11 (replay maintenance) are NOT yet implemented here and
-remain mandatory for the final 205 PR.
+lazy configuration, exact-37 cohort batch), and — new in 205-c — DoD5
+(discovery grant: real filtered `GET /v1/models` through the installed owned
+gateway with provider/allow-list/disable controls), DoD7 (two configured
+completion services + capabilities routes prepared disabled, inspected,
+separately activated), and DoD8 (stable-ID context/media route updates via
+reviewed plans, stale-plan and mixed-mode refusals, multi-route, preserved
+key policy/material, route-linked history). DoD9 (one-time delivery
+lifecycle), DoD10 (gateway-recorded failure diagnostics), and DoD11 (replay
+maintenance) are NOT yet implemented here and remain mandatory for the final
+205 PR.
 
 The NEW CLI privacy defect confirmed under 205-a (credential-shaped numeric
 input echoed completely in native usage errors, exit 2; root receipts
@@ -99,11 +122,24 @@ positions (root recheck `205-b-root-fixed-installed-numeric-probe.json`: all
 refusal, exit 2, stderr, no JSON, even with `--json`) remains documented 197
 behavior and is asserted, not treated as a defect.
 
-Transcript persistence: the safe requirement-indexed argv/output/exit
-projections and the run identity are kept IN MEMORY for assertions only; this
-fixture does not yet write or export a persisted operator transcript file.
-That persistence is carried forward to the next same-PR qualifier, and the
-final fresh-installation all-eleven run must export it.
+Transcript persistence (implemented in 205-c):
+`FieldEnvironment.persist_transcript(outcome)` writes per run, outside the
+checkout, into a 0700 per-run directory
+`<ARTIFACT_DIR>/transcripts/<RUN_TOKEN>/` (default `/tmp/slaif205`, override
+`SLAIF205_ARTIFACTS`): `transcript.json` and `identity.json`, both 0600,
+never overwriting another run. Records carry the actual requirement-indexed
+`run_cli` argv boundaries/output projections/exit codes (each real record
+has a meaningful outcome `label`) plus safe run/installation identity. No
+raw bearer/provider values, passwords, encryption keys, request/response
+bodies, or raw subprocess/SQL exception dumps are persisted; generated
+credentials are registered before retention and asserted absent by canary
+checks; the directory survives PG/process teardown and pytest temp cleanup
+by construction. A persistence failure surfaces as an evidence failure while
+teardown always completes. Retention is operator-controlled (remove the run
+directory after review). This is a PARTIAL transcript: it covers the NEW
+C cases only; the previously executed six outcomes are not retroactively
+re-transcribed, and the final fresh all-eleven run must export every
+outcome.
 
 ## Reproducible invocation
 

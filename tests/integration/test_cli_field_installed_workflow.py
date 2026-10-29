@@ -34,6 +34,7 @@ synthetics. This module is qualification evidence, not production exercise.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import http.server
@@ -50,11 +51,16 @@ import time
 import uuid
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from slaif_gateway.db.models import CodexReplayReference, UsageLedger
+from slaif_gateway.db.repositories.keys import GatewayKeysRepository
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # --- Accepted source / wheel / installation identity -----------------------
 SOURCE_SHA = "420fb8f6d9377f569d126d08f4c9e4146fc7250b"
@@ -707,27 +713,41 @@ class GatewayServer:
             stderr=subprocess.STDOUT,
         )
         self.url = f"http://127.0.0.1:{self.port}"
-        deadline = time.monotonic() + 60
-        ready = False
+        # An unread stdout PIPE would fill and HANG the gateway; a daemon
+        # drainer discards it so startup/teardown never block on output.
+        # No gateway output is retained, asserted, or reported.
+        self._drainer = threading.Thread(target=self._drain, daemon=True)
+        self._drainer.start()
+        try:
+            self._wait_ready()
+        except BaseException:
+            self.stop()
+            raise
+
+    def _drain(self) -> None:
+        assert self.proc.stdout is not None
+        while True:
+            chunk = self.proc.stdout.read(65536)
+            if not chunk:
+                return
+
+    def _wait_ready(self, timeout: float = 60.0) -> None:
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.proc.poll() is not None:
-                out = (self.proc.stdout.read() or b"")[:1000] if self.proc.stdout else b""
                 raise AssertionError(
-                    f"gateway exited during startup (exit {self.proc.returncode}): "
-                    f"{out.decode('utf-8', 'replace')}"
+                    "gateway exited during startup "
+                    f"(exit {self.proc.returncode})"
                 )
             try:
                 with urllib.request.urlopen(
                     f"{self.url}/healthz", timeout=5
                 ) as resp:
                     if resp.status == 200:
-                        ready = True
-                        break
+                        return
             except (urllib.error.URLError, OSError):
                 time.sleep(0.5)
-        if not ready:
-            self.stop()
-            raise AssertionError("gateway did not become ready in time")
+        raise AssertionError("gateway did not become ready in time")
 
     def stop(self) -> None:
         if self.proc.poll() is None:
@@ -737,6 +757,14 @@ class GatewayServer:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
                 self.proc.wait(timeout=30)
+        # EOF reaches the drainer once the process has exited; settle the
+        # pipe before closing it (bounded, never blocks teardown).
+        self._drainer.join(timeout=10)
+        if self.proc.stdout is not None:
+            try:
+                self.proc.stdout.close()
+            except (OSError, ValueError):
+                pass
 # --------------------------------------------------------------------------
 # CLI result (raw output is TRANSIENT; retained fields are safe projections)
 # --------------------------------------------------------------------------
@@ -793,10 +821,21 @@ class FieldEnvironment:
     container_id: str = ""
     pg_port: int = 0
     _secrets: dict[str, str] = field(default_factory=dict, repr=False, compare=False)
+    _gateway_launcher: Callable[[], GatewayServer] | None = field(
+        default=None, repr=False, compare=False
+    )
 
     def register_secret(self, value: str, label: str) -> None:
         if value:
             self._secrets[value] = f"<REDACTED:{label}>"
+
+    def start_gateway(self) -> GatewayServer:
+        """Start the ACTUAL installed gateway on owned loopback.
+
+        Delegates to the owning fixture, which constructs the process and
+        registers it for exact teardown before readiness completes."""
+        assert self._gateway_launcher is not None, "gateway launcher not attached"
+        return self._gateway_launcher()
 
     def safe(self, text: str) -> str:
         """Safe projection: replace every known generated secret value."""
@@ -823,6 +862,7 @@ class FieldEnvironment:
         expect: int = 0,
         any_failure: bool = False,
         timeout: int = 120,
+        label: str = "",
     ) -> CliResult:
         argv = [str(self.artifacts.console), *args]
         if json_output:
@@ -852,6 +892,7 @@ class FieldEnvironment:
         )
         self.transcript.append(
             {
+                "label": label,
                 "argv": list(safe_argv),
                 "exit_code": proc.returncode,
                 "stdout": self.safe(_strip_ansi(proc.stdout)),
@@ -943,6 +984,55 @@ class FieldEnvironment:
         except json.JSONDecodeError:
             parsed = raw.decode("utf-8", "replace")
         return status, parsed
+
+    def persist_transcript(self, outcome: str) -> dict[str, object]:
+        """Persist the labeled in-memory transcript and the safe installation
+        identity as 0600 files under an owned 0700 per-run directory OUTSIDE
+        the checkout (order 205-c section 7). The run token makes the
+        directory unique per process run, so another run is never
+        overwritten. A write failure is an EVIDENCE failure (it raises); the
+        fixture teardown always completes regardless."""
+        run_dir = ARTIFACT_DIR / "transcripts" / RUN_TOKEN
+        run_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(run_dir, 0o700)
+        payload = {
+            "run_token": RUN_TOKEN,
+            "outcome": outcome,
+            "record_count": len(self.transcript),
+            "records": list(self.transcript),
+        }
+        identity = dict(self.identity)
+        identity.update(
+            {
+                "run_token": RUN_TOKEN,
+                "container_id": self.container_id,
+                "pg_port": self.pg_port,
+            }
+        )
+        paths = {
+            "transcript": run_dir / "transcript.json",
+            "identity": run_dir / "identity.json",
+        }
+        digests: dict[str, str] = {}
+        for name, document in (("transcript", payload), ("identity", identity)):
+            path = paths[name]
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(document, handle, indent=2)
+                handle.write("\n")
+            os.chmod(path, 0o600)
+            digests[name] = _sha256_file(path)
+        return {
+            "directory": str(run_dir),
+            "paths": {name: str(path) for name, path in paths.items()},
+            "sha256": digests,
+            "record_count": len(self.transcript),
+            "labeled": [
+                str(record["label"])
+                for record in self.transcript
+                if str(record.get("label", "")).startswith(outcome)
+            ],
+        }
 SEED_SCRIPT = r"""
 import asyncio
 import json
@@ -1322,6 +1412,24 @@ class _OwnedFieldEnvironment:
         self._artifacts: Artifacts | None = None
         self._operator_dir = tmp_base / "operator"
 
+    # -- installed gateway (order 205-c section 4) --------------------------
+    def start_gateway(self) -> GatewayServer:
+        """Start the ACTUAL installed ``slaif_gateway.main:app`` on owned
+        loopback against the owned PG. The process is registered for exact
+        teardown before readiness completes, so a startup failure still
+        cleans up (GatewayServer stops its own process on every failure
+        path)."""
+        assert self._env is not None, "start_gateway before environment setup"
+        env = self._env
+        gateway = GatewayServer(
+            venv_py=env.artifacts.venv_py,
+            env=dict(env.cli_env),
+            cwd=env.operator_dir,
+        )
+        self._gateway = gateway  # registered; _teardown stops it
+        env.gateway_url = gateway.url
+        return gateway
+
     # -- exact-resource teardown (re-checks the per-run token) ---------------
     def _remove_container(self) -> None:
         if not self._container_id:
@@ -1584,6 +1692,7 @@ class _OwnedFieldEnvironment:
         env.register_secret(hmac_secret, "hmac-secret")
         env.register_secret(enc_key, "encryption-key")
         self._env = env
+        env._gateway_launcher = self.start_gateway
         return env
 
     def __exit__(self, *exc: object) -> None:
@@ -1899,10 +2008,14 @@ def _full_key_row(env: FieldEnvironment, key_id: str) -> dict[str, object]:
     return env.sql("SELECT * FROM gateway_keys WHERE id = $1", key_id)[0]
 
 
-def _export_policy(env: FieldEnvironment, key_id: str) -> dict[str, object]:
+def _export_policy(
+    env: FieldEnvironment, key_id: str, label: str = ""
+) -> dict[str, object]:
     """Installed FULL canonical policy export (always JSON on stdout; the
     command has no --json flag)."""
-    result = env.run_cli("keys", "policy", "export", key_id, json_output=False)
+    result = env.run_cli(
+        "keys", "policy", "export", key_id, json_output=False, label=label
+    )
     document = json.loads(result.stdout)
     assert document.get("schema_version") == 1
     return document
@@ -2656,3 +2769,1106 @@ def test_dod6_rates_lazy_and_exact37_batch(field_workflow: FieldEnvironment) -> 
     assert float(sample_row["cost_used_eur"]) == 0.0
     assert int(sample_row["tokens_used_total"]) == 0
     assert sample_row["valid_from"] and sample_row["valid_until"]
+
+
+# --------------------------------------------------------------------------
+# DoD 5: actual filtered model discovery through the installed gateway
+# (order 205-c section 4). The gateway is the ACTUAL installed
+# ``slaif_gateway.main:app`` (real middleware/auth/policy/catalog); the HTTP
+# stimulus is synthetic. Administrative mutations are installed CLI calls.
+# --------------------------------------------------------------------------
+
+
+def test_dod5_filtered_model_discovery(field_workflow: FieldEnvironment) -> None:
+    env = field_workflow
+    m = env.manifest
+    m1 = str(m["models"]["m1"])
+    m2 = str(m["models"]["m2"])
+    m3 = str(m["models"]["m3"])
+    m4 = str(m["models"]["m4"])
+
+    # (a) Dedicated synthetic key issued through the INSTALLED CLI with ONE
+    # explicit secure output channel. The generated value is registered
+    # BEFORE the private file is removed. (Seed keys are pre-existing
+    # fixture setup; this is the operator-issued key under demonstration.)
+    bearer_file = env.operator_dir / "discovery-bearer.txt"
+    created = env.run_cli(
+        "keys", "create",
+        "--owner-id", str(m["owner_seed"]),
+        "--cohort-id", str(m["cohort_seed"]),
+        "--valid-days", "30",
+        "--allowed-model", m1,
+        "--allowed-endpoint", "/v1/chat/completions",
+        "--reason", "discovery qualification key",
+        "--secret-output-file", str(bearer_file),
+        label="dod5-discovery-keys-create",
+    ).json
+    bearer = bearer_file.read_text().strip()
+    key_prefix = env.cli_env["GATEWAY_KEY_PREFIX"]
+    bearer_has_prefix = bearer.startswith(key_prefix) and len(bearer) > len(key_prefix)
+    assert bearer_has_prefix, "issued key does not carry the configured prefix"
+    env.register_secret(bearer, "discovery-bearer")
+    bearer_file.unlink()
+    key_id = str(created["gateway_key_id"])
+    assert key_id
+
+    # (b) Baseline: effective policy and key material/expiry BEFORE the grant.
+    effective_before = env.run_cli(
+        "keys", "policy", "effective", key_id,
+        label="dod5-discovery-policy-before",
+    ).json
+    assert effective_before["allowlists"]["allowed_models"] == [m1]
+    assert effective_before["allowlists"]["allowed_endpoints"] == [
+        "/v1/chat/completions"
+    ]
+    row_before = _full_key_row(env, key_id)
+    export_before = _export_policy(env, key_id, label="dod5-discovery-export-before")
+    metadata_before = env.sql(
+        "SELECT metadata FROM gateway_keys WHERE id = $1", key_id
+    )[0]["metadata"]
+
+    # (c) Actual installed gateway on owned loopback against the owned PG.
+    env.start_gateway()
+
+    # (d) Denied BEFORE the grant: OpenAI-shaped 403 error, no model data.
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 403
+    assert isinstance(body, dict) and "error" in body
+
+    # (e) Bearer-shaped LOOKUP refusal with a known synthetic value: the
+    # refusal must not echo it, and the retained record must carry the
+    # shape mask, not the value (artifact canary evidence).
+    canary_bearer = key_prefix + "0" * 8 + secrets.token_hex(16)
+    env.register_secret(canary_bearer, "canary-bearer")
+    refused = env.run_cli(
+        "keys", "show", canary_bearer, expect=1,
+        label="dod5-discovery-bearer-refusal",
+    )
+    refusal_no_echo = canary_bearer not in (refused.stdout + refused.stderr)
+    assert refusal_no_echo, "canary bearer echoed in refusal output"
+    assert "Full key material cannot be used for lookup" in (
+        refused.stdout + refused.stderr
+    )
+
+    # (f) Installed policy grant. Endpoint arrays REPLACE, so the inference
+    # endpoint is explicitly retained while /v1/models is added.
+    env.run_cli(
+        "keys", "policy", "update", key_id,
+        "--allowed-endpoint", "/v1/chat/completions",
+        "--allowed-endpoint", "/v1/models",
+        "--reason", "grant model discovery endpoint",
+        label="dod5-discovery-policy-grant",
+    ).assert_ok("policy update grant")
+
+    # (g) Actual filtered GET /v1/models: exactly the ONE permitted model
+    # with an enabled, visible route on the enabled provider.
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 200
+    assert isinstance(body, dict)
+    data = body["data"]
+    assert [row["id"] for row in data] == [m1]
+    for row in data:
+        assert row["object"] == "model"
+        assert row["created"] == 0
+        assert row["owned_by"] == "openai"
+    visible = {row["id"] for row in data}
+    # m4: enabled visible route on the enabled provider but NOT in the key's
+    # model allow-list -> a genuine allow-list exclusion (the route/provider
+    # dimensions do not already hide it). m2/m3: routes disabled in the
+    # pre-existing fixture state.
+    assert m4 not in visible
+    assert m2 not in visible and m3 not in visible
+
+    # (h) Explicit PROVIDER allow-list controls (arrays REPLACE): an explicit
+    # single-provider list still serves the permitted model; an EMPTY list
+    # denies every provider, so the catalog empties even though the model is
+    # allowed and its route is enabled (the only excluding dimension is the
+    # provider allow-list); unrestricted restores it.
+    env.run_cli(
+        "keys", "policy", "update", key_id,
+        "--allowed-provider", "openai",
+        "--reason", "explicit provider allow-list",
+        label="dod5-discovery-provider-allow",
+    ).assert_ok("provider allow")
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 200
+    assert [row["id"] for row in body["data"]] == [m1]
+    env.run_cli(
+        "keys", "policy", "update", key_id,
+        "--provider-none",
+        "--reason", "deny all providers control",
+        label="dod5-discovery-provider-none",
+    ).assert_ok("provider none")
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 200
+    assert body["data"] == []
+    env.run_cli(
+        "keys", "policy", "update", key_id,
+        "--provider-all",
+        "--reason", "restore unrestricted provider access",
+        label="dod5-discovery-provider-all",
+    ).assert_ok("provider all")
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 200
+    assert [row["id"] for row in body["data"]] == [m1]
+
+    # (i) DISABLED-PROVIDER control: the sole provider goes disabled, so the
+    # catalog empties even though the model is allowed and the route enabled;
+    # re-enabling restores exactly the filtered set.
+    env.run_cli(
+        "providers", "disable", "openai", label="dod5-discovery-provider-disable"
+    ).assert_ok("provider disable")
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 200
+    assert body["data"] == []
+    env.run_cli(
+        "providers", "enable", "openai", label="dod5-discovery-provider-enable"
+    ).assert_ok("provider enable")
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 200
+    assert [row["id"] for row in body["data"]] == [m1]
+
+    # (j) Disabled-route control: the ONLY permitted route goes disabled,
+    # so the catalog empties even though the allow-list still names m1;
+    # re-enabling restores exactly the filtered set.
+    route_a = str(m["route_a"])
+    env.run_cli(
+        "routes", "disable", route_a, label="dod5-discovery-route-disable"
+    ).assert_ok("route disable")
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 200
+    assert body["data"] == []
+    env.run_cli(
+        "routes", "enable", route_a, label="dod5-discovery-route-enable"
+    ).assert_ok("route enable")
+    status, body = env.gateway_request("GET", "/v1/models", bearer=bearer)
+    assert status == 200
+    assert [row["id"] for row in body["data"]] == [m1]
+
+    # (k) After all controls, the net policy change is ONLY the endpoint
+    # array: model restrictions, the (restored) provider state, rates,
+    # quotas and the Responses profile unchanged; key material and expiry
+    # unchanged (a lawful authentication last-used timestamp is not a
+    # policy mutation and is intentionally not compared).
+    effective_after = env.run_cli(
+        "keys", "policy", "effective", key_id,
+        label="dod5-discovery-policy-after",
+    ).json
+    assert effective_after["allowlists"]["allowed_models"] == [m1]
+    assert effective_after["allowlists"]["allowed_endpoints"] == [
+        "/v1/chat/completions",
+        "/v1/models",
+    ]
+    assert effective_after["allowlists"]["state"] == "unrestricted"
+    for section in ("rate_limits", "quotas", "responses_profile"):
+        assert effective_after[section] == effective_before[section]
+    # Canonical service-owned configuration: the ONLY change across the
+    # whole version-1 document is the endpoint array member.
+    export_after = _export_policy(
+        env, key_id, label="dod5-discovery-export-after"
+    )
+    assert export_before["allowed_endpoints"] == ["/v1/chat/completions"]
+    assert export_after["allowed_endpoints"] == [
+        "/v1/chat/completions",
+        "/v1/models",
+    ]
+    before_rest = {
+        key: value for key, value in export_before.items()
+        if key != "allowed_endpoints"
+    }
+    after_rest = {
+        key: value for key, value in export_after.items()
+        if key != "allowed_endpoints"
+    }
+    assert before_rest == after_rest, (
+        "grant changed more than the endpoint array in the canonical policy"
+    )
+    # Storage level: the metadata-backed policy (provider allow-list state,
+    # Responses profile, ...) is untouched.
+    metadata_after = env.sql(
+        "SELECT metadata FROM gateway_keys WHERE id = $1", key_id
+    )[0]["metadata"]
+    assert metadata_after == metadata_before
+    row_after = _full_key_row(env, key_id)
+    material_changed = row_after["token_hash"] != row_before["token_hash"]
+    assert not material_changed, "grant changed the key material"
+    expiry_changed = (
+        row_after["valid_from"] != row_before["valid_from"]
+        or row_after["valid_until"] != row_before["valid_until"]
+    )
+    assert not expiry_changed, "grant changed the key validity window"
+    for column in (
+        "cost_limit_eur", "token_limit_total", "request_limit_total",
+        "allowed_models", "allow_all_models", "allow_all_endpoints",
+    ):
+        assert row_after[column] == row_before[column], column
+
+    # (l) Persist the labeled transcript and safe identity for this outcome.
+    persisted = env.persist_transcript("dod5-discovery")
+    run_dir = Path(persisted["directory"])
+    transcript_path = Path(persisted["paths"]["transcript"])
+    identity_path = Path(persisted["paths"]["identity"])
+    assert (run_dir.stat().st_mode & 0o777) == 0o700
+    assert (transcript_path.stat().st_mode & 0o777) == 0o600
+    assert (identity_path.stat().st_mode & 0o777) == 0o600
+    assert _sha256_file(transcript_path) == persisted["sha256"]["transcript"]
+    assert _sha256_file(identity_path) == persisted["sha256"]["identity"]
+    assert persisted["record_count"] == len(env.transcript)
+    assert persisted["labeled"] == [
+        "dod5-discovery-keys-create",
+        "dod5-discovery-policy-before",
+        "dod5-discovery-export-before",
+        "dod5-discovery-bearer-refusal",
+        "dod5-discovery-policy-grant",
+        "dod5-discovery-provider-allow",
+        "dod5-discovery-provider-none",
+        "dod5-discovery-provider-all",
+        "dod5-discovery-provider-disable",
+        "dod5-discovery-provider-enable",
+        "dod5-discovery-route-disable",
+        "dod5-discovery-route-enable",
+        "dod5-discovery-policy-after",
+        "dod5-discovery-export-after",
+    ]
+    # Actual labeled argv boundaries survive (the operator transcript is not
+    # reduced to booleans), while every known generated secret is absent
+    # from the persisted bytes.
+    persisted_bytes = (
+        transcript_path.read_bytes() + identity_path.read_bytes()
+    )
+    document = json.loads(transcript_path.read_text())
+    records = document["records"]
+    by_label = {str(record["label"]): record for record in records}
+    create_record = by_label["dod5-discovery-keys-create"]
+    assert create_record["argv"][1:3] == ["keys", "create"]
+    grant_record = by_label["dod5-discovery-policy-grant"]
+    assert key_id in grant_record["argv"]
+    refusal_record = by_label["dod5-discovery-bearer-refusal"]
+    argv_masked = "<REFUSED-BEARER-SHAPE>" in refusal_record["argv"]
+    assert argv_masked, "bearer-shaped argv not shape-masked in the transcript"
+    refusal_unmasked = any(
+        canary_bearer in arg for arg in refusal_record["argv"]
+    )
+    assert not refusal_unmasked, "canary bearer retained in a transcript argv"
+    secret_in_persisted = any(
+        secret.encode("utf-8") in persisted_bytes for secret in env._secrets
+    )
+    assert not secret_in_persisted, (
+        "a generated secret is present in the persisted transcript/identity"
+    )
+
+
+# --------------------------------------------------------------------------
+# DoD 7: two configured completion services (order 205-c section 5).
+# Fictional module providers/pricing/routes through the EXISTING installed
+# commands, reusing the objective-199 qualified shapes (exact public/
+# upstream/profile mappings, module kind, non-streaming, zero retries).
+# No provider HTTP occurs; configuration activation is not credential,
+# execution, or protocol-compatibility qualification.
+# --------------------------------------------------------------------------
+
+ZAP_CAPS = {
+    "schema_version": 1,
+    "capabilities": {
+        "chat_completions": {
+            "chat_text": True,
+            "chat_streaming": False,
+            "chat_function_tools": True,
+        },
+        "codex_limits": {
+            "context_window_tokens": 1050000,
+            "default_max_output_tokens": 32768,
+            "max_output_tokens": 128000,
+        },
+        "media_input_estimation": {
+            "version": 1,
+            "image_tokens": 1024,
+            "video_tokens": 2048,
+            "video_frames": 8,
+        },
+        "completion_service": {"version": 1, "profile": "zap-it-v1"},
+    },
+}
+
+FACIAL_CAPS = {
+    "schema_version": 1,
+    "capabilities": {
+        "chat_completions": {"chat_text": True, "chat_streaming": False},
+        "completion_service": {"version": 1, "profile": "facial-scoring-v1"},
+    },
+}
+
+
+def test_dod7_two_configured_completion_services(
+    field_workflow: FieldEnvironment,
+) -> None:
+    env = field_workflow
+
+    # (a) Two fictional module providers, DISABLED preparation (installed
+    # default), distinct origins and env-reference NAMES (names only, no
+    # credential values), custom timeouts, retries 0.
+    for slug, display, base, env_ref, timeout in (
+        ("svc-a", "Svc A", "https://svc-a.example/api", "SVC_A_KEY", 30),
+        ("svc-b", "Svc B", "https://svc-b.example/api", "SVC_B_KEY", 180),
+    ):
+        added = env.run_cli(
+            "providers", "add",
+            "--provider", slug,
+            "--display-name", display,
+            "--kind", "module",
+            "--base-url", base,
+            "--api-key-env-var", env_ref,
+            "--timeout-seconds", str(timeout),
+            "--max-retries", "0",
+            "--reason", "fictional module preparation",
+            label=f"dod7-providers-add-{slug}",
+        ).json
+        assert added["enabled"] is False, "installed default: stays DISABLED"
+        assert added["kind"] == "module"
+        assert added["max_retries"] == 0
+        assert added["timeout_seconds"] == timeout
+        assert added["api_key_env_var"] == env_ref
+
+    # (b) Pricing rows through the existing installed command; exact Decimal
+    # semantics surfaced as decimal strings in JSON.
+    for slug, model in (
+        ("svc-a", "zap-it-1"),
+        ("svc-b", "facial-manipulation-scoring"),
+    ):
+        rule = env.run_cli(
+            "pricing", "add",
+            "--provider", slug,
+            "--model", model,
+            "--input-price-per-1m", "0.01",
+            "--output-price-per-1m", "0.03",
+            label=f"dod7-pricing-add-{slug}",
+        ).json
+        assert rule["model"] == model
+        listed = env.run_cli(
+            "pricing", "list", "--provider", slug,
+            label=f"dod7-pricing-list-{slug}",
+        ).json
+        rows = [
+            row for row in listed["pricing_rules"] if row["model"] == model
+        ]
+        assert len(rows) == 1
+        # Exact Decimal semantics at the storage scale (Numeric 18,9):
+        # equal values, not string identity.
+        assert Decimal(rows[0]["input_price_per_1m"]) == Decimal("0.01")
+        assert Decimal(rows[0]["output_price_per_1m"]) == Decimal("0.03")
+        assert rows[0]["currency"] == "EUR"
+        assert rows[0]["enabled"] is True
+
+    # (c) Capabilities-file routes prepared DISABLED (deliberate installed
+    # default), non-streaming, on the zero-retry module providers, with the
+    # exact bundled profile mappings.
+    zap_caps_file = env.operator_dir / "dod7-zap-caps.json"
+    facial_caps_file = env.operator_dir / "dod7-facial-caps.json"
+    zap_caps_file.write_text(json.dumps(ZAP_CAPS))
+    facial_caps_file.write_text(json.dumps(FACIAL_CAPS))
+    routes: dict[str, str] = {}
+    for name, model, slug, caps_file in (
+        ("zap", "zap-it-1", "svc-a", zap_caps_file),
+        ("facial", "facial-manipulation-scoring", "svc-b", facial_caps_file),
+    ):
+        created = env.run_cli(
+            "routes", "add",
+            "--requested-model", model,
+            "--match-type", "exact",
+            "--provider", slug,
+            "--upstream-model", model,
+            "--no-streaming",
+            "--capabilities-file", str(caps_file),
+            "--priority", "100",
+            "--reason", "two-service workflow route preparation",
+            label=f"dod7-routes-add-{name}",
+        ).json
+        assert created["enabled"] is False, (
+            "capabilities-file preparation stays DISABLED"
+        )
+        assert created["supports_streaming"] is False
+        routes[name] = str(created["id"])
+
+    # (d) Inspect the prepared state: capabilities, provider facts, disabled.
+    shown_zap = env.run_cli(
+        "routes", "show", routes["zap"], label="dod7-routes-show-zap"
+    ).json
+    assert shown_zap["capabilities"] == ZAP_CAPS["capabilities"]
+    assert shown_zap["enabled"] is False
+    assert shown_zap["supports_streaming"] is False
+    shown_facial = env.run_cli(
+        "routes", "show", routes["facial"], label="dod7-routes-show-facial"
+    ).json
+    assert shown_facial["capabilities"] == FACIAL_CAPS["capabilities"]
+    assert shown_facial["enabled"] is False
+    for slug, timeout, env_ref, base in (
+        ("svc-a", 30, "SVC_A_KEY", "https://svc-a.example/api"),
+        ("svc-b", 180, "SVC_B_KEY", "https://svc-b.example/api"),
+    ):
+        shown = env.run_cli(
+            "providers", "show", slug, label=f"dod7-providers-show-{slug}"
+        ).json
+        assert shown["kind"] == "module"
+        assert shown["enabled"] is False
+        assert shown["timeout_seconds"] == timeout
+        assert shown["max_retries"] == 0
+        assert shown["api_key_env_var"] == env_ref
+        assert shown["base_url"] == base
+
+    # (e) Existing useful refusals: incompatible kind/profile/streaming/
+    # retry combinations are denied with fixed safe errors, zero rows.
+    streaming = env.run_cli(
+        "routes", "add",
+        "--requested-model", "zap-it-1",
+        "--match-type", "exact",
+        "--provider", "svc-a",
+        "--upstream-model", "zap-it-1",
+        "--capabilities-file", str(zap_caps_file),
+        "--priority", "100",
+        "--reason", "streaming profile probe",
+        any_failure=True,
+        label="dod7-routes-reject-streaming",
+    )
+    assert streaming.json["error"]["code"] == "invalid_value"
+    assert "does not support streaming on this route" in streaming.json[
+        "error"
+    ]["message"]
+    kind = env.run_cli(
+        "routes", "add",
+        "--requested-model", "zap-it-1",
+        "--match-type", "exact",
+        "--provider", "openai",
+        "--upstream-model", "zap-it-1",
+        "--no-streaming",
+        "--capabilities-file", str(zap_caps_file),
+        "--priority", "100",
+        "--reason", "kind-mismatch profile probe",
+        any_failure=True,
+        label="dod7-routes-reject-kind",
+    )
+    assert kind.json["error"]["code"] == "invalid_value"
+    assert "requires a module provider kind" in kind.json["error"]["message"]
+    retry_provider = env.run_cli(
+        "providers", "add",
+        "--provider", "svc-retry",
+        "--display-name", "Svc Retry",
+        "--kind", "module",
+        "--base-url", "https://svc-retry.example/api",
+        "--api-key-env-var", "SVC_RETRY_KEY",
+        "--timeout-seconds", "30",
+        "--max-retries", "1",
+        "--reason", "retry provider probe",
+        label="dod7-providers-add-retry-probe",
+    ).json
+    assert retry_provider["max_retries"] == 1
+    retry_route = env.run_cli(
+        "routes", "add",
+        "--requested-model", "zap-it-1",
+        "--match-type", "exact",
+        "--provider", "svc-retry",
+        "--upstream-model", "zap-it-1",
+        "--no-streaming",
+        "--capabilities-file", str(zap_caps_file),
+        "--priority", "100",
+        "--reason", "retry profile probe",
+        any_failure=True,
+        label="dod7-routes-reject-retry",
+    )
+    assert retry_route.json["error"]["code"] == "invalid_value"
+    assert "must not retry" in retry_route.json["error"]["message"]
+
+    # (f) SEPARATE explicit activation of BOTH providers and BOTH routes.
+    for slug in ("svc-a", "svc-b"):
+        enabled = env.run_cli(
+            "providers", "enable", slug, label=f"dod7-providers-enable-{slug}"
+        ).json
+        assert enabled["enabled"] is True
+    for name in ("zap", "facial"):
+        enabled = env.run_cli(
+            "routes", "enable", routes[name],
+            label=f"dod7-routes-enable-{name}",
+        ).json
+        assert enabled["enabled"] is True
+    for name, caps in (("zap", ZAP_CAPS), ("facial", FACIAL_CAPS)):
+        shown = env.run_cli(
+            "routes", "show", routes[name],
+            label=f"dod7-routes-show-enabled-{name}",
+        ).json
+        assert shown["enabled"] is True
+        assert shown["capabilities"] == caps["capabilities"]
+
+    # (g) Partial provider update preserves omitted siblings; the unrelated
+    # provider is untouched.
+    openai_before = env.run_cli(
+        "providers", "show", "openai", label="dod7-providers-show-openai"
+    ).json
+    svc_a_before = env.run_cli(
+        "providers", "show", "svc-a", label="dod7-providers-show-svca"
+    ).json
+    updated = env.run_cli(
+        "providers", "update", "svc-a",
+        "--timeout-seconds", "45",
+        "--reason", "adjust upstream timeout",
+        label="dod7-providers-update-svca",
+    ).json
+    assert updated["timeout_seconds"] == 45
+    for column in (
+        "provider", "display_name", "kind", "base_url",
+        "api_key_env_var", "enabled", "max_retries",
+    ):
+        assert updated[column] == svc_a_before[column], column
+    openai_after = env.run_cli(
+        "providers", "show", "openai", label="dod7-providers-show-openai-2"
+    ).json
+    assert openai_after == openai_before
+
+    # (h) Persist the labeled transcript and safe identity for this outcome.
+    persisted = env.persist_transcript("dod7")
+    run_dir = Path(persisted["directory"])
+    transcript_path = Path(persisted["paths"]["transcript"])
+    identity_path = Path(persisted["paths"]["identity"])
+    assert (run_dir.stat().st_mode & 0o777) == 0o700
+    assert (transcript_path.stat().st_mode & 0o777) == 0o600
+    assert (identity_path.stat().st_mode & 0o777) == 0o600
+    assert _sha256_file(transcript_path) == persisted["sha256"]["transcript"]
+    assert _sha256_file(identity_path) == persisted["sha256"]["identity"]
+    assert persisted["record_count"] == len(env.transcript)
+    expected_labels = {
+        "dod7-providers-add-svc-a",
+        "dod7-providers-add-svc-b",
+        "dod7-pricing-add-svc-a",
+        "dod7-pricing-list-svc-a",
+        "dod7-pricing-add-svc-b",
+        "dod7-pricing-list-svc-b",
+        "dod7-routes-add-zap",
+        "dod7-routes-add-facial",
+        "dod7-routes-show-zap",
+        "dod7-routes-show-facial",
+        "dod7-providers-show-svc-a",
+        "dod7-providers-show-svc-b",
+        "dod7-routes-reject-streaming",
+        "dod7-routes-reject-kind",
+        "dod7-providers-add-retry-probe",
+        "dod7-routes-reject-retry",
+        "dod7-providers-enable-svc-a",
+        "dod7-routes-enable-zap",
+        "dod7-providers-enable-svc-b",
+        "dod7-routes-enable-facial",
+        "dod7-routes-show-enabled-zap",
+        "dod7-routes-show-enabled-facial",
+        "dod7-providers-show-openai",
+        "dod7-providers-show-svca",
+        "dod7-providers-update-svca",
+        "dod7-providers-show-openai-2",
+    }
+    assert set(persisted["labeled"]) == expected_labels
+    persisted_bytes = (
+        transcript_path.read_bytes() + identity_path.read_bytes()
+    )
+    secret_in_persisted = any(
+        secret.encode("utf-8") in persisted_bytes for secret in env._secrets
+    )
+    assert not secret_in_persisted, (
+        "a generated secret is present in the persisted transcript/identity"
+    )
+
+
+# --------------------------------------------------------------------------
+# DoD 8: stable route context/media updates (order 205-c section 6).
+# Two dedicated routes on the existing openai_compatible provider are
+# prepared disabled with coherent initial capability data; each receives
+# its OWN reviewed two-step plan (dry-run then execute, plan bound to the
+# route UUID), so the multi-route change is explicitly selected, never a
+# hidden global edit. The context ceiling genuinely INCREASES to 400000
+# from a lower valid value on route 1 and to 420000 on route 2 (separate
+# multi-leaf plan). A re-applied plan is refused stale with zero
+# additional mutation/audit. Pre-existing fictional ledger/replay ROUTE
+# links, a nontrivial key's policy/material, and the installed
+# completion-profile/module data are all proven unchanged. No
+# delete/recreate, no SQL business mutation, no shared-service bypass.
+# --------------------------------------------------------------------------
+
+M8 = "slaif205a-model-e"
+M8B = "slaif205a-model-f"
+
+M8_CAPS = {
+    "schema_version": 1,
+    "capabilities": {
+        "chat_completions": {
+            "chat_text": True,
+            "chat_streaming": True,
+            "chat_function_tools": True,
+        },
+        "codex_limits": {
+            "context_window_tokens": 105000,
+            "default_max_output_tokens": 32768,
+            "max_output_tokens": 65536,
+        },
+        "media_input_estimation": {
+            "version": 1,
+            "image_tokens": 1000,
+            "video_tokens": 2000,
+            "video_frames": 8,
+        },
+    },
+}
+
+M8B_CAPS = {
+    "schema_version": 1,
+    "capabilities": {
+        "chat_completions": {
+            "chat_text": True,
+            "chat_streaming": True,
+            "chat_function_tools": False,
+        },
+        "codex_limits": {
+            "context_window_tokens": 210000,
+            "default_max_output_tokens": 16384,
+            "max_output_tokens": 32768,
+        },
+        "media_input_estimation": {
+            "version": 1,
+            "image_tokens": 500,
+            "video_tokens": 1000,
+            "video_frames": 4,
+        },
+    },
+}
+
+
+def _profile_data_fingerprint(env: FieldEnvironment) -> dict[str, str]:
+    """SHA256 over the INSTALLED completion-service profile/module data
+    (bundled versioned data the routes may reference). Route edits must
+    never touch it."""
+    package_file = Path(str(env.identity["package_file"]))
+    profile_dir = (
+        package_file.parent / "modules" / "servers" / "completion_service" / "profiles"
+    )
+    assert profile_dir.is_dir(), "installed completion profile data missing"
+    fingerprint: dict[str, str] = {}
+    for file in sorted(profile_dir.iterdir()):
+        if file.is_file():
+            fingerprint[file.name] = _sha256_file(file)
+    assert fingerprint, "installed completion profile data empty"
+    return fingerprint
+
+
+async def _plant_dod8_history(
+    orm_url: str, owner_id: uuid.UUID, route_id: uuid.UUID
+) -> dict[str, str]:
+    """Plant the DoD8 pre-existing history rows (fixture setup, one session).
+
+    Mirrors the 199 ORM planting pattern: typed UUID/datetime columns through
+    SQLAlchemy, so no raw string-bound driver SQL. Fictional linkage only:
+    constant synthetic digests, no gateway-key plaintext.
+    """
+    engine = create_async_engine(orm_url, future=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    past = now - timedelta(days=2)
+    try:
+        async with factory() as session:
+            async with session.begin():
+                key = await GatewayKeysRepository(session).create_gateway_key_record(
+                    public_key_id=f"pk_hist_205c_{uuid.uuid4().hex[:8]}",
+                    token_hash=uuid.uuid4().hex * 2,
+                    owner_id=owner_id,
+                    valid_from=past,
+                    valid_until=now + timedelta(days=30),
+                    allowed_models=[M8],
+                )
+                request_id = f"req-205c-{uuid.uuid4().hex[:8]}"
+                ledger = UsageLedger(
+                    request_id=request_id,
+                    gateway_key_id=key.id,
+                    owner_id=owner_id,
+                    endpoint="/v1/chat/completions",
+                    provider="openai",
+                    requested_model=M8,
+                    resolved_model=M8,
+                    started_at=past,
+                    finished_at=past,
+                )
+                session.add(ledger)
+                await session.flush()
+                replay = CodexReplayReference(
+                    gateway_key_id=key.id,
+                    usage_ledger_id=ledger.id,
+                    source_request_id=request_id,
+                    provider="openai",
+                    route_id=route_id,
+                    upstream_model="fixture-e",
+                    item_kind="reasoning",
+                    item_id_hmac="a" * 64,
+                    hmac_key_version=1,
+                    expires_at=now + timedelta(days=365),
+                )
+                session.add(replay)
+                await session.flush()
+                return {
+                    "key_id": str(key.id),
+                    "ledger_id": str(ledger.id),
+                    "replay_id": str(replay.id),
+                    "request_id": request_id,
+                }
+    finally:
+        await engine.dispose()
+
+
+def test_dod8_stable_route_context_media_updates(
+    field_workflow: FieldEnvironment,
+) -> None:
+    env = field_workflow
+    m = env.manifest
+    plans = env.operator_dir / "dod8-plans"
+    plans.mkdir(exist_ok=True)
+    caps_file = env.operator_dir / "dod8-m8-caps.json"
+    caps_file_b = env.operator_dir / "dod8-m8b-caps.json"
+    caps_file.write_text(json.dumps(M8_CAPS))
+    caps_file_b.write_text(json.dumps(M8B_CAPS))
+
+    # Two dedicated routes, prepared DISABLED (capabilities-file default),
+    # with coherent LOW context values the increases will move from.
+    created = env.run_cli(
+        "routes", "add",
+        "--requested-model", M8,
+        "--match-type", "exact",
+        "--provider", "openai",
+        "--upstream-model", "fixture-e",
+        "--capabilities-file", str(caps_file),
+        "--priority", "100",
+        "--reason", "stable-update qualification route",
+        label="dod8-routes-add",
+    ).json
+    route_id = str(created["id"])
+    assert created["enabled"] is False
+    created_b = env.run_cli(
+        "routes", "add",
+        "--requested-model", M8B,
+        "--match-type", "exact",
+        "--provider", "openai",
+        "--upstream-model", "fixture-f",
+        "--capabilities-file", str(caps_file_b),
+        "--priority", "100",
+        "--reason", "stable-update qualification route second target",
+        label="dod8-routes-add-second",
+    ).json
+    route_b_id = str(created_b["id"])
+    assert created_b["enabled"] is False
+    assert route_b_id != route_id
+
+    # Fictional historical linkage (fixture setup, NOT an operator action):
+    # a pre-existing key + usage-ledger row + replay reference bound to the
+    # FIRST route, planted through the ORM (199 reference pattern) with
+    # typed UUID/datetime parameters rather than raw string-bound SQL.
+    # Constant synthetic digests only; no generated plaintext exists, so
+    # nothing new needs secret registration.
+    hist = asyncio.run(
+        _plant_dod8_history(
+            env.driver_url.replace("postgresql://", "postgresql+asyncpg://", 1),
+            uuid.UUID(str(m["owner_seed"])),
+            uuid.UUID(route_id),
+        )
+    )
+    hist_key_id = hist["key_id"]
+    hist_ledger_id = hist["ledger_id"]
+    hist_replay_id = hist["replay_id"]
+
+    def _replay_snapshot() -> dict[str, object]:
+        return env.sql(
+            "SELECT id, gateway_key_id, usage_ledger_id, source_request_id, "
+            "provider, route_id, upstream_model, item_kind, item_id_hmac, "
+            "hmac_key_version, created_at, expires_at "
+            "FROM codex_replay_references WHERE id = $1",
+            str(hist_replay_id),
+        )[0]
+
+    replay_before = _replay_snapshot()
+    ledger_before = env.sql(
+        "SELECT id, gateway_key_id, request_id FROM usage_ledger WHERE id = $1",
+        str(hist_ledger_id),
+    )[0]
+    hist_key_before = _full_key_row(env, hist_key_id)
+
+    # Meaningful existing key policy (pinned Responses/Codex module policy
+    # plus configured rates) and its private material/validity window.
+    k_policy = str(m["k_policy"])
+    policy_export_before = _export_policy(
+        env, k_policy, label="dod8-policy-export-before"
+    )
+    policy_row_before = _full_key_row(env, k_policy)
+
+    # Installed completion-profile / module data snapshot.
+    profile_before = _profile_data_fingerprint(env)
+
+    snapshot_fields = (
+        "requested_model", "match_type", "provider", "upstream_model",
+        "priority", "enabled", "supports_streaming", "visible_in_models",
+    )
+
+    def _route_show(route_uuid: str, label: str) -> dict[str, object]:
+        return env.run_cli("routes", "show", route_uuid, label=label).json
+
+    def _other_routes(label: str) -> dict[str, object]:
+        rows = env.run_cli("routes", "list", label=label).json["routes"]
+        return {
+            row["id"]: {
+                key: row[key] for key in (*snapshot_fields, "capabilities")
+            }
+            for row in rows
+            if row["id"] not in (route_id, route_b_id)
+        }
+
+    baseline = _route_show(route_id, "dod8-routes-show-baseline")
+    baseline_b = _route_show(route_b_id, "dod8-routes-show-baseline-second")
+    others_before = _other_routes("dod8-routes-list-before")
+    assert baseline["id"] == route_id
+    assert baseline["capabilities"]["codex_limits"] == {
+        "context_window_tokens": 105000,
+        "default_max_output_tokens": 32768,
+        "max_output_tokens": 65536,
+    }
+    assert baseline["capabilities"]["media_input_estimation"] == {
+        "version": 1, "image_tokens": 1000, "video_tokens": 2000, "video_frames": 8,
+    }
+    assert baseline_b["capabilities"]["codex_limits"] == {
+        "context_window_tokens": 210000,
+        "default_max_output_tokens": 16384,
+        "max_output_tokens": 32768,
+    }
+    audit_before = _audit_count(env)
+
+    # (a) Reviewed plan 1 on route 1 raises the context admission ceiling
+    # to 400000 (a genuine increase from 105000); output values remain
+    # valid and unchanged. The dry-run is READ-ONLY.
+    plan1 = plans / "dod8-context.json"
+    preview = env.run_cli(
+        "routes", "update", route_id, "--dry-run", str(plan1),
+        "--codex-context-window-tokens", "400000",
+        label="dod8-plan-context",
+    ).json
+    assert preview["route_id"] == route_id
+    assert preview["capabilities_mode"] == "partial"
+    assert preview["plan_written"] is True
+    assert (plan1.stat().st_mode & 0o777) == 0o600
+    assert _route_show(route_id, "dod8-routes-show-after-dryrun") == baseline
+    assert _audit_count(env) == audit_before
+    applied1 = env.run_cli(
+        "routes", "update", route_id, "--execute", str(plan1),
+        "--reason", "raise context ceiling to 400000",
+        label="dod8-execute-context",
+    ).json
+    assert applied1["id"] == route_id
+    after1 = _route_show(route_id, "dod8-routes-show-after-ctx")
+    assert after1["id"] == baseline["id"]
+    assert after1["created_at"] == baseline["created_at"]
+    assert after1["capabilities"]["codex_limits"] == {
+        "context_window_tokens": 400000,
+        "default_max_output_tokens": 32768,
+        "max_output_tokens": 65536,
+    }
+    # Deep sibling capabilities and unrelated route fields preserved.
+    assert after1["capabilities"]["media_input_estimation"] == (
+        baseline["capabilities"]["media_input_estimation"]
+    )
+    assert after1["capabilities"]["chat_completions"] == (
+        baseline["capabilities"]["chat_completions"]
+    )
+    for column in snapshot_fields:
+        assert after1[column] == baseline[column], column
+    # The second target route is untouched by route 1's plan.
+    assert _route_show(route_b_id, "dod8-routes-show-second-after-ctx") == baseline_b
+    assert _audit_count(env) == audit_before + 1
+
+    # (b) SEPARATE reviewed plan for route 1's media leaves (multi-field,
+    # same route): the context headroom from (a) is preserved.
+    plan2 = plans / "dod8-media.json"
+    preview2 = env.run_cli(
+        "routes", "update", route_id, "--dry-run", str(plan2),
+        "--media-image-tokens", "1500",
+        "--media-video-tokens", "3000",
+        "--media-video-frames", "16",
+        label="dod8-plan-media",
+    ).json
+    assert preview2["route_id"] == route_id
+    assert (plan2.stat().st_mode & 0o777) == 0o600
+    applied2 = env.run_cli(
+        "routes", "update", route_id, "--execute", str(plan2),
+        "--reason", "adjust media estimation leaves",
+        label="dod8-execute-media",
+    ).json
+    assert applied2["id"] == route_id
+    after2 = _route_show(route_id, "dod8-routes-show-after-media")
+    assert after2["capabilities"]["media_input_estimation"] == {
+        "version": 1, "image_tokens": 1500, "video_tokens": 3000, "video_frames": 16,
+    }
+    assert after2["capabilities"]["codex_limits"] == {
+        "context_window_tokens": 400000,
+        "default_max_output_tokens": 32768,
+        "max_output_tokens": 65536,
+    }
+    assert after2["created_at"] == baseline["created_at"]
+    assert _route_show(route_b_id, "dod8-routes-show-second-after-media") == baseline_b
+    assert _audit_count(env) == audit_before + 2
+
+    # (c) The SECOND explicitly selected route gets its OWN reviewed plan:
+    # a genuine context increase (210000 -> 420000) plus one media leaf,
+    # in one multi-leaf plan. Route 1 is untouched by it.
+    plan3 = plans / "dod8-second-route.json"
+    preview3 = env.run_cli(
+        "routes", "update", route_b_id, "--dry-run", str(plan3),
+        "--codex-context-window-tokens", "420000",
+        "--media-image-tokens", "1200",
+        label="dod8-plan-second-route",
+    ).json
+    assert preview3["route_id"] == route_b_id
+    assert (plan3.stat().st_mode & 0o777) == 0o600
+    assert _route_show(route_b_id, "dod8-routes-show-second-after-dryrun") == baseline_b
+    applied3 = env.run_cli(
+        "routes", "update", route_b_id, "--execute", str(plan3),
+        "--reason", "second target reviewed context and media leaves",
+        label="dod8-execute-second-route",
+    ).json
+    assert applied3["id"] == route_b_id
+    after_b = _route_show(route_b_id, "dod8-routes-show-second-final")
+    assert after_b["id"] == baseline_b["id"]
+    assert after_b["created_at"] == baseline_b["created_at"]
+    assert after_b["capabilities"]["codex_limits"] == {
+        "context_window_tokens": 420000,
+        "default_max_output_tokens": 16384,
+        "max_output_tokens": 32768,
+    }
+    assert after_b["capabilities"]["media_input_estimation"] == {
+        "version": 1, "image_tokens": 1200, "video_tokens": 1000, "video_frames": 4,
+    }
+    assert _route_show(route_id, "dod8-routes-show-first-after-second") == after2
+    assert _audit_count(env) == audit_before + 3
+
+    # (d) The applied plan1 is intentionally STALE now: re-applying it
+    # refuses with zero additional mutation/audit.
+    stale = env.run_cli(
+        "routes", "update", route_id, "--execute", str(plan1),
+        "--reason", "stale plan probe",
+        any_failure=True,
+        label="dod8-execute-stale",
+    )
+    assert stale.json["error"]["code"] == "invalid_value"
+    assert "no longer matches" in stale.json["error"]["message"]
+    assert _route_show(route_id, "dod8-routes-show-stale-check") == after2
+    assert _audit_count(env) == audit_before + 3
+
+    # (e) Mixed-mode edit flags on --execute are refused: a plan is applied
+    # exactly as reviewed. (Command-body BadParameter is a NATIVE Typer
+    # usage error: exit 2 with a fixed safe stderr message, no JSON
+    # payload; compare renderer-normalized text, not raw terminal bytes.)
+    mixed = env.run_cli(
+        "routes", "update", route_id, "--execute", str(plan2),
+        "--media-image-tokens", "1",
+        "--reason", "mixed mode probe",
+        any_failure=True,
+        label="dod8-execute-mixed-probe",
+    )
+    assert mixed.exit_code == 2
+    mixed_normalized = " ".join(_strip_ansi(mixed.stderr).split())
+    mixed_has_fixed_message = "Edit flags are --dry-run only" in mixed_normalized
+    assert mixed_has_fixed_message, "mixed-mode fixed refusal message missing"
+    assert _route_show(route_id, "dod8-routes-show-mixed-check") == after2
+    assert _audit_count(env) == audit_before + 3
+
+    # (f) Every unrelated route is unchanged (no hidden global update).
+    others_after = _other_routes("dod8-routes-list-after")
+    assert set(others_after) == set(others_before)
+    for route_uuid, before in others_before.items():
+        after = others_after[route_uuid]
+        for key, value in before.items():
+            assert after[key] == value, f"unrelated route changed {key}"
+
+    # (g) Pre-existing ledger/replay ROUTE links and their key are stable.
+    replay_after = _replay_snapshot()
+    replay_stable = replay_after == replay_before
+    assert replay_stable, "replay reference linkage changed by route edits"
+    assert str(replay_after["route_id"]) == route_id
+    ledger_after = env.sql(
+        "SELECT id, gateway_key_id, request_id FROM usage_ledger WHERE id = $1",
+        str(hist_ledger_id),
+    )[0]
+    assert ledger_after == ledger_before
+    hist_key_after = _full_key_row(env, hist_key_id)
+    hist_key_stable = (
+        hist_key_after["token_hash"] == hist_key_before["token_hash"]
+        and hist_key_after["valid_from"] == hist_key_before["valid_from"]
+        and hist_key_after["valid_until"] == hist_key_before["valid_until"]
+        and hist_key_after["allowed_models"] == hist_key_before["allowed_models"]
+    )
+    assert hist_key_stable, "historical linkage key changed by route edits"
+
+    # (h) The nontrivial existing key's policy, material and validity are
+    # unchanged by the route edits (no new key state is copied by route
+    # edits).
+    policy_export_after = _export_policy(
+        env, k_policy, label="dod8-policy-export-after"
+    )
+    policy_export_unchanged = policy_export_after == policy_export_before
+    assert policy_export_unchanged, "route edits changed an existing key policy"
+    policy_row_after = _full_key_row(env, k_policy)
+    policy_material_stable = (
+        policy_row_after["token_hash"] == policy_row_before["token_hash"]
+        and policy_row_after["valid_from"] == policy_row_before["valid_from"]
+        and policy_row_after["valid_until"] == policy_row_before["valid_until"]
+    )
+    assert policy_material_stable, "route edits changed key material/validity"
+
+    # (i) Installed completion-profile / module data untouched.
+    profile_after = _profile_data_fingerprint(env)
+    profile_unchanged = profile_after == profile_before
+    assert profile_unchanged, "route edits changed installed profile data"
+
+    # (j) Persist the labeled transcript and safe identity for this outcome.
+    persisted = env.persist_transcript("dod8")
+    run_dir = Path(persisted["directory"])
+    transcript_path = Path(persisted["paths"]["transcript"])
+    identity_path = Path(persisted["paths"]["identity"])
+    assert (run_dir.stat().st_mode & 0o777) == 0o700
+    assert (transcript_path.stat().st_mode & 0o777) == 0o600
+    assert (identity_path.stat().st_mode & 0o777) == 0o600
+    assert _sha256_file(transcript_path) == persisted["sha256"]["transcript"]
+    assert _sha256_file(identity_path) == persisted["sha256"]["identity"]
+    assert persisted["record_count"] == len(env.transcript)
+    expected_labels = {
+        "dod8-routes-add",
+        "dod8-routes-add-second",
+        "dod8-policy-export-before",
+        "dod8-routes-show-baseline",
+        "dod8-routes-show-baseline-second",
+        "dod8-routes-list-before",
+        "dod8-plan-context",
+        "dod8-routes-show-after-dryrun",
+        "dod8-execute-context",
+        "dod8-routes-show-after-ctx",
+        "dod8-routes-show-second-after-ctx",
+        "dod8-plan-media",
+        "dod8-execute-media",
+        "dod8-routes-show-after-media",
+        "dod8-routes-show-second-after-media",
+        "dod8-plan-second-route",
+        "dod8-routes-show-second-after-dryrun",
+        "dod8-execute-second-route",
+        "dod8-routes-show-second-final",
+        "dod8-routes-show-first-after-second",
+        "dod8-execute-stale",
+        "dod8-routes-show-stale-check",
+        "dod8-execute-mixed-probe",
+        "dod8-routes-show-mixed-check",
+        "dod8-routes-list-after",
+        "dod8-policy-export-after",
+    }
+    assert set(persisted["labeled"]) == expected_labels
+    persisted_bytes = (
+        transcript_path.read_bytes() + identity_path.read_bytes()
+    )
+    secret_in_persisted = any(
+        secret.encode("utf-8") in persisted_bytes for secret in env._secrets
+    )
+    assert not secret_in_persisted, (
+        "a generated secret is present in the persisted transcript/identity"
+    )
