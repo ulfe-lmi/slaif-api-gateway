@@ -228,6 +228,30 @@ this is not a promise that all Typer usage errors become JSON.
   `test_cli_providers.py`, `test_cli_routes.py`,
   `test_cli_codex_replay.py`.
 
+CI renderer chronology (test-only repair, commit `99989fe`): the
+implementation head's CI job "Unit, lint, and migration head" failed 76
+of the 110 new cases under the GHA colored narrow terminal (75
+fixed-message substrings + 1 positive-limit literal); all other CI jobs
+were green. The app renders Click usage errors through a rich error
+panel whose ANSI styling and width-dependent wrapping are terminal
+properties, not product behavior; the local NO_COLOR wide-terminal run
+had passed. The module was repaired in place with the established
+project renderer-stable pattern (TERM_ENV COLUMNS=220/NO_COLOR=1 per
+invocation + ANSI-strip/whitespace-normalized fixed-reason comparison),
+keeping the raw canary/exit/no-op/no-echo/caplog assertions intact; no
+product message or behavior changed. Focused module re-verified 110
+PASS 0 skip under a forced-color narrow CI-like terminal (JUnit
+`205b-ci-fixed`, sha256
+`035b279f4994038523bd8e9133f339f3963680025660574bcaf0e85a51aa29f0`) and
+under the normal NO_COLOR local env (JUnit `205b-numeric-privacy-3`,
+sha256 `aeaf706f350a8bd4a2b7e1fbcb0f0bbb5a9155f9da0fb1bf007c9dcd604d76bb`).
+Chronology: CI run 40892694064 (head `420fb8f`) 76 failed / 6434 passed
+/ 1 skipped (172.49 s); CI run 40896109400 (head `0e4c229`) same unit
+job 76 failed / 6434 passed / 1 skipped (162.64 s); local forced-color
+narrow reproduction (JUnit `205b-ci-repro`, sha256
+`bed28b5cedece4d28f514e97dee0533c718ea0043f681b99b96602159962d9f0`)
+76 failed / 34 passed.
+
 ### Installation identity for the 205-b slice (executed)
 
 - Source: `420fb8f6d9377f569d126d08f4c9e4146fc7250b` (the 205-b
