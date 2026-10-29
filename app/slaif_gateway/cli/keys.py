@@ -18,7 +18,7 @@ from typing import Annotated, Any
 
 import typer
 
-from slaif_gateway.cli.common import CliError, write_secret_file
+from slaif_gateway.cli.common import CliError, parse_int_option, write_secret_file
 from slaif_gateway.cli.key_policy_files import (
     PROVIDER_ABSENT,
     build_configuration_from_explicit_flags,
@@ -2176,7 +2176,7 @@ def clone(
         ),
     ] = None,
     validity_duration_seconds: Annotated[
-        int | None,
+        str | None,
         typer.Option(
             "--validity-duration-seconds",
             help="Positive whole seconds for duration-from-now (dry-run only)",
@@ -2258,6 +2258,9 @@ def clone(
     rotate the key.
     """
     try:
+        validity_duration_seconds = parse_int_option(
+            validity_duration_seconds, field_name="--validity-duration-seconds"
+        )
         if (dry_run is None) == (execute is None):
             raise typer.BadParameter(
                 "Use exactly one of --dry-run PATH or --execute PATH."
@@ -2680,14 +2683,16 @@ def list_keys(
     ] = None,
     cohort_id: Annotated[str | None, typer.Option("--cohort-id", help="Cohort UUID")] = None,
     status: Annotated[str | None, typer.Option("--status", help="Key status")] = None,
-    limit: Annotated[int, typer.Option("--limit", help="Maximum rows to return")] = 50,
+    limit: Annotated[str, typer.Option("--limit", help="Maximum rows to return")] = "50",
     offset: Annotated[
-        int,
+        str,
         typer.Option("--offset", help="Rows to skip for bounded complete pagination"),
-    ] = 0,
+    ] = "0",
     json_output: Annotated[bool, typer.Option("--json", help="Output JSON")] = False,
 ) -> None:
     """List gateway keys using safe metadata only."""
+    limit = parse_int_option(limit, field_name="--limit")
+    offset = parse_int_option(offset, field_name="--offset")
     if limit <= 0:
         raise typer.BadParameter("--limit must be positive")
     if limit > MAX_KEY_LIST_LIMIT:
@@ -3527,7 +3532,7 @@ def set_lazy_throttling(
         typer.Option("--mode", help="wait or reject"),
     ] = None,
     max_wait_seconds: Annotated[
-        int | None,
+        str | None,
         typer.Option(
             "--max-wait-seconds",
             help=(
@@ -3537,7 +3542,7 @@ def set_lazy_throttling(
         ),
     ] = None,
     max_waiting_requests: Annotated[
-        int | None,
+        str | None,
         typer.Option(
             "--max-waiting-requests",
             help=(
@@ -3580,6 +3585,10 @@ def set_lazy_throttling(
     Waiting never relaxes hard quota, auth, security, or pricing, and changing
     it touches only the key's lazy metadata, ``updated_at``, and one audit row.
     """
+    max_wait_seconds = parse_int_option(max_wait_seconds, field_name="--max-wait-seconds")
+    max_waiting_requests = parse_int_option(
+        max_waiting_requests, field_name="--max-waiting-requests"
+    )
     if clear and (
         mode is not None or max_wait_seconds is not None or max_waiting_requests is not None
     ):

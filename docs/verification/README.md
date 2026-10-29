@@ -10,6 +10,70 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-29 Objective 205-a installed CLI field administration workflows verification (PARTIAL handoff)`](2026-10-29-cli-field-installed-workflow.md)
+  (recorded 2026-10-29) - actual installed `slaif-gateway` console from a
+  payload-verified wheel of accepted source `5e59a02` in an owned venv, on
+  an owned labeled PostgreSQL 16 container with a loopback SMTP sink:
+  outcomes 1-4 and 6 executed and green in the final byte-matched module
+  run (6/6 PASS, 0 skip). Same-PR 205-b continuation (recorded in the same
+  file): the confirmed numeric-echo CLI product gap fixed in source
+  `420fb8f` (shared no-echo conversion at 17 positions; 110 new + 136
+  existing unit PASS, 0 skip), first six outcomes re-qualified 6/6 PASS on
+  the fresh wheel `042eb23a` in a fresh owned venv (root-verified 432-file
+  identity + 17-position installed canary). Same-PR 205-c continuation
+  (recorded in the same file, product still frozen at `420fb8f`): outcome
+  5 (real filtered `GET /v1/models` through the installed owned gateway
+  with provider/allow-list/disable controls), outcome 7 (two configured
+  completion services + routes prepared disabled, inspected, separately
+  activated), and outcome 8 (stable-ID context/media route updates via
+  reviewed plans, stale-plan refusal, multi-route) executed and green in
+  the final combined run (3/3 PASS, 0 skip), plus the safe persisted
+  0600/0700 operator transcript/identity export (66 labeled records,
+  canary-clean); outcomes 9-11, config-show, the complete all-eleven
+  transcript, and the final fresh all-eleven run remain mandatory in
+  later same-PR suffixes.
+  Same-PR 205-d continuation (recorded in the same file, product still
+  frozen at `420fb8f`): outcome 9 (one-time delivery lifecycle against the
+  owned loopback SMTP sink: pending channel, real send-now with full
+  MIME-decoded key observation, exact repeat refusal, definite 550 refusal
+  + safe explicit retry, and labeled sending/ambiguous/expired fixture
+  states inspected before any unsafe probe) and outcome 11 (reviewed
+  replay-reference expiry maintenance: schema-valid planted rows,
+  configured-default-TTL dry-run, mixed-mode refusal, monotonic apply,
+  already-applied repeat, explicit `--include-expired` second plan,
+  column-level preservation) executed and green, plus the installed
+  `config show` finite process-configuration evidence (exact 45-field
+  allowlist, configured vs default provenance, invalid-Settings
+  no-echo/no-traceback) in the final D combined run (3/3 PASS, 0 skip,
+  37-record labeled transcript); outcome 10, the complete all-eleven
+  transcript, and the final fresh all-eleven run remained mandatory in
+  later same-PR suffixes.
+  Same-PR 205-e continuation (recorded in the same file, product still
+  frozen at `420fb8f`): outcome 10 (gateway-recorded failure diagnostics)
+  executed and green through the ACTUAL installed gateway observer +
+  installed `diagnostics` commands: pre-auth 401 without key attribution,
+  endpoint denial with resolved key but no route facts, unsupported
+  function-tool capability, Codex context-window rejection with actual
+  decision numbers/ceilings, a genuine service-persisted replay reference
+  authorizing then denying after ONLY its expiry moved, and an unsupported
+  provider stream event after wire 200 with failed-then-released
+  accounting; plus CLI status/not-found/ambiguous/typed-unavailable
+  outcomes, capture OFF with an empty owned capture dir, and
+  content-free store/transcript canaries (focused run 1/1 PASS, 0 skip,
+  15-record labeled transcript). Same-PR 205-f continuation (recorded in
+  the same file, product still frozen at `420fb8f`): the SINGLE FINAL
+  COMPLETION run — one fresh complete installed workflow of ALL 13 cases
+  (installation identity + all 11 outcomes + configuration) executed
+  13/13 PASS, 0 skip, on a fresh source-verified wheel `4e4c76fb` in a
+  fresh owned venv (root-verified 432-file identity), with DoD5 then
+  DoD10 actually exercising the prior-gateway stop/replace path, the
+  complete 206-record indexed operator transcript (0 unlabeled, 33
+  expected negative exits, 0700/0600, canary-clean), the single
+  full-scope brief coverage table, and consolidated operator/upgrade
+  documentation; the earlier "remains mandatory in the final same-PR
+  phase" carry-forward is SUPERSEDED by that final section. Strategic
+  merge and actual-main verification remain pending.
+
 - [`2026-10-29 Objective 204 CLI record edits and process configuration inspection verification`](2026-10-29-cli-record-edits-and-config.md)
   (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +
   actual-service evidence (8: owner move preservation with exact audit,
