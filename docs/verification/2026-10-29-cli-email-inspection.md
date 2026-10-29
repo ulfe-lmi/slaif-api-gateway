@@ -245,15 +245,24 @@ and are ROOT runs (independent probes/rechecks), not agent pytest runs:
 
 - `202-a-independent-postgres-boundaries-baseline.json` — baseline
   reproduction (actual owned PostgreSQL 16, actual sender service, fake
-  SMTP) of the three original guard gaps: >100-row tail attempts missed by
-  the old oldest-100 `any()` check, omitted-selector alternative-row
-  bypass, and no-ID after a failed history; plus three passing controls.
-  Service source sha `64618145` unchanged during the probe.
+  SMTP) of exactly three original guard gaps: a mismatched-secret
+  delivery was accepted and SENT, a supplied missing delivery UUID
+  resulted in a substitute delivery created and SENT, and an omitted
+  selector bypassed a retained ambiguous attempt (a fresh row was
+  created and SENT); plus three passing positive controls. This receipt
+  contains NO >100-row tail case and NO failed-history case — those
+  guards are supported by the later fixed recheck and the native
+  owned-PG cases, not by the baseline reproduction. Service source sha
+  `64618145` unchanged during the probe.
 - `202-a-independent-postgres-boundaries-fixed-recheck.json` — fixed-mode
-  recheck PASS: all named guard/read-only checks including the >100
-  blocking tail, omitted failed/ambiguous selectors, no decryption on
-  known-invalid cases, and scoped delivery/secret/key state preservation.
-  Service source sha `dad935eb`.
+  recheck PASS (service source sha `dad935eb`, `all_expected_guards_pass`):
+  the three baseline gaps now refused with no decryption; a blocking
+  TAIL attempt (beyond the old oldest-100 window) refused with no
+  decryption; an omitted failed selector requires explicit selection
+  (no decryption); prior-attempt sendability reports the block;
+  inspection read-only; all positive controls pass. This is where the
+  tail and failed-history guard evidence lives (together with the
+  native owned-PG cases below).
 - `202-a-cli-dispatch-mode-probe.json` and
   `202-a-cli-dispatch-mode-recheck.json` — four-mode Typer dispatch
   routing (selected-ID/no-ID × send-now/enqueue) reproduced the
@@ -418,7 +427,22 @@ focused file with their wait/current-clock assertions unweakened.
 
 ### Report provenance note (documented per order, immutable A untouched)
 
-The 202-a report's "+3 CLI" and "+2 sender" items were the LAST
-incremental fixes in those files, not all additions in them; the 145/12
-202-a counts were the complete latest totals at that head and remain the
-historical 202-a layer.
+- The 202-a report's "+3 CLI" and "+2 sender" items were the LAST
+  incremental fixes in those files, not all additions in them; the 145/12
+  202-a counts were the complete latest totals at that head and remain
+  the historical 202-a layer.
+- Baseline receipt attribution: the immutable 202-a report's
+  old-failure->evidence mapping labels the >100-row tail and
+  failed-history guards as reproduced by
+  `202-a-independent-postgres-boundaries-baseline.json`. That label is
+  inaccurate: the baseline receipt (read directly) reproduces exactly
+  the mismatched-secret sent, the supplied-missing-delivery
+  substitute-created/sent, and the omitted-selector ambiguous bypass,
+  with three passing positive controls, and contains no tail or
+  failed-history case. Those two guards are supported by the later
+  `202-a-independent-postgres-boundaries-fixed-recheck.json`
+  (blocked-tail and omitted-failed-selector checks, all with no
+  decryption) and by the native owned-PG cases in this record. The
+  corrected attribution is stated in the 202-a layer of this record
+  (amended here, 202-b); the immutable 202-a report itself is not
+  rewritten.
