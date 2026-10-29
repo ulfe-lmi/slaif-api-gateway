@@ -62,12 +62,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.mount("/admin/static", StaticFiles(directory=str(static_dir)), name="admin_static")
 
     app.add_middleware(MetricsMiddleware)
-    # Default-OFF failure-diagnostics observer: added inside RequestId (so
-    # the server diagnostic and client request IDs exist on the scope
-    # state) and inside the capture observer (which stays outermost).
     install_request_diagnostics(app, app_settings)
     app.add_middleware(RequestIdMiddleware, settings=app_settings)
-    # Outermost default-OFF capture observer; added last so it reads the diagnostic ID.
     install_request_capture(app, app_settings)
 
     app.add_exception_handler(OpenAICompatibleError, openai_compatible_error_handler)

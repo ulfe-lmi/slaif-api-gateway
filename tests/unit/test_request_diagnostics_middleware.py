@@ -28,11 +28,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 
+import slaif_gateway.api.middleware as mw
 from slaif_gateway.api.errors import (
     OpenAICompatibleError,
     openai_compatible_error_handler,
 )
-from slaif_gateway.api.middleware import RequestIdMiddleware
 from slaif_gateway.api.request_diagnostics import (
     DiagnosticsObserverMiddleware,
     install_request_diagnostics,
@@ -93,7 +93,7 @@ def _make_app(settings: Settings, *, with_db: bool = True) -> FastAPI:
         settings=settings,
         accepted_prefixes=("sk-slaif-",),
     )
-    app.add_middleware(RequestIdMiddleware, settings=settings)
+    app.add_middleware(mw.RequestIdMiddleware, settings=settings)
     return app
 
 
@@ -513,7 +513,7 @@ def test_capture_probe_provenance_never_supplies_key_id(
 def _log_app(settings: Settings) -> FastAPI:
     app = FastAPI()
     app.add_exception_handler(OpenAICompatibleError, openai_compatible_error_handler)
-    app.add_middleware(RequestIdMiddleware, settings=settings)
+    app.add_middleware(mw.RequestIdMiddleware, settings=settings)
 
     @app.get("/v1/log-fail")
     async def fail() -> None:
@@ -576,8 +576,6 @@ def test_masker_fault_omits_binding_and_preserves_request(
 ) -> None:
     """A fault INSIDE the masker callback must omit the log binding, never
     turn an ordinary 200 request into a 500, and never skip the endpoint."""
-    import slaif_gateway.api.middleware as mw
-
     def broken_masker(scope: Any, *, accepted_prefixes: Any) -> Any:
         def boom(data: Any) -> Any:
             raise RuntimeError("synthetic masker fault")
@@ -586,7 +584,7 @@ def test_masker_fault_omits_binding_and_preserves_request(
 
     monkeypatch.setattr(mw, "build_client_id_masker", broken_masker)
     app = FastAPI()
-    app.add_middleware(RequestIdMiddleware, settings=settings)
+    app.add_middleware(mw.RequestIdMiddleware, settings=settings)
     calls: list[int] = []
 
     @app.get("/v1/ok")

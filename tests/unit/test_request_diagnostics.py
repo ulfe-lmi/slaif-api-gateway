@@ -457,6 +457,33 @@ def test_disabled_recording_never_touches_the_store() -> None:
     assert factory.session.committed == 0
 
 
+def test_external_cancellation_propagates_from_enabled_record_failure() -> None:
+    """An externally propagated asyncio.CancelledError is NOT swallowed.
+
+    The bounded best-effort contract covers ordinary internal diagnostics
+    failures (typed drop outcomes); a cancellation of the surrounding task
+    is not an ordinary diagnostics failure and must propagate by design
+    (there is no catch-BaseException anywhere in the write path).
+    """
+    import asyncio
+
+    settings = Settings(_env_file=None, REQUEST_DIAGNOSTICS_ENABLED=True)
+    service = RequestDiagnosticsService(
+        settings=settings, session_factory=_RecordingFactory()  # type: ignore[arg-type]
+    )
+
+    async def cancelled_record(record: Any) -> DiagnosticsWriteOutcome:
+        raise asyncio.CancelledError()
+
+    service._record = cancelled_record  # type: ignore[method-assign]
+
+    async def _run() -> None:
+        await service.record_failure(_base_facts())
+
+    with pytest.raises(asyncio.CancelledError):
+        _run_sync(_run())
+
+
 def _run_sync(coro: Any) -> Any:
     import asyncio
 

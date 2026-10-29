@@ -797,7 +797,16 @@ class RequestDiagnosticsService:
         client_id_masker: Callable[[bytes], bytes] | None = None,
         client_id_mask_complete: bool = True,
     ) -> DiagnosticsWriteOutcome:
-        """Best-effort record one failure; never raises to the caller."""
+        """Best-effort record one failure.
+
+        Ordinary internal diagnostics failures (projection errors, write
+        timeouts, store failures) become typed drop outcomes and are never
+        raised to the caller.  An EXTERNALLY propagated
+        ``asyncio.CancelledError`` is NOT swallowed by design: it is a
+        ``BaseException`` the ``except Exception`` boundaries do not
+        catch, so the surrounding task's cancellation propagates (there is
+        no catch-BaseException anywhere in the write path).
+        """
         if not self.recording_enabled:
             return DiagnosticsWriteOutcome.DROPPED_DISABLED
         try:
@@ -822,17 +831,21 @@ class RequestDiagnosticsService:
     async def _record(self, record: RequestDiagnosticRecord) -> DiagnosticsWriteOutcome:
         """One bounded capacity-enforced write (true cap under concurrency).
 
-        Under the nonblocking transactional capacity lock: prune a bounded
-        number of expired rows, then, only if at or above the configured
-        maximum, evict a bounded number of the oldest rows and RECOUNT.  The
-        record is inserted only when room exists; a writer that cannot make
-        room through bounded eviction drops its own record
-        (``DROPPED_CAPACITY``) so the configured maximum is never exceeded by
-        an insert.  Pre-existing excess (for example after an operator lowers
-        ``REQUEST_DIAGNOSTICS_MAX_RECORDS`` by more than one eviction bound)
-        drains at up to one bound minus one row per subsequent non-repeat
-        write; the bounded prune performed on a capacity drop is committed
-        before any insert is attempted, so it is not rolled back.
+        Under the nonblocking transactional capacity lock (at most three
+        bounded nonblocking acquisition attempts with 10 ms retry intervals,
+        all inside the single configured awaited-write budget): prune a
+        bounded batch of expired rows (its own phase bound), then, only if
+        at or above the configured maximum, evict ``count - cap + 1`` oldest
+        rows (capped by the separate per-write eviction phase bound) and
+        RECOUNT.  The record is inserted only when room exists; a writer
+        that still cannot make room drops its own record
+        (``DROPPED_CAPACITY``) so the configured maximum is never exceeded
+        by an insert, and that capacity drop COMMITS the bounded prune
+        already performed without inserting.  Pre-existing excess (for
+        example after an operator lowers
+        ``REQUEST_DIAGNOSTICS_MAX_RECORDS`` beyond what one write's bounded
+        phases clear) therefore drains across subsequent non-repeat writes,
+        never by an unbounded sweep.
         Before any prune/eviction, a bounded point lookup on the unique
         stable gateway diagnostic ID converts a repeat of a retained row
         into a true idempotent no-op (``STORED``, original row unchanged),

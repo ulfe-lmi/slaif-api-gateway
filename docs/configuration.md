@@ -1581,26 +1581,34 @@ Behavioral guarantees:
   admission, accounting, or cancellation; `CancelledError` is never
   suppressed; there are no background tasks, queues, retry loops, or
   schedulers.
-- **Honest drop policy.** Under the capacity lock the writer prunes a
-  bounded number of expired rows and, only at/above the cap, evicts a
-  bounded number of the oldest rows and recounts; if it still cannot make
-  room, the NEW record is dropped (`DROPPED_CAPACITY`) rather than exceeding
-  the cap. Pre-existing excess (e.g. after the operator lowers
-  `REQUEST_DIAGNOSTICS_MAX_RECORDS` by more than one eviction bound) drains
-  at up to one bound minus one row per subsequent non-repeat write. A repeat
-  of a retained row (same stable server diagnostic ID) is an idempotent
-  no-op that can never evict the row it duplicates (the unique constraint
-  remains the race fallback for concurrent writers).
+- **Honest drop policy.** A repeat of a retained row (same stable server
+  diagnostic ID) is an idempotent no-op checked BEFORE any pruning, so it
+  can never evict the row it duplicates (the unique constraint remains the
+  race fallback for concurrent writers). Otherwise, under the capacity lock
+  the writer first prunes a bounded batch of expired rows (its own phase
+  bound), and only when at/above the cap evicts a bounded number of the
+  oldest rows (`count - cap + 1`, capped by its own per-write phase bound)
+  and recounts. If it still cannot make room, the NEW record is dropped
+  (`DROPPED_CAPACITY`) rather than exceeding the cap; that capacity drop
+  COMMITS the bounded prune it already performed without inserting.
+  Pre-existing excess (e.g. after the operator lowers
+  `REQUEST_DIAGNOSTICS_MAX_RECORDS` beyond what one write's bounded phases
+  clear) therefore drains across subsequent non-repeat writes, never by an
+  unbounded sweep. Capacity-lock acquisition makes at most three bounded
+  nonblocking attempts with 10 ms retry intervals, all inside the single
+  configured awaited-write budget (no background jobs, no unbounded
+  retries, no queue, no scheduler).
 - **No background expiry daemon.** Expired records stay in the table until
   the bounded prune-on-write or an explicit `diagnostics cleanup` removes
   them; idle storage needs repeated cleanup. Cleanup affects this table
   only.
 - **Latency honesty.** Recording is awaited at response completion, so a
   recorded failure adds up to the write timeout (plus bounded cleanup) to
-  the completion path — it is not zero latency. The 100 ms default is set so
-  that a cold first-connection statement preparation can legitimately
-  exceed the budget and be dropped as `DROPPED_TIMEOUT` rather than slowing
-  the response; verification evidence uses the maximum allowed 1000 ms.
+  the completion path — it is not zero latency, and no performance or
+  zero-delay qualification is claimed. The 100 ms default is tight by
+  design: a cold first-connection statement preparation can legitimately
+  exceed the budget and be dropped as `DROPPED_TIMEOUT`; local functional
+  PostgreSQL verification uses the maximum allowed 1000 ms.
 - **Startup-scoped.** These are startup configuration, read once per API
   worker process; the operator MUST configure them consistently across all
   API workers (the facility does not detect or reconcile per-worker

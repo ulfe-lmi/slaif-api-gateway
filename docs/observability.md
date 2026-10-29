@@ -95,9 +95,10 @@ Configuration and operator procedure: [configuration.md](configuration.md)
 
 ## Request failure diagnostics (default OFF)
 
-The content-free request-failure diagnostics facility is a bounded
-operational index for FAILED terminal `/v1` outcomes — it deliberately adds
-NO new telemetry channels and stores NO request content:
+The content-free request-failure diagnostics facility is a bounded,
+authorized PostgreSQL operational index for FAILED terminal `/v1`
+outcomes. It adds no remote exporter, no extra content logs, no admin UI
+surface, and no metrics pipeline, and it stores NO request content:
 
 - **Failure-only, content-free.** At most one bounded typed record per
   failed request: the public error code/param, the bounded classifier

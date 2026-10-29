@@ -489,6 +489,11 @@ def _key_state(url: str, key_id: Any) -> dict[str, Any]:
                 "cost_reserved_eur": key.cost_reserved_eur,
                 "tokens_reserved_total": key.tokens_reserved_total,
                 "requests_reserved_total": key.requests_reserved_total,
+                "external_tool_fence_state": key.external_tool_fence_state,
+                "external_tool_fence_reservation_id": key.external_tool_fence_reservation_id,
+                "external_tool_fence_request_id": key.external_tool_fence_request_id,
+                "external_tool_fence_acquired_at": key.external_tool_fence_acquired_at,
+                "external_tool_fence_expires_at": key.external_tool_fence_expires_at,
                 "ledger_rows": len(ledger),
                 "ledger_states": sorted(
                     (r.accounting_status, r.success) for r in ledger
@@ -610,6 +615,7 @@ def test_preauth_401_recorded_without_key_identity_or_ledger(
     world = asyncio.run(_setup_world(owned_pg_url))
     key = _make_key(owned_pg_url, world)
     app = _build_app(diagnostics_enabled=True)
+    state_before = _key_state(owned_pg_url, key["key_id"])
     with TestClient(app) as client:
         response = client.post(
             RESPONSES_ENDPOINT,
@@ -626,8 +632,22 @@ def test_preauth_401_recorded_without_key_identity_or_ledger(
     # pre-auth: NO key identity, and the authenticated-key column is empty
     assert newest["gateway_key_id"] is None
     state = _key_state(owned_pg_url, key["key_id"])
+    # the complete before/after accounting state is unchanged (pre-admission
+    # denial touches no counter, ledger, reservation, or fence/hold at all)
+    assert state == state_before
     assert state["ledger_rows"] == 0
     assert state["reservation_states"] == []
+    assert state["cost_used_eur"] == 0
+    assert state["cost_reserved_eur"] == 0
+    assert state["tokens_used_total"] == 0
+    assert state["tokens_reserved_total"] == 0
+    assert state["requests_used_total"] == 0
+    assert state["requests_reserved_total"] == 0
+    assert state["external_tool_fence_state"] == "none"
+    assert state["external_tool_fence_reservation_id"] is None
+    assert state["external_tool_fence_request_id"] is None
+    assert state["external_tool_fence_acquired_at"] is None
+    assert state["external_tool_fence_expires_at"] is None
 
 
 def test_capability_denial_records_resolved_route_facts_and_state_unchanged(
@@ -721,6 +741,7 @@ def test_stream_failure_after_200_recorded_and_state_consistent(
 
     bodies: list[str] = []
     deltas: list[dict[str, Any]] = []
+    states_after: list[dict[str, Any]] = []
     recorded: list[dict[str, Any] | None] = []
 
     for mode in ("disabled", "enabled", "failing_writer"):
@@ -752,6 +773,7 @@ def test_stream_failure_after_200_recorded_and_state_consistent(
         bodies.append(streamed)
         recorded.append(_diagnostic_row_by_id(owned_pg_url, diag_id))
         state_after = _key_state(owned_pg_url, key["key_id"])
+        states_after.append(state_after)
         before_set = list(state_before["ledger_states"])
         after_set = list(state_after["ledger_states"])
         added_ledger: list[tuple[Any, Any]] = []
@@ -776,6 +798,9 @@ def test_stream_failure_after_200_recorded_and_state_consistent(
                 "cost_used_delta": state_after["cost_used_eur"] - state_before["cost_used_eur"],
                 "tokens_used_delta": state_after["tokens_used_total"] - state_before["tokens_used_total"],
                 "requests_used_delta": state_after["requests_used_total"] - state_before["requests_used_total"],
+                "cost_reserved_delta": state_after["cost_reserved_eur"] - state_before["cost_reserved_eur"],
+                "tokens_reserved_delta": state_after["tokens_reserved_total"] - state_before["tokens_reserved_total"],
+                "requests_reserved_delta": state_after["requests_reserved_total"] - state_before["requests_reserved_total"],
             }
         )
         if mode == "failing_writer":
@@ -791,6 +816,22 @@ def test_stream_failure_after_200_recorded_and_state_consistent(
     assert deltas[0]["ledger_rows"] == 1
     assert deltas[0]["added_ledger"] == [("failed", False)]
     assert deltas[0]["added_reservations"] == ["released"]
+    # the released reservation leaves ZERO residual reserved quota in every
+    # mode (reserved counters fully back to the pre-run baseline)
+    assert deltas[0]["cost_reserved_delta"] == 0
+    assert deltas[0]["tokens_reserved_delta"] == 0
+    assert deltas[0]["requests_reserved_delta"] == 0
+    assert states_after[0]["cost_reserved_eur"] == 0
+    assert states_after[0]["tokens_reserved_total"] == 0
+    assert states_after[0]["requests_reserved_total"] == 0
+    # the external-tool fence/hold boundary stays none/unbound across all
+    # modes (strict-mode fixture: no fenced quota mode, no hold binding)
+    for state in states_after:
+        assert state["external_tool_fence_state"] == "none"
+        assert state["external_tool_fence_reservation_id"] is None
+        assert state["external_tool_fence_request_id"] is None
+        assert state["external_tool_fence_acquired_at"] is None
+        assert state["external_tool_fence_expires_at"] is None
     # only the enabled mode records; stream_failure keeps the actual wire status
     assert recorded[0] is None
     assert recorded[2] is None
@@ -1232,11 +1273,13 @@ def test_slow_capacity_lock_write_times_out_without_changing_response(
     monkeypatch.setenv("REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS", "10")
     monkeypatch.setattr(RequestDiagnosticsRepository, "try_acquire_capacity_lock", _slow_lock)
     enabled = _build_app(diagnostics_enabled=True)
+    state_before = _key_state(owned_pg_url, key["key_id"])
     try:
         with TestClient(enabled) as client:
             slow_response = client.post(RESPONSES_ENDPOINT, json=_function_tool_body(), headers=headers)
     finally:
         monkeypatch.undo()
+    state_after = _key_state(owned_pg_url, key["key_id"])
 
     # the public response is UNCHANGED by the timed-out observer write
     assert slow_response.status_code == base_response.status_code
@@ -1246,6 +1289,22 @@ def test_slow_capacity_lock_write_times_out_without_changing_response(
     assert slow_diag != base_diag
     # the timed-out write stored nothing
     assert _diagnostic_row_by_id(owned_pg_url, slow_diag) is None
+    # the complete before/after accounting state is unchanged: the timed-out
+    # bounded write touched no counter, ledger, reservation, or fence/hold
+    assert state_after == state_before
+    assert state_after["ledger_rows"] == 0
+    assert state_after["reservation_states"] == []
+    assert state_after["cost_used_eur"] == 0
+    assert state_after["cost_reserved_eur"] == 0
+    assert state_after["tokens_used_total"] == 0
+    assert state_after["tokens_reserved_total"] == 0
+    assert state_after["requests_used_total"] == 0
+    assert state_after["requests_reserved_total"] == 0
+    assert state_after["external_tool_fence_state"] == "none"
+    assert state_after["external_tool_fence_reservation_id"] is None
+    assert state_after["external_tool_fence_request_id"] is None
+    assert state_after["external_tool_fence_acquired_at"] is None
+    assert state_after["external_tool_fence_expires_at"] is None
 
 
 # --- T9: content-free canaries (row + CLI + logs) ------------------------------
