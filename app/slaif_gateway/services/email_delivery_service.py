@@ -536,6 +536,20 @@ class EmailDeliveryService:
         if blocking_reason is not None:
             raise _email_delivery_not_sendable_error(email_delivery.status, blocking_reason)
 
+        # 202-b: prepared-attempt recipient metadata. The SMTP destination
+        # is the canonical CURRENT Owner.email resolved above; refresh the
+        # existing persisted recipient to that SAME value so read-only
+        # inspection reports the recipient prepared for THIS actual send
+        # attempt. This never infers or rewrites historical destinations,
+        # proves nothing about SMTP acceptance or inbox arrival, and is
+        # preserved by the existing transaction law if the attempt later
+        # fails. One captured local value; the existing mark_sending flush
+        # persists it in the same transaction (no new repository,
+        # transaction, or framework). The legitimate no-ID first creation
+        # already used this same target and is untouched.
+        prepared_recipient = owner.email
+        if email_delivery.recipient_email != prepared_recipient:
+            email_delivery.recipient_email = prepared_recipient
         await self._email_deliveries_repository.mark_sending(email_delivery.id, started_at=now)
         body = render_gateway_key_email(
             GatewayKeyEmailContext(
@@ -557,7 +571,7 @@ class EmailDeliveryService:
             one_time_secret_id=decrypted.row.id,
             gateway_key_id=gateway_key.id,
             owner_id=owner.id,
-            recipient_email=owner.email,
+            recipient_email=prepared_recipient,
             subject=subject,
             body=body,
         )

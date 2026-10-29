@@ -234,6 +234,8 @@ def cli_env(owned_pg_url: str) -> str:
 def _reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeEmailService.sent.clear()
     _FakeEmailService.failure = None
+    _FakeEmailService.send_url = None
+    _FakeEmailService.on_send = None
     monkeypatch.setattr(email_cli, "EmailService", _FakeEmailService)
 
 
@@ -243,11 +245,21 @@ def _reset_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
 class _FakeEmailService:
     sent: list[dict[str, object]] = []
     failure: Exception | None = None
+    # 202-b: optional DURING-ATTEMPT observation hook — a coroutine
+    # callable ``(url, to)`` invoked at the START of every attempt, before
+    # a recorded failure raises and before a successful send is recorded,
+    # so a test can read the already-committed sending state from a FRESH
+    # session for successful AND failed attempts alike. ``send_url``
+    # carries the owned database URL into the hook.
+    send_url: str | None = None
+    on_send: object | None = None
 
     def __init__(self, *args, **kwargs) -> None:
         pass
 
     async def send_email(self, *, to: str, subject: str, text_body: str, html_body=None):
+        if _FakeEmailService.on_send is not None:
+            await _FakeEmailService.on_send(_FakeEmailService.send_url, to)  # type: ignore[misc]
         if _FakeEmailService.failure is not None:
             raise _FakeEmailService.failure
         _FakeEmailService.sent.append({"to": to, "subject": subject, "text_body": text_body})
@@ -1161,6 +1173,7 @@ def test_actions_send_retry_and_refusals(cli_env: str) -> None:
     d8 = uuid.UUID(k8["email_delivery_id"])
     s9 = uuid.UUID(k9["one_time_secret_id"])
     _run(_set_delivery(url, d8, one_time_secret_id=s9))
+    recipient_before8 = _run(_delivery_rows(url, gateway_key_id=uuid.UUID(k8["gateway_key_id"])))[0].recipient_email
     sent_count = len(_FakeEmailService.sent)
     result = _invoke_email(
         ["send-pending-key", "--one-time-secret-id", str(s9), "--email-delivery-id", str(d8), "--send-now", "--json"]
@@ -1171,6 +1184,11 @@ def test_actions_send_retry_and_refusals(cli_env: str) -> None:
     assert len(_FakeEmailService.sent) == sent_count
     assert _run(_get_secret(url, s9)).status == "pending"
     assert _run(_delivery_rows(url, gateway_key_id=uuid.UUID(k9["gateway_key_id"])))[0].status == "pending"
+    # 202-b: the invalid-identity refusal leaves the selected recipient
+    # untouched (zero decrypt/SMTP already asserted above).
+    d8_after = _run(_delivery_rows(url, gateway_key_id=uuid.UUID(k8["gateway_key_id"])))[0]
+    assert d8_after.status == "pending"
+    assert d8_after.recipient_email == recipient_before8
 
 
 def test_actions_no_id_bypass_refusals_and_pre_decrypt_guard(cli_env: str) -> None:
@@ -1293,6 +1311,141 @@ def test_actions_ambiguous_after_finalization_failure(cli_env: str, monkeypatch:
     assert result.status == "failed"
     assert result.error_code == "email_delivery_selection_required"
     assert len(_FakeEmailService.sent) == sent_count
+
+
+# --- 202-b: prepared-recipient metadata on the existing sending commit -------
+#
+# The owner address is edited AFTER the pending delivery rows exist (they
+# still carry the fictional creation-time address). The existing sending
+# commit must record exactly the prepared SMTP target (current Owner.email)
+# so read-only inspection reports the recipient prepared for THIS actual
+# attempt. This never infers or rewrites historical destinations and proves
+# nothing about SMTP acceptance or inbox arrival; outcomes follow the
+# existing sent/failed/ambiguous law.
+
+
+def test_prepared_recipient_refreshes_to_current_owner_email(
+    cli_env: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = cli_env
+    admin_id = _run(_create_admin(url))
+    old_address = "ada-old-202b@example.org"
+    current_address = "ada-current-202b@example.org"
+    owner_id = _run(_create_owner(url, email=old_address))
+    k1 = _create_key(url, owner_id, email_delivery="pending", show_plaintext=True)
+    k2 = _create_key(url, owner_id, email_delivery="pending")
+    k3 = _create_key(url, owner_id, email_delivery="pending")
+    d1 = uuid.UUID(k1["email_delivery_id"])
+    s1 = uuid.UUID(k1["one_time_secret_id"])
+    d2 = uuid.UUID(k2["email_delivery_id"])
+    s2 = uuid.UUID(k2["one_time_secret_id"])
+    d3 = uuid.UUID(k3["email_delivery_id"])
+    s3 = uuid.UUID(k3["one_time_secret_id"])
+    # The owner address is edited AFTER the rows were created.
+    _run(_set_fields(url, Owner, owner_id, email=current_address))
+    for k in (k1, k2, k3):
+        assert (
+            _run(_delivery_rows(url, gateway_key_id=uuid.UUID(k["gateway_key_id"])))[0].recipient_email
+            == old_address
+        )
+
+    attempts: list[dict[str, object]] = []
+    current_delivery: dict[str, uuid.UUID | None] = {"id": None}
+
+    # DURING every attempt (successful or failed), a FRESH separate session
+    # reads the row for the scenario's delivery UUID: the existing sending
+    # commit must already carry the prepared recipient equal to the exact
+    # fake `to`.
+    async def _observe_attempt(during_url: str, to: str) -> None:
+        entry: dict[str, object] = {"to": to}
+        if current_delivery["id"] is not None:
+            factory = _session_factory(during_url)
+            async with factory() as fresh:
+                row = await fresh.get(EmailDelivery, current_delivery["id"])
+                entry["during_status"] = row.status
+                entry["during_recipient"] = row.recipient_email
+        attempts.append(entry)
+
+    _FakeEmailService.send_url = url
+    _FakeEmailService.on_send = _observe_attempt
+
+    # A. SUCCESS via the ACTUAL CLI: after success the fresh row and the
+    #    actual CLI list/show reflect the prepared address, not the
+    #    obsolete one.
+    current_delivery["id"] = d1
+    result = _invoke_email(
+        [
+            "send-pending-key",
+            "--one-time-secret-id", str(s1),
+            "--email-delivery-id", str(d1),
+            "--actor-admin-id", str(admin_id),
+            "--reason", "prepared recipient 202b",
+            "--send-now",
+            "--json",
+        ]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["status"] == "sent"
+    assert len(attempts) == 1
+    assert attempts[0]["to"] == current_address
+    assert attempts[0]["during_status"] == "sending"
+    assert attempts[0]["during_recipient"] == current_address
+    row1 = _run(_delivery_rows(url, gateway_key_id=uuid.UUID(k1["gateway_key_id"])))[0]
+    assert row1.status == "sent"
+    assert row1.recipient_email == current_address
+    assert _FakeEmailService.sent[-1]["to"] == current_address
+    listed = _list_page("--delivery-id", str(d1))
+    assert listed["items"][0]["recipient_email"] == current_address
+    shown = _invoke_email(["show", str(d1), "--json"])
+    assert shown.exit_code == 0, shown.output
+    assert json.loads(shown.stdout)["recipient_email"] == current_address
+
+    # B. SMTP FAILURE via the ACTUAL shared sender: the ATTEMPT (observed
+    #    before the fake failure) targets the prepared address with the
+    #    committed sending state carrying it; existing failed law with the
+    #    prepared recipient retained; the secret is untouched.
+    current_delivery["id"] = d2
+    _FakeEmailService.failure = SmtpSendError("smtp down 202b")
+    result2 = _run(
+        _send_via_service(url, one_time_secret_id=s2, email_delivery_id=d2, reason="smtp failure 202b")
+    )
+    _FakeEmailService.failure = None
+    assert result2.status == "failed"
+    assert len(attempts) == 2
+    assert attempts[1]["to"] == current_address
+    assert attempts[1]["during_status"] == "sending"
+    assert attempts[1]["during_recipient"] == current_address
+    row2 = _run(_delivery_rows(url, gateway_key_id=uuid.UUID(k2["gateway_key_id"])))[0]
+    assert row2.status == "failed"
+    assert row2.recipient_email == current_address
+    assert _run(_get_secret(url, s2)).status == "pending"
+
+    # C. SMTP accepted, DB finalization failure => existing ambiguous law,
+    #    prepared recipient retained, secret not consumed, no resend.
+    current_delivery["id"] = d3
+
+    async def _boom(self, secret_id, *, consumed_at):
+        raise RuntimeError("finalization boom 202b")
+
+    monkeypatch.setattr("slaif_gateway.services.email_delivery_service.SecretService.mark_consumed", _boom)
+    result3 = _run(
+        _send_via_service(url, one_time_secret_id=s3, email_delivery_id=d3, reason="finalization failure 202b")
+    )
+    assert result3.status == "ambiguous"
+    assert len(attempts) == 3
+    assert attempts[2]["to"] == current_address
+    assert attempts[2]["during_status"] == "sending"
+    assert attempts[2]["during_recipient"] == current_address
+    assert _FakeEmailService.sent[-1]["to"] == current_address
+    row3 = _run(_delivery_rows(url, gateway_key_id=uuid.UUID(k3["gateway_key_id"])))[0]
+    assert row3.status == "ambiguous"
+    assert row3.recipient_email == current_address
+    assert _run(_get_secret(url, s3)).status == "pending"
+    result4 = _run(_send_via_service(url, one_time_secret_id=s3, email_delivery_id=d3, reason="retry"))
+    assert result4.status == "ambiguous"
+    assert result4.error_code == "email_delivery_ambiguous"
+    assert len(attempts) == 3, "the ambiguous retry adds no SMTP attempt"
+    _FakeEmailService.on_send = None
 
 
 # --- C: controlled blocking concurrency on real row locks --------------------

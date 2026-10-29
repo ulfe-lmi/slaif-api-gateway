@@ -57,6 +57,15 @@ docker compose run --rm api slaif-gateway email send-pending-key --help
 
 ## When To Rotate
 
+The delivery's recorded recipient is prepared-attempt metadata: an attempt
+prepared by this code records the exact destination prepared for that
+attempt (the current owner email, refreshed by the existing sending
+commit). Untouched older rows and rows that were never prepared may retain
+creation-time metadata, and the actual historical destination of a
+pre-upgrade attempt is unknown and is never reconstructed or backfilled.
+The field is historical metadata — it never infers actual past destinations
+and never proves mailbox arrival.
+
 Rotate the gateway key when:
 
 - The delivery is `ambiguous` and recipient receipt cannot be confirmed.

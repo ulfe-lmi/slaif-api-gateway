@@ -1284,10 +1284,14 @@ email/Celery is the selected secret delivery channel.
 
 Email delivery is not mathematically exactly-once because SMTP acceptance and
 database finalization are separate systems. The gateway fails closed around that
-boundary: before SMTP it persists a `sending` state, SMTP failure before
-acceptance records a retryable `failed` status with the one-time secret still
-pending, and SMTP success finalizes by consuming the one-time secret and marking
-the delivery `sent`. If SMTP may have accepted the message but database
+boundary: before SMTP it persists a `sending` state — for attempts prepared by this
+code, the same commit also records the exact destination prepared for that
+attempt (the current owner email) as inspection metadata; untouched older rows
+may retain creation-time metadata, and actual historical destinations are never
+reconstructed or backfilled — SMTP failure before acceptance records a
+retryable `failed` status with the one-time secret still pending, and SMTP
+success finalizes by consuming the one-time secret and marking the delivery
+`sent`. If SMTP may have accepted the message but database
 finalization fails, the row is left or marked `ambiguous`; automatic retry is
 blocked and operators should rotate the key if receipt cannot be confirmed.
 

@@ -758,6 +758,15 @@ slaif-gateway email show <delivery-uuid> [--json]
   `present` (pending usable material — NOT proof the email was sent),
   `consumed`, `expired`, `unavailable`, plus `can_send` and a fixed
   blocking reason when not safely sendable.
+- The reported recipient is PREPARED-ATTEMPT metadata: an attempt prepared
+  by this code records, in the existing sending commit, the exact
+  destination prepared for that attempt (the current owner email), so
+  inspection reflects the recipient prepared for THAT attempt. Untouched
+  older rows and rows that were never prepared may retain creation-time
+  metadata, and the actual historical destination of a pre-upgrade attempt
+  is unknown and is never reconstructed or backfilled. The field never
+  infers or rewrites historical destinations and proves nothing about SMTP
+  acceptance or mailbox arrival.
 
 `email send-pending-key` (the sender action) additionally accepts:
 

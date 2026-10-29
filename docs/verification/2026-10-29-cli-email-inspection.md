@@ -7,7 +7,11 @@ It is not provider, model, client, SMTP, mailbox, credential, performance,
 security, compliance, or release qualification, and it is not the 205
 installed-wheel executable-only operator transcript. Final-head CI for the
 publication commit is gated by root and is reported honestly in the
-objective report, not certified here.
+objective report, not certified here. The 202-a layer below is historical
+evidence for implementation `bb96266`; the clearly separated 202-b
+section at the end of this record covers the bounded prepared-recipient
+correction on the SAME PR and supersedes the 202-a recipient caveat
+without editing that historical layer.
 
 ## Scope
 
@@ -308,13 +312,14 @@ and are ROOT runs (independent probes/rechecks), not agent pytest runs:
 - `queued` means CLI broker submission only; `sent` means recorded SMTP
   acceptance/finalization; neither proves mailbox arrival. No real SMTP,
   mail, or inbox contact occurred anywhere in this evidence.
-- Recipient caveat: the persisted `recipient` is the creation-time
-  recorded field, while the existing sender delivers using the current
-  `Owner.email` after an owner-address change. This record describes the
-  recipient as the recorded field and does not infer historical actual
-  destinations; no SMTP destination policy was changed (an inert
-  producer-side candidate is recorded by root and may be scoped by a
-  continuation after merge).
+- Recipient caveat (SUPERSEDED by the 202-b section below, which
+  resolved this pre-merge per order 202-b; this 202-a text is kept as
+  historical evidence): at implementation `bb96266` the persisted
+  `recipient` was the creation-time recorded field, while the existing
+  sender delivers using the current `Owner.email` after an
+  owner-address change. The 202-a layer described the recipient as the
+  recorded field and did not infer historical actual destinations; no
+  SMTP destination policy was changed.
 - The global audit sanitizer drops secret-named fields by design; the
   intent event's `one_time_reference_id` is a documented safe reference
   (strictly the parsed UUID), not a relaxation.
@@ -333,3 +338,87 @@ No schema or key-policy migration: the migration head remains
 `one_time_secrets.status` documentation was added). Deploy by rebuilding
 and recreating the API and worker code consistently; no new settings,
 queue contract, or transport changes are required.
+
+## 202-b — bounded prepared-recipient correction (same PR, same record)
+
+Order 202-b (AMEND_EXISTING_PR, same PR #358) required the NEW inspection
+to report the recipient prepared for a NEW actual send attempt rather
+than an obsolete creation address after an owner-address edit, with no
+new recipient-selection policy, mail subsystem, schema, version marker,
+or backfill.
+
+### What changed
+
+- `app/slaif_gateway/services/email_delivery_service.py` ONLY: after the
+  existing exact-identity/lifecycle/prior-attempt validations succeed and
+  the canonical current owner destination is resolved, the existing
+  `EmailDelivery.recipient_email` is refreshed to the SAME value used in
+  `_PreparedKeyEmailDelivery.recipient_email` / the existing SMTP `to`,
+  within the existing locked sending preparation immediately before the
+  existing `mark_sending` flush/commit (one captured local value, small
+  ORM assignment, no new repository/transaction/framework).
+- Scope guarantee: only attempts prepared by this code record the exact
+  prepared `to` in the sending commit. Untouched older rows and rows that
+  were never prepared may retain creation-time metadata; the actual
+  historical destination of a pre-upgrade attempt is unknown and is never
+  reconstructed or backfilled. No row mutation for invalid identity or
+  blocked attempts; read-only list/show still updates nothing; the
+  known-shape output masking is unchanged; the existing
+  sent/failed/ambiguous law, single consumption, lock order, and
+  pre-decryption refusals are preserved.
+
+### Evidence (newest totals; 202-a layer above stays historical)
+
+- Affected unit batch: 149 PASS / 0 SKIP
+  (`/tmp/slaif202/unit-affected-202b.xml`, exit 0) — the 145 202-a
+  batch plus 4 new cases in `tests/unit/test_email_delivery_service.py`
+  (parametrized sent / smtp-failure / finalization-failure asserting the
+  PERSISTED row carries the prepared recipient in every outcome plus a
+  no-ID first-creation control).
+- Owned PostgreSQL 16, actual CLI entrypoint + actual shared sender,
+  fake SMTP/Celery, real crypto hooks: 13 PASS / 0 SKIP
+  (`/tmp/slaif202/pg-202b.xml`, time 62.677s, exit 0) — the 12 202-a
+  cases plus one new focused case
+  (`test_prepared_recipient_refreshes_to_current_owner_email`):
+  owner address edited after the pending rows existed (fictional
+  creation address); for EACH attempt — actual-CLI success, shared-sender
+  SMTP failure, and shared-sender accepted-then-finalization-failure — a
+  FRESH separate session read DURING the attempt proves the committed
+  `sending` row already carries the prepared recipient equal to the exact
+  fake `to`; after success the fresh row and the ACTUAL CLI
+  `list`/`show` reflect the prepared address; the failed/ambiguous rows
+  retain the prepared recipient under the existing law with the secret
+  untouched; the ambiguous retry adds no SMTP attempt. The existing
+  foreign-binding refusal case also asserts the selected recipient stays
+  untouched on the invalid-identity path (zero decrypt/SMTP).
+- Root independent evidence (root runs, not agent runs):
+  `202-b-independent-postgres-recipient-and-boundary-recheck.json`
+  (sender source sha `f57d0648`; fresh separate PostgreSQL session
+  DURING fake SMTP sees the committed sending recipient equal to the
+  actual prepared `to`; success, SMTP-failure and finalization-failure
+  targets persist; read-only inspection projects them unchanged; 3
+  positive controls + 12 existing guards + 9 recipient-named assertions;
+  mocked SMTP, no real mail/CLI/concurrency claim; the first root
+  fixture omitted a required `provider_status` and failed — corrected
+  fixture only, rerun exit 0, source stable, exact containers removed).
+
+### Review-thread disposition (recorded, root-owned)
+
+`github-code-quality[bot]` "Statement has no effect" on
+`tests/integration/test_cli_email_inspection_postgres.py` line 1429
+(discussion_r4409208194) targets `await o_task`. Inspection: the await is
+a deliberate synchronization point — it propagates the observer's
+timeout `AssertionError` into the test and guarantees the observer's
+session has closed before the final assertions, preserving the causal
+coordination of the lock-wait proof. It is a FALSE POSITIVE; the
+statement has effect through exception propagation and task-completion
+ordering. The await is preserved unchanged (root resolved the thread the
+same way); the three causal lock-wait cases still run as part of the full
+focused file with their wait/current-clock assertions unweakened.
+
+### Report provenance note (documented per order, immutable A untouched)
+
+The 202-a report's "+3 CLI" and "+2 sender" items were the LAST
+incremental fixes in those files, not all additions in them; the 145/12
+202-a counts were the complete latest totals at that head and remain the
+historical 202-a layer.

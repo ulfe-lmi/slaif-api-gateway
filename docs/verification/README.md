@@ -30,7 +30,13 @@ on record. They are dated, commit-specific evidence, not certifications.
   mail/broker, no schema change (head stays 0026/33 tables); root
   independent owned-PG baseline/fixed rechecks and CLI/dispatch/parser
   probes credited separately; not the 205 installed-wheel transcript;
-  final-head CI gated by root.
+  final-head CI gated by root. The same record carries the bounded
+  202-b prepared-recipient correction (149 unit + 13 owned-PG layers):
+  attempts prepared by this code record the exact prepared `to` in the
+  existing sending commit (fresh-session DURING-attempt proof for
+  success/SMTP-failure/finalization-failure), untouched older rows may
+  retain creation-time metadata with no backfill, and the
+  code-quality `await o_task` thread is recorded as a false positive.
 - [`2026-10-29 Objective 201-a content-free request-failure diagnostics verification`](2026-10-29-cli-request-diagnostics.md)
   (recorded 2026-10-29) - focused unit (61 new: 25 service + 24
   middleware + 8 actual-Typer CLI + 4 alembic), owned-PostgreSQL-16
