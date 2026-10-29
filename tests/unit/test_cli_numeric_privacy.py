@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 import uuid
 from pathlib import Path
@@ -38,6 +39,25 @@ from slaif_gateway.cli.common import parse_int_option
 from slaif_gateway.cli.main import app
 
 runner = CliRunner()
+
+# Renderer-stable terminal + ANSI/whitespace-independent assertions
+# (established project pattern: tests/unit/test_cli.py,
+# tests/unit/test_cli_provider_route_configuration.py). The app renders
+# Click usage errors through a rich error panel, whose ANSI styling and
+# width-dependent wrapping are terminal properties, not product behavior;
+# comparisons below are therefore style-independent.
+_ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+TERM_ENV = {"COLUMNS": "220", "NO_COLOR": "1"}
+
+
+def _plain(text: str) -> str:
+    return " ".join(_ANSI_RE.sub("", text).split())
+
+
+def _invoke(*args: Any, **kwargs: Any) -> Any:
+    """Renderer-stable invocation (fixed terminal width, no color)."""
+    kwargs.setdefault("env", TERM_ENV)
+    return runner.invoke(*args, **kwargs)
 
 KEY_ID = str(uuid.uuid4())
 ROUTE_ID = str(uuid.uuid4())
@@ -261,8 +281,10 @@ INVALID_SHAPES = [
 
 def _fixed_output(result, position: Position) -> str:
     if position.json_error:
+        # JSON error payloads are plain stdout (no terminal rendering).
         return result.stdout
-    return result.stderr
+    # Terminal-rendered usage errors: compare style-independently.
+    return _plain(result.stderr)
 
 
 @pytest.mark.parametrize("position", POSITIONS, ids=[p.name for p in POSITIONS])
@@ -280,7 +302,7 @@ def test_position_rejects_credential_shaped_canary_without_echo(
     seen: list[Any] = []
     position.monkeypatch_sentinel(monkeypatch, seen)
     with caplog.at_level(logging.DEBUG):
-        result = runner.invoke(app, position.argv(canary, tmp_path))
+        result = _invoke(app, position.argv(canary, tmp_path))
 
     operation_reached = len(seen) > 0
     exit_matches = result.exit_code == position.exit_code
@@ -322,7 +344,7 @@ def test_position_rejects_invalid_shapes_with_fixed_message(
     seen: list[Any] = []
     position.monkeypatch_sentinel(monkeypatch, seen)
     with caplog.at_level(logging.DEBUG):
-        result = runner.invoke(app, position.argv(shape, tmp_path))
+        result = _invoke(app, position.argv(shape, tmp_path))
 
     value = shape.strip()
     operation_reached = len(seen) > 0
@@ -356,7 +378,7 @@ def test_keys_list_valid_int_payloads_and_explicit_zero(monkeypatch) -> None:
 
     monkeypatch.setattr(keys_cli, "_list_gateway_keys", fake_list)
 
-    result = runner.invoke(app, ["keys", "list", "--limit", "1", "--offset", "0", "--json"])
+    result = _invoke(app, ["keys", "list", "--limit", "1", "--offset", "0", "--json"])
     assert result.exit_code == 0
     assert len(seen) == 1
     # 197-b bounded lookahead: the operation layer receives limit + 1 so the
@@ -369,9 +391,9 @@ def test_keys_list_valid_int_payloads_and_explicit_zero(monkeypatch) -> None:
 
     # Explicit 0 is DISTINCT from omitted: it reaches the existing domain
     # law (positive limit) and is refused, never coerced to the default.
-    result_zero = runner.invoke(app, ["keys", "list", "--limit", "0"])
+    result_zero = _invoke(app, ["keys", "list", "--limit", "0"])
     assert result_zero.exit_code == 2
-    assert "--limit must be positive" in result_zero.stderr
+    assert "--limit must be positive" in _plain(result_zero.stderr)
     assert len(seen) == 1  # refused before any operation call
 
 
@@ -384,7 +406,7 @@ def test_keys_list_omitted_uses_documented_defaults(monkeypatch) -> None:
 
     monkeypatch.setattr(keys_cli, "_list_gateway_keys", fake_list)
 
-    result = runner.invoke(app, ["keys", "list", "--json"])
+    result = _invoke(app, ["keys", "list", "--json"])
     assert result.exit_code == 0
     assert seen[0]["limit"] == 51 and type(seen[0]["limit"]) is int
     assert seen[0]["offset"] == 0 and type(seen[0]["offset"]) is int
@@ -395,7 +417,7 @@ def test_set_lazy_wait_converts_both_bounds_to_int(monkeypatch) -> None:
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(keys_cli, "_update_lazy_throttling", _sentinel_async(seen))
 
-    result = runner.invoke(
+    result = _invoke(
         app,
         [
             "keys", "set-lazy-throttling", KEY_ID,
@@ -423,7 +445,7 @@ def test_clone_converts_duration_to_int_and_keeps_domain_law(monkeypatch) -> Non
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(keys_cli, "_build_clone_plan_document", _sentinel_async(seen))
 
-    result = runner.invoke(
+    result = _invoke(
         app,
         [
             "keys", "clone",
@@ -441,7 +463,7 @@ def test_clone_converts_duration_to_int_and_keeps_domain_law(monkeypatch) -> Non
     assert type(seen[0]["validity_duration_seconds"]) is int
 
     # Explicit 0 is still refused by the existing positive-duration law.
-    result_zero = runner.invoke(
+    result_zero = _invoke(
         app,
         [
             "keys", "clone",
@@ -464,7 +486,7 @@ def test_providers_add_converts_timeout_and_retry_zero(monkeypatch) -> None:
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(providers_cli, "_add_provider", _sentinel_async(seen))
 
-    result = runner.invoke(
+    result = _invoke(
         app,
         [
             "providers", "add", "--provider", "probe-provider",
@@ -483,7 +505,7 @@ def test_providers_update_converts_and_keeps_omitted_none(monkeypatch) -> None:
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(providers_cli, "_update_provider", _sentinel_async(seen))
 
-    result = runner.invoke(
+    result = _invoke(
         app,
         [
             "providers", "update", "probe-provider",
@@ -497,7 +519,7 @@ def test_providers_update_converts_and_keeps_omitted_none(monkeypatch) -> None:
     assert seen[0]["timeout_seconds"] == 30 and type(seen[0]["timeout_seconds"]) is int
     assert seen[0]["max_retries"] == 0 and type(seen[0]["max_retries"]) is int
 
-    result_omitted = runner.invoke(
+    result_omitted = _invoke(
         app,
         [
             "providers", "update", "probe-provider",
@@ -515,7 +537,7 @@ def test_routes_update_converts_signed_priority_and_tokens(monkeypatch) -> None:
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(routes_cli, "_preview_route_update_plan", _sentinel_async(seen))
 
-    result = runner.invoke(
+    result = _invoke(
         app,
         [
             "routes", "update", ROUTE_ID,
@@ -533,7 +555,7 @@ def test_routes_update_converts_signed_priority_and_tokens(monkeypatch) -> None:
     assert type(patch.codex_limits["max_output_tokens"]) is int
 
     # Omitted numerics stay None (no default injected into a partial patch).
-    result_omitted = runner.invoke(
+    result_omitted = _invoke(
         app,
         [
             "routes", "update", ROUTE_ID,
@@ -564,7 +586,7 @@ def test_replay_extend_converts_ttl_and_keeps_omitted_none(monkeypatch) -> None:
     monkeypatch.setattr(codex_replay_cli, "cli_db_session", lambda: fake_db())
     monkeypatch.setattr(codex_replay_cli, "_service", lambda session: FakeService())
 
-    result = runner.invoke(
+    result = _invoke(
         app,
         [
             "codex", "replay", "extend",
@@ -577,7 +599,7 @@ def test_replay_extend_converts_ttl_and_keeps_omitted_none(monkeypatch) -> None:
     assert len(seen) == 1
     assert seen[0]["ttl_seconds"] == 3600 and type(seen[0]["ttl_seconds"]) is int
 
-    result_omitted = runner.invoke(
+    result_omitted = _invoke(
         app,
         [
             "codex", "replay", "extend",
