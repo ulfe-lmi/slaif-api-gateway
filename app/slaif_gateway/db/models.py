@@ -1696,3 +1696,91 @@ class CatalogRefreshApplication(Base):
         Index("ix_catalog_refresh_applications_run_id", "run_id"),
         Index("ix_catalog_refresh_applications_effective_at", "effective_at"),
     )
+
+
+class RequestDiagnostic(Base):
+    """One bounded, content-free recorded request FAILURE diagnostic.
+
+    Stores typed failure metadata only (never request/response bodies,
+    prompts, tool arguments/results, media URLs, reasoning, replay or
+    provider IDs, HMACs, credentials, headers, or raw path values).  A
+    successful request never produces a row.  The server diagnostic ID is
+    the stable unique identity; the client request ID is a separate,
+    NONunique lookup field that may collide across requests or with
+    another request's server diagnostic ID.
+    """
+
+    __tablename__ = "request_diagnostics"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Server-generated diagnostic ID (``gw-<uuid>``); the stable unique lookup ID.
+    gateway_request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Client-facing request ID as recorded; nullable when it was absent or
+    # omitted for a fixed safe reason (see client_id_unavailable_reason).
+    client_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    client_id_unavailable_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    method: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Static matched route template (e.g. ``/v1/responses``); never a raw path.
+    endpoint_template: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Actual HTTP status at the terminal outcome when known.
+    http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Stream outcome is distinct from HTTP status: a failed stream after
+    # HTTP 200 records ``stream_failure`` with http_status 200.
+    stream_outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Shared classifier facts (bounded, content-free).
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_param: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Bounded classifier positions (known index names) / counts / limits.
+    # ``none_as_null=True`` so an absent fact stores SQL NULL (satisfying the
+    # IS-NULL-or-object CHECK), never a JSON null.
+    positions: Mapped[dict] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    counts: Mapped[dict] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    limits: Mapped[dict] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    # Authenticated key UUID ONLY after successful normal authentication.
+    gateway_key_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Actual configured/resolved route identity when available.
+    route_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    route_pattern: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Operator-declared deployment revision provenance (existing settings).
+    deployment_revision: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    estimated_input_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_allowance_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    context_window_tokens: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Actual fixed replay error code where genuinely known (no counts).
+    replay_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint(
+            "stream_outcome in ('http_rejection', 'stream_failure', 'cancelled')",
+            name="request_diagnostics_stream_outcome_allowed",
+        ),
+        CheckConstraint(
+            "client_id_unavailable_reason in ('absent', 'unsafe', 'secret_alias')",
+            name="request_diagnostics_client_id_reason_allowed",
+        ),
+        # PostgreSQL 16-compatible shape/size guard (no jsonb_object_length):
+        # the key vocabulary and per-key bounds are enforced by the typed
+        # service boundary; this CHECK only pins JSONB shape and size.
+        CheckConstraint(
+            "positions is null or (jsonb_typeof(positions) = 'object' "
+            "and COALESCE(octet_length(positions::text), 0) <= 512)",
+            name="request_diagnostics_positions_bounded",
+        ),
+        CheckConstraint(
+            "COALESCE(octet_length(positions::text), 0) "
+            "+ COALESCE(octet_length(counts::text), 0) "
+            "+ COALESCE(octet_length(limits::text), 0) <= 8192",
+            name="request_diagnostics_facts_payload_8kib",
+        ),
+        # Stable unique server diagnostic ID: a repeated write for the same
+        # diagnostic ID is a repeat, not a second record (repeat safety).
+        UniqueConstraint(
+            "gateway_request_id", name="uq_request_diagnostics_gateway_request_id"
+        ),
+        Index("ix_request_diagnostics_client_request_id", "client_request_id"),
+        Index("ix_request_diagnostics_occurred_at", "occurred_at"),
+    )

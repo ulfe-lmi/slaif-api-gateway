@@ -14,4 +14,5 @@ def openai_error_from_request_policy_error(error: RequestPolicyError) -> OpenAIC
         error_type=error.error_type,
         code=error.error_code,
         param=error.param,
+        diagnostics_facts=getattr(error, "diagnostics_facts", None),
     )

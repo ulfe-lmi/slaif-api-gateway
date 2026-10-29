@@ -1,7 +1,7 @@
 # Database Schema for `slaif-api-gateway`
 
 > **Authority:** Current SQLAlchemy/Alembic schema contract
-> **Migration head:** `0025_catalog_refresh_applications`
+> **Migration head:** `0026_request_diagnostics`
 
 This reference describes the schema at the named Alembic head. The runtime
 stack is:
@@ -2387,6 +2387,76 @@ Rules:
 
 ---
 
+## 5.25 `request_diagnostics`
+
+Bounded, content-free request-failure diagnostics (objective 201). One row
+per recorded request FAILURE only; a successful request never produces a
+row. Stores typed failure metadata (stable server diagnostic ID, bounded
+client request ID or a fixed unavailable reason, static route template,
+terminal outcome, shared classifier code facts, authenticated key UUID only
+after successful normal auth, actually resolved route identity, and the
+typed token/ceiling decision numbers). It never stores request/response
+bodies, prompts, tool arguments or results, media URLs, reasoning or replay
+content, provider or client IDs beyond the bounded lookup fields, HMACs,
+credentials, headers, or raw path values.
+
+Columns:
+
+```text
+id UUID primary key
+gateway_request_id text(128) not null        -- server diagnostic ID (gw-<uuid>); stable unique identity
+client_request_id text(128) null             -- client ID as recorded; null when omitted for a fixed reason
+client_id_unavailable_reason text(32) null   -- 'absent' | 'unsafe' | 'secret_alias'
+method text(16) not null
+endpoint_template text(256) null             -- static matched route template; never a raw path
+occurred_at timestamptz not null
+http_status integer null                     -- actual terminal HTTP status when known
+stream_outcome text(32) not null             -- 'http_rejection' | 'stream_failure' | 'cancelled'
+source text(64) null                         -- shared classifier source
+reason_code text(64) null                    -- shared classifier reason
+error_code text(64) null                     -- public/fixed error code
+error_param text(64) null                    -- finite known param component (unknown => unavailable)
+positions jsonb null                         -- bounded known index names; absent => SQL NULL
+counts jsonb null                            -- bounded integer counts (count/limit/observed); absent => SQL NULL
+limits jsonb null                            -- bounded configured ceilings; absent => SQL NULL
+gateway_key_id uuid null                     -- ONLY after successful normal authentication
+route_id uuid null                           -- actually resolved route identity when available
+route_pattern text(128) null                 -- configured static route pattern (never a raw requested value)
+deployment_revision text(128) null           -- operator-declared revision provenance
+estimated_input_tokens bigint null
+output_allowance_tokens bigint null
+context_window_tokens bigint null
+replay_error_code text(64) null              -- actual fixed replay code where genuinely known
+recorded_at timestamptz not null
+```
+
+Constraints/indexes:
+
+```text
+uq_request_diagnostics_gateway_request_id UNIQUE (gateway_request_id)
+ix_request_diagnostics_client_request_id (client_request_id)
+ix_request_diagnostics_occurred_at (occurred_at)
+request_diagnostics_stream_outcome_allowed CHECK stream_outcome in ('http_rejection','stream_failure','cancelled')
+request_diagnostics_client_id_reason_allowed CHECK client_id_unavailable_reason in ('absent','unsafe','secret_alias')
+request_diagnostics_positions_bounded CHECK positions is null or (jsonb_typeof(positions) = 'object' and COALESCE(octet_length(positions::text), 0) <= 512)
+request_diagnostics_facts_payload_8kib CHECK COALESCE(octet_length(positions::text), 0) + COALESCE(octet_length(counts::text), 0) + COALESCE(octet_length(limits::text), 0) <= 8192
+```
+
+The positions/counts/limits columns use `JSONB(none_as_null=True)`: an
+absent fact is stored as SQL NULL (never JSON `null`), so the
+IS-NULL-or-object CHECKs hold; the size sums are NULL-safe
+(`COALESCE(..., 0)`) because a SQL-NULL column contributes zero bytes.
+The key vocabulary and per-key numeric bounds are enforced by the typed
+service boundary; the CHECKs pin JSONB shape and size only (PostgreSQL
+16-compatible: no `jsonb_object_length`).
+Retention is operator-bounded (`REQUEST_DIAGNOSTICS_RETENTION_SECONDS`),
+the retained row count is capped (`REQUEST_DIAGNOSTICS_MAX_RECORDS`) with
+bounded prune-on-write and bounded oldest-eviction, and there is no
+background expiry daemon (explicit `slaif-gateway diagnostics cleanup` or
+the bounded prune on writes).
+
+---
+
 ## 6. Quota reservation algorithm
 
 Before forwarding an upstream request:
@@ -2507,7 +2577,7 @@ keys.
 
 ## 10. Current table inventory
 
-Migration head `0025_catalog_refresh_applications` contains 32 tables.
+Migration head `0026_request_diagnostics` contains 33 tables.
 
 Current Gateway and operator-path tables:
 
@@ -2523,6 +2593,7 @@ key_templates                key_template_revisions
 response_references           conversation_references
 codex_replay_references       one_time_secrets
 email_deliveries              catalog_refresh_applications
+request_diagnostics
 ```
 
 Schema or repository foundations whose product wiring is partial or absent:

@@ -16,6 +16,7 @@ from slaif_gateway.cli.catalog_refresh import app as catalog_refresh_app
 from slaif_gateway.cli.cohorts import app as cohorts_app
 from slaif_gateway.cli.codex import app as codex_app
 from slaif_gateway.cli.db import app as db_app
+from slaif_gateway.cli.diagnostics import app as diagnostics_app
 from slaif_gateway.cli.email import app as email_app
 from slaif_gateway.cli.fx import app as fx_app
 from slaif_gateway.cli.institutions import app as institutions_app
@@ -46,6 +47,7 @@ app.add_typer(cohorts_app, name="cohorts")
 app.add_typer(codex_app, name="codex")
 app.add_typer(owners_app, name="owners")
 app.add_typer(db_app, name="db")
+app.add_typer(diagnostics_app, name="diagnostics")
 app.add_typer(email_app, name="email")
 app.add_typer(keys_app, name="keys")
 app.add_typer(providers_app, name="providers")

@@ -152,8 +152,19 @@ def codex_client_tool_taxonomy_id(policy: object) -> str | None:
 class ResponsesRequestPolicyError(RequestPolicyError):
     """Request-policy error for Responses field validation."""
 
-    def __init__(self, safe_message: str, *, param: str, error_code: str) -> None:
+    def __init__(
+        self,
+        safe_message: str,
+        *,
+        param: str,
+        error_code: str,
+        diagnostics_facts: Mapping[str, object] | None = None,
+    ) -> None:
         self.error_code = error_code
+        # Private typed observation facts (bounded, content-free) carried to
+        # the diagnostics facility only.  They are never part of the error
+        # message, the public OpenAI error JSON, or any provider payload.
+        self.diagnostics_facts = dict(diagnostics_facts) if diagnostics_facts else None
         super().__init__(safe_message, param=param)
 
 
@@ -4228,11 +4239,43 @@ def apply_codex_route_limits(
 
     limits = parse_codex_route_limits(route_capabilities)
     policy_result = apply_media_input_estimate(policy_result, route_capabilities=route_capabilities, input_ceiling=settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS)
+
+    def _limit_facts(
+        *,
+        output_tokens_value: int | None = None,
+        operator_output_ceiling: int | None = None,
+    ) -> dict[str, object]:
+        # Typed, bounded, content-free decision facts for the diagnostics
+        # facility only (never part of the public error).  Actual estimate /
+        # allowance / context values and the configured ceilings.  When the
+        # operator output ceiling is the rejecting ceiling it is retained
+        # under its own finite key (the route max alone would misattribute
+        # the rejection); no token re-estimation, no decision change.
+        facts: dict[str, object] = {
+            "source": "responses_route_limits",
+            "estimated_input_tokens": policy_result.estimated_input_tokens,
+            "context_window_tokens": limits.context_window_tokens,
+            "limits": {
+                "max_output_tokens": limits.max_output_tokens,
+                "max_input_tokens": settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS,
+                "context_window_tokens": limits.context_window_tokens,
+            },
+        }
+        if operator_output_ceiling is not None:
+            facts["limits"]["absolute_max_output_tokens"] = operator_output_ceiling
+        if output_tokens_value is not None:
+            facts["output_allowance_tokens"] = output_tokens_value
+        return facts
+
     if limits.default_max_output_tokens > settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS:
         _raise(
             "model",
             "responses_codex_limits_invalid",
             "The route Codex output default exceeds the operator ceiling.",
+            diagnostics=_limit_facts(
+                output_tokens_value=limits.default_max_output_tokens,
+                operator_output_ceiling=settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS,
+            ),
         )
     if reserve_route_max_output:
         output_tokens = limits.max_output_tokens
@@ -4245,24 +4288,31 @@ def apply_codex_route_limits(
             "max_output_tokens",
             "output_token_limit_exceeded",
             "The Codex output limit exceeds the selected model route maximum.",
+            diagnostics=_limit_facts(output_tokens_value=output_tokens),
         )
     if output_tokens > settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS:
         _raise(
             "max_output_tokens",
             "output_token_limit_exceeded",
             "The Codex output limit exceeds the configured operator maximum.",
+            diagnostics=_limit_facts(
+                output_tokens_value=output_tokens,
+                operator_output_ceiling=settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS,
+            ),
         )
     if policy_result.estimated_input_tokens > settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS:
         _raise(
             "input",
             "input_token_limit_exceeded",
             "Estimated Codex input exceeds the configured operator maximum.",
+            diagnostics=_limit_facts(output_tokens_value=output_tokens),
         )
     if policy_result.estimated_input_tokens + output_tokens > limits.context_window_tokens:
         _raise(
             "input",
             "responses_codex_context_window_exceeded",
             "Estimated Codex input plus output exposure exceeds the route context window.",
+            diagnostics=_limit_facts(output_tokens_value=output_tokens),
         )
 
     effective_body = copy.deepcopy(policy_result.effective_body)
@@ -5229,5 +5279,13 @@ def _allowed_responses_file_extensions(settings: Settings) -> frozenset[str]:
     )
 
 
-def _raise(param: str, code: str, message: str) -> NoReturn:
-    raise ResponsesRequestPolicyError(message, param=param, error_code=code)
+def _raise(
+    param: str,
+    code: str,
+    message: str,
+    *,
+    diagnostics: Mapping[str, object] | None = None,
+) -> NoReturn:
+    raise ResponsesRequestPolicyError(
+        message, param=param, error_code=code, diagnostics_facts=diagnostics
+    )

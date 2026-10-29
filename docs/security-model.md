@@ -1207,6 +1207,56 @@ request content, and it is bounded as follows:
 
 Operator procedure: [runbooks/incoming-request-capture.md](runbooks/incoming-request-capture.md).
 
+## Content-Free Request-Failure Diagnostics Boundary
+
+The request-failure diagnostics facility is a default-OFF, bounded,
+content-free operational index over ONE small PostgreSQL table. It is NOT a
+request-content exception (that remains exclusively operator request
+capture) and is bounded as follows:
+
+- **Content-free by construction.** Records store only the public error
+  code/param, bounded classifier reason, actual observed numeric decision
+  facts, endpoint template, actual observed wire status/stream outcome,
+  deployment revision, and (where authentication succeeded) the gateway key
+  UUID. Route identity is the configured pattern/UUID — never a raw model
+  wildcard suffix or URL/path/query value. No request or response bodies,
+  prompts, tool arguments or results, media URLs, headers, queries, or
+  credentials are ever stored, and the serialized record is hard-bounded to
+  8 KiB with a finite known fact-field vocabulary: unknown fact FIELDS are
+  rejected at the typed service boundary and drop the write (never
+  guessed), while unsafe optional code/reason/param path VALUES are
+  projected to unavailable with the remaining failure facts preserved.
+- **Known-secret protection at the client-ID boundary.** Client request
+  IDs are untrusted: a complete incoming authentication secret can appear
+  as an ID or metadata value. The stored `client_request_id` is masked with
+  the same pure known-secret discovery/masking used elsewhere (gateway
+  Bearer, cookie secrets, `Proxy-Authorization`, explicit credential
+  fields, custom gateway prefixes); when discovery is incomplete or faults,
+  the value is omitted with a fixed safe reason rather than stored. This is
+  known-shape protection, not universal content sanitization.
+- **Log-binding alias masking.** The request-ID structured-log binding is
+  alias-masked/omitted at the log boundary (`api/middleware.py`; the
+  existing redaction pipeline in `logging.py` is unchanged). The wire
+  `X-Request-ID` echo, the `X-SLAIF-Diagnostic-ID` correlation header, and
+  all authentication decisions are unchanged; any masking fault omits the
+  log binding without failing the request.
+- **Lookup IDs grant no authority.** `diagnostics request show` resolves
+  retained records for operator inspection only; a lookup ID never
+  establishes authentication authority, and no record editing, raw SQL,
+  secret recovery, or audit-log retention changes exist in the surface.
+- **Response decisions unchanged.** One bounded, best-effort write at the
+  terminal outcome in an independent transaction (never the accounting
+  transaction), under the configured write timeout; the awaited write may
+  add bounded completion latency, and every write failure drops the record
+  without changing the response, admission, accounting, holds/fences, or
+  cancellation. The operator-request-capture facility remains
+  independently default OFF and is neither replaced nor armed by this
+  facility.
+
+Configuration: [configuration.md](configuration.md) (Request Failure
+Diagnostics, default OFF). Verification:
+[verification/2026-10-29-cli-request-diagnostics.md](verification/2026-10-29-cli-request-diagnostics.md).
+
 ## Redis Rate Limiting
 
 When enabled, Redis enforces request, estimated-token, and active-concurrency
@@ -1249,6 +1299,10 @@ Ambiguous email delivery handling is documented in
 Structured logging redacts configured/custom gateway key prefixes, bearer keys,
 provider keys, cookies, passwords, CSRF/session tokens, token hashes, encrypted
 payloads, nonces, and nested sensitive metadata across common key naming styles.
+The request-ID log binding additionally alias-masks known incoming
+authentication aliases copied into `X-Request-ID` (known-shape protection at
+the log boundary only; the wire echo and authentication decisions are
+unchanged; see [Content-Free Request-Failure Diagnostics Boundary](#content-free-request-failure-diagnostics-boundary)).
 
 Metrics and logs must not contain real secrets. `/metrics` and `/readyz` should
 be internal or allowlisted in production. Production startup warnings make risky

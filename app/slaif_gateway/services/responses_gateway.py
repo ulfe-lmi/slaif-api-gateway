@@ -2656,6 +2656,26 @@ async def _resolve_responses_route(
                 authenticated_key,
                 endpoint=endpoint,
             )
+            # Content-free route facts at the TRUSTED resolution boundary,
+            # before capability enforcement: pre-stream rejections
+            # (capability denials, context/route limits) can cite the
+            # actually resolved route without inferring anything from the
+            # request model.  Pure best-effort; never raises, never affects
+            # the decision.
+            try:
+                if request is not None:
+                    from slaif_gateway.services.request_diagnostics import (
+                        record_scope_diagnostics,
+                        safe_route_pattern,
+                    )
+
+                    record_scope_diagnostics(
+                        request.scope,
+                        route_id=route.route_id,
+                        route_pattern=safe_route_pattern(route.route_pattern),
+                    )
+            except Exception:  # noqa: BLE001 - observation never affects the request
+                pass
             enforce_responses_route_capabilities(
                 route_capabilities=route.capabilities,
                 streaming_requested=streaming_requested,
@@ -2935,6 +2955,28 @@ def _streaming_responses_response(
         failure_response_id: str | None = None
         last_sequence = -1
 
+        def _note_stream_diagnostic(**fields: object) -> None:
+            # Pure best-effort observation: merge bounded, content-free
+            # failure facts onto the per-request scope so the terminal
+            # observer can retain them.  Never changes event order, holds,
+            # finalization, or cleanup, and never raises.
+            if request is None:
+                return
+            try:
+                from slaif_gateway.services.request_diagnostics import (
+                    record_scope_diagnostics,
+                    safe_route_pattern,
+                )
+
+                route_pattern = safe_route_pattern(route.route_pattern)
+                if route_pattern is not None:
+                    fields.setdefault("route_pattern", route_pattern)
+                record_scope_diagnostics(
+                    request.scope, route_id=route.route_id, **fields
+                )
+            except Exception:  # noqa: BLE001 - observability never affects the stream
+                pass
+
         def _failure(
             *, message, code, param=None, request_id=None, status_code=502, error_type=None
         ):
@@ -2977,6 +3019,7 @@ def _streaming_responses_response(
             rate_limit_reservation,
             stop_event=heartbeat_stop,
         )
+        _note_stream_diagnostic()
         try:
             async for chunk in adapter.stream_response(provider_request):
                 if chunk.upstream_request_id:
@@ -3031,6 +3074,11 @@ def _streaming_responses_response(
                             stream_estimate_monitor=stream_estimate_monitor,
                         )
                     provider_status = "incomplete"
+                    _note_stream_diagnostic(
+                        stream_outcome="stream_failure",
+                        source="responses_stream_failure",
+                        error_code=error_code,
+                    )
                     yield _failure(
                         message=safe_message,
                         code=error_code,
@@ -3077,6 +3125,11 @@ def _streaming_responses_response(
                             request=request,
                         )
                     provider_status = "interrupted"
+                    _note_stream_diagnostic(
+                        stream_outcome="stream_failure",
+                        source="responses_stream_failure",
+                        error_code=RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE,
+                    )
                     yield _failure(
                         message=RESPONSES_STREAMING_LIVE_BURN_ERROR_MESSAGE,
                         code=RESPONSES_STREAMING_LIVE_BURN_ERROR_CODE,
@@ -3185,6 +3238,12 @@ def _streaming_responses_response(
                         )
                     except CodexReplayReferenceError as exc:
                         provider_status = "incomplete"
+                        _note_stream_diagnostic(
+                            stream_outcome="stream_failure",
+                            source="responses_stream_failure",
+                            error_code=exc.error_code,
+                            replay_error_code=exc.error_code,
+                        )
                         yield _failure(
                             message=exc.safe_message,
                             code=exc.error_code,
@@ -3231,6 +3290,11 @@ def _streaming_responses_response(
                         stream_estimate_monitor=stream_estimate_monitor,
                     )
                 provider_status = "incomplete"
+                _note_stream_diagnostic(
+                    stream_outcome="stream_failure",
+                    source="responses_stream_failure",
+                    error_code="responses_stream_usage_missing",
+                )
                 yield _failure(
                     message=(
                         "Provider Responses stream completed without final usage metadata; "
@@ -3240,6 +3304,7 @@ def _streaming_responses_response(
                     request_id=request_id,
                 )
         except (asyncio.CancelledError, GeneratorExit):
+            _note_stream_diagnostic(stream_outcome="cancelled")
             with anyio.CancelScope(shield=True):
                 if external_web_search_admission is not None:
                     await _place_external_web_search_hold(
@@ -3302,6 +3367,11 @@ def _streaming_responses_response(
                 else exc
             )
             public_error = openai_error_from_provider_error(wire_error)
+            _note_stream_diagnostic(
+                stream_outcome="stream_failure",
+                source="responses_stream_failure",
+                error_code=public_error.code,
+            )
             yield _failure(
                 message=public_error.message,
                 code=public_error.code,
@@ -3320,6 +3390,11 @@ def _streaming_responses_response(
                     evidence_quality=ExternalToolHoldEvidenceQuality.AMBIGUOUS,
                 )
             increment_accounting_failure(exc.error_code)
+            _note_stream_diagnostic(
+                stream_outcome="stream_failure",
+                source="responses_stream_failure",
+                error_code=exc.error_code,
+            )
             yield _failure(
                 message=exc.safe_message,
                 code=exc.error_code,
@@ -3327,6 +3402,11 @@ def _streaming_responses_response(
             )
         except QuotaError as exc:
             increment_quota_rejection(exc.error_code)
+            _note_stream_diagnostic(
+                stream_outcome="stream_failure",
+                source="responses_stream_failure",
+                error_code=exc.error_code,
+            )
             yield _failure(
                 message=exc.safe_message,
                 code=exc.error_code,
@@ -3348,6 +3428,11 @@ def _streaming_responses_response(
                     estimated_cost_eur=(
                         cost_estimate.estimated_total_cost_eur + external_tool_hold_fee_eur
                     ),
+                )
+                _note_stream_diagnostic(
+                    stream_outcome="stream_failure",
+                    source="responses_stream_failure",
+                    error_code="external_tool_accounting_uncertain",
                 )
                 yield _failure(
                     message="External-tool streaming accounting could not be finalized safely.",

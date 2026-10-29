@@ -1543,6 +1543,100 @@ Behavioral guarantees:
 See [Operator runbook: incoming request capture](runbooks/incoming-request-capture.md)
 and [Verification: incoming request capture](verification/incoming-request-capture.md).
 
+## Request Failure Diagnostics (default OFF)
+
+Bounded, content-free failure-metadata recording for `/v1` requests. When
+enabled, a best-effort terminal-outcome observer writes at most ONE bounded
+typed record per failed request (unattributable authentication failure,
+endpoint/model/capability denial, unsupported tool or capability, context-
+window rejection, replay-reference rejection, or an unsupported streaming
+event after HTTP 200). It exists so an operator can later inspect *why* a
+failed request was rejected, by ID. It stores NO request or response
+content: no bodies, prompts, tool arguments or results, media, headers,
+queries, raw path values, or credentials. Successful completions are never
+recorded, and the facility complements (never replaces or arms) the
+[Operator Request Capture](#operator-request-capture) facility, which is the
+only request-content exception.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `REQUEST_DIAGNOSTICS_ENABLED` | `false` | Master switch. Must be `true` and **all API workers restarted** before any new record is written. Disabling recording never prevents reading or cleaning retained records. |
+| `REQUEST_DIAGNOSTICS_RETENTION_SECONDS` | `604800` (7 days) | Retention window (1 .. 2,592,000). Expired rows are filtered from lookups and physically pruned on writes and by the explicit `slaif-gateway diagnostics cleanup` command. |
+| `REQUEST_DIAGNOSTICS_MAX_RECORDS` | `10000` | Hard retained-record cap (1 .. 100000), enforced under concurrent writers by a small nonblocking transactional capacity lock plus bounded expiry pruning and oldest eviction; an insert never exceeds the cap. |
+| `REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS` | `100` | Bounded best-effort write budget (10 .. 1000 ms). A slow or failing store must never change the original HTTP/SSE response status/body, admission, accounting, or cancellation; the awaited write adds only this bounded, disclosed overhead (see Latency honesty below). |
+
+Behavioral guarantees:
+
+- **Default OFF, failures only.** Nothing is recorded until the switch is
+  enabled and loaded; when on, only failed terminal outcomes produce
+  records. The typed service boundary rejects unknown fact fields (such a
+  write is dropped, never guessed); unsafe or unknown *values* of optional
+  fields (code/reason/param/path) are projected to unavailable while the
+  remaining failure facts are preserved. The serialized record is hard-
+  bounded to 8 KiB.
+- **No impact on the request result.** The write runs in an independent,
+  bounded, best-effort transaction — never the request's accounting
+  transaction. A failed insert, timeout, unavailable schema/database,
+  capacity contention, or cleanup error never changes the original result,
+  admission, accounting, or cancellation; `CancelledError` is never
+  suppressed; there are no background tasks, queues, retry loops, or
+  schedulers.
+- **Honest drop policy.** A repeat of a retained row (same stable server
+  diagnostic ID) is an idempotent no-op checked BEFORE any pruning, so it
+  can never evict the row it duplicates (the unique constraint remains the
+  race fallback for concurrent writers). Otherwise, under the capacity lock
+  the writer first prunes a bounded batch of expired rows (its own phase
+  bound), and only when at/above the cap evicts a bounded number of the
+  oldest rows (`count - cap + 1`, capped by its own per-write phase bound)
+  and recounts. If it still cannot make room, the NEW record is dropped
+  (`DROPPED_CAPACITY`) rather than exceeding the cap; that capacity drop
+  COMMITS the bounded prune it already performed without inserting.
+  Pre-existing excess (e.g. after the operator lowers
+  `REQUEST_DIAGNOSTICS_MAX_RECORDS` beyond what one write's bounded phases
+  clear) therefore drains across subsequent non-repeat writes, never by an
+  unbounded sweep. Capacity-lock acquisition makes at most three bounded
+  nonblocking attempts with 10 ms retry intervals, all inside the single
+  configured awaited-write budget (no background jobs, no unbounded
+  retries, no queue, no scheduler).
+- **No background expiry daemon.** Expired records stay in the table until
+  the bounded prune-on-write or an explicit `diagnostics cleanup` removes
+  them; idle storage needs repeated cleanup. Cleanup affects this table
+  only.
+- **Latency honesty.** Recording is awaited at response completion, so a
+  recorded failure adds up to the write timeout (plus bounded cleanup) to
+  the completion path — it is not zero latency, and no performance or
+  zero-delay qualification is claimed. The 100 ms default is tight by
+  design: a cold first-connection statement preparation can legitimately
+  exceed the budget and be dropped as `DROPPED_TIMEOUT`; local functional
+  PostgreSQL verification uses the maximum allowed 1000 ms.
+- **Startup-scoped.** These are startup configuration, read once per API
+  worker process; the operator MUST configure them consistently across all
+  API workers (the facility does not detect or reconcile per-worker
+  differences). A running worker keeps the settings it started with. In
+  Docker Compose,
+  changing them in the container's `.env` requires **recreating** the
+  affected containers (restarting the same container does not reload
+  `env_file`); a plain process restart takes effect only when it is actually
+  supplied the changed environment.
+- **Reads work while disabled.** `diagnostics status` distinguishes
+  recording-disabled, store-unavailable, and empty retained dataset;
+  `diagnostics request show` reads retained records even when recording is
+  off. A lookup ID never establishes authentication authority; ambiguous
+  client-ID matches are bounded at 100 candidates with an honest
+  count/overflow and the stable gateway diagnostic IDs offered for
+  disambiguation.
+- **Status reflects the calling process, not live workers.** The
+  `recording_enabled` reported by `status` is the setting loaded by the
+  CALLING CLI process, not a live inspection or acknowledgement of the API
+  workers (the store has no worker heartbeat or configuration registry).
+  Run the CLI in the intended deployment environment, and keep the workers
+  on consistent, reloaded settings; retained rows alone cannot prove the
+  current recording state of any worker.
+
+CLI reference: [cli-reference.md](cli-reference.md) (Codex and diagnostics).
+Verification: [Verification: content-free request-failure diagnostics](
+verification/2026-10-29-cli-request-diagnostics.md).
+
 ## Production Notes
 
 - Never commit `.env`.
