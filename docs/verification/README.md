@@ -10,6 +10,15 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-29 Objective 205-a installed CLI field administration workflows verification (PARTIAL handoff)`](2026-10-29-cli-field-installed-workflow.md)
+  (recorded 2026-10-29) - actual installed `slaif-gateway` console from a
+  payload-verified wheel of accepted source `5e59a02` in an owned venv,
+  on an owned labeled PostgreSQL 16 container with a loopback SMTP sink:
+  outcomes 1-4 and 6 executed and green in the final byte-matched module
+  run (6/6 PASS, 0 skip); outcomes 5, 7-11 and the config-show evidence
+  not yet executed (same-PR 205-b); records the confirmed new
+  numeric-echo CLI product gap deferred to 205-b.
+
 - [`2026-10-29 Objective 204 CLI record edits and process configuration inspection verification`](2026-10-29-cli-record-edits-and-config.md)
   (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +
   actual-service evidence (8: owner move preservation with exact audit,
