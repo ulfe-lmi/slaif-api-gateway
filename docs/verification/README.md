@@ -10,6 +10,24 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-29 Objective 204 CLI record edits and process configuration inspection verification`](2026-10-29-cli-record-edits-and-config.md)
+  (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +
+  actual-service evidence (8: owner move preservation with exact audit,
+  clears/conflicts/refusals, late-audit rollback, cohort partials and
+  FINAL merged window, causal lock-wait for both record types with
+  cleared PG statistics snapshots) and focused unit layers (74 new:
+  42 schema + 21 service/CLI + 11 config inspection incl. cold
+  subprocess entrypoint; 61 unchanged consumers; 69
+  governance/documentation passes) for
+  `slaif-gateway owners update` / `cohorts update` partial edits through
+  the shared record services (locked row first, delegated
+  complete-update law, exact owner_updated/cohort_updated audits,
+  late-fault rollback) and `slaif-gateway config show` (finite 45-name
+  allowlist, honest current-process snapshot, fixed safe
+  configuration_unavailable boundary, no credential values), plus the
+  two fixed task-import deferrals; synthetic data only, no
+  schema/settings change, no provider/client/SMTP/205-wheel claim;
+  final-head CI gated by root.
 - [`2026-10-29 Objective 203-a reviewed key-configuration batches verification`](2026-10-29-cli-key-batches.md)
   (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +
   actual-service evidence (13) and focused unit layers (50: 38

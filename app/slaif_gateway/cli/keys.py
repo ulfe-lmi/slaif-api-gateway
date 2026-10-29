@@ -119,11 +119,18 @@ from slaif_gateway.services.streaming_live_burn_surface import (
     CHAT_STREAMING_LIVE_BURN_SURFACE,
     streaming_live_burn_surface_policy_from_cli_options,
 )
-from slaif_gateway.workers.tasks_email import send_pending_key_email_task
+from slaif_gateway.cli.email import _PendingKeyEmailTaskSeam
 from slaif_gateway.utils.crypto import is_plausible_gateway_key
 
 app = typer.Typer(help="Manage gateway keys")
 policy_app = typer.Typer(help="Show or update gateway-key request policy")
+
+# 204-b: the workers task module is NOT imported at CLI module import;
+# the deferred-call seam (defined in cli/email.py) keeps this module
+# attribute name for the existing test mocks and resolves the fixed
+# task only when the enqueue call actually runs.
+send_pending_key_email_task = _PendingKeyEmailTaskSeam()
+
 external_tools_app = typer.Typer(help="Show or update deny-by-default external-tool policy")
 app.add_typer(policy_app, name="policy")
 app.add_typer(external_tools_app, name="external-tools")
