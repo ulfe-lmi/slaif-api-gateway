@@ -366,6 +366,17 @@ async def _key_row(url: str, key_id: uuid.UUID) -> dict[str, object]:
         return dict(row)
 
 
+async def _audit_id_present(url: str, audit_id: object) -> object | None:
+    factory = _session_factory(url)
+    async with factory() as session:
+        row = (
+            await session.execute(
+                text("SELECT id FROM audit_log WHERE id = :a"), {"a": audit_id}
+            )
+        ).first()
+        return row[0] if row is not None else None
+
+
 async def _record_audits(
     url: str, entity_type: str, entity_id: uuid.UUID
 ) -> list[dict[str, object]]:
@@ -602,18 +613,34 @@ def test_owner_late_audit_failure_rolls_back_row_and_audit(cli_env: str) -> None
     row_before = _run(_owner_row(url, owner_id))
 
     class _BoomAuditRepository(AuditRepository):
-        """Controlled fault injection: raises on the first audit write."""
+        """Controlled fault injection AFTER the REAL audit add+flush.
 
-        async def add_audit_log(self, **kwargs: object) -> None:
+        The real ``AuditRepository.add_audit_log`` (add + flush, returning
+        the AuditLog) runs first; the recorded provisional ID proves the
+        audit was genuinely written into the transaction BEFORE the fault
+        crosses the caller begin, so the post-rollback absence proves the
+        provisional audit rolled back with the row.
+        """
+
+        def __init__(self, session) -> None:
+            super().__init__(session)
+            self.flushed_audit_ids: list[object] = []
+
+        async def add_audit_log(self, **kwargs: object):
+            row = await super().add_audit_log(**kwargs)
+            self.flushed_audit_ids.append(row.id)
             raise RuntimeError("injected late audit failure (204b test)")
+
+    flushed_ids: list[object] = []
 
     async def _scenario() -> None:
         factory = _session_factory(url)
         async with factory() as session:
+            boom_repo = _BoomAuditRepository(session)
             service = OwnerService(
                 owners_repository=OwnersRepository(session),
                 institutions_repository=InstitutionsRepository(session),
-                audit_repository=_BoomAuditRepository(session),
+                audit_repository=boom_repo,
             )
             patch, _, reason = parse_owner_update_patch(
                 name=None, surname=None, email=None, institution_id=None,
@@ -624,17 +651,27 @@ def test_owner_late_audit_failure_rolls_back_row_and_audit(cli_env: str) -> None
             )
             # The fault must PROPAGATE out of the begin block so the
             # caller-owned transaction ROLLS BACK (row + audit).
-            with pytest.raises(RuntimeError, match="injected late audit failure"):
+            with pytest.raises(
+                RuntimeError, match="injected late audit failure"
+            ):
                 async with session.begin():
                     await service.update_owner_partial(
                         owner_id, patch=patch, reason=reason
                     )
+        flushed_ids.extend(boom_repo.flushed_audit_ids)
 
     _run(_scenario())
 
-    # The row and the provisional audit BOTH rolled back.
+    # The provisional audit was genuinely flushed into the transaction
+    # before the fault...
+    assert len(flushed_ids) == 1
+    provisional_audit_id = flushed_ids[0]
+    # ...and the row AND that provisional audit BOTH rolled back.
     assert _run(_owner_row(url, owner_id)) == row_before
     assert _run(_record_audits(url, "owner", owner_id)) == []
+    assert (
+        _run(_audit_id_present(url, provisional_audit_id)) is None
+    )
 
 
 # --- B: cohort partial edits --------------------------------------------------
@@ -777,9 +814,10 @@ def test_cohort_merged_window_duplicate_unknown_refusals(cli_env: str) -> None:
 async def _wait_holder_waiter_observed(
     url: str, holder_pid: int, waiter_pid: int
 ) -> None:
-    """Fresh autocommit observer: clear the stats snapshot before each
-    poll (the holder's cached snapshot cannot see waiters) and correlate
-    the EXACT causal relation through pg_blocking_pids."""
+    """Independent observer session: clear the statistics snapshot before
+    each poll (``pg_stat_clear_snapshot`` refreshes the observer's own
+    cached statistics view, which otherwise cannot see new waiters) and
+    correlate the EXACT causal relation through ``pg_blocking_pids``."""
     factory = _session_factory(url)
     async with factory() as session:
         deadline = time.monotonic() + 60

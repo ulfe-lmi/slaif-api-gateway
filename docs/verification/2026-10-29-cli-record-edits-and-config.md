@@ -37,7 +37,7 @@ Objective 204 completes two operator capabilities on the SAME PR as
    (`SELECT ... FOR UPDATE` + `populate_existing`) FIRST, then the merged
    values are delegated to the SAME shared normalization/validation and
    repository-write/audit helpers as the existing complete update (no
-   duplicated body; complete-update semantics byte-equivalent). The exact
+   duplicated body; the existing complete-update contracts are retained and regression-tested, not claimed as byte identity). The exact
    existing `owner_updated` / `cohort_updated` audit with locked old/new,
    required bounded reason, and optional actor commits with the record in
    the caller-owned transaction; a late audit fault rolls back row and
@@ -121,8 +121,9 @@ removed) — `tests/integration/test_cli_record_edits_postgres.py`, 8 PASS,
   email, unknown institution/owner, no-field, blank reason, invalid
   actor, and recognized-shape canary refusals with row/audits unchanged
   and no echo;
-- late audit fault under a caller-owned transaction: row AND provisional
-  audit both rolled back (fresh-session proof);
+- late audit fault under a caller-owned transaction: the genuinely
+  flushed provisional audit (real add+flush, recorded ID) and the row BOTH
+  rolled back (fresh-session absence proof);
 - cohort partial/clears preserve unrequested fields and the member key
   row; naive datetime interpreted as UTC; name strip normalization;
   invalid FINAL MERGED window / duplicate name / unknown cohort /
