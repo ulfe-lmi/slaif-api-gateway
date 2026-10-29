@@ -10,6 +10,27 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-29 Objective 203-a reviewed key-configuration batches verification`](2026-10-29-cli-key-batches.md)
+  (recorded 2026-10-29) - owned-PostgreSQL-16 actual-CLI +
+  actual-service evidence (13) and focused unit layers (50: 38
+  service/schema + 12 actual-Typer CLI, plus 137 unchanged consumers,
+  56 governance/protocol, 44 documentation passes) for the two-step
+  `slaif-gateway keys batch plan` / `apply` surface: READ ONLY exact
+  37-key cohort preview (zero writes/audits, empty `excluded_by_status`
+  per contract), atomic one-transaction apply with exact per-key audits
+  and same-scope preservation, >100-eligible no-truncation vs cap+1
+  overflow, stale membership/config/status/lock-join whole-batch
+  refusals (causal holder/waiter observed with cleared PG statistics
+  snapshot), late-audit full rollback (fresh-session proof), usage-only
+  movement non-staleness across preview->first-write->repeat,
+  `Numeric(18, 9)` money target proof, fresh fenced confirmation (saved
+  confirmation is never authority), edited-artifact fingerprint refusal
+  (first-apply and repeat states), and no-echo known-shape canaries in
+  policy content/pathname/reason/retained config (guard fires before
+  route/model validation can reflect values); synthetic data only, no
+  schema/settings change (head 0026/33 tables), no
+  provider/client/request-accounting/SMTP/205-wheel claim; final-head
+  CI gated by root.
 - [`2026-10-29 Objective 202-a email delivery inspection and safe explicit retries verification`](2026-10-29-cli-email-inspection.md)
   (recorded 2026-10-29) - focused affected unit batch (145 PASS: 18 new
   inspection + 3 new page-parse cases in the existing CLI suite + 2 new

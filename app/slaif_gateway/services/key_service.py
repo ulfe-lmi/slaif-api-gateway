@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
@@ -114,6 +116,52 @@ class GatewayKeyExternalToolFenceActiveError(KeyManagementError):
         "This gateway key has an active exclusive external-tool fence; "
         "the management operation is blocked until the reservation is settled"
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedKeyConfigurationUpdate:
+    """Complete validated resulting state of one typed configuration update.
+
+    Produced by the shared prepare/validate block used by BOTH the mutation
+    path and the no-write batch projection, so the two can never drift.
+    """
+
+    cleaned_reason: str
+    quotas_requested: bool
+    resulting_cost: "Decimal | None"
+    resulting_tokens: "int | None"
+    resulting_requests: "int | None"
+    request_requested: bool
+    request_policy: "GatewayKeyPolicy | None"
+    providers_requested: bool
+    responses_requested: bool
+    resulting_responses: "dict[str, object] | None"
+    rate_requested: bool
+    resulting_rate: "dict[str, int | None]"
+    lazy_requested: bool
+    resulting_lazy: "dict[str, object] | None"
+    live_burn_requested: bool
+    resulting_live_burn: "ChatStreamingLiveBurnPolicy | None"
+    external_requested: bool
+    resulting_external: ExternalToolKeyPolicy
+
+
+# Bounded storage scale of gateway_keys.cost_limit_eur (Numeric(18, 9)).
+_STORAGED_COST_QUANTUM = Decimal("0.000000001")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedKeyConfigurationUpdate:
+    """No-write projection of one typed key-configuration update.
+
+    ``before_document`` is the key's current canonical version-1 document;
+    ``after_document`` is the canonical version-1 document of the EXACT
+    state the write phase would persist (including decimal normalization).
+    """
+
+    gateway_key_id: "uuid.UUID"
+    before_document: "dict[str, object]"
+    after_document: "dict[str, object]"
 
 
 class KeyService:
@@ -803,7 +851,131 @@ class KeyService:
         self._require_not_external_tool_fenced(
             gateway_key, operation="configuration update"
         )
+        prepared = await self._prepare_key_configuration_update(
+            gateway_key, config, cleaned_reason=cleaned_reason
+        )
 
+        # ---- Write phase (caller-owned transaction) ----------------------
+        raw_metadata = (
+            gateway_key.metadata_json
+            if isinstance(gateway_key.metadata_json, dict)
+            else {}
+        )
+        old_values = self._configuration_audit_values(gateway_key)
+        now = self._now()
+
+        if prepared.quotas_requested:
+            updated = await self._gateway_keys_repository.update_gateway_key_limits(
+                gateway_key.id,
+                cost_limit_eur=prepared.resulting_cost,
+                token_limit_total=prepared.resulting_tokens,
+                request_limit_total=prepared.resulting_requests,
+            )
+            if not updated:
+                raise GatewayKeyNotFoundError()
+            gateway_key.cost_limit_eur = prepared.resulting_cost
+            gateway_key.token_limit_total = prepared.resulting_tokens
+            gateway_key.request_limit_total = prepared.resulting_requests
+
+        if prepared.request_requested:
+            request_policy = prepared.request_policy
+            if request_policy is None:
+                raise InvalidGatewayKeyPolicyError(
+                    "Request policy was not prepared.",
+                    param="request_policy",
+                )
+            updated = await self._gateway_keys_repository.update_gateway_key_request_policy(
+                gateway_key.id,
+                allowed_models=request_policy.allowed_models,
+                allowed_endpoints=request_policy.allowed_endpoints,
+                allow_all_models=request_policy.allow_all_models,
+                allow_all_endpoints=request_policy.allow_all_endpoints,
+            )
+            if not updated:
+                raise GatewayKeyNotFoundError()
+            gateway_key.allowed_models = request_policy.allowed_models
+            gateway_key.allowed_endpoints = request_policy.allowed_endpoints
+            gateway_key.allow_all_models = request_policy.allow_all_models
+            gateway_key.allow_all_endpoints = request_policy.allow_all_endpoints
+
+        metadata = dict(raw_metadata)
+        if prepared.providers_requested:
+            metadata = self._metadata_with_provider_policy(
+                metadata, config.allowed_providers
+            )
+        if prepared.responses_requested:
+            metadata = self._metadata_with_responses_policy(
+                metadata, prepared.resulting_responses
+            )
+        if prepared.rate_requested:
+            updated = await self._gateway_keys_repository.update_gateway_key_rate_limit_policy(
+                gateway_key.id,
+                requests_per_minute=prepared.resulting_rate.get("requests_per_minute"),
+                tokens_per_minute=prepared.resulting_rate.get("tokens_per_minute"),
+                max_concurrent_requests=prepared.resulting_rate.get("max_concurrent_requests"),
+                window_seconds=prepared.resulting_rate.get("window_seconds"),
+            )
+            if not updated:
+                raise GatewayKeyNotFoundError()
+            gateway_key.rate_limit_requests_per_minute = prepared.resulting_rate.get(
+                "requests_per_minute"
+            )
+            gateway_key.rate_limit_tokens_per_minute = prepared.resulting_rate.get(
+                "tokens_per_minute"
+            )
+            gateway_key.max_concurrent_requests = prepared.resulting_rate.get(
+                "max_concurrent_requests"
+            )
+            metadata = self._metadata_with_rate_limit_window(metadata, prepared.resulting_rate)
+        if prepared.lazy_requested:
+            metadata = self._metadata_with_lazy_throttling_policy(
+                metadata, prepared.resulting_lazy
+            )
+        if prepared.live_burn_requested:
+            metadata = self._metadata_with_chat_streaming_live_burn_policy(
+                metadata, prepared.resulting_live_burn
+            )
+        if prepared.external_requested:
+            metadata = self._metadata_with_external_tool_policy(
+                metadata, prepared.resulting_external
+            )
+
+        if metadata != raw_metadata:
+            updated = await self._gateway_keys_repository.update_gateway_key_metadata(
+                gateway_key.id,
+                metadata_json=metadata,
+            )
+            if not updated:
+                raise GatewayKeyNotFoundError()
+            gateway_key.metadata_json = metadata
+
+        self._set_updated_at(gateway_key, now)
+        await self._audit_gateway_key_change(
+            action="update_key_configuration",
+            gateway_key=gateway_key,
+            actor_admin_id=payload.actor_admin_id,
+            reason=cleaned_reason,
+            old_values=old_values,
+            new_values=self._configuration_audit_values(gateway_key),
+        )
+        return self._management_result(gateway_key, updated_at=now)
+
+    async def _prepare_key_configuration_update(
+        self,
+        gateway_key: GatewayKey,
+        config: KeyConfiguration,
+        *,
+        cleaned_reason: str,
+    ) -> _PreparedKeyConfigurationUpdate:
+        """Prepare and validate the complete resulting configuration state.
+
+        This is the SAME prepare/validate block the mutation path and the
+        no-write batch projection share: route-aware request policy, rate
+        per-member patch, complete live-burn blocks, finite fenced-quota
+        invariant, and the client-module migration law. No writes occur
+        here; the caller decides (mutation or no-write projection) after
+        the complete resulting state is validated.
+        """
         raw_metadata = (
             gateway_key.metadata_json
             if isinstance(gateway_key.metadata_json, dict)
@@ -829,6 +1001,7 @@ class KeyService:
         )
 
         request_requested = is_request_policy_group_present(config)
+        request_policy: GatewayKeyPolicy | None = None
         if request_requested:
             (
                 allowed_models,
@@ -968,99 +1141,357 @@ class KeyService:
                 cost_limit_eur=resulting_cost,
             )
 
-        # ---- Write phase (caller-owned transaction) ----------------------
-        old_values = self._configuration_audit_values(gateway_key)
-        now = self._now()
-
-        if quotas_requested:
-            updated = await self._gateway_keys_repository.update_gateway_key_limits(
-                gateway_key.id,
-                cost_limit_eur=resulting_cost,
-                token_limit_total=resulting_tokens,
-                request_limit_total=resulting_requests,
-            )
-            if not updated:
-                raise GatewayKeyNotFoundError()
-            gateway_key.cost_limit_eur = resulting_cost
-            gateway_key.token_limit_total = resulting_tokens
-            gateway_key.request_limit_total = resulting_requests
-
-        if request_requested:
-            updated = await self._gateway_keys_repository.update_gateway_key_request_policy(
-                gateway_key.id,
-                allowed_models=request_policy.allowed_models,
-                allowed_endpoints=request_policy.allowed_endpoints,
-                allow_all_models=request_policy.allow_all_models,
-                allow_all_endpoints=request_policy.allow_all_endpoints,
-            )
-            if not updated:
-                raise GatewayKeyNotFoundError()
-            gateway_key.allowed_models = request_policy.allowed_models
-            gateway_key.allowed_endpoints = request_policy.allowed_endpoints
-            gateway_key.allow_all_models = request_policy.allow_all_models
-            gateway_key.allow_all_endpoints = request_policy.allow_all_endpoints
-
-        metadata = dict(raw_metadata)
-        if providers_requested:
-            metadata = self._metadata_with_provider_policy(
-                metadata, config.allowed_providers
-            )
-        if responses_requested:
-            metadata = self._metadata_with_responses_policy(
-                metadata, resulting_responses
-            )
-        if rate_requested:
-            updated = await self._gateway_keys_repository.update_gateway_key_rate_limit_policy(
-                gateway_key.id,
-                requests_per_minute=resulting_rate.get("requests_per_minute"),
-                tokens_per_minute=resulting_rate.get("tokens_per_minute"),
-                max_concurrent_requests=resulting_rate.get("max_concurrent_requests"),
-                window_seconds=resulting_rate.get("window_seconds"),
-            )
-            if not updated:
-                raise GatewayKeyNotFoundError()
-            gateway_key.rate_limit_requests_per_minute = resulting_rate.get(
-                "requests_per_minute"
-            )
-            gateway_key.rate_limit_tokens_per_minute = resulting_rate.get(
-                "tokens_per_minute"
-            )
-            gateway_key.max_concurrent_requests = resulting_rate.get(
-                "max_concurrent_requests"
-            )
-            metadata = self._metadata_with_rate_limit_window(metadata, resulting_rate)
-        if lazy_requested:
-            metadata = self._metadata_with_lazy_throttling_policy(
-                metadata, resulting_lazy
-            )
-        if live_burn_requested:
-            metadata = self._metadata_with_chat_streaming_live_burn_policy(
-                metadata, resulting_live_burn
-            )
-        if external_requested:
-            metadata = self._metadata_with_external_tool_policy(
-                metadata, resulting_external
-            )
-
-        if metadata != raw_metadata:
-            updated = await self._gateway_keys_repository.update_gateway_key_metadata(
-                gateway_key.id,
-                metadata_json=metadata,
-            )
-            if not updated:
-                raise GatewayKeyNotFoundError()
-            gateway_key.metadata_json = metadata
-
-        self._set_updated_at(gateway_key, now)
-        await self._audit_gateway_key_change(
-            action="update_key_configuration",
-            gateway_key=gateway_key,
-            actor_admin_id=payload.actor_admin_id,
-            reason=cleaned_reason,
-            old_values=old_values,
-            new_values=self._configuration_audit_values(gateway_key),
+        return _PreparedKeyConfigurationUpdate(
+            cleaned_reason=cleaned_reason,
+            quotas_requested=quotas_requested,
+            resulting_cost=resulting_cost,
+            resulting_tokens=resulting_tokens,
+            resulting_requests=resulting_requests,
+            request_requested=request_requested,
+            request_policy=request_policy,
+            providers_requested=providers_requested,
+            responses_requested=responses_requested,
+            resulting_responses=resulting_responses,
+            rate_requested=rate_requested,
+            resulting_rate=resulting_rate,
+            lazy_requested=lazy_requested,
+            resulting_lazy=resulting_lazy,
+            live_burn_requested=live_burn_requested,
+            resulting_live_burn=resulting_live_burn,
+            external_requested=external_requested,
+            resulting_external=resulting_external,
         )
-        return self._management_result(gateway_key, updated_at=now)
+
+    async def project_key_configuration_update(
+        self,
+        gateway_key: GatewayKey,
+        configuration: KeyConfiguration,
+        *,
+        reason: str,
+    ) -> ProjectedKeyConfigurationUpdate:
+        """Prepare and validate one configuration update WITHOUT writing.
+
+        Runs the SAME preparation/validation law as
+        ``update_gateway_key_configuration`` on an already-loaded row and
+        renders the canonical version-1 before/after documents of the EXACT
+        state the write phase would persist (including decimal
+        normalization). No writes, audits, secret operations, provider
+        calls, or quota mutation occur; the caller owns the transaction and
+        any row locks. The reason is a validation input only (the fenced
+        external-tool law requires a nonblank audit reason) and is never
+        persisted by this projection.
+        """
+        cleaned_reason = (reason or "").strip()
+        if not cleaned_reason:
+            raise InvalidGatewayKeyPolicyError(
+                "Enter an audit reason before updating key configuration.",
+                param="reason",
+            )
+        if configuration.is_empty():
+            raise InvalidGatewayKeyPolicyError(
+                "No requested key configuration change.",
+                param="configuration",
+            )
+        self._require_not_external_tool_fenced(
+            gateway_key, operation="configuration update"
+        )
+        prepared = await self._prepare_key_configuration_update(
+            gateway_key, configuration, cleaned_reason=cleaned_reason
+        )
+        before_document = self.render_key_configuration_document(gateway_key)
+        after_document = self._key_configuration_document_for_target(
+            gateway_key, configuration, prepared
+        )
+        return ProjectedKeyConfigurationUpdate(
+            gateway_key_id=gateway_key.id,
+            before_document=before_document,
+            after_document=after_document,
+        )
+
+    def render_key_configuration_document(
+        self, gateway_key: GatewayKey
+    ) -> dict[str, object]:
+        """Render the key's current administered policy state as a strict
+        version-1 document (shared by export and batch projection)."""
+        raw_metadata = (
+            gateway_key.metadata_json
+            if isinstance(gateway_key.metadata_json, dict)
+            else {}
+        )
+        return self._render_configuration_document(
+            allowed_models=list(gateway_key.allowed_models or []),
+            allow_all_models=bool(gateway_key.allow_all_models),
+            allowed_endpoints=list(gateway_key.allowed_endpoints or []),
+            allow_all_endpoints=bool(gateway_key.allow_all_endpoints),
+            providers_raw=raw_metadata.get("allowed_providers"),
+            responses_raw=raw_metadata.get("responses_policy"),
+            rate_metadata_raw=raw_metadata.get("rate_limit_policy"),
+            rate_projected=self._rate_limit_policy_from_key(gateway_key),
+            lazy_raw=raw_metadata.get("lazy_throttling_policy"),
+            live_burn_raw=raw_metadata.get(CHAT_STREAMING_LIVE_BURN_METADATA_KEY),
+            external_raw=raw_metadata.get("external_tool_policy"),
+            cost_limit_eur=gateway_key.cost_limit_eur,
+            token_limit_total=gateway_key.token_limit_total,
+            request_limit_total=gateway_key.request_limit_total,
+        )
+
+    def _key_configuration_document_for_target(
+        self,
+        gateway_key: GatewayKey,
+        configuration: KeyConfiguration,
+        prepared: _PreparedKeyConfigurationUpdate,
+    ) -> dict[str, object]:
+        """Render the canonical document of the EXACT state the write phase
+        would persist for a prepared update (no write occurs)."""
+        raw_metadata = (
+            gateway_key.metadata_json
+            if isinstance(gateway_key.metadata_json, dict)
+            else {}
+        )
+
+        if prepared.request_requested and prepared.request_policy is not None:
+            allowed_models = list(prepared.request_policy.allowed_models)
+            allow_all_models = prepared.request_policy.allow_all_models
+            allowed_endpoints = list(prepared.request_policy.allowed_endpoints)
+            allow_all_endpoints = prepared.request_policy.allow_all_endpoints
+        else:
+            allowed_models = list(gateway_key.allowed_models or [])
+            allow_all_models = bool(gateway_key.allow_all_models)
+            allowed_endpoints = list(gateway_key.allowed_endpoints or [])
+            allow_all_endpoints = bool(gateway_key.allow_all_endpoints)
+
+        # Target metadata built EXACTLY like the write phase chain.
+        metadata: dict[str, object] = dict(raw_metadata)
+        if prepared.providers_requested:
+            metadata = self._metadata_with_provider_policy(
+                metadata, configuration.allowed_providers
+            )
+        if prepared.responses_requested:
+            metadata = self._metadata_with_responses_policy(
+                metadata, prepared.resulting_responses
+            )
+        if prepared.rate_requested:
+            metadata = self._metadata_with_rate_limit_window(
+                metadata, prepared.resulting_rate
+            )
+            rate_projected: dict[str, int] | None = {
+                member: value
+                for member, value in prepared.resulting_rate.items()
+                if value is not None
+            }
+        else:
+            rate_projected = self._rate_limit_policy_from_key(gateway_key)
+        if prepared.lazy_requested:
+            metadata = self._metadata_with_lazy_throttling_policy(
+                metadata, prepared.resulting_lazy
+            )
+        if prepared.live_burn_requested:
+            metadata = self._metadata_with_chat_streaming_live_burn_policy(
+                metadata, prepared.resulting_live_burn
+            )
+        if prepared.external_requested:
+            metadata = self._metadata_with_external_tool_policy(
+                metadata, prepared.resulting_external
+            )
+
+        cost_limit_eur = (
+            prepared.resulting_cost if prepared.quotas_requested else gateway_key.cost_limit_eur
+        )
+        if prepared.quotas_requested:
+            # NEW projection boundary only: the projected target must
+            # render EXACTLY as the bounded 9-decimal storage column will
+            # persist it (existing setter/export/accounting law unchanged).
+            cost_limit_eur = self._normalize_stored_cost_scale(cost_limit_eur)
+        token_limit_total = (
+            prepared.resulting_tokens
+            if prepared.quotas_requested
+            else gateway_key.token_limit_total
+        )
+        request_limit_total = (
+            prepared.resulting_requests
+            if prepared.quotas_requested
+            else gateway_key.request_limit_total
+        )
+
+        return self._render_configuration_document(
+            allowed_models=allowed_models,
+            allow_all_models=allow_all_models,
+            allowed_endpoints=allowed_endpoints,
+            allow_all_endpoints=allow_all_endpoints,
+            providers_raw=metadata.get("allowed_providers"),
+            responses_raw=metadata.get("responses_policy"),
+            rate_metadata_raw=metadata.get("rate_limit_policy"),
+            rate_projected=rate_projected,
+            lazy_raw=metadata.get("lazy_throttling_policy"),
+            live_burn_raw=metadata.get(CHAT_STREAMING_LIVE_BURN_METADATA_KEY),
+            external_raw=metadata.get("external_tool_policy"),
+            cost_limit_eur=cost_limit_eur,
+            token_limit_total=token_limit_total,
+            request_limit_total=request_limit_total,
+        )
+
+    @staticmethod
+    def _normalize_stored_cost_scale(value: Decimal | None) -> Decimal | None:
+        """Render a NEW projected target cost at the exact storage scale.
+
+        The ``gateway_keys.cost_limit_eur`` column is ``Numeric(18, 9)``:
+        the durable value is the value at that bounded 9-decimal scale.
+        A target with more decimal places cannot be honestly projected
+        (the database would round it to a DIFFERENT amount), so it is
+        refused explicitly before any batch artifact or write;
+        representable values are normalized to the exact stored scale so
+        projected documents, fingerprints, post-update checks, and repeat
+        decisions match the durable state. This is a NEW projection
+        boundary: the existing setter/audit/accounting law and the
+        stored-value export format are unchanged.
+        """
+        if value is None:
+            return None
+        if value % _STORAGED_COST_QUANTUM != 0:
+            raise InvalidGatewayKeyPolicyError(
+                "The reviewed cost limit exceeds the bounded 9-decimal "
+                "storage precision.",
+                param="cost_limit_eur",
+            )
+        return value.quantize(_STORAGED_COST_QUANTUM)
+
+    def _render_configuration_document(
+        self,
+        *,
+        allowed_models: list[str],
+        allow_all_models: bool,
+        allowed_endpoints: list[str],
+        allow_all_endpoints: bool,
+        providers_raw: object,
+        responses_raw: object,
+        rate_metadata_raw: object,
+        rate_projected: dict[str, int] | None,
+        lazy_raw: object,
+        live_burn_raw: object,
+        external_raw: object,
+        cost_limit_eur: Decimal | None,
+        token_limit_total: int | None,
+        request_limit_total: int | None,
+    ) -> dict[str, object]:
+        """Build and gate one version-1 document from explicit state values.
+
+        Values are inspected RAW with the SAME strict typed validators as
+        the existing export: malformed or unsupported policy fails the
+        operation explicitly instead of falling back to runtime-safe
+        defaults, and the rendered document is re-parsed by the SAME strict
+        version-1 schema (final consumability law).
+        """
+        config = KeyConfiguration()
+        config.allowed_models = list(allowed_models)
+        config.allow_all_models = allow_all_models
+        config.allowed_endpoints = list(allowed_endpoints)
+        config.allow_all_endpoints = allow_all_endpoints
+
+        if providers_raw is None:
+            config.allowed_providers = None
+        elif isinstance(providers_raw, list) and all(
+            isinstance(item, str) and item.strip() for item in providers_raw
+        ):
+            config.allowed_providers = [item.strip() for item in providers_raw]
+        else:
+            raise KeyConfigurationExportError(
+                "Stored provider policy is not a valid provider allow-list.",
+                param="allowed_providers",
+            )
+
+        if responses_raw is None:
+            config.responses_policy = None
+        elif not isinstance(responses_raw, dict):
+            raise KeyConfigurationExportError(
+                param="responses_policy",
+            )
+        else:
+            try:
+                config.responses_policy = validate_key_responses_policy(responses_raw)
+            except InvalidGatewayKeyPolicyError as exc:
+                raise KeyConfigurationExportError(
+                    param=exc.param,
+                ) from exc
+
+        if rate_metadata_raw is not None:
+            if not isinstance(rate_metadata_raw, dict) or any(
+                key != "window_seconds" for key in rate_metadata_raw
+            ):
+                raise KeyConfigurationExportError(
+                    param="rate_limit_policy",
+                )
+            window = rate_metadata_raw.get("window_seconds")
+            if window is not None and (
+                isinstance(window, bool) or not isinstance(window, int)
+            ):
+                raise KeyConfigurationExportError(
+                    param="rate_limit_policy",
+                )
+        config.rate_limit_policy = dict(rate_projected) if rate_projected else None
+
+        if lazy_raw is None:
+            config.lazy_throttling_policy = None
+        elif not isinstance(lazy_raw, dict):
+            raise KeyConfigurationExportError(param="lazy_throttling_policy")
+        else:
+            try:
+                # Strict authoring validator: malformed/unknown/ceiling-
+                # exceeding stored blocks fail the export explicitly.
+                config.lazy_throttling_policy = self._validate_lazy_throttling_policy(
+                    lazy_raw
+                )
+            except InvalidGatewayKeyLimitsError as exc:
+                raise KeyConfigurationExportError(
+                    param=exc.param or "lazy_throttling_policy",
+                ) from exc
+
+        if live_burn_raw is None:
+            config.chat_streaming_live_burn_policy = (
+                default_chat_streaming_live_burn_policy().to_metadata()
+            )
+        else:
+            # Unsupported stored members fail the export explicitly; the
+            # runtime normalizer would otherwise erase them silently.
+            if has_unsupported_chat_live_burn_fields(live_burn_raw):
+                raise KeyConfigurationExportError(
+                    param="chat_streaming_live_burn_policy",
+                )
+            try:
+                config.chat_streaming_live_burn_policy = (
+                    self._validate_chat_streaming_live_burn_policy(live_burn_raw)
+                    .to_metadata()
+                )
+            except InvalidGatewayKeyPolicyError as exc:
+                raise KeyConfigurationExportError(
+                    param=exc.param or "chat_streaming_live_burn_policy",
+                ) from exc
+
+        if external_raw is None:
+            config.external_tool_policy = strict_key_policy().to_metadata()
+        else:
+            parsed_external = parse_key_external_tool_policy(
+                external_raw,
+                ceilings=self._settings.get_external_tool_operator_ceilings(),
+            )
+            if not parsed_external.valid or parsed_external.policy is None:
+                raise KeyConfigurationExportError(
+                    param="external_tool_policy",
+                )
+            config.external_tool_policy = parsed_external.policy.to_metadata()
+
+        config.cost_limit_eur = cost_limit_eur
+        config.token_limit_total = token_limit_total
+        config.request_limit_total = request_limit_total
+        document = key_configuration_export(config)
+        # Final consumability law: the rendered document must be accepted by
+        # the SAME strict version-1 parser. A stored value the file contract
+        # would refuse (e.g. a non-positive rate window) fails the export
+        # explicitly instead of shipping an unparseable document.
+        try:
+            parse_key_configuration(document)
+        except KeyConfigurationError as exc:
+            raise KeyConfigurationExportError(param="file") from exc
+        return document
 
     async def export_gateway_key_configuration(
         self,
@@ -1082,129 +1513,7 @@ class KeyService:
         operation controls, not inherited configuration.
         """
         gateway_key = await self._get_gateway_key(gateway_key_id)
-        raw_metadata = (
-            gateway_key.metadata_json
-            if isinstance(gateway_key.metadata_json, dict)
-            else {}
-        )
-        config = KeyConfiguration()
-        config.allowed_models = list(gateway_key.allowed_models or [])
-        config.allow_all_models = bool(gateway_key.allow_all_models)
-        config.allowed_endpoints = list(gateway_key.allowed_endpoints or [])
-        config.allow_all_endpoints = bool(gateway_key.allow_all_endpoints)
-
-        raw_providers = raw_metadata.get("allowed_providers")
-        if raw_providers is None:
-            config.allowed_providers = None
-        elif isinstance(raw_providers, list) and all(
-            isinstance(item, str) and item.strip() for item in raw_providers
-        ):
-            config.allowed_providers = [item.strip() for item in raw_providers]
-        else:
-            raise KeyConfigurationExportError(
-                "Stored provider policy is not a valid provider allow-list.",
-                param="allowed_providers",
-            )
-
-        raw_responses = raw_metadata.get("responses_policy")
-        if raw_responses is None:
-            config.responses_policy = None
-        elif not isinstance(raw_responses, dict):
-            raise KeyConfigurationExportError(
-                param="responses_policy",
-            )
-        else:
-            try:
-                config.responses_policy = validate_key_responses_policy(raw_responses)
-            except InvalidGatewayKeyPolicyError as exc:
-                raise KeyConfigurationExportError(
-                    param=exc.param,
-                ) from exc
-
-        raw_rate_metadata = raw_metadata.get("rate_limit_policy")
-        if raw_rate_metadata is not None:
-            if not isinstance(raw_rate_metadata, dict) or any(
-                key != "window_seconds" for key in raw_rate_metadata
-            ):
-                raise KeyConfigurationExportError(
-                    param="rate_limit_policy",
-                )
-            window = raw_rate_metadata.get("window_seconds")
-            if window is not None and (
-                isinstance(window, bool) or not isinstance(window, int)
-            ):
-                raise KeyConfigurationExportError(
-                    param="rate_limit_policy",
-                )
-        projected_rate = self._rate_limit_policy_from_key(gateway_key)
-        config.rate_limit_policy = dict(projected_rate) if projected_rate else None
-
-        raw_lazy = raw_metadata.get("lazy_throttling_policy")
-        if raw_lazy is None:
-            config.lazy_throttling_policy = None
-        elif not isinstance(raw_lazy, dict):
-            raise KeyConfigurationExportError(param="lazy_throttling_policy")
-        else:
-            try:
-                # Strict authoring validator: malformed/unknown/ceiling-
-                # exceeding stored blocks fail the export explicitly.
-                config.lazy_throttling_policy = self._validate_lazy_throttling_policy(
-                    raw_lazy
-                )
-            except InvalidGatewayKeyLimitsError as exc:
-                raise KeyConfigurationExportError(
-                    param=exc.param or "lazy_throttling_policy",
-                ) from exc
-
-        raw_live_burn = raw_metadata.get(CHAT_STREAMING_LIVE_BURN_METADATA_KEY)
-        if raw_live_burn is None:
-            config.chat_streaming_live_burn_policy = (
-                default_chat_streaming_live_burn_policy().to_metadata()
-            )
-        else:
-            # Unsupported stored members fail the export explicitly; the
-            # runtime normalizer would otherwise erase them silently.
-            if has_unsupported_chat_live_burn_fields(raw_live_burn):
-                raise KeyConfigurationExportError(
-                    param="chat_streaming_live_burn_policy",
-                )
-            try:
-                config.chat_streaming_live_burn_policy = (
-                    self._validate_chat_streaming_live_burn_policy(raw_live_burn)
-                    .to_metadata()
-                )
-            except InvalidGatewayKeyPolicyError as exc:
-                raise KeyConfigurationExportError(
-                    param=exc.param or "chat_streaming_live_burn_policy",
-                ) from exc
-
-        raw_external = raw_metadata.get("external_tool_policy")
-        if raw_external is None:
-            config.external_tool_policy = strict_key_policy().to_metadata()
-        else:
-            parsed_external = parse_key_external_tool_policy(
-                raw_external,
-                ceilings=self._settings.get_external_tool_operator_ceilings(),
-            )
-            if not parsed_external.valid or parsed_external.policy is None:
-                raise KeyConfigurationExportError(
-                    param="external_tool_policy",
-                )
-            config.external_tool_policy = parsed_external.policy.to_metadata()
-
-        config.cost_limit_eur = gateway_key.cost_limit_eur
-        config.token_limit_total = gateway_key.token_limit_total
-        config.request_limit_total = gateway_key.request_limit_total
-        document = key_configuration_export(config)
-        # Final consumability law: the rendered document must be accepted by
-        # the SAME strict version-1 parser. A stored value the file contract
-        # would refuse (e.g. a non-positive rate window) fails the export
-        # explicitly instead of shipping an unparseable document.
-        try:
-            parse_key_configuration(document)
-        except KeyConfigurationError as exc:
-            raise KeyConfigurationExportError(param="file") from exc
-        return document
+        return self.render_key_configuration_document(gateway_key)
 
     async def reset_gateway_key_usage(
         self,
