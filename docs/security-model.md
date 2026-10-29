@@ -1345,6 +1345,40 @@ permissions. Send-now and enqueue email delivery modes reject additional
 plaintext destinations by default. Destructive reserved-counter resets require
 explicit confirmation.
 
+### Reviewed key-configuration batches (objective 203)
+
+`keys batch plan` is a READ ONLY preview: it locks the exact selected key
+rows, renders the canonical before/after/diff through the existing shared
+policy law, and exits its caller transaction WITHOUT commit. It writes zero
+key/audit/material/usage state and generates no secrets.
+
+`keys batch apply` commits exactly ONE caller-owned transaction containing
+every per-key update through the EXISTING `update_key_configuration` law
+(same validation, same per-key audit). Every check completes before the
+first write; a late validation, write, or audit failure propagates so the
+transaction rolls back ALL keys and ALL provisional audits. There is no
+partial batch state.
+
+The saved plan file is a review artifact, never authority: it grants no
+confirmation, no idempotence proof, and no replay right. Apply re-locks the
+exact rows, re-resolves cohort membership AFTER the last potentially
+blocking selected-key lock, re-derives every target through the shared law
+under the locks, and refuses the whole batch (stale) on membership, status,
+configuration, or fingerprint drift with zero writes and zero audits. A
+`confirm_external_tool_fenced` value recorded in the plan is informational
+only and is stripped before validation; only the FRESH apply-time
+`--confirm-external-tool-fenced` flag satisfies the shared fenced law
+(repeated decisions re-require it through the same law).
+
+Known-shape protection at the new batch boundary (finite recognized
+credential shapes, not universal content sanitization): a recognized shape
+in the typed input policy, in a selected key's retained canonical
+configuration, in the plan artifact pathname, or in the audit reason is
+refused with a fixed safe error before shared validation can reflect the
+value into an error message and before any write, artifact, or output;
+ordinary values and the existing per-key validation/error law are
+unchanged. This is not DLP and makes no claim about arbitrary content.
+
 ## Admin Web Sessions And CSRF
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder

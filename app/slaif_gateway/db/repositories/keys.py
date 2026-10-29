@@ -222,6 +222,46 @@ class GatewayKeysRepository:
         await self._session.flush()
         return row
 
+    async def list_key_batch_selection(
+        self,
+        *,
+        cohort_id: uuid.UUID,
+        statuses: Sequence[str],
+        limit: int,
+    ) -> list[GatewayKey]:
+        """Bounded batch membership read for one cohort and finite statuses.
+
+        Additive read-only selection used by the reviewed key-configuration
+        batch: the cohort/status predicates are applied in SQL BEFORE the
+        bound (cap+1 overflow is refused by the caller), and the
+        deterministic ``id ASC`` order matches the batch lock order. All
+        existing list/admin/clone/accounting behavior is unchanged.
+        """
+        statement = (
+            select(GatewayKey)
+            .where(GatewayKey.cohort_id == cohort_id)
+            .where(GatewayKey.status.in_(tuple(statuses)))
+            .order_by(GatewayKey.id.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+    async def get_gateway_keys_by_ids(
+        self, *, key_ids: Sequence[uuid.UUID]
+    ) -> list[GatewayKey]:
+        """Exact bounded ID-set read for batch scope checks (deterministic
+        ``id ASC``). Additive read-only; no existing behavior is changed."""
+        if not key_ids:
+            return []
+        statement = (
+            select(GatewayKey)
+            .where(GatewayKey.id.in_(tuple(key_ids)))
+            .order_by(GatewayKey.id.asc())
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
     async def list_gateway_keys(
         self,
         *,

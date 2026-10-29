@@ -127,6 +127,10 @@ policy_app = typer.Typer(help="Show or update gateway-key request policy")
 external_tools_app = typer.Typer(help="Show or update deny-by-default external-tool policy")
 app.add_typer(policy_app, name="policy")
 app.add_typer(external_tools_app, name="external-tools")
+# 203-a: reviewed key-configuration batches (plan/apply sub-group).
+from slaif_gateway.cli.key_batch import app as key_batch_app  # noqa: E402
+
+app.add_typer(key_batch_app, name="batch")
 
 # Documented page bound for `keys list` (bounded, complete pagination).
 MAX_KEY_LIST_LIMIT = 200

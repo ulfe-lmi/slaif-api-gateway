@@ -50,6 +50,7 @@ slaif-gateway keys set-limits|set-rate-limits|set-lazy-throttling|set-chat-strea
 slaif-gateway keys reset-usage
 slaif-gateway keys policy show|update|export|effective|explain-route
 slaif-gateway keys external-tools show|update
+slaif-gateway keys batch plan|apply
 slaif-gateway templates create-from-calibration
 slaif-gateway calibration summarize
 ```
@@ -393,6 +394,75 @@ slaif-gateway keys clone --execute /tmp/clone-plan.json \
   pending delivery is sent with `slaif-gateway email send-pending-key
   --one-time-secret-id <uuid>`; otherwise rotate the key. There is no
   exactly-once SMTP promise.
+
+### Reviewed key-configuration batches (`keys batch plan` / `keys batch apply`)
+
+Since objective 203, a bounded reviewed batch applies the EXISTING
+supported key-policy/rate changes to an EXACT selected set of EXISTING
+keys, as a two-step plan/apply operation. `plan` is a READ ONLY preview
+(zero writes, zero audits, zero material/state change); `apply` runs the
+existing per-key `update_key_configuration` law in ONE caller-owned
+transaction, so a late validation/write/audit failure rolls back ALL keys
+and ALL provisional audits. Nothing new is created: no cohorts, no keys,
+no schema, no migration.
+
+```text
+# 1) Preview (READ ONLY) and save the reviewed plan (new 0600 file,
+#    never overwritten) for exactly one selection source:
+slaif-gateway keys batch plan \
+  --cohort-id <existing-cohort-uuid> \
+  --policy-file /tmp/batch-policy.json \
+  --plan-file /tmp/batch-plan.json --json
+# or explicit UUID selection (repeatable; --status repeatable, default active):
+slaif-gateway keys batch plan \
+  --key-id <key-uuid> --key-id <key-uuid> --status active \
+  --policy-file /tmp/batch-policy.json \
+  --plan-file /tmp/batch-plan.json --json
+
+# 2) Review the plan (per-key canonical before/after/diff, fingerprints,
+#    bounded counts), then apply with a fresh bounded audit reason:
+slaif-gateway keys batch apply \
+  --plan-file /tmp/batch-plan.json \
+  --reason "<bounded audit reason>" \
+  --actor-admin-id <admin-uuid> --json
+# A fenced external-tool target additionally requires the FRESH flag:
+slaif-gateway keys batch apply \
+  --plan-file /tmp/batch-plan.json --reason "<bounded audit reason>" \
+  --confirm-external-tool-fenced --json
+```
+
+- Selection: exactly one of `--cohort-id` or repeatable `--key-id`;
+  statuses are the finite set active/suspended/revoked (default active).
+  A cohort preview selects the EXACT currently eligible members and
+  reports `excluded_by_status` empty per contract (non-active members are
+  simply not selected); explicit selection reports the selected rows whose
+  status falls outside the filter as `excluded_by_status` objects. Both
+  selections are bounded to 1,000 keys; duplicates are refused, and any
+  missing key ID fails the WHOLE request with a count only (no ID echo).
+- The saved plan is a review artifact, never authority: it carries no
+  confirmation and no idempotence proof. Apply re-locks the EXACT rows,
+  re-resolves current cohort membership after the last selected-key lock,
+  re-derives every target through the same shared policy law, and refuses
+  the whole batch (stale) on membership, status, configuration, or
+  fingerprint drift - always with zero writes and zero audits.
+- A saved `confirm_external_tool_fenced` value is informational only and
+  is stripped before validation; only the fresh apply-time
+  `--confirm-external-tool-fenced` flag satisfies the shared fenced law
+  (repeated decisions re-require it through the same law).
+- Whole-set repeat: when every selected key already equals the re-derived
+  target, apply reports `already_at_target` with zero writes and zero new
+  audits (state equality, not proof of a historical execution).
+- Known-shape protection (finite recognized credential shapes, not a
+  universal sanitizer): a credential shape in the policy file content, in
+  the plan artifact pathname, or in the audit reason is refused with a
+  fixed safe error before any write, artifact, or output, and is never
+  echoed in stdout or stderr in text or JSON mode.
+- Money targets are projected at the exact `Numeric(18, 9)` storage scale
+  (for example `"2"` previews and applies as `"2.000000000"`); a target
+  that cannot be honestly represented at that scale is refused at plan
+  time with no artifact.
+- Deployment: no schema migration or new settings; the ordinary image
+  rebuild/recreate applies this CLI surface.
 
 ### Typed key-policy configuration (`--policy-file`)
 
