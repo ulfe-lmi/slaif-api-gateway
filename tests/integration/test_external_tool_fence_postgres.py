@@ -50,6 +50,7 @@ from slaif_gateway.services.quota_errors import (
     ExternalToolFenceActiveError as QuotaFenceActiveError,
 )
 from slaif_gateway.services.quota_service import QuotaService
+from slaif_gateway.services.reservation_reconciliation import ReservationReconciliationService
 from slaif_gateway.utils.crypto import hmac_sha256_token
 
 pytestmark = pytest.mark.skipif(
@@ -903,6 +904,43 @@ async def test_acquire_conflicts_and_exhaustion(migrated_postgres_url: str) -> N
         await engine.dispose()
 
 
+class _OwnQuotaReservationsRepository(QuotaReservationsRepository):
+    """Test-local candidate selector for this test's own reservation only.
+
+    The real PostgreSQL-backed expired-pending predicate is applied
+    with the owned reservation UUID filtered at DB selection time,
+    BEFORE the bounded limit, so unrelated expired rows committed by
+    other tests can never crowd the owned row out of the selection.
+    All other repository methods, including the per-reservation
+    get-for-update, are the unchanged production methods, and the
+    unchanged service performs the real candidate conversion, guards,
+    and mutations.
+    """
+
+    def __init__(self, session, own_reservation_id: uuid.UUID) -> None:
+        super().__init__(session)
+        self._own_reservation_id = own_reservation_id
+
+    async def list_expired_pending_reservations(
+        self,
+        *,
+        now: datetime,
+        limit: int = 100,
+    ) -> list[QuotaReservation]:
+        statement = (
+            select(QuotaReservation)
+            .where(
+                QuotaReservation.id == self._own_reservation_id,
+                QuotaReservation.status == "pending",
+                QuotaReservation.expires_at <= now,
+            )
+            .order_by(QuotaReservation.expires_at.asc())
+            .limit(limit)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
+
 @pytest.mark.asyncio
 async def test_held_fence_blocks_and_never_auto_releases(migrated_postgres_url: str) -> None:
     engine = create_async_engine(migrated_postgres_url, future=True)
@@ -965,24 +1003,30 @@ async def test_held_fence_blocks_and_never_auto_releases(migrated_postgres_url: 
                 },
             )
 
-        from slaif_gateway.services.reservation_reconciliation import (
-            ReservationReconciliationService,
-        )
-
+        before_batch = await _load_key(session_factory, key_id)
         async with session_factory() as session:
             summary = await ReservationReconciliationService(
                 gateway_keys_repository=GatewayKeysRepository(session),
-                quota_reservations_repository=QuotaReservationsRepository(session),
+                quota_reservations_repository=_OwnQuotaReservationsRepository(
+                    session, own_reservation_id=acquired.reservation_id
+                ),
                 usage_ledger_repository=UsageLedgerRepository(session),
                 audit_repository=AuditRepository(session),
             ).reconcile_expired_pending_reservations(now=datetime.now(UTC))
             await session.commit()
-        assert summary.skipped_count >= 1
+        # Scoped batch: exactly the own held-fence reservation,
+        # skipped by the external-tool-review law, nothing reconciled.
+        assert summary.checked_count == 1
+        assert summary.candidate_count == 1
+        assert summary.skipped_count == 1
         assert summary.reconciled_count == 0
         reservation = await _load_reservation(session_factory, acquired.reservation_id)
         assert reservation.status == "pending"
         held = await _load_key(session_factory, key_id)
         assert held.external_tool_fence_state == "held"
+        assert held.cost_reserved_eur == before_batch.cost_reserved_eur
+        assert held.tokens_reserved_total == before_batch.tokens_reserved_total
+        assert held.requests_reserved_total == before_batch.requests_reserved_total
     finally:
         await engine.dispose()
 

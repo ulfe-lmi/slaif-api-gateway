@@ -724,6 +724,8 @@ slaif-gateway codex export-preset
 slaif-gateway codex inspect-profile-file
 slaif-gateway codex show-profile
 slaif-gateway codex migrate-key-profile
+slaif-gateway codex replay inspect
+slaif-gateway codex replay extend
 slaif-gateway secrets generate hmac|admin-session|one-time
 slaif-gateway secrets validate-env
 ```
@@ -771,7 +773,75 @@ transaction, a repeated exact target is a no-op with no extra audit, and
 same-revision/different-digest drift or a missing configured active profile
 fails closed with a safe error.
 
-## Operator request capture
+`codex replay inspect [--key-id <uuid> | --cohort-id <uuid> |
+--all-active] [--created-from <utc>] [--created-until <utc>] [--json]`
+is a READ-ONLY summary of retained Codex replay references for exactly
+ONE explicit scope (the three scope options are mutually exclusive;
+`--all-active` selects every currently active key; there is no
+bearer-secret lookup and no unscoped database-wide mode). The optional
+UTC creation bounds are inclusive/exclusive and validated for order.
+The output is a stable safe summary - selected key/reference counts,
+active/expired counts, stored creation/expiry ranges, bounded
+route/public-model groupings, and fixed exclusion-reason counts - that
+distinguishes expiry eligibility from actual client/model readiness.
+It never outputs provider item/call IDs, HMAC digests, compaction
+ciphertext or content, raw stored JSON, replay-row UUIDs, secrets, or
+tool payloads, and it writes nothing (no audit, no rows, no provider
+or credential contact).
+
+`codex replay extend [--key-id <uuid> | --cohort-id <uuid> |
+--all-active] [--ttl-seconds <1..31536000>] [--include-expired]
+[--created-from <utc>] [--created-until <utc>] [--output <path> |
+--execute <path>] [--reason <text>] [--actor-admin-id <uuid>] [--json]`
+is the two-step reviewed expiry-extension operation. `--output` runs a
+READ-ONLY dry run that writes a NEW strict version-1 non-secret plan
+file (mode 0600, at most 32 KiB, never overwritten; the file is read
+in a bounded stream of at most 32 KiB + 1 bytes, and oversize,
+malformed, or over-deep JSON as well as recognized secret shapes are
+refused with fixed no-echo errors). The dry-run output reports
+`new_expiry_range` as the range of ACTUAL post-apply expiries of the
+eligible rows, i.e. `max(existing expiry, original created_at +
+selected TTL)` per row - never a shortening. `--execute <path>
+--reason` applies that previously reviewed plan file ONLY: every
+preview/edit flag (the scope selectors, `--ttl-seconds`,
+`--include-expired`, `--created-from`/`--created-until`) is refused
+with a fixed no-echo error BEFORE the plan file is read or any
+database access, so a conflicting invocation can never silently apply
+the plan while ignoring supplied edits. The
+selected lifetime is the explicit `--ttl-seconds` or, when omitted, the
+ACTUAL configured `CODEX_REPLAY_REFERENCE_TTL_SECONDS`; both are
+rendered distinctly and no global setting is modified. Extension is
+monotonic and expiry-only: the target is the ORIGINAL STORED
+`created_at` + selected TTL (never execute-now + TTL), already-later
+expiries stay unchanged, expired rows require explicit
+`--include-expired`, and `created_at` is never rewritten. Execute locks
+the selected keys then their reference rows, re-resolves the exact
+reviewed scope membership AFTER the key locks and AGAIN after the
+reference-row locks, and re-derives eligible counts AFTER all locks
+(the saved plan's fingerprints and counts are public optimistic
+guards, not signed authority - drift is refused stale with zero
+writes). Before any write, the reviewed post-state fingerprint AND
+the saved report descriptors (old/new expiry ranges, exclusion
+counts) are re-verified against the fresh locked rows under the
+SELECTED TTL, so a TTL-only or descriptor-only edit of an otherwise
+valid plan is refused stale - including on an already-applied repeat
+whose selected TTL would require a different post-state, while an
+edit with no actual post-state effect keeps the honest no-op.
+Execute then updates only `expires_at` of exactly the eligible
+reviewed rows, and records ONE bounded audit; the execute JSON
+labels its exclusion/range descriptors as reviewed-plan metadata
+(`range_descriptors_source: reviewed_plan`) while the
+applied/already-applied/updated fields are derived from the actual
+operation. A repeated apply is recognized as already-applied
+with no duplicate audit; a zero-diff apply makes no writes or audits;
+a transaction or audit failure rolls back everything. Ceilings: 1,000
+selected keys, 50,000 inspected references, 100 route/model groups;
+oversized scopes are refused with a fixed safe narrowing instruction,
+never silently truncated. There is no expiry-shortening or rollback
+command; backup/restore is the normal recovery responsibility and
+`inspect`/dry-run is how an operator re-previews after a failure. No
+schema change, no quota or key-policy change, no runtime replay
+behavior change.
 
 ```text
 slaif-gateway request-capture arm|status|stop|cleanup|inspect
@@ -1019,6 +1089,8 @@ slaif-gateway codex rollback-key-module
 slaif-gateway codex inspect-profile-file
 slaif-gateway codex show-profile
 slaif-gateway codex migrate-key-profile
+slaif-gateway codex replay inspect
+slaif-gateway codex replay extend
 slaif-gateway cohorts create
 slaif-gateway cohorts list
 slaif-gateway cohorts show

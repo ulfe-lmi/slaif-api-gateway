@@ -1566,7 +1566,15 @@ Rules:
   persistence (default 31,536,000 seconds; allowed range 1..31,536,000 seconds,
   at most 365 days). Expired rows are unusable even before a future cleanup
   task removes them. Changing configuration affects newly persisted rows;
-  existing expiries require a separate audited operator update.
+  existing expiries require a separate audited operator update, which is
+  exactly the `codex replay extend` surface (`docs/cli-reference.md`): a
+  bounded, lock-protected, monotonic extension of `expires_at` ONLY (target
+  = original stored `created_at` + selected TTL; `created_at` and every other
+  column unchanged; expired rows only with explicit `--include-expired`),
+  reviewed through a strict non-secret plan file, applied with ONE audit in
+  one caller transaction, and refused stale on membership or count drift.
+  No DDL or schema change accompanies it, and no shortening or rollback
+  command exists.
 - `item_id_hmac` and `call_id_hmac` use HMAC-SHA-256 with separate domain
   labels and the existing versioned token-HMAC secret. The stored version must
   remain available for lookup; missing key material fails closed.

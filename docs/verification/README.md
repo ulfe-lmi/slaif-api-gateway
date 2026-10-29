@@ -10,6 +10,18 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-28 Objective 200-a Codex replay reference inspection and reviewed expiry extension verification`](2026-10-28-cli-replay-maintenance.md)
+  (recorded 2026-10-28) - focused unit (42 new: 30 service/plan + 12
+  actual-Typer CLI) and owned-PostgreSQL-16 (14) evidence for the
+  read-only `codex replay inspect` summary and the two-step reviewed
+  `codex replay extend` plan workflow: strict non-secret 0600 plan with
+  three public optimistic fingerprints, monotonic expiry-only extension
+  at original `created_at` + selected TTL, deterministic key/row lock
+  order with post-lock scope revalidation and re-derived counts,
+  already-applied no-op law, forced late-audit rollback, real-PG
+  concurrent cohort-move invalidation, and the 20,451-reference/26-key
+  single reviewed operation; synthetic data only, no real
+  client/provider/model/SMTP claim; final-head CI gated by root.
 - [`2026-10-28 Objective 199-a provider/route configuration parity CLI verification`](2026-10-28-cli-provider-route-configuration.md)
   (recorded 2026-10-28) - focused unit (90 new pure + 25 actual-Typer
   CLI) and owned-PostgreSQL-16 (19) evidence for the audited,
