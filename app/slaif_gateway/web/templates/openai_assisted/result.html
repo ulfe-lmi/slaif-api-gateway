@@ -33,11 +33,11 @@
     </div>
     <div class="metric-card">
       <span class="metric-label">Rows</span>
-      <strong>{{ result.row_count }}</strong>
+      <strong>{{ result.row_count | num }}</strong>
     </div>
     <div class="metric-card">
       <span class="metric-label">Validation warnings</span>
-      <strong>{{ result.warnings|length }}</strong>
+      <strong>{{ result.warnings|length | num }}</strong>
     </div>
   </section>
 
@@ -74,7 +74,7 @@
   <section class="action-panel danger-zone" aria-labelledby="openai-assisted-preview-bridge-heading">
     <h2 id="openai-assisted-preview-bridge-heading">Import Preview</h2>
     <p class="warning-text">This is an LLM-assisted proposal. Import preview is still non-mutating. Review every row before execution. Execution requires explicit confirmation and an audit reason. Imported pricing remains SLAIF local accounting assumptions, not invoice-grade provider truth.</p>
-    <p class="muted small">Source label: {{ import_bridge.source_label }}. TSV size: {{ import_bridge.tsv_bytes }} bytes. Preview limit: {{ import_bridge.max_bytes }} bytes.</p>
+    <p class="muted small">Source label: {{ import_bridge.source_label }}. TSV size: {{ import_bridge.tsv_bytes | num }} bytes. Preview limit: {{ import_bridge.max_bytes | num }} bytes.</p>
     {% if import_bridge.form_enabled %}
     <form method="post" action="{{ import_bridge.preview_url }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -255,6 +255,14 @@ from slaif_gateway.web.branding import (
     branding_icon_link_html,
     branding_src,
 )
+from slaif_gateway.web.formatting import (
+    format_input_decimal,
+    format_number,
+    format_policy_summary,
+    format_rate_limit_policy,
+    format_raw_decimal,
+    format_tokens_m,
+)
 from slaif_gateway.workers.tasks_email import send_pending_key_email_task
 
 # --- Admin list filters: optional boolean "Any" normalization (192-a) ------
@@ -397,24 +405,80 @@ def _tojson_attr_filter(value: object) -> str:
 templates.env.filters["tojson_attr"] = _tojson_attr_filter
 
 
-def _decimal_display_filter(value: object) -> str:
-    """Fixed-point decimal display with trailing zeros stripped.
+def _decimal_display_filter(value: object) -> str | None:
+    """Canonical ungrouped exact decimal (``data-sort-value`` keys).
 
     PostgreSQL Numeric(18,9) values come back as ``Decimal``; a stored
     zero is rendered by ``str()`` as ``0E-9``. Fixed-point formatting
     followed by zero-stripping keeps a valid actual zero readable as
     ``0`` (and small non-zero values readable without exponent
-    notation) without rounding or changing any value.
+    notation) without rounding or changing any value. This filter stays
+    ungrouped and unscaled on purpose: it feeds machine-facing sort
+    keys and must never use the human-facing grouped/million forms.
     """
-    if isinstance(value, Decimal):
-        text = format(value, "f")
-        if "." in text:
-            text = text.rstrip("0").rstrip(".")
-        return text
-    return str(value)
+    return format_raw_decimal(value)
 
 
 templates.env.filters["dec"] = _decimal_display_filter
+
+
+def _number_display_filter(value: object) -> str | None:
+    """Locale-stable grouped human display (comma groups, dot decimal).
+
+    Read-only money/count readouts only; never a sort key, form value,
+    or identifier. ``None`` maps to ``None`` so templates keep their
+    own missing labels.
+    """
+    return format_number(value)
+
+
+def _tokens_million_display_filter(value: object) -> str | None:
+    """Token quantity in millions of tokens (unit added by templates).
+
+    Human-facing readouts only. The exact count stays in the raw
+    ``data-sort-value`` and the template ``title``/accessibility text.
+    """
+    return format_tokens_m(value)
+
+
+def _input_decimal_display_filter(value: object) -> str | None:
+    """Raw editable-input representation.
+
+    Normalizes a zero-valued valid numeric default to ``0`` (the
+    ``0E-9``/``-0E-9`` exponent forms and padded zero strings); valid
+    non-zero values keep their exact digits and redisplayed user strings
+    pass through unchanged. No grouping or million scaling in editable
+    inputs.
+    """
+    return format_input_decimal(value)
+
+
+def _policy_summary_display_filter(value: object) -> str | None:
+    """Human-readable service-built policy summary (known finite grammars).
+
+    Rate-limit / Chat live-burn / lazy-throttling summaries are matched
+    against the exact known producer grammar before any digit is touched;
+    anything else passes through unchanged. Pure presentation: the
+    shared service output used by CLI/API is never modified.
+    """
+    return format_policy_summary(value)
+
+
+def _rate_limit_policy_display_filter(value: object) -> str | None:
+    """Typed rate-limit policy dict in the known human summary grammar.
+
+    Used only where the template already holds the typed policy
+    dictionary; unknown shapes fall back to the existing literal
+    rendering. Pure presentation.
+    """
+    return format_rate_limit_policy(value)
+
+
+templates.env.filters["num"] = _number_display_filter
+templates.env.filters["tokm"] = _tokens_million_display_filter
+templates.env.filters["inputnum"] = _input_decimal_display_filter
+templates.env.filters["policysum"] = _policy_summary_display_filter
+templates.env.filters["ratepolicy"] = _rate_limit_policy_display_filter
 
 _QWEN_CODEX_PROFILE_IDS = frozenset(
     {

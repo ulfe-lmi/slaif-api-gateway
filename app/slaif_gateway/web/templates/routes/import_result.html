@@ -8,7 +8,7 @@
     <div>
       <p class="eyebrow">Routing Catalog</p>
       <h1 id="route-import-result-heading">Route Import Result</h1>
-      <p class="muted">Processed {{ result.total_rows }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
+      <p class="muted">Processed {{ result.total_rows | num }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/routes/import">Import more routes</a>
@@ -27,19 +27,19 @@
   <section class="summary-grid" aria-label="Route import execution summary">
     <div class="summary-card">
       <span>Total rows</span>
-      <strong>{{ result.total_rows }}</strong>
+      <strong>{{ result.total_rows | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Created rows</span>
-      <strong>{{ result.created_count }}</strong>
+      <strong>{{ result.created_count | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Updated rows</span>
-      <strong>{{ result.updated_count }}</strong>
+      <strong>{{ result.updated_count | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Errors</span>
-      <strong>{{ result.error_count }}</strong>
+      <strong>{{ result.error_count | num }}</strong>
     </div>
   </section>
 
@@ -98,7 +98,7 @@
             {% endif %}
           </td>
           <td data-sort-value="{{ row.priority if row.priority is not none else '' }}">
-            <div>priority {{ row.priority if row.priority is not none else "n/a" }}</div>
+            <div>priority {{ (row.priority | num) if row.priority is not none else "n/a" }}</div>
             <div class="muted small">{{ "enabled" if row.enabled else "disabled" }} / {{ "visible" if row.visible_in_models else "hidden" }} / {{ "streaming" if row.supports_streaming else "non-streaming" }}</div>
           </td>
           <td>

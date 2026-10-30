@@ -100,7 +100,7 @@
         {% endif %}
         <dt>Chat Completions streaming live-burn</dt>
         <dd>
-          <div>{{ current_revision_chat_live_burn_summary }}</div>
+          <div title="{{ current_revision_chat_live_burn_summary }}">{{ current_revision_chat_live_burn_summary | policysum }}</div>
           <div class="muted small">Scope: /v1/chat/completions stream=true. Positive margin stops early; zero stops near the estimated boundary; negative allows bounded estimated overrun. Final provider usage/cost remains authoritative.</div>
         </dd>
         <dt>External-tool policy</dt>
@@ -112,23 +112,23 @@
       <h2>Limits</h2>
       <dl>
         <dt>Request limit</dt>
-        <dd>{{ current_revision.request_limit_total }}</dd>
+        <dd>{{ current_revision.request_limit_total | num }}</dd>
         <dt>Total token limit</dt>
-        <dd>{{ current_revision.token_limit_total }}</dd>
+        <dd title="{{ current_revision.token_limit_total | num }} tokens">{{ (current_revision.token_limit_total | tokm) ~ "M" }}</dd>
         <dt>Input token limit</dt>
-        <dd>{{ current_revision.input_token_limit_total if current_revision.input_token_limit_total is not none else "Unknown" }}</dd>
+        <dd title="{{ current_revision.input_token_limit_total | num if current_revision.input_token_limit_total is not none else '' }} tokens">{{ (current_revision.input_token_limit_total | tokm) ~ "M" if current_revision.input_token_limit_total is not none else "Unknown" }}</dd>
         <dt>Output token limit</dt>
-        <dd>{{ current_revision.output_token_limit_total if current_revision.output_token_limit_total is not none else "Unknown" }}</dd>
+        <dd title="{{ current_revision.output_token_limit_total | num if current_revision.output_token_limit_total is not none else '' }} tokens">{{ (current_revision.output_token_limit_total | tokm) ~ "M" if current_revision.output_token_limit_total is not none else "Unknown" }}</dd>
         <dt>Reasoning token limit</dt>
-        <dd>{{ current_revision.reasoning_token_limit_total if current_revision.reasoning_token_limit_total is not none else "Unknown" }}</dd>
+        <dd title="{{ current_revision.reasoning_token_limit_total | num if current_revision.reasoning_token_limit_total is not none else '' }} tokens">{{ (current_revision.reasoning_token_limit_total | tokm) ~ "M" if current_revision.reasoning_token_limit_total is not none else "Unknown" }}</dd>
         <dt>Cost limit EUR</dt>
-        <dd>{{ current_revision.cost_limit_eur if current_revision.cost_limit_eur is not none else "Unknown" }}</dd>
+        <dd>{{ (current_revision.cost_limit_eur | num) if current_revision.cost_limit_eur is not none else "Unknown" }}</dd>
         <dt>Max total tokens per request</dt>
-        <dd>{{ current_revision.max_total_tokens_per_request if current_revision.max_total_tokens_per_request is not none else "Unknown" }}</dd>
+        <dd title="{{ current_revision.max_total_tokens_per_request | num if current_revision.max_total_tokens_per_request is not none else '' }} tokens">{{ (current_revision.max_total_tokens_per_request | tokm) ~ "M" if current_revision.max_total_tokens_per_request is not none else "Unknown" }}</dd>
         <dt>Max single request cost EUR</dt>
-        <dd>{{ current_revision.max_single_request_cost_eur if current_revision.max_single_request_cost_eur is not none else "Unknown" }}</dd>
+        <dd>{{ (current_revision.max_single_request_cost_eur | num) if current_revision.max_single_request_cost_eur is not none else "Unknown" }}</dd>
         <dt>Default validity days</dt>
-        <dd>{{ current_revision.validity_days_default if current_revision.validity_days_default is not none else "Not set" }}</dd>
+        <dd>{{ (current_revision.validity_days_default | num) if current_revision.validity_days_default is not none else "Not set" }}</dd>
         <dt>Default email delivery mode</dt>
         <dd>{{ current_revision.email_delivery_mode_default or "Not set" }}</dd>
       </dl>

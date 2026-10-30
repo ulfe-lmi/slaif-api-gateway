@@ -220,7 +220,11 @@ def test_key_detail_renders_chat_streaming_live_burn_form(monkeypatch) -> None:
     assert f'action="/admin/keys/{key.id}/chat-streaming-live-burn"' in html
     assert "Chat Completions streaming live-burn monitoring" in html
     assert 'name="chat_streaming_live_burn_enabled" value="true" checked' in html
-    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0.000000000"' in html
+    # 206-b: the zero-valued valid numeric default renders 0 (the stale
+    # 0.000000000 oracle predates the zero-input representation fix).
+    # The non-zero value (see the disabled-form case below) keeps its
+    # exact digits: -0.250000000.
+    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0"' in html
     assert 'name="chat_streaming_live_burn_token_margin" value="0"' in html
     assert "PostgreSQL hard quota limits remain independent and authoritative" in html
     assert "Margins are ignored while monitoring is off" in html
@@ -284,12 +288,16 @@ def test_key_detail_renders_usage_reset_form(monkeypatch) -> None:
     assert "does not delete usage ledger history" in html
     assert "Hard quota limits remain unchanged" in html
     assert "Redis rate-limit counters are not reset" in html
-    assert str(key.cost_used_eur) in html
-    assert str(key.tokens_used_total) in html
-    assert str(key.requests_used_total) in html
-    assert str(key.cost_reserved_eur) in html
-    assert str(key.tokens_reserved_total) in html
-    assert str(key.requests_reserved_total) in html
+    # 206-a: usage readouts display grouped money and millions of
+    # tokens; the exact token count stays in the title attribute.
+    assert "EUR 3" in html
+    assert "0.00003M tokens" in html
+    assert 'title="30 tokens"' in html
+    assert "3 requests" in html
+    assert "EUR 4" in html
+    assert "0.00004M tokens" in html
+    assert 'title="40 tokens"' in html
+    assert "4 requests" in html
 
 
 def test_key_detail_renders_rotation_form(monkeypatch) -> None:

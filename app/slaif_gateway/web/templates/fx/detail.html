@@ -30,7 +30,7 @@
       <dl>
         <dt>Base currency</dt><dd>{{ fx_rate.base_currency }}</dd>
         <dt>Quote currency</dt><dd>{{ fx_rate.quote_currency }}</dd>
-        <dt>Rate</dt><dd>{{ fx_rate.rate }}</dd>
+        <dt>Rate</dt><dd>{{ fx_rate.rate | num }}</dd>
         <dt>Valid from</dt><dd>{{ fx_rate.valid_from.isoformat() }}</dd>
         <dt>Valid until</dt><dd>{{ fx_rate.valid_until.isoformat() if fx_rate.valid_until else "open" }}</dd>
         <dt>Source</dt><dd>{{ fx_rate.source or "Not set" }}</dd>

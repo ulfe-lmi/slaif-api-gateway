@@ -104,15 +104,15 @@
       <h2>Quotas</h2>
       <dl>
         <dt>Cost limit</dt>
-        <dd>{{ "EUR " ~ key.cost_limit_eur if key.cost_limit_eur is not none else "Unlimited" }}</dd>
+        <dd>{{ "EUR " ~ (key.cost_limit_eur | num) if key.cost_limit_eur is not none else "Unlimited" }}</dd>
         <dt>Token limit</dt>
-        <dd>{{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }}</dd>
+        <dd{% if key.token_limit_total is not none %} title="{{ key.token_limit_total | num }}"{% endif %}>{{ (key.token_limit_total | tokm) ~ "M" if key.token_limit_total is not none else "Unlimited" }}</dd>
         <dt>Request limit</dt>
-        <dd>{{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }}</dd>
+        <dd>{{ (key.request_limit_total | num) if key.request_limit_total is not none else "Unlimited" }}</dd>
         <dt>Used</dt>
-        <dd>EUR {{ key.cost_used_eur }}, {{ key.tokens_used_total }} tokens, {{ key.requests_used_total }} requests</dd>
+        <dd title="{{ key.tokens_used_total | num }} tokens">EUR {{ key.cost_used_eur | num }}, {{ (key.tokens_used_total | tokm) ~ "M" }} tokens, {{ key.requests_used_total | num }} requests</dd>
         <dt>Reserved</dt>
-        <dd>EUR {{ key.cost_reserved_eur }}, {{ key.tokens_reserved_total }} tokens, {{ key.requests_reserved_total }} requests</dd>
+        <dd title="{{ key.tokens_reserved_total | num }} tokens">EUR {{ key.cost_reserved_eur | num }}, {{ (key.tokens_reserved_total | tokm) ~ "M" }} tokens, {{ key.requests_reserved_total | num }} requests</dd>
       </dl>
     </section>
 
@@ -126,11 +126,11 @@
         <dt>Allowed providers</dt>
         <dd>{{ key.allowed_providers_summary }}</dd>
         <dt>Rate limits</dt>
-        <dd>{{ key.rate_limit_policy_summary }}</dd>
+        <dd title="{{ key.rate_limit_policy_summary }}">{{ key.rate_limit_policy_summary | policysum }}</dd>
         <dt>Lazy throttling</dt>
-        <dd>{{ key.lazy_throttling_policy_summary }}</dd>
+        <dd>{{ key.lazy_throttling_policy_summary | policysum }}</dd>
         <dt>Chat streaming live-burn</dt>
-        <dd>{{ key.chat_streaming_live_burn_policy_summary }}</dd>
+        <dd title="{{ key.chat_streaming_live_burn_policy_summary }}">{{ key.chat_streaming_live_burn_policy_summary | policysum }}</dd>
         <dt>External-tool policy</dt>
         <dd>{{ key.external_tool_policy_summary }}</dd>
         {% if key.responses_policy %}
@@ -158,7 +158,7 @@
         <dt>Last used</dt>
         <dd>{{ key.last_used_at.isoformat() if key.last_used_at else "Never" }}</dd>
         <dt>Quota resets</dt>
-        <dd>{{ key.quota_reset_count }}</dd>
+        <dd>{{ key.quota_reset_count | num }}</dd>
       </dl>
     </section>
   </div>
@@ -213,7 +213,7 @@
           <input name="lazy_throttling_max_waiting_requests" value="{{ lazy_form.lazy_throttling_max_waiting_requests }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field>
         </label>
       </div>
-      <p class="muted small">Operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key }} waiting per key. Waiting applies before provider execution on Chat Completions and Responses.</p>
+      <p class="muted small">Operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key. Waiting applies before provider execution on Chat Completions and Responses.</p>
       <label>
         Audit reason
         <input name="reason" value="{{ lazy_form.reason }}" required autocomplete="off" placeholder="Required reason">
@@ -232,7 +232,7 @@
       <dt>Mode</dt><dd>{{ key.external_tool_policy.mode }}</dd>
       <dt>Capabilities</dt><dd>{{ key.external_tool_policy.allowed_capabilities|join(', ') or 'None' }}</dd>
       <dt>Destination IDs</dt><dd>{{ key.external_tool_policy.allowed_destination_ids|join(', ') or 'None' }}</dd>
-      <dt>Maximum calls</dt><dd>{{ key.external_tool_policy.max_provider_tool_calls_per_request }}</dd>
+      <dt>Maximum calls</dt><dd>{{ key.external_tool_policy.max_provider_tool_calls_per_request | num }}</dd>
       <dt>Overrun acknowledged</dt><dd>{{ 'Yes' if key.external_tool_policy.single_request_overrun_acknowledged else 'No' }}</dd>
     </dl>
     <form method="post" action="/admin/keys/{{ key.id }}/external-tool-policy">
@@ -291,9 +291,9 @@
           <dt>Enabled</dt>
           <dd>{{ "Yes" if key.chat_streaming_live_burn_policy.enabled else "No" }}</dd>
           <dt>Cost margin EUR</dt>
-          <dd>{{ key.chat_streaming_live_burn_policy.cost_margin_eur }}</dd>
+          <dd>{{ key.chat_streaming_live_burn_policy.cost_margin_eur | num }}</dd>
           <dt>Output token margin</dt>
-          <dd>{{ key.chat_streaming_live_burn_policy.token_margin }}</dd>
+          <dd title="{{ key.chat_streaming_live_burn_policy.token_margin | num }} tokens">{{ (key.chat_streaming_live_burn_policy.token_margin | tokm) ~ "M" }}</dd>
         </dl>
         <p class="muted small">Positive margin stops streams early, zero margin stops near the estimated boundary, and negative margin allows bounded estimated overrun. Final provider usage/cost remains authoritative.</p>
       </div>
@@ -308,10 +308,10 @@
           <div id="detail-chat-streaming-live-burn-fields" class="form-grid{% if not key.chat_streaming_live_burn_policy.enabled %} live-burn-fields-disabled{% endif %}" data-streaming-live-burn-margin-fields>
             <label>
               Cost margin (EUR)
-              <input name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur }}" inputmode="decimal" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
+              <input name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur | inputnum }}" inputmode="decimal" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
             <label>
-              Output token margin
+              Output token margin (tokens)
               <input name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
           </div>
@@ -366,11 +366,11 @@
         <p class="muted">Change lifetime cost, token, and request limits enforced by PostgreSQL. Leave a field blank to keep its current value.</p>
         <dl class="compact-dl">
           <dt>Current cost</dt>
-          <dd>{{ "EUR " ~ key.cost_limit_eur if key.cost_limit_eur is not none else "Unlimited" }}</dd>
+          <dd>{{ "EUR " ~ (key.cost_limit_eur | num) if key.cost_limit_eur is not none else "Unlimited" }}</dd>
           <dt>Current tokens</dt>
-          <dd>{{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }}</dd>
+          <dd{% if key.token_limit_total is not none %} title="{{ key.token_limit_total | num }}"{% endif %}>{{ (key.token_limit_total | tokm) ~ "M" if key.token_limit_total is not none else "Unlimited" }}</dd>
           <dt>Current requests</dt>
-          <dd>{{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }}</dd>
+          <dd>{{ (key.request_limit_total | num) if key.request_limit_total is not none else "Unlimited" }}</dd>
         </dl>
         <form method="post" action="/admin/keys/{{ key.id }}/limits">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -417,17 +417,17 @@
         <h3>Current Usage</h3>
         <dl class="compact-dl">
           <dt>Used cost</dt>
-          <dd>EUR {{ key.cost_used_eur }}</dd>
+          <dd>EUR {{ key.cost_used_eur | num }}</dd>
           <dt>Used tokens</dt>
-          <dd>{{ key.tokens_used_total }}</dd>
+          <dd title="{{ key.tokens_used_total | num }} tokens">{{ (key.tokens_used_total | tokm) ~ "M" }}</dd>
           <dt>Used requests</dt>
-          <dd>{{ key.requests_used_total }}</dd>
+          <dd>{{ key.requests_used_total | num }}</dd>
           <dt>Reserved cost</dt>
-          <dd>EUR {{ key.cost_reserved_eur }}</dd>
+          <dd>EUR {{ key.cost_reserved_eur | num }}</dd>
           <dt>Reserved tokens</dt>
-          <dd>{{ key.tokens_reserved_total }}</dd>
+          <dd title="{{ key.tokens_reserved_total | num }} tokens">{{ (key.tokens_reserved_total | tokm) ~ "M" }}</dd>
           <dt>Reserved requests</dt>
-          <dd>{{ key.requests_reserved_total }}</dd>
+          <dd>{{ key.requests_reserved_total | num }}</dd>
         </dl>
       </div>
 

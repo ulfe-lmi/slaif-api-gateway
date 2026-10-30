@@ -77,8 +77,8 @@
           <td>{{ pricing.provider }}</td>
           <td>{{ pricing.currency }}</td>
           <td data-sort-value="{{ pricing.input_price_per_1m if pricing.input_price_per_1m is not none else '' }}">
-            <div>input {{ pricing.input_price_per_1m if pricing.input_price_per_1m is not none else "n/a" }}</div>
-            <div class="muted small">output {{ pricing.output_price_per_1m if pricing.output_price_per_1m is not none else "n/a" }}</div>
+            <div>input {{ (pricing.input_price_per_1m | num) if pricing.input_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">output {{ (pricing.output_price_per_1m | num) if pricing.output_price_per_1m is not none else "n/a" }}</div>
           </td>
           <td data-sort-value="{{ pricing.valid_from.isoformat() }}">
             <div>{{ pricing.valid_from.isoformat() }}</div>

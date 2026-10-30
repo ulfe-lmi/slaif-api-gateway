@@ -1,0 +1,1121 @@
+"""206-a admin numeric display contract.
+
+Locale-stable, grouped, dot-decimal, exponent-free human readouts with
+token quantities in millions (exact counts preserved in raw sort keys
+and title/accessibility text), while machine-facing surfaces (sort
+values, editable inputs, payloads) keep exact raw units. Covers the
+pure formatter matrix and real template renders through the ASGI app
+with the existing unit fake-session seams (keys list/detail, usage
+detail, pricing list).
+"""
+
+from __future__ import annotations
+
+import re
+import uuid
+from dataclasses import asdict, replace
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+from fastapi.testclient import TestClient
+
+from slaif_gateway.config import Settings
+from slaif_gateway.db.models import AdminSession, AdminUser
+from slaif_gateway.main import create_app
+from slaif_gateway.schemas.admin_activity import (
+    AdminUsageDetail,
+    AdminUsageListRow,
+)
+from slaif_gateway.schemas.admin_keys import AdminKeyDetail
+from slaif_gateway.schemas.admin_catalog import (
+    AdminPricingRuleDetail,
+    AdminPricingRuleListRow,
+)
+from slaif_gateway.services.admin_session_service import AdminSessionContext
+from slaif_gateway.web.formatting import (
+    format_input_decimal,
+    format_number,
+    format_policy_summary,
+    format_rate_limit_policy,
+    format_raw_decimal,
+    format_tokens_m,
+)
+
+from test_admin_table_rows_194 import _client as keys_client
+from test_admin_table_rows_194 import _key
+from test_admin_table_rows_194 import _tbody_rows
+
+
+# ---------------------------------------------------------------------------
+# Pure formatter matrix
+# ---------------------------------------------------------------------------
+
+
+class TestFormatNumber:
+    def test_exponent_zeroes_render_plain_zero(self) -> None:
+        assert format_number(Decimal("0E-9")) == "0"
+        assert format_number(Decimal("-0E-9")) == "0"
+        assert format_number("0E-9") == "0"
+        assert format_number("-0E-9") == "0"
+        assert format_number(Decimal("-0.000000001")) == "-0.000000001"
+
+    def test_true_one_e9_is_not_zero(self) -> None:
+        assert format_number(Decimal("1E-9")) == "0.000000001"
+        assert format_number(-Decimal("1E-9")) == "-0.000000001"
+
+    def test_grouped_money_and_counts(self) -> None:
+        assert format_number(937826734) == "937,826,734"
+        assert format_number(Decimal("2.500000000")) == "2.5"
+        assert format_number(Decimal("100.000000000")) == "100"
+        assert format_number(Decimal("-1234567.890000000")) == "-1,234,567.89"
+        assert format_number(1_000_000) == "1,000,000"
+        assert format_number(10) == "10"
+        assert format_number(0) == "0"
+
+    def test_exact_64_bit_integers_no_float_roundtrip(self) -> None:
+        assert format_number(2**53 + 1) == "9,007,199,254,740,993"
+        assert format_number(2**63 - 1) == "9,223,372,036,854,775,807"
+        assert format_number("-9223372036854775807") == "-9,223,372,036,854,775,807"
+
+    def test_numeric_strings_render_exactly(self) -> None:
+        assert format_number("10.00") == "10"
+        assert format_number(" 7 ") == "7"
+        assert format_number("937826734") == "937,826,734"
+
+    def test_none_stays_none_for_template_labels(self) -> None:
+        assert format_number(None) is None
+
+    def test_non_quantities_pass_through_untouched(self) -> None:
+        assert format_number("gpt-5.6-sol") == "gpt-5.6-sol"
+        assert format_number("/v1/chat/completions") == "/v1/chat/completions"
+        assert format_number("127.0.0.1") == "127.0.0.1"
+        assert format_number(True) == "True"
+        assert format_number(1.5) == "1.5"
+
+
+class TestFormatTokensM:
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (None, None),
+            (0, "0"),
+            (Decimal("0E-9"), "0"),
+            (1, "0.000001"),
+            (1000, "0.001"),
+            (999999, "0.999999"),
+            (1_000_000, "1"),
+            (1_500_000, "1.5"),
+            (937826734, "937.827"),
+            (937826700, "937.827"),
+            (937826749, "937.827"),
+            # rounding boundary: 999,999,500 -> 999.9995 -> 1000 (half-up),
+            # magnitude part still comma-grouped
+            (999999500, "1,000"),
+            (999999499, "999.999"),
+            (-2_000_000, "-2"),
+        ],
+    )
+    def test_m_conversion(self, value, expected) -> None:
+        assert format_tokens_m(value) == expected
+
+    def test_no_positive_value_rounds_to_zero(self) -> None:
+        for value in (1, 10, 100, 999):
+            assert format_tokens_m(value) not in ("0", "0.000")
+        assert format_tokens_m(1) == "0.000001"
+
+    def test_large_grouped_magnitude(self) -> None:
+        assert format_tokens_m(1_234_567_890_123) == "1,234,567.89"
+
+    def test_non_quantities_pass_through(self) -> None:
+        assert format_tokens_m("n/a") == "n/a"
+
+
+class TestFormatRawDecimal:
+    def test_canonical_ungrouped_exact(self) -> None:
+        assert format_raw_decimal(Decimal("0E-9")) == "0"
+        assert format_raw_decimal(Decimal("-0E-9")) == "0"
+        assert format_raw_decimal(Decimal("2.500000000")) == "2.5"
+        assert format_raw_decimal(937826734) == "937826734"
+        assert format_raw_decimal("0E-9") == "0"
+        assert format_raw_decimal(None) is None
+        assert format_raw_decimal(2**63 - 1) == "9223372036854775807"
+
+    def test_never_groups_or_scales(self) -> None:
+        assert "," not in format_raw_decimal(937826734)
+        assert format_raw_decimal(Decimal("0.010000000")) == "0.01"
+
+
+class TestFormatInputDecimal:
+    def test_quantized_zero_renders_zero(self) -> None:
+        assert format_input_decimal(Decimal("0E-9")) == "0"
+        assert format_input_decimal(Decimal("-0E-9")) == "0"
+
+    def test_zero_value_numeric_strings_render_zero(self) -> None:
+        # Zero-valued valid numeric defaults (any representation) render
+        # the plain 0: same value, same units, still a valid input.
+        assert format_input_decimal("0E-9") == "0"
+        assert format_input_decimal("-0E-9") == "0"
+        assert format_input_decimal("0.000000000") == "0"
+        assert format_input_decimal(" 0 ") == "0"
+        assert format_input_decimal("0") == "0"
+
+    def test_nonzero_keeps_exact_fixed_digits(self) -> None:
+        assert format_input_decimal(Decimal("0.010000000")) == "0.010000000"
+        assert format_input_decimal(Decimal("-1.500000000")) == "-1.500000000"
+        assert format_input_decimal(Decimal("0")) == "0"
+
+    def test_user_strings_pass_through_unchanged(self) -> None:
+        # Redisplayed user input (valid or invalid) is never rewritten:
+        # editable controls keep exact raw units and reject nothing here.
+        assert format_input_decimal("1.5") == "1.5"
+        assert format_input_decimal("abc") == "abc"
+        assert format_input_decimal("  2.0") == "  2.0"
+        assert format_input_decimal("") == ""
+        assert format_input_decimal(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Shared ASGI seams (unit fake session; no DB, no server)
+# ---------------------------------------------------------------------------
+
+
+class _FakeResult:
+    def all(self):
+        return []
+
+    def first(self):
+        return None
+
+    def scalar_one_or_none(self):
+        return None
+
+    def scalars(self):
+        return self
+
+
+class _FakeSession:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return None
+
+    def begin(self):
+        return self
+
+    async def execute(self, *args, **kwargs):
+        return _FakeResult()
+
+
+class _FakeSessionmaker:
+    def __call__(self):
+        return _FakeSession()
+
+
+def _login(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    app = create_app(
+        Settings(
+            APP_ENV="test",
+            DATABASE_URL="postgresql+asyncpg://user:secret@localhost:5432/test_db",
+            ADMIN_SESSION_SECRET="s" * 40,
+            OPENAI_UPSTREAM_API_KEY="sk-provider-secret-placeholder",
+            OPENROUTER_API_KEY="sk-or-provider-secret-placeholder",
+        )
+    )
+    app.state.db_sessionmaker = _FakeSessionmaker()
+
+    admin_user = AdminUser(
+        id=uuid.uuid4(),
+        email="admin@example.org",
+        display_name="Admin User",
+        password_hash="password-hash-never-render",
+        role="admin",
+        is_active=True,
+    )
+    admin_session = AdminSession(
+        id=uuid.uuid4(),
+        admin_user_id=admin_user.id,
+        session_token_hash="session-hash-never-render",
+        csrf_token_hash="csrf-hash-never-render",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+    admin_session.admin_user = admin_user
+
+    async def validate_admin_session(self, **kwargs):
+        return AdminSessionContext(admin_user=admin_user, admin_session=admin_session)
+
+    async def refresh_csrf_token(self, **kwargs):
+        return "rendered-csrf-token"
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.validate_admin_session",
+        validate_admin_session,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.refresh_csrf_token",
+        refresh_csrf_token,
+    )
+    client = TestClient(app)
+    client.cookies.set("slaif_admin_session", "206-display-session")
+    return client
+
+
+def _cell(row_html: str, index: int) -> str:
+    return re.findall(r"<td\b[^>]*>.*?(?=<td\b|$)", row_html, flags=re.DOTALL)[index - 1]
+
+
+def _text(cell_html: str) -> str:
+    return re.sub(r"<[^>]+>", "", cell_html).strip()
+
+
+def _detail_key(**overrides) -> AdminKeyDetail:
+    base = _key()
+    return replace(base, **overrides) if overrides else base
+
+
+# ---------------------------------------------------------------------------
+# Keys list (reuses the 194 seam)
+# ---------------------------------------------------------------------------
+
+
+def test_keys_list_grouped_millions_and_exponent_zero(monkeypatch) -> None:
+    big = _key(
+        requests_used_total=937826734,
+        tokens_used_total=937826734,
+        cost_used_eur=Decimal("0E-9"),
+        token_limit_total=999999500,
+        request_limit_total=None,
+    )
+    small = _key(
+        requests_used_total=7,
+        tokens_used_total=1,
+        cost_used_eur=Decimal("1E-9"),
+        token_limit_total=1500,
+        request_limit_total=900,
+    )
+    client = keys_client(monkeypatch, [big, small])
+    html = client.get("/admin/keys").text
+    rows = _tbody_rows(html)
+
+    # Requests grouped; raw sort key unscaled and ungrouped.
+    assert _text(_cell(rows[0], 8)) == "937,826,734"
+    assert 'data-sort-value="937826734"' in _cell(rows[0], 8)
+    # Tokens in M with the exact grouped count in the title.
+    assert _text(_cell(rows[0], 9)) == "937.827M"
+    assert 'data-sort-value="937826734"' in _cell(rows[0], 9)
+    assert 'title="937,826,734"' in _cell(rows[0], 9)
+    # A stored 9-dp zero cost renders 0 (never 0E-9, never hidden).
+    assert _text(_cell(rows[0], 10)) == "0"
+    assert 'data-sort-value="0"' in _cell(rows[0], 10)
+    # Rounding boundary: 999,999,500 tokens -> 1,000M, exact count in title.
+    assert _text(_cell(rows[0], 12)) == "1,000M"
+    assert 'data-sort-value="999999500"' in _cell(rows[0], 12)
+    assert 'title="999,999,500"' in _cell(rows[0], 12)
+    # Missing limits keep their labels with an empty raw key.
+    assert _text(_cell(rows[0], 11)) == "Unlimited"
+    assert 'data-sort-value=""' in _cell(rows[0], 11)
+
+    # The tiny true positive price 1E-9 is never displayed as free zero.
+    assert _text(_cell(rows[1], 10)) == "0.000000001"
+    assert _text(_cell(rows[1], 9)) == "0.000001M"
+    assert 'data-sort-value="1"' in _cell(rows[1], 9)
+    assert _text(_cell(rows[1], 12)) == "0.0015M"
+
+
+# ---------------------------------------------------------------------------
+# Keys detail: live-burn exponent zero + raw editable input
+# ---------------------------------------------------------------------------
+
+
+def test_keys_detail_live_burn_zero_readout_and_raw_input(monkeypatch) -> None:
+    client = _login(monkeypatch)
+    key = _detail_key(
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": Decimal("0E-9"),
+            "token_margin": 0,
+        }
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    # Readout: the exponent zero is readable; the editable input keeps
+    # the same valid raw value (0, not 0E-9) in the same units.
+    assert "0E-9" not in html
+    assert re.search(r"Cost margin EUR</dt>\s*<dd>0</dd>", html)
+    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0"' in html
+
+
+def test_keys_detail_live_burn_positive_margin_not_zeroed(monkeypatch) -> None:
+    client = _login(monkeypatch)
+    key = _detail_key(
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": Decimal("1E-9"),
+            "token_margin": 5,
+        }
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    html = client.get(f"/admin/keys/{key.id}").text
+    assert "0.000000001" in html
+    assert 'value="0.000000001"' in html
+
+
+# ---------------------------------------------------------------------------
+# Usage detail: actual-zero preference, estimate fallback, n/a
+# ---------------------------------------------------------------------------
+
+
+def _usage(**overrides) -> AdminUsageDetail:
+    base = AdminUsageListRow(
+        id=uuid.uuid4(),
+        request_id="req-206",
+        gateway_key_id=uuid.uuid4(),
+        key_public_id="pub-206",
+        owner_id=None,
+        owner_display_name=None,
+        institution_id=None,
+        cohort_id=None,
+        endpoint="/v1/chat/completions",
+        provider="openai",
+        requested_model="gpt-test",
+        resolved_model="gpt-test",
+        streaming=False,
+        success=True,
+        accounting_status="finalized",
+        http_status=200,
+        prompt_tokens=937826734,
+        completion_tokens=0,
+        total_tokens=937826734,
+        cached_tokens=0,
+        reasoning_tokens=0,
+        estimated_cost_eur=Decimal("7.750000000"),
+        actual_cost_eur=Decimal("0E-9"),
+        native_currency="EUR",
+        latency_ms=20,
+        created_at=datetime.now(UTC),
+        completed_at=datetime.now(UTC),
+        chat_live_burn=None,
+    )
+    row = replace(base, **overrides) if overrides else base
+    return AdminUsageDetail(
+        **asdict(row),
+        client_request_id=None,
+        quota_reservation_id=None,
+        upstream_request_id=None,
+        error_type=None,
+        error_message=None,
+        usage_summary='{"safe_counter": 1}',
+        response_metadata_summary='{"safe": "safe"}',
+    )
+
+
+def _usage_page(monkeypatch, usage: AdminUsageDetail) -> str:
+    client = _login(monkeypatch)
+
+    async def get_usage_detail(self, usage_ledger_id):
+        return usage
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_activity_dashboard.AdminActivityDashboardService.get_usage_detail",
+        get_usage_detail,
+    )
+    return client.get(f"/admin/usage/{usage.id}").text
+
+
+def test_usage_detail_actual_zero_cost_in_preference_to_estimate(monkeypatch) -> None:
+    usage = _usage()
+    page = _usage_page(monkeypatch, usage)
+
+    # A present actual zero is displayed (not the estimate, not n/a).
+    assert re.search(r"Cost EUR</dt><dd>0</dd>", page)
+    assert "7.75" not in page
+    # Token readouts in M with the exact grouped count in the title.
+    assert 'title="937,826,734 tokens"' in page
+    assert "937.827M" in page
+    assert "0M" in page
+
+
+def test_usage_detail_estimate_only_falls_back(monkeypatch) -> None:
+    usage = _usage(actual_cost_eur=None)
+    page = _usage_page(monkeypatch, usage)
+    assert re.search(r"Cost EUR</dt><dd>7.75</dd>", page)
+
+
+def test_usage_detail_neither_cost_is_na(monkeypatch) -> None:
+    usage = _usage(actual_cost_eur=None, estimated_cost_eur=None)
+    page = _usage_page(monkeypatch, usage)
+    assert re.search(r"Cost EUR</dt><dd>n/a</dd>", page)
+
+
+# ---------------------------------------------------------------------------
+# Pricing list: 9-dp money readouts, zero, and missing labels
+# ---------------------------------------------------------------------------
+
+
+def _pricing_rule(**overrides) -> AdminPricingRuleDetail:
+    base = AdminPricingRuleListRow(
+        id=uuid.uuid4(),
+        provider="openai",
+        upstream_model="gpt-test",
+        endpoint="/v1/chat/completions",
+        currency="EUR",
+        input_price_per_1m=Decimal("0.010000000"),
+        cached_input_price_per_1m=None,
+        output_price_per_1m=Decimal("0E-9"),
+        reasoning_price_per_1m=None,
+        request_price=None,
+        enabled=True,
+        valid_from=datetime.now(UTC) - timedelta(days=1),
+        valid_until=None,
+        source_url=None,
+        notes=None,
+        pricing_metadata={},
+        metadata_summary="None",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    row = replace(base, **overrides) if overrides else base
+    return AdminPricingRuleDetail(**asdict(row), provider_config=None)
+
+
+def test_pricing_list_money_display_zero_and_missing(monkeypatch) -> None:
+    priced = _pricing_rule()
+    missing = _pricing_rule(input_price_per_1m=None)
+    client = _login(monkeypatch)
+
+    async def list_pricing_rules(self, **kwargs):
+        return [priced, missing]
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.list_pricing_rules",
+        list_pricing_rules,
+    )
+    html = client.get("/admin/pricing").text
+
+    # 9-dp money renders without padded zeros; a stored zero renders 0;
+    # missing fields keep the n/a label; the raw sort key is canonical
+    # and ungrouped (machine-facing, intentionally unformatted).
+    assert "<div>input 0.01</div>" in html
+    assert ">output 0</div>" in html
+    assert "<div>input n/a</div>" in html
+    assert "0E-9" not in html
+    assert 'data-sort-value="0.010000000"' in html
+
+
+# ---------------------------------------------------------------------------
+# 206-b: pure policy-summary formatters (known finite grammars only)
+# ---------------------------------------------------------------------------
+
+
+class TestFormatPolicySummary:
+    def test_rate_limit_summary_grouped_counts_and_m_tokens(self) -> None:
+        assert (
+            format_policy_summary("937826734 req/min, 937826734 tokens/min")
+            == "937,826,734 req/min, 937.827M tokens/min"
+        )
+
+    def test_rate_limit_summary_all_parts_keep_unit_and_window_semantics(self) -> None:
+        assert (
+            format_policy_summary(
+                "100 req/min, 2000000 tokens/min, 5 concurrent, 60s window"
+            )
+            == "100 req/min, 2M tokens/min, 5 concurrent, 60s window"
+        )
+
+    def test_rate_limit_empty_labels_stay_literal(self) -> None:
+        assert format_policy_summary("Default") == "Default"
+        assert format_policy_summary("none") == "none"
+
+    def test_rate_limit_single_small_part_unchanged_in_value(self) -> None:
+        assert format_policy_summary("12 req/min") == "12 req/min"
+
+    def test_live_burn_summary_money_and_m_token_margin(self) -> None:
+        assert (
+            format_policy_summary(
+                "Chat live-burn: on, cost margin EUR 0.000000000, token margin 0"
+            )
+            == "Chat live-burn: on, cost margin EUR 0, token margin 0M"
+        )
+        assert (
+            format_policy_summary(
+                "Chat live-burn: off (margins ignored), cost margin EUR "
+                "-0.250000000, token margin -250"
+            )
+            == "Chat live-burn: off (margins ignored), cost margin EUR -0.25, "
+            "token margin -0.00025M"
+        )
+        assert (
+            format_policy_summary(
+                "Chat live-burn: on, cost margin EUR 1234.500000000, "
+                "token margin -937826734"
+            )
+            == "Chat live-burn: on, cost margin EUR 1,234.5, token margin -937.827M"
+        )
+
+    def test_lazy_throttling_wait_summary_grouped_counts(self) -> None:
+        assert (
+            format_policy_summary(
+                "Mode: wait; max wait: 123456s; max waiting per key: 1234567; "
+                "applies to Chat Completions and Responses before provider execution"
+            )
+            == "Mode: wait; max wait: 123,456s; max waiting per key: 1,234,567; "
+            "applies to Chat Completions and Responses before provider execution"
+        )
+        # The reject variant carries no digits and stays byte-for-byte.
+        assert (
+            format_policy_summary(
+                "Mode: reject (immediate 429); no waiting configured"
+            )
+            == "Mode: reject (immediate 429); no waiting configured"
+        )
+
+    def test_non_grammar_text_passes_through_untouched(self) -> None:
+        cases = (
+            # legacy fixture grammar is NOT a known producer form
+            "Chat Completions streaming enabled; cost margin EUR 0.000000000; "
+            "token margin 0",
+            "Capabilities: web_search; local tools: functions; "
+            "hosted/stateful/multimodal: denied",
+            "Mode: strict_bounded; capabilities: none; destinations: none; "
+            "max calls: 0; overrun acknowledged: false; runtime: denied",
+            # never generic digit substitution on credential-shaped text
+            "sk-slaif-abcdef1234567890",
+            "937826734 req/min; 34 tokens/min",
+            "937826734 req/min, 937826734 tokens/min; extra",
+            "1234567890 tokens",
+        )
+        for text in cases:
+            assert format_policy_summary(text) == text, text
+
+    def test_none_and_non_string_passthrough(self) -> None:
+        assert format_policy_summary(None) is None
+        assert format_policy_summary(937826734) == "937826734"
+
+
+class TestFormatRateLimitPolicy:
+    def test_typed_dict_renders_known_grammar(self) -> None:
+        assert (
+            format_rate_limit_policy(
+                {
+                    "requests_per_minute": 937826734,
+                    "tokens_per_minute": 937826734,
+                    "max_concurrent_requests": 5,
+                    "window_seconds": 60,
+                }
+            )
+            == "937,826,734 req/min, 937.827M tokens/min, 5 concurrent, 60s window"
+        )
+
+    def test_partial_dict_only_known_parts(self) -> None:
+        assert (
+            format_rate_limit_policy({"tokens_per_minute": 2000000})
+            == "2M tokens/min"
+        )
+
+    def test_none_maps_none_for_template_labels(self) -> None:
+        assert format_rate_limit_policy(None) is None
+
+    def test_unknown_shapes_fall_back_to_literal_rendering(self) -> None:
+        assert format_rate_limit_policy({"unknown_key": 1}) == "{'unknown_key': 1}"
+        assert format_rate_limit_policy({"requests_per_minute": "weird"}) == (
+            "{'requests_per_minute': 'weird'}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 206-b: keys detail rate/margin/policy-summary ASGI renders
+# ---------------------------------------------------------------------------
+
+
+def _detail_policy_dd(html: str, label: str) -> str:
+    match = re.search(
+        re.escape(f"<dt>{label}</dt>") + r"\s*<dd([^>]*)>(.*?)</dd>",
+        html,
+        flags=re.DOTALL,
+    )
+    assert match is not None, label
+    return f"<dd{match.group(1)}> {match.group(2)}".strip()
+
+
+def test_keys_detail_rate_and_live_burn_summaries_human_readable(monkeypatch) -> None:
+    client = _login(monkeypatch)
+    key = _detail_key(
+        rate_limit_policy_summary="937826734 req/min, 937826734 tokens/min",
+        lazy_throttling_policy_summary=(
+            "Mode: wait; max wait: 30s; max waiting per key: 10; "
+            "applies to Chat Completions and Responses before provider execution"
+        ),
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": Decimal("0E-9"),
+            "token_margin": -250,
+        },
+        chat_streaming_live_burn_policy_summary=(
+            "Chat live-burn: on, cost margin EUR 0.000000000, token margin -250"
+        ),
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    # Rate limits: grouped req/min, M tokens/min, and the exact unrounded
+    # service string preserved in the accessible title.
+    rate_dd = _detail_policy_dd(html, "Rate limits")
+    assert "937,826,734 req/min, 937.827M tokens/min" in rate_dd
+    assert 'title="937826734 req/min, 937826734 tokens/min"' in rate_dd
+    assert "937826734 req/min, 937826734 tokens/min</dd>" not in html
+
+    # Lazy throttling wait summary: counts grouped, semantics untouched.
+    assert (
+        "Mode: wait; max wait: 30s; max waiting per key: 10; "
+        "applies to Chat Completions and Responses before provider execution"
+    ) in html
+
+    # Live-burn summary: 9-dp zero margin renders 0, negative token margin
+    # in M, exact raw values in the title.
+    burn_dd = _detail_policy_dd(html, "Chat streaming live-burn")
+    assert "Chat live-burn: on, cost margin EUR 0, token margin -0.00025M" in burn_dd
+    assert 'title="Chat live-burn: on, cost margin EUR 0.000000000, token margin -250"' in burn_dd
+    assert "0E-9" not in html
+
+    # Direct token-margin readout: M with the exact count in the title.
+    assert (
+        '<dd title="-250 tokens">-0.00025M</dd>' in html
+    ), _detail_policy_dd(html, "Output token margin")
+
+
+def test_keys_detail_unknown_summary_text_is_not_rewritten(monkeypatch) -> None:
+    client = _login(monkeypatch)
+    key = _detail_key(
+        rate_limit_policy_summary="Default",
+        chat_streaming_live_burn_policy_summary=(
+            "Chat Completions streaming enabled; cost margin EUR 0.000000000; "
+            "token margin 0"
+        ),
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    # The known empty label and the NON-grammar string both render
+    # byte-for-byte: no partial rewriting of unknown text.
+    assert _detail_policy_dd(html, "Rate limits").endswith("> Default")
+    assert (
+        "Chat Completions streaming enabled; cost margin EUR 0.000000000; "
+        "token margin 0"
+    ) in html
+
+
+# ---------------------------------------------------------------------------
+# 206-b: usage detail exact-count titles for cached/reasoning, stop
+# estimate, and the configured token margin
+# ---------------------------------------------------------------------------
+
+
+def test_usage_detail_cached_reasoning_and_stop_estimate_exact_titles(monkeypatch) -> None:
+    usage = _usage(
+        cached_tokens=937826734,
+        reasoning_tokens=1000000,
+        chat_live_burn={
+            "monitoring_enabled": True,
+            "triggered": True,
+            "stop_reason": "token_margin",
+            "estimated_tokens_at_stop": 937826734,
+            "estimated_cost_eur_at_stop": Decimal("9.990000000"),
+            "cost_margin_eur": Decimal("0E-9"),
+            "token_margin": -250,
+            "final_provider_usage_available": False,
+            "estimate_is_invoice_grade": False,
+        },
+    )
+    page = _usage_page(monkeypatch, usage)
+
+    # Cached / reasoning: each rounded value has its exact count in the
+    # accessible title.
+    assert 'title="937,826,734 / 1,000,000"' in page
+    assert "937.827M / 1M" in page
+
+    # Estimated tokens at stop: M display with the exact count in title.
+    stop_dd = re.search(
+        r"Estimated tokens at stop</dt>(<dd[^>]*>.*?</dd>)",
+        page,
+        flags=re.DOTALL,
+    )
+    assert stop_dd is not None
+    assert stop_dd.group(1) == '<dd title="937,826,734 tokens">937.827M</dd>'
+
+    # Configured token margin: M display with the exact raw count.
+    assert '<dd title="-250 tokens">-0.00025M</dd>' in page
+    assert "0E-9" not in page
+
+
+# ---------------------------------------------------------------------------
+# 206-b: detail counters and import summary totals (ASGI, counts > 1000)
+# ---------------------------------------------------------------------------
+
+
+def test_cohort_detail_grouped_counters(monkeypatch) -> None:
+    from slaif_gateway.schemas.admin_records import AdminCohortDetail
+
+    client = _login(monkeypatch)
+    cohort = AdminCohortDetail(
+        id=uuid.uuid4(),
+        name="Cohort 206",
+        description=None,
+        starts_at=None,
+        ends_at=None,
+        owner_count=937826734,
+        key_count=1234567,
+        active_key_count=1234,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    async def get_cohort_detail(self, cohort_id, *, now=None):
+        return cohort
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_records_dashboard.AdminRecordsDashboardService."
+        "get_cohort_detail",
+        get_cohort_detail,
+    )
+    html = client.get(f"/admin/cohorts/{cohort.id}").text
+
+    # Every counter is grouped; no ungrouped 7+ digit count remains.
+    assert "<dd>937,826,734</dd>" in html
+    assert "<dd>1,234,567</dd>" in html
+    assert "<dd>1,234</dd>" in html
+    assert "937826734" not in html
+    assert "1234567" not in html
+
+
+def test_bulk_import_preview_grouped_totals_and_human_summaries(monkeypatch) -> None:
+    from slaif_gateway.services.key_import import KeyImportPreview, KeyImportRowPreview
+
+    from test_admin_bulk_key_import_routes import _valid_csv
+
+    client = _login(monkeypatch)
+
+    def verify_session_csrf_token(self, admin_session, csrf_token):
+        return csrf_token == "rendered-csrf-token"
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service."
+        "AdminSessionService.verify_session_csrf_token",
+        verify_session_csrf_token,
+    )
+
+    row = KeyImportRowPreview(
+        row_number=1,
+        status="valid",
+        classification="create",
+        owner_email="ada@example.org",
+        owner_name="Ada Lovelace",
+        institution_name="SLAIF",
+        cost_limit_eur="10.00",
+        token_limit=100000,
+        request_limit=1000,
+        allowed_models=("gpt-test",),
+        allowed_endpoints=("/v1/chat/completions",),
+        allowed_providers=(),
+        rate_limit_policy={
+            "requests_per_minute": 937826734,
+            "tokens_per_minute": 937826734,
+        },
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0",
+            "token_margin": 1500,
+        },
+        email_delivery_mode="none",
+    )
+    preview = KeyImportPreview(
+        total_rows=1234567,
+        valid_count=1234560,
+        invalid_count=7,
+        rows=(row,),
+        duplicate_owner_count=1,
+    )
+
+    async def build_preview(request, raw_rows, *, max_rows):
+        return preview
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._build_key_import_preview", build_preview
+    )
+    html = client.post(
+        "/admin/keys/bulk-import/preview",
+        data={
+            "csrf_token": "rendered-csrf-token",
+            "import_format": "csv",
+            "import_text": _valid_csv(),
+        },
+    ).text
+
+    # Summary cards: grouped totals, no ungrouped 7+ digit totals remain.
+    assert "<strong>1,234,567</strong>" in html
+    assert "<strong>1,234,560</strong>" in html
+    assert "1234567" not in html
+
+    # Row policy summaries: the service-built strings are rendered in the
+    # accepted human form (grouped req/min, M tokens/min, M token margin).
+    assert "Rate limits: 937,826,734 req/min, 937.827M tokens/min" in html
+    assert "Chat live-burn: on, cost margin EUR 0, token margin 0.0015M" in html
+
+
+# ---------------------------------------------------------------------------
+# 206-c: export-cap captions, latency readout, assisted-result readouts,
+# and template default validity days (actual app/template renders)
+# ---------------------------------------------------------------------------
+
+
+def test_usage_and_audit_export_caps_grouped_in_caption_only(monkeypatch) -> None:
+    """Visible export caps are grouped; the editable row-limit inputs stay raw.
+
+    Both list pages show the configured default (10000) as "10,000" in the
+    caption while the form input keeps the exact raw value (machine-facing
+    control, unchanged units).
+    """
+    client = _login(monkeypatch)
+
+    async def list_usage(self, **kwargs):
+        return []
+
+    async def list_audit_logs(self, **kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_activity_dashboard."
+        "AdminActivityDashboardService.list_usage",
+        list_usage,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_activity_dashboard."
+        "AdminActivityDashboardService.list_audit_logs",
+        list_audit_logs,
+    )
+
+    for path in ("/admin/usage", "/admin/audit"):
+        html = client.get(path).text
+        # Grouped human caption with the configured default.
+        assert "capped at 10,000 rows" in html
+        # The ungrouped raw count never appears as a caption.
+        assert "capped at 10000 rows" not in html
+        # The editable row-limit input keeps the exact raw default.
+        assert 'name="limit" value="10000"' in html
+
+
+@pytest.mark.parametrize(
+    ("latency_ms", "expected"),
+    [
+        (0, "0 ms"),  # an actual zero is displayed, never "n/a"
+        (1234567, "1,234,567 ms"),  # large latency stays grouped
+        (None, "n/a ms"),  # missing latency keeps the missing label
+    ],
+)
+def test_usage_detail_latency_zero_grouped_and_none(
+    monkeypatch, latency_ms, expected
+) -> None:
+    page = _usage_page(monkeypatch, _usage(latency_ms=latency_ms))
+    match = re.search(r"Latency</dt>(<dd[^>]*>.*?</dd>)", page, flags=re.DOTALL)
+    assert match is not None
+    assert match.group(1) == f"<dd>{expected}</dd>"
+
+
+def test_openai_assisted_result_grouped_readouts_and_raw_tsv(monkeypatch) -> None:
+    """Assisted-result summary quantities are grouped; the TSV payload is raw.
+
+    Renders the real result page through the ASGI app with a controlled
+    proposal result (no OpenAI/provider call, no DB audit write).
+    """
+    from slaif_gateway.services.openai_assisted_catalog import (
+        OpenAIAssistedProposalTextResult,
+    )
+
+    client = _login(monkeypatch)
+
+    def verify_session_csrf_token(self, admin_session, csrf_token):
+        return csrf_token == "rendered-csrf-token"
+
+    async def no_audit(request, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service."
+        "AdminSessionService.verify_session_csrf_token",
+        verify_session_csrf_token,
+    )
+    # The result page is presentation-only here; the audit write path is
+    # covered elsewhere and would need a real session to flush.
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._audit_openai_assisted_proposal",
+        no_audit,
+    )
+
+    # 34 (header) + 19 (line) * 1234 = 23480 bytes, no HTML-special chars.
+    tsv_text = "model,currency,input_price_per_1m\n" + "num-model,USD,0.01\n" * 1234
+    result = OpenAIAssistedProposalTextResult(
+        proposal_type="pricing",
+        tsv_text=tsv_text,
+        row_count=1234,
+        warnings=("w1", "w2", "w3"),
+        source_urls=("https://example.org/pricing",),
+    )
+
+    async def generate(**kwargs):
+        return result
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin.generate_openai_pricing_proposal_text",
+        generate,
+    )
+
+    response = client.post(
+        "/admin/openai-assisted/pricing/propose",
+        data={"csrf_token": "rendered-csrf-token", "acknowledge_proposal": "true"},
+    )
+    assert response.status_code == 200
+    html = response.text
+
+    # Read-only human quantities are grouped.
+    assert "<strong>1,234</strong>" in html
+    assert "<strong>3</strong>" in html
+    assert "TSV size: 23,480 bytes" in html
+    assert "Preview limit: 1,048,576 bytes" in html
+    # The generated TSV payload is preserved byte-for-byte in the page.
+    assert tsv_text in html
+
+
+def _template_detail_html(validity_days_default: int | None) -> str:
+    """Render the real templates/detail.html through the app's Jinja env."""
+    from types import SimpleNamespace
+
+    from slaif_gateway.api import admin as admin_module
+
+    now = datetime.now(UTC)
+    template = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Template 206c",
+        description=None,
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    current_revision = SimpleNamespace(
+        id=uuid.uuid4(),
+        revision_number=1,
+        source_type="calibration",
+        source_calibration_gateway_key_id=None,
+        source_time_window_start=None,
+        source_time_window_end=None,
+        source_multiplier=None,
+        created_audit_log_id=None,
+        allowed_endpoints=("/v1/chat/completions",),
+        allowed_models=("gpt-test",),
+        allowed_providers=(),
+        allowed_hosted_capabilities=(),
+        hosted_capabilities_requiring_review=(),
+        template_snapshot={},
+        request_limit_total=None,
+        token_limit_total=None,
+        input_token_limit_total=None,
+        output_token_limit_total=None,
+        reasoning_token_limit_total=None,
+        cost_limit_eur=None,
+        max_total_tokens_per_request=None,
+        max_single_request_cost_eur=None,
+        validity_days_default=validity_days_default,
+        email_delivery_mode_default=None,
+    )
+    form = {
+        "owner_id": "",
+        "cohort_id": "",
+        "valid_from": "",
+        "valid_until": "",
+        "valid_days": str(validity_days_default)
+        if validity_days_default is not None
+        else "",
+        "email_delivery_mode": "none",
+        "confirm_create_key_from_template": "",
+        "reason": "",
+    }
+    request = SimpleNamespace(
+        url=SimpleNamespace(path="/admin/templates/206c-detail"),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(SLAIF_BRANDING_DIR=None)
+            )
+        ),
+    )
+    context: dict[str, object] = {
+        "request": request,
+        "admin": SimpleNamespace(display_name="Admin User"),
+        "csrf_token": "rendered-csrf-token",
+        "template": template,
+        "current_revision": current_revision,
+        "current_revision_chat_live_burn_summary": "Default",
+        "current_revision_external_tool_summary": "None",
+        "choices": {"owner_id": None, "cohort_id": None},
+        "choice_labels": {"owner_id": None, "cohort_id": None},
+        "form": form,
+        "admin_status_message": None,
+        "error": None,
+        "diagnostic_id": None,
+    }
+    context.update(admin_module._branding_context(request))
+    return admin_module.templates.env.get_template("templates/detail.html").render(
+        context
+    )
+
+
+def test_template_detail_validity_days_grouped_and_none() -> None:
+    html = _template_detail_html(validity_days_default=1234)
+    match = re.search(
+        r"Default validity days</dt>\s*(<dd[^>]*>.*?</dd>)", html, flags=re.DOTALL
+    )
+    assert match is not None
+    # Read-only summary is grouped...
+    assert match.group(1) == "<dd>1,234</dd>"
+    # ...while the editable valid-days input keeps the exact raw default.
+    assert 'name="valid_days" value="1234"' in html
+
+    html_none = _template_detail_html(validity_days_default=None)
+    match_none = re.search(
+        r"Default validity days</dt>\s*(<dd[^>]*>.*?</dd>)", html_none, flags=re.DOTALL
+    )
+    assert match_none is not None
+    assert match_none.group(1) == "<dd>Not set</dd>"
+    # The placeholder keeps the documented literal, not a rewritten value.
+    assert "Required if no default" in html_none

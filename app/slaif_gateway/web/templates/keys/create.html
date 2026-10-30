@@ -175,7 +175,7 @@
         I separately confirm fenced external-tool policy for this standard key.
       </label>
       <p class="warning-text">For the implemented web-search contract, concurrent requests are fenced, later exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite request, token, and EUR limits, an acknowledgement, this second confirmation, and the audit reason below.</p>
-      <p class="muted small">Installation ceilings: {{ external_tool_ceilings.max_distinct_capabilities }} capabilities, {{ external_tool_ceilings.max_approved_destinations }} destinations, and {{ external_tool_ceilings.max_provider_tool_calls_per_request }} provider calls per request. No wildcard, URL, credential, inline authorization, or allow-all option exists.</p>
+      <p class="muted small">Installation ceilings: {{ external_tool_ceilings.max_distinct_capabilities | num }} capabilities, {{ external_tool_ceilings.max_approved_destinations | num }} destinations, and {{ external_tool_ceilings.max_provider_tool_calls_per_request | num }} provider calls per request. No wildcard, URL, credential, inline authorization, or allow-all option exists.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="create-rate-limit-heading">
@@ -222,7 +222,7 @@
             <input name="lazy_throttling_max_waiting_requests" value="{{ form.lazy_throttling_max_waiting_requests or lazy_throttling_defaults.max_waiting_per_key }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field>
           </label>
         </div>
-        <p class="muted small">Applies to Chat Completions and Responses. Operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key }} waiting per key.</p>
+        <p class="muted small">Applies to Chat Completions and Responses. Operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key.</p>
         {% if not redis_rate_limits_enabled %}
         <p class="warning-text">Redis rate limiting is currently disabled (ENABLE_REDIS_RATE_LIMITS=false), so operational throttling is inactive: saving a wait policy does not enforce waiting until the operator enables it.</p>
         {% endif %}
@@ -259,9 +259,9 @@
         <dt>Enabled</dt>
         <dd>{{ "Yes" if trusted_calibration_settings.enabled else "No" }}</dd>
         <dt>Maximum requests</dt>
-        <dd>{{ trusted_calibration_settings.max_requests }}</dd>
+        <dd>{{ trusted_calibration_settings.max_requests | num }}</dd>
         <dt>Maximum valid days</dt>
-        <dd>{{ trusted_calibration_settings.max_valid_days }}</dd>
+        <dd>{{ trusted_calibration_settings.max_valid_days | num }}</dd>
         <dt>Unknown hosted tools</dt>
         <dd>{{ "Allowed for trusted calibration" if trusted_calibration_settings.allow_unknown_hosted_tools else "Denied" }}</dd>
         <dt>External authority</dt>

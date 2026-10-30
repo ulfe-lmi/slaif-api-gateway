@@ -174,8 +174,12 @@ def test_keys_list_split_metric_cells_use_typed_raw_keys(monkeypatch) -> None:
     assert 'data-sort-value="0"' in cell(rows[0], 8)
     assert text(cell(rows[1], 8)) == "7"
     assert 'data-sort-value="7"' in cell(rows[1], 8)
-    assert text(cell(rows[1], 9)) == "123"
+    # 206-a: token readouts display millions (exact count stays in the
+    # raw sort key and the title); the grouped money display keeps the
+    # canonical ungrouped raw key.
+    assert text(cell(rows[1], 9)) == "0.000123M"
     assert 'data-sort-value="123"' in cell(rows[1], 9)
+    assert 'title="123"' in cell(rows[1], 9), cell(rows[1], 9)
     assert text(cell(rows[1], 10)) == "2.5", cell(rows[1], 10)
     assert 'data-sort-value="2.5"' in cell(rows[1], 10), cell(rows[1], 10)
 
@@ -188,8 +192,10 @@ def test_keys_list_split_metric_cells_use_typed_raw_keys(monkeypatch) -> None:
     assert 'data-sort-value=""' in cell(rows[0], 12)
     assert text(cell(rows[1], 11)) == "900"
     assert 'data-sort-value="900"' in cell(rows[1], 11)
-    assert text(cell(rows[1], 12)) == "1500"
+    # 206-a: token limit displays millions with the exact raw key/title.
+    assert text(cell(rows[1], 12)) == "0.0015M"
     assert 'data-sort-value="1500"' in cell(rows[1], 12)
+    assert 'title="1,500"' in cell(rows[1], 12), cell(rows[1], 12)
     assert text(cell(rows[1], 13)) == "100"
     assert 'data-sort-value="100"' in cell(rows[1], 13)
 

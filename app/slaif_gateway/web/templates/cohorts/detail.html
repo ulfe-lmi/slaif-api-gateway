@@ -51,11 +51,11 @@
       <h2>Summary</h2>
       <dl>
         <dt>Owners</dt>
-        <dd>{{ cohort.owner_count }}</dd>
+        <dd>{{ cohort.owner_count | num }}</dd>
         <dt>Keys</dt>
-        <dd>{{ cohort.key_count }}</dd>
+        <dd>{{ cohort.key_count | num }}</dd>
         <dt>Active keys</dt>
-        <dd>{{ cohort.active_key_count }}</dd>
+        <dd>{{ cohort.active_key_count | num }}</dd>
       </dl>
     </section>
 

@@ -10,6 +10,33 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-29 Objective 206 admin numeric display verification (206-a/b/c/d)`](2026-10-29-admin-numeric-display.md)
+  (recorded 2026-10-29; 206-b/c/d completions appended 2026-10-30) -
+  presentation-only admin GUI numeric displays:
+  confirmed `0E-9` (exact zero) source vs true `1E-9`, locale-stable
+  comma/dot/exponent-free readouts with exact 64-bit/9-dp rendering,
+  token quantities in M (3-dp half-up >=1M, exact below 1M, exact
+  grouped counts in titles), canonical ungrouped raw `data-sort-value`
+  keys and raw editable inputs (zero-valued valid defaults -> `0`);
+  206-a: 37 new unit cases + 660 admin unit PASS (qualified: predates
+  the final zero-input change; not a final-tree all-admin pass), 3
+  actual Chromium/owned-PG cases + 10 existing browser PASS, 9
+  governance PASS; 206-b completion in the same record: remaining
+  grouped counters/summary totals, M token margins/rates with exact
+  titles, known-grammar human policy summaries (raw strings kept in
+  titles), the stale `0.000000000` oracle fixed (CI run
+  40980689318 provenance), 54 unit + 309 affected + 3 browser PASS;
+  206-c final captions in the same record: grouped usage/audit
+  export-cap captions with raw `limit` inputs, zero-safe grouped
+  usage latency (`0 ms`/`n/a ms`), grouped assisted-result
+  row/warning/TSV/preview-ceiling readouts with the byte-exact TSV
+  payload, grouped template validity days with the raw form default
+  (60 unit + 16 affected PASS, no new formatter or infrastructure);
+  206-d: the two stale pre-206 integration display oracles corrected
+  to the accepted `num` readouts (`0.1` / `0.92` bound to their
+  named readouts), one-case owned-PG 1 PASS, test-only;
+  no services/schema/API/CLI/JS/CSS or accounting changes; GitHub CI
+  pending at publication.
 - [`2026-10-29 Objective 205-a installed CLI field administration workflows verification (PARTIAL handoff)`](2026-10-29-cli-field-installed-workflow.md)
   (recorded 2026-10-29) - actual installed `slaif-gateway` console from a
   payload-verified wheel of accepted source `5e59a02` in an owned venv, on

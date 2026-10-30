@@ -8,7 +8,7 @@
     <div>
       <p class="eyebrow">FX Catalog</p>
       <h1 id="fx-import-result-heading">FX Import Result</h1>
-      <p class="muted">Processed {{ result.total_rows }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
+      <p class="muted">Processed {{ result.total_rows | num }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/fx/import">Import more FX rates</a>
@@ -25,10 +25,10 @@
   {% endif %}
 
   <section class="summary-grid" aria-label="FX import execution summary">
-    <div class="metric-card"><span class="metric-label">Total rows</span><strong>{{ result.total_rows }}</strong></div>
-    <div class="metric-card"><span class="metric-label">Created rows</span><strong>{{ result.created_count }}</strong></div>
-    <div class="metric-card"><span class="metric-label">Updated rows</span><strong>{{ result.updated_count }}</strong></div>
-    <div class="metric-card"><span class="metric-label">Errors</span><strong>{{ result.error_count }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Total rows</span><strong>{{ result.total_rows | num }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Created rows</span><strong>{{ result.created_count | num }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Updated rows</span><strong>{{ result.updated_count | num }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Errors</span><strong>{{ result.error_count | num }}</strong></div>
   </section>
 
   {% if result.error_count %}

@@ -277,7 +277,9 @@ def test_admin_activity_pages_render_only_safe_metadata(monkeypatch) -> None:
     assert "req_safe_usage" in html
     assert "Chat streaming live-burn" in html
     assert "Live-burn: stopped (tokens)" in html
-    assert "0.220000000" in html
+    # 206-a: money readouts use the locale-stable formatter (the
+    # 9-dp Decimal no longer renders with its padded zeros).
+    assert "0.22" in html
     assert "key.created" in html
     assert "Gateway key delivery" in html
     assert "pub_safe_email" in html

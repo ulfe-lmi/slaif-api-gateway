@@ -21,9 +21,9 @@
   </header>
 
   <section class="summary-grid" aria-label="FX import preview summary">
-    <div class="metric-card"><span class="metric-label">Total rows</span><strong>{{ preview.total_rows }}</strong></div>
-    <div class="metric-card"><span class="metric-label">Valid rows</span><strong>{{ preview.valid_count }}</strong></div>
-    <div class="metric-card"><span class="metric-label">Invalid rows</span><strong>{{ preview.invalid_count }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Total rows</span><strong>{{ preview.total_rows | num }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Valid rows</span><strong>{{ preview.valid_count | num }}</strong></div>
+    <div class="metric-card"><span class="metric-label">Invalid rows</span><strong>{{ preview.invalid_count | num }}</strong></div>
     <div class="metric-card"><span class="metric-label">Database writes</span><strong>0</strong></div>
   </section>
 
@@ -59,7 +59,7 @@
               <span class="muted">Invalid</span>
               {% endif %}
             </td>
-            <td data-sort-value="{{ row.rate or '' }}">{{ row.rate or "Invalid" }}</td>
+            <td data-sort-value="{{ row.rate or '' }}">{{ (row.rate | num) if row.rate else "Invalid" }}</td>
             <td data-sort-value="{{ row.valid_from.isoformat() if row.valid_from else '' }}">
               {% if row.valid_from %}
               <div>{{ row.valid_from.isoformat() }}</div>

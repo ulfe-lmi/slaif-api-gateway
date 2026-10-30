@@ -8,7 +8,7 @@
     <div>
       <p class="eyebrow">Pricing Catalog</p>
       <h1 id="pricing-import-result-heading">Pricing Import Result</h1>
-      <p class="muted">Processed {{ result.total_rows }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
+      <p class="muted">Processed {{ result.total_rows | num }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/pricing/import">Import more pricing</a>
@@ -27,19 +27,19 @@
   <section class="summary-grid" aria-label="Pricing import execution summary">
     <div class="summary-card">
       <span>Total rows</span>
-      <strong>{{ result.total_rows }}</strong>
+      <strong>{{ result.total_rows | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Created rows</span>
-      <strong>{{ result.created_count }}</strong>
+      <strong>{{ result.created_count | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Updated rows</span>
-      <strong>{{ result.updated_count }}</strong>
+      <strong>{{ result.updated_count | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Errors</span>
-      <strong>{{ result.error_count }}</strong>
+      <strong>{{ result.error_count | num }}</strong>
     </div>
   </section>
 
@@ -94,11 +94,11 @@
           </td>
           <td>{{ row.currency or "n/a" }}</td>
           <td data-sort-value="{{ row.input_price_per_1m if row.input_price_per_1m is not none else '' }}">
-            <div>input {{ row.input_price_per_1m if row.input_price_per_1m is not none else "n/a" }}</div>
-            <div class="muted small">cached {{ row.cached_input_price_per_1m if row.cached_input_price_per_1m is not none else "n/a" }}</div>
-            <div class="muted small">output {{ row.output_price_per_1m if row.output_price_per_1m is not none else "n/a" }}</div>
-            <div class="muted small">reasoning {{ row.reasoning_price_per_1m if row.reasoning_price_per_1m is not none else "n/a" }}</div>
-            <div class="muted small">request {{ row.request_price if row.request_price is not none else "n/a" }}</div>
+            <div>input {{ (row.input_price_per_1m | num) if row.input_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">cached {{ (row.cached_input_price_per_1m | num) if row.cached_input_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">output {{ (row.output_price_per_1m | num) if row.output_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">reasoning {{ (row.reasoning_price_per_1m | num) if row.reasoning_price_per_1m is not none else "n/a" }}</div>
+            <div class="muted small">request {{ (row.request_price | num) if row.request_price is not none else "n/a" }}</div>
           </td>
           <td data-sort-value="{{ row.valid_from.isoformat() if row.valid_from else '' }}">
             <div>{{ row.valid_from.isoformat() if row.valid_from else "n/a" }}</div>

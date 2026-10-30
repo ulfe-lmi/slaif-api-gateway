@@ -80,11 +80,11 @@
       <h2>Limits</h2>
       <dl>
         <dt>Cost limit</dt>
-        <dd>{{ "EUR " ~ limits.cost_limit_eur if limits.cost_limit_eur is not none else "Unlimited" }}</dd>
+        <dd>{{ "EUR " ~ (limits.cost_limit_eur | num) if limits.cost_limit_eur is not none else "Unlimited" }}</dd>
         <dt>Token limit</dt>
-        <dd>{{ limits.token_limit_total if limits.token_limit_total is not none else "Unlimited" }}</dd>
+        <dd{% if limits.token_limit_total is not none %} title="{{ limits.token_limit_total | num }}"{% endif %}>{{ (limits.token_limit_total | tokm) ~ "M" if limits.token_limit_total is not none else "Unlimited" }}</dd>
         <dt>Request limit</dt>
-        <dd>{{ limits.request_limit_total if limits.request_limit_total is not none else "Unlimited" }}</dd>
+        <dd>{{ (limits.request_limit_total | num) if limits.request_limit_total is not none else "Unlimited" }}</dd>
       </dl>
     </section>
 
@@ -118,7 +118,7 @@
         <dt>Rate limits</dt>
         <dd>
           {% if policy.rate_limit_policy %}
-          {{ policy.rate_limit_policy }}
+          {{ policy.rate_limit_policy | ratepolicy }}
           {% else %}
           Default
           {% endif %}
@@ -126,13 +126,13 @@
         <dt>Lazy throttling</dt>
         <dd>
           {% if policy.lazy_throttling_policy %}
-          Wait for capacity: max wait {{ policy.lazy_throttling_policy.max_wait_seconds }}s, max {{ policy.lazy_throttling_policy.max_waiting_requests }} waiting per key (Chat Completions and Responses, before provider execution).
+          Wait for capacity: max wait {{ policy.lazy_throttling_policy.max_wait_seconds | num }}s, max {{ policy.lazy_throttling_policy.max_waiting_requests | num }} waiting per key (Chat Completions and Responses, before provider execution).
           {% else %}
           Reject immediately (default)
           {% endif %}
         </dd>
         <dt>Chat streaming live-burn</dt>
-        <dd>{{ policy.chat_streaming_live_burn_policy_summary }}</dd>
+        <dd title="{{ policy.chat_streaming_live_burn_policy_summary }}">{{ policy.chat_streaming_live_burn_policy_summary | policysum }}</dd>
         {% if policy.external_tool_policy %}
         <dt>External-tool policy</dt>
         <dd>

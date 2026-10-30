@@ -40,7 +40,7 @@
 
   <section class="action-panel" aria-labelledby="audit-export-heading">
     <h2 id="audit-export-heading">CSV export</h2>
-    <p class="muted">Export safe audit metadata for the current filters. Secrets, prompt/completion content, raw request/response bodies, email bodies, and encrypted secret material are excluded. Formula-looking CSV cells are neutralized. Export generation is audited and capped at {{ export_max_rows }} rows.</p>
+    <p class="muted">Export safe audit metadata for the current filters. Secrets, prompt/completion content, raw request/response bodies, email bodies, and encrypted secret material are excluded. Formula-looking CSV cells are neutralized. Export generation is audited and capped at {{ export_max_rows | num }} rows.</p>
     <form method="post" action="/admin/audit/export.csv">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       {# 195-a: multi filters export the SAME validated scope as the list

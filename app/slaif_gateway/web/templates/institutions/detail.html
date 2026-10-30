@@ -43,11 +43,11 @@
       <h2>Summary</h2>
       <dl>
         <dt>Owners</dt>
-        <dd>{{ institution.owner_count }}</dd>
+        <dd>{{ institution.owner_count | num }}</dd>
         <dt>Keys</dt>
-        <dd>{{ institution.key_count }}</dd>
+        <dd>{{ institution.key_count | num }}</dd>
         <dt>Active keys</dt>
-        <dd>{{ institution.active_key_count }}</dd>
+        <dd>{{ institution.active_key_count | num }}</dd>
       </dl>
     </section>
 

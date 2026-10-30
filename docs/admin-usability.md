@@ -564,11 +564,92 @@ plaintext cell.
 - A VALID actual cost of zero displays `0 EUR` (it is not "missing"
   and does not fall through to the estimate); an estimate-only row
   displays the estimate; a row with neither displays `n/a` and sorts
-  last as missing.
+  last as missing. The usage DETAIL page applies the same explicit
+  `is not none` preference: a present actual zero is shown in
+  preference to the estimate.
 - Import-preview quota cells use explicit `is not none` checks so the
   display and the typed sort key can never disagree for a present
   value. FX rates are positive-only by validation, so their
   truthiness handling stays as-is.
+
+### Numeric display contract (206-a)
+
+Human-visible read-only quantities across the admin GUI use a
+locale-stable formatter (`app/slaif_gateway/web/formatting.py`,
+exposed as the `num` / `tokm` / `inputnum` Jinja filters; `dec` now
+delegates to the canonical raw-decimal helper):
+
+- **Locale rule.** Digit thousands are comma-grouped, the decimal
+  separator is a dot, and no scientific/exponent notation is rendered
+  for ordinary finite quantities. int, Decimal, and legitimate numeric
+  strings render EXACTLY (no float round-trip, so 64-bit counts and
+  9-dp `Numeric(18,9)` money keep their low digits); unneeded
+  fractional zeros are stripped.
+- **Confirmed `0E-9` source.** PostgreSQL `Numeric(18,9)` values come
+  back as `Decimal`; a stored zero quantized to the 9-dp quantum
+  renders by `str()` as `0E-9` (seen in the keys-detail live-burn cost
+  margin readout and its form input). `0E-9` is an EXACT zero and
+  renders `0`. The distinct value `1E-9` is a true positive
+  0.000000001 and renders `0.000000001` — a small positive price or
+  margin is never replaced by a free zero. No data cleanup, epsilon,
+  or accounting rounding is involved; this is presentation only.
+- **Missing stays missing.** `None` never becomes `0`; templates keep
+  their per-field labels (`Unlimited`, `n/a`, `Unknown`, `Not set`).
+- **Token quantities in M.** Human-facing token counts (used/reserved
+  limits, usage totals, per-request maxima, calibration and template
+  readouts) display in millions of tokens with the unit in the VALUE
+  (column headings stay unchanged, e.g. "Tokens"): `|v| >= 1,000,000`
+  quantizes to at most 3 decimals with `ROUND_HALF_UP` and trailing
+  zeros stripped (`1,500,000 -> 1.5M`; `937,826,734 -> 937.827M`;
+  `999,999,500 -> 1,000M`); `|v| < 1,000,000` scales by an exact
+  power-of-ten shift so no positive count rounds to zero
+  (`1,000 -> 0.001M`; `1 -> 0.000001M`). The exact comma-grouped
+  count is provided through `title`/accessibility text on the token
+  readouts; the display is an approximation for reading, never policy
+  authority. Already-per-1M prices/rates keep their monetary value and
+  per-1M unit (never divided again).
+- **Human policy summaries are in scope.** The service-built human
+  policy summaries that the safe DTOs expose as strings (rate-limit
+  `req/min` / `tokens/min` / `concurrent` / `s window` parts, the Chat
+  live-burn summary, the lazy-throttling wait summary; plus the typed
+  rate-limit policy dict on the key create-result page) are inside the
+  numeric display contract. A narrow pure presentation formatter
+  (`format_policy_summary` / `format_rate_limit_policy`, exposed as the
+  `policysum` / `ratepolicy` Jinja filters) matches ONLY the exact known
+  finite producer grammar before touching any digit, then renders the
+  numeric quantities with the same accepted rules (grouped counts,
+  token quantities in M, 9-dp money with unneeded zeros stripped) while
+  preserving the unit, window, disabled/ignored, and inheritance
+  wording verbatim. The raw unrounded service string stays in the
+  `title`/accessibility text of the rounded readouts. Text that does not
+  match the known grammar — arbitrary notes, provider metadata, URLs,
+  raw JSON, code, identifiers — passes through byte-for-byte unchanged;
+  there is no generic digit substitution.
+- **Raw machine surfaces unchanged.** `data-sort-value` keys use the
+  canonical ungrouped, unscaled exact integer/decimal (`dec`); `None`
+  maps to the empty raw key (sorted last in both directions).
+  Editable input values, placeholders, hidden fields, submitted
+  payloads, identifiers, HTTP codes, ports, dates, versions, raw
+  JSON, and code blocks remain literal. Editable inputs accept the
+  same exact raw units as before (no comma/M parser was added): only a
+  zero-valued valid numeric default is normalized to `0` (the `0E-9`
+  / `-0E-9` exponent forms and padded zero strings such as
+  `0.000000000`); valid non-zero values keep their exact digits and
+  redisplayed user input — even invalid input — passes through
+  unchanged. Those raw boundaries are intentional (machine
+  round-trip and form transport must stay valid inputs/identifiers),
+  not an omission of the human-facing contract.
+- **No accounting/schema impact.** These are pure presentation
+  helpers: no services, repositories, schema, migrations, API/CLI/CSV
+  contracts, JS, or CSS changed.
+- **Completion captions and zero-safe latency (206-b/c).** The
+  remaining human quantities — the usage/audit export-cap captions,
+  the OpenAI-assisted proposal summary readouts (rows, warnings, TSV
+  size, preview ceiling), and the key-template default validity days —
+  use the same `num` grouping, and the usage-detail latency readout
+  uses explicit `None` handling so an actual zero displays `0 ms`
+  while a missing value keeps `n/a ms`; every editable input, raw
+  payload, and machine surface stays literal.
 
 ## 7. Verification
 
@@ -588,3 +669,9 @@ and
 SQL-before-LIMIT pagination oracle, real-PG R5 selected-hydration
 scope/limit regressions, chip UI, label-only async refresh, CSV multi
 exports, honest layer separation).
+and
+`docs/verification/2026-10-29-admin-numeric-display.md` for the
+206-a numeric-display record (confirmed `0E-9` source and `1E-9`
+distinction, formatter matrix, ASGI render facts, actual
+Chromium/owned-PG facts, screenshots, raw sort/input law, and
+limitations).

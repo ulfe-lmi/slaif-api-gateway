@@ -69,8 +69,8 @@
           <td>{{ owner.institution_name or "Not set" }}</td>
           <td><span class="status-pill status-{{ 'active' if owner.is_active else 'suspended' }}">{{ "active" if owner.is_active else "inactive" }}</span></td>
           <td data-sort-value="{{ owner.key_count }}">
-            <div>{{ owner.key_count }} total</div>
-            <div class="muted small">{{ owner.active_key_count }} active</div>
+            <div>{{ owner.key_count | num }} total</div>
+            <div class="muted small">{{ owner.active_key_count | num }} active</div>
           </td>
           <td>{{ owner.created_at.isoformat() }}</td>
         </tr>

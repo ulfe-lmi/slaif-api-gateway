@@ -50,7 +50,7 @@
         <dt>Time window</dt>
         <dd>{{ summary.time_window_start.isoformat() if summary.time_window_start else "beginning" }} to {{ summary.time_window_end.isoformat() if summary.time_window_end else "now" }}</dd>
         <dt>Observed requests</dt>
-        <dd>{{ summary.observed_request_count }}</dd>
+        <dd>{{ summary.observed_request_count | num }}</dd>
         <dt>Observed endpoints</dt>
         <dd>{{ summary.observed_endpoints|join(", ") or "None" }}</dd>
         <dt>Observed providers</dt>
@@ -70,25 +70,25 @@
       <h2>Observed Totals And Maxima</h2>
       <dl>
         <dt>Total input tokens</dt>
-        <dd>{{ summary.total_input_tokens }}</dd>
+        <dd title="{{ summary.total_input_tokens | num }} tokens">{{ (summary.total_input_tokens | tokm) ~ "M" }}</dd>
         <dt>Total output tokens</dt>
-        <dd>{{ summary.total_output_tokens }}</dd>
+        <dd title="{{ summary.total_output_tokens | num }} tokens">{{ (summary.total_output_tokens | tokm) ~ "M" }}</dd>
         <dt>Total tokens</dt>
-        <dd>{{ summary.total_tokens }}</dd>
+        <dd title="{{ summary.total_tokens | num }} tokens">{{ (summary.total_tokens | tokm) ~ "M" }}</dd>
         <dt>Total reasoning tokens</dt>
-        <dd>{{ summary.total_reasoning_tokens if summary.total_reasoning_tokens is not none else "Unknown" }}</dd>
+        <dd title="{{ summary.total_reasoning_tokens | num if summary.total_reasoning_tokens is not none else '' }} tokens">{{ (summary.total_reasoning_tokens | tokm) ~ "M" if summary.total_reasoning_tokens is not none else "Unknown" }}</dd>
         <dt>Total cached tokens</dt>
-        <dd>{{ summary.total_cached_tokens if summary.total_cached_tokens is not none else "Unknown" }}</dd>
+        <dd title="{{ summary.total_cached_tokens | num if summary.total_cached_tokens is not none else '' }} tokens">{{ (summary.total_cached_tokens | tokm) ~ "M" if summary.total_cached_tokens is not none else "Unknown" }}</dd>
         <dt>Max input per request</dt>
-        <dd>{{ summary.max_input_tokens_per_request }}</dd>
+        <dd title="{{ summary.max_input_tokens_per_request | num }} tokens">{{ (summary.max_input_tokens_per_request | tokm) ~ "M" }}</dd>
         <dt>Max output per request</dt>
-        <dd>{{ summary.max_output_tokens_per_request }}</dd>
+        <dd title="{{ summary.max_output_tokens_per_request | num }} tokens">{{ (summary.max_output_tokens_per_request | tokm) ~ "M" }}</dd>
         <dt>Max total per request</dt>
-        <dd>{{ summary.max_total_tokens_per_request }}</dd>
+        <dd title="{{ summary.max_total_tokens_per_request | num }} tokens">{{ (summary.max_total_tokens_per_request | tokm) ~ "M" }}</dd>
         <dt>Total SLAIF cost</dt>
-        <dd>{{ summary.total_slaif_calculated_cost if summary.total_slaif_calculated_cost is not none else "Unknown" }}</dd>
+        <dd>{{ (summary.total_slaif_calculated_cost | num) if summary.total_slaif_calculated_cost is not none else "Unknown" }}</dd>
         <dt>Total provider-reported cost</dt>
-        <dd>{{ summary.total_provider_reported_cost if summary.total_provider_reported_cost is not none else "Unknown" }}</dd>
+        <dd>{{ (summary.total_provider_reported_cost | num) if summary.total_provider_reported_cost is not none else "Unknown" }}</dd>
         <dt>Cost confidence</dt>
         <dd>{{ summary.cost_confidence }}</dd>
       </dl>
@@ -110,7 +110,7 @@
       <h2>Strict Participant Policy Proposal</h2>
       <dl>
         <dt>Multiplier</dt>
-        <dd>{{ proposal.multiplier }}</dd>
+        <dd>{{ proposal.multiplier | num }}</dd>
         <dt>Allowed endpoints</dt>
         <dd>{{ proposal.proposed_allowed_endpoints|join(", ") or "None" }}</dd>
         <dt>Allowed models</dt>
@@ -122,21 +122,21 @@
         <dt>Hosted capabilities requiring review</dt>
         <dd>{{ proposal.hosted_capabilities_requiring_review|join(", ") or "None" }}</dd>
         <dt>Request limit</dt>
-        <dd>{{ proposal.proposed_request_limit_total }}</dd>
+        <dd>{{ proposal.proposed_request_limit_total | num }}</dd>
         <dt>Total token limit</dt>
-        <dd>{{ proposal.proposed_token_limit_total }}</dd>
+        <dd title="{{ proposal.proposed_token_limit_total | num }} tokens">{{ (proposal.proposed_token_limit_total | tokm) ~ "M" }}</dd>
         <dt>Input token limit</dt>
-        <dd>{{ proposal.proposed_input_token_limit_total }}</dd>
+        <dd title="{{ proposal.proposed_input_token_limit_total | num }} tokens">{{ (proposal.proposed_input_token_limit_total | tokm) ~ "M" }}</dd>
         <dt>Output token limit</dt>
-        <dd>{{ proposal.proposed_output_token_limit_total }}</dd>
+        <dd title="{{ proposal.proposed_output_token_limit_total | num }} tokens">{{ (proposal.proposed_output_token_limit_total | tokm) ~ "M" }}</dd>
         <dt>Reasoning token limit</dt>
-        <dd>{{ proposal.proposed_reasoning_token_limit_total if proposal.proposed_reasoning_token_limit_total is not none else "Unknown" }}</dd>
+        <dd title="{{ proposal.proposed_reasoning_token_limit_total | num if proposal.proposed_reasoning_token_limit_total is not none else '' }} tokens">{{ (proposal.proposed_reasoning_token_limit_total | tokm) ~ "M" if proposal.proposed_reasoning_token_limit_total is not none else "Unknown" }}</dd>
         <dt>Cost limit EUR</dt>
-        <dd>{{ proposal.proposed_cost_limit_eur if proposal.proposed_cost_limit_eur is not none else "Unknown" }}</dd>
+        <dd>{{ (proposal.proposed_cost_limit_eur | num) if proposal.proposed_cost_limit_eur is not none else "Unknown" }}</dd>
         <dt>Max total tokens per request</dt>
-        <dd>{{ proposal.proposed_max_total_tokens_per_request }}</dd>
+        <dd title="{{ proposal.proposed_max_total_tokens_per_request | num }} tokens">{{ (proposal.proposed_max_total_tokens_per_request | tokm) ~ "M" }}</dd>
         <dt>Max single-request cost EUR</dt>
-        <dd>{{ proposal.proposed_max_single_request_cost_eur if proposal.proposed_max_single_request_cost_eur is not none else "Unknown" }}</dd>
+        <dd>{{ (proposal.proposed_max_single_request_cost_eur | num) if proposal.proposed_max_single_request_cost_eur is not none else "Unknown" }}</dd>
       </dl>
     </section>
   </div>
