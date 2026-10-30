@@ -126,11 +126,11 @@
         <dt>Allowed providers</dt>
         <dd>{{ key.allowed_providers_summary }}</dd>
         <dt>Rate limits</dt>
-        <dd>{{ key.rate_limit_policy_summary }}</dd>
+        <dd title="{{ key.rate_limit_policy_summary }}">{{ key.rate_limit_policy_summary | policysum }}</dd>
         <dt>Lazy throttling</dt>
-        <dd>{{ key.lazy_throttling_policy_summary }}</dd>
+        <dd>{{ key.lazy_throttling_policy_summary | policysum }}</dd>
         <dt>Chat streaming live-burn</dt>
-        <dd>{{ key.chat_streaming_live_burn_policy_summary }}</dd>
+        <dd title="{{ key.chat_streaming_live_burn_policy_summary }}">{{ key.chat_streaming_live_burn_policy_summary | policysum }}</dd>
         <dt>External-tool policy</dt>
         <dd>{{ key.external_tool_policy_summary }}</dd>
         {% if key.responses_policy %}
@@ -293,7 +293,7 @@
           <dt>Cost margin EUR</dt>
           <dd>{{ key.chat_streaming_live_burn_policy.cost_margin_eur | num }}</dd>
           <dt>Output token margin</dt>
-          <dd>{{ key.chat_streaming_live_burn_policy.token_margin | num }}</dd>
+          <dd title="{{ key.chat_streaming_live_burn_policy.token_margin | num }} tokens">{{ (key.chat_streaming_live_burn_policy.token_margin | tokm) ~ "M" }}</dd>
         </dl>
         <p class="muted small">Positive margin stops streams early, zero margin stops near the estimated boundary, and negative margin allows bounded estimated overrun. Final provider usage/cost remains authoritative.</p>
       </div>
@@ -311,7 +311,7 @@
               <input name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur | inputnum }}" inputmode="decimal" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
             <label>
-              Output token margin
+              Output token margin (tokens)
               <input name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
           </div>

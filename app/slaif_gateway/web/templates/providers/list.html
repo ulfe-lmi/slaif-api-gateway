@@ -72,8 +72,8 @@
           <td><code>{{ provider.api_key_env_var }}</code></td>
           <td><span class="status-pill status-{{ 'active' if provider.enabled else 'suspended' }}">{{ "enabled" if provider.enabled else "disabled" }}</span></td>
           <td data-sort-value="{{ provider.timeout_seconds }}">
-            <div>{{ provider.timeout_seconds }}s timeout</div>
-            <div class="muted small">{{ provider.max_retries }} retries</div>
+            <div>{{ provider.timeout_seconds | num }}s timeout</div>
+            <div class="muted small">{{ provider.max_retries | num }} retries</div>
           </td>
         </tr>
         {% else %}

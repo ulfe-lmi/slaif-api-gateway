@@ -607,9 +607,24 @@ delegates to the canonical raw-decimal helper):
   count is provided through `title`/accessibility text on the token
   readouts; the display is an approximation for reading, never policy
   authority. Already-per-1M prices/rates keep their monetary value and
-  per-1M unit (never divided again), and rate-limit summaries with a
-  semantic window unit are service-built strings outside this
-  contract (documented limitation).
+  per-1M unit (never divided again).
+- **Human policy summaries are in scope.** The service-built human
+  policy summaries that the safe DTOs expose as strings (rate-limit
+  `req/min` / `tokens/min` / `concurrent` / `s window` parts, the Chat
+  live-burn summary, the lazy-throttling wait summary; plus the typed
+  rate-limit policy dict on the key create-result page) are inside the
+  numeric display contract. A narrow pure presentation formatter
+  (`format_policy_summary` / `format_rate_limit_policy`, exposed as the
+  `policysum` / `ratepolicy` Jinja filters) matches ONLY the exact known
+  finite producer grammar before touching any digit, then renders the
+  numeric quantities with the same accepted rules (grouped counts,
+  token quantities in M, 9-dp money with unneeded zeros stripped) while
+  preserving the unit, window, disabled/ignored, and inheritance
+  wording verbatim. The raw unrounded service string stays in the
+  `title`/accessibility text of the rounded readouts. Text that does not
+  match the known grammar — arbitrary notes, provider metadata, URLs,
+  raw JSON, code, identifiers — passes through byte-for-byte unchanged;
+  there is no generic digit substitution.
 - **Raw machine surfaces unchanged.** `data-sort-value` keys use the
   canonical ungrouped, unscaled exact integer/decimal (`dec`); `None`
   maps to the empty raw key (sorted last in both directions).
@@ -621,7 +636,9 @@ delegates to the canonical raw-decimal helper):
   / `-0E-9` exponent forms and padded zero strings such as
   `0.000000000`); valid non-zero values keep their exact digits and
   redisplayed user input — even invalid input — passes through
-  unchanged.
+  unchanged. Those raw boundaries are intentional (machine
+  round-trip and form transport must stay valid inputs/identifiers),
+  not an omission of the human-facing contract.
 - **No accounting/schema impact.** These are pure presentation
   helpers: no services, repositories, schema, migrations, API/CLI/CSV
   contracts, JS, or CSS changed.

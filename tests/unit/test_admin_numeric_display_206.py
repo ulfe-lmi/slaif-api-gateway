@@ -36,6 +36,8 @@ from slaif_gateway.services.admin_session_service import AdminSessionContext
 from slaif_gateway.web.formatting import (
     format_input_decimal,
     format_number,
+    format_policy_summary,
+    format_rate_limit_policy,
     format_raw_decimal,
     format_tokens_m,
 )
@@ -516,3 +518,378 @@ def test_pricing_list_money_display_zero_and_missing(monkeypatch) -> None:
     assert "<div>input n/a</div>" in html
     assert "0E-9" not in html
     assert 'data-sort-value="0.010000000"' in html
+
+
+# ---------------------------------------------------------------------------
+# 206-b: pure policy-summary formatters (known finite grammars only)
+# ---------------------------------------------------------------------------
+
+
+class TestFormatPolicySummary:
+    def test_rate_limit_summary_grouped_counts_and_m_tokens(self) -> None:
+        assert (
+            format_policy_summary("937826734 req/min, 937826734 tokens/min")
+            == "937,826,734 req/min, 937.827M tokens/min"
+        )
+
+    def test_rate_limit_summary_all_parts_keep_unit_and_window_semantics(self) -> None:
+        assert (
+            format_policy_summary(
+                "100 req/min, 2000000 tokens/min, 5 concurrent, 60s window"
+            )
+            == "100 req/min, 2M tokens/min, 5 concurrent, 60s window"
+        )
+
+    def test_rate_limit_empty_labels_stay_literal(self) -> None:
+        assert format_policy_summary("Default") == "Default"
+        assert format_policy_summary("none") == "none"
+
+    def test_rate_limit_single_small_part_unchanged_in_value(self) -> None:
+        assert format_policy_summary("12 req/min") == "12 req/min"
+
+    def test_live_burn_summary_money_and_m_token_margin(self) -> None:
+        assert (
+            format_policy_summary(
+                "Chat live-burn: on, cost margin EUR 0.000000000, token margin 0"
+            )
+            == "Chat live-burn: on, cost margin EUR 0, token margin 0M"
+        )
+        assert (
+            format_policy_summary(
+                "Chat live-burn: off (margins ignored), cost margin EUR "
+                "-0.250000000, token margin -250"
+            )
+            == "Chat live-burn: off (margins ignored), cost margin EUR -0.25, "
+            "token margin -0.00025M"
+        )
+        assert (
+            format_policy_summary(
+                "Chat live-burn: on, cost margin EUR 1234.500000000, "
+                "token margin -937826734"
+            )
+            == "Chat live-burn: on, cost margin EUR 1,234.5, token margin -937.827M"
+        )
+
+    def test_lazy_throttling_wait_summary_grouped_counts(self) -> None:
+        assert (
+            format_policy_summary(
+                "Mode: wait; max wait: 123456s; max waiting per key: 1234567; "
+                "applies to Chat Completions and Responses before provider execution"
+            )
+            == "Mode: wait; max wait: 123,456s; max waiting per key: 1,234,567; "
+            "applies to Chat Completions and Responses before provider execution"
+        )
+        # The reject variant carries no digits and stays byte-for-byte.
+        assert (
+            format_policy_summary(
+                "Mode: reject (immediate 429); no waiting configured"
+            )
+            == "Mode: reject (immediate 429); no waiting configured"
+        )
+
+    def test_non_grammar_text_passes_through_untouched(self) -> None:
+        cases = (
+            # legacy fixture grammar is NOT a known producer form
+            "Chat Completions streaming enabled; cost margin EUR 0.000000000; "
+            "token margin 0",
+            "Capabilities: web_search; local tools: functions; "
+            "hosted/stateful/multimodal: denied",
+            "Mode: strict_bounded; capabilities: none; destinations: none; "
+            "max calls: 0; overrun acknowledged: false; runtime: denied",
+            # never generic digit substitution on credential-shaped text
+            "sk-slaif-abcdef1234567890",
+            "937826734 req/min; 34 tokens/min",
+            "937826734 req/min, 937826734 tokens/min; extra",
+            "1234567890 tokens",
+        )
+        for text in cases:
+            assert format_policy_summary(text) == text, text
+
+    def test_none_and_non_string_passthrough(self) -> None:
+        assert format_policy_summary(None) is None
+        assert format_policy_summary(937826734) == "937826734"
+
+
+class TestFormatRateLimitPolicy:
+    def test_typed_dict_renders_known_grammar(self) -> None:
+        assert (
+            format_rate_limit_policy(
+                {
+                    "requests_per_minute": 937826734,
+                    "tokens_per_minute": 937826734,
+                    "max_concurrent_requests": 5,
+                    "window_seconds": 60,
+                }
+            )
+            == "937,826,734 req/min, 937.827M tokens/min, 5 concurrent, 60s window"
+        )
+
+    def test_partial_dict_only_known_parts(self) -> None:
+        assert (
+            format_rate_limit_policy({"tokens_per_minute": 2000000})
+            == "2M tokens/min"
+        )
+
+    def test_none_maps_none_for_template_labels(self) -> None:
+        assert format_rate_limit_policy(None) is None
+
+    def test_unknown_shapes_fall_back_to_literal_rendering(self) -> None:
+        assert format_rate_limit_policy({"unknown_key": 1}) == "{'unknown_key': 1}"
+        assert format_rate_limit_policy({"requests_per_minute": "weird"}) == (
+            "{'requests_per_minute': 'weird'}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 206-b: keys detail rate/margin/policy-summary ASGI renders
+# ---------------------------------------------------------------------------
+
+
+def _detail_policy_dd(html: str, label: str) -> str:
+    match = re.search(
+        re.escape(f"<dt>{label}</dt>") + r"\s*<dd([^>]*)>(.*?)</dd>",
+        html,
+        flags=re.DOTALL,
+    )
+    assert match is not None, label
+    return f"<dd{match.group(1)}> {match.group(2)}".strip()
+
+
+def test_keys_detail_rate_and_live_burn_summaries_human_readable(monkeypatch) -> None:
+    client = _login(monkeypatch)
+    key = _detail_key(
+        rate_limit_policy_summary="937826734 req/min, 937826734 tokens/min",
+        lazy_throttling_policy_summary=(
+            "Mode: wait; max wait: 30s; max waiting per key: 10; "
+            "applies to Chat Completions and Responses before provider execution"
+        ),
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": Decimal("0E-9"),
+            "token_margin": -250,
+        },
+        chat_streaming_live_burn_policy_summary=(
+            "Chat live-burn: on, cost margin EUR 0.000000000, token margin -250"
+        ),
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    # Rate limits: grouped req/min, M tokens/min, and the exact unrounded
+    # service string preserved in the accessible title.
+    rate_dd = _detail_policy_dd(html, "Rate limits")
+    assert "937,826,734 req/min, 937.827M tokens/min" in rate_dd
+    assert 'title="937826734 req/min, 937826734 tokens/min"' in rate_dd
+    assert "937826734 req/min, 937826734 tokens/min</dd>" not in html
+
+    # Lazy throttling wait summary: counts grouped, semantics untouched.
+    assert (
+        "Mode: wait; max wait: 30s; max waiting per key: 10; "
+        "applies to Chat Completions and Responses before provider execution"
+    ) in html
+
+    # Live-burn summary: 9-dp zero margin renders 0, negative token margin
+    # in M, exact raw values in the title.
+    burn_dd = _detail_policy_dd(html, "Chat streaming live-burn")
+    assert "Chat live-burn: on, cost margin EUR 0, token margin -0.00025M" in burn_dd
+    assert 'title="Chat live-burn: on, cost margin EUR 0.000000000, token margin -250"' in burn_dd
+    assert "0E-9" not in html
+
+    # Direct token-margin readout: M with the exact count in the title.
+    assert (
+        '<dd title="-250 tokens">-0.00025M</dd>' in html
+    ), _detail_policy_dd(html, "Output token margin")
+
+
+def test_keys_detail_unknown_summary_text_is_not_rewritten(monkeypatch) -> None:
+    client = _login(monkeypatch)
+    key = _detail_key(
+        rate_limit_policy_summary="Default",
+        chat_streaming_live_burn_policy_summary=(
+            "Chat Completions streaming enabled; cost margin EUR 0.000000000; "
+            "token margin 0"
+        ),
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return key
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+    html = client.get(f"/admin/keys/{key.id}").text
+
+    # The known empty label and the NON-grammar string both render
+    # byte-for-byte: no partial rewriting of unknown text.
+    assert _detail_policy_dd(html, "Rate limits").endswith("> Default")
+    assert (
+        "Chat Completions streaming enabled; cost margin EUR 0.000000000; "
+        "token margin 0"
+    ) in html
+
+
+# ---------------------------------------------------------------------------
+# 206-b: usage detail exact-count titles for cached/reasoning, stop
+# estimate, and the configured token margin
+# ---------------------------------------------------------------------------
+
+
+def test_usage_detail_cached_reasoning_and_stop_estimate_exact_titles(monkeypatch) -> None:
+    usage = _usage(
+        cached_tokens=937826734,
+        reasoning_tokens=1000000,
+        chat_live_burn={
+            "monitoring_enabled": True,
+            "triggered": True,
+            "stop_reason": "token_margin",
+            "estimated_tokens_at_stop": 937826734,
+            "estimated_cost_eur_at_stop": Decimal("9.990000000"),
+            "cost_margin_eur": Decimal("0E-9"),
+            "token_margin": -250,
+            "final_provider_usage_available": False,
+            "estimate_is_invoice_grade": False,
+        },
+    )
+    page = _usage_page(monkeypatch, usage)
+
+    # Cached / reasoning: each rounded value has its exact count in the
+    # accessible title.
+    assert 'title="937,826,734 / 1,000,000"' in page
+    assert "937.827M / 1M" in page
+
+    # Estimated tokens at stop: M display with the exact count in title.
+    stop_dd = re.search(
+        r"Estimated tokens at stop</dt>(<dd[^>]*>.*?</dd>)",
+        page,
+        flags=re.DOTALL,
+    )
+    assert stop_dd is not None
+    assert stop_dd.group(1) == '<dd title="937,826,734 tokens">937.827M</dd>'
+
+    # Configured token margin: M display with the exact raw count.
+    assert '<dd title="-250 tokens">-0.00025M</dd>' in page
+    assert "0E-9" not in page
+
+
+# ---------------------------------------------------------------------------
+# 206-b: detail counters and import summary totals (ASGI, counts > 1000)
+# ---------------------------------------------------------------------------
+
+
+def test_cohort_detail_grouped_counters(monkeypatch) -> None:
+    from slaif_gateway.schemas.admin_records import AdminCohortDetail
+
+    client = _login(monkeypatch)
+    cohort = AdminCohortDetail(
+        id=uuid.uuid4(),
+        name="Cohort 206",
+        description=None,
+        starts_at=None,
+        ends_at=None,
+        owner_count=937826734,
+        key_count=1234567,
+        active_key_count=1234,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    async def get_cohort_detail(self, cohort_id, *, now=None):
+        return cohort
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_records_dashboard.AdminRecordsDashboardService."
+        "get_cohort_detail",
+        get_cohort_detail,
+    )
+    html = client.get(f"/admin/cohorts/{cohort.id}").text
+
+    # Every counter is grouped; no ungrouped 7+ digit count remains.
+    assert "<dd>937,826,734</dd>" in html
+    assert "<dd>1,234,567</dd>" in html
+    assert "<dd>1,234</dd>" in html
+    assert "937826734" not in html
+    assert "1234567" not in html
+
+
+def test_bulk_import_preview_grouped_totals_and_human_summaries(monkeypatch) -> None:
+    from slaif_gateway.services.key_import import KeyImportPreview, KeyImportRowPreview
+
+    from test_admin_bulk_key_import_routes import _valid_csv
+
+    client = _login(monkeypatch)
+
+    def verify_session_csrf_token(self, admin_session, csrf_token):
+        return csrf_token == "rendered-csrf-token"
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service."
+        "AdminSessionService.verify_session_csrf_token",
+        verify_session_csrf_token,
+    )
+
+    row = KeyImportRowPreview(
+        row_number=1,
+        status="valid",
+        classification="create",
+        owner_email="ada@example.org",
+        owner_name="Ada Lovelace",
+        institution_name="SLAIF",
+        cost_limit_eur="10.00",
+        token_limit=100000,
+        request_limit=1000,
+        allowed_models=("gpt-test",),
+        allowed_endpoints=("/v1/chat/completions",),
+        allowed_providers=(),
+        rate_limit_policy={
+            "requests_per_minute": 937826734,
+            "tokens_per_minute": 937826734,
+        },
+        chat_streaming_live_burn_policy={
+            "version": 1,
+            "enabled": True,
+            "cost_margin_eur": "0",
+            "token_margin": 1500,
+        },
+        email_delivery_mode="none",
+    )
+    preview = KeyImportPreview(
+        total_rows=1234567,
+        valid_count=1234560,
+        invalid_count=7,
+        rows=(row,),
+        duplicate_owner_count=1,
+    )
+
+    async def build_preview(request, raw_rows, *, max_rows):
+        return preview
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._build_key_import_preview", build_preview
+    )
+    html = client.post(
+        "/admin/keys/bulk-import/preview",
+        data={
+            "csrf_token": "rendered-csrf-token",
+            "import_format": "csv",
+            "import_text": _valid_csv(),
+        },
+    ).text
+
+    # Summary cards: grouped totals, no ungrouped 7+ digit totals remain.
+    assert "<strong>1,234,567</strong>" in html
+    assert "<strong>1,234,560</strong>" in html
+    assert "1234567" not in html
+
+    # Row policy summaries: the service-built strings are rendered in the
+    # accepted human form (grouped req/min, M tokens/min, M token margin).
+    assert "Rate limits: 937,826,734 req/min, 937.827M tokens/min" in html
+    assert "Chat live-burn: on, cost margin EUR 0, token margin 0.0015M" in html

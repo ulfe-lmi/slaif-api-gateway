@@ -33,7 +33,7 @@
         <dt>Endpoint</dt><dd>{{ route.endpoint }}</dd>
         <dt>Provider</dt><dd>{{ route.provider }}</dd>
         <dt>Upstream model</dt><dd>{{ route.upstream_model }}</dd>
-        <dt>Priority</dt><dd>{{ route.priority }}</dd>
+        <dt>Priority</dt><dd>{{ route.priority | num }}</dd>
         <dt>Status</dt><dd>{{ "enabled" if route.enabled else "disabled" }}</dd>
         <dt>Models visibility</dt><dd>{{ "visible" if route.visible_in_models else "hidden" }}</dd>
         <dt>Streaming</dt><dd>{{ "supported" if route.supports_streaming else "not supported" }}</dd>

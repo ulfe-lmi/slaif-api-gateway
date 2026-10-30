@@ -22,9 +22,9 @@
 
   <section class="summary-grid" aria-label="Route import summary">
     <div><span class="muted">Format</span><strong>{{ import_format }}</strong></div>
-    <div><span class="muted">Rows</span><strong>{{ preview.total_rows }}</strong></div>
-    <div><span class="muted">Valid rows</span><strong>{{ preview.valid_count }}</strong></div>
-    <div><span class="muted">Invalid rows</span><strong>{{ preview.invalid_count }}</strong></div>
+    <div><span class="muted">Rows</span><strong>{{ preview.total_rows | num }}</strong></div>
+    <div><span class="muted">Valid rows</span><strong>{{ preview.valid_count | num }}</strong></div>
+    <div><span class="muted">Invalid rows</span><strong>{{ preview.invalid_count | num }}</strong></div>
   </section>
 
   {% if source_label %}
@@ -65,7 +65,7 @@
             {% endif %}
           </td>
           <td data-sort-value="{{ row.priority if row.priority is not none else '' }}">
-            <div>priority {{ row.priority if row.priority is not none else "n/a" }}</div>
+            <div>priority {{ (row.priority | num) if row.priority is not none else "n/a" }}</div>
             <div class="muted small">{{ "enabled" if row.enabled else "disabled" }} / {{ "visible" if row.visible_in_models else "hidden" }} / {{ "streaming" if row.supports_streaming else "non-streaming" }}</div>
           </td>
           <td>

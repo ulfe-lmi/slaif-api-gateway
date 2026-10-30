@@ -258,6 +258,8 @@ from slaif_gateway.web.branding import (
 from slaif_gateway.web.formatting import (
     format_input_decimal,
     format_number,
+    format_policy_summary,
+    format_rate_limit_policy,
     format_raw_decimal,
     format_tokens_m,
 )
@@ -451,9 +453,32 @@ def _input_decimal_display_filter(value: object) -> str | None:
     return format_input_decimal(value)
 
 
+def _policy_summary_display_filter(value: object) -> str | None:
+    """Human-readable service-built policy summary (known finite grammars).
+
+    Rate-limit / Chat live-burn / lazy-throttling summaries are matched
+    against the exact known producer grammar before any digit is touched;
+    anything else passes through unchanged. Pure presentation: the
+    shared service output used by CLI/API is never modified.
+    """
+    return format_policy_summary(value)
+
+
+def _rate_limit_policy_display_filter(value: object) -> str | None:
+    """Typed rate-limit policy dict in the known human summary grammar.
+
+    Used only where the template already holds the typed policy
+    dictionary; unknown shapes fall back to the existing literal
+    rendering. Pure presentation.
+    """
+    return format_rate_limit_policy(value)
+
+
 templates.env.filters["num"] = _number_display_filter
 templates.env.filters["tokm"] = _tokens_million_display_filter
 templates.env.filters["inputnum"] = _input_decimal_display_filter
+templates.env.filters["policysum"] = _policy_summary_display_filter
+templates.env.filters["ratepolicy"] = _rate_limit_policy_display_filter
 
 _QWEN_CODEX_PROFILE_IDS = frozenset(
     {

@@ -8,7 +8,7 @@
     <div>
       <p class="eyebrow">Pricing Catalog</p>
       <h1 id="pricing-import-result-heading">Pricing Import Result</h1>
-      <p class="muted">Processed {{ result.total_rows }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
+      <p class="muted">Processed {{ result.total_rows | num }} {{ "row" if result.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/pricing/import">Import more pricing</a>
@@ -27,19 +27,19 @@
   <section class="summary-grid" aria-label="Pricing import execution summary">
     <div class="summary-card">
       <span>Total rows</span>
-      <strong>{{ result.total_rows }}</strong>
+      <strong>{{ result.total_rows | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Created rows</span>
-      <strong>{{ result.created_count }}</strong>
+      <strong>{{ result.created_count | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Updated rows</span>
-      <strong>{{ result.updated_count }}</strong>
+      <strong>{{ result.updated_count | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Errors</span>
-      <strong>{{ result.error_count }}</strong>
+      <strong>{{ result.error_count | num }}</strong>
     </div>
   </section>
 

@@ -27,23 +27,23 @@
   <section class="summary-grid" aria-label="Bulk key import result summary">
     <article class="summary-card">
       <span class="summary-label">Total rows</span>
-      <strong>{{ result.total_rows }}</strong>
+      <strong>{{ result.total_rows | num }}</strong>
     </article>
     <article class="summary-card">
       <span class="summary-label">Created keys</span>
-      <strong>{{ result.created_count }}</strong>
+      <strong>{{ result.created_count | num }}</strong>
     </article>
     <article class="summary-card">
       <span class="summary-label">Invalid rows</span>
-      <strong>{{ result.invalid_count }}</strong>
+      <strong>{{ result.invalid_count | num }}</strong>
     </article>
     <article class="summary-card">
       <span class="summary-label">Pending emails</span>
-      <strong>{{ result.pending_email_delivery_count }}</strong>
+      <strong>{{ result.pending_email_delivery_count | num }}</strong>
     </article>
     <article class="summary-card">
       <span class="summary-label">Queued emails</span>
-      <strong>{{ result.queued_email_delivery_count }}</strong>
+      <strong>{{ result.queued_email_delivery_count | num }}</strong>
     </article>
   </section>
 
@@ -117,8 +117,8 @@
           <td>
             <div>Models: {{ row.allowed_models_summary }}</div>
             <div class="muted small">Endpoints: {{ row.allowed_endpoints_summary }}</div>
-            <div class="muted small">Rate limits: {{ row.rate_limit_summary }}</div>
-            <div class="muted small">{{ row.chat_streaming_live_burn_summary }}</div>
+            <div class="muted small">Rate limits: {{ row.rate_limit_summary | policysum }}</div>
+            <div class="muted small">{{ row.chat_streaming_live_burn_summary | policysum }}</div>
           </td>
           <td>
             <div>{{ row.email_delivery_mode }}</div>

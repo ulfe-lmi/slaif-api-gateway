@@ -220,7 +220,11 @@ def test_key_detail_renders_chat_streaming_live_burn_form(monkeypatch) -> None:
     assert f'action="/admin/keys/{key.id}/chat-streaming-live-burn"' in html
     assert "Chat Completions streaming live-burn monitoring" in html
     assert 'name="chat_streaming_live_burn_enabled" value="true" checked' in html
-    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0.000000000"' in html
+    # 206-b: the zero-valued valid numeric default renders 0 (the stale
+    # 0.000000000 oracle predates the zero-input representation fix).
+    # The non-zero value (see the disabled-form case below) keeps its
+    # exact digits: -0.250000000.
+    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="0"' in html
     assert 'name="chat_streaming_live_burn_token_margin" value="0"' in html
     assert "PostgreSQL hard quota limits remain independent and authoritative" in html
     assert "Margins are ignored while monitoring is off" in html

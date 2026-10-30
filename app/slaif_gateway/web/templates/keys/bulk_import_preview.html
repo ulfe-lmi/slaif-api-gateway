@@ -24,19 +24,19 @@
   <section class="summary-grid" aria-label="Import summary">
     <article class="summary-card">
       <span class="summary-label">Total rows</span>
-      <strong>{{ preview.total_rows }}</strong>
+      <strong>{{ preview.total_rows | num }}</strong>
     </article>
     <article class="summary-card">
       <span class="summary-label">Valid rows</span>
-      <strong>{{ preview.valid_count }}</strong>
+      <strong>{{ preview.valid_count | num }}</strong>
     </article>
     <article class="summary-card">
       <span class="summary-label">Invalid rows</span>
-      <strong>{{ preview.invalid_count }}</strong>
+      <strong>{{ preview.invalid_count | num }}</strong>
     </article>
     <article class="summary-card">
       <span class="summary-label">Duplicate owners</span>
-      <strong>{{ preview.duplicate_owner_count }}</strong>
+      <strong>{{ preview.duplicate_owner_count | num }}</strong>
     </article>
   </section>
 
@@ -146,8 +146,8 @@
             <div>Models: {{ row.allowed_models_summary }}</div>
             <div class="muted small">Endpoints: {{ row.allowed_endpoints_summary }}</div>
             <div class="muted small">Providers: {{ row.allowed_providers_summary }}</div>
-            <div class="muted small">Rate limits: {{ row.rate_limit_summary }}</div>
-            <div class="muted small">{{ row.chat_streaming_live_burn_summary }}</div>
+            <div class="muted small">Rate limits: {{ row.rate_limit_summary | policysum }}</div>
+            <div class="muted small">{{ row.chat_streaming_live_burn_summary | policysum }}</div>
             <div class="muted small">Metadata: {{ row.metadata_summary }}</div>
           </td>
           <td>

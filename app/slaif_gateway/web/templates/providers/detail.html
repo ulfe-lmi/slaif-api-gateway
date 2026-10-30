@@ -33,8 +33,8 @@
         <dt>Base URL</dt><dd>{{ provider.base_url }}</dd>
         <dt>Runtime</dt><dd>{% if provider.kind == "module" %}Native modules use only the reviewed static adapter registry; no dynamic imports or provider-defined classes are accepted.{% else %}Built-in adapters remain fixed; operator-defined <code>openai_compatible</code> backends use the generic runtime.{% endif %}</dd>
         <dt>API key env var</dt><dd><code>{{ provider.api_key_env_var }}</code></dd>
-        <dt>Timeout</dt><dd>{{ provider.timeout_seconds }}s</dd>
-        <dt>Max retries</dt><dd>{{ provider.max_retries }}</dd>
+        <dt>Timeout</dt><dd>{{ provider.timeout_seconds | num }}s</dd>
+        <dt>Max retries</dt><dd>{{ provider.max_retries | num }}</dd>
         <dt>Created</dt><dd>{{ provider.created_at.isoformat() }}</dd>
         <dt>Updated</dt><dd>{{ provider.updated_at.isoformat() }}</dd>
       </dl>
@@ -101,7 +101,7 @@
           <td class="row-ordinal">{{ loop.index }}</td>
           <td><a href="/admin/routes/{{ route.id }}">{{ route.requested_model }}</a><div class="muted small">{{ route.match_type }} / {{ route.endpoint }}</div></td>
           <td>{{ route.upstream_model }}</td>
-          <td data-sort-value="{{ route.priority }}">{{ route.priority }}</td>
+          <td data-sort-value="{{ route.priority }}">{{ route.priority | num }}</td>
           <td>{{ "enabled" if route.enabled else "disabled" }} / {{ "visible" if route.visible_in_models else "hidden" }}</td>
         </tr>
         {% else %}

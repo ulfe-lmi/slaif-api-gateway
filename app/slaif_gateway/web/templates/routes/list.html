@@ -92,7 +92,7 @@
             <div class="muted small">Exact protocol/profile locally qualified; real provider-through-gateway E2E not yet run.</div>
             {% endif %}
           </td>
-          <td>{{ route.priority }}</td>
+          <td>{{ route.priority | num }}</td>
           <td>
             <div>{{ "enabled" if route.enabled else "disabled" }}</div>
             <div class="muted small">{{ "visible" if route.visible_in_models else "hidden" }} / {{ "streaming" if route.supports_streaming else "non-streaming" }}</div>

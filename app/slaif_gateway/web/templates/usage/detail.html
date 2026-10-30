@@ -52,7 +52,7 @@
         <dt>Prompt tokens</dt><dd title="{{ usage.prompt_tokens | num }} tokens">{{ (usage.prompt_tokens | tokm) ~ "M" }}</dd>
         <dt>Completion tokens</dt><dd title="{{ usage.completion_tokens | num }} tokens">{{ (usage.completion_tokens | tokm) ~ "M" }}</dd>
         <dt>Total tokens</dt><dd title="{{ usage.total_tokens | num }} tokens">{{ (usage.total_tokens | tokm) ~ "M" }}</dd>
-        <dt>Cached / reasoning</dt><dd>{{ (usage.cached_tokens | tokm) ~ "M" }} / {{ (usage.reasoning_tokens | tokm) ~ "M" }}</dd>
+        <dt>Cached / reasoning</dt><dd title="{{ usage.cached_tokens | num }} / {{ usage.reasoning_tokens | num }}">{{ (usage.cached_tokens | tokm) ~ "M" }} / {{ (usage.reasoning_tokens | tokm) ~ "M" }}</dd>
         <dt>Cost EUR</dt><dd>{{ (usage.actual_cost_eur | num) if usage.actual_cost_eur is not none else ((usage.estimated_cost_eur | num) if usage.estimated_cost_eur is not none else "n/a") }}</dd>
         <dt>Native currency</dt><dd>{{ usage.native_currency or "n/a" }}</dd>
       </dl>
@@ -76,10 +76,10 @@
       <dt>Monitoring enabled</dt><dd>{{ "yes" if usage.chat_live_burn.monitoring_enabled else "no" if usage.chat_live_burn.monitoring_enabled is sameas false else "n/a" }}</dd>
       <dt>Triggered</dt><dd>{{ "yes" if usage.chat_live_burn.triggered else "no" }}</dd>
       <dt>Stop reason</dt><dd>{{ usage.chat_live_burn.stop_reason or "n/a" }}</dd>
-      <dt>Estimated tokens at stop</dt><dd>{{ (usage.chat_live_burn.estimated_tokens_at_stop | tokm) ~ "M" if usage.chat_live_burn.estimated_tokens_at_stop is not none else "n/a" }}</dd>
+      <dt>Estimated tokens at stop</dt><dd{% if usage.chat_live_burn.estimated_tokens_at_stop is not none %} title="{{ usage.chat_live_burn.estimated_tokens_at_stop | num }} tokens"{% endif %}>{{ (usage.chat_live_burn.estimated_tokens_at_stop | tokm) ~ "M" if usage.chat_live_burn.estimated_tokens_at_stop is not none else "n/a" }}</dd>
       <dt>Estimated cost EUR at stop</dt><dd>{{ (usage.chat_live_burn.estimated_cost_eur_at_stop | num) if usage.chat_live_burn.estimated_cost_eur_at_stop is not none else "n/a" }}</dd>
       <dt>Configured cost margin EUR</dt><dd>{{ (usage.chat_live_burn.cost_margin_eur | num) if usage.chat_live_burn.cost_margin_eur is not none else "n/a" }}</dd>
-      <dt>Configured token margin</dt><dd>{{ (usage.chat_live_burn.token_margin | num) if usage.chat_live_burn.token_margin is not none else "n/a" }}</dd>
+      <dt>Configured token margin</dt><dd{% if usage.chat_live_burn.token_margin is not none %} title="{{ usage.chat_live_burn.token_margin | num }} tokens"{% endif %}>{{ (usage.chat_live_burn.token_margin | tokm) ~ "M" if usage.chat_live_burn.token_margin is not none else "n/a" }}</dd>
       <dt>Final provider usage available</dt><dd>{{ "yes" if usage.chat_live_burn.final_provider_usage_available else "no" if usage.chat_live_burn.final_provider_usage_available is sameas false else "n/a" }}</dd>
       <dt>Estimate is invoice-grade</dt><dd>{{ "yes" if usage.chat_live_burn.estimate_is_invoice_grade else "no" }}</dd>
     </dl>

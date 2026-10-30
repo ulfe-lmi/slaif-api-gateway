@@ -138,9 +138,101 @@ runs).
 - The ASGI renders are unit-fake-session renders (no DB); the
   Chromium cases are the actual-page proof. No real provider,
   email, or production traffic is involved; no release claim.
-- Service-built policy summary strings (e.g. "500 tokens/min") are
-  outside this presentation contract and still render their built
-  text; rate-limit semantic window units stay in those strings.
+- Service-built policy summary strings were outside the 206-a scope;
+  the 206-b completion section below closes that gap in the same
+  presentation layer (known finite grammar only; raw unrounded
+  strings preserved in titles; no shared service output changed).
 - GitHub CI on the report head remains PENDING at publication
   (treated as pending, not pass); strategic review and guarded
   merge are the root's gates.
+
+## 206-b completion (recorded 2026-10-30, same PR #362)
+
+Scope: finish the remaining demonstrated missed readouts and fix the
+one stale display oracle in the same PR. No services, schema,
+migrations, API/CLI/CSV contracts, JS/CSS, or accounting changes.
+
+### Implementation (presentation only)
+
+- `app/slaif_gateway/web/formatting.py`: two new pure helpers,
+  `format_policy_summary` (rate-limit / Chat live-burn /
+  lazy-throttling wait grammars matched exactly before any digit is
+  touched; everything else byte-for-byte unchanged) and
+  `format_rate_limit_policy` (typed policy dict in the same known
+  grammar, literal `str` fallback for unknown shapes).
+- `app/slaif_gateway/api/admin.py`: `policysum` / `ratepolicy` filter
+  registration only.
+- Templates: grouped `num` on the remaining read-only counters and
+  summary totals (cohorts/owners/institutions detail counters; keys
+  bulk preview/result cards; pricing/FX/routes import preview/result
+  counts; provider timeout/retry and route priority readouts); M
+  display (`tokm`) with exact grouped counts in `title`/accessibility
+  text for the key-detail output token margin (including negative
+  margins), the usage-detail configured token margin, cached/reasoning
+  (title on each value), and estimated-tokens-at-stop; the human
+  policy summary sites (key detail, create-result, template detail,
+  bulk preview/result rows) render through `policysum`/`ratepolicy`
+  with the raw unrounded service string in the `title` attribute.
+  Editable inputs stay exact raw units (the key-detail token-margin
+  form label now says "(tokens)" next to the M readout). The
+  bounded `rows shown` counters are left literal by design: page
+  limits cap them below any grouping threshold and the 194-a source
+  pin owns that exact interpolation.
+
+### Stale oracle failure provenance (206-a report head)
+
+- GitHub CI run 40980689318 on the 206-a report head
+  `7070bd45db499ee9a7155420ac322306910fea77`: the unit job
+  (`tests/unit/test_admin_key_actions_templates.py::
+  test_key_detail_renders_chat_streaming_live_burn_form`, line 223)
+  FAILED with 1 FAIL / 6546 PASS / 1 SKIP: the expectation still
+  asserted the pre-206-a raw `value="0.000000000"` for the
+  zero-valued editable cost-margin input, whose final intended value
+  is `value="0"`. This is a stale display oracle, not a product
+  regression; the fix updates exactly that expectation and preserves
+  the non-zero `-0.250000000` exact-digits assertion in the
+  disabled-form case.
+- Qualification: the earlier "660 PASS" admin-unit total PREDATES the
+  final zero-input representation change and is NOT a final-tree
+  all-admin pass; the 206-b scoped run below is reported separately.
+
+### 206-b focused results (local; GitHub CI pending)
+
+- `tests/unit/test_admin_numeric_display_206.py`: 54 PASS, 0 skip
+  (the 37 unchanged 206-a cases plus 17 new: the policy-summary /
+  rate-policy formatter matrices including negative margins, true
+  0E-9 vs 1E-9 money, non-grammar passthrough; ASGI renders of the
+  key-detail rate/live-burn/margin readouts with exact titles, the
+  usage-detail cached/reasoning + stop-estimate + configured-margin
+  titles, a cohort detail with 937,826,734 / 1,234,567 grouped
+  counters, and a bulk-import preview with 1,234,567-row grouped
+  totals plus human-rendered row policy summaries).
+- Directly affected existing presentation suites (23 files, including
+  the exact previously failing test, the FX/pricing/routes/bulk
+  import template and route tests, the record detail template tests,
+  the key create/keys routes and template tests, the 194-a rows
+  contract, the catalog FX oracles, and the usability inventory):
+  309 PASS, 0 skip.
+- `tests/browser/test_admin_numeric_display_206.py` (extended in
+  place, same owned labeled loopback tmpfs PostgreSQL fixture, real
+  Chromium/uvicorn, exact container cleanup): 3 PASS, 0 skip. The key
+  detail case now additionally demonstrates the real rate-limit
+  summary `937,826,734 req/min, 937.827M tokens/min` (title keeps the
+  exact `937826734 req/min, 937826734 tokens/min`), the Chat
+  live-burn summary `cost margin EUR 0, token margin -0.00025M`
+  (title keeps `0.000000000` / `-250`), the direct `-0.00025M`
+  token-margin readout with title `-250 tokens`, the raw `-250`
+  editable input, and the usage-detail `937.827M / 1M` cached/
+  reasoning readout with title `937,826,734 / 1,000,000`.
+  Screenshot (synthetic data only):
+  `/tmp/slaif206/key-detail-numeric-policy.png` alongside the two
+  206-a screenshots.
+
+### 206-b residual limitations
+
+- Same layer separation as 206-a: ASGI renders are unit-fake-session;
+  the Chromium cases are the actual-page proof. No real provider,
+  mail, or production traffic; no release claim.
+- GitHub CI on the 206-b report head is pending at publication
+  (treated as pending, not pass); strategic review and guarded merge
+  are the root's gates.

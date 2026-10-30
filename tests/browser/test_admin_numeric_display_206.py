@@ -1,4 +1,4 @@
-"""206-a admin numeric display: real Chromium on the owned PostgreSQL.
+"""206-a/206-b admin numeric display: real Chromium on the owned PostgreSQL.
 
 Actual uvicorn app, real stylesheet, and real HTTP admin pages against
 the already-qualified owned, labeled, loopback-bound, tmpfs-backed
@@ -9,6 +9,14 @@ count in the accessible title, actual-zero cost preference over the
 estimate, and raw exact units in editable inputs. Sorting clicks stay on
 the typed raw ``data-sort-value`` keys, including distinct values that
 share a rounded M label and None-last in both directions.
+
+206-b adds the finished human-readable policy surfaces on the same
+fixture: the key-detail rate-limit summary (grouped req/min, M
+tokens/min with the exact raw string in the title), the Chat live-burn
+summary (9-dp zero money, M token margin), the direct token-margin
+readout in M with the exact count in the title, and the usage-detail
+cached/reasoning exact-count title. The editable token-margin input
+keeps its exact raw units (no comma/M parser).
 
 Safety: only synthetic fixture values are read; session and CSRF values
 are used transiently for login and never logged or screenshotted.
@@ -158,6 +166,9 @@ async def _seed_numeric_display_data(database_url: str) -> dict[str, Any]:
                     request_limit: int | None,
                     cost_limit: Decimal | None,
                     live_burn: bool = False,
+                    rate_requests: int | None = None,
+                    rate_tokens: int | None = None,
+                    token_margin: int = 0,
                 ) -> GatewayKey:
                     metadata: dict[str, object] | None = None
                     if live_burn:
@@ -166,7 +177,7 @@ async def _seed_numeric_display_data(database_url: str) -> dict[str, Any]:
                                 "version": 1,
                                 "enabled": True,
                                 "cost_margin_eur": "0",
-                                "token_margin": 0,
+                                "token_margin": token_margin,
                             }
                         }
                     key = await GatewayKeysRepository(session).create_gateway_key_record(
@@ -179,6 +190,8 @@ async def _seed_numeric_display_data(database_url: str) -> dict[str, Any]:
                         cost_limit_eur=cost_limit,
                         token_limit_total=token_limit,
                         request_limit_total=request_limit,
+                        rate_limit_requests_per_minute=rate_requests,
+                        rate_limit_tokens_per_minute=rate_tokens,
                         allow_all_models=True,
                         allow_all_endpoints=True,
                         created_by_admin_user_id=admin.id,
@@ -246,6 +259,13 @@ async def _seed_numeric_display_data(database_url: str) -> dict[str, Any]:
                     request_limit=None,
                     cost_limit=None,
                     live_burn=True,
+                    # 206-b: the same big token quantity in the rate
+                    # summary and a NEGATIVE token margin so the M
+                    # display/sign and the raw editable units are both
+                    # demonstrated on the real page.
+                    rate_requests=BIG_TOKENS,
+                    rate_tokens=BIG_TOKENS,
+                    token_margin=-250,
                 )
 
                 usage: dict[str, UsageLedger] = {}
@@ -255,6 +275,9 @@ async def _seed_numeric_display_data(database_url: str) -> dict[str, Any]:
                     ("u1", TWIN_A, None, Decimal("0.010000000")),
                     ("u2", 1000, None, None),
                 )
+                usage_cached_reasoning = {
+                    "u0": (BIG_TOKENS, 1000000),
+                }
                 for n, (name, tokens, actual, estimated) in enumerate(usage_plan):
                     row = UsageLedger(
                         id=uuid.uuid4(),
@@ -267,6 +290,8 @@ async def _seed_numeric_display_data(database_url: str) -> dict[str, Any]:
                         accounting_status="finalized",
                         http_status=200,
                         total_tokens=tokens,
+                        cached_tokens=usage_cached_reasoning.get(name, (0, 0))[0],
+                        reasoning_tokens=usage_cached_reasoning.get(name, (0, 0))[1],
                         actual_cost_eur=actual,
                         estimated_cost_eur=estimated,
                         started_at=now - timedelta(hours=2, minutes=n),
@@ -478,7 +503,8 @@ def test_key_detail_live_burn_zero_and_raw_inputs(chromium, num_env) -> None:
         margin_dd = page.locator("dt:has-text('Cost margin EUR') + dd")  # type: ignore[attr-defined]
         assert margin_dd.inner_text().strip() == "0"
         # Editable controls keep the exact raw value in the same units
-        # (0, not 0M and not 0E-9); the token margin input is raw too.
+        # (0, not 0M and not 0E-9); the token margin input is raw too
+        # (the negative margin stays the exact raw -250, never -0.00025M).
         cost_input = page.locator(
             "input[name='chat_streaming_live_burn_cost_margin_eur']"  # type: ignore[attr-defined]
         )
@@ -486,13 +512,35 @@ def test_key_detail_live_burn_zero_and_raw_inputs(chromium, num_env) -> None:
         token_input = page.locator(
             "input[name='chat_streaming_live_burn_token_margin']"  # type: ignore[attr-defined]
         )
-        assert token_input.input_value() == "0"
+        assert token_input.input_value() == "-250"
 
         # Quota readouts: millions display with the exact grouped title.
         token_limit_dd = page.locator("dt:has-text('Token limit') + dd")  # type: ignore[attr-defined]
         assert token_limit_dd.inner_text().strip() == "1,000M"
         assert token_limit_dd.get_attribute("title") == "999,999,500"
 
+        # 206-b: the service-built rate-limit summary renders grouped
+        # req/min and M tokens/min; the exact unrounded service string
+        # stays in the accessible title.
+        rate_dd = page.locator("dt:has-text('Rate limits') + dd")  # type: ignore[attr-defined]
+        assert rate_dd.inner_text().strip() == "937,826,734 req/min, 937.827M tokens/min"
+        assert rate_dd.get_attribute("title") == "937826734 req/min, 937826734 tokens/min"
+
+        # 206-b: the Chat live-burn summary shows the 9-dp zero money as
+        # 0 and the negative token margin in M, exact raw values in the
+        # title; the direct readout is M with the exact count in title.
+        burn_dd = page.locator("dt:has-text('Chat streaming live-burn') + dd")  # type: ignore[attr-defined]
+        assert burn_dd.inner_text().strip() == "Chat live-burn: on, cost margin EUR 0, token margin -0.00025M"
+        assert burn_dd.get_attribute("title") == "Chat live-burn: on, cost margin EUR 0.000000000, token margin -250"
+        token_margin_dd = page.locator("dt:has-text('Output token margin') + dd")  # type: ignore[attr-defined]
+        assert token_margin_dd.inner_text().strip() == "-0.00025M"
+        assert token_margin_dd.get_attribute("title") == "-250 tokens"
+
+        SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        page.screenshot(  # type: ignore[attr-defined]
+            path=str(SCREENSHOT_DIR / "key-detail-numeric-policy.png"),
+            full_page=False,
+        )
 
 # ---------------------------------------------------------------------------
 # 3) Usage list + detail: M readouts, actual-zero cost preference
@@ -528,6 +576,11 @@ def test_usage_list_and_detail_numeric_display(chromium, num_env) -> None:
         total_dd = page.locator("dt:has-text('Total tokens') + dd")  # type: ignore[attr-defined]
         assert total_dd.inner_text().strip() == "937.827M"
         assert total_dd.get_attribute("title") == "937,826,734 tokens"
+        # 206-b: cached/reasoning each keep their exact count in the
+        # accessible title next to the rounded M values.
+        cached_dd = page.locator("dt:has-text('Cached / reasoning') + dd")  # type: ignore[attr-defined]
+        assert cached_dd.inner_text().strip() == "937.827M / 1M"
+        assert cached_dd.get_attribute("title") == "937,826,734 / 1,000,000"
         cost_dd = page.locator("dt:has-text('Cost EUR') + dd")  # type: ignore[attr-defined]
         assert cost_dd.inner_text().strip() == "0"
         assert "9.99" not in page.content()

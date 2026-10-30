@@ -8,7 +8,7 @@
     <div>
       <p class="eyebrow">Pricing Catalog</p>
       <h1 id="pricing-import-preview-heading">Pricing Import Preview Result</h1>
-      <p class="muted">Validated {{ preview.total_rows }} {{ "row" if preview.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
+      <p class="muted">Validated {{ preview.total_rows | num }} {{ "row" if preview.total_rows == 1 else "rows" }} from {{ import_format|upper }} input.</p>
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/pricing/import">Preview another import</a>
@@ -23,15 +23,15 @@
   <section class="summary-grid" aria-label="Pricing import summary">
     <div class="summary-card">
       <span>Total rows</span>
-      <strong>{{ preview.total_rows }}</strong>
+      <strong>{{ preview.total_rows | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Valid rows</span>
-      <strong>{{ preview.valid_count }}</strong>
+      <strong>{{ preview.valid_count | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Invalid rows</span>
-      <strong>{{ preview.invalid_count }}</strong>
+      <strong>{{ preview.invalid_count | num }}</strong>
     </div>
     <div class="summary-card">
       <span>Database writes</span>
