@@ -10,8 +10,8 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
-- [`2026-10-29 Objective 206 admin numeric display verification (206-a/b/c)`](2026-10-29-admin-numeric-display.md)
-  (recorded 2026-10-29; 206-b and 206-c completions appended 2026-10-30) -
+- [`2026-10-29 Objective 206 admin numeric display verification (206-a/b/c/d)`](2026-10-29-admin-numeric-display.md)
+  (recorded 2026-10-29; 206-b/c/d completions appended 2026-10-30) -
   presentation-only admin GUI numeric displays:
   confirmed `0E-9` (exact zero) source vs true `1E-9`, locale-stable
   comma/dot/exponent-free readouts with exact 64-bit/9-dp rendering,
@@ -32,6 +32,9 @@ on record. They are dated, commit-specific evidence, not certifications.
   row/warning/TSV/preview-ceiling readouts with the byte-exact TSV
   payload, grouped template validity days with the raw form default
   (60 unit + 16 affected PASS, no new formatter or infrastructure);
+  206-d: the two stale pre-206 integration display oracles corrected
+  to the accepted `num` readouts (`0.1` / `0.92` bound to their
+  named readouts), one-case owned-PG 1 PASS, test-only;
   no services/schema/API/CLI/JS/CSS or accounting changes; GitHub CI
   pending at publication.
 - [`2026-10-29 Objective 205-a installed CLI field administration workflows verification (PARTIAL handoff)`](2026-10-29-cli-field-installed-workflow.md)

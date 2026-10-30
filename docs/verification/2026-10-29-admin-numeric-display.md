@@ -275,3 +275,30 @@ migrations, API/CLI/CSV contracts, JS/CSS, or accounting changes.
   through the app's Jinja environment; no real provider, mail, or
   production traffic. The final C report head still requires all
   final-head checks; pending CI is pending, not pass.
+
+### 206-d focused results (local; GitHub CI pending)
+
+- TEST-ONLY correction of the two stale pre-206 display expectations
+  in `tests/integration/test_admin_catalog_readonly_postgres.py::
+  test_admin_catalog_readonly_pages` that failed the 206-b head's
+  PostgreSQL integration check (run 40985644692, job 123835904685):
+  the fixture's stored `Decimal("0.100000000")` pricing and
+  `Decimal("0.920000000")` FX rate now assert their accepted
+  `num`-rendered values bound to the named readouts —
+  `<dt>Input / 1M</dt><dd>0.1</dd>` and `<dt>Rate</dt><dd>0.92</dd>`
+  — instead of the old padded literals. All other assertions,
+  fixture values, persistence, auth, filtering, and secret guards are
+  unchanged; no product, template, formatter, or infrastructure
+  change.
+- One focused native run of exactly that case on a fresh owned,
+  labeled, loopback/tmpfs PostgreSQL 16 (reusing the existing
+  `owned_pg_url` fixture generator; URL never printed): 1 PASS, 0
+  fail / 0 error / 0 skip (3.413 s); exact-ID container cleanup
+  verified (container absent after the run).
+- Reused without rerun: all accepted 206-a/b/c unit/browser/
+  formatting proofs (55 root rerun, 60/309/3/16/9 JUnit evidence) and
+  immutable A/B/C orders/reports. Ruff, `git diff --check`,
+  documentation checker, and 9 OAP governance PASS.
+- The final 206-d head requires ALL checks successful before merge;
+  GitHub CI on the report head is pending at publication (treated as
+  pending, not pass). No release claim.

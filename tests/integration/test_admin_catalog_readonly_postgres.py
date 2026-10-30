@@ -224,7 +224,12 @@ def test_admin_catalog_readonly_pages(migrated_postgres_url: str) -> None:
 
         pricing_detail = client.get(f"/admin/pricing/{data['pricing_id']}")
         assert pricing_detail.status_code == 200
-        assert "0.100000000" in pricing_detail.text
+        # 206-d: the accepted 206-a/b `num` display strips unneeded
+        # fractional zeros from the stored 9-dp value (0.100000000 -> 0.1);
+        # bind the exact rendered value to its named readout.
+        assert re.search(
+            r"<dt>Input / 1M</dt>\s*<dd>0\.1</dd>", pricing_detail.text
+        )
 
         fx = client.get("/admin/fx")
         assert fx.status_code == 200
@@ -244,7 +249,9 @@ def test_admin_catalog_readonly_pages(migrated_postgres_url: str) -> None:
 
         fx_detail = client.get(f"/admin/fx/{data['fx_id']}")
         assert fx_detail.status_code == 200
-        assert "0.920000000" in fx_detail.text
+        # 206-d: same accepted display rule for the FX rate readout
+        # (0.920000000 -> 0.92), bound to the named Rate readout.
+        assert re.search(r"<dt>Rate</dt>\s*<dd>0\.92</dd>", fx_detail.text)
 
         combined = "\n".join(
             [
