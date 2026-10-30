@@ -128,7 +128,7 @@
         <dt>Max single request cost EUR</dt>
         <dd>{{ (current_revision.max_single_request_cost_eur | num) if current_revision.max_single_request_cost_eur is not none else "Unknown" }}</dd>
         <dt>Default validity days</dt>
-        <dd>{{ current_revision.validity_days_default if current_revision.validity_days_default is not none else "Not set" }}</dd>
+        <dd>{{ (current_revision.validity_days_default | num) if current_revision.validity_days_default is not none else "Not set" }}</dd>
         <dt>Default email delivery mode</dt>
         <dd>{{ current_revision.email_delivery_mode_default or "Not set" }}</dd>
       </dl>

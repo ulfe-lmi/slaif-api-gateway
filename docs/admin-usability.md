@@ -642,6 +642,14 @@ delegates to the canonical raw-decimal helper):
 - **No accounting/schema impact.** These are pure presentation
   helpers: no services, repositories, schema, migrations, API/CLI/CSV
   contracts, JS, or CSS changed.
+- **Completion captions and zero-safe latency (206-b/c).** The
+  remaining human quantities — the usage/audit export-cap captions,
+  the OpenAI-assisted proposal summary readouts (rows, warnings, TSV
+  size, preview ceiling), and the key-template default validity days —
+  use the same `num` grouping, and the usage-detail latency readout
+  uses explicit `None` handling so an actual zero displays `0 ms`
+  while a missing value keeps `n/a ms`; every editable input, raw
+  payload, and machine surface stays literal.
 
 ## 7. Verification
 

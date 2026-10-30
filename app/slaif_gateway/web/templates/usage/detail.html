@@ -63,7 +63,7 @@
       <dl>
         <dt>Created</dt><dd>{{ usage.created_at }}</dd>
         <dt>Completed</dt><dd>{{ usage.completed_at or "n/a" }}</dd>
-        <dt>Latency</dt><dd>{{ usage.latency_ms or "n/a" }} ms</dd>
+        <dt>Latency</dt><dd>{{ (usage.latency_ms | num) if usage.latency_ms is not none else "n/a" }} ms</dd>
         <dt>Reservation</dt><dd>{{ usage.quota_reservation_id or "n/a" }}</dd>
       </dl>
     </section>

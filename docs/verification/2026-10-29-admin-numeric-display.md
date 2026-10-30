@@ -236,3 +236,42 @@ migrations, API/CLI/CSV contracts, JS/CSS, or accounting changes.
 - GitHub CI on the 206-b report head is pending at publication
   (treated as pending, not pass); strategic review and guarded merge
   are the root's gates.
+
+### 206-c focused results (local; GitHub CI pending)
+
+- Five template caption/readout corrections reusing the existing `num`
+  filter (no new formatter, service, or infrastructure): usage and
+  audit list export caps render grouped in the caption (`capped at
+  10,000 rows`) while the editable row-limit inputs keep the exact raw
+  value; usage-detail latency uses explicit `None` handling plus `num`
+  (0 → `0 ms`, 1234567 → `1,234,567 ms`, missing → `n/a ms`, an actual
+  zero never reads as missing); the OpenAI-assisted result page groups
+  row count, warning count, TSV byte size, and preview byte ceiling
+  while the generated TSV payload stays byte-for-byte; the key-template
+  detail groups the read-only default validity days and keeps `Not
+  set` for missing, with the editable form placeholder/units
+  unchanged.
+- `tests/unit/test_admin_numeric_display_206.py`: 60 PASS, 0 skip in
+  the current tree (the 54 accepted 206-a/b cases plus 6 new: the
+  grouped export-cap captions with raw `limit` inputs on both list
+  pages, the latency zero/large/None matrix, the assisted-result
+  grouped readouts with the raw TSV preserved through the ASGI app,
+  and the template validity-days render with raw editable default
+  through the real app Jinja environment).
+- Directly affected existing presentation suites
+  (`test_admin_openai_assisted_catalog_routes.py`,
+  `test_admin_activity_templates_safety.py`): 16 PASS, 0 skip, no
+  assertion changes.
+- Reused without rerun: root's 54+1 = 55 numeric/stale-oracle pass
+  rerun, the 206-b 54/309/3 JUnit evidence, the 206-a core raw-sort
+  and legacy browser evidence, and all A/B orders/reports
+  (unchanged). No browser rerun: these are text-only existing-filter
+  applications on already-accepted pages.
+
+### 206-c residual limitations
+
+- Same layer separation as A/B: the new checks are unit ASGI renders
+  (fake session) plus one direct render of the real template file
+  through the app's Jinja environment; no real provider, mail, or
+  production traffic. The final C report head still requires all
+  final-head checks; pending CI is pending, not pass.

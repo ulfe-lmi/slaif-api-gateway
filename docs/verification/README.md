@@ -10,8 +10,8 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
-- [`2026-10-29 Objective 206-a admin numeric display verification`](2026-10-29-admin-numeric-display.md)
-  (recorded 2026-10-29; 206-b completion appended 2026-10-30) -
+- [`2026-10-29 Objective 206 admin numeric display verification (206-a/b/c)`](2026-10-29-admin-numeric-display.md)
+  (recorded 2026-10-29; 206-b and 206-c completions appended 2026-10-30) -
   presentation-only admin GUI numeric displays:
   confirmed `0E-9` (exact zero) source vs true `1E-9`, locale-stable
   comma/dot/exponent-free readouts with exact 64-bit/9-dp rendering,
@@ -26,6 +26,12 @@ on record. They are dated, commit-specific evidence, not certifications.
   titles, known-grammar human policy summaries (raw strings kept in
   titles), the stale `0.000000000` oracle fixed (CI run
   40980689318 provenance), 54 unit + 309 affected + 3 browser PASS;
+  206-c final captions in the same record: grouped usage/audit
+  export-cap captions with raw `limit` inputs, zero-safe grouped
+  usage latency (`0 ms`/`n/a ms`), grouped assisted-result
+  row/warning/TSV/preview-ceiling readouts with the byte-exact TSV
+  payload, grouped template validity days with the raw form default
+  (60 unit + 16 affected PASS, no new formatter or infrastructure);
   no services/schema/API/CLI/JS/CSS or accounting changes; GitHub CI
   pending at publication.
 - [`2026-10-29 Objective 205-a installed CLI field administration workflows verification (PARTIAL handoff)`](2026-10-29-cli-field-installed-workflow.md)

@@ -893,3 +893,229 @@ def test_bulk_import_preview_grouped_totals_and_human_summaries(monkeypatch) -> 
     # accepted human form (grouped req/min, M tokens/min, M token margin).
     assert "Rate limits: 937,826,734 req/min, 937.827M tokens/min" in html
     assert "Chat live-burn: on, cost margin EUR 0, token margin 0.0015M" in html
+
+
+# ---------------------------------------------------------------------------
+# 206-c: export-cap captions, latency readout, assisted-result readouts,
+# and template default validity days (actual app/template renders)
+# ---------------------------------------------------------------------------
+
+
+def test_usage_and_audit_export_caps_grouped_in_caption_only(monkeypatch) -> None:
+    """Visible export caps are grouped; the editable row-limit inputs stay raw.
+
+    Both list pages show the configured default (10000) as "10,000" in the
+    caption while the form input keeps the exact raw value (machine-facing
+    control, unchanged units).
+    """
+    client = _login(monkeypatch)
+
+    async def list_usage(self, **kwargs):
+        return []
+
+    async def list_audit_logs(self, **kwargs):
+        return []
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_activity_dashboard."
+        "AdminActivityDashboardService.list_usage",
+        list_usage,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_activity_dashboard."
+        "AdminActivityDashboardService.list_audit_logs",
+        list_audit_logs,
+    )
+
+    for path in ("/admin/usage", "/admin/audit"):
+        html = client.get(path).text
+        # Grouped human caption with the configured default.
+        assert "capped at 10,000 rows" in html
+        # The ungrouped raw count never appears as a caption.
+        assert "capped at 10000 rows" not in html
+        # The editable row-limit input keeps the exact raw default.
+        assert 'name="limit" value="10000"' in html
+
+
+@pytest.mark.parametrize(
+    ("latency_ms", "expected"),
+    [
+        (0, "0 ms"),  # an actual zero is displayed, never "n/a"
+        (1234567, "1,234,567 ms"),  # large latency stays grouped
+        (None, "n/a ms"),  # missing latency keeps the missing label
+    ],
+)
+def test_usage_detail_latency_zero_grouped_and_none(
+    monkeypatch, latency_ms, expected
+) -> None:
+    page = _usage_page(monkeypatch, _usage(latency_ms=latency_ms))
+    match = re.search(r"Latency</dt>(<dd[^>]*>.*?</dd>)", page, flags=re.DOTALL)
+    assert match is not None
+    assert match.group(1) == f"<dd>{expected}</dd>"
+
+
+def test_openai_assisted_result_grouped_readouts_and_raw_tsv(monkeypatch) -> None:
+    """Assisted-result summary quantities are grouped; the TSV payload is raw.
+
+    Renders the real result page through the ASGI app with a controlled
+    proposal result (no OpenAI/provider call, no DB audit write).
+    """
+    from slaif_gateway.services.openai_assisted_catalog import (
+        OpenAIAssistedProposalTextResult,
+    )
+
+    client = _login(monkeypatch)
+
+    def verify_session_csrf_token(self, admin_session, csrf_token):
+        return csrf_token == "rendered-csrf-token"
+
+    async def no_audit(request, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service."
+        "AdminSessionService.verify_session_csrf_token",
+        verify_session_csrf_token,
+    )
+    # The result page is presentation-only here; the audit write path is
+    # covered elsewhere and would need a real session to flush.
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin._audit_openai_assisted_proposal",
+        no_audit,
+    )
+
+    # 34 (header) + 19 (line) * 1234 = 23480 bytes, no HTML-special chars.
+    tsv_text = "model,currency,input_price_per_1m\n" + "num-model,USD,0.01\n" * 1234
+    result = OpenAIAssistedProposalTextResult(
+        proposal_type="pricing",
+        tsv_text=tsv_text,
+        row_count=1234,
+        warnings=("w1", "w2", "w3"),
+        source_urls=("https://example.org/pricing",),
+    )
+
+    async def generate(**kwargs):
+        return result
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin.generate_openai_pricing_proposal_text",
+        generate,
+    )
+
+    response = client.post(
+        "/admin/openai-assisted/pricing/propose",
+        data={"csrf_token": "rendered-csrf-token", "acknowledge_proposal": "true"},
+    )
+    assert response.status_code == 200
+    html = response.text
+
+    # Read-only human quantities are grouped.
+    assert "<strong>1,234</strong>" in html
+    assert "<strong>3</strong>" in html
+    assert "TSV size: 23,480 bytes" in html
+    assert "Preview limit: 1,048,576 bytes" in html
+    # The generated TSV payload is preserved byte-for-byte in the page.
+    assert tsv_text in html
+
+
+def _template_detail_html(validity_days_default: int | None) -> str:
+    """Render the real templates/detail.html through the app's Jinja env."""
+    from types import SimpleNamespace
+
+    from slaif_gateway.api import admin as admin_module
+
+    now = datetime.now(UTC)
+    template = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Template 206c",
+        description=None,
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    current_revision = SimpleNamespace(
+        id=uuid.uuid4(),
+        revision_number=1,
+        source_type="calibration",
+        source_calibration_gateway_key_id=None,
+        source_time_window_start=None,
+        source_time_window_end=None,
+        source_multiplier=None,
+        created_audit_log_id=None,
+        allowed_endpoints=("/v1/chat/completions",),
+        allowed_models=("gpt-test",),
+        allowed_providers=(),
+        allowed_hosted_capabilities=(),
+        hosted_capabilities_requiring_review=(),
+        template_snapshot={},
+        request_limit_total=None,
+        token_limit_total=None,
+        input_token_limit_total=None,
+        output_token_limit_total=None,
+        reasoning_token_limit_total=None,
+        cost_limit_eur=None,
+        max_total_tokens_per_request=None,
+        max_single_request_cost_eur=None,
+        validity_days_default=validity_days_default,
+        email_delivery_mode_default=None,
+    )
+    form = {
+        "owner_id": "",
+        "cohort_id": "",
+        "valid_from": "",
+        "valid_until": "",
+        "valid_days": str(validity_days_default)
+        if validity_days_default is not None
+        else "",
+        "email_delivery_mode": "none",
+        "confirm_create_key_from_template": "",
+        "reason": "",
+    }
+    request = SimpleNamespace(
+        url=SimpleNamespace(path="/admin/templates/206c-detail"),
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                settings=SimpleNamespace(SLAIF_BRANDING_DIR=None)
+            )
+        ),
+    )
+    context: dict[str, object] = {
+        "request": request,
+        "admin": SimpleNamespace(display_name="Admin User"),
+        "csrf_token": "rendered-csrf-token",
+        "template": template,
+        "current_revision": current_revision,
+        "current_revision_chat_live_burn_summary": "Default",
+        "current_revision_external_tool_summary": "None",
+        "choices": {"owner_id": None, "cohort_id": None},
+        "choice_labels": {"owner_id": None, "cohort_id": None},
+        "form": form,
+        "admin_status_message": None,
+        "error": None,
+        "diagnostic_id": None,
+    }
+    context.update(admin_module._branding_context(request))
+    return admin_module.templates.env.get_template("templates/detail.html").render(
+        context
+    )
+
+
+def test_template_detail_validity_days_grouped_and_none() -> None:
+    html = _template_detail_html(validity_days_default=1234)
+    match = re.search(
+        r"Default validity days</dt>\s*(<dd[^>]*>.*?</dd>)", html, flags=re.DOTALL
+    )
+    assert match is not None
+    # Read-only summary is grouped...
+    assert match.group(1) == "<dd>1,234</dd>"
+    # ...while the editable valid-days input keeps the exact raw default.
+    assert 'name="valid_days" value="1234"' in html
+
+    html_none = _template_detail_html(validity_days_default=None)
+    match_none = re.search(
+        r"Default validity days</dt>\s*(<dd[^>]*>.*?</dd>)", html_none, flags=re.DOTALL
+    )
+    assert match_none is not None
+    assert match_none.group(1) == "<dd>Not set</dd>"
+    # The placeholder keeps the documented literal, not a rewritten value.
+    assert "Required if no default" in html_none
