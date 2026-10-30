@@ -117,17 +117,17 @@
           <td class="nowrap" data-sort-value="{{ key.valid_until.isoformat() }}" title="{{ key.valid_until.isoformat() }}">
             {{ key.valid_until | utc_date_display }}
           </td>
-          <td class="num" data-sort-value="{{ key.requests_used_total }}">{{ key.requests_used_total }}</td>
-          <td class="num" data-sort-value="{{ key.tokens_used_total }}">{{ key.tokens_used_total }}</td>
-          <td class="num" data-sort-value="{{ key.cost_used_eur | dec }}">{{ key.cost_used_eur | dec }}</td>
+          <td class="num" data-sort-value="{{ key.requests_used_total }}">{{ key.requests_used_total | num }}</td>
+          <td class="num" data-sort-value="{{ key.tokens_used_total }}" title="{{ key.tokens_used_total | num }}">{{ (key.tokens_used_total | tokm) ~ "M" }}</td>
+          <td class="num" data-sort-value="{{ key.cost_used_eur | dec }}">{{ key.cost_used_eur | num }}</td>
           <td class="num" data-sort-value="{{ key.request_limit_total if key.request_limit_total is not none else '' }}">
-            {{ key.request_limit_total if key.request_limit_total is not none else "Unlimited" }}
+            {{ (key.request_limit_total | num) if key.request_limit_total is not none else "Unlimited" }}
           </td>
-          <td class="num" data-sort-value="{{ key.token_limit_total if key.token_limit_total is not none else '' }}">
-            {{ key.token_limit_total if key.token_limit_total is not none else "Unlimited" }}
+          <td class="num" data-sort-value="{{ key.token_limit_total if key.token_limit_total is not none else '' }}" {% if key.token_limit_total is not none %}title="{{ key.token_limit_total | num }}"{% endif %}>
+            {{ (key.token_limit_total | tokm) ~ "M" if key.token_limit_total is not none else "Unlimited" }}
           </td>
           <td class="num" data-sort-value="{% if key.cost_limit_eur is not none %}{{ key.cost_limit_eur | dec }}{% endif %}">
-            {% if key.cost_limit_eur is not none %}{{ key.cost_limit_eur | dec }}{% else %}Unlimited{% endif %}
+            {% if key.cost_limit_eur is not none %}{{ key.cost_limit_eur | num }}{% else %}Unlimited{% endif %}
           </td>
         </tr>
         {% else %}

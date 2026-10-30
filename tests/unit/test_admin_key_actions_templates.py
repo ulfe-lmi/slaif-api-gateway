@@ -284,12 +284,16 @@ def test_key_detail_renders_usage_reset_form(monkeypatch) -> None:
     assert "does not delete usage ledger history" in html
     assert "Hard quota limits remain unchanged" in html
     assert "Redis rate-limit counters are not reset" in html
-    assert str(key.cost_used_eur) in html
-    assert str(key.tokens_used_total) in html
-    assert str(key.requests_used_total) in html
-    assert str(key.cost_reserved_eur) in html
-    assert str(key.tokens_reserved_total) in html
-    assert str(key.requests_reserved_total) in html
+    # 206-a: usage readouts display grouped money and millions of
+    # tokens; the exact token count stays in the title attribute.
+    assert "EUR 3" in html
+    assert "0.00003M tokens" in html
+    assert 'title="30 tokens"' in html
+    assert "3 requests" in html
+    assert "EUR 4" in html
+    assert "0.00004M tokens" in html
+    assert 'title="40 tokens"' in html
+    assert "4 requests" in html
 
 
 def test_key_detail_renders_rotation_form(monkeypatch) -> None:

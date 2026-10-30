@@ -144,8 +144,8 @@
             <div class="muted small">Live-burn: stopped ({{ row.chat_live_burn.stop_reason or "unknown" }})</div>
             {% endif %}
           </td>
-          <td data-sort-value="{{ row.total_tokens if row.total_tokens is not none else '' }}">{{ row.total_tokens }} total</td>
-          <td data-sort-value="{{ row.actual_cost_eur | dec if row.actual_cost_eur is not none else (row.estimated_cost_eur | dec if row.estimated_cost_eur is not none else '') }}">{{ (row.actual_cost_eur | dec) if row.actual_cost_eur is not none else ((row.estimated_cost_eur | dec) if row.estimated_cost_eur is not none else "n/a") }} EUR</td>
+          <td data-sort-value="{{ row.total_tokens if row.total_tokens is not none else '' }}" {% if row.total_tokens is not none %}title="{{ row.total_tokens | num }}"{% endif %}>{{ (row.total_tokens | tokm) ~ "M" ~ " total" if row.total_tokens is not none else "n/a" }}</td>
+          <td data-sort-value="{{ row.actual_cost_eur | dec if row.actual_cost_eur is not none else (row.estimated_cost_eur | dec if row.estimated_cost_eur is not none else '') }}">{{ (row.actual_cost_eur | num) if row.actual_cost_eur is not none else ((row.estimated_cost_eur | num) if row.estimated_cost_eur is not none else "n/a") }} EUR</td>
           <td>{{ row.created_at }}</td>
         </tr>
         {% else %}

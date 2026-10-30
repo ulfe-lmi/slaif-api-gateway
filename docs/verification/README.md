@@ -10,6 +10,17 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-29 Objective 206-a admin numeric display verification`](2026-10-29-admin-numeric-display.md)
+  (recorded 2026-10-29) - presentation-only admin GUI numeric displays:
+  confirmed `0E-9` (exact zero) source vs true `1E-9`, locale-stable
+  comma/dot/exponent-free readouts with exact 64-bit/9-dp rendering,
+  token quantities in M (3-dp half-up >=1M, exact below 1M, exact
+  grouped counts in titles), canonical ungrouped raw `data-sort-value`
+  keys and raw editable inputs (zero-valued valid defaults -> `0`);
+  37 new unit cases + 660 admin unit PASS, 3 actual
+  Chromium/owned-PG cases + 10 existing browser PASS, 9 governance
+  PASS; no services/schema/API/CLI/JS/CSS or accounting changes;
+  GitHub CI pending at publication.
 - [`2026-10-29 Objective 205-a installed CLI field administration workflows verification (PARTIAL handoff)`](2026-10-29-cli-field-installed-workflow.md)
   (recorded 2026-10-29) - actual installed `slaif-gateway` console from a
   payload-verified wheel of accepted source `5e59a02` in an owned venv, on

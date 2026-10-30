@@ -564,11 +564,67 @@ plaintext cell.
 - A VALID actual cost of zero displays `0 EUR` (it is not "missing"
   and does not fall through to the estimate); an estimate-only row
   displays the estimate; a row with neither displays `n/a` and sorts
-  last as missing.
+  last as missing. The usage DETAIL page applies the same explicit
+  `is not none` preference: a present actual zero is shown in
+  preference to the estimate.
 - Import-preview quota cells use explicit `is not none` checks so the
   display and the typed sort key can never disagree for a present
   value. FX rates are positive-only by validation, so their
   truthiness handling stays as-is.
+
+### Numeric display contract (206-a)
+
+Human-visible read-only quantities across the admin GUI use a
+locale-stable formatter (`app/slaif_gateway/web/formatting.py`,
+exposed as the `num` / `tokm` / `inputnum` Jinja filters; `dec` now
+delegates to the canonical raw-decimal helper):
+
+- **Locale rule.** Digit thousands are comma-grouped, the decimal
+  separator is a dot, and no scientific/exponent notation is rendered
+  for ordinary finite quantities. int, Decimal, and legitimate numeric
+  strings render EXACTLY (no float round-trip, so 64-bit counts and
+  9-dp `Numeric(18,9)` money keep their low digits); unneeded
+  fractional zeros are stripped.
+- **Confirmed `0E-9` source.** PostgreSQL `Numeric(18,9)` values come
+  back as `Decimal`; a stored zero quantized to the 9-dp quantum
+  renders by `str()` as `0E-9` (seen in the keys-detail live-burn cost
+  margin readout and its form input). `0E-9` is an EXACT zero and
+  renders `0`. The distinct value `1E-9` is a true positive
+  0.000000001 and renders `0.000000001` — a small positive price or
+  margin is never replaced by a free zero. No data cleanup, epsilon,
+  or accounting rounding is involved; this is presentation only.
+- **Missing stays missing.** `None` never becomes `0`; templates keep
+  their per-field labels (`Unlimited`, `n/a`, `Unknown`, `Not set`).
+- **Token quantities in M.** Human-facing token counts (used/reserved
+  limits, usage totals, per-request maxima, calibration and template
+  readouts) display in millions of tokens with the unit in the VALUE
+  (column headings stay unchanged, e.g. "Tokens"): `|v| >= 1,000,000`
+  quantizes to at most 3 decimals with `ROUND_HALF_UP` and trailing
+  zeros stripped (`1,500,000 -> 1.5M`; `937,826,734 -> 937.827M`;
+  `999,999,500 -> 1,000M`); `|v| < 1,000,000` scales by an exact
+  power-of-ten shift so no positive count rounds to zero
+  (`1,000 -> 0.001M`; `1 -> 0.000001M`). The exact comma-grouped
+  count is provided through `title`/accessibility text on the token
+  readouts; the display is an approximation for reading, never policy
+  authority. Already-per-1M prices/rates keep their monetary value and
+  per-1M unit (never divided again), and rate-limit summaries with a
+  semantic window unit are service-built strings outside this
+  contract (documented limitation).
+- **Raw machine surfaces unchanged.** `data-sort-value` keys use the
+  canonical ungrouped, unscaled exact integer/decimal (`dec`); `None`
+  maps to the empty raw key (sorted last in both directions).
+  Editable input values, placeholders, hidden fields, submitted
+  payloads, identifiers, HTTP codes, ports, dates, versions, raw
+  JSON, and code blocks remain literal. Editable inputs accept the
+  same exact raw units as before (no comma/M parser was added): only a
+  zero-valued valid numeric default is normalized to `0` (the `0E-9`
+  / `-0E-9` exponent forms and padded zero strings such as
+  `0.000000000`); valid non-zero values keep their exact digits and
+  redisplayed user input — even invalid input — passes through
+  unchanged.
+- **No accounting/schema impact.** These are pure presentation
+  helpers: no services, repositories, schema, migrations, API/CLI/CSV
+  contracts, JS, or CSS changed.
 
 ## 7. Verification
 
@@ -588,3 +644,9 @@ and
 SQL-before-LIMIT pagination oracle, real-PG R5 selected-hydration
 scope/limit regressions, chip UI, label-only async refresh, CSV multi
 exports, honest layer separation).
+and
+`docs/verification/2026-10-29-admin-numeric-display.md` for the
+206-a numeric-display record (confirmed `0E-9` source and `1E-9`
+distinction, formatter matrix, ASGI render facts, actual
+Chromium/owned-PG facts, screenshots, raw sort/input law, and
+limitations).

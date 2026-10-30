@@ -106,13 +106,13 @@
             {% if row.valid_until %}<div class="muted small">until {{ row.valid_until.isoformat() }}</div>{% endif %}
           </td>
           <td class="num" data-sort-value="{% if row.cost_limit_eur is not none %}{{ row.cost_limit_eur | dec }}{% endif %}">
-            {% if row.cost_limit_eur is not none %}{{ row.cost_limit_eur | dec }}{% else %}unlimited{% endif %}
+            {% if row.cost_limit_eur is not none %}{{ row.cost_limit_eur | num }}{% else %}unlimited{% endif %}
           </td>
-          <td class="num" data-sort-value="{{ row.token_limit if row.token_limit is not none else '' }}">
-            {{ row.token_limit if row.token_limit is not none else "unlimited" }}
+          <td class="num" data-sort-value="{{ row.token_limit if row.token_limit is not none else '' }}" {% if row.token_limit is not none %}title="{{ row.token_limit | num }}"{% endif %}>
+            {{ (row.token_limit | tokm) ~ "M" if row.token_limit is not none else "unlimited" }}
           </td>
           <td class="num" data-sort-value="{{ row.request_limit if row.request_limit is not none else '' }}">
-            {{ row.request_limit if row.request_limit is not none else "unlimited" }}
+            {{ (row.request_limit | num) if row.request_limit is not none else "unlimited" }}
           </td>
           <td>
             <div>Models: {{ row.allowed_models_summary }}</div>

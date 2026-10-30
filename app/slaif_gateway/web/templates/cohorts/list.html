@@ -76,10 +76,10 @@
             <div>{{ cohort.starts_at.isoformat() if cohort.starts_at else "No start" }}</div>
             <div class="muted small">until {{ cohort.ends_at.isoformat() if cohort.ends_at else "No end" }}</div>
           </td>
-          <td data-sort-value="{{ cohort.owner_count }}">{{ cohort.owner_count }}</td>
+          <td data-sort-value="{{ cohort.owner_count }}">{{ cohort.owner_count | num }}</td>
           <td data-sort-value="{{ cohort.key_count }}">
-            <div>{{ cohort.key_count }} total</div>
-            <div class="muted small">{{ cohort.active_key_count }} active</div>
+            <div>{{ cohort.key_count | num }} total</div>
+            <div class="muted small">{{ cohort.active_key_count | num }} active</div>
           </td>
           <td>{{ cohort.created_at.isoformat() }}</td>
         </tr>

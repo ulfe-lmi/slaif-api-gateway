@@ -59,7 +59,7 @@
               <span class="muted">Invalid</span>
               {% endif %}
             </td>
-            <td data-sort-value="{{ row.rate or '' }}">{{ row.rate or "Invalid" }}</td>
+            <td data-sort-value="{{ row.rate or '' }}">{{ (row.rate | num) if row.rate else "Invalid" }}</td>
             <td data-sort-value="{{ row.valid_from.isoformat() if row.valid_from else '' }}">
               {% if row.valid_from %}
               <div>{{ row.valid_from.isoformat() }}</div>

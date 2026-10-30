@@ -62,10 +62,10 @@
           <td class="row-ordinal">{{ loop.index }}</td>
           <td><a href="/admin/institutions/{{ institution.id }}">{{ institution.name }}</a></td>
           <td>{{ institution.country or "Not set" }}</td>
-          <td data-sort-value="{{ institution.owner_count }}">{{ institution.owner_count }}</td>
+          <td data-sort-value="{{ institution.owner_count }}">{{ institution.owner_count | num }}</td>
           <td data-sort-value="{{ institution.key_count }}">
-            <div>{{ institution.key_count }} total</div>
-            <div class="muted small">{{ institution.active_key_count }} active</div>
+            <div>{{ institution.key_count | num }} total</div>
+            <div class="muted small">{{ institution.active_key_count | num }} active</div>
           </td>
           <td>{{ institution.created_at.isoformat() }}</td>
         </tr>

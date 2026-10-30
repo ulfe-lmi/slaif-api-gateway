@@ -457,7 +457,11 @@ def test_admin_pricing_and_fx_routes_return_html_and_accept_filters(monkeypatch)
     assert pricing.upstream_model in pricing_list.text
     assert pricing.currency in pricing_detail.text
     assert "USD / EUR" in fx_list.text
-    assert "0.920000000" in fx_detail.text
+    # 206-a: the detail rate readout uses the locale-stable formatter
+    # (padded 9-dp zeros stripped) while the list cell keeps the
+    # canonical ungrouped raw sort key.
+    assert "0.92" in fx_detail.text
+    assert 'data-sort-value="0.920000000"' in fx_list.text
     assert seen_pricing["model"] == "gpt"
     assert seen_pricing["active"] is True
     assert seen_fx["base_currency"] == "USD"

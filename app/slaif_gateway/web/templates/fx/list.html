@@ -65,7 +65,7 @@
         <tr>
           <td class="row-ordinal">{{ loop.index }}</td>
           <td><a href="/admin/fx/{{ fx_rate.id }}">{{ fx_rate.base_currency }} / {{ fx_rate.quote_currency }}</a></td>
-          <td>{{ fx_rate.rate }}</td>
+          <td data-sort-value="{{ fx_rate.rate }}">{{ fx_rate.rate | num }}</td>
           <td data-sort-value="{{ fx_rate.valid_from.isoformat() }}">
             <div>{{ fx_rate.valid_from.isoformat() }}</div>
             <div class="muted small">until {{ fx_rate.valid_until.isoformat() if fx_rate.valid_until else "open" }}</div>

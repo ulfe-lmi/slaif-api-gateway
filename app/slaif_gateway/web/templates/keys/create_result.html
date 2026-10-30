@@ -80,11 +80,11 @@
       <h2>Limits</h2>
       <dl>
         <dt>Cost limit</dt>
-        <dd>{{ "EUR " ~ limits.cost_limit_eur if limits.cost_limit_eur is not none else "Unlimited" }}</dd>
+        <dd>{{ "EUR " ~ (limits.cost_limit_eur | num) if limits.cost_limit_eur is not none else "Unlimited" }}</dd>
         <dt>Token limit</dt>
-        <dd>{{ limits.token_limit_total if limits.token_limit_total is not none else "Unlimited" }}</dd>
+        <dd{% if limits.token_limit_total is not none %} title="{{ limits.token_limit_total | num }}"{% endif %}>{{ (limits.token_limit_total | tokm) ~ "M" if limits.token_limit_total is not none else "Unlimited" }}</dd>
         <dt>Request limit</dt>
-        <dd>{{ limits.request_limit_total if limits.request_limit_total is not none else "Unlimited" }}</dd>
+        <dd>{{ (limits.request_limit_total | num) if limits.request_limit_total is not none else "Unlimited" }}</dd>
       </dl>
     </section>
 
