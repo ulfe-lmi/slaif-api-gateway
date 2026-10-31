@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-10-31):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). G05-G18 remain open.
+**Delivery update (2026-10-31):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05-G18 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -461,6 +461,15 @@ re-implemented.
   persisted-target oracles, exact-repeat via the same still-valid token,
   recovery views, no-JS typed-UUID fallback through to the persisted
   target, and a narrow-viewport review capture.
+
+### CI qualification (208-b, same PR)
+
+208-b repaired the two demonstrated 208-a final-head CI failures (the
+unit structural-guard line budget and the 207/208 provider-slug seed
+collision in the shared session database) with test-only changes plus
+removal of the unused `_CLONE_FORM_FIELDS` tuple; no GUI behavior, product
+law, or schema change. The full chronology and focused evidence are in
+the 208-b section of `docs/verification/gui-cli-parity.md`.
 
 ### Still open
 

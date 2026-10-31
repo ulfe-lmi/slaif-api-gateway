@@ -148,17 +148,6 @@ _DURATION_UNITS: dict[str, int] = {
     "days": 86400,
 }
 
-_CLONE_FORM_FIELDS: tuple[str, ...] = (
-    "target_owner_id",
-    "target_cohort_id",
-    "validity_mode",
-    "duration_value",
-    "duration_unit",
-    "valid_from",
-    "valid_until",
-    "email_delivery_mode",
-)
-
 
 def _default_clone_form() -> dict[str, str]:
     return {

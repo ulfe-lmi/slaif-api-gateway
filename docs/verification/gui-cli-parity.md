@@ -552,3 +552,86 @@ app, real stylesheet); exact created container removed on teardown.
 - GitHub CI on the 208-a report head is pending at publication
   (treated as pending, not pass); strategic review and guarded merge
   are the root's gates.
+
+## 208-b CI qualification and final-head chronology (objective 208, same PR, 2026-10-31)
+
+208-b (same PR `oap/208-gui-key-clone`) qualifies the demonstrated
+208-a final-head CI failures. The section above remains the 208-a
+publication record; this section supersedes its pending-CI sentence
+with the terminal A result and records the bounded B repair.
+
+### Terminal A CI result (run 41243331544, head `4335ecb` A SELF)
+
+- Unit, lint, and migration head (job `124661804858`): 1 FAILED,
+  6687 PASS, 1 SKIPPED (the skip is not a pass). The failure is
+  `tests/unit/test_main_app_structure.py::test_main_app_only_wires_app_and_routes`
+  asserting the brittle source-line budget (`assert 87 < 84`): the
+  new clone router's legitimate import/include/comment lines exceed
+  the ceiling, while main still only composes the app.
+- PostgreSQL integration (job `124661804846`): 10 FAILED, 524 PASS,
+  9 SKIPPED. All 10 failures are in
+  `tests/integration/test_admin_key_policy_207_postgres.py` with
+  `duplicate key value violates unique constraint
+  "uq_provider_configs_provider"`: CI collects the 208 clone module
+  before the 207 policy module, and the 207 seed still created the
+  DB-unique provider rows unconditionally (the earlier 207-then-208
+  local coexist check could not see this order).
+- The other 8 final-A checks (docs, Compose, browser, E2E, analyses,
+  CodeQL) succeeded at that head.
+
+### Bounded B repair (tests + one dead tuple; no product behavior change)
+
+1. `tests/unit/test_main_app_structure.py`: the total-line ceiling is
+   replaced by small standard-library AST structural checks of the
+   main-as-composition contract: first-party imports (including
+   `from slaif_gateway import ...` aliases treated as qualified
+   module names) must stay outside the `services`/`db`/`workers`/
+   `providers` layers; `include_router` must target the app
+   instance; no inline route handlers (FastAPI and Starlette
+   `route`/`websocket_route` decorator forms) and no direct handler
+   registration (`add_api_route`, `add_route`,
+   `add_websocket_route`, `add_api_websocket_route`). Ordinary new
+   router imports/includes pass without any ceiling change, and a
+   focused negative/positive control case pins the rejected shapes.
+2. `app/slaif_gateway/api/admin_key_clone.py`: removes only the
+   genuinely unused `_CLONE_FORM_FIELDS` tuple (demonstrated unused by
+   repository search; form parameters, validations, and allowlists are
+   unchanged).
+3. `tests/integration/test_admin_key_policy_207_postgres.py`: the 207
+   `_seed` provider/route creation becomes get-or-create on the
+   DB-unique provider slugs and requested models (the same existing
+   repository pattern the 208 seed already used), so both modules
+   coexist in either collection order. No production law, state
+   reset, or collection-order forcing.
+
+### Focused B evidence (newly run)
+
+- `tests/unit/test_main_app_structure.py`: 6 PASS, 0 skip (JUnit
+  `unit-208b-3.xml`), including the new structural-guard control case.
+- OAP governance: 9 PASS, 0 skip (JUnit `unit-208b-gov2.xml`) with
+  the 208-b order committed byte-exact.
+- 207/208 coexistence in BOTH collection orders on separate fresh
+  qualified owned-PG fixtures: 14 distinct cases per order (10 + 4),
+  28 executions total, 14 PASS / 0 fail / 0 skip each (JUnit
+  `pg-208b-ciorder.xml` for the CI order 208-then-207 and
+  `pg-208b-reverse.xml` for the reverse), each with exact-ID
+  container cleanup.
+- Ruff on the changed paths and `git diff --check` clean.
+
+### Reused unchanged A evidence (not rerun)
+
+The 208-a component proof stands as recorded above: 47 unit PASS
+(`unit-208a-4.xml`), 4 owned-PG PASS (`pg-208a-1.xml`), 14 coexist
+PASS (`pg-208a-coexist.xml`), 3 actual Chromium PASS
+(`browser-208a-1.xml`); those suites are unaffected by the B changes
+other than the two test files and the one dead tuple listed above.
+
+### Final-head status and operator notes
+
+GitHub CI on the B implementation head is pending at publication
+(treated as pending, not pass); the A report remains immutable with
+its pending-at-publication statement, and the terminal A failure is
+recorded here. The 208-a operator/upgrade notes still apply: ordinary
+API/assets rebuild and restart, no schema or existing-key migration,
+no production action authorized. Strategic review and guarded merge
+remain the root's gates.

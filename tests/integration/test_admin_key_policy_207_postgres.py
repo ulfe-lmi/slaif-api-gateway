@@ -106,32 +106,44 @@ async def _seed(database_url: str) -> dict[str, object]:
                     email=f"owner-{uuid.uuid4()}@example.org",
                     institution_id=institution.id,
                 )
+                # Provider slugs and requested models are DB-unique across the
+                # session database: get-or-create so this module coexists with
+                # other PG tests regardless of collection order (CI collects
+                # the 208 clone module before the 207 policy module).
                 providers = ProviderConfigsRepository(session)
-                await providers.create_provider_config(
-                    provider="openai",
-                    display_name="OpenAI (207)",
-                    base_url="https://api.openai.test/v1",
-                    api_key_env_var="OPENAI_UPSTREAM_API_KEY",
-                )
-                await providers.create_provider_config(
-                    provider="openrouter",
-                    display_name="OpenRouter (207)",
-                    base_url="https://openrouter.test/v1",
-                    api_key_env_var="OPENROUTER_API_KEY",
-                )
+                if await providers.get_provider_config_by_provider("openai") is None:
+                    await providers.create_provider_config(
+                        provider="openai",
+                        display_name="OpenAI (207)",
+                        base_url="https://api.openai.test/v1",
+                        api_key_env_var="OPENAI_UPSTREAM_API_KEY",
+                    )
+                if (
+                    await providers.get_provider_config_by_provider("openrouter")
+                    is None
+                ):
+                    await providers.create_provider_config(
+                        provider="openrouter",
+                        display_name="OpenRouter (207)",
+                        base_url="https://openrouter.test/v1",
+                        api_key_env_var="OPENROUTER_API_KEY",
+                    )
                 routes = ModelRoutesRepository(session)
-                await routes.create_model_route(
-                    requested_model="gpt-test",
-                    provider="openai",
-                    upstream_model="gpt-test",
-                    endpoint="/v1/chat/completions",
-                )
-                await routes.create_model_route(
-                    requested_model="gpt-other",
-                    provider="openrouter",
-                    upstream_model="gpt-other",
-                    endpoint="/v1/chat/completions",
-                )
+                for provider, requested, upstream in (
+                    ("openai", "gpt-test", "gpt-test"),
+                    ("openrouter", "gpt-other", "gpt-other"),
+                ):
+                    existing = {
+                        r.requested_model
+                        for r in await routes.list_model_routes(provider=provider)
+                    }
+                    if requested not in existing:
+                        await routes.create_model_route(
+                            requested_model=requested,
+                            provider=provider,
+                            upstream_model=upstream,
+                            endpoint="/v1/chat/completions",
+                        )
                 return {
                     "admin_email": admin.email,
                     "admin_password": "correct horse battery staple",
