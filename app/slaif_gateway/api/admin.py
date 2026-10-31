@@ -70,6 +70,7 @@ from slaif_gateway.services.codex_profile_registry import (
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
 from slaif_gateway.schemas.admin_keys import LazyThrottlingOperatorCeilings
 from slaif_gateway.schemas.key_configuration import (
+    MAX_KEY_CONFIGURATION_REASON_LENGTH,
     KeyConfigurationError,
     parse_key_configuration_file,
 )
@@ -1103,7 +1104,11 @@ async def create_admin_key(
             parsed_input = _parse_key_create_configuration_form(
                 form,
                 actor_admin_id=action_context.admin_user.id,
+                settings=settings,
             )
+            for model in parsed_input.allowed_models:
+                if _admin_value_contains_credential_shape(model, settings):
+                    raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
         else:
             parsed_input = _parse_key_create_form(
                 form,
@@ -1113,6 +1118,9 @@ async def create_admin_key(
                     request, form
                 ),
             )
+            for model in parsed_input.allowed_models:
+                if _admin_value_contains_credential_shape(model, settings):
+                    raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
             validated_request_policy = await _validate_admin_request_policy(
                 request,
                 allowed_models=parsed_input.allowed_models,
@@ -1181,7 +1189,7 @@ async def create_admin_key(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             options=options,
-            form=form,
+            form=_admin_redact_key_form_values(form, settings),
             choices=await _load_admin_record_choices_safe(
                 request,
                 (
@@ -1189,7 +1197,7 @@ async def create_admin_key(
                     ("cohort_id", "cohort", form.get("cohort_id")),
                 ),
             ),
-            error=str(exc),
+            error=_admin_redact_key_form_value(str(exc), settings),
             diagnostic_id=diagnostic_id,
             status_code=400,
         )
@@ -1210,7 +1218,7 @@ async def create_admin_key(
                     admin=action_context.admin_user,
                     csrf_token=csrf_token,
                     options=options,
-                    form=form,
+                    form=_admin_redact_key_form_values(form, settings),
                     choices=await _load_admin_record_choices_safe(
                         request,
                         (
@@ -1231,7 +1239,7 @@ async def create_admin_key(
                         admin=action_context.admin_user,
                         csrf_token=csrf_token,
                         options=options,
-                        form=form,
+                        form=_admin_redact_key_form_values(form, settings),
                         choices=await _load_admin_record_choices_safe(
                             request,
                             (
@@ -1263,18 +1271,19 @@ async def create_admin_key(
             email_delivery_mode=parsed_email_delivery_mode,
         )
         form["configuration_json"] = ""
-        error_message = (
+        error_message = _admin_redact_key_form_value(
             exc.safe_message
             if isinstance(exc, KeyManagementError)
             and exc.error_code == "invalid_gateway_key_policy"
-            else _ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1]
+            else _ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1],
+            settings,
         )
         return _render_key_create_form(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             options=options,
-            form=form,
+            form=_admin_redact_key_form_values(form, settings),
                 choices=await _load_admin_record_choices_safe(
                     request,
                     (
@@ -2262,26 +2271,6 @@ async def update_admin_key_policy(
     if isinstance(action_context, Response):
         return action_context
 
-    cleaned_reason = _clean_admin_reason(reason)
-    if cleaned_reason is None:
-        return await _render_key_policy_error(
-            request,
-            admin=action_context.admin_user,
-            csrf_token=csrf_token,
-            gateway_key_id=parsed_key_id,
-            error=_ADMIN_STATUS_MESSAGES["key_policy_reason_required"][1],
-            policy_form={
-                "allowed_providers": allowed_providers,
-                "allowed_models": allowed_models,
-                "allowed_endpoints": allowed_endpoints,
-                "allow_all_providers": allow_all_providers,
-                "provider_deny_all": provider_deny_all,
-                "allow_all_models": allow_all_models,
-                "allow_all_endpoints": allow_all_endpoints,
-                "reason": reason,
-            },
-        )
-
     policy_form = {
         "allowed_providers": allowed_providers,
         "allowed_models": allowed_models,
@@ -2292,10 +2281,25 @@ async def update_admin_key_policy(
         "allow_all_endpoints": allow_all_endpoints,
         "reason": reason,
     }
+    cleaned_reason, reason_error = _admin_bounded_reason(reason)
+    if cleaned_reason is None:
+        return await _render_key_policy_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            gateway_key_id=parsed_key_id,
+            error=reason_error or _ADMIN_STATUS_MESSAGES["key_policy_reason_required"][1],
+            policy_form=_admin_redact_key_form_values(policy_form, settings),
+        )
+    cleaned_reason = _admin_redact_key_form_value(cleaned_reason, settings)
     try:
+        submitted_models = _parse_admin_text_list(allowed_models)
+        for model in submitted_models:
+            if _admin_value_contains_credential_shape(model, settings):
+                raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
         validated_request_policy = await _validate_admin_request_policy(
             request,
-            allowed_models=_parse_admin_text_list(allowed_models),
+            allowed_models=submitted_models,
             allowed_endpoints=_parse_admin_text_list(allowed_endpoints),
             allow_all_models=_is_checked(allow_all_models),
             allow_all_endpoints=_is_checked(allow_all_endpoints),
@@ -2312,7 +2316,7 @@ async def update_admin_key_policy(
                     csrf_token=csrf_token,
                     gateway_key_id=parsed_key_id,
                     error="Gateway key not found.",
-                    policy_form=policy_form,
+                    policy_form=_admin_redact_key_form_values(policy_form, settings),
                 )
             raw_providers = current_key.metadata_json.get("allowed_providers")
             if isinstance(raw_providers, list) and raw_providers:
@@ -2352,8 +2356,11 @@ async def update_admin_key_policy(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             gateway_key_id=parsed_key_id,
-            error=exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
-            policy_form=policy_form,
+            error=_admin_redact_key_form_value(
+                exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+                settings,
+            ),
+            policy_form=_admin_redact_key_form_values(policy_form, settings),
             diagnostic_id=_admin_diagnostic_id(request),
         )
 
@@ -2407,16 +2414,17 @@ async def update_admin_key_rate_limits(
         "reason": reason,
     }
     try:
-        cleaned_reason = _clean_admin_reason(reason)
+        cleaned_reason, reason_error = _admin_bounded_reason(reason)
         if cleaned_reason is None:
             return await _render_key_rate_limits_error(
                 request,
                 admin=action_context.admin_user,
                 csrf_token=csrf_token,
                 gateway_key_id=parsed_key_id,
-                error=_ADMIN_STATUS_MESSAGES["key_rate_limits_reason_required"][1],
-                rate_form=rate_form,
+                error=reason_error or _ADMIN_STATUS_MESSAGES["key_rate_limits_reason_required"][1],
+                rate_form=_admin_redact_key_form_values(rate_form, settings),
             )
+        cleaned_reason = _admin_redact_key_form_value(cleaned_reason, settings)
         async with _admin_key_management_runtime_scope(request) as (
             keys_repository,
             service,
@@ -2429,7 +2437,7 @@ async def update_admin_key_rate_limits(
                     csrf_token=csrf_token,
                     gateway_key_id=parsed_key_id,
                     error="Gateway key not found.",
-                    rate_form=rate_form,
+                    rate_form=_admin_redact_key_form_values(rate_form, settings),
                 )
             current_policy = _admin_rate_limit_policy_from_key(current_key)
             final_policy = _compose_admin_rate_limit_policy(rate_form, current_policy)
@@ -2443,7 +2451,7 @@ async def update_admin_key_rate_limits(
                         "No rate-limit change requested. Set or clear at "
                         "least one member."
                     ),
-                    rate_form=rate_form,
+                    rate_form=_admin_redact_key_form_values(rate_form, settings),
                 )
             await service.update_gateway_key_rate_limits(
                 UpdateGatewayKeyRateLimitsInput(
@@ -2465,8 +2473,11 @@ async def update_admin_key_rate_limits(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             gateway_key_id=parsed_key_id,
-            error=exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
-            rate_form=rate_form,
+            error=_admin_redact_key_form_value(
+                exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+                settings,
+            ),
+            rate_form=_admin_redact_key_form_values(rate_form, settings),
             diagnostic_id=_admin_diagnostic_id(request),
         )
 
@@ -2550,7 +2561,13 @@ async def explain_admin_key_route_access(
         policy_form=_default_key_policy_form_for_key(key),
         lazy_form=_default_key_lazy_throttling_form_for_key(key, settings),
         explain_report=report,
-        explain_form={"endpoint": str(endpoint or ""), "model": str(model or "")},
+        # The typed model/endpoint inputs are re-displayed verbatim in the
+        # form; mask credential shapes on the retained values (the shared
+        # classifier still receives the original input above).
+        explain_form=_admin_redact_key_form_values(
+            {"endpoint": str(endpoint or ""), "model": str(model or "")},
+            settings,
+        ),
     )
 
 
@@ -2564,6 +2581,11 @@ async def download_admin_key_configuration(
     allowlisted fields only; re-parsed by the strict version-1 schema):
     no secret material, no arbitrary metadata, no server environment.
     Served as a private no-store attachment.
+
+    Authentication uses the NON-ROTATING read-only attachment context:
+    page renders refresh the stored CSRF token, but this download must
+    leave it untouched because the origin detail page (and its
+    still-displayed form token) remains in view after the attachment.
     """
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
@@ -2573,9 +2595,9 @@ async def download_admin_key_configuration(
     if parsed_key_id is None:
         return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
-    page_context = await _admin_page_context(request)
-    if isinstance(page_context, Response):
-        return page_context
+    attachment_context = await _admin_attachment_context(request)
+    if isinstance(attachment_context, Response):
+        return attachment_context
 
     try:
         async with _admin_key_dashboard_service_scope(request) as service:
@@ -2652,16 +2674,17 @@ async def update_admin_key_configuration(
         "reason": reason,
     }
     try:
-        cleaned_reason = _clean_admin_reason(reason)
+        cleaned_reason, reason_error = _admin_bounded_reason(reason)
         if cleaned_reason is None:
             return await _render_key_configuration_error(
                 request,
                 admin=action_context.admin_user,
                 csrf_token=csrf_token,
                 gateway_key_id=parsed_key_id,
-                error=_ADMIN_STATUS_MESSAGES["key_configuration_reason_required"][1],
-                config_form=config_form,
+                error=reason_error or _ADMIN_STATUS_MESSAGES["key_configuration_reason_required"][1],
+                config_form=_admin_redact_key_form_values(config_form, settings),
             )
+        cleaned_reason = _admin_redact_key_form_value(cleaned_reason, settings)
         if not _is_checked(confirm_configuration_update):
             return await _render_key_configuration_error(
                 request,
@@ -2669,7 +2692,7 @@ async def update_admin_key_configuration(
                 csrf_token=csrf_token,
                 gateway_key_id=parsed_key_id,
                 error=_ADMIN_STATUS_MESSAGES["key_configuration_confirmation_required"][1],
-                config_form=config_form,
+                config_form=_admin_redact_key_form_values(config_form, settings),
             )
         if not (configuration_json or "").strip():
             return await _render_key_configuration_error(
@@ -2678,9 +2701,14 @@ async def update_admin_key_configuration(
                 csrf_token=csrf_token,
                 gateway_key_id=parsed_key_id,
                 error="Enter a valid advanced configuration document.",
-                config_form=config_form,
+                config_form=_admin_redact_key_form_values(config_form, settings),
             )
         config = parse_key_configuration_file(configuration_json.encode("utf-8"))
+        # absent (omitted) and explicit null (clear) never carry model
+        # values; only a concrete allow-list can hold model shapes.
+        for model in config.allowed_models if isinstance(config.allowed_models, list) else []:
+            if _admin_value_contains_credential_shape(str(model), settings):
+                raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
         if config.is_empty():
             return await _render_key_configuration_error(
                 request,
@@ -2688,7 +2716,7 @@ async def update_admin_key_configuration(
                 csrf_token=csrf_token,
                 gateway_key_id=parsed_key_id,
                 error="The configuration document contains no requested changes.",
-                config_form=config_form,
+                config_form=_admin_redact_key_form_values(config_form, settings),
             )
         async with _admin_key_management_service_scope(request) as service:
             await service.update_gateway_key_configuration(
@@ -2711,8 +2739,11 @@ async def update_admin_key_configuration(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             gateway_key_id=parsed_key_id,
-            error=exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
-            config_form=config_form,
+            error=_admin_redact_key_form_value(
+                exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+                settings,
+            ),
+            config_form=_admin_redact_key_form_values(config_form, settings),
             diagnostic_id=_admin_diagnostic_id(request),
         )
 
@@ -7837,6 +7868,28 @@ async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, st
         return response
 
 
+async def _admin_attachment_context(request: Request) -> AdminSessionContext | Response:
+    """Authenticate a read-only attachment WITHOUT rotating form CSRF.
+
+    Same session validation, active/expired/revoked handling, and
+    login-cookie behavior as page renders, but the stored CSRF token is
+    left untouched: the origin page stays displayed after the download,
+    so the still-visible form token on that page must remain valid.
+    """
+    settings = _settings(request)
+    session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
+    if not session_token:
+        return RedirectResponse("/admin/login", status_code=303)
+
+    try:
+        async with _admin_service_scope(request) as service:
+            return await service.validate_admin_session(session_token=session_token)
+    except (AdminSessionError, RuntimeError):
+        response = RedirectResponse("/admin/login", status_code=303)
+        _clear_session_cookie(response, settings)
+        return response
+
+
 async def _load_admin_record_choices(
     request: Request,
     specs: tuple[tuple[str, str, object, object | None], ...],
@@ -11183,6 +11236,7 @@ def _parse_key_create_configuration_form(
     form: Mapping[str, object],
     *,
     actor_admin_id: uuid.UUID,
+    settings: Settings | None = None,
 ) -> CreateGatewayKeyInput:
     """Create input from an advanced version-1 configuration document.
 
@@ -11195,9 +11249,18 @@ def _parse_key_create_configuration_form(
     """
     owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
     cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
-    cleaned_reason = _clean_admin_reason(form.get("reason"))
+    cleaned_reason, reason_error = _admin_bounded_reason(form.get("reason"))
+    if reason_error is not None:
+        raise ValueError(reason_error)
     if cleaned_reason is None:
         raise ValueError("Enter an audit reason before creating a key.")
+    # Credential protection applies to the stored audit note as well as
+    # the re-rendered form; ordinary reasons pass through unchanged.
+    cleaned_reason = (
+        _admin_redact_key_form_value(str(cleaned_reason), settings)
+        if settings is not None
+        else redact_text(str(cleaned_reason))
+    )
 
     try:
         valid_from = _parse_admin_datetime(form.get("valid_from")) or datetime.now(UTC)
@@ -11255,9 +11318,18 @@ def _parse_key_create_form(
 ) -> CreateGatewayKeyInput:
     owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
     cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
-    cleaned_reason = _clean_admin_reason(form.get("reason"))
+    cleaned_reason, reason_error = _admin_bounded_reason(form.get("reason"))
+    if reason_error is not None:
+        raise ValueError(reason_error)
     if cleaned_reason is None:
         raise ValueError("Enter an audit reason before creating a key.")
+    # Credential protection applies to the stored audit note as well as
+    # the re-rendered form; ordinary reasons pass through unchanged.
+    cleaned_reason = (
+        _admin_redact_key_form_value(cleaned_reason, settings)
+        if settings is not None
+        else redact_text(cleaned_reason)
+    )
 
     try:
         valid_from = _parse_admin_datetime(form.get("valid_from")) or datetime.now(UTC)
@@ -12098,6 +12170,90 @@ def _clean_admin_reason(reason: str | None) -> str | None:
     return cleaned or None
 
 
+_ADMIN_REASON_TOO_LONG_MESSAGE = (
+    "Audit reason is too long. Keep it to at most "
+    f"{MAX_KEY_CONFIGURATION_REASON_LENGTH} characters."
+)
+
+
+def _admin_bounded_reason(reason: str | None) -> tuple[str | None, str | None]:
+    """Strip the operator reason and enforce the stored 512-char bound.
+
+    Returns ``(cleaned_reason, error_message)``. Blank input yields
+    ``(None, None)`` so callers keep their existing reason-required
+    message; an over-long reason yields ``(None, fixed safe message)``
+    and must be refused before any mutation or audit write. The bound is
+    measured in Unicode characters and uses the existing schema
+    constant ``MAX_KEY_CONFIGURATION_REASON_LENGTH``; it is a GUI-side
+    seam bound for these new/touched key mutations, and the unchanged
+    CLI is not claimed to enforce it.
+    """
+    if reason is None:
+        return None, None
+    cleaned = reason.strip()
+    if not cleaned:
+        return None, None
+    if len(cleaned) > MAX_KEY_CONFIGURATION_REASON_LENGTH:
+        return None, _ADMIN_REASON_TOO_LONG_MESSAGE
+    return cleaned, None
+
+
+def _admin_redact_key_form_value(value: str, settings: Settings) -> str:
+    """Focused key-form privacy seam over the shared redaction rules.
+
+    Masks recognized credential shapes (bearer / gateway / provider key
+    patterns plus this deployment's configured accepted key prefixes) in
+    key-form error text and retained re-displayed form values. Ordinary
+    values pass through byte-identical, so useful operator input stays
+    visible. The result is display text only; it never replaces a
+    canonical policy document or a stored policy value.
+    """
+    if not value:
+        return value
+    return redact_text(
+        value,
+        accepted_gateway_key_prefixes=settings.get_gateway_key_accepted_prefixes(),
+    )
+
+
+def _admin_redact_key_form_values(
+    form: Mapping[str, str], settings: Settings
+) -> dict[str, str]:
+    """Redacted copy of a re-rendered key form (retained-values seam)."""
+    return {
+        name: _admin_redact_key_form_value(value, settings)
+        for name, value in form.items()
+    }
+
+
+_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE = (
+    "Allowed models must be route model identifiers, not "
+    "credential-shaped values."
+)
+
+
+def _admin_value_contains_credential_shape(value: str, settings: Settings) -> bool:
+    """True when a key-form field value carries a recognized credential
+    shape.
+
+    Reuses the shared redaction rules (including this deployment's
+    configured accepted key prefixes) as the detector: a value the
+    redactor would mask is refused with a fixed safe message BEFORE the
+    shared policy validators run, so a domain error message can never
+    echo the submitted value. Ordinary model identifiers pass through
+    byte-identical and remain valid.
+    """
+    if not value:
+        return False
+    return (
+        redact_text(
+            value,
+            accepted_gateway_key_prefixes=settings.get_gateway_key_accepted_prefixes(),
+        )
+        != value
+    )
+
+
 def _parse_admin_datetime(value: str | None) -> datetime | None:
     if value is None:
         return None
@@ -12251,7 +12407,9 @@ def _log_admin_action_failure(
         event["error_code"] = error_code
     safe_message = getattr(exc, "safe_message", None)
     if isinstance(safe_message, str) and safe_message:
-        event["safe_message"] = safe_message
+        # Domain safe messages can embed rejected operator input (e.g. a
+        # refused model name); mask credential shapes before logging.
+        event["safe_message"] = _admin_redact_key_form_value(safe_message, _settings(request))
 
     if level == "error":
         logger.error("admin.key_create.failed", **event)

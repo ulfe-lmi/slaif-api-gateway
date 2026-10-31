@@ -328,8 +328,9 @@
       <p class="muted small">Send-now and enqueue suppress browser plaintext display. Pending creates a delivery record but still shows the key once. Celery payloads contain IDs only, and provider keys are never involved.</p>
       <label>
         Audit reason
-        <input name="reason" value="{{ form.reason }}" required autocomplete="off" placeholder="Required reason">
+        <input name="reason" value="{{ form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="create-reason-help">
       </label>
+      <p class="field-help" id="create-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
       <button type="submit">Create key</button>
     </section>
   </form>

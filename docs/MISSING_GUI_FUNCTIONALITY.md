@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-10-31):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`); see [section 9](#9-delivery-status-objective-207-a). G04-G18 remain open.  
+**Delivery update (2026-10-31):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04-G18 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -245,9 +245,10 @@ Implementation should update this file's status against actual delivered GUI beh
 
 ## 9. Delivery status (objective 207-a)
 
-Added 2026-10-31 as the delivery update required at the end of section 8.
-The historical findings above are preserved as written at the baseline; this
-section only records what 207-a changed and what remains open.
+Added 2026-10-31 as the delivery update required at the end of section 8
+(207-b repair round appended the same day). The historical findings above
+are preserved as written at the baseline; this section records what 207-a
+delivered, what 207-b repaired on the same PR, and what remains open.
 
 ### Delivered by 207-a (G01-G03)
 
@@ -299,11 +300,48 @@ Evidence lives in the objective 207-a report and PR (focused unit/integration
 JUnit counts, owned-PostgreSQL facts, real-Chromium workflow facts, and
 screenshots under `/tmp/slaif207/`), plus
 [docs/verification/gui-cli-parity.md](verification/gui-cli-parity.md) and the
-new section in [docs/admin-usability.md](admin-usability.md).
+new section in [docs/admin-usability.md](admin-usability.md). The 207-b
+repair round appends its evidence to the same verification file and
+records the GUI-side reason bound and the non-rotating configuration
+download.
+
+### Repaired by 207-b (same PR, 2026-10-31)
+
+The 207-b order (correctly formatted, same PR363) repaired three
+demonstrated gaps in the 207-a surfaces without new scope:
+
+- **Credential privacy at the new/touched seams.** Scoped by value
+  kind (recognized through the existing redaction rules, including
+  configured accepted key prefixes): credential-shaped MODEL
+  identifiers in the policy inputs are refused with a fixed safe
+  message before the shared validators; credential-shaped values in
+  reasons and other retained fields are masked in the re-rendered
+  form, flash errors, audit notes, and failure logs (a valid change
+  with a credential-shaped reason still succeeds, stored masked).
+  The explain action's shared classifier is unchanged (original
+  input); only its retained display is masked. Useful ordinary
+  values are preserved for correction.
+- **Same-page configuration download.** The attachment authenticates
+  through a non-rotating read-only session context (the same real
+  session checks), so the detail page's own form token stays valid:
+  the browser-qualified flow is detail page -> download -> edit
+  through the SAME still-displayed form.
+- **Reason bound on the new/touched mutations.** Nonblank and at most
+  512 Unicode characters, enforced server-side before mutation or
+  audit with a fixed safe refusal, with matching `maxlength` and
+  visible help. This is a GUI-side seam bound: the schema constant
+  existed but was previously unused, and the unchanged CLI is not
+  claimed to enforce it.
+
+The 207-b record (same
+[gui-cli-parity.md](verification/gui-cli-parity.md) file) corrects the
+earlier claims that reasons were bounded and that all canaries were
+covered.
 
 ### Still open (G04-G18)
 
-Nothing in 207-a claims G04 (cloning), G05 (batch), G06 (route-capability
+Nothing in 207-a or 207-b claims G04 (cloning), G05 (batch), G06
+(route-capability
 review), G07 (provider preparation/clearing), G08 (diagnostics), G09 (replay
 inspection), G10 (Codex migration), G11 (usage reporting), G12 (email
 inspection), G13 (list navigation), G14 (accounting recovery), G15 (catalog

@@ -1,12 +1,20 @@
-# 2026-10-31 objective 207-a GUI key policy administration verification
+# 2026-10-31 objective 207 GUI key policy administration verification (207-a + 207-b)
 
-Focused verification record for the 207-a admin GUI key-policy
-administration change (G01-G03 of `docs/MISSING_GUI_FUNCTIONALITY.md`; PUBLISHED AS PARTIAL — the OAP governance format gate fails on the immutable order bytes, see below):
+Focused verification record for the 207 admin GUI key-policy
+administration change (G01-G03 of `docs/MISSING_GUI_FUNCTIONALITY.md`):
 provider tri-state + advanced versioned configuration, existing-key
 operational rate editor, and effective-policy inspection with
 configuration-only "explain model access"). The GUI surfaces REUSE the
 already-qualified shared services and projections; no database schema,
 table, migration, client/server module, or sortable table was added.
+
+The 207-a record below is preserved as written at its publication (it
+was PUBLISHED AS PARTIAL — the OAP governance format gate failed on
+the immutable 207-a order bytes, see the A-era section below).
+207-b (same PR363) repaired the demonstrated privacy, same-page
+download, and reason-bound gaps in those same surfaces; the
+"207-b repair round" section below supersedes the A-era claims where
+they conflict.
 
 ## Scope and GUI-CLI parity contract
 
@@ -183,12 +191,16 @@ real-page layer and were fixed in this same order:
 - **Test-side (audit snapshot + CSRF chronology):** the explain audit
   snapshot now happens after the login (login audits
   `admin_login_succeeded`), and the configuration export download is
-  fetched before the form page is rendered because every admin page
-  render refreshes the session CSRF token (existing admin design): a
-  form page fetched before any other admin GET would carry a stale
-  token. The empty-reason refusal block lifts the client-side
-  `required` attribute first so the SERVER's fixed refusal, not native
-  validation, is what is proven.
+  fetched BEFORE the form page was rendered — a workaround for the
+  defect that the attachment GET rotated the stored CSRF token (every
+  admin page render refreshes it, but the read-only attachment must
+  not): a form page fetched before any other admin GET would carry a
+  stale token. **Superseded by 207-b:** the attachment now
+  authenticates through a non-rotating context, and the browser case
+  loads the detail page FIRST, downloads, then edits the SAME
+  still-displayed form. The empty-reason refusal block lifts the
+  client-side `required` attribute first so the SERVER's fixed
+  refusal, not native validation, is what is proven.
 - **Test-side (readout whitespace):** the effective-policy rate readout
   renders each member as separate text nodes (`requests_per_window:`
   then, on the next line, `configured 7 (source: key)`), so the
@@ -197,14 +209,168 @@ real-page layer and were fixed in this same order:
   value itself is proven by the direct-DB oracle
   (`rate_requests == 7`).
 
-## OAP governance format gate (UNRESOLVED on this head)
+## 207-b repair round (same PR363, 2026-10-31)
+
+207-b (correctly formatted, now the active order on the same PR)
+repaired three demonstrated gaps in the 207-a surfaces. The 207-a
+report remains immutable; this section corrects the earlier claims
+that reasons were bounded and that all canaries were covered.
+
+### Demonstrated gaps (root probes: real ASGI/Jinja, synthetic canaries)
+
+- **Credential-shaped values leaked into 400 HTML.** Three cases
+  returned the COMPLETE synthetic canary: (a) an otherwise-valid
+  version-1 `allowed_models` list carrying a canary reached the real
+  shared `validate_gateway_key_policy`, whose safe message embeds
+  the rejected model; (b) malformed JSON plus a canary in the reason;
+  (c) a canary in a numeric rate input.
+- **Same-page download rotated the form CSRF.** The attachment
+  authenticated through `_admin_page_context`, which refreshes the
+  stored CSRF while the displayed page keeps its old form token:
+  detail 200, attachment 200, same-page old-token POST 400
+  InvalidCSRF; fresh-token control 303. The A-era browser case
+  avoided this by downloading before the page render.
+- **Reasons unbounded on the new/touched mutations.** A valid
+  fresh-token rate POST with a 513-character reason reached the
+  service and 303'd; the 512 schema constant existed but was unused
+  on these seams.
+
+### Repairs (GUI seams only; no core/schema/service/CLI change)
+
+- **Credential-shape guards at the touched seams, scoped by value
+  kind** (recognized through the existing redaction rules, including
+  configured accepted key prefixes; no redesign): (1) credential-
+  shaped MODELS in the create (guided and document), policy, and
+  configuration `allowed_models` are refused with a fixed safe
+  message BEFORE the shared validators, whose safe message would
+  otherwise embed the rejected model in the 400 HTML; (2) reasons
+  and the other retained form values are MASKED — a valid change
+  with a credential-shaped reason still succeeds, stored and
+  redisplayed masked; (3) the explain-model-access action keeps
+  sending the ORIGINAL input to the unchanged shared classifier and
+  masks only the retained re-displayed form values. Masking covers
+  the re-rendered form, flash/error text, the audit note, and
+  failure logs; useful ordinary values are preserved unchanged, and
+  no DOM/Jinja redactor, capture, or classifier change was added.
+- **Non-rotating attachment authentication.**
+  `download_admin_key_configuration` uses a read-only
+  `_admin_attachment_context` (the same real session validation,
+  active/expired/revoked checks, and login-cookie behavior) that
+  does NOT refresh the stored CSRF; mutation CSRF, authorization,
+  and the page render/session design are unchanged.
+- **GUI-side reason bound.** The four new/touched mutation seams
+  apply a server-side nonblank / at-most-512-Unicode-character bound
+  (`_admin_bounded_reason`, matching the existing schema constant)
+  with the fixed safe refusal BEFORE mutation or audit, and the
+  fields carry `maxlength` plus visible help that agree with the
+  server law; credential-shaped reasons are masked exactly like
+  every other retained value. This bound is a GUI-side seam bound:
+  the schema constant was previously unused and the unchanged CLI is
+  NOT claimed to enforce it; no legacy operation, CLI/service
+  contract, or schema was altered to introduce it.
+
+### 207-b focused evidence (local; GitHub CI pending)
+
+Layer: native unit (ASGI app with the existing fake-session seams; no
+DB, no server, no real provider/mail).
+
+- `tests/unit/test_admin_key_policy_207.py`: 65 PASS, 0 skip
+  (JUnit `unit-b-4.xml`; the 49 A cases plus 16 B cases). The new
+  cases cover the three repaired leak paths with recognized
+  synthetic canaries (document-mode create canary model, guided
+  create canary model, policy canary, configuration canary) with
+  fixed safe refusals and no echo in HTML, flash, logs, or audit; a
+  full plausible-key-shape canary (43-char secret, verified with the
+  accepted-prefix parser); `allowed_models: null` as a legal explicit
+  clear; the 512-valid / 513-refused bound with no mutation on
+  refusal (rate, configuration, policy, create) and Unicode
+  character behavior; the explain form re-display masking with the
+  shared classifier still receiving the original input; and the
+  stateful CSRF download without rotation.
+- Directly affected existing unit suites (key-create routes,
+  key-create email-delivery routes, OAP governance): 101 PASS, 0
+  skip (JUnit `unit-b-1.xml`). The email-delivery route fixtures
+  omitted the now-explicit provider mode and were given
+  `allow_all_providers="true"` (unrestricted) — a fixture
+  correction, not a behavior change.
+
+Layer: actual owned, labeled, loopback-bound, tmpfs-backed
+PostgreSQL 16 container (same fixture generator), real
+schema/migrations, real ASGI app through `TestClient` (no browser);
+exact created container removed on teardown.
+
+- `tests/integration/test_admin_key_policy_207_postgres.py` plus the
+  directly affected A PG oracles: 12 PASS, 0 fail / 0 error / 0
+  skip (JUnit `pg-b-1.xml`). New: the same-page download does not
+  rotate the page CSRF (detail -> attachment -> same-form edit
+  303), the 512/513 reason bound with no mutation/audit on refusal
+  (audit-count baseline, because the shared module seed persists
+  across the file), and the document-create canary-model refusal
+  without persistence. The two A CI PG fixtures (create form,
+  email-delivery modes) received the same explicit
+  `allow_all_providers: "true"` fixture correction.
+
+Layer: actual Chromium on the same owned PostgreSQL with a real
+uvicorn app and real stylesheet (real HTTP admin pages end to end).
+
+- `tests/browser/test_admin_key_policy_207.py`: 7 PASS, 0 fail / 0
+  error / 0 skip (JUnit `browser-207b-1.xml`). NEW: strict
+  document-mode create — the guided policy checkboxes reset to off,
+  the version-1 document is the single policy source, the one-time
+  plaintext result renders exactly once (booleans-only assertion),
+  and the persisted state is verified by direct-DB oracle plus the
+  canonical `configuration.json` export (providers/models/
+  endpoints/cost/exact rate window), with the provider tri-state
+  still intact afterward. CHANGED: the configuration case now loads
+  the detail page FIRST, downloads the same-page attachment, and
+  then edits through the SAME still-displayed form/token (no
+  reload, page.goto, or token swap) — the A-era "download first"
+  workaround is removed. FOCUSED: screenshots are now element
+  captures of the actual new controls (create policy-source and
+  provider sections, document-mode create form, effective-policy
+  readout, rate editor, explain panel, plus 480px narrow captures
+  including the rate editor), because whole-page captures showed
+  only the page-top identity.
+- The two cases touched after that first green (one-time-result
+  opaque-boolean assertion; 480px rate-editor capture) reran to 2
+  PASS (JUnit `browser-207b-pair-1.xml`); the other five 207 browser
+  cases are component evidence for the unchanged flows, and the
+  privacy/CSRF/reason repairs are additionally covered by the unit
+  and PG layers above.
+- The affected 206 numeric-display case
+  (`test_admin_numeric_display_206.py::
+  test_key_detail_live_burn_zero_and_raw_inputs`), whose locator now
+  disambiguates the new "Rate limits" readout row from the legacy
+  summary (direct-child Policy heading inside the detail section):
+  1 PASS (JUnit `browser-207b-206-1.xml`).
+- Screenshots (synthetic fixture data only, no key/session/secret
+  cells): `/tmp/slaif207/key-create-policy-source.png`,
+  `/tmp/slaif207/key-create-provider-controls.png`,
+  `/tmp/slaif207/key-create-document-mode.png`,
+  `/tmp/slaif207/key-detail-effective-policy.png`,
+  `/tmp/slaif207/key-detail-rate-editor.png`,
+  `/tmp/slaif207/key-explain-report.png`,
+  `/tmp/slaif207/key-detail-narrow.png`,
+  `/tmp/slaif207/key-detail-narrow-policy.png`,
+  `/tmp/slaif207/key-detail-narrow-rate-editor.png`.
+
+### 207-b static and governance checks
+
+- `ruff check` on all touched Python files: clean.
+- `git diff --check`: clean.
+- `scripts/check_documentation.py`: `DOCUMENTATION_CHECK=OK`.
+- `tests/unit/test_oap_governance.py`: 9 PASS, 0 skip with the
+  correctly formatted 207-b order and `oap/active=207-b` committed —
+  the two A-era format gates no longer fail on the 207-b head.
+
+## OAP governance format gate (207-a head; resolved by the 207-b order)
 
 The activated immutable order
 `oap/orders/207-a-gui-key-policy.md` (SHA256
 `a3e959226d2429ccc7f2d4d62603bf2e779304ae9d444394eb42959c52b5bbd0`,
-restored byte-exact from root's trusted preactivation copy) carries a
+restored byte-exact from root's trusted preactivation copy) carried a
 heading / PR-mode syntax that deviates from the durable governance
-format used by orders 206-a through 206-d: line 1 is
+format used by orders 206-a through 206-d: line 1 was
 `# OAP Work Order 207-a — GUI key policy, rate overrides and effective
 inspection` instead of the required `# OAP Work Order — 207-a`, and
 the round declares the new-PR mode as prose
@@ -215,10 +381,11 @@ exact original bytes and the governance tests were NOT loosened; this
 clerical format issue is reported, not fixed. Consequence on this
 head: `tests/unit/test_oap_governance.py` is 7 PASS / 2 FAIL —
 `test_active_identifier_resolves_exactly_one_matching_order` and
-`test_initial_round_declares_new_pr_and_one_objective_one_pr` fail on
-the order format only; every other governance check passes. A
-same-PR strategic continuation with a correctly formatted order is
-required before any merge.
+`test_initial_round_declares_new_pr_and_one_objective_one_pr` failed on
+the order format only; every other governance check passed. That
+state is historical: with the correctly formatted 207-b order
+committed and active, all nine governance checks pass on the 207-b
+head (see the 207-b static and governance checks above).
 
 ## Static and governance checks
 
@@ -228,8 +395,8 @@ required before any merge.
 - `scripts/check_documentation.py`: `DOCUMENTATION_CHECK=OK`.
 - `tests/unit/test_oap_governance.py`: 7 PASS, 2 FAIL, 0 skip — the two
   OAP governance FORMAT gates listed above fail on the restored
-  immutable order bytes (recorded without waiver); the other seven
-  governance checks pass.
+  immutable order bytes (recorded without waiver, 207-a head); the
+  other seven governance checks pass.
 
 ## Honesty and limitations
 
@@ -251,8 +418,14 @@ required before any merge.
 - Overall status is PARTIAL (FORMAT-GATE-FAILED): the product work and
  the focused product evidence above are complete and green, but this
  head fails the two OAP governance format gates on the immutable
- order bytes; the strategic same-PR continuation must resolve that
- before merge. No completion claim follows from this head.
+ order bytes; the strategic same-PR continuation (207-b) has since
+ resolved that on the same PR. No completion claim followed from the
+ 207-a head.
 - GitHub CI on the report head is pending at publication (treated as
   pending, not pass); strategic review and guarded merge are the root's
   gates.
+- Status on the 207-b head: the 207-a PARTIAL (FORMAT-GATE-FAILED)
+  state is historical; the active order is the correctly formatted
+  207-b, all nine governance checks pass, and the focused 207-b
+  evidence above is green. GitHub CI on the 207-b report head is
+  pending at publication (treated as pending, not pass).

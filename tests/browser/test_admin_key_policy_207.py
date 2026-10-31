@@ -4,7 +4,8 @@ Actual uvicorn app, real stylesheet, and real HTTP admin pages against
 the already-qualified owned, labeled, loopback-bound, tmpfs-backed
 PostgreSQL fixture. Exercises the G01-G03 acceptance workflow end to
 end: guided create with the provider tri-state (allow-all / selected /
-deny-all, JS mutual exclusion included), existing-key policy edits with
+deny-all, JS mutual exclusion included), strict document-mode create
+persisting the canonical version-1 policy, existing-key policy edits with
 empty-selection fail-closed and disabled-provider preservation, the
 per-member rate editor (set 1/10s + concurrency 1, zero and no-op
 refusals, clear-to-inherit with sibling preservation), the versioned
@@ -319,6 +320,11 @@ def _fetch_key_state(database_url: str, key_id: str) -> dict[str, Any]:
         rate_policy = rate_policy if isinstance(rate_policy, dict) else {}
         return {
             "providers": metadata.get("allowed_providers"),
+            "models": (bool(key.allow_all_models), list(key.allowed_models or [])),
+            "endpoints": (bool(key.allow_all_endpoints), list(key.allowed_endpoints or [])),
+            "cost_limit": (
+                str(key.cost_limit_eur) if key.cost_limit_eur is not None else None
+            ),
             "rate_requests": key.rate_limit_requests_per_minute,
             "rate_tokens": key.rate_limit_tokens_per_minute,
             "concurrency": key.max_concurrent_requests,
@@ -433,6 +439,15 @@ def _screenshot(page: object, name: str) -> None:
     page.screenshot(path=str(SCREENSHOT_DIR / name))  # type: ignore[attr-defined]
 
 
+def _screenshot_element(page: object, selector: str, name: str) -> None:
+    """Focused element capture: whole-page screenshots of these busy
+    pages showed only the page-top identity instead of the new controls."""
+    SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    locator = page.locator(selector)  # type: ignore[attr-defined]
+    locator.first.scroll_into_view_if_needed()  # type: ignore[attr-defined]
+    locator.first.screenshot(path=str(SCREENSHOT_DIR / name))  # type: ignore[attr-defined]
+
+
 def _error_snippet(html: str) -> str:
     """Fixed-label error extraction: only the flash message text is kept."""
     match = re.search(
@@ -485,6 +500,7 @@ def test_create_form_help_and_provider_tri_state(chromium, keypolicy_env) -> Non
             "create-validity-help",
             "create-limits-help",
             "create-policy-source-help",
+            "create-reason-help",
             "create-rate-limit-help",
             "create-policy-provider-mode-help",
         ):
@@ -503,6 +519,10 @@ def test_create_form_help_and_provider_tri_state(chromium, keypolicy_env) -> Non
             page.locator('input[name="rate_limit_requests_per_minute"]')
             .get_attribute("aria-describedby")
             == "create-rate-limit-help"
+        )
+        assert (
+            page.locator('input[name="reason"]').get_attribute("aria-describedby")
+            == "create-reason-help"
         )
         for mode in ("allow_all_providers", "provider_deny_all"):
             assert (
@@ -547,7 +567,18 @@ def test_create_form_help_and_provider_tri_state(chromium, keypolicy_env) -> Non
         page.check('input[name="allow_all_models"]')  # type: ignore[attr-defined]
         page.check('input[name="allow_all_endpoints"]')  # type: ignore[attr-defined]
         page.fill('input[name="reason"]', f"207 browser unrestricted {suffix}")  # type: ignore[attr-defined]
-        _screenshot(page, "key-create-form-desktop.png")
+        # Focused capture of the NEW create controls (policy source +
+        # provider selector), not the page-top identity.
+        _screenshot_element(
+            page,
+            'section.action-panel[aria-labelledby="create-policy-source-heading"]',
+            "key-create-policy-source.png",
+        )
+        _screenshot_element(
+            page,
+            'section.action-panel[aria-labelledby="create-policy-heading"]',
+            "key-create-provider-controls.png",
+        )
         status = _submit_form(page, page.locator("form[action='/admin/keys/create']"), "/admin/keys/create")
         assert status == 200  # email mode "none" renders the result page
         page.wait_for_url("**/admin/keys/create")  # type: ignore[attr-defined]
@@ -583,7 +614,11 @@ def test_create_form_help_and_provider_tri_state(chromium, keypolicy_env) -> Non
         page.goto(f"/admin/keys/{env['key_openai']}")  # type: ignore[attr-defined]
         page.wait_for_selector("#key-effective-policy-heading")  # type: ignore[attr-defined]
         assert "Allow-list: openai" in page.content()
-        _screenshot(page, "key-detail-effective-policy.png")
+        _screenshot_element(
+            page,
+            'section.detail-section[aria-labelledby="key-effective-policy-heading"]',
+            "key-detail-effective-policy.png",
+        )
 
         # --- key C: deny-all (explicit, labelled)
         page.goto("/admin/keys/create")  # type: ignore[attr-defined]
@@ -603,6 +638,110 @@ def test_create_form_help_and_provider_tri_state(chromium, keypolicy_env) -> Non
         page.wait_for_selector("#key-effective-policy-heading")  # type: ignore[attr-defined]
         assert "Deny all providers" in page.content()
         assert page.locator('input[name="provider_deny_all"]').is_checked()
+
+
+# ---------------------------------------------------------------------------
+# 1b) Document-mode create: strict version-1 document persists canonically
+# ---------------------------------------------------------------------------
+
+
+def test_create_document_mode_persists_canonical_policy(chromium, keypolicy_env) -> None:
+    env = keypolicy_env
+    suffix = env["suffix"]
+    owner_id = env["owner_id"]
+    document = {
+        "schema_version": 1,
+        "allowed_models": ["gpt-test"],
+        "allowed_endpoints": ["/v1/chat/completions"],
+        "allowed_providers": ["openai"],
+        "cost_limit_eur": "5.000000000",
+        "rate_limit_policy": {"requests_per_minute": 3, "window_seconds": 15},
+    }
+    with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
+        page = context.new_page()
+        _login(page, env)
+        page.goto("/admin/keys/create")  # type: ignore[attr-defined]
+        page.wait_for_selector("form[action='/admin/keys/create']")  # type: ignore[attr-defined]
+        _select_owner_js(page, owner_id)
+        page.fill('input[name="valid_days"]', "30")  # type: ignore[attr-defined]
+        # Document mode: the guided policy checkboxes reset to "off" (JS
+        # law) and the strict version-1 document becomes the SINGLE policy
+        # source; identity fields stay guided.
+        page.select_option('select[name="policy_source"]', "configuration")  # type: ignore[attr-defined]
+        assert not page.locator('input[name="allow_all_providers"]').is_checked()
+        assert not page.locator('input[name="allow_all_models"]').is_checked()
+        assert not page.locator('input[name="allow_all_endpoints"]').is_checked()
+        assert page.locator('[data-create-configuration-document]').is_visible()
+        page.fill(  # type: ignore[attr-defined]
+            'textarea[name="configuration_json"]', json.dumps(document)
+        )
+        page.fill('input[name="reason"]', f"207 browser document-mode {suffix}")  # type: ignore[attr-defined]
+        _screenshot_element(
+            page,
+            'section.action-panel[aria-labelledby="create-policy-source-heading"]',
+            "key-create-document-mode.png",
+        )
+        status = _submit_form(page, page.locator("form[action='/admin/keys/create']"), "/admin/keys/create")
+        assert status == 200, "document-mode create failed: " + _error_snippet(page.content())
+        page.wait_for_url("**/admin/keys/create")  # type: ignore[attr-defined]
+        # The intentional one-time plaintext result is functional: the key
+        # renders exactly once in the dedicated result panel. Booleans
+        # only, so a regression cannot print the generated value.
+        code = page.locator("section[aria-labelledby='created-plaintext-heading'] code")
+        assert code.count() == 1
+        key_text = code.first.inner_text().strip()  # type: ignore[attr-defined]
+        # Opaque boolean first: a failed assertion must never print the
+        # generated one-time value (fixed message only).
+        one_time_result_ok = (
+            key_text.startswith("sk-slaif-") and len(key_text) > len("sk-slaif-")
+        )
+        assert one_time_result_ok, (
+            "one-time plaintext result panel did not render a gateway key"
+        )
+        key_id = _latest_key_id(env["database_url"], owner_id)
+        env["key_document"] = key_id
+        # Navigate away from the one-time result BEFORE any capture.
+        page.goto(f"/admin/keys/{key_id}")  # type: ignore[attr-defined]
+        page.wait_for_selector("#key-effective-policy-heading")  # type: ignore[attr-defined]
+        assert "Allow-list: openai" in _flat(page)
+        # Persisted canonical state (direct DB oracle).
+        state = _fetch_key_state(env["database_url"], key_id)
+        assert state["providers"] == ["openai"]
+        assert state["models"] == (False, ["gpt-test"])
+        assert state["endpoints"] == (False, ["/v1/chat/completions"])
+        assert state["cost_limit"] == "5.000000000"
+        assert state["rate_requests"] == 3
+        assert state["window"] == 15
+        assert state["concurrency"] is None
+        assert state["rate_tokens"] is None
+        # The canonical export reproduces the same document values.
+        response = context.request.get(f"/admin/keys/{key_id}/configuration.json")  # type: ignore[attr-defined]
+        assert response.ok
+        exported = response.json()
+        assert exported["allowed_models"] == ["gpt-test"]
+        assert exported["allow_all_models"] is False
+        assert exported["allowed_endpoints"] == ["/v1/chat/completions"]
+        assert exported["allow_all_endpoints"] is False
+        assert exported["allowed_providers"] == ["openai"]
+        assert exported["cost_limit_eur"] == "5.000000000"
+        assert exported["rate_limit_policy"] == {
+            "requests_per_minute": 3,
+            "window_seconds": 15,
+        }
+        # The provider tri-state remains intact after the document-mode
+        # flow: selector mutual exclusion still works on the create form.
+        page.goto("/admin/keys/create")  # type: ignore[attr-defined]
+        page.wait_for_selector("form[action='/admin/keys/create']")  # type: ignore[attr-defined]
+        allow_all = page.locator('input[name="allow_all_providers"]')
+        deny_all = page.locator('input[name="provider_deny_all"]')
+        allow_all.check()
+        assert allow_all.is_checked()
+        deny_all.check()
+        assert deny_all.is_checked()
+        assert not allow_all.is_checked()
+        allow_all.check()
+        assert allow_all.is_checked()
+        assert not deny_all.is_checked()
 
 
 # ---------------------------------------------------------------------------
@@ -751,7 +890,11 @@ def test_rate_editor_workflow(chromium, keypolicy_env) -> None:
         assert "window_seconds: configured 10 (source: key)" in body
         assert "tokens_per_window: not limited by this member" in body
         assert "requests 1 / tokens inherited / concurrency 1 / window 10" in body
-        _screenshot(page, "key-detail-rate-editor.png")
+        _screenshot_element(
+            page,
+            'section.action-panel[aria-labelledby="key-rate-limits-heading"]',
+            "key-detail-rate-editor.png",
+        )
 
         after = _fetch_key_state(env["database_url"], key_id)
         assert after["rate_requests"] == 1
@@ -795,11 +938,12 @@ def test_configuration_export_and_update(chromium, keypolicy_env) -> None:
     with chromium.new_context(base_url=env["base_url"]) as context:  # type: ignore[attr-defined]
         page = context.new_page()
         _login(page, env)
-        # --- download first: allowlisted projection, private no-store
-        #     attachment. Every admin page render refreshes the session
-        #     CSRF token (existing admin design), so the form page must be
-        #     rendered LAST; fetching it before any other admin GET would
-        #     leave the form carrying a stale token.
+        # --- SAME-PAGE download (order 207-b requirement 2): the detail
+        #     page loads FIRST; the read-only attachment authenticates
+        #     WITHOUT rotating the stored CSRF token, so the still-
+        #     displayed form keeps its own token.
+        page.goto(f"/admin/keys/{key_id}")  # type: ignore[attr-defined]
+        page.wait_for_selector("form[action$='/configuration']")  # type: ignore[attr-defined]
         response = context.request.get(  # type: ignore[attr-defined]
             f"/admin/keys/{key_id}/configuration.json"
         )
@@ -813,9 +957,9 @@ def test_configuration_export_and_update(chromium, keypolicy_env) -> None:
         for forbidden in ("api_key", "token_hash", "owner", "cohort", "secret"):
             assert forbidden not in document, forbidden
 
-        # --- partial update through the same strict parser
-        page.goto(f"/admin/keys/{key_id}")  # type: ignore[attr-defined]
-        page.wait_for_selector("form[action$='/configuration']")  # type: ignore[attr-defined]
+        # --- partial update through the SAME still-displayed form (no
+        #     reload/goto/token swap): the attachment GET above left the
+        #     form's own CSRF token valid.
         form = page.locator("form[action$='/configuration']")
         document_text = json.dumps(
             {"schema_version": 1, "rate_limit_policy": {"requests_per_minute": 7}}
@@ -917,7 +1061,11 @@ def test_explain_route_read_only(chromium, keypolicy_env) -> None:
         assert report.locator("dt:has-text('Bounds')").count() == 1
         assert report.locator("dt:has-text('Not evaluated here')").count() == 1
         assert "configuration only" in page.content()
-        _screenshot(page, "key-explain-report.png")
+        _screenshot_element(
+            page,
+            'section.action-panel[aria-labelledby="key-explain-route-heading"]',
+            "key-explain-report.png",
+        )
 
         # --- unknown model: reportable blocked result
         form = page.locator("form[action$='/explain-route']")
@@ -1025,3 +1173,14 @@ def test_nojs_fallback_legacy_lazy_and_narrow_layout(chromium, keypolicy_env) ->
         scroll_width = page.evaluate("() => document.documentElement.scrollWidth")  # type: ignore[attr-defined]
         assert int(scroll_width) <= 480
         _screenshot(page, "key-detail-narrow.png")
+        # The busy policy/rate region fits the narrow viewport as well.
+        page.evaluate(  # type: ignore[attr-defined]
+            "() => document.getElementById('key-effective-policy-heading').scrollIntoView()"
+        )
+        _screenshot(page, "key-detail-narrow-policy.png")
+        # Focused capture of the NEW editable rate controls at 480px.
+        _screenshot_element(
+            page,
+            'section.action-panel[aria-labelledby="key-rate-limits-heading"]',
+            "key-detail-narrow-rate-editor.png",
+        )

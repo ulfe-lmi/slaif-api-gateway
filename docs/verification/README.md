@@ -10,6 +10,30 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-31 Objective 207-b GUI key policy repair verification`](gui-cli-parity.md)
+  (recorded 2026-10-31, same living record file as 207-a) - same-PR
+  repair of the demonstrated 207-a gaps, scoped by value kind
+  (recognized through the existing redaction rules, including
+  configured accepted key prefixes): credential-shaped MODEL
+  identifiers now refused with a fixed safe message before the shared
+  validators, and credential-shaped reason/retained-form values
+  masked in the re-rendered form, flash errors, audit notes, and
+  failure logs (a valid change with a credential-shaped reason still
+  succeeds, stored masked; the explain classifier is unchanged on
+  original input; ordinary values preserved); the configuration
+  attachment authenticates WITHOUT
+  rotating the form CSRF (browser-qualified detail -> download ->
+  SAME still-displayed form edit 303); and a GUI-side nonblank /
+  at-most-512-Unicode-character reason bound on the new/touched key
+  create/policy/rate/configuration mutations (the schema constant
+  was previously unused and the unchanged CLI is not claimed;
+  `maxlength` + visible help agree, refusal before mutation/audit).
+  65 unit PASS (49 A + 16 B), 101 directly-affected unit PASS, 12
+  owned-PostgreSQL PASS, 7 + 2 + 1 actual Chromium/owned-PG PASS
+  (focused element screenshots of the new controls), 9 governance
+  PASS with the formatted 207-b order active; 207-a history and its
+  PARTIAL (FORMAT-GATE-FAILED) state remain recorded; GitHub CI
+  pending at publication.
 - [`2026-10-31 Objective 207-a GUI key policy administration verification`](gui-cli-parity.md)
   (recorded 2026-10-31) - admin GUI G01-G03 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared code as

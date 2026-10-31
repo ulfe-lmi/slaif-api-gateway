@@ -270,6 +270,9 @@ def test_admin_key_create_form_postgres(migrated_postgres_url: str) -> None:
                 "cost_limit_eur": "19.000000000",
                 "token_limit_total": "1900",
                 "request_limit_total": "190",
+                # 207-a provider tri-state: explicit UNRESTRICTED (stored
+                # null) so no provider config rows are required.
+                "allow_all_providers": "true",
                 "allowed_models": "gpt-test\nopenrouter/test",
                 "allowed_endpoints": "/v1/chat/completions, /v1/models",
                 "rate_limit_requests_per_minute": "60",

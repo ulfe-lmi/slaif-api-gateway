@@ -219,6 +219,10 @@ def _create_payload(owner_id: uuid.UUID, cohort_id: uuid.UUID, mode: str) -> dic
         "valid_days": "30",
         "reason": f"dashboard email mode {mode}",
         "email_delivery_mode": mode,
+        # 207-a provider tri-state: explicit UNRESTRICTED (stored null) so
+        # the email-mode matrix is not blocked by the fail-closed
+        # empty-provider rule.
+        "allow_all_providers": "true",
         "allow_all_models": "true",
         "allow_all_endpoints": "true",
     }

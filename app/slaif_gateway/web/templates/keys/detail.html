@@ -178,12 +178,14 @@
           <span class="policy-selector-caption">{{ policy_inspection.rate_limits.count_semantics }}; source key = stored on this key, deployment = inherited default, default = runtime default.</span>
           {% for member_name in ("requests_per_window", "tokens_per_window", "concurrency", "window_seconds") %}
           {% set info = policy_inspection.rate_limits[member_name] %}
-          <div>
+          {% set token_member = member_name == "tokens_per_window" %}
+          {% set shown = info.configured if info.configured is not none else info.effective %}
+          <div{% if token_member and shown is not none %} title="{{ shown | num }} tokens"{% endif %}>
             {{ member_name }}:
             {% if info.configured is not none %}
-            configured {{ info.configured | num }} (source: {{ info.source }})
+            configured {{ (info.configured | tokm ~ "M tokens") if token_member else (info.configured | num) }} (source: {{ info.source }})
             {% elif info.effective is not none %}
-            inherited {{ info.effective | num }} (source: {{ info.source }})
+            inherited {{ (info.effective | tokm ~ "M tokens") if token_member else (info.effective | num) }} (source: {{ info.source }})
             {% else %}
             not limited by this member
             {% endif %}
@@ -210,12 +212,13 @@
         <dd>
           {% for quota_name in ("cost_eur", "tokens", "requests") %}
           {% set q = policy_inspection.quotas[quota_name] %}
-          <div>
+          {% set token_quota = quota_name == "tokens" %}
+          <div{% if token_quota and not q.unlimited %} title="{{ q.configured | num }} tokens configured, {{ q.remaining | num }} tokens remaining"{% endif %}>
             {{ quota_name }}:
             {% if q.unlimited %}
             unlimited (null, not zero)
             {% else %}
-            {{ q.configured | num }} configured, {{ q.remaining | num }} remaining after used and reserved
+            {{ (q.configured | tokm ~ "M tokens") if token_quota else (q.configured | num) }} configured, {{ (q.remaining | tokm ~ "M tokens") if token_quota else (q.remaining | num) }} remaining after used and reserved
             {% endif %}
           </div>
           {% endfor %}
@@ -234,8 +237,8 @@
           {% else %}
           absent
           {% endif %}
-          </dd>
         {% endif %}
+        </dd>
         <dt>Redis rate limiting</dt>
         <dd>
           {% if policy_inspection.redis_configuration.enabled %}
@@ -282,8 +285,9 @@
       {% include "keys/_policy_selector.html" %}
       <label>
         Audit reason
-        <input name="reason" value="{{ policy_form.reason }}" required autocomplete="off" placeholder="Required reason">
+        <input name="reason" value="{{ policy_form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="key-policy-reason-help">
       </label>
+      <p class="field-help" id="key-policy-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
       <button type="submit">Update request policy</button>
     </form>
   </section>
@@ -359,7 +363,7 @@
       {% if policy_inspection %}
       <p class="muted small">
         Currently configured (source): requests {{ (policy_inspection.rate_limits.requests_per_window.configured | num) if policy_inspection.rate_limits.requests_per_window.configured is not none else "inherited" }}
-        / tokens {{ (policy_inspection.rate_limits.tokens_per_window.configured | num) if policy_inspection.rate_limits.tokens_per_window.configured is not none else "inherited" }}
+        / tokens {{ (policy_inspection.rate_limits.tokens_per_window.configured | tokm ~ "M") if policy_inspection.rate_limits.tokens_per_window.configured is not none else "inherited" }}
         / concurrency {{ (policy_inspection.rate_limits.concurrency.configured | num) if policy_inspection.rate_limits.concurrency.configured is not none else "inherited" }}
         / window {{ (policy_inspection.rate_limits.window_seconds.configured | num) if policy_inspection.rate_limits.window_seconds.configured is not none else "standard" }}.
         Effective values are shown in the "Effective Policy" section above.
@@ -367,8 +371,9 @@
       {% endif %}
       <label>
         Audit reason
-        <input name="reason" value="{{ rate_form.reason }}" required autocomplete="off" placeholder="Required reason">
+        <input name="reason" value="{{ rate_form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="key-rate-reason-help">
       </label>
+      <p class="field-help" id="key-rate-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
       <button type="submit">Update operational rate limits</button>
     </form>
     {% if not redis_rate_limits_enabled %}
@@ -719,8 +724,9 @@
       </label>
       <label>
         Audit reason
-        <input name="reason" value="{{ configuration_form.reason }}" required autocomplete="off" placeholder="Required reason">
+        <input name="reason" value="{{ configuration_form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="key-config-reason-help">
       </label>
+      <p class="field-help" id="key-config-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
       <button type="submit">Apply configuration update</button>
     </form>
   </section>

@@ -675,19 +675,23 @@ and
 distinction, formatter matrix, ASGI render facts, actual
 Chromium/owned-PG facts, screenshots, raw sort/input law, and
 limitations) and
-`docs/verification/gui-cli-parity.md` for the 207-a key-policy
-administration record (provider tri-state, advanced configuration
-import/export, existing-key rate editor, effective inspection and
-explain model access, no-JS fallback facts, and screenshots).
+`docs/verification/gui-cli-parity.md` for the 207 (207-a + 207-b)
+key-policy administration record (provider tri-state, advanced
+configuration import/export, existing-key rate editor, effective
+inspection and explain model access, the 207-b privacy/download/
+reason-bound repairs, no-JS fallback facts, and screenshots).
 
 
-## 8. Key policy administration (207-a)
+## 8. Key policy administration (207-a + 207-b)
 
-This section documents the key-management surfaces delivered by objective
-207-a (G01-G03 of `docs/MISSING_GUI_FUNCTIONALITY.md`). They reuse the
-existing shared services; no new database schema, table, or client/server
-module was added, and no new sortable tables were introduced (the rate
-editor and inspection blocks are grouped field cards, not tables).
+This section documents the key-management surfaces delivered by
+objective 207-a (G01-G03 of `docs/MISSING_GUI_FUNCTIONALITY.md`) and
+repaired by 207-b on the same PR (credential privacy at the new/touched
+seams, the non-rotating configuration download, and the GUI-side
+reason bound). They reuse the existing shared services; no new database
+schema, table, or client/server module was added, and no new sortable
+tables were introduced (the rate editor and inspection blocks are
+grouped field cards, not tables).
 
 ### 8.1 Navigation
 
@@ -746,11 +750,31 @@ Non-goals: the document carries policy only - never identity (owner,
 cohort, validity, delivery), never secrets, never server environment.
 Existing bound client-module repin/removal stays blocked and must use the
 reviewed compatibility migration path, not this editor. Mutations require
-the confirmation checkbox plus a bounded nonblank reason (actor from the
-session); a rejected document is never redisplayed and never echoed into
-the flash, logs, or audit. The download link serves only the service's
-allowlisted projection as an `attachment` with `Cache-Control: no-store`
-and a `slaif-key-configuration-<public_key_id>.json` filename.
+the confirmation checkbox plus a bounded reason — nonblank, at most
+512 Unicode characters, enforced server-side on these GUI seams with a
+fixed safe refusal before mutation or audit, and matching `maxlength`
+plus visible field help on the field (207-b; the unchanged CLI is not
+claimed to enforce this bound) — with the actor from the session. A
+rejected document is never redisplayed. Credential protection at
+these seams is scoped by value kind (recognized through the existing
+redaction rules, including configured accepted key prefixes):
+credential-shaped MODEL identifiers in the document's
+`allowed_models` are refused with a fixed safe message before the
+shared validators (whose safe message would embed the rejected
+model); credential-shaped values in the reason or other retained
+fields are MASKED — a valid change with a credential-shaped reason
+still succeeds and is stored/redisplayed masked. A recognized shape
+never reaches the re-rendered form, the flash, the logs, the audit
+note, or the export, and useful ordinary values are preserved. The
+download link serves
+only the service's allowlisted projection as an `attachment` with
+`Cache-Control: no-store` and a
+`slaif-key-configuration-<public_key_id>.json` filename; it authenticates
+through a non-rotating read-only session context (same real
+active/expired/revoked session checks, same login behavior) that does
+NOT refresh the stored CSRF token, so the detail page can be downloaded
+and then edited with its own still-displayed form (browser-qualified
+in 207-b).
 
 In document mode on the create page, the guided POLICY controls are reset
 to off by the page script (the server additionally rejects guided policy
@@ -768,7 +792,9 @@ and a submission that changes nothing is refused with a fixed message.
 Clearing the window member has no deployment default: it falls back to the
 runtime's standard window. The editor applies the shared
 `KeyService.update_gateway_key_rate_limits` operation with the session
-actor and the bounded reason; lifetime quotas, lazy mode, validity, replay/
+actor and the bounded reason (nonblank, at most 512 Unicode
+characters, GUI-side bound with the fixed safe refusal before
+mutation or audit); lifetime quotas, lazy mode, validity, replay/
 module binding, material, usage, and reservations are never touched.
 Readable values note that enforcement happens only while
 `ENABLE_REDIS_RATE_LIMITS` is true; the page says so explicitly when Redis
@@ -795,11 +821,21 @@ partial answer.
   inherit/deny meanings, and examples where useful); help is text, not
   placeholder-only.
 - All mutations go through the existing session/CSRF contexts with the
-  session as actor; reasons are bounded nonblank text; confirmations are
-  explicit checkboxes where the action is destructive or ambiguous.
-- Fixed safe error messages never echo submitted values; credential-shaped
-  canaries in rejected documents appear nowhere in responses, logs, audit
-  notes, or exports; downloads are private/no-store; no plaintext key
+  session as actor; reasons on the new/touched key mutations are
+  nonblank and at most 512 Unicode characters (server-side refusal
+  before mutation or audit; this corrects the 207-a record's
+  unqualified "bounded" wording); confirmations are explicit
+  checkboxes where the action is destructive or ambiguous.
+- Fixed safe error messages never echo submitted values. On the 207
+  surfaces, credential-shaped model identifiers are refused with a
+  fixed safe message BEFORE reaching the shared validators, and
+  credential-shaped values in reasons and the other retained form
+  values are masked in every retained surface — the re-rendered
+  form, flash errors, audit notes, and failure logs — while useful
+  ordinary values remain readable for correction. Explain model
+  access keeps the unchanged shared classifier on the original input
+  and masks only its retained form display. Downloads are
+  private/no-store and do not rotate the form CSRF; no plaintext key
   material is added to URLs, forms, or local storage.
 
 ### 8.7 Upgrade notes
@@ -810,4 +846,7 @@ keys stay deny-all, and stored allow-lists keep their values. The behavior
 change for operators: a POST that leaves the provider selection empty with
 no mode checked now **fails closed** instead of silently meaning
 unrestricted - creating an unrestricted key requires the explicit
-"Allow all enabled providers" mode (the guided default).
+"Allow all enabled providers" mode (the guided default). A reason
+longer than 512 characters on a new/touched key mutation is refused
+with a fixed message (no mutation, no audit row); the affected fields
+show `maxlength=512` and the matching visible help.

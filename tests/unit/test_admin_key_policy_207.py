@@ -29,6 +29,7 @@ from slaif_gateway.schemas.keys import CreatedGatewayKey
 from slaif_gateway.services.admin_session_service import AdminSessionContext
 from slaif_gateway.services.admin_key_dashboard import AdminKeyNotFoundError
 from slaif_gateway.services.key_errors import KeyManagementError
+from slaif_gateway.utils.crypto import is_plausible_gateway_key
 from tests.unit.test_admin_key_actions_routes import _app, _login_for_actions
 
 CANARY = "sk-slaif-canary-" + "0" * 40
@@ -1158,3 +1159,601 @@ def test_create_document_mode_error_scrubs_configuration_json(monkeypatch) -> No
     assert response.status_code == 400
     assert "file: File is not valid JSON." in response.text
     assert CANARY not in response.text
+
+
+# ---------------------------------------------------------------------------
+# 207-b: key-form privacy seams, reason bounds, and non-rotating download
+# ---------------------------------------------------------------------------
+
+# A full synthetic SLAIF key shape (public id + secret part) so the
+# configured-accepted-prefix redaction path is exercised, not only the
+# provider-shape pattern. The 43-character URL-safe secret makes the
+# shape PLAUSIBLE to the existing accepted-prefix parser, so the
+# gateway-key redaction branch (not the generic fallback) is proven.
+# No real credential; fixed synthetic values.
+CANARY_FULL_KEY = "sk-slaif-" + "a" * 16 + "." + "b" * 43
+assert is_plausible_gateway_key(CANARY_FULL_KEY, ("sk-slaif-",))
+
+MODEL_CREDENTIAL_REFUSAL = (
+    "Allowed models must be route model identifiers, not "
+    "credential-shaped values."
+)
+
+REASON_TOO_LONG = "Audit reason is too long."
+
+
+def _reason_512() -> str:
+    return "r" * 512
+
+
+def _reason_513() -> str:
+    return "r" * 513
+
+
+def test_create_document_mode_canary_model_refused_without_echo(monkeypatch) -> None:
+    """Domain safe messages embed rejected model names; the GUI seam must
+    refuse credential-shaped models BEFORE the shared validator runs so
+    the 400 HTML can never carry the submitted value (trailing-punctuation
+    context where plain text redaction does not recognize the shape)."""
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+        raise AssertionError("service must not run for a credential model")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    document = json.dumps(
+        {
+            "schema_version": 1,
+            "allowed_models": [CANARY],
+            "allow_all_endpoints": True,
+        }
+    )
+    response = _create_doc_post(monkeypatch, {"configuration_json": document})
+    assert response.status_code == 400
+    assert MODEL_CREDENTIAL_REFUSAL in response.text
+    assert CANARY not in response.text
+    assert called is False
+
+
+def test_create_document_mode_full_key_shape_model_refused_without_echo(monkeypatch) -> None:
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+        raise AssertionError("service must not run for a credential model")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    document = json.dumps(
+        {
+            "schema_version": 1,
+            "allowed_models": [CANARY_FULL_KEY],
+            "allow_all_endpoints": True,
+        }
+    )
+    response = _create_doc_post(monkeypatch, {"configuration_json": document})
+    assert response.status_code == 400
+    assert MODEL_CREDENTIAL_REFUSAL in response.text
+    assert CANARY_FULL_KEY not in response.text
+    # The secret part must not survive even in redacted shape.
+    assert "b" * 43 not in response.text
+    assert called is False
+
+
+def test_create_guided_canary_model_refused_without_echo(monkeypatch) -> None:
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+        raise AssertionError("service must not run for a credential model")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    response = _create_doc_post(
+        monkeypatch,
+        {
+            "policy_source": "guided",
+            "allowed_models": CANARY,
+            "allowed_endpoints": "/v1/chat/completions",
+            "allow_all_providers": "true",
+        },
+    )
+    assert response.status_code == 400
+    assert MODEL_CREDENTIAL_REFUSAL in response.text
+    assert CANARY not in response.text
+    assert called is False
+
+
+def test_policy_update_canary_model_refused_without_echo(monkeypatch) -> None:
+    key_id = uuid.uuid4()
+    _patch_gateway_key_lookup(monkeypatch, _key_row(id=key_id))
+    called = False
+
+    async def update_gateway_key_policy(self, payload):
+        nonlocal called
+        called = True
+        raise AssertionError("service must not run for a credential model")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_policy",
+        update_gateway_key_policy,
+    )
+    client = TestClient(_app())
+    _login_with_render(monkeypatch, client, _detail(id=key_id))
+    response = client.post(
+        f"/admin/keys/{key_id}/policy",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "allowed_models": CANARY,
+            "allowed_endpoints": "/v1/chat/completions",
+            "allow_all_providers": "true",
+            "reason": "adjust models",
+        },
+    )
+    assert response.status_code == 400
+    assert MODEL_CREDENTIAL_REFUSAL in response.text
+    assert CANARY not in response.text
+    assert called is False
+
+
+def test_configuration_post_canary_model_refused_without_echo(monkeypatch) -> None:
+    key_id = uuid.uuid4()
+    called = False
+
+    async def update_gateway_key_configuration(self, payload):
+        nonlocal called
+        called = True
+        raise AssertionError("service must not run for a credential model")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_configuration",
+        update_gateway_key_configuration,
+    )
+    document = json.dumps(
+        {
+            "schema_version": 1,
+            "allowed_models": [CANARY_FULL_KEY],
+            "allow_all_models": True,
+        }
+    )
+    response = _config_post(key_id, monkeypatch, document)
+    assert response.status_code == 400
+    assert MODEL_CREDENTIAL_REFUSAL in response.text
+    assert CANARY_FULL_KEY not in response.text
+    assert "b" * 43 not in response.text
+    assert called is False
+
+
+def test_configuration_post_null_allowed_models_still_clears(monkeypatch) -> None:
+    """Explicit null is the legal clear for allowed_models: the
+    model-shape guard must skip absent and null, not iterate them."""
+    key_id = uuid.uuid4()
+    seen = {}
+
+    async def update_gateway_key_configuration(self, payload):
+        seen["payload"] = payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_configuration",
+        update_gateway_key_configuration,
+    )
+    document = json.dumps(
+        {"schema_version": 1, "allowed_models": None, "allow_all_models": True}
+    )
+    response = _config_post(key_id, monkeypatch, document)
+    assert response.status_code == 303
+    assert seen["payload"].configuration.allowed_models is None
+    assert seen["payload"].configuration.allow_all_models is True
+
+
+def test_configuration_post_canary_reason_refused_without_echo(monkeypatch) -> None:
+    """Malformed document + credential-shaped reason: the reason is a
+    retained re-displayed form value and must come back masked."""
+    key_id = uuid.uuid4()
+    response = _config_post(
+        key_id, monkeypatch, "{not json", reason="rotate " + CANARY + " now"
+    )
+    assert response.status_code == 400
+    assert "file: File is not valid JSON." in response.text
+    assert CANARY not in response.text
+    # The masked shape, not the value, is what the operator sees back.
+    assert "***" in response.text
+
+
+def test_rate_limits_canary_value_refused_without_echo(monkeypatch) -> None:
+    """A credential-shaped value in a numeric rate input is refused with
+    the fixed numeric message and the input redisplay masked."""
+    key_id = uuid.uuid4()
+    _patch_gateway_key_lookup(monkeypatch, _key_row(id=key_id))
+    called = False
+
+    async def update_gateway_key_rate_limits(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_rate_limits",
+        update_gateway_key_rate_limits,
+    )
+    client = TestClient(_app())
+    _login_with_render(monkeypatch, client, _detail(id=key_id))
+    response = client.post(
+        f"/admin/keys/{key_id}/rate-limits",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "rate_action_concurrency": "set",
+            "rate_value_concurrency": CANARY,
+            "reason": "try credential-shaped rate",
+        },
+    )
+    assert response.status_code == 400
+    assert "Concurrent requests must be a positive whole number." in response.text
+    assert CANARY not in response.text
+    assert called is False
+
+
+def test_explain_route_canary_model_not_redisplayed(monkeypatch) -> None:
+    key_id = uuid.uuid4()
+    _patch_gateway_key_lookup(monkeypatch, _key_row(id=key_id))
+    seen = {}
+
+    async def explain_model_route_access(**kwargs):
+        seen["kwargs"] = kwargs
+        return {
+            "note": "Configuration-only view.",
+            "verdict": "blocked",
+            "message": "The requested model is not allowed for this key",
+            "blocker": "model-not-allowed-for-key",
+            "resolution": None,
+            "capability_checks": None,
+            "allowlist_intersection": None,
+            "unevaluated": [],
+            "bounds": {
+                "route_candidate_bound": 1000,
+                "routes_examined": None,
+                "possible_unexamined_routes": None,
+            },
+        }
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin.explain_model_route_access",
+        explain_model_route_access,
+    )
+    client = TestClient(_app())
+    _login_with_render(monkeypatch, client, _detail(id=key_id))
+    response = client.post(
+        f"/admin/keys/{key_id}/explain-route",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "endpoint": "/v1/chat/completions",
+            "model": CANARY,
+        },
+    )
+    assert response.status_code == 200
+    assert CANARY not in response.text
+    # The shared classifier still receives the ORIGINAL input; only the
+    # retained form display is masked.
+    assert seen["kwargs"]["requested_model"] == CANARY
+
+    ordinary = client.post(
+        f"/admin/keys/{key_id}/explain-route",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "endpoint": "/v1/chat/completions",
+            "model": "gpt-test-model",
+        },
+    )
+    assert ordinary.status_code == 200
+    # Ordinary model text passes through the seam byte-identical.
+    assert 'value="gpt-test-model"' in ordinary.text
+
+
+def test_rate_limits_reason_512_ok_513_refused(monkeypatch) -> None:
+    key_id = uuid.uuid4()
+    _patch_gateway_key_lookup(monkeypatch, _key_row(id=key_id, requests=60))
+    seen = {}
+
+    async def update_gateway_key_rate_limits(self, payload):
+        seen.setdefault("payloads", []).append(payload)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_rate_limits",
+        update_gateway_key_rate_limits,
+    )
+    client = TestClient(_app())
+    _login_with_render(monkeypatch, client, _detail(id=key_id))
+
+    ok = client.post(
+        f"/admin/keys/{key_id}/rate-limits",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "rate_action_requests_per_window": "set",
+            "rate_value_requests_per_window": "1",
+            "reason": _reason_512(),
+        },
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303
+    assert len(seen["payloads"]) == 1
+    assert seen["payloads"][0].reason == _reason_512()
+
+    too_long = client.post(
+        f"/admin/keys/{key_id}/rate-limits",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "rate_action_requests_per_window": "set",
+            "rate_value_requests_per_window": "2",
+            "reason": _reason_513(),
+        },
+    )
+    assert too_long.status_code == 400
+    assert REASON_TOO_LONG in too_long.text
+    assert len(seen["payloads"]) == 1  # no mutation on refusal
+
+
+def test_rate_limits_reason_unicode_512_chars_accepted(monkeypatch) -> None:
+    """The bound is Unicode characters, not bytes or code units."""
+    key_id = uuid.uuid4()
+    _patch_gateway_key_lookup(monkeypatch, _key_row(id=key_id, requests=60))
+    seen = {}
+
+    async def update_gateway_key_rate_limits(self, payload):
+        seen["payload"] = payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_rate_limits",
+        update_gateway_key_rate_limits,
+    )
+    client = TestClient(_app())
+    _login_with_render(monkeypatch, client, _detail(id=key_id))
+    reason = "\u00e9" * 512  # 512 non-ASCII characters
+    assert len(reason) == 512
+    response = client.post(
+        f"/admin/keys/{key_id}/rate-limits",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "rate_action_requests_per_window": "set",
+            "rate_value_requests_per_window": "1",
+            "reason": reason,
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert seen["payload"].reason == reason
+
+
+def test_configuration_post_reason_513_refused(monkeypatch) -> None:
+    key_id = uuid.uuid4()
+    called = False
+
+    async def update_gateway_key_configuration(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_configuration",
+        update_gateway_key_configuration,
+    )
+    document = json.dumps({"schema_version": 1, "cost_limit_eur": "5"})
+    response = _config_post(key_id, monkeypatch, document, reason=_reason_513())
+    assert response.status_code == 400
+    assert REASON_TOO_LONG in response.text
+    assert called is False
+
+    ok = _config_post(key_id, monkeypatch, document, reason=_reason_512())
+    assert ok.status_code == 303
+    assert called is True
+
+
+def test_policy_update_reason_513_refused(monkeypatch) -> None:
+    key_id = uuid.uuid4()
+    _patch_gateway_key_lookup(monkeypatch, _key_row(id=key_id))
+    called = False
+
+    async def update_gateway_key_policy(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_policy",
+        update_gateway_key_policy,
+    )
+    client = TestClient(_app())
+    _login_with_render(monkeypatch, client, _detail(id=key_id))
+    response = client.post(
+        f"/admin/keys/{key_id}/policy",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "allow_all_providers": "true",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
+            "reason": _reason_513(),
+        },
+    )
+    assert response.status_code == 400
+    assert REASON_TOO_LONG in response.text
+    assert called is False
+
+
+def test_create_guided_reason_513_refused_before_service(monkeypatch) -> None:
+    called = False
+
+    async def create_gateway_key(self, payload):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.create_gateway_key",
+        create_gateway_key,
+    )
+    response = _create_doc_post(
+        monkeypatch,
+        {
+            "policy_source": "guided",
+            "allow_all_providers": "true",
+            "allow_all_models": "true",
+            "allow_all_endpoints": "true",
+            "reason": _reason_513(),
+        },
+    )
+    assert response.status_code == 400
+    assert REASON_TOO_LONG in response.text
+    assert called is False
+
+
+def test_rate_limits_canary_reason_masked_on_success_and_refusal(monkeypatch) -> None:
+    """Credential protection applies to the stored audit reason (success)
+    and to the retained form on refusal alike."""
+    key_id = uuid.uuid4()
+    _patch_gateway_key_lookup(monkeypatch, _key_row(id=key_id, requests=60))
+    seen = {}
+
+    async def update_gateway_key_rate_limits(self, payload):
+        seen["payload"] = payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_rate_limits",
+        update_gateway_key_rate_limits,
+    )
+    client = TestClient(_app())
+    _login_with_render(monkeypatch, client, _detail(id=key_id))
+
+    ok = client.post(
+        f"/admin/keys/{key_id}/rate-limits",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "rate_action_requests_per_window": "set",
+            "rate_value_requests_per_window": "1",
+            "reason": "rotate " + CANARY + " for ops",
+        },
+        follow_redirects=False,
+    )
+    assert ok.status_code == 303
+    assert CANARY not in seen["payload"].reason
+    assert "rotate *** for ops" == seen["payload"].reason
+
+    refused = client.post(
+        f"/admin/keys/{key_id}/rate-limits",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "rate_action_requests_per_window": "set",
+            "rate_value_requests_per_window": "0",
+            "reason": "try zero " + CANARY,
+        },
+    )
+    assert refused.status_code == 400
+    assert CANARY not in refused.text
+
+
+def test_configuration_download_does_not_rotate_csrf(monkeypatch) -> None:
+    """The read-only attachment authenticates WITHOUT rotating the stored
+    form CSRF: the still-displayed detail form keeps a valid token, and a
+    same-page mutation with that token succeeds."""
+    key_id = uuid.uuid4()
+    _patch_gateway_key_lookup(monkeypatch, _key_row(id=key_id, requests=60))
+    state = {"token": "csrf-t1", "rotations": 0}
+
+    admin_user = _admin_user()
+
+    def _session():
+        session = AdminSession(
+            id=uuid.uuid4(),
+            admin_user_id=admin_user.id,
+            session_token_hash="sha256:session",
+            csrf_token_hash="sha256:csrf",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        session.admin_user = admin_user
+        return session
+
+    async def validate_admin_session(self, **kwargs):
+        return AdminSessionContext(
+            admin_user=admin_user, admin_session=_session()
+        )
+
+    async def refresh_csrf_token(self, **kwargs):
+        state["rotations"] += 1
+        state["token"] = f"csrf-t{state['rotations'] + 1}"
+        return state["token"]
+
+    def verify_session_csrf_token(self, admin_session, csrf_token):
+        return csrf_token == state["token"]
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.validate_admin_session",
+        validate_admin_session,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.refresh_csrf_token",
+        refresh_csrf_token,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.verify_session_csrf_token",
+        verify_session_csrf_token,
+    )
+
+    async def get_key_detail(self, gateway_key_id):
+        return _detail(id=key_id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.get_key_detail",
+        get_key_detail,
+    )
+
+    async def export_gateway_key_configuration(self, gateway_key_id):
+        assert gateway_key_id == key_id
+        return {"schema_version": 1}
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.export_gateway_key_configuration",
+        export_gateway_key_configuration,
+    )
+
+    seen = {}
+
+    async def update_gateway_key_rate_limits(self, payload):
+        seen["payload"] = payload
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.key_service.KeyService.update_gateway_key_rate_limits",
+        update_gateway_key_rate_limits,
+    )
+
+    client = TestClient(_app())
+    client.cookies.set("slaif_admin_session", "session-plaintext")
+
+    detail = client.get(f"/admin/keys/{key_id}")
+    assert detail.status_code == 200
+    assert state["rotations"] == 1
+    displayed_token = state["token"]
+
+    rotations_before_download = state["rotations"]
+    download = client.get(f"/admin/keys/{key_id}/configuration.json")
+    assert download.status_code == 200
+    # The attachment authenticated the session but did NOT rotate it.
+    assert state["rotations"] == rotations_before_download
+
+    # The SAME still-displayed token now completes the same-page edit.
+    edited = client.post(
+        f"/admin/keys/{key_id}/rate-limits",
+        data={
+            "csrf_token": displayed_token,
+            "rate_action_requests_per_window": "set",
+            "rate_value_requests_per_window": "1",
+            "reason": "same-page edit after download",
+        },
+        follow_redirects=False,
+    )
+    assert edited.status_code == 303
+    assert seen["payload"].reason == "same-page edit after download"

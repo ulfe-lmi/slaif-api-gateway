@@ -21,7 +21,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from slaif_gateway.config import Settings
-from slaif_gateway.db.models import AuditLog, GatewayKey, OneTimeSecret, ProviderConfig
+from slaif_gateway.db.models import (
+    AdminSession,
+    AuditLog,
+    GatewayKey,
+    OneTimeSecret,
+    ProviderConfig,
+)
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.cohorts import CohortsRepository
 from slaif_gateway.db.repositories.institutions import InstitutionsRepository
@@ -811,3 +817,256 @@ def test_detail_inspection_matches_shared_cli_projection(migrated_postgres_url: 
         assert "Allow-list: openai" in page.text
         assert "requests_per_window" in page.text
         assert "77" in page.text
+
+
+# ---------------------------------------------------------------------------
+# 207-b: non-rotating download auth, reason bounds, canary non-persistence
+# ---------------------------------------------------------------------------
+
+
+async def _key_count_for_owner(database_url: str, owner_id: uuid.UUID) -> int:
+    engine = _engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            result = await session.execute(
+                select(func.count())
+                .select_from(GatewayKey)
+                .where(GatewayKey.owner_id == owner_id)
+            )
+            return int(result.scalar_one())
+    finally:
+        await engine.dispose()
+
+
+async def _any_audit_note_contains(database_url: str, needle: str) -> bool:
+    engine = _engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            result = await session.execute(
+                select(AuditLog.note).where(AuditLog.note.like(f"%{needle}%"))
+            )
+            return result.first() is not None
+    finally:
+        await engine.dispose()
+
+
+async def _expire_admin_sessions(database_url: str, admin_id: uuid.UUID) -> None:
+    engine = _engine(database_url)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            async with session.begin():
+                result = await session.execute(
+                    select(AdminSession).where(AdminSession.admin_user_id == admin_id)
+                )
+                for row in result.scalars().all():
+                    row.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    finally:
+        await engine.dispose()
+
+
+def test_configuration_download_does_not_rotate_same_page_csrf(
+    migrated_postgres_url: str,
+) -> None:
+    """REAL CSRF service: page renders rotate the stored token, the
+    read-only attachment must not, so the still-displayed form token
+    completes the same-page edit; expired sessions are refused on the
+    attachment too."""
+    data = _seed_sync(migrated_postgres_url)
+    owner_id = data["owner_id"]
+    app = create_app(_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        _login(client, data)
+        _create_key(
+            client,
+            {
+                "allow_all_providers": "true",
+                "allow_all_models": "true",
+                "allow_all_endpoints": "true",
+                "reason": "207-b download csrf key",
+            },
+            owner_id=owner_id,
+        )
+        key = asyncio_run(_latest_key(migrated_postgres_url, owner_id))
+
+        detail = client.get(f"/admin/keys/{key.id}")
+        assert detail.status_code == 200
+        displayed_csrf = _csrf_from_html(detail.text)
+
+        download = client.get(f"/admin/keys/{key.id}/configuration.json")
+        assert download.status_code == 200
+        assert download.headers["content-type"].startswith("application/json")
+        assert "no-store" in download.headers.get("cache-control", "")
+        assert download.headers["content-disposition"].startswith("attachment")
+        document = json.loads(download.text)
+        assert document["schema_version"] == 1
+        # The attachment carries the canonical allowlisted projection:
+        # unrestricted providers export as null.
+        assert document["allowed_providers"] is None
+
+        # Same-page edit with THAT SAME still-displayed token: a rotated
+        # (or invalidated) token would 400 Invalid CSRF here.
+        edited = client.post(
+            f"/admin/keys/{key.id}/rate-limits",
+            data={
+                "csrf_token": displayed_csrf,
+                "rate_action_requests_per_window": "set",
+                "rate_value_requests_per_window": "5",
+                "rate_action_window": "set",
+                "rate_value_window": "30",
+                "reason": "same-page edit after download",
+            },
+            follow_redirects=False,
+        )
+        assert edited.status_code == 303
+        after = asyncio_run(_latest_key(migrated_postgres_url, owner_id))
+        assert after.rate_limit_requests_per_minute == 5
+        assert after.metadata_json["rate_limit_policy"]["window_seconds"] == 30
+        assert after.rate_limit_tokens_per_minute is None
+        audit = asyncio_run(_last_audit(migrated_postgres_url, "update_key_rate_limits"))
+        assert audit is not None
+        assert audit.note == "same-page edit after download"
+
+        # The real CSRF service still rotates on page renders: the token
+        # displayed BEFORE this fresh render is now refused, proving the
+        # success above came from non-rotation, not an always-accept
+        # token check.
+        client.get(f"/admin/keys/{key.id}")
+        stale = client.post(
+            f"/admin/keys/{key.id}/rate-limits",
+            data={
+                "csrf_token": displayed_csrf,
+                "rate_action_requests_per_window": "set",
+                "rate_value_requests_per_window": "6",
+                "reason": "stale token control",
+            },
+        )
+        assert stale.status_code == 400
+        assert "Invalid CSRF token." in stale.text
+        unchanged = asyncio_run(_latest_key(migrated_postgres_url, owner_id))
+        assert unchanged.rate_limit_requests_per_minute == 5
+
+        # Expired session: same refused-redirect law on the attachment.
+        asyncio_run(_expire_admin_sessions(migrated_postgres_url, data["admin_id"]))
+        expired = client.get(
+            f"/admin/keys/{key.id}/configuration.json", follow_redirects=False
+        )
+        assert expired.status_code == 303
+        assert expired.headers["location"] == "/admin/login"
+
+
+def test_rate_reason_bounds_512_valid_513_refused_no_mutation(
+    migrated_postgres_url: str,
+) -> None:
+    data = _seed_sync(migrated_postgres_url)
+    owner_id = data["owner_id"]
+    app = create_app(_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        _login(client, data)
+        _create_key(
+            client,
+            {
+                "allow_all_providers": "true",
+                "allow_all_models": "true",
+                "allow_all_endpoints": "true",
+                "reason": "207-b reason bounds key",
+            },
+            owner_id=owner_id,
+        )
+        key = asyncio_run(_latest_key(migrated_postgres_url, owner_id))
+        page = client.get(f"/admin/keys/{key.id}")
+        csrf = _csrf_from_html(page.text)
+        # The seed/owner is shared across this module, so prior
+        # rate-edit audits exist: the refusal is proven by the audit
+        # baseline, not by a global "no such audit ever" claim.
+        audits_before = asyncio_run(_audit_count(migrated_postgres_url))
+
+        reason_513 = "b" * 513
+        too_long = client.post(
+            f"/admin/keys/{key.id}/rate-limits",
+            data={
+                "csrf_token": csrf,
+                "rate_action_requests_per_window": "set",
+                "rate_value_requests_per_window": "42",
+                "reason": reason_513,
+            },
+        )
+        assert too_long.status_code == 400
+        assert "Audit reason is too long." in too_long.text
+        unchanged = asyncio_run(_latest_key(migrated_postgres_url, owner_id))
+        assert unchanged.rate_limit_requests_per_minute is None
+        assert asyncio_run(_audit_count(migrated_postgres_url)) == audits_before
+
+        reason_512 = "b" * 512
+        ok = client.post(
+            f"/admin/keys/{key.id}/rate-limits",
+            data={
+                "csrf_token": csrf,
+                "rate_action_requests_per_window": "set",
+                "rate_value_requests_per_window": "42",
+                "reason": reason_512,
+            },
+            follow_redirects=False,
+        )
+        assert ok.status_code == 303
+        after = asyncio_run(_latest_key(migrated_postgres_url, owner_id))
+        assert after.rate_limit_requests_per_minute == 42
+        audit = asyncio_run(_last_audit(migrated_postgres_url, "update_key_rate_limits"))
+        assert audit is not None
+        assert audit.note == reason_512
+        assert len(audit.note) == 512
+
+
+def test_create_document_canary_model_refused_without_persistence(
+    migrated_postgres_url: str,
+) -> None:
+    """The demonstrated (a) case end-to-end: a schema-valid document whose
+    allowed_models carries a recognized credential shape is refused before
+    the shared validators and the service; nothing persists, no audit note
+    carries the canary, and the 400 HTML echoes nothing."""
+    data = _seed_sync(migrated_postgres_url)
+    owner_id = data["owner_id"]
+    app = create_app(_settings(migrated_postgres_url))
+    with TestClient(app) as client:
+        _login(client, data)
+        create_page = client.get("/admin/keys/create")
+        csrf = _csrf_from_html(create_page.text)
+        keys_before = asyncio_run(_key_count_for_owner(migrated_postgres_url, owner_id))
+        audits_before = asyncio_run(_audit_count(migrated_postgres_url))
+
+        document = json.dumps(
+            {
+                "schema_version": 1,
+                "allowed_models": [CONFIG_CANARY],
+                "allow_all_endpoints": True,
+                "allowed_providers": ["openai"],
+            }
+        )
+        response = client.post(
+            "/admin/keys/create",
+            data={
+                "csrf_token": csrf,
+                "owner_id": str(owner_id),
+                "valid_days": "30",
+                "email_delivery_mode": "none",
+                "reason": "207-b canary model refusal",
+                "policy_source": "configuration",
+                "configuration_json": document,
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 400
+        assert "Allowed models must be route model identifiers" in response.text
+        assert CONFIG_CANARY not in response.text
+
+        assert (
+            asyncio_run(_key_count_for_owner(migrated_postgres_url, owner_id))
+            == keys_before
+        )
+        assert asyncio_run(_audit_count(migrated_postgres_url)) == audits_before
+        assert (
+            asyncio_run(_any_audit_note_contains(migrated_postgres_url, CONFIG_CANARY))
+            is False
+        )
