@@ -429,3 +429,126 @@ head (see the 207-b static and governance checks above).
   207-b, all nine governance checks pass, and the focused 207-b
   evidence above is green. GitHub CI on the 207-b report head is
   pending at publication (treated as pending, not pass).
+
+## 208-a reviewed key cloning (objective 208, new PR, 2026-10-31)
+
+208-a delivers G04 (faithful standard-key cloning) in the admin GUI by
+reusing the already-qualified core `KeyCloneService` (reviewed-plan
+build/execute, dedup, fingerprint revalidation, receipt, one-time
+delivery) and the existing GUI seams (session/CSRF contexts, record
+pickers, redaction, no-store headers). No schema, migration, model,
+CLI, worker, or runtime-accounting change; the core's concurrency,
+rollback, dedup, and replay laws are component evidence from the
+qualified core/CLI rounds and are not re-run here.
+
+### GUI-to-CLI mapping
+
+| GUI surface | Reused core/CLI law |
+| --- | --- |
+| Guided clone form (source eligibility, target owner/cohort, three validity modes, delivery select) | `KeyCloneService.build_plan` (core decides eligibility; no GUI policy engine) |
+| Review page (readable canonical policy, operation identity, signed intent) | strict `parse_clone_plan_document` plan; new purpose-bound review-intent token (HMAC-SHA256 over plan + actor/session/expiry/delivery) |
+| Apply (confirm + bounded reason + fresh fenced checkbox when required) | `KeyCloneService.execute_plan` in the caller-owned transaction; dedup-first; fresh fingerprint/policy/public ID/expiry |
+| One-time result (plaintext at most once, no-store; delivery after commit; "Created With Delivery Failure" recovery state) | existing one-time-secret / email-delivery services; post-commit dispatch only |
+| Outcome recovery by source + operation | new READ-ONLY `find_clone_receipt` projection (created / not-found / ambiguous / malformed safe states) |
+
+### Focused evidence (local; GitHub CI pending)
+
+Layer: native unit (ASGI app with the existing fake-session seams; no
+DB, no server, no real provider/mail).
+
+- `tests/unit/test_admin_key_clone_208.py`: 47 PASS, 0 skip (JUnit
+  `unit-208a-4.xml`). Coverage: intent round-trip, expiry at the
+  boundary, wrong actor/session/secret, tamper, malformed formats
+  (including the controlled non-ASCII digest refusal before
+  comparison), builder decoded-plan and final-token size bounds with
+  the full core-supported scope still building, controlled 404 for a
+  vanished source (form AND re-render path), ineligible/secret-shaped
+  source refusals with no token issued, apply confirmation/reason
+  bounds (blank/513 refused), forged delivery field ignored (channel
+  bound at review), fenced confirmation required/accepted,
+  one-time plaintext exactly once with no-store headers,
+  already-applied without redisplay or duplicate audit, post-commit
+  send-now failure (synthetic `EmailError`) rendering "Created With
+  Delivery Failure" with stable IDs and no plaintext, read-only
+  recovery (created / not-found / ambiguous / malformed, including the
+  two-ID-only malformed receipt) and the recovery operation-input
+  canary redaction with ordinary UUID errors preserved, plus the
+  window-aware rate readout (10s window labeled by the window; minute
+  default keeps the per-minute grammar) and the lazy reject/wait mode
+  controls.
+
+Layer: actual owned, labeled, loopback-bound, tmpfs-backed
+PostgreSQL 16 container (same fixture generator), real
+schema/migrations, real ASGI app through `TestClient` (no browser);
+exact created container removed on teardown.
+
+- `tests/integration/test_admin_key_clone_208_postgres.py`: 4 PASS,
+  0 skip (JUnit `pg-208a-1.xml`). Faithful canonical clone to an
+  ALTERNATE owner + cohort (the target controls are proven persisted,
+  not ignored): policy columns and metadata blocks equal the source,
+  exact 3601s window (non-minute, exact persisted timedelta), zero
+  usage/reservations, independent token hash/public ID, receipt
+  identity (operation UUID equal to the reviewed operation, source/
+  target IDs, status created), source and unrelated-key snapshots
+  unchanged, exact-repeat returning already-applied with no second
+  key/audit/plaintext, stale (post-review source validity change) and
+  tampered-token refusals proven by AFTER-change state snapshots and
+  audit counts, committed clone with a post-commit SMTP failure
+  (synthetic monkeypatch) showing "Created With Delivery Failure"
+  plus the persisted pending delivery and recovery, suspended-source
+  form/review controlled states, and the send-now precondition
+  refusal when delivery is disabled.
+- 207/208 coexistence: the 208 seed is get-or-create on the
+  DB-unique provider slugs (existing repository pattern), so the 207
+  and 208 modules pass together on one session database (14 PASS, 0
+  skip; JUnit `pg-208a-coexist.xml`).
+
+Layer: real Chromium on the owned fixture (Playwright sync, uvicorn
+app, real stylesheet); exact created container removed on teardown.
+
+- `tests/browser/test_admin_key_clone_208.py`: 3 PASS, 0 skip (JUnit
+  `browser-208a-1.xml`). Key-detail clone entry with the preserved
+  ordinary panels; guided form with the record pickers driven and a
+  3601s duration; review page with the window-aware 10s rate readout
+  and no key material; keyboard-only apply (focus/Space to confirm,
+  typed reason, Enter to submit); one-time result asserted from HTML
+  only (the plaintext page is NEVER screenshotted); persisted-target
+  oracles (policy fidelity, zero usage, receipt, exact window, audit
+  count, source unchanged); exact-repeat via the same still-valid
+  token through a form POST; recovery created/not-found views; the
+  no-JS typed-UUID fallback carried through to the persisted
+  no-cohort target; and a narrow-viewport (768px) review capture.
+  Focused screenshots (synthetic data only, no key/session/secret
+  cells) under `/tmp/slaif208/`.
+
+### Static and governance checks
+
+- `ruff check` on all touched/new Python files: clean.
+- `git diff --check`: clean.
+- `scripts/check_documentation.py`: `DOCUMENTATION_CHECK=OK`.
+- `tests/unit/test_oap_governance.py`: 9 PASS, 0 skip.
+
+### Honesty and limitations
+
+- The unit renders are fake-session ASGI renders (no DB); the
+  owned-PG cases are the real-schema proof and the Chromium cases are
+  the actual-page proof. No real provider, email, or production
+  traffic is involved (the SMTP failure is a synthetic monkeypatch);
+  no release or production claim follows.
+- The GUI parity is at the shared-code level: the same
+  `KeyCloneService` build/execute law and the same strict plan schema
+  as the CLI clone commands; this record does not re-qualify the CLI
+  or the core concurrency/rollback/replay proofs (qualified in the
+  196-205 core/CLI objective records).
+- The review-intent token is a browser-session review-state adapter
+  (bounded size, short expiry, actor/session/source/delivery bound);
+  it is not a signing framework and carries no gateway-key, replay,
+  or provider secret. The recovery view is read-only and never
+  creates or assumes an outcome.
+- Historical keys are untouched (no migration, no mass update);
+  cloning is an explicit two-step operator action creating a NEW key
+  with independent material, identity, zero usage and reservations,
+  and its own replay ownership.
+- GitHub CI on the 208-a report head is pending at publication
+  (treated as pending, not pass); strategic review and guarded merge
+  are the root's gates.

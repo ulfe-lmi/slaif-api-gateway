@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-10-31):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04-G18 remain open.
+**Delivery update (2026-10-31):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). G05-G18 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -338,13 +338,135 @@ The 207-b record (same
 earlier claims that reasons were bounded and that all canaries were
 covered.
 
-### Still open (G04-G18)
+### Still open (G05-G18)
 
-Nothing in 207-a or 207-b claims G04 (cloning), G05 (batch), G06
+Nothing in 207-a, 207-b, or 208-a claims G05 (batch), G06
 (route-capability
 review), G07 (provider preparation/clearing), G08 (diagnostics), G09 (replay
 inspection), G10 (Codex migration), G11 (usage reporting), G12 (email
 inspection), G13 (list navigation), G14 (accounting recovery), G15 (catalog
 workflows), G16 (configuration inspection page), G17 (admin accounts), or
 G18 (small catalog operations) is complete. The section 3.1-3.5 findings for
-those areas remain as documented at the baseline.
+those areas remain as documented at the baseline. G04 is delivered by
+208-a; see section 10 below.
+
+## 10. Delivery status (objective 208-a)
+
+Added 2026-10-31 as the delivery update for G04 (faithful standard-key
+cloning) on branch `oap/208-gui-key-clone` (its own PR). The historical
+findings above are preserved as written at the baseline; this section
+records what 208-a delivered and what remains open.
+
+### Delivered by 208-a (G04)
+
+- **Clone entry on key detail.** The existing key-detail page gains a
+  bounded "Clone This Key" action panel (clone link plus a "Check a
+  clone outcome" recovery link). All prior detail sections are unchanged.
+- **Guided clone form.** `/admin/keys/{id}/clone` shows the source public
+  identity and a read-only core eligibility probe (the core decides; an
+  unsupported source is refused honestly and its policy is never reset or
+  weakened), the existing latest-100 record pickers for the target owner
+  (required) and cohort (optional; blank = no cohort) with plain-text
+  no-JS fallbacks, and exactly three validity modes: copy the source
+  expiry, a positive whole duration from execution time (seconds/
+  minutes/hours/days, service-bounded), or an explicit UTC window.
+  Nothing is created on this page.
+- **Review before confirm.** POSTing the form calls the core
+  `KeyCloneService.build_plan` (no GUI policy engine; no mutation, no
+  policy audit) and renders a readable summary of the canonical policy
+  (providers/models/endpoints, limits, window-aware rate counts, lazy
+  throttling mode, live-burn, external-tool, Responses settings) plus the
+  reviewed target, validity, one-time delivery channel, and operation
+  identity. The full non-secret plan/policy JSON remains available as
+  optional detail. The review page never shows key material.
+- **Signed review-intent binding.** The review state is an HMAC-SHA256
+  token over the strict plan plus the acting admin user, session, a short
+  expiry, and the delivery mode. Apply verifies format (including a
+  controlled non-ASCII/tampered-digest refusal before comparison), the
+  constant-time HMAC, purpose/actor/session, expiry, and re-parses the
+  embedded strict plan before any mutation; the plan's source must match
+  the URL path. A mutable apply field can never change the reviewed
+  delivery channel. Bounded encoded/decoded sizes are enforced at build
+  and verify.
+- **Apply with confirmation and reason.** Apply requires the explicit
+  confirmation checkbox, a bounded nonblank audit reason (masked through
+  the existing redaction seam before storage), the session-derived actor,
+  and CSRF. A source whose configured policy includes fenced
+  external-tool mode requires a fresh fenced checkbox at apply. The core
+  `execute_plan` runs the SAME reviewed plan in the caller-owned
+  transaction: locked source revalidation, dedup first, fresh
+  fingerprint/policy, independent material and IDs, zero usage and
+  reservations, its own replay ownership, and the committed receipt.
+- **One-time delivery channel.** The channel (none / pending /
+  send-now / enqueue) is bound at review and revalidated against the
+  existing readiness rules. The generated key is displayed at most once
+  (none/pending), in a private no-store result page; send-now/enqueue
+  dispatch only AFTER commit, and a post-commit channel failure renders
+  "Created With Delivery Failure" with the stable target/secret/delivery
+  IDs and an explicit "a second clone is NOT needed" recovery path.
+  Already-applied repeats never decrypt or redisplay the plaintext.
+- **Read-only outcome recovery.** `/admin/keys/{id}/clone/receipts?
+  operation=` inspects the committed receipt by source + operation
+  (created / not-found / ambiguous / malformed, each a safe fixed state),
+  works after the review state expired or the result page was lost, and
+  never creates or assumes anything. The operation input is redacted
+  before redisplay; ordinary misspelled UUIDs keep their useful fixed
+  error.
+- **Window-aware rate readout.** The new review readout labels copied
+  rate counts by the configured window the runtime meters in (e.g. "per
+  10s window"); minute and omitted windows keep the existing per-minute
+  grammar. No runtime/accounting or global formatter change.
+
+### Bounded paths (208-a)
+
+`app/slaif_gateway/api/admin_key_clone.py` (focused router),
+`app/slaif_gateway/api/admin_review_intent.py` (purpose-bound review
+token), the read-only `find_clone_receipt` projection plus
+`KeyCloneReceiptMalformedError` in
+`app/slaif_gateway/services/key_clone_service.py`, the router include in
+`app/slaif_gateway/main.py`, four `keys/clone_*.html` templates, the
+detail-page action panel, `web/static/js/key-clone.js` (progressive
+validity-mode enablement only - never value conversion), and the asset
+registration. No schema, migration, model, CLI, worker, or runtime
+accounting change; the core clone service's existing concurrency,
+rollback, dedup, and replay laws are reused and re-qualified, not
+re-implemented.
+
+### Focused evidence (208-a)
+
+- Fake-persistence ASGI/Jinja unit suite (47 cases): intent round-trip,
+  expiry/actor/session/source/delivery binding, tamper and malformed
+  formats (including the non-ASCII digest refusal), builder/verify size
+  bounds with the full core-supported scope still building, controlled
+  404 for a vanished source on form and re-render, ineligible-source
+  refusals, one-time plaintext exactly once with no-store headers,
+  already-applied without redisplay, post-commit delivery failure with
+  stable IDs, and read-only recovery including malformed-receipt refusal.
+- Owned-PostgreSQL integration suite (4 cases on the qualified
+  loopback/tmpfs fixture): faithful canonical clone to an ALTERNATE
+  owner + cohort (target controls proven persisted), exact 3601s window,
+  zero usage/reservations, independent material, receipt identity equal
+  to the reviewed operation, source/unrelated isolation, exact-repeat
+  already-applied, stale (post-review source change) and tampered-token
+  refusals with no-write snapshot proof, committed clone with a
+  post-commit SMTP failure (synthetic) and its recovery, suspended-source
+  form/review states, and the send-now precondition refusal. The 208
+  seed is get-or-create on the DB-unique provider slugs so it coexists
+  with the 207 module on one session database (verified together:
+  14/14).
+- Real Chromium on the owned fixture (3 cases): detail entry + guided
+  form (record pickers driven, 3601s duration), review with the window-
+  aware readout, keyboard-only apply (focus/Space/Enter), one-time result
+  asserted from HTML only (the plaintext page is never screenshotted),
+  persisted-target oracles, exact-repeat via the same still-valid token,
+  recovery views, no-JS typed-UUID fallback through to the persisted
+  target, and a narrow-viewport review capture.
+
+### Still open
+
+G05-G18 remain open as documented in section 9. Nothing in 208-a touches
+batch editing, route-capability review, provider preparation,
+diagnostics, replay inspection, Codex migration, usage reporting, email
+inspection, list navigation, accounting recovery, catalog workflows, the
+configuration inspection page, admin accounts, or small catalog
+operations.

@@ -16,6 +16,7 @@ template membership); the target starts as an independent active key.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 import uuid
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from slaif_gateway.config import Settings
 from slaif_gateway.db.models import GatewayKey
 from slaif_gateway.schemas.key_clone import (
     CLONE_RECEIPT_METADATA_KEY,
+    VALIDITY_ABSOLUTE,
     VALIDITY_COPY_SOURCE_EXPIRY,
     VALIDITY_DURATION_FROM_NOW,
     KeyClonePlan,
@@ -73,6 +75,19 @@ _CLONE_SECRET_SHAPE_PATTERNS = (
     _BEARER_PATTERN,
     _PROVIDER_KEY_PATTERN,
     _SENSITIVE_ASSIGNMENT_PATTERN,
+)
+
+# Bounded finite patterns for the read-only receipt projection (208-a):
+# canonical UUID strings, 64-hex fingerprints, and the three known validity
+# modes. These bound what recovery may project as a completed clone.
+_RECEIPT_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_RECEIPT_HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_RECEIPT_VALIDITY_MODES = (
+    VALIDITY_COPY_SOURCE_EXPIRY,
+    VALIDITY_DURATION_FROM_NOW,
+    VALIDITY_ABSOLUTE,
 )
 
 
@@ -151,6 +166,15 @@ class KeyCloneReceiptAmbiguousError(KeyCloneError):
     )
 
 
+class KeyCloneReceiptMalformedError(KeyCloneError):
+    error_code = "key_clone_receipt_malformed"
+    message = (
+        "A clone receipt matched this operation but is missing required "
+        "identity members or carries invalid types; it cannot be projected "
+        "as a completed clone."
+    )
+
+
 class KeyCloneReviewedPolicyMismatchError(KeyCloneError):
     error_code = "key_clone_reviewed_policy_mismatch"
     message = (
@@ -179,6 +203,34 @@ class KeyCloneResult:
     # explicitly selected output channel. It is never persisted, audited,
     # logged, or included in already-applied results.
     plaintext_key: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class KeyCloneReceiptProjection:
+    """Read-only, non-secret clone-receipt projection (208-a recovery).
+
+    ``status`` is ``"not-found"`` (no receipt matched this source+operation)
+    or ``"created"`` (the operation completed exactly one target). This
+    projection is display data for the authenticated recovery view: it never
+    decides, executes, deduplicates, locks, or mutates; the authoritative
+    execute/dedup law in :meth:`KeyCloneService.execute_plan` is unchanged.
+    """
+
+    status: str  # "not-found" | "created"
+    source_gateway_key_id: str
+    operation_uuid: str
+    target_gateway_key_id: str | None = None
+    target_public_key_id: str | None = None
+    target_owner_id: str | None = None
+    target_cohort_id: str | None = None
+    one_time_secret_id: str | None = None
+    email_delivery_id: str | None = None
+    source_public_key_id: str | None = None
+    source_fingerprint: str | None = None
+    policy_fingerprint: str | None = None
+    requires_fenced_confirmation: bool | None = None
+    validity_mode: str | None = None
+    target_status: str | None = None
 
 
 class KeyCloneService:
@@ -588,6 +640,151 @@ class KeyCloneService:
             valid_until=valid_until,
             plaintext_key=key_result.plaintext_key,
         )
+
+    async def find_clone_receipt(
+        self,
+        *,
+        source_gateway_key_id: uuid.UUID,
+        operation_uuid: uuid.UUID,
+    ) -> KeyCloneReceiptProjection:
+        """Narrowly allowlisted READ-ONLY receipt projection (208-a).
+
+        Reads the source row (so unknown sources are a 404, not an
+        assumption) and the existing bounded receipt lookup. It acquires no
+        lock, executes nothing, and never creates a clone or writes an audit
+        row. A ``"not-found"`` outcome deliberately assumes nothing: the
+        operation may have been refused, rolled back, or never started.
+        Ambiguous receipts (more than one match) and receipts missing
+        required identity members or carrying invalid types are controlled
+        refusals; neither claims a completed clone.
+        """
+        await self._load_source(source_gateway_key_id)
+        receipts = await self._keys.find_clone_receipts(
+            source_gateway_key_id=source_gateway_key_id,
+            operation_uuid=operation_uuid,
+        )
+        if len(receipts) > 1:
+            raise KeyCloneReceiptAmbiguousError(param="operation_uuid")
+        if not receipts:
+            return KeyCloneReceiptProjection(
+                status="not-found",
+                source_gateway_key_id=str(source_gateway_key_id),
+                operation_uuid=str(operation_uuid),
+            )
+        target = receipts[0]
+        metadata = target.metadata_json if isinstance(target.metadata_json, dict) else {}
+        receipt = metadata.get(CLONE_RECEIPT_METADATA_KEY)
+        self._assert_receipt_well_formed(
+            receipt,
+            source_gateway_key_id=source_gateway_key_id,
+            operation_uuid=operation_uuid,
+            target_row=target,
+        )
+        return KeyCloneReceiptProjection(
+            status="created",
+            source_gateway_key_id=str(source_gateway_key_id),
+            operation_uuid=str(operation_uuid),
+            target_gateway_key_id=str(target.id),
+            target_public_key_id=target.public_key_id,
+            target_owner_id=str(target.owner_id) if target.owner_id else None,
+            target_cohort_id=str(target.cohort_id) if target.cohort_id else None,
+            one_time_secret_id=receipt.get("one_time_secret_id"),
+            email_delivery_id=receipt.get("email_delivery_id"),
+            source_public_key_id=receipt.get("source_public_key_id"),
+            source_fingerprint=receipt.get("source_fingerprint"),
+            policy_fingerprint=receipt.get("policy_fingerprint"),
+            requires_fenced_confirmation=receipt.get("requires_fenced_confirmation"),
+            validity_mode=receipt.get("validity_mode"),
+            target_status=target.status,
+        )
+
+    @staticmethod
+    def _assert_receipt_well_formed(
+        receipt: object,
+        *,
+        source_gateway_key_id: uuid.UUID,
+        operation_uuid: uuid.UUID,
+        target_row: GatewayKey,
+    ) -> None:
+        """Bounded safe validation of a matched clone receipt (208-a).
+
+        Recovery may project a receipt as a completed clone ONLY when every
+        required identity member is present with the expected finite type.
+        Missing/malformed receipts are a controlled refusal: they must never
+        claim a completed clone, and the projection never echoes arbitrary
+        receipt strings. This is display-path validation only; the
+        authoritative execute/dedup law (``_receipt_matches_plan``) is
+        unchanged.
+        """
+        if not isinstance(receipt, dict):
+            raise KeyCloneReceiptMalformedError(param="clone_receipt")
+
+        def _uuid_str(name: str) -> str:
+            value = receipt.get(name)
+            if not _RECEIPT_UUID_RE.match(value if isinstance(value, str) else ""):
+                raise KeyCloneReceiptMalformedError(param=name)
+            return value
+
+        def _optional_uuid_str(name: str) -> str | None:
+            value = receipt.get(name)
+            if value is None:
+                return None
+            if not _RECEIPT_UUID_RE.match(value if isinstance(value, str) else ""):
+                raise KeyCloneReceiptMalformedError(param=name)
+            return value
+
+        def _hex64(name: str) -> str:
+            value = receipt.get(name)
+            if not _RECEIPT_HEX64_RE.match(value if isinstance(value, str) else ""):
+                raise KeyCloneReceiptMalformedError(param=name)
+            return value
+
+        def _nonempty_str(name: str, *, maximum: int = 256) -> str:
+            value = receipt.get(name)
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or len(value) > maximum
+            ):
+                raise KeyCloneReceiptMalformedError(param=name)
+            return value
+
+        def _optional_str(name: str) -> str | None:
+            value = receipt.get(name)
+            if value is None:
+                return None
+            _nonempty_str(name)
+            return value
+
+        if _uuid_str("source_gateway_key_id") != str(source_gateway_key_id):
+            raise KeyCloneReceiptMalformedError(param="source_gateway_key_id")
+        if _uuid_str("operation_uuid") != str(operation_uuid):
+            raise KeyCloneReceiptMalformedError(param="operation_uuid")
+        if _uuid_str("target_gateway_key_id") != str(target_row.id):
+            raise KeyCloneReceiptMalformedError(param="target_gateway_key_id")
+        _uuid_str("target_owner_id")
+        _uuid_str("one_time_secret_id")
+        _optional_uuid_str("email_delivery_id")
+        _optional_uuid_str("target_cohort_id")
+        _hex64("source_fingerprint")
+        _hex64("policy_fingerprint")
+        _nonempty_str("source_public_key_id")
+        _optional_str("source_valid_until")
+        fenced = receipt.get("requires_fenced_confirmation")
+        if not isinstance(fenced, bool):
+            raise KeyCloneReceiptMalformedError(param="requires_fenced_confirmation")
+        mode = receipt.get("validity_mode")
+        if mode not in _RECEIPT_VALIDITY_MODES:
+            raise KeyCloneReceiptMalformedError(param="validity_mode")
+        duration = receipt.get("validity_duration_seconds")
+        if duration is not None and (
+            isinstance(duration, bool) or not isinstance(duration, int)
+        ):
+            raise KeyCloneReceiptMalformedError(param="validity_duration_seconds")
+        _optional_str("validity_from")
+        _optional_str("validity_until")
+        if receipt.get("status") != "created":
+            raise KeyCloneReceiptMalformedError(param="status")
 
     def _already_applied(self, existing: GatewayKey, plan: KeyClonePlan) -> KeyCloneResult:
         metadata = existing.metadata_json if isinstance(existing.metadata_json, dict) else {}

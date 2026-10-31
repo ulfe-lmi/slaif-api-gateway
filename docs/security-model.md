@@ -1406,6 +1406,54 @@ nonzero exit; the invalid value and any traceback are never echoed. The
 snapshot is qualified in every output as current-process state, not live
 API/worker state.
 
+### Reviewed key cloning and review-intent state (objective 208)
+
+The admin GUI clone workflow (G04) adds a browser-session
+review-intent state without weakening the existing secret/content
+boundary. The review state is an HMAC-SHA256 token over the strict
+clone plan document plus the acting admin user ID, admin session ID,
+a short expiry, and the one-time delivery mode, keyed with the
+existing `ADMIN_SESSION_SECRET`; the token is `b64url(payload).dot.
+hex64` and is never echoed in errors, logs, or recovery output.
+Apply verifies, before ANY mutation: token format (a digest that is
+not exactly 64 lowercase hex characters - including non-ASCII input -
+is a fixed controlled refusal before any constant-time comparison),
+the HMAC in constant time, the purpose/actor/session binding, the
+expiry, and a STRICT re-parse of the embedded plan
+(`parse_clone_plan_document`); the plan's source must match the URL
+path. Bounded encoded and decoded sizes are enforced at build and at
+verify, so the token cannot be used as an unbounded storage channel.
+The hidden token is an authority only in the verified form; the
+reviewed delivery channel is re-derived from the token, so a mutable
+apply field can never turn a reviewed mail operation into plaintext
+display or vice versa.
+
+The core execution law is unchanged and reused: locked source
+revalidation with fresh fingerprint/policy comparison (stale plans
+refused), deduplication on the operation UUID BEFORE creation,
+independent key material and identity, zero usage and reservations,
+its own replay ownership, and the committed receipt. The generated
+key is displayed at most once (none/pending channels) in a private
+no-store result page; send-now/enqueue dispatch only after commit,
+and a post-commit channel failure renders a recovery state with the
+stable target/secret/delivery IDs - never a redisplayed plaintext and
+never an instruction to clone again. Re-applying the same valid
+operation returns the already-applied target without decrypting or
+redisplaying anything.
+
+The outcome recovery view is read-only: it inspects the committed
+receipt by source + operation and reports created / not-found /
+ambiguous / malformed as fixed safe states (unknown outcomes assume
+nothing), with the operation input redacted before redisplay while
+ordinary misspelled UUIDs keep their useful fixed error. A
+repository-matching receipt missing required identity members is
+`key_clone_receipt_malformed`, never a claimed completed clone.
+Eligibility and policy-shape refusals (non-standard purpose/mode,
+suspended/expired source, fenced source, recognized secret shapes in
+the configured policy) are fixed no-echo states; the source policy is
+never reset or weakened to force eligibility. No schema, migration,
+worker, or runtime-accounting change accompanies this surface.
+
 ## Admin Web Sessions And CSRF
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder

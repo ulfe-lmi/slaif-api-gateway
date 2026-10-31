@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Clone Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="clone-result-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="clone-result-heading">Clone Result</h1>
+      <p class="muted">Operation {{ result.operation_uuid }} for source {{ source_public_key_id }}.</p>
+    </div>
+    <div class="header-actions">
+      {% if result.target_gateway_key_id %}
+      <a class="button-link secondary" href="/admin/keys/{{ result.target_gateway_key_id }}">New key detail</a>
+      {% endif %}
+      <a class="button-link secondary" href="/admin/keys/{{ source_id }}/clone/receipts?operation={{ result.operation_uuid }}">Check this outcome</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+    </div>
+  </header>
+
+  {% if show_plaintext %}
+  <section class="action-panel" aria-labelledby="clone-plaintext-heading">
+    <h2 id="clone-plaintext-heading">Plaintext Gateway Key (one-time display)</h2>
+    <p class="warning-text">Copy this key now. It will not be shown again. If it is lost, use the still-unconsumed pending delivery through the existing one-time sendability flow, or rotate the key.</p>
+    <div class="secret-display" aria-label="Plaintext gateway key">
+      <code>{{ plaintext_key }}</code>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if result.status == "created" %}
+  <section class="action-panel" aria-labelledby="clone-new-key-heading">
+    <h2 id="clone-new-key-heading">New Key</h2>
+    <dl>
+      <dt>Gateway key ID</dt>
+      <dd>{{ result.target_gateway_key_id }}</dd>
+      <dt>Public key ID</dt>
+      <dd>{{ result.target_public_key_id }}</dd>
+      <dt>Valid from</dt>
+      <dd>{{ result.valid_from.isoformat() if result.valid_from else "-" }}</dd>
+      <dt>Valid until</dt>
+      <dd>{{ result.valid_until.isoformat() if result.valid_until else "-" }}</dd>
+    </dl>
+    <p class="muted">The new key has independent key material and identity, zero usage and reservations, and its own replay ownership. The source key and unrelated rows are unchanged.</p>
+  </section>
+  {% elif result.status == "already-applied" %}
+  <section class="action-panel" aria-labelledby="clone-applied-heading">
+    <h2 id="clone-applied-heading">Already Applied</h2>
+    <p class="muted">This clone operation already completed: the recorded target is returned. No new key, secret, or delivery was created, and the one-time plaintext is unrecoverable and not redisplayed.</p>
+    <dl>
+      <dt>Target gateway key ID</dt>
+      <dd>{{ result.target_gateway_key_id }}</dd>
+      <dt>Target public key ID</dt>
+      <dd>{{ result.target_public_key_id }}</dd>
+      {% if result.one_time_secret_id %}
+      <dt>One-time secret ID</dt>
+      <dd>{{ result.one_time_secret_id }}</dd>
+      {% endif %}
+      {% if result.email_delivery_id %}
+      <dt>Email delivery ID</dt>
+      <dd>{{ result.email_delivery_id }}</dd>
+      {% endif %}
+    </dl>
+  </section>
+  {% endif %}
+
+  {% if post_commit_failure %}
+  <section class="action-panel" aria-labelledby="clone-delivery-failure-heading">
+    <h2 id="clone-delivery-failure-heading">Created With Delivery Failure</h2>
+    <p class="warning-text" role="alert">
+      The clone committed, but the selected output channel ({{ delivery_mode }}) failed AFTER commit. The one-time plaintext cannot be recovered from this response.
+    </p>
+    <dl>
+      <dt>Target gateway key ID</dt>
+      <dd>{{ result.target_gateway_key_id }}</dd>
+      <dt>Operation UUID</dt>
+      <dd>{{ result.operation_uuid }}</dd>
+      {% if result.email_delivery_id %}
+      <dt>Email delivery ID</dt>
+      <dd>{{ result.email_delivery_id }}</dd>
+      {% endif %}
+    </dl>
+    <p class="muted">
+      A second clone is NOT needed. Retry through the existing one-time sendability flow for a still-unconsumed pending delivery (email delivery ID {{ result.email_delivery_id or "see the delivery view" }}), or rotate the key.
+    </p>
+  </section>
+  {% elif result.status == "created" and delivery_mode in ["send-now", "enqueue"] %}
+  <section class="action-panel" aria-labelledby="clone-delivery-heading">
+    <h2 id="clone-delivery-heading">Delivery Status</h2>
+    <dl>
+      <dt>Mode</dt>
+      <dd>{{ delivery_mode_label }}</dd>
+      <dt>Status</dt>
+      <dd>{{ delivery.status if delivery else "not-created" }}</dd>
+      {% if delivery and delivery.email_delivery_id %}
+      <dt>Email delivery ID</dt>
+      <dd>{{ delivery.email_delivery_id }}</dd>
+      {% endif %}
+      {% if delivery and delivery.recipient_email %}
+      <dt>Recipient</dt>
+      <dd>{{ delivery.recipient_email }}</dd>
+      {% endif %}
+      {% if celery_task_id %}
+      <dt>Celery task ID</dt>
+      <dd>{{ celery_task_id }}</dd>
+      {% endif %}
+      {% if delivery and delivery.error_message %}
+      <dt>Error</dt>
+      <dd>{{ delivery.error_message }}</dd>
+      {% endif %}
+    </dl>
+  </section>
+  {% elif result.status == "created" and delivery_mode == "pending" %}
+  <section class="action-panel" aria-labelledby="clone-delivery-heading">
+    <h2 id="clone-delivery-heading">Pending Delivery</h2>
+    <p class="muted">
+      Email delivery is pending (ID {{ result.email_delivery_id or "see the delivery view" }}). Send it later through the existing one-time sendability flow; the key is shown above exactly once.
+    </p>
+  </section>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="clone-result-safety-heading">
+    <h2 id="clone-result-safety-heading">Safety Notes</h2>
+    {% if not show_plaintext %}
+    <p class="warning-text">The plaintext gateway key is not in this response, URL, cookies, hidden review state, audit row, or log.</p>
+    {% endif %}
+    <p class="muted">
+      Lost or failed one-time secrets are never blindly resent: retry uses the existing authorization and one-time sendability checks, and already-applied outcomes never decrypt or redisplay plaintext.
+    </p>
+    <p class="muted">
+      Inspect this operation later - even after this page is closed or the review state expired - through the read-only
+      <a href="/admin/keys/{{ source_id }}/clone/receipts?operation={{ result.operation_uuid }}">clone outcome view</a>.
+    </p>
+  </section>
+</section>
+{% endblock %}

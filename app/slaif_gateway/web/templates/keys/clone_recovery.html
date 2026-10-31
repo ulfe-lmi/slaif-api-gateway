@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}Clone Outcome Recovery{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="recovery-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="recovery-heading">Clone Outcome Recovery</h1>
+      <p class="muted">Inspect a clone outcome by source key and operation UUID - including after the review state expired or the result page was lost. This view is READ-ONLY: it never creates a clone and never redisplay plaintext.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys/{{ key.id }}">Key detail</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="recovery-form-heading">
+    <h2 id="recovery-form-heading">Operation</h2>
+    <form method="get" action="/admin/keys/{{ key.id }}/clone/receipts">
+      <label>
+        Operation UUID
+        <input name="operation" value="{{ operation }}" autocomplete="off" spellcheck="false"
+               aria-describedby="recovery-operation-help">
+      </label>
+      <button type="submit">Inspect outcome</button>
+    </form>
+    <p class="field-help" id="recovery-operation-help">
+      Use the operation UUID shown on the clone result page (32 hexadecimal digits with hyphens). Leaving it blank shows this help page only.
+    </p>
+    {% if operation_error %}
+    <div class="admin-flash admin-flash-error" role="alert">
+      <p>{{ operation_error }}</p>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if projection_error %}
+  <section class="action-panel" aria-labelledby="recovery-error-heading">
+    <h2 id="recovery-error-heading">Outcome</h2>
+    <p class="warning-text" role="alert">{{ projection_error }}</p>
+    <p class="muted">The outcome is unknown from this view. Nothing is assumed about the operation; do not start a guessed new clone - re-running the SAME reviewed plan (while its state is still valid) is the safe path, because the core deduplicates on the operation UUID.</p>
+  </section>
+  {% elif projection %}
+  <section class="action-panel" aria-labelledby="recovery-outcome-heading">
+    <h2 id="recovery-outcome-heading">Outcome</h2>
+    {% if projection.status == "not-found" %}
+    <p class="muted">
+      No clone receipt matches this source and operation. NOTHING is assumed: the operation may have been refused, rolled back, or never started from this source.
+    </p>
+    <p class="muted">
+      If you reviewed a plan but lost the result, re-running the SAME reviewed plan is safe: the core deduplicates on the operation UUID and returns the existing target instead of creating a second key. A new review (new operation UUID) is needed only for a genuinely new clone.
+    </p>
+    {% else %}
+    <p class="muted">This operation completed and created exactly one target key.</p>
+    <dl>
+      <dt>Target gateway key ID</dt>
+      <dd><a href="/admin/keys/{{ projection.target_gateway_key_id }}">{{ projection.target_gateway_key_id }}</a></dd>
+      <dt>Target public key ID</dt>
+      <dd>{{ projection.target_public_key_id }}</dd>
+      <dt>Target status</dt>
+      <dd>{{ projection.target_status }}</dd>
+      {% if projection.target_cohort_id %}
+      <dt>Target cohort</dt>
+      <dd>{{ projection.target_cohort_id }}</dd>
+      {% endif %}
+      <dt>Validity mode</dt>
+      <dd>{{ projection.validity_mode }}</dd>
+      {% if projection.one_time_secret_id %}
+      <dt>One-time secret ID</dt>
+      <dd>{{ projection.one_time_secret_id }}</dd>
+      {% endif %}
+      {% if projection.email_delivery_id %}
+      <dt>Email delivery ID</dt>
+      <dd><a href="/admin/email-deliveries/{{ projection.email_delivery_id }}">{{ projection.email_delivery_id }}</a></dd>
+      {% endif %}
+      <dt>Source fingerprint</dt>
+      <dd><code>{{ projection.source_fingerprint }}</code></dd>
+      <dt>Policy fingerprint</dt>
+      <dd><code>{{ projection.policy_fingerprint }}</code></dd>
+    </dl>
+    <p class="muted">
+      The one-time plaintext is never redisplayed. Retry a still-unconsumed pending delivery through the existing one-time sendability flow (see the linked delivery), or rotate the key.
+    </p>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Clone Gateway Key{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="clone-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="clone-heading">Clone Gateway Key</h1>
+      <p class="muted">Select the target, validity, and one-time delivery for a NEW key that copies this source key's configured policy. Nothing is created until you review and confirm.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys/{{ key.id }}">Key detail</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">
+    <p>{{ error }}</p>
+    {% if diagnostic_id %}
+    <p class="small">Reference ID: <code>{{ diagnostic_id }}</code></p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="clone-source-heading">
+    <h2 id="clone-source-heading">Source Key</h2>
+    <dl class="compact-dl">
+      <dt>Public key ID</dt>
+      <dd>{{ key.public_key_id }}</dd>
+      <dt>Prefix</dt>
+      <dd>{{ key.key_prefix }}</dd>
+      <dt>Status</dt>
+      <dd>{{ key.status }} (display: {{ key.computed_display_status }})</dd>
+      <dt>Valid until</dt>
+      <dd>{{ key.valid_until.isoformat() }}</dd>
+      <dt>Purpose / capability mode</dt>
+      <dd>{{ key.key_purpose }} / {{ key.capability_policy_mode }}</dd>
+    </dl>
+    {% if eligibility.eligible %}
+    <p class="muted">Eligibility: {{ eligibility.message }}</p>
+    {% else %}
+    <p class="warning-text" role="alert">Eligibility: {{ eligibility.message }}</p>
+    {% endif %}
+    <p class="field-help" id="clone-source-help">
+      Cloning copies the CONFIGURED POLICY only. The new key gets independent key material and identity, zero usage and reservations, and its own replay ownership. It starts with UNUSED configured limits - the source's remaining balance is never transferred. The source key and all unrelated keys are not changed.
+    </p>
+  </section>
+
+  <form class="create-form" method="post" action="/admin/keys/{{ key.id }}/clone/review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="clone-target-heading">
+      <h2 id="clone-target-heading">Target Owner And Cohort</h2>
+      <p class="muted">Select existing records only - the picker shows record names but submits the record's UUID (a public identifier, never a secret). A cohort is optional: choose "No cohort" when the key should have none.</p>
+      <div class="form-grid">
+        {{ record_choice(
+            "target_owner_id", "owner", "Target owner",
+            options=choices.owner_id or none,
+            selected_id=form.target_owner_id,
+            selected_label=choice_labels.target_owner_id,
+            allow_new=false,
+            nojs_value=form.target_owner_id,
+            clear_label="Select owner",
+            placeholder="Search owners",
+            help="Existing owner UUID (required). Without JavaScript, type or paste the owner UUID.",
+        ) }}
+        {{ record_choice(
+            "target_cohort_id", "cohort", "Target cohort (optional)",
+            options=choices.cohort_id or none,
+            selected_id=form.target_cohort_id,
+            selected_label=choice_labels.target_cohort_id,
+            allow_new=false,
+            nojs_value=form.target_cohort_id,
+            clear_label="No cohort",
+            placeholder="Search cohorts",
+            help="Existing cohort UUID, or leave blank for no cohort. Without JavaScript, type or paste the cohort UUID (blank = no cohort).",
+        ) }}
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="clone-validity-heading" data-clone-validity>
+      <h2 id="clone-validity-heading">Validity</h2>
+      <p class="muted">Times are UTC. Choose exactly one mode and fill in only that mode's fields; the other modes' fields must stay blank.</p>
+      <label class="checkbox-row">
+        <input type="radio" name="validity_mode" value="copy-source-expiry"
+               {% if form.validity_mode == "copy-source-expiry" %}checked{% endif %} aria-describedby="clone-validity-help">
+        Copy the source's current expiry (valid now until the source's current expiry, rechecked at execution)
+      </label>
+      <label class="checkbox-row">
+        <input type="radio" name="validity_mode" value="duration-from-now"
+               {% if form.validity_mode == "duration-from-now" %}checked{% endif %} aria-describedby="clone-duration-help">
+        Valid for a duration from execution time
+      </label>
+      <label class="checkbox-row">
+        <input type="radio" name="validity_mode" value="absolute"
+               {% if form.validity_mode == "absolute" %}checked{% endif %} aria-describedby="clone-absolute-help">
+        Exact absolute window (UTC)
+      </label>
+      <div class="form-grid">
+        <label data-clone-duration>
+          Duration value
+          <input name="duration_value" value="{{ form.duration_value }}" inputmode="numeric" autocomplete="off"
+                 placeholder="e.g. 72" aria-describedby="clone-duration-help">
+        </label>
+        <label data-clone-duration>
+          Duration unit
+          <select name="duration_unit" aria-describedby="clone-duration-help">
+            <option value="seconds" {% if form.duration_unit == "seconds" %}selected{% endif %}>Seconds</option>
+            <option value="minutes" {% if form.duration_unit == "minutes" %}selected{% endif %}>Minutes</option>
+            <option value="hours" {% if not form.duration_unit or form.duration_unit == "hours" %}selected{% endif %}>Hours</option>
+            <option value="days" {% if form.duration_unit == "days" %}selected{% endif %}>Days</option>
+          </select>
+        </label>
+        <label>
+          Absolute valid from (UTC)
+          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60"
+                 autocomplete="off" aria-describedby="clone-absolute-help">
+        </label>
+        <label>
+          Absolute valid until (UTC)
+          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60"
+                 autocomplete="off" aria-describedby="clone-absolute-help">
+        </label>
+      </div>
+      <p class="field-help" id="clone-duration-help">
+        Duration mode: a positive whole number of seconds, minutes, hours, or days (stored as exact seconds; maximum {{ max_duration_seconds | num }} seconds, about 1,000 years). The window starts at EXECUTION time, so the preview shown on the review page is an estimate, not a promise.
+      </p>
+      <p class="field-help" id="clone-absolute-help">
+        Absolute mode: both UTC times are required; the end must be after the start and still in the future when the clone executes.
+      </p>
+      <p class="field-help" id="clone-validity-help">
+        Copy-source-expiry mode takes no extra values: the new key becomes valid from execution time until the source's CURRENT expiry, which the core rechecks against the live source at execution.
+      </p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="clone-delivery-heading">
+      <h2 id="clone-delivery-heading">One-Time Key Delivery</h2>
+      <p class="muted">The selected channel is bound into the review you are about to confirm. Changing it later requires a new review - applying never changes this choice.</p>
+      <label>
+        Delivery mode
+        <select name="email_delivery_mode" aria-describedby="clone-delivery-help">
+          <option value="none" {% if form.email_delivery_mode == "none" or not form.email_delivery_mode %}selected{% endif %}>{{ delivery_mode_labels.none }}</option>
+          <option value="pending" {% if form.email_delivery_mode == "pending" %}selected{% endif %}>{{ delivery_mode_labels.pending }}</option>
+          <option value="send-now" {% if form.email_delivery_mode == "send-now" %}selected{% endif %}>{{ delivery_mode_labels["send-now"] }}</option>
+          <option value="enqueue" {% if form.email_delivery_mode == "enqueue" %}selected{% endif %}>{{ delivery_mode_labels.enqueue }}</option>
+        </select>
+      </label>
+      <p class="field-help" id="clone-delivery-help">
+        Send-now and enqueue suppress the browser display and dispatch only AFTER the clone is committed. A post-commit dispatch failure never requires a second clone: the pending delivery keeps its stable ID and can be retried through the existing one-time sendability flow.
+      </p>
+      <button type="submit">Review clone plan</button>
+    </section>
+  </form>
+</section>
+<script src="{{ asset_url('key-clone.js') }}"></script>
+{% endblock %}
