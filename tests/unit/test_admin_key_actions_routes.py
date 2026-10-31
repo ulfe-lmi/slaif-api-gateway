@@ -288,6 +288,14 @@ def test_update_policy_calls_key_service_with_actor_reason_and_policy(monkeypatc
     async def update_gateway_key_policy(self, payload):
         seen["payload"] = payload
 
+    async def get_gateway_key_by_id(self, requested_id):
+        assert requested_id == gateway_key_id
+        return SimpleNamespace(id=gateway_key_id, metadata_json={})
+
+    monkeypatch.setattr(
+        "slaif_gateway.db.repositories.keys.GatewayKeysRepository.get_gateway_key_by_id",
+        get_gateway_key_by_id,
+    )
     monkeypatch.setattr(
         "slaif_gateway.api.admin._validate_admin_request_policy",
         validate_admin_request_policy,
@@ -303,6 +311,7 @@ def test_update_policy_calls_key_service_with_actor_reason_and_policy(monkeypatc
         f"/admin/keys/{gateway_key_id}/policy",
         data={
             "csrf_token": "dashboard-csrf",
+            "allow_all_providers": "true",
             "allowed_models": "gpt-5.2\ngpt-5.1",
             "allowed_endpoints": "/v1/models\n/v1/chat/completions",
             "reason": "fix swapped policy",

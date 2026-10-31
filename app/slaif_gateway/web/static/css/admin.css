@@ -1789,3 +1789,60 @@ td.col-subject {
     min-width: 56rem;
   }
 }
+
+/* --- 207-a: field help, advanced configuration, rate editor, explain ----- */
+
+.field-help {
+  margin: 0 0 0.65rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.config-json {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  width: 100%;
+  min-height: 9rem;
+}
+
+.config-sample {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+  font-size: 0.78rem;
+}
+
+.rate-editor-grid {
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+}
+
+.rate-editor-member {
+  display: grid;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  background: var(--surface);
+}
+
+.explain-report {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.55rem;
+  padding: 0.75rem 1rem;
+  background: var(--background);
+}
+
+.explain-report dl {
+  margin: 0;
+}
+
+@media (max-width: 700px) {
+  .rate-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}

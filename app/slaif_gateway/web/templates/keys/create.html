@@ -66,17 +66,20 @@
       <div class="form-grid">
         <label>
           Valid from (UTC)
-          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60" autocomplete="off">
+          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-validity-help">
         </label>
         <label>
           Valid until (UTC)
-          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60" autocomplete="off">
+          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="create-validity-help">
         </label>
         <label>
           Valid days
-          <input name="valid_days" value="{{ form.valid_days }}" inputmode="numeric" autocomplete="off" placeholder="30">
+          <input name="valid_days" value="{{ form.valid_days }}" inputmode="numeric" autocomplete="off" placeholder="30" aria-describedby="create-validity-help">
         </label>
       </div>
+      <p class="field-help" id="create-validity-help">
+        Key validity is an identity fact, stored on the key row: it is not part of the advanced configuration document and cannot be changed by one.
+      </p>
     </section>
 
     <section class="action-panel" aria-labelledby="create-limits-heading">
@@ -85,23 +88,50 @@
       <div class="form-grid">
         <label>
           Cost limit EUR
-          <input name="cost_limit_eur" value="{{ form.cost_limit_eur }}" inputmode="decimal" autocomplete="off">
+          <input name="cost_limit_eur" value="{{ form.cost_limit_eur }}" inputmode="decimal" autocomplete="off" aria-describedby="create-limits-help">
         </label>
         <label>
           Token limit
-          <input name="token_limit_total" value="{{ form.token_limit_total }}" inputmode="numeric" autocomplete="off">
+          <input name="token_limit_total" value="{{ form.token_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-limits-help">
         </label>
         <label>
           Request limit
-          <input name="request_limit_total" value="{{ form.request_limit_total }}" inputmode="numeric" autocomplete="off">
+          <input name="request_limit_total" value="{{ form.request_limit_total }}" inputmode="numeric" autocomplete="off" aria-describedby="create-limits-help">
         </label>
       </div>
+      <p class="field-help" id="create-limits-help">
+        Blank means UNLIMITED for that lifetime quota (stored null, never zero). In a configuration document the same null/omission law applies.
+      </p>
     </section>
 
     <section class="action-panel" aria-labelledby="create-policy-heading">
       <h2 id="create-policy-heading">Request Policy</h2>
       {% set selector_id_prefix = "create-policy" %}
       {% include "keys/_policy_selector.html" %}
+    </section>
+
+    <section class="action-panel" aria-labelledby="create-policy-source-heading">
+      <h2 id="create-policy-source-heading">Policy Source</h2>
+      <p class="muted">Choose where this key's POLICY fields come from: the guided controls on this page, or one advanced version-1 configuration document. Identity fields (owner, cohort, validity, delivery, reason) are always guided.</p>
+      <label>
+        Policy source
+        <select name="policy_source" aria-describedby="create-policy-source-help">
+          <option value="guided" {% if form.policy_source != "configuration" %}selected{% endif %}>Guided fields (recommended)</option>
+          <option value="configuration" {% if form.policy_source == "configuration" %}selected{% endif %}>Advanced configuration document (JSON)</option>
+        </select>
+      </label>
+      <p class="field-help" id="create-policy-source-help">
+        Document mode applies the SAME strict version-1 schema as the CLI: unknown or duplicate fields are rejected,
+        omitted fields take service defaults, <code>null</code> <code>allowed_providers</code> is unrestricted,
+        <code>[]</code> denies all providers, null quotas are unlimited, and null rate members inherit the deployment.
+        In document mode, guided policy controls must be left at defaults: uncheck allow-all providers/models/endpoints,
+        deny-all, live-burn and external-tool fences, and leave their numbers blank.
+      </p>
+      <label>
+        Advanced configuration document
+        <textarea name="configuration_json" rows="8" class="config-json" spellcheck="false" autocomplete="off" data-create-configuration-document aria-describedby="create-policy-source-help">{% if form.configuration_json %}{{ form.configuration_json }}{% endif %}</textarea>
+      </label>
+      <p class="muted small">Required only when policy source is "Advanced configuration document". The document defines policy only; it never carries identity, secrets, owner/cohort, validity, or server settings.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="create-codex-pilot-heading">
@@ -184,21 +214,26 @@
       <div class="form-grid">
         <label>
           Requests per minute
-          <input name="rate_limit_requests_per_minute" value="{{ form.rate_limit_requests_per_minute }}" inputmode="numeric" autocomplete="off">
+          <input name="rate_limit_requests_per_minute" value="{{ form.rate_limit_requests_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help">
         </label>
         <label>
           Tokens per minute
-          <input name="rate_limit_tokens_per_minute" value="{{ form.rate_limit_tokens_per_minute }}" inputmode="numeric" autocomplete="off">
+          <input name="rate_limit_tokens_per_minute" value="{{ form.rate_limit_tokens_per_minute }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help">
         </label>
         <label>
           Concurrent requests
-          <input name="rate_limit_concurrent_requests" value="{{ form.rate_limit_concurrent_requests }}" inputmode="numeric" autocomplete="off">
+          <input name="rate_limit_concurrent_requests" value="{{ form.rate_limit_concurrent_requests }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help">
         </label>
         <label>
           Window seconds
-          <input name="rate_limit_window_seconds" value="{{ form.rate_limit_window_seconds }}" inputmode="numeric" autocomplete="off">
+          <input name="rate_limit_window_seconds" value="{{ form.rate_limit_window_seconds }}" inputmode="numeric" autocomplete="off" aria-describedby="create-rate-limit-help">
         </label>
       </div>
+      <p class="field-help" id="create-rate-limit-help">
+        Positive whole counts per selected window (Window seconds blank = the deployment's 60s default).
+        Blank inherits the deployment default; zero is not accepted. Enforced only while
+        {% if redis_rate_limits_enabled %}Redis rate limiting is enabled.{% else %}Redis rate limiting is currently DISABLED, so stored values do not enforce until ENABLE_REDIS_RATE_LIMITS is true.{% endif %}
+      </p>
       <fieldset data-lazy-throttling-surface>
         <legend>When a rate limit is reached</legend>
         <p class="muted">Optional lazy (waiting) throttling for this key. Waiting precedes provider execution; queue full or deadline returns 429, and disconnected requests are canceled. Hard quota, security, and hosted-tool fence refusals remain immediate, and streaming starts only after admission.</p>
@@ -293,8 +328,9 @@
       <p class="muted small">Send-now and enqueue suppress browser plaintext display. Pending creates a delivery record but still shows the key once. Celery payloads contain IDs only, and provider keys are never involved.</p>
       <label>
         Audit reason
-        <input name="reason" value="{{ form.reason }}" required autocomplete="off" placeholder="Required reason">
+        <input name="reason" value="{{ form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="create-reason-help">
       </label>
+      <p class="field-help" id="create-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
       <button type="submit">Create key</button>
     </section>
   </form>
@@ -302,4 +338,41 @@
 <script src="{{ asset_url('policy-selector.js') }}"></script>
 <script src="{{ asset_url('streaming-live-burn.js') }}"></script>
 <script src="{{ asset_url('lazy-throttling.js') }}"></script>
+<script>
+(() => {
+  // Policy-source switch (G01 advanced document mode): in document mode the
+  // guided POLICY checkboxes default to "off" (the server still enforces the
+  // single-source law; identity checkboxes such as trusted calibration are
+  // untouched and rejected server-side in document mode).
+  const source = document.querySelector('select[name="policy_source"]');
+  const doc = document.querySelector('[data-create-configuration-document]');
+  if (!source || !doc) return;
+  const guidedPolicyControls = [
+    'input[name="allow_all_providers"]',
+    'input[name="provider_deny_all"]',
+    'input[name="allow_all_models"]',
+    'input[name="allow_all_endpoints"]',
+    'input[name="chat_streaming_live_burn_enabled"]',
+    'input[name="confirm_external_tool_fenced"]',
+  ];
+  const syncPolicySource = () => {
+    const documentMode = source.value === "configuration";
+    // Only DOCUMENT mode resets the guided policy controls; guided mode
+    // keeps its explicit defaults (the allow-all checkbox stays checked)
+    // so no-JS and JS submissions carry the same visible state.
+    if (documentMode) {
+      for (const selector of guidedPolicyControls) {
+        const control = document.querySelector(selector);
+        if (control && control.checked) {
+          control.checked = false;
+          control.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      }
+    }
+    doc.hidden = !documentMode;
+  };
+  source.addEventListener("change", syncPolicySource);
+  syncPolicySource();
+})();
+</script>
 {% endblock %}

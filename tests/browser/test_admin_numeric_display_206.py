@@ -522,7 +522,14 @@ def test_key_detail_live_burn_zero_and_raw_inputs(chromium, num_env) -> None:
         # 206-b: the service-built rate-limit summary renders grouped
         # req/min and M tokens/min; the exact unrounded service string
         # stays in the accessible title.
-        rate_dd = page.locator("dt:has-text('Rate limits') + dd")  # type: ignore[attr-defined]
+        # 207 added a second "Rate limits" row in the Effective Policy
+        # section; scope this legacy-Policy summary to its own
+        # detail-section (direct-child heading) so the outer dashboard
+        # shell, which contains both rows, cannot qualify.
+        rate_dd = page.locator(  # type: ignore[attr-defined]
+            "section.detail-section:has(> h2:text-is('Policy'))"
+            " dt:has-text('Rate limits') + dd"
+        )
         assert rate_dd.inner_text().strip() == "937,826,734 req/min, 937.827M tokens/min"
         assert rate_dd.get_attribute("title") == "937826734 req/min, 937826734 tokens/min"
 

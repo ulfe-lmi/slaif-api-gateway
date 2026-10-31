@@ -674,4 +674,179 @@ and
 206-a numeric-display record (confirmed `0E-9` source and `1E-9`
 distinction, formatter matrix, ASGI render facts, actual
 Chromium/owned-PG facts, screenshots, raw sort/input law, and
-limitations).
+limitations) and
+`docs/verification/gui-cli-parity.md` for the 207 (207-a + 207-b)
+key-policy administration record (provider tri-state, advanced
+configuration import/export, existing-key rate editor, effective
+inspection and explain model access, the 207-b privacy/download/
+reason-bound repairs, no-JS fallback facts, and screenshots).
+
+
+## 8. Key policy administration (207-a + 207-b)
+
+This section documents the key-management surfaces delivered by
+objective 207-a (G01-G03 of `docs/MISSING_GUI_FUNCTIONALITY.md`) and
+repaired by 207-b on the same PR (credential privacy at the new/touched
+seams, the non-rotating configuration download, and the GUI-side
+reason bound). They reuse the existing shared services; no new database
+schema, table, or client/server module was added, and no new sortable
+tables were introduced (the rate editor and inspection blocks are
+grouped field cards, not tables).
+
+### 8.1 Navigation
+
+- **Create key** (`/admin/keys/create`): the existing guided form keeps all
+  prior fields. The policy section gains the labeled provider mode
+  checkboxes and a new "Policy Source" section that chooses between the
+  guided fields and one advanced version-1 configuration document.
+- **Key detail** (`/admin/keys/{id}`): a new "Effective Policy
+  (configuration only)" readout section near the top, then the existing
+  "Update Request Policy" form (with the tri-state provider controls), then
+  the new "Operational Rate Limits (Redis)" editor, "Explain Model Access
+  (configuration only)" panel, and "Advanced Configuration (versioned
+  JSON)" section. All legacy sections (policy selector, lazy throttling,
+  streaming live-burn, external tools, quotas, lifecycle, rotation, usage
+  reset) remain unchanged.
+
+### 8.2 Provider tri-state semantics
+
+Exactly one provider mode applies, and it is expressed explicitly:
+
+- **Allow all enabled providers (unrestricted)**: stored `null`. This is
+  the guided create default (the checkbox starts checked); no-JS
+  submissions carry the same visible state.
+- **Selected providers (allow-list)**: leave both mode checkboxes off and
+  choose at least one provider. On an existing key, stored providers that
+  are now disabled or older stay listed (labeled `slug | manual entry`) and
+  are preserved on save.
+- **Deny all providers**: stored `[]`, an explicit checkbox. A deny-all key
+  cannot use any provider route.
+
+A submission with **neither** mode checked and an **empty** selection is
+refused with a fixed error ("...an empty selection never grants
+unrestricted access."); it never broadens authority. When JavaScript is
+enabled the two mode checkboxes are mutually exclusive and either one locks
+the selection grid; the server enforces the same law on every POST, so
+no-JS forms and direct submissions follow the identical rules.
+
+### 8.3 Advanced configuration document
+
+The create page (document mode) and the key-detail "Apply configuration
+update" form accept the SAME strict version-1 document the CLI uses:
+`schema_version` must be `1`; unknown or duplicate fields are rejected with
+fixed safe errors; the document is capped at 64 KB; `cost_limit_eur` accepts
+a decimal string or number and exports with exact 9-dp Decimal rendering.
+
+Semantics (presence-aware, matching the CLI `policy update --policy-file`
+law):
+
+- an **omitted** field leaves the key's current value untouched;
+- `null` `allowed_providers` is unrestricted and `[]` denies all;
+- null quotas are unlimited (null, never zero);
+- null rate members inherit the deployment; null lazy policy means reject;
+- explicit `null` and `[]` keep their distinct meanings.
+
+Non-goals: the document carries policy only - never identity (owner,
+cohort, validity, delivery), never secrets, never server environment.
+Existing bound client-module repin/removal stays blocked and must use the
+reviewed compatibility migration path, not this editor. Mutations require
+the confirmation checkbox plus a bounded reason — nonblank, at most
+512 Unicode characters, enforced server-side on these GUI seams with a
+fixed safe refusal before mutation or audit, and matching `maxlength`
+plus visible field help on the field (207-b; the unchanged CLI is not
+claimed to enforce this bound) — with the actor from the session. A
+rejected document is never redisplayed. Credential protection at
+these seams is scoped by value kind (recognized through the existing
+redaction rules, including configured accepted key prefixes):
+credential-shaped MODEL identifiers in the document's
+`allowed_models` are refused with a fixed safe message before the
+shared validators (whose safe message would embed the rejected
+model); credential-shaped values in the reason or other retained
+fields are MASKED — a valid change with a credential-shaped reason
+still succeeds and is stored/redisplayed masked. A recognized shape
+never reaches the re-rendered form, the flash, the logs, the audit
+note, or the export, and useful ordinary values are preserved. The
+download link serves
+only the service's allowlisted projection as an `attachment` with
+`Cache-Control: no-store` and a
+`slaif-key-configuration-<public_key_id>.json` filename; it authenticates
+through a non-rotating read-only session context (same real
+active/expired/revoked session checks, same login behavior) that does
+NOT refresh the stored CSRF token, so the detail page can be downloaded
+and then edited with its own still-displayed form (browser-qualified
+in 207-b).
+
+In document mode on the create page, the guided POLICY controls are reset
+to off by the page script (the server additionally rejects guided policy
+fields submitted alongside a document); identity fields always stay guided.
+In guided mode the explicit defaults are preserved, so JavaScript and no-JS
+submissions express the same state.
+
+### 8.4 Rate editor: units, inheritance, and the no-op law
+
+The per-member editor offers four independent actions - leave unchanged,
+set a positive whole number, or clear (inherit the deployment). Counts are
+requests-per-window, tokens-per-window, and concurrent requests; the window
+member is seconds. Zero is not a value (inherit is the "clear" action),
+and a submission that changes nothing is refused with a fixed message.
+Clearing the window member has no deployment default: it falls back to the
+runtime's standard window. The editor applies the shared
+`KeyService.update_gateway_key_rate_limits` operation with the session
+actor and the bounded reason (nonblank, at most 512 Unicode
+characters, GUI-side bound with the fixed safe refusal before
+mutation or audit); lifetime quotas, lazy mode, validity, replay/
+module binding, material, usage, and reservations are never touched.
+Readable values note that enforcement happens only while
+`ENABLE_REDIS_RATE_LIMITS` is true; the page says so explicitly when Redis
+rate limiting is disabled.
+
+### 8.5 Configuration-only explanations
+
+The "Effective Policy" section and "Explain Model Access" panel are
+**configuration-only** projections built by the shared
+`key_policy_inspection` functions (the same code the CLI uses): they show
+configured/effective/source per control, the provider state, and - for a
+requested model/endpoint - the shared verdict, blockers, resolution,
+allow-list intersection, bounds, and not-evaluated states. They perform no
+authentication as the key, no admission/quota/pricing check, no counter
+reset, and no provider call, and they are labeled as such on the page. If
+the inspection context cannot be built, the explain action answers with a
+fixed 503 "Policy explanation is currently unavailable." rather than a
+partial answer.
+
+### 8.6 Privacy, authorization, and help patterns
+
+- Every touched control is wrapped in a `<label>` and carries
+  `aria-describedby` help beside or below the field (units, blank/default/
+  inherit/deny meanings, and examples where useful); help is text, not
+  placeholder-only.
+- All mutations go through the existing session/CSRF contexts with the
+  session as actor; reasons on the new/touched key mutations are
+  nonblank and at most 512 Unicode characters (server-side refusal
+  before mutation or audit; this corrects the 207-a record's
+  unqualified "bounded" wording); confirmations are explicit
+  checkboxes where the action is destructive or ambiguous.
+- Fixed safe error messages never echo submitted values. On the 207
+  surfaces, credential-shaped model identifiers are refused with a
+  fixed safe message BEFORE reaching the shared validators, and
+  credential-shaped values in reasons and the other retained form
+  values are masked in every retained surface — the re-rendered
+  form, flash errors, audit notes, and failure logs — while useful
+  ordinary values remain readable for correction. Explain model
+  access keeps the unchanged shared classifier on the original input
+  and masks only its retained form display. Downloads are
+  private/no-store and do not rotate the form CSRF; no plaintext key
+  material is added to URLs, forms, or local storage.
+
+### 8.7 Upgrade notes
+
+Deploying this change is a normal rebuild/restart of the API assets; there
+is **no schema migration** and no policy mass-update. Historical deny-all
+keys stay deny-all, and stored allow-lists keep their values. The behavior
+change for operators: a POST that leaves the provider selection empty with
+no mode checked now **fails closed** instead of silently meaning
+unrestricted - creating an unrestricted key requires the explicit
+"Allow all enabled providers" mode (the guided default). A reason
+longer than 512 characters on a new/touched key mutation is refused
+with a fixed message (no mutation, no audit row); the affected fields
+show `maxlength=512` and the matching visible help.

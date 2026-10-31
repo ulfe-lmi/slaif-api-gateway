@@ -69,6 +69,11 @@ from slaif_gateway.services.codex_profile_registry import (
 )
 from slaif_gateway.services.admin_export_service import AdminCsvExportResult, AdminCsvExportService
 from slaif_gateway.schemas.admin_keys import LazyThrottlingOperatorCeilings
+from slaif_gateway.schemas.key_configuration import (
+    MAX_KEY_CONFIGURATION_REASON_LENGTH,
+    KeyConfigurationError,
+    parse_key_configuration_file,
+)
 from slaif_gateway.services.admin_key_dashboard import (
     AdminKeyDashboardService,
     AdminKeyNotFoundError,
@@ -229,7 +234,17 @@ from slaif_gateway.schemas.keys import (
     UpdateGatewayKeyLazyThrottlingInput,
     UpdateGatewayKeyLimitsInput,
     UpdateGatewayKeyPolicyInput,
+    UpdateGatewayKeyConfigurationInput,
+    UpdateGatewayKeyRateLimitsInput,
     UpdateGatewayKeyValidityInput,
+)
+from slaif_gateway.services.key_policy_configuration import (
+    build_create_gateway_key_input,
+)
+from slaif_gateway.services.key_policy_inspection import (
+    KeyPolicyInspectionContext,
+    build_key_policy_inspection,
+    explain_model_route_access,
 )
 from slaif_gateway.services.chat_streaming_live_burn import (
     ChatStreamingLiveBurnPolicyError,
@@ -546,6 +561,14 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_validity_updated": ("success", "Gateway key validity updated."),
     "key_limits_updated": ("success", "Gateway key hard quota limits updated."),
     "key_policy_updated": ("success", "Gateway key request policy updated."),
+    "key_rate_limits_updated": (
+        "success",
+        "Gateway key operational rate limits updated.",
+    ),
+    "key_configuration_updated": (
+        "success",
+        "Gateway key advanced configuration updated.",
+    ),
     "key_lazy_throttling_updated": (
         "success",
         "Gateway key lazy throttling policy updated.",
@@ -573,6 +596,18 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "key_policy_reason_required": (
         "error",
         "Enter an audit reason before updating request policy.",
+    ),
+    "key_rate_limits_reason_required": (
+        "error",
+        "Enter an audit reason before updating operational rate limits.",
+    ),
+    "key_configuration_reason_required": (
+        "error",
+        "Enter an audit reason before updating the advanced key configuration.",
+    ),
+    "key_configuration_confirmation_required": (
+        "error",
+        "Confirm the advanced key configuration update before continuing.",
     ),
     "key_lazy_throttling_reason_required": (
         "error",
@@ -975,8 +1010,11 @@ async def create_admin_key(
     allowed_models: str = Form(""),
     allowed_endpoints: str = Form(""),
     allow_all_providers: str = Form(""),
+    provider_deny_all: str = Form(""),
     allow_all_models: str = Form(""),
     allow_all_endpoints: str = Form(""),
+    policy_source: str = Form("guided"),
+    configuration_json: str = Form(""),
     rate_limit_requests_per_minute: str = Form(""),
     rate_limit_tokens_per_minute: str = Form(""),
     rate_limit_concurrent_requests: str = Form(""),
@@ -1023,8 +1061,11 @@ async def create_admin_key(
         "allowed_models": allowed_models,
         "allowed_endpoints": allowed_endpoints,
         "allow_all_providers": allow_all_providers,
+        "provider_deny_all": provider_deny_all,
         "allow_all_models": allow_all_models,
         "allow_all_endpoints": allow_all_endpoints,
+        "policy_source": policy_source,
+        "configuration_json": configuration_json,
         "rate_limit_requests_per_minute": rate_limit_requests_per_minute,
         "rate_limit_tokens_per_minute": rate_limit_tokens_per_minute,
         "rate_limit_concurrent_requests": rate_limit_concurrent_requests,
@@ -1053,28 +1094,47 @@ async def create_admin_key(
     options = await _load_key_create_form_options(request)
 
     try:
-        parsed_input = _parse_key_create_form(
-            form,
-            actor_admin_id=action_context.admin_user.id,
-            settings=settings,
-            available_provider_values=await _admin_enabled_provider_values_for(
-                request, form
-            ),
-        )
-        validated_request_policy = await _validate_admin_request_policy(
-            request,
-            allowed_models=parsed_input.allowed_models,
-            allowed_endpoints=parsed_input.allowed_endpoints,
-            allow_all_models=parsed_input.allow_all_models,
-            allow_all_endpoints=parsed_input.allow_all_endpoints,
-        )
-        parsed_input = replace(
-            parsed_input,
-            allowed_models=validated_request_policy.allowed_models,
-            allowed_endpoints=validated_request_policy.allowed_endpoints,
-            allow_all_models=validated_request_policy.allow_all_models,
-            allow_all_endpoints=validated_request_policy.allow_all_endpoints,
-        )
+        policy_source_mode = (policy_source or "guided").strip().lower()
+        if policy_source_mode not in {"guided", "configuration"}:
+            raise ValueError(
+                "Select a valid policy source: guided fields or advanced "
+                "configuration document."
+            )
+        if policy_source_mode == "configuration":
+            parsed_input = _parse_key_create_configuration_form(
+                form,
+                actor_admin_id=action_context.admin_user.id,
+                settings=settings,
+            )
+            for model in parsed_input.allowed_models:
+                if _admin_value_contains_credential_shape(model, settings):
+                    raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
+        else:
+            parsed_input = _parse_key_create_form(
+                form,
+                actor_admin_id=action_context.admin_user.id,
+                settings=settings,
+                available_provider_values=await _admin_enabled_provider_values_for(
+                    request, form
+                ),
+            )
+            for model in parsed_input.allowed_models:
+                if _admin_value_contains_credential_shape(model, settings):
+                    raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
+            validated_request_policy = await _validate_admin_request_policy(
+                request,
+                allowed_models=parsed_input.allowed_models,
+                allowed_endpoints=parsed_input.allowed_endpoints,
+                allow_all_models=parsed_input.allow_all_models,
+                allow_all_endpoints=parsed_input.allow_all_endpoints,
+            )
+            parsed_input = replace(
+                parsed_input,
+                allowed_models=validated_request_policy.allowed_models,
+                allowed_endpoints=validated_request_policy.allowed_endpoints,
+                allow_all_models=validated_request_policy.allow_all_models,
+                allow_all_endpoints=validated_request_policy.allow_all_endpoints,
+            )
         if _is_checked(codex_protocol_pilot) and _is_checked(qwen_codex):
             raise ValueError("Select only one Codex key mode.")
         if _is_checked(codex_protocol_pilot):
@@ -1114,6 +1174,7 @@ async def create_admin_key(
                 "Trusted calibration keys may only use none or pending email delivery modes."
             )
     except (KeyManagementError, ValueError) as exc:
+        form["configuration_json"] = ""
         diagnostic_id = _admin_diagnostic_id(request)
         _log_admin_action_failure(
             request,
@@ -1128,7 +1189,7 @@ async def create_admin_key(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             options=options,
-            form=form,
+            form=_admin_redact_key_form_values(form, settings),
             choices=await _load_admin_record_choices_safe(
                 request,
                 (
@@ -1136,7 +1197,7 @@ async def create_admin_key(
                     ("cohort_id", "cohort", form.get("cohort_id")),
                 ),
             ),
-            error=str(exc),
+            error=_admin_redact_key_form_value(str(exc), settings),
             diagnostic_id=diagnostic_id,
             status_code=400,
         )
@@ -1151,12 +1212,13 @@ async def create_admin_key(
         ):
             owner = await owners_repository.get_owner_by_id(parsed_input.owner_id)
             if owner is None:
+                form["configuration_json"] = ""
                 return _render_key_create_form(
                     request,
                     admin=action_context.admin_user,
                     csrf_token=csrf_token,
                     options=options,
-                    form=form,
+                    form=_admin_redact_key_form_values(form, settings),
                     choices=await _load_admin_record_choices_safe(
                         request,
                         (
@@ -1171,12 +1233,13 @@ async def create_admin_key(
             if parsed_input.cohort_id is not None:
                 cohort = await cohorts_repository.get_cohort_by_id(parsed_input.cohort_id)
                 if cohort is None:
+                    form["configuration_json"] = ""
                     return _render_key_create_form(
                         request,
                         admin=action_context.admin_user,
                         csrf_token=csrf_token,
                         options=options,
-                        form=form,
+                        form=_admin_redact_key_form_values(form, settings),
                         choices=await _load_admin_record_choices_safe(
                             request,
                             (
@@ -1207,18 +1270,20 @@ async def create_admin_key(
             cohort_id=parsed_input.cohort_id,
             email_delivery_mode=parsed_email_delivery_mode,
         )
-        error_message = (
+        form["configuration_json"] = ""
+        error_message = _admin_redact_key_form_value(
             exc.safe_message
             if isinstance(exc, KeyManagementError)
             and exc.error_code == "invalid_gateway_key_policy"
-            else _ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1]
+            else _ADMIN_STATUS_MESSAGES["gateway_key_create_failed"][1],
+            settings,
         )
         return _render_key_create_form(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             options=options,
-            form=form,
+            form=_admin_redact_key_form_values(form, settings),
                 choices=await _load_admin_record_choices_safe(
                     request,
                     (
@@ -1583,7 +1648,7 @@ async def admin_key_detail(request: Request, gateway_key_id: str) -> Response:
         return _admin_error_page(request, status_code=404, message="Gateway key not found.")
 
     policy_catalog = await _load_key_policy_catalog(request)
-    return _render_key_detail(
+    return await _render_key_detail(
         request,
         admin=context.admin_user,
         csrf_token=csrf_token,
@@ -2189,6 +2254,7 @@ async def update_admin_key_policy(
     allowed_models: str = Form(""),
     allowed_endpoints: str = Form(""),
     allow_all_providers: str = Form(""),
+    provider_deny_all: str = Form(""),
     allow_all_models: str = Form(""),
     allow_all_endpoints: str = Form(""),
     reason: str = Form(""),
@@ -2205,52 +2271,70 @@ async def update_admin_key_policy(
     if isinstance(action_context, Response):
         return action_context
 
-    cleaned_reason = _clean_admin_reason(reason)
+    policy_form = {
+        "allowed_providers": allowed_providers,
+        "allowed_models": allowed_models,
+        "allowed_endpoints": allowed_endpoints,
+        "allow_all_providers": allow_all_providers,
+        "provider_deny_all": provider_deny_all,
+        "allow_all_models": allow_all_models,
+        "allow_all_endpoints": allow_all_endpoints,
+        "reason": reason,
+    }
+    cleaned_reason, reason_error = _admin_bounded_reason(reason)
     if cleaned_reason is None:
         return await _render_key_policy_error(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             gateway_key_id=parsed_key_id,
-            error=_ADMIN_STATUS_MESSAGES["key_policy_reason_required"][1],
-            policy_form={
-                "allowed_providers": allowed_providers,
-                "allowed_models": allowed_models,
-                "allowed_endpoints": allowed_endpoints,
-                "allow_all_providers": allow_all_providers,
-                "allow_all_models": allow_all_models,
-                "allow_all_endpoints": allow_all_endpoints,
-                "reason": reason,
-            },
+            error=reason_error or _ADMIN_STATUS_MESSAGES["key_policy_reason_required"][1],
+            policy_form=_admin_redact_key_form_values(policy_form, settings),
         )
-
-    policy_form = {
-        "allowed_providers": allowed_providers,
-        "allowed_models": allowed_models,
-        "allowed_endpoints": allowed_endpoints,
-        "allow_all_providers": allow_all_providers,
-        "allow_all_models": allow_all_models,
-        "allow_all_endpoints": allow_all_endpoints,
-        "reason": reason,
-    }
+    cleaned_reason = _admin_redact_key_form_value(cleaned_reason, settings)
     try:
+        submitted_models = _parse_admin_text_list(allowed_models)
+        for model in submitted_models:
+            if _admin_value_contains_credential_shape(model, settings):
+                raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
         validated_request_policy = await _validate_admin_request_policy(
             request,
-            allowed_models=_parse_admin_text_list(allowed_models),
+            allowed_models=submitted_models,
             allowed_endpoints=_parse_admin_text_list(allowed_endpoints),
             allow_all_models=_is_checked(allow_all_models),
             allow_all_endpoints=_is_checked(allow_all_endpoints),
         )
-        async with _admin_key_management_service_scope(request) as service:
+        async with _admin_key_management_runtime_scope(request) as (
+            keys_repository,
+            service,
+        ):
+            current_key = await keys_repository.get_gateway_key_by_id(parsed_key_id)
+            if current_key is None:
+                return await _render_key_policy_error(
+                    request,
+                    admin=action_context.admin_user,
+                    csrf_token=csrf_token,
+                    gateway_key_id=parsed_key_id,
+                    error="Gateway key not found.",
+                    policy_form=_admin_redact_key_form_values(policy_form, settings),
+                )
+            raw_providers = current_key.metadata_json.get("allowed_providers")
+            if isinstance(raw_providers, list) and raw_providers:
+                preserved_providers = tuple(
+                    str(item) for item in raw_providers if str(item).strip()
+                )
+            else:
+                preserved_providers = ()
+            allowed_providers = _parse_admin_allowed_providers(
+                policy_form,
+                available_provider_values=await _admin_enabled_provider_values_for(
+                    request, policy_form, preserved_provider_values=preserved_providers
+                ),
+            )
             await service.update_gateway_key_policy(
                 UpdateGatewayKeyPolicyInput(
                     gateway_key_id=parsed_key_id,
-                    allowed_providers=_parse_admin_allowed_providers(
-                        policy_form,
-                        available_provider_values=await _admin_enabled_provider_values_for(
-                            request, policy_form
-                        ),
-                    ),
+                    allowed_providers=allowed_providers,
                     update_allowed_providers=True,
                     allowed_models=validated_request_policy.allowed_models,
                     allowed_endpoints=validated_request_policy.allowed_endpoints,
@@ -2272,12 +2356,398 @@ async def update_admin_key_policy(
             admin=action_context.admin_user,
             csrf_token=csrf_token,
             gateway_key_id=parsed_key_id,
-            error=exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
-            policy_form=policy_form,
+            error=_admin_redact_key_form_value(
+                exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+                settings,
+            ),
+            policy_form=_admin_redact_key_form_values(policy_form, settings),
             diagnostic_id=_admin_diagnostic_id(request),
         )
 
     return _redirect_to_admin_key(parsed_key_id, message="key_policy_updated")
+
+
+@router.post("/keys/{gateway_key_id}/rate-limits", response_class=HTMLResponse)
+async def update_admin_key_rate_limits(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    rate_action_requests_per_window: str = Form("unchanged"),
+    rate_value_requests_per_window: str = Form(""),
+    rate_action_tokens_per_window: str = Form("unchanged"),
+    rate_value_tokens_per_window: str = Form(""),
+    rate_action_concurrency: str = Form("unchanged"),
+    rate_value_concurrency: str = Form(""),
+    rate_action_window: str = Form("unchanged"),
+    rate_value_window: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    """Existing-key operational rate editor (GUI of ``set-rate-limits``).
+
+    Per-member explicit actions (unchanged / set / clear) are composed
+    against the persisted policy with the canonical CLI law and applied
+    through the same audited ``KeyService`` operation. A no-op edit is
+    refused; zero is never a value (inherit is the clear action); usage,
+    reservations, identities, validity, and secrets are untouched.
+    """
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found(request)
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    rate_form = {
+        "rate_action_requests_per_window": rate_action_requests_per_window,
+        "rate_value_requests_per_window": rate_value_requests_per_window,
+        "rate_action_tokens_per_window": rate_action_tokens_per_window,
+        "rate_value_tokens_per_window": rate_value_tokens_per_window,
+        "rate_action_concurrency": rate_action_concurrency,
+        "rate_value_concurrency": rate_value_concurrency,
+        "rate_action_window": rate_action_window,
+        "rate_value_window": rate_value_window,
+        "reason": reason,
+    }
+    try:
+        cleaned_reason, reason_error = _admin_bounded_reason(reason)
+        if cleaned_reason is None:
+            return await _render_key_rate_limits_error(
+                request,
+                admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                gateway_key_id=parsed_key_id,
+                error=reason_error or _ADMIN_STATUS_MESSAGES["key_rate_limits_reason_required"][1],
+                rate_form=_admin_redact_key_form_values(rate_form, settings),
+            )
+        cleaned_reason = _admin_redact_key_form_value(cleaned_reason, settings)
+        async with _admin_key_management_runtime_scope(request) as (
+            keys_repository,
+            service,
+        ):
+            current_key = await keys_repository.get_gateway_key_by_id(parsed_key_id)
+            if current_key is None:
+                return await _render_key_rate_limits_error(
+                    request,
+                    admin=action_context.admin_user,
+                    csrf_token=csrf_token,
+                    gateway_key_id=parsed_key_id,
+                    error="Gateway key not found.",
+                    rate_form=_admin_redact_key_form_values(rate_form, settings),
+                )
+            current_policy = _admin_rate_limit_policy_from_key(current_key)
+            final_policy = _compose_admin_rate_limit_policy(rate_form, current_policy)
+            if _admin_rate_limit_policy_no_change(current_policy, final_policy):
+                return await _render_key_rate_limits_error(
+                    request,
+                    admin=action_context.admin_user,
+                    csrf_token=csrf_token,
+                    gateway_key_id=parsed_key_id,
+                    error=(
+                        "No rate-limit change requested. Set or clear at "
+                        "least one member."
+                    ),
+                    rate_form=_admin_redact_key_form_values(rate_form, settings),
+                )
+            await service.update_gateway_key_rate_limits(
+                UpdateGatewayKeyRateLimitsInput(
+                    gateway_key_id=parsed_key_id,
+                    rate_limit_policy=final_policy or None,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except (KeyManagementError, ValueError) as exc:
+        _log_admin_key_policy_failure(
+            request,
+            exc=exc,
+            admin_id=action_context.admin_user.id,
+            gateway_key_id=parsed_key_id,
+        )
+        return await _render_key_rate_limits_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            gateway_key_id=parsed_key_id,
+            error=_admin_redact_key_form_value(
+                exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+                settings,
+            ),
+            rate_form=_admin_redact_key_form_values(rate_form, settings),
+            diagnostic_id=_admin_diagnostic_id(request),
+        )
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_rate_limits_updated")
+
+
+@router.post("/keys/{gateway_key_id}/explain-route", response_class=HTMLResponse)
+async def explain_admin_key_route_access(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    endpoint: str = Form(""),
+    model: str = Form(""),
+) -> Response:
+    """Authenticated configuration-only "explain model access" (G03).
+
+    Reuses the EXACT shared ``explain_model_route_access`` projection as
+    the CLI ``keys policy explain-route``: same policy checks, ranking /
+    ambiguity handling, and finite reason vocabulary, so GUI and CLI
+    cannot drift. Read-only: no writes, counter resets, provider calls,
+    or authentication as the key.
+    """
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found(request)
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    page_context = await _admin_page_context(request)
+    if isinstance(page_context, Response):
+        return page_context
+    context, csrf_token = page_context
+
+    try:
+        async with _admin_key_dashboard_service_scope(request) as service:
+            key = await service.get_key_detail(parsed_key_id)
+    except AdminKeyNotFoundError:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+
+    try:
+        async with _admin_key_inspection_runtime_scope(request) as (
+            keys_repository,
+            inspection_context,
+        ):
+            key_row = await keys_repository.get_gateway_key_by_id(parsed_key_id)
+            if key_row is None:
+                return _admin_error_page(
+                    request, status_code=404, message="Gateway key not found."
+                )
+            report = await explain_model_route_access(
+                gateway_key=key_row,
+                settings=settings,
+                requested_model=str(model or "").strip(),
+                endpoint=str(endpoint or ""),
+                context=inspection_context,
+            )
+    except (AttributeError, RuntimeError) as exc:
+        structlog.get_logger("admin.explain_route").error(
+            "key_explain_route_unavailable",
+            gateway_key_id=_uuid_for_log(str(gateway_key_id)),
+            error_type=type(exc).__name__,
+        )
+        return _admin_error_page(
+            request,
+            status_code=503,
+            message="Policy explanation is currently unavailable.",
+        )
+
+    return await _render_key_detail(
+        request,
+        admin=context.admin_user,
+        csrf_token=csrf_token,
+        key=key,
+        policy_catalog=await _load_key_policy_catalog(request),
+        policy_form=_default_key_policy_form_for_key(key),
+        lazy_form=_default_key_lazy_throttling_form_for_key(key, settings),
+        explain_report=report,
+        # The typed model/endpoint inputs are re-displayed verbatim in the
+        # form; mask credential shapes on the retained values (the shared
+        # classifier still receives the original input above).
+        explain_form=_admin_redact_key_form_values(
+            {"endpoint": str(endpoint or ""), "model": str(model or "")},
+            settings,
+        ),
+    )
+
+
+@router.get("/keys/{gateway_key_id}/configuration.json")
+async def download_admin_key_configuration(
+    request: Request, gateway_key_id: str
+) -> Response:
+    """Download the key's allowlisted version-1 configuration projection.
+
+    The document is the SAME canonical export the CLI renders (service
+    allowlisted fields only; re-parsed by the strict version-1 schema):
+    no secret material, no arbitrary metadata, no server environment.
+    Served as a private no-store attachment.
+
+    Authentication uses the NON-ROTATING read-only attachment context:
+    page renders refresh the stored CSRF token, but this download must
+    leave it untouched because the origin detail page (and its
+    still-displayed form token) remains in view after the attachment.
+    """
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found(request)
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+
+    attachment_context = await _admin_attachment_context(request)
+    if isinstance(attachment_context, Response):
+        return attachment_context
+
+    try:
+        async with _admin_key_dashboard_service_scope(request) as service:
+            key = await service.get_key_detail(parsed_key_id)
+    except AdminKeyNotFoundError:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+
+    try:
+        async with _admin_key_management_service_scope(request) as service:
+            document = await service.export_gateway_key_configuration(parsed_key_id)
+    except KeyManagementError as exc:
+        return _admin_error_page(
+            request,
+            status_code=409,
+            message=exc.safe_message
+            or "Stored policy cannot be exported as a configuration document.",
+        )
+
+    content = (
+        json.dumps(
+            document,
+            indent=2,
+            sort_keys=True,
+            default=_admin_configuration_json_default,
+        )
+        + "\n"
+    )
+    response = Response(content=content, media_type="application/json")
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="slaif-key-configuration-{key.public_key_id}.json"'
+    )
+    _set_no_store_headers(response)
+    return response
+
+
+@router.post("/keys/{gateway_key_id}/configuration", response_class=HTMLResponse)
+async def update_admin_key_configuration(
+    request: Request,
+    gateway_key_id: str,
+    csrf_token: str = Form(""),
+    configuration_json: str = Form(""),
+    confirm_configuration_update: str = Form(""),
+    reason: str = Form(""),
+) -> Response:
+    """Presence-aware advanced configuration update (GUI of the CLI
+    ``policy update --policy-file`` law).
+
+    The same strict version-1 parser, bounds, and canonical semantics as
+    the CLI: omitted fields preserve the key's current state, explicit
+    ``null`` and ``[]`` keep their distinct meanings, and the service's
+    bound-module migration law stays authoritative (a generic edit cannot
+    repin or remove an already bound client module). Fixed safe errors
+    never echo the submitted document, and the raw text is never
+    retained in an error re-render.
+    """
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found(request)
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+
+    action_context = await _admin_action_context(request, csrf_token=csrf_token)
+    if isinstance(action_context, Response):
+        return action_context
+
+    # PRIVACY LAW: the re-rendered form never retains the submitted
+    # document text (a rejected document may carry secret-shaped values);
+    # only the confirmation and reason are redisplayed.
+    config_form = {
+        "configuration_json": "",
+        "confirm_configuration_update": confirm_configuration_update,
+        "reason": reason,
+    }
+    try:
+        cleaned_reason, reason_error = _admin_bounded_reason(reason)
+        if cleaned_reason is None:
+            return await _render_key_configuration_error(
+                request,
+                admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                gateway_key_id=parsed_key_id,
+                error=reason_error or _ADMIN_STATUS_MESSAGES["key_configuration_reason_required"][1],
+                config_form=_admin_redact_key_form_values(config_form, settings),
+            )
+        cleaned_reason = _admin_redact_key_form_value(cleaned_reason, settings)
+        if not _is_checked(confirm_configuration_update):
+            return await _render_key_configuration_error(
+                request,
+                admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                gateway_key_id=parsed_key_id,
+                error=_ADMIN_STATUS_MESSAGES["key_configuration_confirmation_required"][1],
+                config_form=_admin_redact_key_form_values(config_form, settings),
+            )
+        if not (configuration_json or "").strip():
+            return await _render_key_configuration_error(
+                request,
+                admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                gateway_key_id=parsed_key_id,
+                error="Enter a valid advanced configuration document.",
+                config_form=_admin_redact_key_form_values(config_form, settings),
+            )
+        config = parse_key_configuration_file(configuration_json.encode("utf-8"))
+        # absent (omitted) and explicit null (clear) never carry model
+        # values; only a concrete allow-list can hold model shapes.
+        for model in config.allowed_models if isinstance(config.allowed_models, list) else []:
+            if _admin_value_contains_credential_shape(str(model), settings):
+                raise ValueError(_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE)
+        if config.is_empty():
+            return await _render_key_configuration_error(
+                request,
+                admin=action_context.admin_user,
+                csrf_token=csrf_token,
+                gateway_key_id=parsed_key_id,
+                error="The configuration document contains no requested changes.",
+                config_form=_admin_redact_key_form_values(config_form, settings),
+            )
+        async with _admin_key_management_service_scope(request) as service:
+            await service.update_gateway_key_configuration(
+                UpdateGatewayKeyConfigurationInput(
+                    gateway_key_id=parsed_key_id,
+                    configuration=config,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=cleaned_reason,
+                )
+            )
+    except (KeyConfigurationError, KeyManagementError, ValueError) as exc:
+        _log_admin_key_policy_failure(
+            request,
+            exc=exc,
+            admin_id=action_context.admin_user.id,
+            gateway_key_id=parsed_key_id,
+        )
+        return await _render_key_configuration_error(
+            request,
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            gateway_key_id=parsed_key_id,
+            error=_admin_redact_key_form_value(
+                exc.safe_message if isinstance(exc, KeyManagementError) else str(exc),
+                settings,
+            ),
+            config_form=_admin_redact_key_form_values(config_form, settings),
+            diagnostic_id=_admin_diagnostic_id(request),
+        )
+
+    return _redirect_to_admin_key(parsed_key_id, message="key_configuration_updated")
 
 
 @router.post("/keys/{gateway_key_id}/lazy-throttling", response_class=HTMLResponse)
@@ -2410,7 +2880,7 @@ async def update_admin_key_external_tool_policy(
                 key = await dashboard_service.get_key_detail(parsed_key_id)
             except AdminKeyNotFoundError:
                 return _admin_error_page(request, status_code=404, message="Gateway key not found.")
-        return _render_key_detail(
+        return await _render_key_detail(
             request,
             admin=action_context.admin_user,
             csrf_token=csrf_token,
@@ -7398,6 +7868,28 @@ async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, st
         return response
 
 
+async def _admin_attachment_context(request: Request) -> AdminSessionContext | Response:
+    """Authenticate a read-only attachment WITHOUT rotating form CSRF.
+
+    Same session validation, active/expired/revoked handling, and
+    login-cookie behavior as page renders, but the stored CSRF token is
+    left untouched: the origin page stays displayed after the download,
+    so the still-visible form token on that page must remain valid.
+    """
+    settings = _settings(request)
+    session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
+    if not session_token:
+        return RedirectResponse("/admin/login", status_code=303)
+
+    try:
+        async with _admin_service_scope(request) as service:
+            return await service.validate_admin_session(session_token=session_token)
+    except (AdminSessionError, RuntimeError):
+        response = RedirectResponse("/admin/login", status_code=303)
+        _clear_session_cookie(response, settings)
+        return response
+
+
 async def _load_admin_record_choices(
     request: Request,
     specs: tuple[tuple[str, str, object, object | None], ...],
@@ -7621,6 +8113,72 @@ async def _admin_key_management_runtime_scope(
                     model_routes_repository=ModelRoutesRepository(session),
                 ),
             )
+
+
+@asynccontextmanager
+async def _admin_key_inspection_runtime_scope(
+    request: Request,
+) -> AsyncIterator[tuple[GatewayKeysRepository, KeyPolicyInspectionContext]]:
+    """Read-only runtime for effective-policy inspection and route
+    explanation (GUI mirror of the CLI inspection scope).
+
+    One session (a read snapshot), repositories only: it never constructs
+    a ``KeyService`` and issues no writes, so inspection cannot reset
+    counters, audit, or contact upstreams.
+    """
+    session_factory = get_sessionmaker_from_app(request)
+    async with session_factory() as session:
+        async with session.begin():
+            yield (
+                GatewayKeysRepository(session),
+                KeyPolicyInspectionContext(
+                    model_routes=ModelRoutesRepository(session),
+                    provider_configs=ProviderConfigsRepository(session),
+                ),
+            )
+
+
+async def _load_key_policy_inspection(
+    request: Request, gateway_key_id: uuid.UUID
+) -> dict[str, object] | None:
+    """Configuration-only effective-policy projection for the detail page.
+
+    Uses the SAME shared inspection function as the CLI
+    (``keys policy effective``): configured/effective/source per rate
+    member, lazy state, quotas, provider tri-state, Responses profile and
+    Redis configuration. Returns ``None`` when the row is gone or the
+    read snapshot is unavailable (the page degrades to the stored-summary
+    view; the explain action reports not-found explicitly).
+    """
+    try:
+        async with _admin_key_inspection_runtime_scope(request) as (
+            keys_repository,
+            _context,
+        ):
+            key_row = await keys_repository.get_gateway_key_by_id(gateway_key_id)
+            if key_row is None:
+                return None
+            return build_key_policy_inspection(
+                gateway_key=key_row, settings=_settings(request)
+            )
+    except (AttributeError, RuntimeError):
+        return None
+
+
+def _admin_configuration_json_default(value: object) -> object:
+    """Safe JSON serializer for the configuration download.
+
+    Identical value law to the CLI export (exact decimal strings, ISO
+    datetimes, string UUIDs); the document itself is the service's
+    allowlisted projection, so no secret material is reachable here.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
 
 
 @asynccontextmanager
@@ -8240,6 +8798,10 @@ def _default_key_policy_form_for_key(key: object) -> dict[str, str]:
         "allowed_models": "\n".join(getattr(key, "allowed_models", ()) or ()),
         "allowed_endpoints": "\n".join(getattr(key, "allowed_endpoints", ()) or ()),
         "allow_all_providers": "true" if allowed_providers is None else "",
+        # Tri-state round-trip: ``None`` renders allow-all, the empty tuple
+        # (stored ``[]``) renders explicit deny-all, a non-empty tuple
+        # renders the allow-list. Never collapse ``()`` back into ``None``.
+        "provider_deny_all": "true" if allowed_providers == () else "",
         "allow_all_models": "true" if getattr(key, "allow_all_models", False) else "",
         "allow_all_endpoints": "true" if getattr(key, "allow_all_endpoints", False) else "",
         "reason": "",
@@ -8301,6 +8863,7 @@ def _build_policy_selector_form_state(
     policy_catalog: dict[str, object],
 ) -> dict[str, object]:
     allow_all_providers = _is_checked(form.get("allow_all_providers", ""))
+    provider_deny_all = _is_checked(form.get("provider_deny_all", ""))
     allow_all_models = _is_checked(form.get("allow_all_models", ""))
     allow_all_endpoints = _is_checked(form.get("allow_all_endpoints", ""))
     selected_provider_values = tuple(_parse_admin_text_list(form.get("allowed_providers")))
@@ -8316,6 +8879,8 @@ def _build_policy_selector_form_state(
 
     return {
         "allow_all_providers": allow_all_providers,
+        "provider_deny_all": provider_deny_all,
+        "provider_selection_locked": allow_all_providers or provider_deny_all,
         "allow_all_models": allow_all_models,
         "allow_all_endpoints": allow_all_endpoints,
         "selected_provider_values": selected_provider_values,
@@ -8347,7 +8912,50 @@ def _build_policy_selector_form_state(
     }
 
 
-def _render_key_detail(
+def _admin_rate_policy_from_inspection(
+    inspection: dict[str, object] | None,
+) -> dict[str, int | None] | None:
+    """Prefill source for the rate editor: the inspection's CONFIGURED
+    per-member values (``None`` = inherit the deployment). ``None`` when
+    the inspection snapshot is unavailable (the editor then prefills
+    blank/inherit, and the server-side compose remains authoritative).
+    """
+    if not isinstance(inspection, dict):
+        return None
+    rates = inspection.get("rate_limits")
+    if not isinstance(rates, dict):
+        return None
+    mapping = {
+        "requests_per_minute": "requests_per_window",
+        "tokens_per_minute": "tokens_per_window",
+        "max_concurrent_requests": "concurrency",
+        "window_seconds": "window_seconds",
+    }
+    result: dict[str, int | None] = {}
+    for member, inspection_name in mapping.items():
+        info = rates.get(inspection_name)
+        if not isinstance(info, dict):
+            return None
+        configured = info.get("configured")
+        if configured is not None and (
+            isinstance(configured, bool) or not isinstance(configured, int)
+        ):
+            return None
+        result[member] = configured
+    return result
+
+
+# Documented minimal advanced-configuration sample (rendered beside the
+# textarea; omission / null / empty semantics are explained in the help).
+_KEY_CONFIGURATION_SAMPLE = """{
+  "schema_version": 1,
+  "allowed_providers": null,
+  "rate_limit_policy": {"requests_per_minute": 60},
+  "lazy_throttling_policy": null
+}"""
+
+
+async def _render_key_detail(
     request: Request,
     *,
     admin: object,
@@ -8357,6 +8965,10 @@ def _render_key_detail(
     policy_form: dict[str, str],
     external_policy_form: dict[str, str] | None = None,
     lazy_form: dict[str, str] | None = None,
+    rate_form: dict[str, str] | None = None,
+    explain_report: dict[str, object] | None = None,
+    explain_form: dict[str, str] | None = None,
+    configuration_form: dict[str, str] | None = None,
     error: str | None = None,
     diagnostic_id: str | None = None,
     status_code: int = 200,
@@ -8369,6 +8981,7 @@ def _render_key_detail(
         )
         if destination.strip()
     ]
+    policy_inspection = await _load_key_policy_inspection(request, key.id)
     return templates.TemplateResponse(
         request,
         "keys/detail.html",
@@ -8384,6 +8997,20 @@ def _render_key_detail(
                 policy_form,
                 policy_catalog=policy_catalog,
             ),
+            "policy_inspection": policy_inspection,
+            "rate_form": rate_form
+            or _default_admin_rate_limit_form(
+                _admin_rate_policy_from_inspection(policy_inspection)
+            ),
+            "explain_report": explain_report,
+            "explain_form": explain_form or {"endpoint": "", "model": ""},
+            "configuration_form": configuration_form
+            or {
+                "configuration_json": "",
+                "confirm_configuration_update": "",
+                "reason": "",
+            },
+            "configuration_sample": _KEY_CONFIGURATION_SAMPLE,
             "external_policy_form": external_policy_form
             or _default_external_tool_policy_form_for_key(key),
             "external_tool_capabilities": sorted(KNOWN_EXTERNAL_CAPABILITIES),
@@ -8538,7 +9165,7 @@ async def _render_key_policy_error(
             key = await service.get_key_detail(gateway_key_id)
     except AdminKeyNotFoundError:
         return _admin_error_page(request, status_code=404, message="Gateway key not found.")
-    return _render_key_detail(
+    return await _render_key_detail(
         request,
         admin=admin,
         csrf_token=csrf_token,
@@ -8566,7 +9193,7 @@ async def _render_key_lazy_throttling_error(
             key = await service.get_key_detail(gateway_key_id)
     except AdminKeyNotFoundError:
         return _admin_error_page(request, status_code=404, message="Gateway key not found.")
-    return _render_key_detail(
+    return await _render_key_detail(
         request,
         admin=admin,
         csrf_token=csrf_token,
@@ -8574,6 +9201,66 @@ async def _render_key_lazy_throttling_error(
         policy_catalog=await _load_key_policy_catalog(request),
         policy_form=_default_key_policy_form_for_key(key),
         lazy_form=lazy_form,
+        error=error,
+        diagnostic_id=diagnostic_id,
+        status_code=400,
+    )
+
+
+async def _render_key_rate_limits_error(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    gateway_key_id: uuid.UUID,
+    error: str,
+    rate_form: dict[str, str] | None = None,
+    diagnostic_id: str | None = None,
+) -> Response:
+    try:
+        async with _admin_key_dashboard_service_scope(request) as service:
+            key = await service.get_key_detail(gateway_key_id)
+    except AdminKeyNotFoundError:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+    return await _render_key_detail(
+        request,
+        admin=admin,
+        csrf_token=csrf_token,
+        key=key,
+        policy_catalog=await _load_key_policy_catalog(request),
+        policy_form=_default_key_policy_form_for_key(key),
+        lazy_form=_default_key_lazy_throttling_form_for_key(key, _settings(request)),
+        rate_form=rate_form,
+        error=error,
+        diagnostic_id=diagnostic_id,
+        status_code=400,
+    )
+
+
+async def _render_key_configuration_error(
+    request: Request,
+    *,
+    admin: object,
+    csrf_token: str,
+    gateway_key_id: uuid.UUID,
+    error: str,
+    config_form: dict[str, str] | None = None,
+    diagnostic_id: str | None = None,
+) -> Response:
+    try:
+        async with _admin_key_dashboard_service_scope(request) as service:
+            key = await service.get_key_detail(gateway_key_id)
+    except AdminKeyNotFoundError:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+    return await _render_key_detail(
+        request,
+        admin=admin,
+        csrf_token=csrf_token,
+        key=key,
+        policy_catalog=await _load_key_policy_catalog(request),
+        policy_form=_default_key_policy_form_for_key(key),
+        lazy_form=_default_key_lazy_throttling_form_for_key(key, _settings(request)),
+        configuration_form=config_form,
         error=error,
         diagnostic_id=diagnostic_id,
         status_code=400,
@@ -8798,6 +9485,9 @@ def _default_key_create_form() -> dict[str, str]:
         "allowed_models": "",
         "allowed_endpoints": "",
         "allow_all_providers": "true",
+        "provider_deny_all": "",
+        "policy_source": "guided",
+        "configuration_json": "",
         "allow_all_models": "",
         "allow_all_endpoints": "",
         "rate_limit_requests_per_minute": "",
@@ -10495,6 +11185,130 @@ def _parse_provider_config_form(
     }
 
 
+def _guided_policy_fields_present(form: Mapping[str, object]) -> bool:
+    """True when any guided policy control carries an explicit choice.
+
+    Used to reject ambiguous simultaneous policy sources at create: the
+    advanced configuration document and the guided controls must not both
+    define policy. Identity fields (owner, cohort, validity, delivery
+    mode, reason) are always guided and never counted here.
+    """
+    if (
+        _is_checked(form.get("allow_all_providers"))
+        or _is_checked(form.get("provider_deny_all"))
+        or _is_checked(form.get("allow_all_models"))
+        or _is_checked(form.get("allow_all_endpoints"))
+        or _is_checked(form.get("chat_streaming_live_burn_enabled"))
+        or _is_checked(form.get("confirm_external_tool_fenced"))
+    ):
+        return True
+    for field in (
+        "allowed_providers",
+        "allowed_models",
+        "allowed_endpoints",
+        "rate_limit_requests_per_minute",
+        "rate_limit_tokens_per_minute",
+        "rate_limit_concurrent_requests",
+        "rate_limit_window_seconds",
+        "cost_limit_eur",
+        "token_limit_total",
+        "request_limit_total",
+        "external_tool_destination_ids",
+    ):
+        if str(form.get(field) or "").strip():
+            return True
+    if str(form.get("lazy_throttling_mode") or "reject").strip() == "wait":
+        return True
+    if str(form.get("external_tool_mode") or STRICT_BOUNDED).strip() != STRICT_BOUNDED:
+        return True
+    if str(form.get("external_tool_capabilities") or "").strip():
+        return True
+    max_calls = str(form.get("external_tool_max_calls") or "0").strip()
+    try:
+        if int(max_calls) > 0:
+            return True
+    except ValueError:
+        return True
+    return False
+
+
+def _parse_key_create_configuration_form(
+    form: Mapping[str, object],
+    *,
+    actor_admin_id: uuid.UUID,
+    settings: Settings | None = None,
+) -> CreateGatewayKeyInput:
+    """Create input from an advanced version-1 configuration document.
+
+    Identity (owner, cohort, validity, reason, actor) comes from the
+    guided form fields; EVERY policy field comes from the strictly
+    parsed document through the shared ``build_create_gateway_key_input``
+    helper (same parser, bounds, and semantics as the CLI). Guided
+    policy controls and preset modes are mutually exclusive with a
+    document and are refused, never merged.
+    """
+    owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
+    cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
+    cleaned_reason, reason_error = _admin_bounded_reason(form.get("reason"))
+    if reason_error is not None:
+        raise ValueError(reason_error)
+    if cleaned_reason is None:
+        raise ValueError("Enter an audit reason before creating a key.")
+    # Credential protection applies to the stored audit note as well as
+    # the re-rendered form; ordinary reasons pass through unchanged.
+    cleaned_reason = (
+        _admin_redact_key_form_value(str(cleaned_reason), settings)
+        if settings is not None
+        else redact_text(str(cleaned_reason))
+    )
+
+    try:
+        valid_from = _parse_admin_datetime(form.get("valid_from")) or datetime.now(UTC)
+        valid_until = _parse_create_valid_until(
+            valid_from=valid_from,
+            valid_until=form.get("valid_until"),
+            valid_days=form.get("valid_days"),
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "Enter a valid key validity window. Use UTC date and time "
+            "(YYYY-MM-DD HH:MM) or positive Valid days, not both."
+        ) from exc
+    if valid_until <= valid_from:
+        raise ValueError("Enter a valid key validity window.")
+
+    if (
+        _is_checked(form.get("trusted_calibration"))
+        or _is_checked(form.get("codex_protocol_pilot"))
+        or _is_checked(form.get("qwen_codex"))
+    ):
+        raise ValueError(
+            "Advanced configuration documents cannot be combined with trusted "
+            "calibration or Codex preset modes."
+        )
+    if _guided_policy_fields_present(form):
+        raise ValueError(
+            "Choose one policy source: the guided policy fields or the advanced "
+            "configuration document, not both. Leave guided policy controls at "
+            "their defaults (uncheck allow-all and live-burn, blank numbers)."
+        )
+    document_text = str(form.get("configuration_json") or "")
+    if not document_text.strip():
+        raise ValueError(
+            "Enter a valid advanced configuration document or choose guided fields."
+        )
+    config = parse_key_configuration_file(document_text.encode("utf-8"))
+    return build_create_gateway_key_input(
+        config=config,
+        owner_id=owner_id,
+        cohort_id=cohort_id,
+        valid_from=valid_from,
+        valid_until=valid_until,
+        created_by_admin_id=actor_admin_id,
+        note=cleaned_reason,
+    )
+
+
 def _parse_key_create_form(
     form: dict[str, str],
     *,
@@ -10504,9 +11318,18 @@ def _parse_key_create_form(
 ) -> CreateGatewayKeyInput:
     owner_id = _parse_required_admin_uuid(form.get("owner_id"), field_name="owner_id")
     cohort_id = _parse_optional_admin_uuid(form.get("cohort_id"), field_name="cohort_id")
-    cleaned_reason = _clean_admin_reason(form.get("reason"))
+    cleaned_reason, reason_error = _admin_bounded_reason(form.get("reason"))
+    if reason_error is not None:
+        raise ValueError(reason_error)
     if cleaned_reason is None:
         raise ValueError("Enter an audit reason before creating a key.")
+    # Credential protection applies to the stored audit note as well as
+    # the re-rendered form; ordinary reasons pass through unchanged.
+    cleaned_reason = (
+        _admin_redact_key_form_value(cleaned_reason, settings)
+        if settings is not None
+        else redact_text(cleaned_reason)
+    )
 
     try:
         valid_from = _parse_admin_datetime(form.get("valid_from")) or datetime.now(UTC)
@@ -10549,6 +11372,11 @@ def _parse_key_create_form(
         raise ValueError("Enter valid positive quota and rate-limit values.") from exc
 
     trusted_calibration = _is_checked(form.get("trusted_calibration"))
+    if trusted_calibration and _is_checked(form.get("provider_deny_all")):
+        raise ValueError(
+            "Trusted calibration keys use unrestricted provider discovery; "
+            "deny-all is not compatible."
+        )
     request_policy = validate_gateway_key_policy_values(
         GatewayKeyPolicy(
             allowed_models=_parse_admin_text_list(form.get("allowed_models")),
@@ -10938,6 +11766,137 @@ def _parse_admin_rate_limit_policy(form: dict[str, str]) -> dict[str, int] | Non
     return policy or None
 
 
+# Canonical (form-suffix, policy-member, human label) triples for the
+# existing-key rate editor. The form suffix is the stable HTML field
+# family (``rate_action_<suffix>`` / ``rate_value_<suffix>``); the member
+# name matches the shared rate-limit policy vocabulary.
+_ADMIN_RATE_LIMIT_EDITOR_MEMBERS: tuple[tuple[str, str, str], ...] = (
+    ("requests_per_window", "requests_per_minute", "Requests per window"),
+    ("tokens_per_window", "tokens_per_minute", "Tokens per window"),
+    ("concurrency", "max_concurrent_requests", "Concurrent requests"),
+    ("window", "window_seconds", "Window seconds"),
+)
+_ADMIN_RATE_LIMIT_ACTIONS: tuple[str, ...] = ("unchanged", "set", "clear")
+
+
+def _admin_rate_limit_policy_from_key(gateway_key: object) -> dict[str, int | None]:
+    """The key's CURRENT per-member rate override (``None`` = inherit).
+
+    Reads the same scalar columns + nested ``rate_limit_policy`` metadata
+    window the runtime and the shared inspection project, so the editor's
+    no-op comparison is against the persisted state, not the display
+    summary.
+    """
+    metadata = (
+        gateway_key.metadata_json
+        if isinstance(getattr(gateway_key, "metadata_json", None), dict)
+        else {}
+    )
+    raw_rate_policy = metadata.get("rate_limit_policy")
+    rate_policy_metadata = (
+        raw_rate_policy if isinstance(raw_rate_policy, dict) else {}
+    )
+    window = rate_policy_metadata.get("window_seconds")
+    if isinstance(window, bool) or not isinstance(window, int):
+        window = None
+    return {
+        "requests_per_minute": getattr(
+            gateway_key, "rate_limit_requests_per_minute", None
+        ),
+        "tokens_per_minute": getattr(
+            gateway_key, "rate_limit_tokens_per_minute", None
+        ),
+        "max_concurrent_requests": getattr(
+            gateway_key, "max_concurrent_requests", None
+        ),
+        "window_seconds": window,
+    }
+
+
+def _admin_rate_limit_form_value(
+    value: str | None, *, field_label: str
+) -> int:
+    """Parse one explicit rate-editor value: a positive whole number.
+
+    Zero and negative values are refused with fixed messages (the shared
+    rate validator accepts positive integers only; ``None``/blank is the
+    inherit path, expressed by the per-member action, never by ``0``).
+    """
+    try:
+        provided, parsed = _parse_optional_admin_int(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_label} must be a positive whole number."
+        ) from exc
+    if not provided or parsed is None:
+        raise ValueError(f"Enter a positive whole number for {field_label.lower()}.")
+    return parsed
+
+
+def _compose_admin_rate_limit_policy(
+    form: Mapping[str, object], current_policy: Mapping[str, int | None]
+) -> dict[str, int]:
+    """Apply the explicit per-member actions to the current policy.
+
+    Mirrors the canonical CLI ``set-rate-limits`` law: ``clear`` removes
+    the member (inherit the deployment), ``set`` replaces it with the
+    parsed positive value, ``unchanged`` preserves it. All four members
+    must carry a recognized action; the result contains only members that
+    end up configured.
+    """
+    final: dict[str, int] = {
+        member: value
+        for member, value in current_policy.items()
+        if value is not None
+    }
+    for suffix, member, label in _ADMIN_RATE_LIMIT_EDITOR_MEMBERS:
+        action = str(form.get(f"rate_action_{suffix}", "") or "").strip().lower()
+        if action not in _ADMIN_RATE_LIMIT_ACTIONS:
+            raise ValueError(
+                f"Select a valid action for {label.lower()} "
+                "(unchanged, set, or clear)."
+            )
+        if action == "clear":
+            final.pop(member, None)
+        elif action == "set":
+            final[member] = _admin_rate_limit_form_value(
+                form.get(f"rate_value_{suffix}"), field_label=label
+            )
+    return final
+
+
+def _admin_rate_limit_policy_no_change(
+    current_policy: Mapping[str, int | None], final_policy: Mapping[str, int]
+) -> bool:
+    """True when every member's effective value is unchanged (a no-op).
+
+    Member-wise None-versus-absent equality: no truthiness on the values
+    themselves.
+    """
+    return all(
+        current_policy.get(member) == final_policy.get(member)
+        for _suffix, member, _label in _ADMIN_RATE_LIMIT_EDITOR_MEMBERS
+    )
+
+
+def _default_admin_rate_limit_form(
+    current_policy: Mapping[str, int | None] | None,
+) -> dict[str, str]:
+    """Prefill the rate editor: action unchanged, value = configured.
+
+    The configured value is displayed so the operator sees exactly what
+    is stored (or "inherit" when the member is unset); submitting it
+    back unchanged is detected and refused as a no-op.
+    """
+    current_policy = dict(current_policy or {})
+    form: dict[str, str] = {"reason": ""}
+    for suffix, member, _label in _ADMIN_RATE_LIMIT_EDITOR_MEMBERS:
+        form[f"rate_action_{suffix}"] = "unchanged"
+        value = current_policy.get(member)
+        form[f"rate_value_{suffix}"] = str(value) if value is not None else ""
+    return form
+
+
 def _parse_admin_lazy_throttling_bound(
     value: str | None,
     *,
@@ -11002,7 +11961,10 @@ def _parse_admin_text_list(value: str | None) -> list[str]:
 
 
 async def _admin_enabled_provider_values_for(
-    request: Request, form: Mapping[str, object]
+    request: Request,
+    form: Mapping[str, object],
+    *,
+    preserved_provider_values: Sequence[str] = (),
 ) -> set[str]:
     """Bounded submitted-provider eligibility (submit-time point query).
 
@@ -11013,16 +11975,27 @@ async def _admin_enabled_provider_values_for(
     authority — while unknown or disabled slugs are denied. The whole
     registry is never materialized, and client values are never trusted
     without the DB check.
+
+    ``preserved_provider_values`` are the edited key's currently stored
+    provider slugs: an existing allow-list that references a now-disabled
+    or older provider round-trips unchanged instead of being silently
+    dropped (or broadened) on an unrelated policy save.
     """
     submitted = _parse_admin_text_list(str(form.get("allowed_providers") or ""))
-    if _is_checked(str(form.get("allow_all_providers") or "")) or not submitted:
-        return set()
+    if (
+        _is_checked(str(form.get("allow_all_providers") or ""))
+        or _is_checked(str(form.get("provider_deny_all") or ""))
+        or not submitted
+    ):
+        preserved = {str(value).strip() for value in preserved_provider_values}
+        return preserved if preserved else set()
     session_factory = get_sessionmaker_from_app(request)
     async with session_factory() as session:
         async with session.begin():
-            return await ProviderConfigsRepository(session).list_enabled_provider_slugs_matching(
+            enabled = await ProviderConfigsRepository(session).list_enabled_provider_slugs_matching(
                 submitted
             )
+    return enabled | {str(value).strip() for value in preserved_provider_values}
 
 
 def _parse_admin_allowed_providers(
@@ -11030,7 +12003,25 @@ def _parse_admin_allowed_providers(
     *,
     available_provider_values: Sequence[str],
 ) -> list[str] | None:
-    if _is_checked(form.get("allow_all_providers", "")):
+    """Parse the explicit provider tri-state from a key policy form.
+
+    The three states are mutually exclusive and must be expressed
+    explicitly: ``allow_all_providers`` checked is UNRESTRICTED (stored
+    ``null``), ``provider_deny_all`` checked is DENY-ALL (stored ``[]``),
+    and a non-empty selection is the allow-list. A POST with NEITHER mode
+    checked and an empty selection fails closed: an empty selection never
+    silently grants unrestricted access.
+    """
+    allow_all = _is_checked(form.get("allow_all_providers", ""))
+    deny_all = _is_checked(form.get("provider_deny_all", ""))
+    if allow_all and deny_all:
+        raise ValueError(
+            "Select only one provider mode: allow all enabled providers, "
+            "selected providers, or deny all providers."
+        )
+    if deny_all:
+        return []
+    if allow_all:
         return None
 
     available_provider_set = {
@@ -11041,12 +12032,17 @@ def _parse_admin_allowed_providers(
         for value in _parse_admin_text_list(form.get("allowed_providers"))
     ]
     if not providers:
-        return None
+        raise ValueError(
+            "Provider selection is empty. Choose allow all enabled providers, "
+            "select at least one provider, or explicitly deny all providers; "
+            "an empty selection never grants unrestricted access."
+        )
 
     invalid = [provider for provider in providers if provider not in available_provider_set]
     if invalid:
         raise ValueError(
-            f"Provider {invalid[0]} is not available. Select from enabled local provider configs only."
+            "A selected provider is not available. Select only from enabled "
+            "local provider configs, or providers this key already stores."
         )
     return providers
 
@@ -11172,6 +12168,90 @@ def _clean_admin_reason(reason: str | None) -> str | None:
         return None
     cleaned = reason.strip()
     return cleaned or None
+
+
+_ADMIN_REASON_TOO_LONG_MESSAGE = (
+    "Audit reason is too long. Keep it to at most "
+    f"{MAX_KEY_CONFIGURATION_REASON_LENGTH} characters."
+)
+
+
+def _admin_bounded_reason(reason: str | None) -> tuple[str | None, str | None]:
+    """Strip the operator reason and enforce the stored 512-char bound.
+
+    Returns ``(cleaned_reason, error_message)``. Blank input yields
+    ``(None, None)`` so callers keep their existing reason-required
+    message; an over-long reason yields ``(None, fixed safe message)``
+    and must be refused before any mutation or audit write. The bound is
+    measured in Unicode characters and uses the existing schema
+    constant ``MAX_KEY_CONFIGURATION_REASON_LENGTH``; it is a GUI-side
+    seam bound for these new/touched key mutations, and the unchanged
+    CLI is not claimed to enforce it.
+    """
+    if reason is None:
+        return None, None
+    cleaned = reason.strip()
+    if not cleaned:
+        return None, None
+    if len(cleaned) > MAX_KEY_CONFIGURATION_REASON_LENGTH:
+        return None, _ADMIN_REASON_TOO_LONG_MESSAGE
+    return cleaned, None
+
+
+def _admin_redact_key_form_value(value: str, settings: Settings) -> str:
+    """Focused key-form privacy seam over the shared redaction rules.
+
+    Masks recognized credential shapes (bearer / gateway / provider key
+    patterns plus this deployment's configured accepted key prefixes) in
+    key-form error text and retained re-displayed form values. Ordinary
+    values pass through byte-identical, so useful operator input stays
+    visible. The result is display text only; it never replaces a
+    canonical policy document or a stored policy value.
+    """
+    if not value:
+        return value
+    return redact_text(
+        value,
+        accepted_gateway_key_prefixes=settings.get_gateway_key_accepted_prefixes(),
+    )
+
+
+def _admin_redact_key_form_values(
+    form: Mapping[str, str], settings: Settings
+) -> dict[str, str]:
+    """Redacted copy of a re-rendered key form (retained-values seam)."""
+    return {
+        name: _admin_redact_key_form_value(value, settings)
+        for name, value in form.items()
+    }
+
+
+_ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE = (
+    "Allowed models must be route model identifiers, not "
+    "credential-shaped values."
+)
+
+
+def _admin_value_contains_credential_shape(value: str, settings: Settings) -> bool:
+    """True when a key-form field value carries a recognized credential
+    shape.
+
+    Reuses the shared redaction rules (including this deployment's
+    configured accepted key prefixes) as the detector: a value the
+    redactor would mask is refused with a fixed safe message BEFORE the
+    shared policy validators run, so a domain error message can never
+    echo the submitted value. Ordinary model identifiers pass through
+    byte-identical and remain valid.
+    """
+    if not value:
+        return False
+    return (
+        redact_text(
+            value,
+            accepted_gateway_key_prefixes=settings.get_gateway_key_accepted_prefixes(),
+        )
+        != value
+    )
 
 
 def _parse_admin_datetime(value: str | None) -> datetime | None:
@@ -11327,7 +12407,9 @@ def _log_admin_action_failure(
         event["error_code"] = error_code
     safe_message = getattr(exc, "safe_message", None)
     if isinstance(safe_message, str) and safe_message:
-        event["safe_message"] = safe_message
+        # Domain safe messages can embed rejected operator input (e.g. a
+        # refused model name); mask credential shapes before logging.
+        event["safe_message"] = _admin_redact_key_form_value(safe_message, _settings(request))
 
     if level == "error":
         logger.error("admin.key_create.failed", **event)

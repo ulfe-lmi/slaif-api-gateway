@@ -48,6 +48,8 @@ and do not override current contracts or merged code.
   searchable record-choice fields, and the bounded read-only lookup
   contract for the operator dashboard.
 - [CLI reference](cli-reference.md) — the operator command index.
+- [GUI–CLI parity analysis](MISSING_GUI_FUNCTIONALITY.md) — current control
+  coverage, missing GUI workflows, priorities, and operator-only exceptions.
 
 ## Operating SLAIF
 
