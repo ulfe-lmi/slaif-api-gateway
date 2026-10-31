@@ -10,6 +10,29 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-31 Objective 207-a GUI key policy administration verification`](gui-cli-parity.md)
+  (recorded 2026-10-31) - admin GUI G01-G03 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared code as
+  the CLI (strict version-1 configuration parser/law, the audited
+  rate-limit operation, and the `build_key_policy_inspection` /
+  `explain_model_route_access` projections): provider tri-state with
+  empty-selection fail-closed and disabled-provider preservation,
+  advanced versioned configuration download/private no-store export and
+  confirmation-gated partial update (rejected documents never
+  redisplayed), the per-member existing-key rate editor (set 1/10s +
+  concurrency 1, zero/no-op refusals, clear-to-inherit), the effective-
+  policy readout plus configuration-only explain model access
+  (read-only; the login itself audits, explain POSTs do not), field
+  help via `aria-describedby` and no new tables; 49 new unit PASS +
+  282 affected PASS, 7 owned-PostgreSQL PASS, 6 actual
+  Chromium/owned-PG PASS (five screenshots), two real-page product
+  defects found and fixed during qualification (document-mode script
+  guard; explain form field name) with provenance; no
+  services/schema/migrations/client-server/sortable-table changes;
+  published as PARTIAL (FORMAT-GATE-FAILED): the immutable order bytes
+  fail the two OAP governance format gates (7 PASS / 2 FAIL, recorded
+  without waiver; strategic same-PR continuation required), and
+  GitHub CI is pending at publication.
 - [`2026-10-29 Objective 206 admin numeric display verification (206-a/b/c/d)`](2026-10-29-admin-numeric-display.md)
   (recorded 2026-10-29; 206-b/c/d completions appended 2026-10-30) -
   presentation-only admin GUI numeric displays:

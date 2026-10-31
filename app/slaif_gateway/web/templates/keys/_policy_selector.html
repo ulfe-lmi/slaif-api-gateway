@@ -14,10 +14,19 @@
       <p class="muted small">Select from enabled local provider configs only. No provider key values are displayed here.</p>
     </div>
     <label class="checkbox-row">
-      <input type="checkbox" name="allow_all_providers" value="true" {% if policy_form_state.allow_all_providers %}checked{% endif %} data-policy-toggle="providers">
-      Allow all enabled providers
+      <input type="checkbox" name="allow_all_providers" value="true" {% if policy_form_state.allow_all_providers %}checked{% endif %} data-policy-toggle="providers" aria-describedby="{{ selector_id_prefix }}-provider-mode-help">
+      Allow all enabled providers (unrestricted)
     </label>
-    <div class="policy-selector-grid{% if policy_form_state.allow_all_providers %} policy-selector-disabled{% endif %}" data-policy-selector-group="providers">
+    <label class="checkbox-row">
+      <input type="checkbox" name="provider_deny_all" value="true" {% if policy_form_state.provider_deny_all %}checked{% endif %} data-policy-deny-toggle="providers" aria-describedby="{{ selector_id_prefix }}-provider-mode-help">
+      Deny all providers (key cannot use any provider route)
+    </label>
+    <p class="field-help" id="{{ selector_id_prefix }}-provider-mode-help">
+      Exactly one provider mode applies: allow all enabled providers, the selected provider list, or deny all.
+      An empty selection with no mode is rejected, never treated as unrestricted. On an existing key, stored
+      providers that are now disabled or older stay listed and are preserved on save.
+    </p>
+    <div class="policy-selector-grid{% if policy_form_state.provider_selection_locked %} policy-selector-disabled{% endif %}" data-policy-selector-group="providers">
       <div class="policy-selector-pane">
         <label class="policy-model-search">
           <span class="rc-name">Search older providers (server-side)</span>
@@ -50,7 +59,7 @@
       <div class="policy-selector-pane">
         <label>
           Selected allowed providers
-          <span class="policy-selector-caption">Used only when "Allow all enabled providers" is off.</span>
+          <span class="policy-selector-caption">Used only when both provider mode checkboxes are off. Stored providers that are disabled or older remain listed as <code>slug | manual entry</code>.</span>
           <select id="{{ selector_id_prefix }}-providers-selected" multiple size="8" data-policy-selected="providers">
             {% for option in policy_form_state.selected_provider_options %}
             <option value="{{ option.value }}">{{ option.label }}</option>
@@ -58,7 +67,7 @@
           </select>
         </label>
         <p class="policy-selector-empty small" data-policy-empty="providers-selected" hidden>
-          No explicit provider allow-list is selected.
+          No explicit provider allow-list is selected. With no mode checkbox this selection must not be empty, or choose deny all.
         </p>
       </div>
     </div>

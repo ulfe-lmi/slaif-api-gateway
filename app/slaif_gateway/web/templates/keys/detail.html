@@ -148,6 +148,106 @@
       </dl>
     </section>
 
+    {% if policy_inspection %}
+    <section class="detail-section" aria-labelledby="key-effective-policy-heading">
+      <h2 id="key-effective-policy-heading">Effective Policy (configuration only)</h2>
+      <p class="field-help">{{ policy_inspection.note }} {{ policy_inspection.redis_configuration.note }}</p>
+      {% if policy_inspection.key.status_note %}
+      <p class="warning-text">Key state: {{ policy_inspection.key.status_note }} — this key is not currently usable for requests.</p>
+      {% endif %}
+      <dl>
+        <dt>Providers</dt>
+        <dd>
+          {% set prov = policy_inspection.allowlists %}
+          {% if prov.state == "unrestricted" %}
+          Unrestricted (all enabled providers)
+          {% elif prov.state == "deny-all" %}
+          Deny all providers
+          {% elif prov.state == "invalid" %}
+          <span class="status-pill status-suspended">stored provider policy invalid</span>
+          {% else %}
+          Allow-list: {{ prov.allowed_providers | join(", ") }}
+          {% endif %}
+        </dd>
+        <dt>Endpoints</dt>
+        <dd>{% if policy_inspection.allowlists.allow_all_endpoints %}All implemented endpoints{% else %}{{ (policy_inspection.allowlists.allowed_endpoints | join(", ")) or "(none)" }}{% endif %}</dd>
+        <dt>Models</dt>
+        <dd>{% if policy_inspection.allowlists.allow_all_models %}All route-backed models{% else %}{{ (policy_inspection.allowlists.allowed_models | join(", ")) or "(none)" }}{% endif %}</dd>
+        <dt>Rate limits</dt>
+        <dd>
+          <span class="policy-selector-caption">{{ policy_inspection.rate_limits.count_semantics }}; source key = stored on this key, deployment = inherited default, default = runtime default.</span>
+          {% for member_name in ("requests_per_window", "tokens_per_window", "concurrency", "window_seconds") %}
+          {% set info = policy_inspection.rate_limits[member_name] %}
+          <div>
+            {{ member_name }}:
+            {% if info.configured is not none %}
+            configured {{ info.configured | num }} (source: {{ info.source }})
+            {% elif info.effective is not none %}
+            inherited {{ info.effective | num }} (source: {{ info.source }})
+            {% else %}
+            not limited by this member
+            {% endif %}
+          </div>
+          {% endfor %}
+          {% for warning in policy_inspection.rate_limits.warnings %}
+          <div class="warning-text">{{ warning }}</div>
+          {% endfor %}
+        </dd>
+        <dt>Lazy throttling</dt>
+        <dd>
+          {% set lazy = policy_inspection.lazy_throttling %}
+          {% if lazy.stored_state == "absent" %}
+          No stored policy — deployment default: {{ lazy.mode }}
+          {% elif lazy.stored_state == "invalid-stored" %}
+          <span class="status-pill status-suspended">stored policy invalid</span> effective: {{ lazy.mode }}
+          {% elif lazy.mode == "wait" %}
+          stored wait (max wait {{ lazy.max_wait_seconds | num }}s, {{ lazy.max_waiting_requests | num }} waiting; source: {{ lazy.source }})
+          {% else %}
+          stored reject (immediate 429)
+          {% endif %}
+        </dd>
+        <dt>Quotas (lifetime)</dt>
+        <dd>
+          {% for quota_name in ("cost_eur", "tokens", "requests") %}
+          {% set q = policy_inspection.quotas[quota_name] %}
+          <div>
+            {{ quota_name }}:
+            {% if q.unlimited %}
+            unlimited (null, not zero)
+            {% else %}
+            {{ q.configured | num }} configured, {{ q.remaining | num }} remaining after used and reserved
+            {% endif %}
+          </div>
+          {% endfor %}
+        </dd>
+        {% set rp = policy_inspection.responses_profile %}
+        <dt>Responses profile</dt>
+        <dd>
+          {% if rp.policy_state == "absent" %}
+          None (no Responses authority)
+          {% elif rp.policy_state == "invalid" %}
+          <span class="status-pill status-suspended">stored block invalid</span>
+          {% else %}
+          valid; client module:
+          {% if rp.client_module.state == "bound" %}
+          {{ rp.client_module.id }} {{ rp.client_module.version }} (bound)
+          {% else %}
+          absent
+          {% endif %}
+          </dd>
+        {% endif %}
+        <dt>Redis rate limiting</dt>
+        <dd>
+          {% if policy_inspection.redis_configuration.enabled %}
+          enabled (fail-closed: {% if policy_inspection.redis_configuration.fail_closed %}yes{% else %}no{% endif %})
+          {% else %}
+          disabled — stored rate and wait values do not enforce until ENABLE_REDIS_RATE_LIMITS is true
+          {% endif %}
+        </dd>
+      </dl>
+    </section>
+    {% endif %}
+
     <section class="detail-section">
       <h2>Metadata</h2>
       <dl>
@@ -186,6 +286,189 @@
       </label>
       <button type="submit">Update request policy</button>
     </form>
+  </section>
+
+  <section class="action-panel" aria-labelledby="key-rate-limits-heading" data-rate-limits-surface>
+    <h2 id="key-rate-limits-heading">Operational Rate Limits (Redis)</h2>
+    <p class="muted">Per-member operational overrides separate from lifetime quotas and lazy waiting. Counts are positive whole numbers per selected window; a cleared member inherits the deployment. Usage, reservations, identities, validity, and secrets are never touched.</p>
+    <form method="post" action="/admin/keys/{{ key.id }}/rate-limits">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid rate-editor-grid">
+        <div class="rate-editor-member" data-rate-editor-member="requests_per_window">
+          <label>
+            Requests per window — action
+            <select name="rate_action_requests_per_window" aria-describedby="key-rate-limits-help" data-rate-editor-action="requests_per_window">
+              <option value="unchanged" {% if rate_form["rate_action_requests_per_window"] == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+              <option value="set" {% if rate_form["rate_action_requests_per_window"] == "set" %}selected{% endif %}>Set value</option>
+              <option value="clear" {% if rate_form["rate_action_requests_per_window"] == "clear" %}selected{% endif %}>Clear (inherit deployment)</option>
+            </select>
+          </label>
+          <label>
+            Requests per window — value
+            <input name="rate_value_requests_per_window" value="{{ rate_form["rate_value_requests_per_window"] }}" inputmode="numeric" autocomplete="off" aria-describedby="key-rate-limits-help" data-rate-editor-value="requests_per_window" placeholder="current configured or blank">
+          </label>
+        </div>
+        <div class="rate-editor-member" data-rate-editor-member="tokens_per_window">
+          <label>
+            Tokens per window — action
+            <select name="rate_action_tokens_per_window" aria-describedby="key-rate-limits-help" data-rate-editor-action="tokens_per_window">
+              <option value="unchanged" {% if rate_form["rate_action_tokens_per_window"] == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+              <option value="set" {% if rate_form["rate_action_tokens_per_window"] == "set" %}selected{% endif %}>Set value</option>
+              <option value="clear" {% if rate_form["rate_action_tokens_per_window"] == "clear" %}selected{% endif %}>Clear (inherit deployment)</option>
+            </select>
+          </label>
+          <label>
+            Tokens per window — value
+            <input name="rate_value_tokens_per_window" value="{{ rate_form["rate_value_tokens_per_window"] }}" inputmode="numeric" autocomplete="off" aria-describedby="key-rate-limits-help" data-rate-editor-value="tokens_per_window" placeholder="current configured or blank">
+          </label>
+        </div>
+        <div class="rate-editor-member" data-rate-editor-member="concurrency">
+          <label>
+            Concurrent requests — action
+            <select name="rate_action_concurrency" aria-describedby="key-rate-limits-help" data-rate-editor-action="concurrency">
+              <option value="unchanged" {% if rate_form["rate_action_concurrency"] == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+              <option value="set" {% if rate_form["rate_action_concurrency"] == "set" %}selected{% endif %}>Set value</option>
+              <option value="clear" {% if rate_form["rate_action_concurrency"] == "clear" %}selected{% endif %}>Clear (inherit deployment)</option>
+            </select>
+          </label>
+          <label>
+            Concurrent requests — value
+            <input name="rate_value_concurrency" value="{{ rate_form["rate_value_concurrency"] }}" inputmode="numeric" autocomplete="off" aria-describedby="key-rate-limits-help" data-rate-editor-value="concurrency" placeholder="current configured or blank">
+          </label>
+        </div>
+        <div class="rate-editor-member" data-rate-editor-member="window">
+          <label>
+            Window seconds — action
+            <select name="rate_action_window" aria-describedby="key-rate-limits-help" data-rate-editor-action="window">
+              <option value="unchanged" {% if rate_form["rate_action_window"] == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+              <option value="set" {% if rate_form["rate_action_window"] == "set" %}selected{% endif %}>Set value</option>
+              <option value="clear" {% if rate_form["rate_action_window"] == "clear" %}selected{% endif %}>Clear (inherit deployment)</option>
+            </select>
+          </label>
+          <label>
+            Window seconds — value
+            <input name="rate_value_window" value="{{ rate_form["rate_value_window"] }}" inputmode="numeric" autocomplete="off" aria-describedby="key-rate-limits-help" data-rate-editor-value="window" placeholder="current configured or blank">
+          </label>
+        </div>
+      </div>
+      <p class="field-help" id="key-rate-limits-help">
+        "Leave unchanged" keeps the stored value even if the value box shows it. "Clear" removes the member so the deployment
+        default applies (the window member has no deployment default: clearing it means the runtime's standard window).
+        Zero is not a value — use "Clear". A submit that changes nothing is refused.
+      </p>
+      {% if policy_inspection %}
+      <p class="muted small">
+        Currently configured (source): requests {{ (policy_inspection.rate_limits.requests_per_window.configured | num) if policy_inspection.rate_limits.requests_per_window.configured is not none else "inherited" }}
+        / tokens {{ (policy_inspection.rate_limits.tokens_per_window.configured | num) if policy_inspection.rate_limits.tokens_per_window.configured is not none else "inherited" }}
+        / concurrency {{ (policy_inspection.rate_limits.concurrency.configured | num) if policy_inspection.rate_limits.concurrency.configured is not none else "inherited" }}
+        / window {{ (policy_inspection.rate_limits.window_seconds.configured | num) if policy_inspection.rate_limits.window_seconds.configured is not none else "standard" }}.
+        Effective values are shown in the "Effective Policy" section above.
+      </p>
+      {% endif %}
+      <label>
+        Audit reason
+        <input name="reason" value="{{ rate_form.reason }}" required autocomplete="off" placeholder="Required reason">
+      </label>
+      <button type="submit">Update operational rate limits</button>
+    </form>
+    {% if not redis_rate_limits_enabled %}
+    <p class="warning-text">Redis rate limiting is currently disabled (ENABLE_REDIS_RATE_LIMITS=false), so these stored values do not enforce until the operator enables it.</p>
+    {% endif %}
+  </section>
+
+  <section class="action-panel" aria-labelledby="key-explain-route-heading">
+    <h2 id="key-explain-route-heading">Explain Model Access (configuration only)</h2>
+    <p class="muted">Ask which configuration grants or blocks one model on one endpoint, using the SAME shared explanation as the CLI. This is a read-only configuration view: it performs no authentication, admission, quota, pricing, or provider check.</p>
+    <form method="post" action="/admin/keys/{{ key.id }}/explain-route">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <label>
+          Endpoint
+          <select name="endpoint" aria-describedby="key-explain-route-help">
+            <option value="">Select endpoint</option>
+            {% for choice in policy_catalog.endpoint_choices %}
+            <option value="{{ choice.value }}" {% if explain_form.endpoint == choice.value %}selected{% endif %}>{{ choice.label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          Requested model
+          <input name="model" list="explain-model-options" value="{{ explain_form.model }}" autocomplete="off" aria-describedby="key-explain-route-help" placeholder="e.g. gpt-5.6-sol">
+          <datalist id="explain-model-options">
+            {% for group_label, choices in policy_catalog.model_choices_by_group.items() %}
+            {% for choice in choices %}
+            <option value="{{ choice.token }}">{{ choice.label }}</option>
+            {% endfor %}
+            {% endfor %}
+          </datalist>
+        </label>
+      </div>
+      <p class="field-help" id="key-explain-route-help">
+        Model suggestions are the latest 100 enabled route models; any model token can be typed — an unknown model is itself a
+        reportable result. The result repeats here verbatim from the shared configuration-only explanation, including its
+        blockers, ambiguity handling, and not-evaluated states.
+      </p>
+      <button type="submit">Explain access</button>
+    </form>
+    {% if explain_report %}
+    <div class="explain-report" data-explain-report>
+      <h3>Explanation result</h3>
+      <p class="field-help">{{ explain_report.note }}</p>
+      <dl>
+        <dt>Verdict</dt>
+        <dd>
+          <span class="status-pill {% if explain_report.verdict == "resolved" %}status-active{% elif explain_report.verdict == "blocked" %}status-suspended{% else %}status-pending{% endif %}">{{ explain_report.verdict }}</span>
+        </dd>
+        {% if explain_report.blocker %}
+        <dt>Blocker</dt>
+        <dd><code>{{ explain_report.blocker }}</code></dd>
+        {% endif %}
+        {% if explain_report.message %}
+        <dt>Message</dt>
+        <dd>{{ explain_report.message }}</dd>
+        {% endif %}
+        {% if explain_report.resolution %}
+        {% set res = explain_report.resolution %}
+        <dt>Resolution</dt>
+        <dd>
+          provider <code>{{ res.provider }}</code>, resolved model <code>{{ res.resolved_model }}</code>,
+          route <code>{{ res.route_pattern }}</code> ({{ res.route_match_type }}, priority {{ res.priority | num }})
+        </dd>
+        {% endif %}
+        {% if explain_report.capability_checks %}
+        <dt>Capability checks</dt>
+        <dd>
+          base request supported: {% if explain_report.capability_checks.base_request_supported %}yes{% else %}no ({{ explain_report.capability_checks.capability_error_code }}){% endif %}
+        </dd>
+        {% endif %}
+        {% if explain_report.allowlist_intersection %}
+        {% set ai = explain_report.allowlist_intersection %}
+        <dt>Allow-list intersection</dt>
+        <dd>
+          {% if ai.allowed_models == "all" %}
+          all models; candidate route patterns: {{ (ai.candidate_route_patterns | join(", ")) or "(none)" }}
+          {% else %}
+          allowed models: {{ (ai.allowed_models | join(", ")) or "(none)" }}; with candidate route: {{ (ai.allowed_models_with_candidate_route | join(", ")) or "(none)" }}
+          {% endif %}
+          <br>{{ ai.note }}
+        </dd>
+        {% endif %}
+        {% if explain_report.unevaluated %}
+        <dt>Not evaluated here</dt>
+        <dd>{{ explain_report.unevaluated | join(" ") }}</dd>
+        {% endif %}
+        <dt>Bounds</dt>
+        <dd>
+          route candidate bound {{ explain_report.bounds.route_candidate_bound | num }};
+          routes examined {% if explain_report.bounds.routes_examined is not none %}{{ explain_report.bounds.routes_examined | num }}{% else %}n/a{% endif %};
+          possible unexamined routes:
+          {% if explain_report.bounds.possible_unexamined_routes is none %}n/a
+          {% elif explain_report.bounds.possible_unexamined_routes %}yes
+          {% else %}no{% endif %}
+        </dd>
+      </dl>
+    </div>
+    {% endif %}
   </section>
 
   <section class="action-panel" aria-labelledby="key-lazy-throttling-heading" data-lazy-throttling-surface>
@@ -407,6 +690,39 @@
         </form>
       </div>
     </div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="key-advanced-configuration-heading">
+    <h2 id="key-advanced-configuration-heading">Advanced Configuration (versioned JSON)</h2>
+    <p class="muted">The SAME strict version-1 document the CLI uses: download the key's current allowlisted projection, edit it, and apply a presence-aware partial update. Omitted fields preserve the current state; explicit <code>null</code> and <code>[]</code> keep their distinct meanings. Key material, status, owner/cohort, validity, usage counters, and reservations are never touched. Bound client-module changes remain blocked and must use the reviewed migration path, not this editor.</p>
+    <p>
+      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>
+    </p>
+    <form method="post" action="/admin/keys/{{ key.id }}/configuration">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        Configuration document
+        <textarea name="configuration_json" rows="10" class="config-json" spellcheck="false" autocomplete="off" aria-describedby="key-advanced-config-help">{% if configuration_form.configuration_json %}{{ configuration_form.configuration_json }}{% endif %}</textarea>
+      </label>
+      <p class="muted small">
+        Minimal sample:
+        <pre class="config-sample">{{ configuration_sample }}</pre>
+      </p>
+      <p class="field-help" id="key-advanced-config-help">
+        Semantics: an omitted field leaves the key's current value untouched; <code>null</code> <code>allowed_providers</code> is unrestricted and
+        <code>[]</code> denies all providers; null quotas are unlimited; null rate members inherit the deployment; null lazy policy means reject.
+        Unknown or duplicate fields are rejected; the document must not exceed 64 KB. A rejected document is never redisplayed.
+      </p>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_configuration_update" value="true" {% if configuration_form.confirm_configuration_update %}checked{% endif %} aria-describedby="key-advanced-config-help">
+        I confirm this advanced configuration update
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" value="{{ configuration_form.reason }}" required autocomplete="off" placeholder="Required reason">
+      </label>
+      <button type="submit">Apply configuration update</button>
+    </form>
   </section>
 
   <section class="action-panel" aria-labelledby="key-usage-reset-heading">

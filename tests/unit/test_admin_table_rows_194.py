@@ -260,7 +260,7 @@ def test_all_eleven_get_limit_lists_have_bound_rows_selectors() -> None:
 
     These controls are bounded numeric preset/custom selectors over the
     existing GET page limit — they are NOT database reference pickers
-    and are classified separately from the 102-field known-reference
+    and are classified separately from the 108-field known-reference
     inventory. The keys page is additionally real-rendered by
     ``test_keys_list_rows_selector_binds_to_filter_form`` and by the
     browser tests (custom limit 37 preserved).

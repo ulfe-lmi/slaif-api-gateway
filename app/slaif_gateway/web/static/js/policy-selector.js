@@ -42,6 +42,10 @@
         selected: surface.querySelector(`[data-policy-selected="${dimension}"]`),
         manual: surface.querySelector(`[data-policy-manual="${dimension}"]`),
         toggle: surface.querySelector(`[data-policy-toggle="${dimension}"]`),
+        denyToggle:
+          dimension === "providers"
+            ? surface.querySelector('[data-policy-deny-toggle="providers"]')
+            : null,
         addButton: surface.querySelector(`[data-policy-add="${dimension}"]`),
         removeButton: surface.querySelector(`[data-policy-remove="${dimension}"]`),
         emptyAvailable: surface.querySelector(`[data-policy-empty="${dimension}-available"]`),
@@ -130,8 +134,15 @@
       }
     };
 
+    // Provider tri-state (allow-all / selected / deny-all): the two mode
+    // checkboxes are mutually exclusive, and EITHER one locks the
+    // selection grid. The server enforces the same law on submit.
+    const providerLocked = () =>
+      Boolean(groups.providers.toggle?.checked) ||
+      Boolean(groups.providers.denyToggle?.checked);
+
     const currentProviderFilter = () => {
-      if (groups.providers.toggle?.checked) {
+      if (providerLocked()) {
         return null;
       }
       const selected = selectedValues("providers");
@@ -246,14 +257,16 @@
 
     const refreshButtonStates = () => {
       for (const dimension of dimensions) {
+        const locked =
+          dimension === "providers" ? providerLocked() : groups[dimension].toggle?.checked;
         if (groups[dimension].addButton) {
           groups[dimension].addButton.disabled =
-            groups[dimension].toggle?.checked ||
+            locked ||
             !Array.from(groups[dimension].available?.selectedOptions || []).length;
         }
         if (groups[dimension].removeButton) {
           groups[dimension].removeButton.disabled =
-            groups[dimension].toggle?.checked ||
+            locked ||
             !Array.from(groups[dimension].selected?.selectedOptions || []).length;
         }
       }
@@ -264,7 +277,8 @@
       if (!group.container || !group.toggle) {
         return;
       }
-      const disabled = group.toggle.checked;
+      const disabled =
+        dimension === "providers" ? providerLocked() : group.toggle.checked;
       group.container.classList.toggle("policy-selector-disabled", disabled);
       // Per-dimension search controls: the providers search belongs to
       // the providers dimension and the models search to the models
@@ -346,6 +360,20 @@
       groups[dimension].toggle?.addEventListener("change", refreshAll);
       groups[dimension].available?.addEventListener("change", refreshButtonStates);
     }
+
+    const exclusiveProviderToggle = (source, other) => {
+      if (source?.checked && other?.checked) {
+        other.checked = false;
+      }
+    };
+    groups.providers.toggle?.addEventListener("change", () => {
+      exclusiveProviderToggle(groups.providers.toggle, groups.providers.denyToggle);
+      refreshAll();
+    });
+    groups.providers.denyToggle?.addEventListener("change", () => {
+      exclusiveProviderToggle(groups.providers.denyToggle, groups.providers.toggle);
+      refreshAll();
+    });
 
     groups.providers.selected?.addEventListener("change", refreshAll);
     groups.endpoints.selected?.addEventListener("change", refreshAll);

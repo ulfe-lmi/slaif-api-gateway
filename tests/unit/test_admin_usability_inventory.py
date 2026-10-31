@@ -99,11 +99,17 @@ EXPECTED_FIELDS: dict[str, dict[str, str]] = {
     "keys/create.html": {
         "owner_id": "record_choice",
         "cohort_id": "record_choice",
+        "policy_source": "select",
         "external_tool_mode": "select",
         "external_tool_destination_ids": "record_choice",
         "email_delivery_mode": "select",
     },
     "keys/detail.html": {
+        "rate_action_requests_per_window": "select",
+        "rate_action_tokens_per_window": "select",
+        "rate_action_concurrency": "select",
+        "rate_action_window": "select",
+        "endpoint": "select",
         "external_tool_mode": "select",
         "external_tool_destination_ids": "record_choice",
         "email_delivery_mode": "select",
@@ -232,9 +238,9 @@ def _field_marker(template: str, field: str, kind: str) -> bool:
     raise ValueError(f"unknown control kind {kind!r}")
 
 
-def test_expected_field_inventory_is_the_102_field_baseline() -> None:
+def test_expected_field_inventory_is_the_108_field_baseline() -> None:
     total = sum(len(fields) for fields in EXPECTED_FIELDS.values())
-    assert total == 102, f"inventory drifted from the 102-field baseline: {total}"
+    assert total == 108, f"inventory drifted from the 108-field baseline: {total}"
     assert len(EXPECTED_FIELDS) == 34
 
 
@@ -499,14 +505,14 @@ if __name__ == "__main__":
 
 # ---------------------------------------------------------------------------
 # A1 regression: no NEW raw existing-record field may bypass the shared
-# pickers. The fixed 102-field baseline pins the known fields; this audit
+# pickers. The fixed 108-field baseline pins the known fields; this audit
 # additionally catches a newly added visible raw input/textarea whose
 # name has existing-record reference semantics (the *_id/*_uuid patterns
 # and the known semantic names) unless the field uses a shared
 # record-choice picker, a native select, or carries a documented
 # exception with a reason. Hidden inputs (CSRF etc.), checkboxes/radios/
 # submit/file controls, and genuine free-text/new-record/date/number
-# fields are out of scope here (the 102-field baseline classifies finite
+# fields are out of scope here (the 108-field baseline classifies finite
 # choices; this audit targets reference fields only).
 # ---------------------------------------------------------------------------
 
@@ -553,6 +559,14 @@ _RAW_FIELD_EXCEPTIONS: dict[str, dict[str, str]] = {
         "provider": (
             "the slug is the identity of the provider record being edited, "
             "not a reference to another record"
+        ),
+    },
+    "keys/detail.html": {
+        "model": (
+            "explain-route query input: an operator may ask about a model "
+            "that is NOT currently routed (to learn why it is blocked), so "
+            "a finite picker cannot cover it; suggestions come from a "
+            "read-only datalist"
         ),
     },
 }
