@@ -10,6 +10,26 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-31 Objective 208-a GUI reviewed key cloning verification`](gui-cli-parity.md)
+  (recorded 2026-10-31, same living record file as 207) - admin GUI G04
+  of `docs/MISSING_GUI_FUNCTIONALITY.md` (faithful standard-key
+  cloning) reusing the SAME qualified core `KeyCloneService` build/
+  execute law (dedup-first, fingerprint revalidation, receipt, one-
+  time delivery): guided clone form with core eligibility and the
+  existing record pickers, a signed bounded review-intent token
+  (actor/session/source/delivery bound, strict re-parse before any
+  mutation), confirm-and-apply with bounded masked reason and fresh
+  fenced confirmation where required, one-time plaintext at most once
+  in a private no-store result, post-commit delivery-failure recovery
+  state, read-only outcome recovery (created / not-found / ambiguous /
+  malformed safe states), and a window-aware rate readout with a
+  neutral null-Responses readout on the review page. 47 unit PASS
+  (fake-session ASGI/Jinja), 4 owned-PostgreSQL PASS (+14 with 207
+  coexistence on one session DB), 3 actual Chromium/owned-PG PASS
+  (focused screenshots, plaintext result never captured), 9 OAP
+  governance PASS with the 208-a order committed byte-exact; no
+  schema/migration/model/CLI/worker change; GitHub CI pending at
+  publication.
 - [`2026-10-31 Objective 207-b GUI key policy repair verification`](gui-cli-parity.md)
   (recorded 2026-10-31, same living record file as 207-a) - same-PR
   repair of the demonstrated 207-a gaps, scoped by value kind
