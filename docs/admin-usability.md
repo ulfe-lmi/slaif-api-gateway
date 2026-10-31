@@ -850,3 +850,108 @@ unrestricted - creating an unrestricted key requires the explicit
 longer than 512 characters on a new/touched key mutation is refused
 with a fixed message (no mutation, no audit row); the affected fields
 show `maxlength=512` and the matching visible help.
+
+## 9. Reviewed key cloning (208-a)
+
+This section documents the key-cloning surface delivered by objective
+208-a (G04 of `docs/MISSING_GUI_FUNCTIONALITY.md`). It reuses the
+existing shared services (`KeyCloneService`, record pickers, redaction
+seam, session/CSRF contexts); no new database schema, table, or
+client/server module was added, and no new sortable tables were
+introduced (the review and result views are grouped field cards).
+
+### 9.1 Navigation
+
+- **Key detail** (`/admin/keys/{id}`): a new "Clone This Key" action
+  panel (bounded, after the template-provenance section) with a
+  "Clone this key" link and a "Check a clone outcome" recovery link.
+  All prior detail sections and actions remain unchanged.
+- **Clone form** (`/admin/keys/{id}/clone`): source identity card
+  (public key ID, prefix, status, validity, purpose) with a read-only
+  core eligibility line; the existing latest-100 record pickers for
+  "Target owner" (required) and "Target cohort (optional)" (blank = no
+  cohort), with plain-text UUID inputs when JavaScript is off; a
+  three-way validity radio (copy source expiry / duration from
+  execution time / exact UTC window) with seconds/minutes/hours/days
+  units for the duration; and the one-time delivery select
+  (none / pending / send-now / enqueue) whose options carry fixed
+  plain-language channel descriptions.
+- **Review** (`/admin/keys/{id}/clone/review` result of the form POST):
+  the reviewed plan identity (operation UUID and fingerprints), a
+  readable "Canonical Policy (copied exactly)" card, the reviewed
+  target/validity/delivery summary, the raw non-secret plan and policy
+  JSON as optional `<details>` blocks, and the apply form.
+- **Result and recovery**: the apply result page (one-time plaintext
+  where the channel allows, new-key identity, delivery status, recovery
+  link) and the read-only outcome recovery view
+  (`/admin/keys/{id}/clone/receipts?operation=...`).
+
+### 9.2 Review readout semantics
+
+- Provider/model/endpoint rows use the same tri-state wording as the
+  207 policy surfaces (unrestricted / allow-list / deny-all).
+- **Rate limits are labeled by the window the runtime meters in.**
+  When the copied policy carries a non-minute `window_seconds`, the
+  readout says e.g. "30 requests, 0.01M tokens per 10s window, max 2
+  concurrent"; minute (60s) and omitted windows keep the existing
+  "req/min / tokens/min" grammar. The exact raw policy stays in the
+  optional JSON detail, and the `num`/`tokm` grouped/M formatting is
+  unchanged.
+- **Lazy throttling honors the explicit mode**: `wait` renders the max
+  wait / max waiting counts; `reject` (or absent) renders "Reject
+  immediately (default)" - never a truthiness-only "wait" claim.
+- Live-burn, external-tool, and Responses rows reuse the existing
+  summary helpers; the fenced external-tool policy additionally
+  surfaces that a FRESH confirmation checkbox will be required at
+  apply (it is never copied from the source key).
+- The confirmation help states the binding honestly: the admin submits
+  the confirmation and the audit reason, the acting admin is derived
+  server-side from the signed-in session, and re-applying the SAME
+  valid operation returns the already-applied target instead of a
+  second key.
+
+### 9.3 Safety and error behavior
+
+- The review page carries a signed intent token (hidden input); the
+  page itself never shows key material. The token is bounded in
+  encoded and decoded size, expires, and is bound to the admin user,
+  session, source, and delivery channel; tampered, expired,
+  wrong-actor/session, wrong-source, or malformed states are refused
+  with fixed safe messages BEFORE any mutation.
+- A source that disappears (or never existed) yields a controlled 404
+  on the form, the review, and the re-render path - never a form
+  requiring absent key fields.
+- Ineligible sources (non-standard purpose/mode, suspended or expired,
+  fenced, secret-shaped policy) show a fixed controlled state on the
+  form and are refused at review with the core's fixed message; the
+  source policy is never reset or weakened to force eligibility.
+- The generated key is displayed at most once, only for the
+  none/pending channels, in a private no-store page; send-now/enqueue
+  results never show it. A post-commit channel failure renders
+  "Created With Delivery Failure" with the stable target/secret/
+  delivery IDs and "A second clone is NOT needed".
+- The reason is nonblank and at most 512 Unicode characters, refused
+  server-side before mutation or audit, and masked through the existing
+  redaction seam before storage; the recovery view redacts the
+  operation input before redisplay while preserving useful ordinary
+  UUID errors.
+
+### 9.4 No-JS and narrow behavior
+
+- Without JavaScript the record pickers fall back to plain-text UUID
+  inputs (typed or pasted), the validity radios and duration inputs
+  work as-is (the server reads only the selected mode's fields), and
+  the whole flow through to the persisted clone is usable.
+- The progressive-enhancement script only enables/disables the
+  non-selected validity-mode inputs; it never converts or scales any
+  value. The review and apply controls remain usable at the narrow
+  desktop viewport (qualified at 768px).
+
+### 9.5 Upgrade notes
+
+Deploying this change is a normal rebuild/restart of the API assets;
+there is **no schema migration** and no key mass-update. Existing keys
+are not touched: cloning is an explicit two-step operator action that
+creates a NEW key with independent material, identity, zero usage and
+reservations, and its own replay ownership. The only operator-facing
+behavior change on the key-detail page is the new action panel.

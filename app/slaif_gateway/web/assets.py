@@ -38,6 +38,7 @@ _ASSETS: dict[str, str] = {
     "policy-selector.js": "js/policy-selector.js",
     "streaming-live-burn.js": "js/streaming-live-burn.js",
     "lazy-throttling.js": "js/lazy-throttling.js",
+    "key-clone.js": "js/key-clone.js",
 }
 
 

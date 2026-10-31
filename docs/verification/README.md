@@ -10,6 +10,42 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-10-31 Objective 208-b GUI clone CI qualification verification`](gui-cli-parity.md)
+  (recorded 2026-10-31, same living record file) - same-PR
+  qualification of the demonstrated 208-a final-head CI failures:
+  terminal A result (unit `assert 87 < 84` line-budget failure with
+  6687 PASS / 1 SKIPPED; 10 207-module provider-slug seed failures
+  with 524 PASS / 9 SKIPPED in the shared session database) and the
+  bounded repair: standard-library AST main-as-composition guard
+  (wiring-only first-party imports, app-targeted `include_router`, no
+  inline handlers or direct route registration), removal of the
+  unused `_CLONE_FORM_FIELDS` tuple, and the 207 `_seed`
+  get-or-create provider/route correction so 207 and 208 coexist in
+  either collection order. 6 main-structure PASS, 9 governance PASS,
+  and 207/208 both-order owned-PG coexistence (14 distinct cases per
+  order, 28 executions, 0 skip) on fresh fixtures; the 208-a
+  component proof (47 unit / 4 PG / 14 coexist / 3 Chromium) is reused
+  unchanged; GitHub CI on the B head pending at publication.
+- [`2026-10-31 Objective 208-a GUI reviewed key cloning verification`](gui-cli-parity.md)
+  (recorded 2026-10-31, same living record file as 207) - admin GUI G04
+  of `docs/MISSING_GUI_FUNCTIONALITY.md` (faithful standard-key
+  cloning) reusing the SAME qualified core `KeyCloneService` build/
+  execute law (dedup-first, fingerprint revalidation, receipt, one-
+  time delivery): guided clone form with core eligibility and the
+  existing record pickers, a signed bounded review-intent token
+  (actor/session/source/delivery bound, strict re-parse before any
+  mutation), confirm-and-apply with bounded masked reason and fresh
+  fenced confirmation where required, one-time plaintext at most once
+  in a private no-store result, post-commit delivery-failure recovery
+  state, read-only outcome recovery (created / not-found / ambiguous /
+  malformed safe states), and a window-aware rate readout with a
+  neutral null-Responses readout on the review page. 47 unit PASS
+  (fake-session ASGI/Jinja), 4 owned-PostgreSQL PASS (+14 with 207
+  coexistence on one session DB), 3 actual Chromium/owned-PG PASS
+  (focused screenshots, plaintext result never captured), 9 OAP
+  governance PASS with the 208-a order committed byte-exact; no
+  schema/migration/model/CLI/worker change; GitHub CI pending at
+  publication.
 - [`2026-10-31 Objective 207-b GUI key policy repair verification`](gui-cli-parity.md)
   (recorded 2026-10-31, same living record file as 207-a) - same-PR
   repair of the demonstrated 207-a gaps, scoped by value kind

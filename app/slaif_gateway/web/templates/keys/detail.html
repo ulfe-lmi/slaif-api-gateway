@@ -42,6 +42,16 @@
   </section>
   {% endif %}
 
+  <section class="action-panel" aria-labelledby="key-clone-heading">
+    <h2 id="key-clone-heading">Clone This Key</h2>
+    <p class="muted">Clone an eligible standard key into a NEW independent key for an existing owner or cohort: the configured policy is copied, never usage, remaining balance, replay rows, or holds. The clone starts with UNUSED configured limits - the source's remaining balance is not transferred.</p>
+    <p>
+      <a class="button-link" href="/admin/keys/{{ key.id }}/clone">Clone this key</a>
+      ·
+      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/clone/receipts">Check a clone outcome</a>
+    </p>
+  </section>
+
   <div class="detail-grid">
     <section class="detail-section">
       <h2>Identity</h2>

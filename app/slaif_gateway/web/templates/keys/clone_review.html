@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+
+{% block title %}Review Clone Plan{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="review-heading">Review Clone Plan</h1>
+      <p class="muted">Nothing is created until you confirm the apply step below. This page shows the EXACT non-secret plan the core built for this source.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys/{{ source_id }}/clone">Back to clone form</a>
+      <a class="button-link secondary" href="/admin/keys/{{ source_id }}/clone/receipts?operation={{ plan.operation_uuid }}">Check this operation's outcome</a>
+      <a class="button-link secondary" href="/admin/keys/{{ source_id }}">Key detail</a>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">
+    <p>{{ error }}</p>
+  </div>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="review-plan-heading">
+    <h2 id="review-plan-heading">Reviewed Plan</h2>
+    <dl>
+      <dt>Operation UUID</dt>
+      <dd><code>{{ plan.operation_uuid }}</code></dd>
+      <dt>Source public key ID</dt>
+      <dd>{{ plan.source_public_key_id }}</dd>
+      <dt>Source fingerprint</dt>
+      <dd><code>{{ plan.source_fingerprint }}</code></dd>
+      <dt>Target owner</dt>
+      <dd>{{ choice_labels.owner_id or owner_id }}</dd>
+      <dt>Target cohort</dt>
+      <dd>{{ choice_labels.cohort_id if cohort_id else "No cohort" }}</dd>
+      <dt>Validity mode</dt>
+      <dd>
+        {% if plan.validity.mode == "copy-source-expiry" %}
+        Copy the source's current expiry ({{ plan.validity.source_valid_until }})
+        {% elif plan.validity.mode == "duration-from-now" %}
+        {{ plan.validity.duration_seconds | num }} seconds from execution time
+        {% else %}
+        {{ plan.validity.valid_from }} to {{ plan.validity.valid_until }} (UTC)
+        {% endif %}
+      </dd>
+      {% if plan.preview %}
+      <dt>Preview (execution-relative estimate)</dt>
+      <dd>{{ plan.preview.valid_from or "-" }} to {{ plan.preview.valid_until or "-" }} (UTC)</dd>
+      {% endif %}
+      <dt>Delivery (bound to this review)</dt>
+      <dd>{{ delivery_mode_label }}</dd>
+      {% if plan.requires_fenced_confirmation %}
+      <dt>Fenced external-tool policy</dt>
+      <dd class="warning-text">This plan requires a FRESH fenced confirmation at apply.</dd>
+      {% endif %}
+    </dl>
+    {% if plan.preview and plan.preview.note %}
+    <p class="field-help">{{ plan.preview.note }}</p>
+    {% endif %}
+    <details>
+      <summary>Raw non-secret plan JSON</summary>
+      <pre class="config-json">{{ plan | tojson(indent=2) }}</pre>
+    </details>
+  </section>
+
+  <section class="action-panel" aria-labelledby="review-policy-heading">
+    <h2 id="review-policy-heading">Canonical Policy (copied exactly)</h2>
+    <dl>
+      <dt>Allowed providers</dt>
+      <dd>{{ policy_summary.allowed_providers }}</dd>
+      <dt>Allowed models</dt>
+      <dd>{{ policy_summary.allowed_models }}</dd>
+      <dt>Allowed endpoints</dt>
+      <dd>{{ policy_summary.allowed_endpoints }}</dd>
+      <dt>Cost limit</dt>
+      <dd>{{ "Unlimited" if policy_summary.cost_limit_eur is none else "EUR " ~ (policy_summary.cost_limit_eur | num) }}</dd>
+      <dt>Token limit</dt>
+      <dd{% if policy_summary.token_limit_total is not none %} title="{{ policy_summary.token_limit_total | num }}"{% endif %}>{{ "Unlimited" if policy_summary.token_limit_total is none else (policy_summary.token_limit_total | tokm) ~ "M" }}</dd>
+      <dt>Request limit</dt>
+      <dd>{{ "Unlimited" if policy_summary.request_limit_total is none else (policy_summary.request_limit_total | num) }}</dd>
+      <dt>Rate limits</dt>
+      <dd>{{ policy_summary.rate_limit_line if policy_summary.rate_limit_line else "Default" }}</dd>
+      <dt>Lazy throttling</dt>
+      <dd>
+        {% if policy_summary.lazy_throttling_policy and policy_summary.lazy_throttling_policy.mode == "wait" %}
+        Wait for capacity: max wait {{ policy_summary.lazy_throttling_policy.max_wait_seconds | num }}s, max {{ policy_summary.lazy_throttling_policy.max_waiting_requests | num }} waiting per key (before provider execution).
+        {% else %}
+        Reject immediately (default)
+        {% endif %}
+      </dd>
+      <dt>Chat streaming live-burn</dt>
+      <dd>{{ policy_summary.chat_streaming_live_burn_summary | policysum if policy_summary.chat_streaming_live_burn_summary else "Off (default)" }}</dd>
+      <dt>External-tool policy</dt>
+      <dd>
+        {% if policy_summary.external_tool_policy %}
+        Mode {{ policy_summary.external_tool_policy.mode }}; capabilities {{ policy_summary.external_tool_policy.allowed_capabilities|join(', ') or 'none' }}; destinations {{ policy_summary.external_tool_policy.allowed_destination_ids|join(', ') or 'none' }}; max calls {{ policy_summary.external_tool_policy.max_provider_tool_calls_per_request | num }}; overrun acknowledged {{ 'yes' if policy_summary.external_tool_policy.single_request_overrun_acknowledged else 'no' }}.
+        {% else %}
+        Strict bounded (default deny)
+        {% endif %}
+      </dd>
+      <dt>Responses policy</dt>
+      <dd>
+        {% if policy_summary.responses_policy %}
+        <div>Allowed capabilities:</div>
+        <ul>
+          {% for capability in policy_summary.responses_policy.allowed_capabilities %}
+          <li><code>{{ capability }}</code></li>
+          {% endfor %}
+        </ul>
+        <div>Allowed local tool types:</div>
+        <ul>
+          {% for tool_type in policy_summary.responses_policy.allowed_local_tool_types %}
+          <li><code>{{ tool_type }}</code></li>
+          {% endfor %}
+        </ul>
+        {% if policy_summary.responses_policy.client_module %}
+        <div>Client module:</div>
+        <ul>
+          <li><code>{{ policy_summary.responses_policy.client_module.id }}</code> ({{ policy_summary.responses_policy.client_module.version or "pinned" }})</li>
+        </ul>
+        {% endif %}
+        {% else %}
+        No explicit Responses policy: optional key capability grants are absent. Endpoint and route policy still apply.
+        {% endif %}
+      </dd>
+    </dl>
+    <p class="field-help">
+      The new key starts with UNUSED configured limits (no transferred balance). Every policy field above - including provider null/list/[] distinctions, quotas, inherited rate members, and module pins - is copied from the canonical document; the optional JSON below is the exact reviewed value.
+    </p>
+    <details>
+      <summary>Full canonical policy document</summary>
+      <pre class="config-json">{{ policy | tojson(indent=2) }}</pre>
+    </details>
+  </section>
+
+  <form method="post" action="/admin/keys/{{ source_id }}/clone/apply">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="clone_review_intent" value="{{ clone_review_intent }}">
+    <section class="action-panel" aria-labelledby="review-apply-heading">
+      <h2 id="review-apply-heading">Apply This Exact Plan</h2>
+      <p class="muted">
+        Applying executes this exact reviewed plan - same operation UUID, source, target, validity, and delivery. Any change requires a new review. The review state expires about 15 minutes after it was created; inspecting an outcome later uses the read-only recovery view and never needs a new UUID.
+      </p>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_apply" value="true" required aria-describedby="review-confirm-help">
+        I confirm this exact reviewed clone plan
+      </label>
+      <p class="field-help" id="review-confirm-help">
+        You submit this confirmation and the audit reason; the acting admin is derived server-side from your signed-in session. A tampered, expired, or wrong-actor review state is refused before any mutation - and re-applying this same valid operation returns the already-applied target, never a second key.
+      </p>
+      {% if plan.requires_fenced_confirmation %}
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_external_tool_fenced" value="true" aria-describedby="review-fenced-help">
+        I provide a fresh confirmation for the fenced external-tool policy
+      </label>
+      <p class="field-help" id="review-fenced-help">
+        Fenced confirmation is always re-requested for this plan; it is never copied from the source key.
+      </p>
+      {% endif %}
+      <label>
+        Audit reason
+        <input name="reason" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="review-reason-help">
+      </label>
+      <p class="field-help" id="review-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
+      <button type="submit">Apply clone plan</button>
+    </section>
+  </form>
+</section>
+{% endblock %}
