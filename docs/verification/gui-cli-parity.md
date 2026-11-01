@@ -1379,3 +1379,120 @@ evidence, not native proof; the installed whole-GUI qualification
 (objective 219) and all deployment remain explicitly OUT of scope.
 Final-head GitHub CI status per head is recorded in the immutable
 212-a report.
+
+## 213-a GUI replay reference maintenance (objective 213, new PR,
+2026-11-01)
+
+### Scope and GUI-CLI parity contract
+
+G09 (replay-reference inspection and extension) of
+`docs/MISSING_GUI_FUNCTIONALITY.md`, delivered on branch
+`oap/213-gui-replay-maintenance` (created from verified remote `main`
+`abc08014`). The GUI reuses the SAME shared service the CLI uses
+(`CodexReplayMaintenanceService.inspect_replay_references` /
+`preview_replay_extend` / `apply_replay_extend`, the strict plan
+schemas, and the repositories) inside a caller-owned transaction; the
+controllers only bind the reviewed plan to the signed-in actor/session
+through the existing HMAC review-intent pattern and enforce the GUI's
+known-incoming-alias withholding. No schema, migration, permission,
+adapter, request-acceptance, accounting, or replay-law change; no raw
+replay inventory or content recovery, no expiry shortening, no key
+migration or ownership transfer, no production calls. All seeded
+keys/references are synthetic; no real provider/Codex request is
+involved; the final 219 installed whole-GUI qualification remains
+required and is NOT claimed.
+
+### Final evidence (accepted receipts)
+
+| Receipt | Scope | Result |
+| --- | --- | --- |
+| `unit-213a-1.xml` | 213 unit module: scope parsing/existence, time/TTL/default/expired controls, exact service invocation and read-only preview, strict plan envelope/types/unknowns/duplicates/caps, invalid auth/CSRF/confirmation, wrong actor/session/purpose/key/cohort, expired/tampered counts/TTL/reason/plan, fixed no-echo errors, incoming-alias canaries across every output/sign/apply boundary | 43 PASS / 0 skip (17.163 s) SHA `96af820b…` |
+| `unit-guards-213a-1.xml` | the 43 above PLUS usability inventory, SLAIF design, and the 9 OAP governance tests on the exact activated order+active | 185 PASS / 0 skip (20.316 s) SHA `5565c61a…` (includes the 43, not 228 distinct) |
+| `pg-213a-1.xml` | owned-PG ordered module (sole container owner): real admin login/CSRF and actual HTTP over the real app; inspection and preview prove NO domain/audit write; eligible/excluded synthetic retained references, original-age monotonic targets, explicit expired inclusion, same-key/finalized-ledger/HMAC eligibility; one session-actor/reason audit; exact reload/repeat with no duplicate write/audit; stale scope and changed-eligibility refusal; late fault after the real audit flush rolls back extension and audit together with retry; independent before/after oracle compares ALL non-expiry key/material/ledger/quota/reservation/replay-ownership fields and the ENTIRE expiry map | 11 PASS / 0 skip (14.131 s) SHA `c49c36de…` |
+| `browser-213a-1.xml` | actual Chromium (owned PG, sole owner, real uvicorn, no route mocks): login -> Operations -> Replay maintenance index (three explicit scopes), bound key/cohort detail navigation, inspect with independent before/after oracles, preview -> confirm -> apply through the real UI with exact expiry-map/audit oracles, exact same-session repeat no-op, original displayed token surviving a real background read (browser-context POST), no-JS flow with recovery, desktop/narrow captures | 7 PASS / 0 skip (19.158 s) SHA `ae57bb6d…` |
+| `unit-visual-213a-1.xml` | TARGETED post-visual-fix recheck (overlapping the 185, not new distinct totals): the 6 replay page/inspect unit cases rendering the changed templates (index combined Scope column, numeric Keys-in-scope, scope-page facets) plus the design and usability-inventory structural guards after the table-column change | 139 PASS / 0 skip (7.730 s) SHA `3862d3f8…` |
+| `browser-213a-2.xml` | TARGETED post-visual-fix recheck (overlapping the accepted 7, not a ninth workflow): the existing inspect case 02 now submits the form with a REAL keyboard Enter and asserts the numeric Keys-in-scope render, and the existing captures case 07 exercises REAL keyboard focus + Space toggle of the review confirmation checkbox (toggled back before the capture; no apply) and adds the narrow POPULATED inspection capture | 2 PASS / 0 skip (11.691 s) SHA `4d637da4…` |
+
+The strategic model independently RAN scoped component probes
+(synthetic, no HTTP/auth/PG effects - NOT native evidence): 10 pure
+controller/shared scope-parser probes (3 exact scopes; 7 conflicting/
+mismatched/missing-kind refusals; scope-parser AST
+`fc1199d1…`), 8 pure replay review-token probes, and 14 ASGI guard
+probes. It also INDEPENDENTLY REVIEWED (parsed, not rerun) the formal
+JUnit receipts above and visually reviewed the refreshed
+desktop/narrow captures (visual gate passed on the refreshed set).
+
+### In-order corrections (superseded states; product and test changes
+both occurred)
+
+- Pre-acceptance unit fixture corrections only (negative alias
+  fixtures actually set the cookies; no fixture `int(bad)` before the
+  HTTP call; the conflicting-scope ambiguity is preserved so the Core
+  parser sees all populated IDs; invalid schema fields/types; short
+  Unicode reason legality; HTML escaping/whitespace assertions). No
+  Core change.
+- Native fixture/oracle corrections only: an ORM
+  `Column.key`/metadata collision, the full-key digest now exercises a
+  nonempty legal 0149-v4 pin plus unrelated nested metadata sentinels
+  (not only empty `{}`), JSONB datetime-string and comma-number
+  expectations, the 07/08 full snapshot taken AFTER intentional
+  external drift and BEFORE the refused apply with the full state
+  compared immediately after apply before restore (no `updated_at`
+  exclusion), and the entire expiry map compared against before plus
+  the exact expected changes. No product/Core/accounting change.
+- Browser fixture corrections only: the repeat reuses the ACTUAL
+  browser context/session of the original apply (no second login or
+  serialized-cookie artifact), absolute URLs for the context form
+  POST, case 05 uses a REAL background private-POST inspect with the
+  ORIGINAL displayed CSRF and then the unchanged visible UI
+  confirm/apply, and the no-JS recovery link order. No weakened
+  auth/session binding; no mocked backend success.
+- Post-acceptance VISUAL corrections (root visual gate on the
+  functional captures), all display/test-only: (1) the inspection
+  "Keys in scope" projection renamed to `keys_count` because
+  `summary.keys` collided with the `dict.keys` builtin in Jinja
+  (numeric render now asserted); (2) the index navigation table
+  combines label/link/note into ONE Scope column after the ordinal so
+  the choices fit the narrow 390px layout; (3) the inspection
+  identity/date cells reuse the existing `.table-wide` / `.col-key` /
+  `.nowrap` classes inside the scroll wrappers; (4) the absent scope
+  facet (cohort name on a key scope) stays absent instead of rendering
+  a placeholder; (5) real keyboard evidence added to the same existing
+  cases (Enter form submission in case 02; focus + Space checkbox
+  toggle, restored, in case 07) and the narrow populated-inspection
+  capture added to case 07. The targeted rechecks above cover these;
+  the unchanged 185/native-11/full-7 flows were NOT rerun.
+- Execution chronology note: the coding CLI hit its context window
+  mid-visual-fix on 2026-11-01 and was recovered in the SAME
+  CLI/pane/worktree as a continuation of the already-activated 213-a
+  (the control OK was consumed ONCE at activation, 13:06 UTC; no
+  resignal, no second reader, no model/profile/effort change).
+
+### Reused unchanged evidence (not rerun)
+
+The accepted objective-200/CLI concurrency and large-scope Core proofs
+are reused unchanged (no 20k-row scale repetition); the unchanged
+cross-purpose 208/210 consumer-guard stdout success is reused. The 9
+OAP governance tests ran on the exact activated order+active inside
+the accepted 185 receipt.
+
+### Resource evidence
+
+Every PostgreSQL run used a fresh owned, labeled, loopback-bound,
+tmpfs-backed container created by the fixture and destroyed by the
+fixture's exact-ID cleanup; the final targeted-capture container
+(`20b0813f…`, owner `slaif185a-56d3ef…`) was independently verified
+NotFound with owner_remaining 0 after the run. No Docker env/DSN
+dump, no unowned container mutation.
+
+### Limits of this record
+
+Synthetic fixture keys/references only (no real Codex, provider, or
+mail request; no real DB beyond the owned disposable PostgreSQL in the
+native/browser fixtures). The 11-case native module is ONE ordered
+scenario, not 11 independent workflows, and the 7-case browser module
+is one ordered installation flow per case family; mocked-auth unit
+probes are component evidence, not native proof. The installed
+whole-GUI qualification (objective 219) and all deployment remain
+explicitly OUT of scope. Final-head GitHub CI status is recorded in
+the immutable 213-a report.

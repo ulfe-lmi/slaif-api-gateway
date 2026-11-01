@@ -648,6 +648,37 @@ class TestRouteConfigurationApply:
         assert "not valid for this signed-in admin" in response.text
         assert state.execute_calls == []
 
+    def test_cross_purpose_replay_token_refused(
+        self, client: TestClient, state: _State
+    ) -> None:
+        # 213-a: a validly signed replay-maintenance review token is a
+        # different signed purpose: the route-configuration verifier
+        # refuses it and the plan never executes.
+        import uuid as _uuid
+
+        from slaif_gateway.api.admin_review_intent import (
+            build_replay_review_token,
+        )
+        from slaif_gateway.schemas.codex_replay_maintenance import ReplayScope
+        from tests.unit.test_admin_replay_maintenance_213 import _review_doc
+
+        settings = _settings()
+        token = build_replay_review_token(
+            admin_session_secret=settings.ADMIN_SESSION_SECRET,
+            admin_user_id=ADMIN_ID,
+            admin_session_id=SESSION_ID,
+            review_document=_review_doc(
+                scope=ReplayScope(
+                    key_id=_uuid.UUID("cccccccc-0000-4000-8000-000000000003")
+                )
+            ),
+        )
+        response = _apply_post(client, token)
+        assert response.status_code == 400
+        # a different signed purpose is refused, never executed
+        assert "not valid for this signed-in admin" in response.text
+        assert state.execute_calls == []
+
     def test_stale_provider_context_refused(self, client: TestClient, state: _State) -> None:
         token = _reviewed_token(state, priority=50)
         state.execute_exc = ProviderRouteStaleError(

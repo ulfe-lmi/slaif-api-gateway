@@ -13,6 +13,7 @@
     <div class="header-actions">
       <a class="button-link" href="/admin/cohorts/{{ cohort.id }}/edit">Edit cohort</a>
       <a class="button-link secondary" href="/admin/cohorts">All cohorts</a>
+      <a class="button-link secondary" href="/admin/operations/replay-maintenance/cohort/{{ cohort.id }}">Replay maintenance</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="signout">Sign out</button>

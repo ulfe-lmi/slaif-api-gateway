@@ -308,7 +308,10 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
     # index presets, review tuples). The preset document region is a
     # dual-class "config-json table-wrap" (labeled/focusable too) and is
     # not matched by this single-class probe.
-    assert wrappers == 31
+    # 213-a: +5 for the replay-maintenance tables (index scopes,
+    # inspection per-key, inspection route/model groups, inspection
+    # exclusion reasons, review exclusion counts).
+    assert wrappers == 36
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

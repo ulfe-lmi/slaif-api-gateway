@@ -15,6 +15,7 @@
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/keys">All keys</a>
       <a class="button-link secondary" href="/admin/operations/compatibility/key/{{ key.id }}">Codex compatibility</a>
+      <a class="button-link secondary" href="/admin/operations/replay-maintenance/key/{{ key.id }}">Replay maintenance</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="signout">Sign out</button>

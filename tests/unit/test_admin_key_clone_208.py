@@ -830,6 +830,30 @@ def test_apply_cross_purpose_compatibility_token_refused(
     assert not state.execute_calls
 
 
+
+def test_apply_cross_purpose_replay_token_refused(client, state: _State) -> None:
+    # 213-a: a validly signed replay-maintenance review token is a
+    # different signed purpose: the clone verifier refuses it and the
+    # clone plan never executes.
+    import uuid as _uuid
+
+    from slaif_gateway.schemas.codex_replay_maintenance import ReplayScope
+    from tests.unit.test_admin_replay_maintenance_213 import _review_doc
+
+    token = intent.build_replay_review_token(
+        admin_session_secret=_settings().ADMIN_SESSION_SECRET,
+        admin_user_id=ADMIN_ID,
+        admin_session_id=SESSION_ID,
+        review_document=_review_doc(
+            scope=ReplayScope(key_id=_uuid.UUID("cccccccc-0000-4000-8000-000000000003"))
+        ),
+    )
+    result = _apply(client, token)
+    assert result.status_code == 400
+    assert "not valid for this signed-in admin" in result.text
+    assert not state.execute_calls
+
+
 def test_apply_expired_refused(client, state: _State) -> None:
     token = intent.build_review_intent_token(
         admin_session_secret="s" * 40,

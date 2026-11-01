@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}{{ error_status }} — Replay maintenance{% endblock %}
+
+{% block body %}
+{#- Replay-owned error surface: fixed safe message plus a useful recovery
+    link.  The scope link is only present for a verified canonical scope
+    that is not a known incoming alias; no raw input or token is ever
+    rendered here. -#}
+<section class="error-page" aria-labelledby="error-heading">
+  <p class="error-status">HTTP {{ error_status }}</p>
+  <h1 id="error-heading">{{ error_status_text }}</h1>
+  <p>{{ error_message }}</p>
+  {% if scope_href %}
+  <a class="button-link" href="{{ scope_href }}">Open this scope and preview it again</a>
+  {% endif %}
+  <a class="button-link secondary" href="/admin/operations/replay-maintenance/">Go to replay maintenance</a>
+  <a class="button-link secondary" href="/admin">Go to admin</a>
+</section>
+{% endblock %}

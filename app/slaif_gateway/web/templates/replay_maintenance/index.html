@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Replay maintenance{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="replay-index-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations / Replay maintenance</p>
+      <h1 id="replay-index-heading">Replay reference maintenance</h1>
+      <p class="lead">Inspect retained Codex replay references read-only, or review and apply a
+      monotonic expiry extension for one explicit scope.</p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/">Operations</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="replay-about-heading">
+    <h2 id="replay-about-heading">What this manages</h2>
+    <p>Retained Codex replay references are short-lived, same-key replay pointers with stored
+    expiry times. Inspection is read-only and writes nothing. An extension only lengthens the
+    expiry of eligible references to <em>original creation time + the selected lifetime</em>; it
+    never shortens, recreates, or transfers a reference, and it never restores unusable
+    material, grants replay access, or changes any other key state.</p>
+    <p class="muted">HMAC maintenance eligibility means the stored HMAC version has a configured
+    secret available. It does not verify the underlying material, and replay use still requires
+    the normal runtime authorization, route, and policy checks.</p>
+  </section>
+
+  <section class="action-panel" aria-labelledby="replay-scopes-heading">
+    <h2 id="replay-scopes-heading">Choose exactly one scope</h2>
+    <p class="muted">There is no implicit "all active keys" default: the third option is an
+    explicit choice you make from this page.</p>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Replay maintenance scopes">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Scope</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for option in scope_options %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>
+              <strong>{{ option.label }}</strong><br>
+              <a href="{{ option.href }}">{{ option.link_text }}</a>
+              {% if option.note %} <span class="muted">{{ option.note }}</span>{% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr data-no-sort class="empty-state"><td colspan="2">No scopes available.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="replay-limits-heading">
+    <h2 id="replay-limits-heading">Bounded by design</h2>
+    <p class="muted">A single operation inspects at most {{ 50000 | num }} retained references
+    across at most {{ 1000 | num }} selected keys; exceeding a ceiling refuses the operation
+    instead of silently truncating the scope. Route/model groups display at most
+    {{ 100 | num }} rows with explicit truncation metadata. The selected lifetime is
+    {{ 1 | num }}..{{ 31536000 | num }} seconds total from each reference's original
+    creation; blank uses this deployment's configured default ({{ configured_ttl_seconds | num }}
+    seconds).</p>
+  </section>
+</section>
+{% endblock %}
