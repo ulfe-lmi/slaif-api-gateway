@@ -668,7 +668,7 @@ wrapper and `.config-json` containment stylesheet rules, and the
 bounded 16 m `/admin/key-batch/` locations in BOTH shipped Nginx
 configs plus the `deployment.md` operator note.
 
-### Focused test evidence (local; GitHub CI pending at publication)
+### Focused test evidence (local; actual CI chronology recorded below)
 
 - **Fake-persistence ASGI/Jinja unit suite: 81 PASS / 0 skip** (JUnit
   `unit-209a-7.xml`; the module was green at 80 cases at
@@ -999,6 +999,8 @@ loopback/tmpfs PostgreSQL fixtures with exact-ID cleanup.
 | `affected-210a-1.xml` | main composition, legacy route form modules, consumer/doc drift, design/inventory, 9 OAP governance on the byte-exact order | 184 PASS / 0 skip (14.566 s) |
 | `affected-210a-2.xml` | legacy provider form module incl. the three URL display canaries | 17 PASS / 0 skip (8.203 s) |
 | `urlcanary-210a-2.xml` | focused URL canaries (supersedes `urlcanary-210a-1.xml`, 2 PASS pre-hardening) | 3 PASS / 0 skip (3.935 s) |
+| `pathfix-210a-1.xml` | focused re-verification of the completion-profile path boundary (loader + choices modules) | 117 PASS / 0 skip (15.745 s) |
+| `smoke-210a-1.xml` | focused re-verification of the repaired dashboard smoke case (owned PG, exact-ID cleanup) | 1 PASS / 0 skip (10.183 s) |
 
 Scoped root component probes (mocked auth, no real DB/provider) are
 reused: 11 pure review-helper checks (round-trip, actor/session/purpose,
@@ -1075,6 +1077,48 @@ pre-existing review helpers are unchanged.
   recorded latest receipts as product/test code moved; the superseded
   states are described here, not rerun.
 
+### CI chronology (actual, per head)
+
+- **First IMPL head `edf201e3` - CodeQL aggregate FAILED** (2026-11-01T
+  05:30:40Z) with three HIGH path-injection alerts
+  (`modules/servers/completion_service/profiles.py:153`;
+  `services/admin_record_choices.py:255,352`). Root SARIF review: the
+  sources are submitted profile/selected IDs, not an HTTP-supplied
+  directory; the existing fullmatch whitelist
+  `[a-z0-9][a-z0-9-]{0,63}` excludes every path separator; no escape
+  was demonstrated. Bounded same-order repair (commit `ebc12dac`, with
+  the additionally approved paths
+  `modules/servers/completion_service/profiles.py` and
+  `tests/unit/test_completion_service.py`): AFTER the existing ID-law
+  refusal, the final single root-relative filename is re-derived with
+  `os.path.basename` at the loader join and both lookup joins (no raw
+  `entry.path`), making the by-construction boundary explicit without
+  relaxing it - the whitelist, streaming enumeration, 100 cap, file
+  modes, and O_NOFOLLOW are unchanged; no suppression, dismissal,
+  config change, or directory framework. Focused re-verification:
+  `pathfix-210a-1.xml` (117 PASS / 0 skip; invalid components refused
+  before any I/O, valid names unchanged).
+- **First IMPL head `edf201e3` - browser job `124761536375` FAILED** on
+  exactly one case: `tests/browser/test_admin_dashboard_smoke.py::
+  test_admin_dashboard_browser_smoke` (line 487) - the new associated
+  route-create metadata help had rephrased the established warning
+  sentence the smoke asserts ("Runtime consumes it only for exact
+  OpenAI Responses"). Same-order repair (commit `bfe1ab43`): the
+  original sentence is restored verbatim inside the route-create
+  metadata help, keeping the added field guidance and all
+  hosted-tool limitations; no acceptance change or test weakening.
+  Focused re-verification: `smoke-210a-1.xml` (1 PASS / 0 skip).
+- **Placeholder correction (final IMPL commit):** the route-create
+  capabilities textarea placeholder `{"vision": false}` names a group
+  the shared `validate_capabilities_document` REFUSES; it is replaced
+  by the valid RAW example `{"chat_completions": {"chat_text": true}}`
+  (root-verified accepted) - the legacy editor takes the raw
+  capability object, never the reviewed `schema_version` wrapper.
+  Template hint only; IDs and behavior unchanged, no unrelated rerun.
+- The final IMPL head's actual check results are recorded in the
+  immutable 210-a report (queried per head; a failed or skipped job is
+  never reported as pass).
+
 ### Operator notes
 
 Deploying 210 is an application upgrade: rebuild the API/assets image
@@ -1095,7 +1139,10 @@ production access. The 207/208/209 component proof and the unchanged
 CLI law are reused without rerun; the affected shared route-execute
 path WAS requalified after the shared-clear correction (the 199 CLI PG
 module, `cli-pg-210a-1.xml`, 31 PASS). GitHub CI had not yet run on
-the 210 head when these docs were committed (the PR opens after them);
-the actual first-head check status is recorded in the immutable 210-a
-report - a failed or skipped job is never reported as pass. Strategic
+the 210 head when the first docs were committed; the FIRST IMPL head
+actually FAILED the CodeQL aggregate (three HIGH path-injection
+alerts) and one dashboard-smoke wording assertion, and both were
+repaired by bounded same-order commits with focused re-verification
+(chronology above). The final head's checked status is recorded in
+the immutable 210-a report. Strategic
 review and guarded merge remain the root's gates.
