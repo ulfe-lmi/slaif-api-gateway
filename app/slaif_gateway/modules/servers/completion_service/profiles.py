@@ -140,6 +140,28 @@ def profile_id_from_capabilities(capabilities: object) -> str | None:
     return value["profile"]
 
 
+def contained_child(root: str | Path, filename: str) -> str:
+    """A validated single child of the trusted profile root, proven contained.
+
+    ``filename`` must already have passed the profile ID law and been
+    re-derived with ``os.path.basename`` (a single name; for a
+    whitelisted stem the basename is the identity). Only the TRUSTED
+    ROOT is canonicalized: ``os.path.realpath`` on the root resolves
+    symlinks in the operator root's own ancestry (the caller already
+    enforces the root's absolute/non-symlink law before this). The
+    joined candidate is normalized and must remain inside the
+    canonical root plus a separator. The final file is NEVER resolved
+    or opened through its target: callers keep ``O_NOFOLLOW`` plus
+    symlink/mode/size refusal on the last component, so a symlinked
+    profile file - inside or outside the root - is refused.
+    """
+    canonical_root = os.path.realpath(os.fspath(root))
+    candidate = os.path.normpath(os.path.join(canonical_root, filename))
+    if candidate == canonical_root or not candidate.startswith(canonical_root + os.sep):
+        raise ValueError("Profile filename escapes the profile root")
+    return candidate
+
+
 @lru_cache(maxsize=64)
 def load_profile(profile_id: str, directory: str = "") -> CompletionProfile:
     """Load one bounded JSON file; route metadata cannot select a file path.
@@ -147,7 +169,10 @@ def load_profile(profile_id: str, directory: str = "") -> CompletionProfile:
     The ID law rejects every path component BEFORE any I/O; the final
     join re-derives the single root-relative filename with
     ``os.path.basename`` so the by-construction boundary is explicit
-    (for a whitelisted ID the basename is the identity).
+    (for a whitelisted ID the basename is the identity), and the join
+    is proven to stay inside the canonicalized trusted root
+    (``contained_child``). The final file is never resolved: a
+    symlinked profile is refused by ``O_NOFOLLOW``.
     """
     try:
         if not _ID.fullmatch(profile_id):
@@ -155,7 +180,7 @@ def load_profile(profile_id: str, directory: str = "") -> CompletionProfile:
         root = Path(directory) if directory else Path(__file__).parent / "profiles"
         if directory and (not root.is_absolute() or root.is_symlink()):
             raise ValueError("Profile directory must be an absolute operator path")
-        path = root / (os.path.basename(profile_id) + ".json")
+        path = contained_child(root, os.path.basename(profile_id) + ".json")
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as source:
             info = os.fstat(source.fileno())

@@ -284,9 +284,11 @@ def _completion_profile_choices(
     shared profile selectors.
 
     Every path join re-derives the single root-relative filename with
-    ``os.path.basename`` AFTER the ID-law refusal, so the by-construction
-    boundary is explicit: no path component can ever reach the I/O (for
-    a whitelisted stem the basename is the identity).
+    ``os.path.basename`` AFTER the ID-law refusal, then proves the joined
+    candidate stays inside the canonicalized trusted root through the
+    shared ``profiles.contained_child``: no path component can ever reach
+    the I/O (for a whitelisted stem the basename is the identity), and
+    the final file keeps its symlink/mode/size refusal.
     """
     custom = bool(profile_dir)
     root: Path
@@ -327,13 +329,17 @@ def _completion_profile_choices(
                 stem = _eligible_name(entry.name)
                 if stem is None:
                     continue
-                candidate = root / (os.path.basename(stem) + ".json")
                 try:
+                    candidate = Path(
+                        _completion_profiles.contained_child(
+                            root, os.path.basename(stem) + ".json"
+                        )
+                    )
                     if candidate.is_symlink() or not _profile_file_ok(
                         candidate, custom=custom
                     ):
                         continue
-                except OSError:
+                except (ValueError, OSError):
                     continue
                 available.append(RecordChoice(id=stem, label=stem))
                 if len(available) >= CHOICE_LIMIT:
@@ -353,13 +359,15 @@ def _completion_profile_choices(
             or any(c.id == stem for c in available)
         ):
             continue
-        candidate = root / (os.path.basename(stem) + ".json")
         try:
+            candidate = Path(
+                _completion_profiles.contained_child(root, os.path.basename(stem) + ".json")
+            )
             if candidate.is_symlink() or not _profile_file_ok(
                 candidate, custom=custom
             ):
                 continue
-        except OSError:
+        except (ValueError, OSError):
             continue
         hydrated.append(RecordChoice(id=stem, label=stem))
     return _merge_selected_keep_cap(available, hydrated)
