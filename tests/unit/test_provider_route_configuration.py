@@ -1239,6 +1239,36 @@ class TestExecuteRouteUpdatePlan:
         assert call["capabilities"]["codex_limits"]["default_max_output_tokens"] == 32768
         assert call["capabilities"]["chat_completions"] == CHAT_BLOCK
         assert call["notes"] == "route notes"
+        # An omitted notes preview carries the CURRENT notes: the service
+        # call keeps the default preserve behavior (no explicit clear).
+        assert call["clear_notes"] is False
+
+    def test_cleared_notes_target_applies_explicit_clear(self, harness, monkeypatch) -> None:
+        """Reviewed canonical target notes=null => the execute path
+        applies the EXPLICIT clear (repository writes NULL; the service
+        captures the REAL prior notes in its one audit)."""
+        row, _provider_row = harness
+        plan = _plan_for(row, clear_notes=True)
+        assert plan.notes is None
+        assert row.notes == "route notes"
+        calls: list[dict[str, Any]] = []
+
+        class _RecordingService:
+            async def update_model_route(self, route_id: Any, **kwargs: Any) -> Any:
+                calls.append({"route_id": route_id, **kwargs})
+                return row
+
+        monkeypatch.setattr("slaif_gateway.services.provider_route_configuration.ModelRouteService", lambda **_: _RecordingService())
+
+        async def go() -> None:
+            return await execute_route_update_plan(FakeSession(), plan, reason="reviewed")
+
+        import asyncio
+
+        asyncio.run(go())
+        assert len(calls) == 1
+        assert calls[0]["notes"] is None
+        assert calls[0]["clear_notes"] is True
 
     def test_repeated_apply_refused_stale(self, harness) -> None:
         row, _provider_row = harness

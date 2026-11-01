@@ -370,6 +370,12 @@ def test_external_tool_policy_contract_consumers_remain_allowlisted() -> (
         # authorization, fences/holds and execution; this grants no
         # runtime hosted-tool authority.
         REPO_ROOT / "app/slaif_gateway/api/admin_key_batch.py",
+        # 210-a: the purpose-bound review-intent helper imports the
+        # ExternalToolOperatorCeilings TYPE only so the route-configuration
+        # token build/verify can strict-reparse the plan under the caller's
+        # installation ceilings; it performs no policy logic and grants no
+        # runtime hosted-tool authority.
+        REPO_ROOT / "app/slaif_gateway/api/admin_review_intent.py",
     }
     for path in (REPO_ROOT / "app/slaif_gateway").rglob("*.py"):
         if path == module_path or path in allowed_consumers:

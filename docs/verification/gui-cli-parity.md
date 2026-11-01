@@ -668,7 +668,7 @@ wrapper and `.config-json` containment stylesheet rules, and the
 bounded 16 m `/admin/key-batch/` locations in BOTH shipped Nginx
 configs plus the `deployment.md` operator note.
 
-### Focused test evidence (local; GitHub CI pending at publication)
+### Focused test evidence (local; actual CI chronology recorded below)
 
 - **Fake-persistence ASGI/Jinja unit suite: 81 PASS / 0 skip** (JUnit
   `unit-209a-7.xml`; the module was green at 80 cases at
@@ -910,4 +910,285 @@ API/assets rebuild with API recreate/restart, the reverse-proxy
 configuration from the shipped templates plus `nginx -t` and reload in
 the same maintenance window (proxy-only edits need just the reload),
 no schema migration and no existing-key change or rotation. Strategic
+review and guarded merge remain the root's gates.
+
+## 210-a reviewed route configuration and provider preparation (objective 210, new PR, 2026-11-01)
+
+### Scope and GUI-CLI parity contract
+
+G06 (reviewed route-capability changes) and G07 (provider preparation
+and explicit clearing) of `docs/MISSING_GUI_FUNCTIONALITY.md`, delivered
+on branch `oap/210-gui-provider-route` (created from accepted `main`
+`32478e0`, the merged PR #365 head). The GUI reuses the SAME qualified
+core: the shared `provider_route_configuration` orchestration (strict
+reviewed-plan schema, fresh revalidation of route/provider identity and
+context, deterministic FOR UPDATE locking, stale refusal, the no-op law,
+and the merged-candidate validation including the configured-completion
+zero-retry rule), `ModelRouteService` (the audited CRUD path - one
+`model_route_updated` audit per changed route), `ProviderConfigService`
+(prior-state capture, HTTP confirmation, credential reference only),
+the record-choice infrastructure, and the review-intent token family.
+No GUI policy engine, no second validator, no schema,
+migration, model, CLI-semantics, worker, or accounting change. Route
+CREATE's finite creation intent (Automatic / Prepare disabled / Enable
+explicitly; legacy POSTs keep the enabled checkbox) and provider CREATE's
+default-OFF enabled checkbox with one optional Notes are preparation
+separations: provider status is never proof of backend authentication.
+
+### Bounded implementation
+
+New focused router `api/admin_provider_route_configuration.py` (GET
+form / POST plan / POST apply; registered from `main.py` composition;
+`admin.py` does not import it) over the route-purpose token extension of
+`api/admin_review_intent.py` (HMAC-SHA256, actor + session + purpose,
+15-minute expiry, 178,858-character encoded bound, and the 128 KiB
+decoded canonical-plan bound enforced at BUILD and VERIFY; malformed
+token formats are a fixed refusal before digest comparison). Bounded
+`admin.py` changes: provider detail/form display projections, provider
+create+edit known-shape refusals (the 199 CLI law) before any write,
+legacy route-form refusal blanking/redaction, the route-creation intent
+path (validated through `validate_route_creation_candidate` in the same
+caller transaction before write), the entry link, and the small
+`_admin_url_display_value` projection. Templates: three new
+`routes/configuration_*.html`, touched `routes/{detail,edit,create}.html`
+and `providers/{create,edit}.html`; progressive
+`web/static/js/catalog-configuration.js` (the capability-source fieldset
+hidden AND disabled by JS only; no-JS fully enabled; no value
+conversion). A
+bounded `completion_profile` choice kind (streaming `os.scandir`,
+filters before stat, stop at 100, `bindings.json` excluded,
+unsafe-mode/symlink/oversize refusals; configured profile directory
+wired to initial render AND AJAX).
+
+### Root-approved bounded shared-law exception (recorded with approval)
+
+A demonstrated defect: the reviewed preview promised a null notes target
+while the repository treated `notes=None` as preserve. Root approved the
+exact bounded paths (`services/model_route_service.py`,
+`db/repositories/routing.py`, `services/provider_route_configuration.py`
+plus their unit tests; the 199 CLI PG module needed no change):
+`update_model_route_metadata(..., clear_notes: bool = False)` writes
+NULL only when explicitly requested (`notes=None` without it still
+preserves), `update_model_route(..., clear_notes: bool = False)` refuses
+the conflicting notes+clear combination, and
+`execute_route_update_plan` passes `clear_notes=plan.notes is None` -
+the plan's notes is the reviewed canonical target, applied as an
+explicit clear (a no-op when already null; equality is checked first,
+and the service captures the REAL prior notes in its single audit). No
+schema/plan-version/permission/accounting change; the order bytes are
+immutable. Evidence: `unit-clear-1.xml` (202 PASS), the native
+clear-only PG case in `pg-210a-3.xml`, and `cli-pg-210a-1.xml` (31 PASS).
+
+### Focused test evidence (local; GitHub CI pending at publication)
+
+All JUnit files under `/tmp/slaif210/`; the final qualifying runs were
+in managed foreground terminals (two early background PG launches were
+diagnosed, found dead, and corrected rather than rerun blindly); owned
+loopback/tmpfs PostgreSQL fixtures with exact-ID cleanup.
+
+| Receipt | Scope | Result |
+| --- | --- | --- |
+| `unit-210a-3.xml` (latest; `unit-210a-2.xml` post-layout receipt reused for unchanged areas) | 210 unit module: form sources, leaf diff, tokens, boundaries, refusals | 58 PASS / 0 skip (24.033 s) |
+| `choices-210a-1.xml` / `choices-210a-3.xml` | completion-profile lookup + final six tail cases | 74 PASS / 6 PASS |
+| `unit-clear-1.xml` | 210 unit + `test_model_route_service` + `test_provider_route_configuration` after the shared-clear correction | 202 PASS / 0 skip (24.694 s) |
+| `pg-210a-1.xml` | 10 native PG cases (chronology below) | 10 PASS / 0 skip (6.480 s) |
+| `pg-210a-2.xml` | added real auth/CSRF denial case | 1 PASS (3.833 s) |
+| `pg-210a-3.xml` | full 210 PG: preview read-only, exact apply + 1 audit, stale no-write, late-failure rollback, zero-diff no-op, provider create disabled / edit clear, creation intents, real auth/CSRF denial, native clear-only (plan TAMPER is unit evidence, not a native PG case) | 12 PASS / 0 skip (7.739 s) |
+| `cli-pg-210a-1.xml` | 199 CLI PG module (affected by the execute-path change) | 31 PASS / 0 skip (36.378 s) |
+| `browser-210a-1.xml` | real Chromium: entry/initial state + desktop/narrow captures, keyboard guided plan/apply with independent DB/audit oracles, JS source transitions, full-document replacement, no-JS fallback incl. notes clear, provider edit clear, creation intents, help associations | 8 PASS / 0 skip (21.267 s) |
+| `affected-210a-1.xml` | main composition, legacy route form modules, consumer/doc drift, design/inventory, 9 OAP governance on the byte-exact order | 184 PASS / 0 skip (14.566 s) |
+| `affected-210a-2.xml` | legacy provider form module incl. the three URL display canaries | 17 PASS / 0 skip (8.203 s) |
+| `urlcanary-210a-2.xml` | focused URL canaries (supersedes `urlcanary-210a-1.xml`, 2 PASS pre-hardening) | 3 PASS / 0 skip (3.935 s) |
+| `pathfix-210a-1.xml` | focused re-verification of the completion-profile path boundary (loader + choices modules) | 117 PASS / 0 skip (15.745 s) |
+| `pathfix2-210a-1.xml` | FINAL completion-profile path-boundary re-verification (loader + choices modules; includes the root-containment guard and the separator-safe root-prefix tests) | 121 PASS / 0 skip (15.699 s) |
+| `smoke-210a-1.xml` | focused re-verification of the repaired dashboard smoke case (owned PG, exact-ID cleanup) | 1 PASS / 0 skip (10.183 s) |
+
+Scoped root component probes (mocked auth, no real DB/provider) are
+reused: 11 pure review-helper checks (round-trip, actor/session/purpose,
+expiry, digest tamper, cross-purpose denial, decoded 128 KiB refusal
+inside wrapper slack), 8 completion-lookup metadata checks (bounded
+opens, older hydration, `bindings.json` exclusion, unsafe-mode
+refusals), 3 provider-detail projection checks, 2 provider create/edit
+known-shape canaries (refusal before any service call), 8 URL-fix ASGI
+refusal/recovery checks (https/ftp userinfo and malformed IPv6 across
+create/edit, ordinary-URL recovery, retained projections, literal ENV
+name, original row unchanged), and the AST audit that the seven
+pre-existing review helpers are unchanged.
+
+### Qualification chronology (honest failures)
+
+- **PG fixture**: the first `pg-210a-1.xml` run was 10 tests / 2
+  failures - the seed ENV names `210_SVC_KEY`/`210_MOD_KEY`/
+  `210_NEW_KEY` start with digits and violate the existing ENV-name
+  validator (a generic 400 blocked the intended validators). Corrected
+  to `GUI210_*` names; the corrected module is the recorded 10 PASS
+  receipt (the JUnit was overwritten; chronology preserved here).
+- **PG final module**: the first `pg-210a-3.xml` run of the two new
+  cases failed on an audit helper-key typo in the test (fixture-only -
+  the audit dict keys are `old`/`new`, not `old_values`/`new_values`);
+  the corrected module is the recorded 12 PASS receipt. The runner
+  wrapper then raised a `NameError` on `child_exit` AFTER the tests
+  and container cleanup had completed - a harness-only post-cleanup
+  failure, distinct from the test result; the wrapper was corrected for
+  later runs and the 12 PASS receipt was not rerun for it.
+- **Legacy provider module**: the first `affected-210a-2.xml` run was
+  14 / 1 failure - the pre-existing `_FakeSession` did not back the new
+  caller-transaction locked read. Fixture-only backing added (directly
+  affected behavior, authorized path); the module is the recorded 17
+  PASS receipt after the URL canaries joined it.
+- **Browser module (actual sequence)**: the first 2-case run failed 1
+  case (42.688 s) - the Chat flag lives inside an intentionally
+  collapsed disclosure, and the ordinary `select_option` was attempted
+  on the control while it was still hidden; the fix opens the
+  disclosure by keyboard first (focus the summary, Enter/Space) and
+  only touches the flag once visible. The targeted rerun then failed
+  (11.197 s) on an unsupported oracle - the result template does not
+  render the audit reason, so the DB audit assertion is authoritative;
+  corrected, the case passed (10.808 s). The first FULL 8-case run
+  failed 4 cases (78.933 s), all fixture/oracle defects: the
+  full-replacement raw-document expectation ignored the shared-
+  normalized canonical defaults (stored state is the reviewed
+  canonical target, so e.g. chat_text true -> true is correctly
+  absent from the leaf diff); the no-JS notes label expected
+  "No notes." where the template actually renders "(none)"; the
+  provider redirect success check did not allow the `?message`
+  query; and the route-creation fixture selected the requested model
+  before its provider, whose picker parent change clears the
+  dependent selection. Separately (setup correction, not one of the
+  four test failures): the runner's unused outer owned PG was removed
+  so the browser fixture is the sole container owner. The second FULL
+  run failed 2 cases (21.927 s):
+  ONE was a REAL shared persistence defect - the reviewed preview
+  promised a null notes target while the repository treated
+  `notes=None` as preserve - repaired through the root-approved
+  bounded shared-law correction above, NOT a fixture fix; the other was
+  test-side (the raw-plan `<details>` was read while closed). The final
+  full run is the recorded 8 PASS receipt (21.267 s). No product
+  message, message-flow, or validator was changed to fit selectors.
+- **Demonstrated URL privacy edge and fix**: root reproduced (mocked
+  auth, no real DB/provider) that a credential-bearing (userinfo) base
+  URL is refused with 400 but the plaintext password remained in the
+  error HTML - the generic known-shape redaction does not cover URL
+  userinfo. The small field-specific `_admin_url_display_value`
+  projection withholds credential-bearing URL values entirely on
+  form/detail/review display (any userinfo, any scheme, including empty
+  userinfo; malformed URLs withheld safely instead of re-raised, so a
+  400 recovery page cannot become a 500), leaving ordinary URLs
+  byte-identical and URL acceptance, canonical values, fingerprints,
+  and stored data unchanged. Focused canaries:
+  `urlcanary-210a-2.xml` (3 PASS) and the root's independent 8 checks;
+  the two directly-affected unit modules were refreshed after each
+  hardening (recorded receipts above).
+- **Receipt supersession**: `unit-210a-2.xml` (58 PASS, post-layout),
+  `urlcanary-210a-1.xml` (2 PASS, pre-hardening), and the intermediate
+  14/16 PASS `affected-210a-2.xml` states were superseded by the
+  recorded latest receipts as product/test code moved; the superseded
+  states are described here, not rerun.
+
+### CI chronology (actual, per head)
+
+- **First IMPL head `edf201e3` - CodeQL aggregate FAILED** (2026-11-01T
+  05:30:40Z) with three HIGH path-injection alerts
+  (`modules/servers/completion_service/profiles.py:153`;
+  `services/admin_record_choices.py:255,352`). Root SARIF review: the
+  sources are submitted profile/selected IDs, not an HTTP-supplied
+  directory; the existing fullmatch whitelist
+  `[a-z0-9][a-z0-9-]{0,63}` excludes every path separator; no escape
+  was demonstrated. Bounded same-order repair (commit `ebc12dac`, with
+  the additionally approved paths
+  `modules/servers/completion_service/profiles.py` and
+  `tests/unit/test_completion_service.py`): AFTER the existing ID-law
+  refusal, the final single root-relative filename is re-derived with
+  `os.path.basename` at the loader join and both lookup joins (no raw
+  `entry.path`), making the by-construction boundary explicit without
+  relaxing it - the whitelist, streaming enumeration, 100 cap, file
+  modes, and O_NOFOLLOW are unchanged; no suppression, dismissal,
+  config change, or directory framework. Focused re-verification:
+  `pathfix-210a-1.xml` (117 PASS / 0 skip; invalid components refused
+  before any I/O, valid names unchanged). The follow-up CodeQL runs
+  on the next heads (`bfe1ab43`, `784ed9c5`) STILL reported the same
+  three HIGH alerts: the basename re-derivation alone was insufficient
+  for the analysis (the SARIF still traced the submitted IDs through
+  the basename join), so a further bounded guard was authorized.
+- **CodeQL root-containment guard (commit `c32c6ca9`):** following the
+  official CodeQL recommendation, the shared helper
+  `profiles.contained_child` (used by the loader and by both
+  enumeration/hydration joins) canonicalizes the TRUSTED ROOT only
+  (`os.path.realpath`; the root's original absolute/non-symlink law is
+  still checked first and unchanged), `os.path.normpath`s the joined
+  validated filename, and requires the normalized candidate to start
+  with the canonical root plus a separator BEFORE any I/O. The final
+  file is never resolved and never opened through a symlink target:
+  `O_NOFOLLOW`, symlink/mode/size refusal, streaming caps, and the
+  pre-I/O ID-law rejection are all preserved. No directory framework,
+  suppression, dismissal, or config change; same two approved modules
+  plus `tests/unit/test_completion_service.py`. Focused re-verification:
+  `pathfix2-210a-1.xml` (121 PASS / 0 skip, incl. inside-root and
+  outside-root symlinked profile refusals and relative/symlinked root
+  refusals).
+- **Separator-safe root prefix (commit `cea28df1`, final CODE head):**
+  `canonical_root + os.sep` builds `"//"` when the accepted root is
+  `/` and would wrongly refuse `/profile.json`; the root prefix is now
+  derived with `os.path.join(canonical_root, "")`, which keeps exactly
+  one trailing separator (`/` itself at the root). The strict-child and
+  separator-boundary requirements are unchanged; a pure helper
+  assertion covers the `/` root without any filesystem write. Same
+  focused suite: `pathfix2-210a-1.xml` (121 PASS / 0 skip).
+- **First IMPL head `edf201e3` - browser job `124761536375` FAILED** on
+  exactly one case: `tests/browser/test_admin_dashboard_smoke.py::
+  test_admin_dashboard_browser_smoke` (line 487) - the new associated
+  route-create metadata help had rephrased the established warning
+  sentence the smoke asserts ("Runtime consumes it only for exact
+  OpenAI Responses"). Same-order repair (commit `bfe1ab43`): the
+  original sentence is restored verbatim inside the route-create
+  metadata help, keeping the added field guidance and all
+  hosted-tool limitations; no acceptance change or test weakening.
+  Focused re-verification: `smoke-210a-1.xml` (1 PASS / 0 skip).
+- **Placeholder correction (final IMPL commit):** the route-create
+  capabilities textarea placeholder `{"vision": false}` names a group
+  the shared `validate_capabilities_document` REFUSES; it is replaced
+  by the valid RAW example `{"chat_completions": {"chat_text": true}}`
+  (root-verified accepted) - the legacy editor takes the raw
+  capability object, never the reviewed `schema_version` wrapper.
+  Template hint only; IDs and behavior unchanged, no unrelated rerun.
+- **Final CODE head `cea28df1` - CodeQL aggregate SUCCESS**
+  (queried 2026-11-01T05:58:50Z), together with Unit/lint/migration,
+  OpenAI-compatible E2E, Docker Compose smoke, documentation hygiene,
+  and the three CodeQL analyze jobs all `completed/success` at the same
+  timestamp; the Playwright browser smoke and PostgreSQL integration
+  jobs were still `in_progress` at that timestamp (the same suites have
+  local green receipts: `browser-210a-1.xml` 8 PASS, `pg-210a-3.xml`
+  12 PASS, `smoke-210a-1.xml` 1 PASS). The final docs-only IMPL head's
+  checks and the merge gate are root-owned; per-head check states are
+  recorded in the immutable 210-a report (a failed or skipped job is
+  never reported as pass).
+
+### Operator notes
+
+Deploying 210 is an application upgrade: rebuild the API/assets image
+and recreate/restart the API so the new code runs. There is **no Nginx
+change**: the signed route review envelope is bounded to ~175 KiB
+(178,858 base64url characters), well inside the existing default
+`client_max_body_size`, and no new location or allowance is introduced.
+No database migration; existing keys and routes are untouched.
+Installed completion profiles are a process-local cache: deploy the
+profile files to the configured profile directory, then recreate/restart
+the API so the process picks them up. See `deployment.md`.
+
+### Honesty and limitations
+
+This is local, commit-specific evidence on the qualified owned fixtures
+and real Chromium: no real provider, mail, or upstream call; no
+production access. The 207/208/209 component proof and the unchanged
+CLI law are reused without rerun; the affected shared route-execute
+path WAS requalified after the shared-clear correction (the 199 CLI PG
+module, `cli-pg-210a-1.xml`, 31 PASS). GitHub CI had not yet run on
+the 210 head when the first docs were committed; the FIRST IMPL head
+actually FAILED the CodeQL aggregate (three HIGH path-injection
+alerts) and one dashboard-smoke wording assertion; the basename
+clarification alone did not clear the CodeQL flow, and both were
+repaired by the bounded same-order commits recorded above
+(chronology), ending in CodeQL aggregate SUCCESS on final CODE head
+`cea28df1`. The final docs-only head's checked status is recorded in
+the immutable 210-a report. Strategic
 review and guarded merge remain the root's gates.

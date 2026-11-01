@@ -876,6 +876,12 @@ async def execute_route_update_plan(
         supports_streaming=plan.supports_streaming,
         capabilities=merged,
         notes=plan.notes,
+        # plan.notes is the reviewed canonical target. A null target is
+        # applied as the explicit clear (a no-op when the stored notes
+        # are already null; the equality/no-op check runs first). The
+        # service captures the REAL prior notes in its single audit, and
+        # notes=None without clear_notes still preserves.
+        clear_notes=plan.notes is None,
         actor_admin_id=actor_admin_id,
         reason=reason,
     )

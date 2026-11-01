@@ -34,13 +34,19 @@ with an alphabetical tie-breaker.
 
 from __future__ import annotations
 
+import os
+import re
+import stat
 import uuid
+from pathlib import Path
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import String, and_, asc, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from slaif_gateway.modules.servers.completion_service import profiles as _completion_profiles
 
 from slaif_gateway.db.models import (
     STATUS_VALUES_EMAIL_DELIVERIES,
@@ -62,6 +68,10 @@ from slaif_gateway.services.key_policy_validation import IMPLEMENTED_CLIENT_ENDP
 CHOICE_LIMIT = 100
 QUERY_MAX_LENGTH = 200
 
+# Mirrors the shared completion-profile ID law (profiles.py ``_ID``):
+# one bounded lowercase id per installed ``<id>.json`` data file.
+_PROFILE_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+_PROFILE_FILE_MAX_BYTES = 65536
 
 def _endpoint_path(value: str) -> str:
     """Reduce a canonical endpoint entry to the plain /v1 path form.
@@ -231,6 +241,136 @@ def _one_time_secret_choice(row: Any) -> RecordChoice:
         label=f"{str(row.id)[:8]}… ({row.status})",
         sub=str(row.purpose or ""),
     )
+
+
+def _profile_file_ok(path: Path, *, custom: bool) -> bool:
+    """The shared profile file law, checked without opening the body.
+
+    Mirrors the core loader: regular non-symlink file at most 65536
+    bytes; an OPERATOR (custom) directory additionally rejects
+    group/world-writable files (the bundled tree keeps the loader's
+    looser mode law).
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        info = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > _PROFILE_FILE_MAX_BYTES:
+        return False
+    return not (custom and info.st_mode & 0o022)
+
+
+def _completion_profile_choices(
+    profile_dir: str, query: str | None, selected: Sequence[str]
+) -> list[RecordChoice]:
+    """Installed completion profile ids for the guided picker (210-a).
+
+    Enumerates ``<id>.json`` stems matching the shared profile ID law in
+    the operator directory (blank = bundled data profiles), regular
+    non-symlink files at most 65536 bytes, ``bindings.json`` excluded
+    (it is not a profile id, in enumeration AND hydration). The
+    enumeration STREAMS the directory: cheap name filters (suffix, id
+    law, query) run before any stat, and enumeration stops at
+    CHOICE_LIMIT eligible matches - an oversized directory never opens
+    or stats every unrelated profile. The bounded result is sorted;
+    selected-id hydration goes DIRECTLY to the candidate path with the
+    same guards (an older selected id keeps its label without
+    re-scanning the tree). No profile body is loaded or parsed here -
+    the reviewed plan still validates the selected id through the
+    shared profile selectors.
+
+    Every path join re-derives the single root-relative filename with
+    ``os.path.basename`` AFTER the ID-law refusal, then proves the joined
+    candidate stays inside the canonicalized trusted root through the
+    shared ``profiles.contained_child``: no path component can ever reach
+    the I/O (for a whitelisted stem the basename is the identity), and
+    the final file keeps its symlink/mode/size refusal.
+    """
+    custom = bool(profile_dir)
+    root: Path
+    if custom:
+        # The core loader law for an operator directory: absolute,
+        # non-symlink root. A misconfigured directory offers no choices
+        # (the reviewed plan still fails closed on the selected id).
+        try:
+            root = Path(profile_dir)
+        except (TypeError, ValueError):
+            return []
+        if not root.is_absolute() or root.is_symlink():
+            return []
+    else:
+        root = Path(_completion_profiles.__file__).parent / "profiles"
+
+    pattern = query.lower() if query else None
+
+    def _eligible_name(name: str) -> str | None:
+        """Cheap name-only eligibility; the profile id stem or None."""
+        if not name.endswith(".json"):
+            return None
+        stem = name[: -len(".json")]
+        if (
+            stem == "bindings"  # compatibility bindings, not a profile
+            or not _PROFILE_ID_RE.fullmatch(stem)
+            or (pattern is not None and pattern not in stem.lower())
+        ):
+            return None
+        return stem
+
+    available: list[RecordChoice] = []
+    try:
+        # os.scandir is truly incremental (Path.iterdir materializes the
+        # whole name list through os.listdir first).
+        with os.scandir(root) as entries:
+            for entry in entries:
+                stem = _eligible_name(entry.name)
+                if stem is None:
+                    continue
+                try:
+                    candidate = Path(
+                        _completion_profiles.contained_child(
+                            root, os.path.basename(stem) + ".json"
+                        )
+                    )
+                    if candidate.is_symlink() or not _profile_file_ok(
+                        candidate, custom=custom
+                    ):
+                        continue
+                except (ValueError, OSError):
+                    continue
+                available.append(RecordChoice(id=stem, label=stem))
+                if len(available) >= CHOICE_LIMIT:
+                    break
+    except OSError:
+        pass
+    available.sort(key=lambda choice: choice.id)
+
+    hydrated: list[RecordChoice] = []
+    for raw in selected:
+        stem = str(raw).strip()
+        if (
+            not stem
+            or stem == "bindings"
+            or not _PROFILE_ID_RE.fullmatch(stem)
+            or any(c.id == stem for c in hydrated)
+            or any(c.id == stem for c in available)
+        ):
+            continue
+        try:
+            candidate = Path(
+                _completion_profiles.contained_child(root, os.path.basename(stem) + ".json")
+            )
+            if candidate.is_symlink() or not _profile_file_ok(
+                candidate, custom=custom
+            ):
+                continue
+        except (ValueError, OSError):
+            continue
+        hydrated.append(RecordChoice(id=stem, label=stem))
+    return _merge_selected_keep_cap(available, hydrated)
 
 
 async def _fetch_selected(
@@ -479,6 +619,7 @@ async def load_choices(
     provider: str | Sequence[str] | None = None,
     endpoints: Sequence[str] | None = None,
     target_type: str | Sequence[str] | None = None,
+    profile_dir: str = "",
 ) -> list[RecordChoice]:
     """Return bounded choices for one allowlisted kind.
 
@@ -493,6 +634,10 @@ async def load_choices(
     scope returns no choices, a non-empty scope is a bounded ``IN``.
     ``endpoints`` additionally scopes the ``policy_model`` kind the same
     way (the model kind keeps its provider-only contract).
+
+    ``profile_dir`` (210-a) scopes the ``completion_profile`` kind to the
+    operator completion-service profile directory (blank = the bundled
+    data profiles); it is ignored by every other kind.
     """
     query = (q or "").strip()[:QUERY_MAX_LENGTH] or None
     provider_values = _scope_values(provider)
@@ -1183,6 +1328,14 @@ async def load_choices(
                 choices,
                 await _fetch_selected(session, sel_stmt, selected, _one_time_secret_choice),
             )
+
+    elif kind == "completion_profile":
+        # Installed completion-service data profiles (210-a): enumerate
+        # the bounded profile directory with the same file law the
+        # shared profile loader enforces, WITHOUT loading or validating
+        # any profile body (display metadata only; the reviewed plan
+        # re-validates the selected id through the shared profile law).
+        choices = _completion_profile_choices(profile_dir, query, selected)
 
     else:
         raise UnknownChoiceKindError(kind)

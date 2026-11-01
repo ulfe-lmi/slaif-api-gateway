@@ -301,7 +301,8 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
                 assert 'tabindex="0"' in line, path
                 assert re.search(r'aria-label="[^"]+"', line), path
     # 209-a: +1 for the reviewed key-batch per-key scroll region.
-    assert wrappers == 24
+    # 210-a: +1 for the reviewed route-configuration diff scroll region.
+    assert wrappers == 25
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

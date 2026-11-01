@@ -40,6 +40,7 @@ _ASSETS: dict[str, str] = {
     "lazy-throttling.js": "js/lazy-throttling.js",
     "key-clone.js": "js/key-clone.js",
     "key-batch.js": "js/key-batch.js",
+    "catalog-configuration.js": "js/catalog-configuration.js",
 }
 
 

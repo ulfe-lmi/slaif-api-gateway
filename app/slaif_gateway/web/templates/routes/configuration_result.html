@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Route Configuration Applied{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="route-result-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Routing Catalog</p>
+      <h1 id="route-result-heading">Reviewed route plan result</h1>
+      <p class="muted">Route {{ requested_model }} ({{ route_id }}).</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/routes/{{ route_id }}">Route detail</a>
+      <a class="button-link secondary" href="/admin/routes">Model routes</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if applied %}
+  <div class="admin-flash" role="status">
+    The reviewed plan was applied: the route configuration changed exactly as reviewed and one audit row records the change.
+  </div>
+  {% else %}
+  <div class="admin-flash" role="status">
+    The reviewed plan matched the route's current state exactly: this was a zero-diff no-op with zero writes and no audit row.
+  </div>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="route-result-next-heading">
+    <h2 id="route-result-next-heading">Next</h2>
+    <p class="muted">
+      This review applied to this one route and has a short window; a further change goes through a fresh
+      plan and review, and a review prepared before a later change is refused rather than applied.
+    </p>
+    <p><a class="button-link" href="/admin/routes/{{ route_id }}">Open route detail</a></p>
+  </section>
+</section>
+{% endblock %}

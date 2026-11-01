@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}Reviewed Route Plan{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="route-review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Routing Catalog</p>
+      <h1 id="route-review-heading">Reviewed route plan</h1>
+      <p class="muted">Read-only preview of the exact change to be applied. Nothing has been written yet.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/routes/{{ route_id }}">Route detail</a>
+      <a class="button-link secondary" href="/admin/routes">Model routes</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if plan_note %}
+  <div class="admin-flash" role="status">{{ plan_note }}</div>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="route-review-target-heading">
+    <h2 id="route-review-target-heading">Target route</h2>
+    <dl>
+      <dt>Route</dt>
+      <dd><a href="/admin/routes/{{ route_id }}"><code>{{ route_id }}</code></a></dd>
+      <dt>Destination provider</dt>
+      <dd>{{ destination_provider }}</dd>
+    </dl>
+    {% if provider_context %}
+    <h3>Destination provider context</h3>
+    <dl>
+      <dt>Kind</dt><dd>{{ provider_context.kind }}</dd>
+      <dt>Base URL</dt><dd>{{ provider_context.base_url }}</dd>
+      <dt>API key environment variable</dt><dd><code>{{ provider_context.api_key_env_var }}</code></dd>
+      <dt>Timeout seconds</dt><dd>{{ provider_context.timeout_seconds }}</dd>
+      <dt>Max retries</dt><dd>{{ provider_context.max_retries }}</dd>
+      <dt>Status</dt><dd>{{ provider_context.enabled }}</dd>
+    </dl>
+    <p class="field-help">The environment variable NAME is shown literally; no key value is ever rendered. Display fields and the enabled flag are deliberately outside the signed context digest: preparation stays separate from readiness.</p>
+    {% endif %}
+  </section>
+
+  <section class="action-panel" aria-labelledby="route-review-diff-heading">
+    <h2 id="route-review-diff-heading">Changed configuration fields</h2>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Changed configuration fields">
+      <table data-sortable class="table-wide" aria-describedby="route-review-diff-help">
+        <thead>
+          <tr>
+            <th data-ordinal scope="col" aria-label="Row number">#</th>
+            <th scope="col">Field</th>
+            <th scope="col">Before</th>
+            <th scope="col">After</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in diff_rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>{{ row.label }}</td>
+            <td>{{ row.before }}</td>
+            <td>{{ row.after }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort>
+            <td colspan="4" class="empty-state">No configuration field changes in this plan.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="field-help" id="route-review-diff-help">Only changed canonical fields are listed; every omitted field is preserved. The route's enabled state is preserved by the preview and never changed here.</p>
+  </section>
+
+  <section class="action-panel" aria-labelledby="route-review-capabilities-heading">
+    <h2 id="route-review-capabilities-heading">Capability changes (readable diff)</h2>
+    {% if capability_changes %}
+    <ul class="change-list">
+      {% for change in capability_changes %}
+      <li>{{ change.label }}: {{ change.before }} &rarr; {{ change.after }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No capability changes in this plan.</p>
+    {% endif %}
+    <p class="field-help">Changed groups outside the guided leaf sets (external tool route policy, transport-contract groups, audio/embeddings/realtime) render their actual non-secret before/after state; sensitive members are masked and the exact raw JSON stays in the disclosure below.</p>
+  </section>
+
+  <section class="action-panel" aria-labelledby="route-review-raw-heading">
+    <h2 id="route-review-raw-heading">Raw reviewed plan</h2>
+    <details>
+      <summary>Open the exact machine plan (JSON)</summary>
+      <pre class="config-json">{{ plan | tojson(indent=2) }}</pre>
+    </details>
+    <p class="field-help">Apply sends exactly this reviewed document to this route. The review state is bound to you and this route and expires after a short window; if the route or this session changes before you apply, prepare a fresh review.</p>
+  </section>
+
+  <section class="action-panel" aria-labelledby="route-review-apply-heading">
+    <h2 id="route-review-apply-heading">Apply reviewed plan</h2>
+    <form method="post" action="/admin/routes/{{ route_id }}/configuration/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="route_config_review_intent" value="{{ route_config_review_intent }}">
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_apply" value="true" required aria-describedby="route-review-confirm-help">
+        <span>I confirm the reviewed plan above, including the capability changes.</span>
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" required autocomplete="off" aria-describedby="route-review-reason-help route-review-confirm-help">
+      </label>
+      <p class="field-help" id="route-review-confirm-help">Confirming applies the exact reviewed changes to this one route and records one audit row with your reason. The review state is bound to you and this route and expires after a short window; if the route changed since the review, apply is refused and a fresh review is needed.</p>
+      <p class="field-help" id="route-review-reason-help">A nonblank audit reason is required (at most 512 characters). If the route already matches the plan exactly, apply writes nothing and records no audit row.</p>
+      <button type="submit">Apply reviewed plan</button>
+    </form>
+  </section>
+</section>
+{% endblock %}

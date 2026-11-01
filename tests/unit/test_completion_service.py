@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import base64
+import os
 import json
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from slaif_gateway.config import Settings
 from slaif_gateway.modules.servers.completion_service.adapter import CompletionServiceAdapter
 from slaif_gateway.modules.servers.completion_service.profiles import (
+    contained_child,
     load_profile,
     profile_id_from_capabilities,
 )
@@ -287,6 +289,34 @@ def test_route_metadata_cannot_select_paths_or_code(value):
         profile_id_from_capabilities({"completion_service": value})
 
 
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../evil", "a/b", "/etc/passwd", "..", "zap/it", "a\\b"],
+)
+def test_loader_refuses_invalid_components_before_any_io(monkeypatch, bad_id):
+    opened: list[str] = []
+
+    def fail_open(path, *args, **kwargs):
+        opened.append(str(path))
+        raise AssertionError("I/O reached before the ID-law refusal")
+
+    monkeypatch.setattr(
+        "slaif_gateway.modules.servers.completion_service.profiles.os.open",
+        fail_open,
+    )
+    with pytest.raises(ProviderConfigurationError):
+        load_profile(bad_id)
+    assert opened == []
+
+
+def test_loader_valid_id_filename_is_basename_identity(tmp_path):
+    profile = load_profile("zap-it-v1").model_dump()
+    path = tmp_path / "zap-it-v1.json"
+    path.write_text(json.dumps(profile))
+    path.chmod(0o600)
+    loaded = load_profile("zap-it-v1", str(tmp_path))
+    assert loaded.profile_id == "zap-it-v1"
+
 def test_external_profiles_reject_code_fields_and_writable_or_symlink_files(tmp_path):
     profile = load_profile("zap-it-v1").model_dump()
     path = tmp_path / "zap-it-v1.json"
@@ -303,6 +333,66 @@ def test_external_profiles_reject_code_fields_and_writable_or_symlink_files(tmp_
     path.symlink_to(tmp_path / "missing")
     with pytest.raises(ProviderConfigurationError):
         load_profile("zap-it-v1", str(tmp_path))
+
+
+def test_contained_child_proves_single_child_inside_the_canonical_root(tmp_path):
+    legit = contained_child(tmp_path, "zap-it-v1.json")
+    canonical = os.path.realpath(str(tmp_path))
+    assert legit == os.path.join(canonical, "zap-it-v1.json")
+    assert legit.startswith(canonical + os.sep)
+    for escape in ("../evil.json", ".."):
+        with pytest.raises(ValueError):
+            contained_child(tmp_path, escape)
+
+
+def test_contained_child_root_slash_is_separator_safe_without_writing():
+    # The "/" root must not build a "//" prefix that rejects /profile.json;
+    # pure path algebra only, nothing is written to the root.
+    assert contained_child("/", "profile.json") == "/profile.json"
+    # The root itself is not a child: ".." collapses to "/" and is refused.
+    with pytest.raises(ValueError):
+        contained_child("/", "..")
+
+
+def test_loader_refuses_symlinked_profiles_inside_and_outside_the_root(tmp_path):
+    profile = load_profile("zap-it-v1").model_dump()
+    root = tmp_path / "root"
+    root.mkdir()
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    outside_file = outside_dir / "zap-it-v1.json"
+    outside_file.write_text(json.dumps(profile))
+    outside_file.chmod(0o600)
+    inner_target = root / "inner-copy.json"
+    inner_target.write_text(json.dumps(profile))
+    inner_target.chmod(0o600)
+
+    link = root / "zap-it-v1.json"
+    # Target INSIDE the root: root containment alone would admit it, so
+    # the final component's O_NOFOLLOW/symlink refusal is what refuses.
+    link.symlink_to(inner_target)
+    with pytest.raises(ProviderConfigurationError):
+        load_profile("zap-it-v1", str(root))
+
+    # Target OUTSIDE the root: refused the same way.
+    link.unlink()
+    link.symlink_to(outside_file)
+    with pytest.raises(ProviderConfigurationError):
+        load_profile("zap-it-v1", str(root))
+
+
+def test_loader_refuses_relative_or_symlinked_profile_roots(tmp_path):
+    profile = load_profile("zap-it-v1").model_dump()
+    real = tmp_path / "real"
+    real.mkdir()
+    real_file = real / "zap-it-v1.json"
+    real_file.write_text(json.dumps(profile))
+    real_file.chmod(0o600)
+    link = tmp_path / "linked-root"
+    link.symlink_to(real)
+    for root in ("relative/root", str(link)):
+        with pytest.raises(ProviderConfigurationError):
+            load_profile("zap-it-v1", root)
 
 
 @pytest.mark.asyncio

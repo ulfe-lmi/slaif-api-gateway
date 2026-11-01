@@ -29,18 +29,19 @@
 
     <section class="action-panel" aria-labelledby="provider-edit-metadata-heading">
       <h2 id="provider-edit-metadata-heading">Metadata</h2>
+      <p class="field-help" id="provider-edit-metadata-help">The provider slug is the stable identifier routes reference; changing it orphans existing routes. The display name is operator-facing only.</p>
       <div class="form-grid">
         <label>
           Provider
-          <input name="provider" value="{{ form.provider }}" required autocomplete="off">
+          <input name="provider" value="{{ form.provider }}" required autocomplete="off" aria-describedby="provider-edit-metadata-help">
         </label>
         <label>
           Display name
-          <input name="display_name" value="{{ form.display_name }}" autocomplete="off">
+          <input name="display_name" value="{{ form.display_name }}" autocomplete="off" aria-describedby="provider-edit-metadata-help">
         </label>
         <label>
           Kind
-          <select name="kind">
+          <select name="kind" aria-describedby="provider-edit-metadata-help">
             <option value="openai_compatible" {% if form.kind == "openai_compatible" %}selected{% endif %}>OpenAI-compatible</option>
             <option value="module" {% if form.kind == "module" %}selected{% endif %}>Native module</option>
           </select>
@@ -50,27 +51,27 @@
 
     <section class="action-panel" aria-labelledby="provider-edit-connection-heading">
       <h2 id="provider-edit-connection-heading">Connection Metadata</h2>
-      <p class="warning-text">Use an environment variable name such as OPENAI_UPSTREAM_API_KEY, never an actual provider key value.</p>
+      <p class="warning-text" id="provider-edit-connection-help">Use an environment variable name such as OPENAI_UPSTREAM_API_KEY, never an actual provider key value. The enabled status is the route-serving state of this provider.</p>
       <div class="form-grid">
         <label>
           Base URL
-          <input name="base_url" value="{{ form.base_url }}" required autocomplete="off">
+          <input name="base_url" value="{{ form.base_url }}" required autocomplete="off" aria-describedby="provider-edit-connection-help">
         </label>
         <label>
           API key environment variable
-          <input name="api_key_env_var" value="{{ form.api_key_env_var }}" required autocomplete="off">
+          <input name="api_key_env_var" value="{{ form.api_key_env_var }}" required autocomplete="off" aria-describedby="provider-edit-connection-help">
         </label>
         <label>
           Insecure HTTP confirmation
           <span class="checkbox-row">
-            <input type="checkbox" name="confirm_insecure_http" value="true" {% if form.confirm_insecure_http %}checked{% endif %}>
+            <input type="checkbox" name="confirm_insecure_http" value="true" aria-describedby="provider-edit-connection-help" {% if form.confirm_insecure_http %}checked{% endif %}>
             <span>Allow only for an operator-owned LAN/reverse proxy</span>
           </span>
         </label>
         <label>
           Status
           <span class="checkbox-row">
-            <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
+            <input type="checkbox" name="enabled" value="true" aria-describedby="provider-edit-connection-help" {% if form.enabled %}checked{% endif %}>
             <span>Enabled</span>
           </span>
         </label>
@@ -79,24 +80,47 @@
 
     <section class="action-panel" aria-labelledby="provider-edit-runtime-heading">
       <h2 id="provider-edit-runtime-heading">Runtime Defaults</h2>
+      <p class="field-help" id="provider-edit-runtime-help">Timeout is the upstream HTTP timeout in whole seconds; max retries is a whole number of request retries. The audit reason records why this provider changed.</p>
       <div class="form-grid">
         <label>
           Timeout seconds
-          <input name="timeout_seconds" value="{{ form.timeout_seconds }}" inputmode="numeric" required>
+          <input name="timeout_seconds" value="{{ form.timeout_seconds }}" inputmode="numeric" required aria-describedby="provider-edit-runtime-help">
         </label>
         <label>
           Max retries
-          <input name="max_retries" value="{{ form.max_retries }}" inputmode="numeric" required>
+          <input name="max_retries" value="{{ form.max_retries }}" inputmode="numeric" required aria-describedby="provider-edit-runtime-help">
         </label>
         <label>
           Audit reason
-          <input name="reason" value="{{ form.reason }}" required autocomplete="off">
+          <input name="reason" value="{{ form.reason }}" required autocomplete="off" aria-describedby="provider-edit-runtime-help">
         </label>
       </div>
-      <label>
-        Notes
-        <textarea name="notes">{{ form.notes }}</textarea>
-      </label>
+      <fieldset aria-describedby="provider-edit-notes-intent-help">
+        <legend>Notes</legend>
+        <dl>
+          <dt>Current notes</dt>
+          <dd>{{ form.notes_current or "No notes." }}</dd>
+        </dl>
+        <label class="checkbox-row">
+          <input type="radio" name="notes_intent" value="preserve" aria-describedby="provider-edit-notes-intent-help" {% if not form.notes_intent or form.notes_intent == "preserve" %}checked{% endif %}>
+          <span>Preserve current notes</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="radio" name="notes_intent" value="replace" aria-describedby="provider-edit-notes-intent-help" {% if form.notes_intent == "replace" %}checked{% endif %}>
+          <span>Replace with the text below</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="radio" name="notes_intent" value="clear" aria-describedby="provider-edit-notes-intent-help" {% if form.notes_intent == "clear" %}checked{% endif %}>
+          <span>Clear notes</span>
+        </label>
+        <label>
+          Replacement text
+          <textarea name="notes" rows="2" aria-describedby="provider-edit-notes-intent-help">{{ form.notes }}</textarea>
+        </label>
+        <p class="muted small" id="provider-edit-notes-intent-help">
+          A blank replacement KEEPS the current notes - replacing is not an implicit clear; choose Clear to remove them. Clearing while the replacement entry holds text is refused, not a silent clear.
+        </p>
+      </fieldset>
     </section>
 
     <section class="action-panel" aria-labelledby="provider-edit-submit-heading">
