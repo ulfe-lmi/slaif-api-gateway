@@ -1246,3 +1246,31 @@ never reaches a URL, error response, or rendered page through the real
 handler; native PG proves retention/expiry/cleanup/audit/rollback
 through authenticated HTTP; the installed whole-GUI qualification
 (objective 219) and all deployment remain explicitly OUT of scope.
+
+## 211-b Final-head browser CI qualification (objective 211, same PR,
+2026-11-01)
+
+The A final-head CI genuinely FAILED on the Playwright job (job
+124809403688 of run 41293439505, 2026-11-01T09:36:22Z, 2 failed /
+70 passed in 242.95s): both failures were stale exact nav-link
+counts (14) in `tests/browser/test_admin_slaif_design.py`, while the
+approved Operations entry intentionally grew the shared shell nav to
+15 links. A was NOT all green, and B repairs no product behavior -
+the 15-link nav is the accepted G08/G16 navigation.
+
+B corrects ONLY those stale oracles: the two failing exact counts
+plus one downstream 768-tablet count in the same no-JS case that the
+first fix unblocked now expect 15, and both the normal and
+no-JavaScript scenarios explicitly assert the ONE correctly named
+Operations link to `/admin/operations` derived from the base
+template (no arbitrary extra link, no weakened or dynamic count).
+All other font-byte, theme/contrast, branding, current-page,
+keyboard, responsive-overflow, table, and no-JS assertions and
+fixtures are preserved; no product, template, JS, CSS, or
+fixture-ownership change.
+
+Newly run (local, synthetic): the TWO complete existing cases pass
+on real Chromium with the qualified owned-PG fixture -
+`browser-211b-1.xml` 2 PASS / 0 skip (16.829s), owned container
+cleanup verified. Reused unchanged A evidence: unit 173/35, native
+8 + overlap 3, browser 7, and the other 70 CI browser passes.

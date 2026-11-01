@@ -392,7 +392,10 @@ def test_design_default_theme_shell_fonts_navigation_and_tables(owned_pg_url: st
             page.set_viewport_size({"width": 1440, "height": 900})
             _login(page, data)
             nav = page.locator("#admin-nav a")
-            assert nav.count() == 14
+            assert nav.count() == 15
+            operations = page.locator("#admin-nav a[href='/admin/operations']")
+            assert operations.count() == 1
+            assert operations.first.inner_text() == "Operations"
             assert page.locator('#admin-nav a[aria-current="page"]').inner_text() == "Dashboard"
             _shot(page, tmp_path, "design-default-dashboard-1440.png")
 
@@ -545,7 +548,10 @@ def test_design_no_javascript_navigation_usable(owned_pg_url: str) -> None:
             # The section nav is a plain visible list on the dashboard.
             assert "nav-ready" not in page.content()
             assert page.locator("#admin-nav").is_visible()
-            assert page.locator("#admin-nav a").count() == 14
+            assert page.locator("#admin-nav a").count() == 15
+            operations = page.locator("#admin-nav a[href='/admin/operations']")
+            assert operations.count() == 1
+            assert operations.first.inner_text() == "Operations"
             # Without JavaScript the signed-in toggle button stays hidden.
             assert page.locator(".nav-toggle").is_hidden()
             page.click("#admin-nav a[href='/admin/owners']")
@@ -559,7 +565,7 @@ def test_design_no_javascript_navigation_usable(owned_pg_url: str) -> None:
             assert "nav-ready" not in page.content()
             assert page.locator(".nav-toggle").is_hidden()
             assert page.locator("#admin-nav").is_visible()
-            assert page.locator("#admin-nav a").count() == 14
+            assert page.locator("#admin-nav a").count() == 15
             _assert_no_horizontal_overflow(page, 768)
         finally:
             page.close()
