@@ -74,6 +74,7 @@ from slaif_gateway.schemas.key_configuration import (
     KeyConfigurationError,
     parse_key_configuration_file,
 )
+from slaif_gateway.schemas.provider_route_configuration import ProviderRouteConfigError
 from slaif_gateway.services.admin_key_dashboard import (
     AdminKeyDashboardService,
     AdminKeyNotFoundError,
@@ -163,6 +164,10 @@ from slaif_gateway.services.key_policy_validation import (
     validate_gateway_key_policy_values,
 )
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.provider_route_configuration import (
+    contains_known_secret_shape,
+    validate_route_creation_candidate,
+)
 from slaif_gateway.services.openai_compatible_discovery import (
     DiscoveryError,
     OpenAICompatibleDiscoveryService,
@@ -4373,6 +4378,7 @@ async def create_admin_provider(
     timeout_seconds: str = Form("300"),
     max_retries: str = Form("2"),
     notes: str = Form(""),
+    notes_intent: str = Form("replace"),
     reason: str = Form(""),
     confirm_insecure_http: str = Form(""),
 ) -> Response:
@@ -4394,6 +4400,7 @@ async def create_admin_provider(
         timeout_seconds=timeout_seconds,
         max_retries=max_retries,
         notes=notes,
+        notes_intent=notes_intent,
         reason=reason,
         confirm_insecure_http=confirm_insecure_http,
     )
@@ -4409,6 +4416,23 @@ async def create_admin_provider(
             error=str(exc),
             status_code=400,
         )
+
+    # 210-a: the established known-shape refusal (the 199 CLI law)
+    # runs BEFORE any NEW provider write (and, on the full edit,
+    # before the lock and any write, matching the 199 CLI update
+    # law): free-form fields carrying a recognized credential pattern
+    # are refused with fixed safe vocabulary; the submitted value is
+    # never echoed. ENV variable NAMES are not affected.
+    refusal = _render_provider_secret_shape_refusal(
+        request,
+        template_name="providers/create.html",
+        admin=action_context.admin_user,
+        csrf_token=csrf_token,
+        form=form,
+        parsed=parsed,
+    )
+    if refusal is not None:
+        return refusal
 
     try:
         async with _admin_provider_config_service_scope(request) as service:
@@ -4486,6 +4510,7 @@ async def update_admin_provider(
     timeout_seconds: str = Form("300"),
     max_retries: str = Form("2"),
     notes: str = Form(""),
+    notes_intent: str = Form("replace"),
     reason: str = Form(""),
     confirm_insecure_http: str = Form(""),
 ) -> Response:
@@ -4512,6 +4537,7 @@ async def update_admin_provider(
         timeout_seconds=timeout_seconds,
         max_retries=max_retries,
         notes=notes,
+        notes_intent=notes_intent,
         reason=reason,
         confirm_insecure_http=confirm_insecure_http,
     )
@@ -4529,23 +4555,58 @@ async def update_admin_provider(
             status_code=400,
         )
 
+    # 210-a: matching known-shape refusal (the 199 CLI update law) for
+    # the full edit's submitted free-form values, BEFORE the lock and
+    # any write. The clear intent, slug/status editing, and ENV
+    # variable NAMES are unaffected.
+    refusal = _render_provider_secret_shape_refusal(
+        request,
+        template_name="providers/edit.html",
+        admin=action_context.admin_user,
+        csrf_token=csrf_token,
+        form=form,
+        parsed=parsed,
+        provider_config_id=parsed_provider_config_id,
+    )
+    if refusal is not None:
+        return refusal
+
     try:
-        async with _admin_provider_config_service_scope(request) as service:
-            updated = await service.update_provider_config(
-                str(parsed_provider_config_id),
-                provider=parsed["provider"],
-                display_name=parsed["display_name"],
-                kind=parsed["kind"],
-                base_url=parsed["base_url"] or "",
-                api_key_env_var=parsed["api_key_env_var"],
-                enabled=parsed["enabled"],
-                timeout_seconds=parsed["timeout_seconds"],
-                max_retries=parsed["max_retries"],
-                notes=parsed["notes"],
-                actor_admin_id=action_context.admin_user.id,
-                reason=parsed["reason"],
-                confirm_insecure_http=parsed["confirm_insecure_http"],
-            )
+        # 210-a: the full edit runs in the caller-owned transaction and
+        # takes the administrative row lock (get_provider_config_for_update,
+        # 199-a) BEFORE the service prior-state capture, so a concurrent
+        # partial update and this full edit cannot interleave. The lock
+        # read is a pure FOR UPDATE select - it never pre-clears notes;
+        # the service still captures the real prior state for its audit.
+        session_factory = get_sessionmaker_from_app(request)
+        async with session_factory() as session:
+            async with session.begin():
+                providers = ProviderConfigsRepository(session)
+                locked = await providers.get_provider_config_for_update(
+                    str(parsed_provider_config_id)
+                )
+                if locked is None:
+                    raise RecordNotFoundError("Provider config")
+                service = ProviderConfigService(
+                    provider_configs_repository=providers,
+                    audit_repository=AuditRepository(session),
+                )
+                updated = await service.update_provider_config(
+                    str(locked.id),
+                    provider=parsed["provider"],
+                    display_name=parsed["display_name"],
+                    kind=parsed["kind"],
+                    base_url=parsed["base_url"] or "",
+                    api_key_env_var=parsed["api_key_env_var"],
+                    enabled=parsed["enabled"],
+                    timeout_seconds=parsed["timeout_seconds"],
+                    max_retries=parsed["max_retries"],
+                    notes=parsed["notes"],
+                    clear_notes=parsed["clear_notes"],
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=parsed["reason"],
+                    confirm_insecure_http=parsed["confirm_insecure_http"],
+                )
     except RecordNotFoundError:
         return _admin_error_page(request, status_code=404, message="Provider config not found.")
     except (DuplicateRecordError, ValueError):
@@ -4709,7 +4770,12 @@ async def admin_provider_detail(request: Request, provider_config_id: str) -> Re
             "admin": context.admin_user,
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
-            "provider": provider_row,
+            # 210-a: display projection with known-shape redaction of
+            # the retained free-form fields (the raw row is never
+            # rendered directly).
+            "provider": _provider_detail_display_projection(
+                provider_row, settings
+            ),
         },
     )
 
@@ -5446,6 +5512,9 @@ async def create_admin_route_form(request: Request) -> Response:
 async def create_admin_route(
     request: Request,
     csrf_token: str = Form(""),
+    # 210-a: route creation intent. Empty (absent) = legacy POST, the
+    # pre-210 enabled-checkbox semantics are preserved exactly.
+    creation_intent: str = Form(""),
     requested_model: str = Form(""),
     match_type: str = Form("exact"),
     endpoint: str = Form(CHAT_COMPLETIONS_ENDPOINT),
@@ -5469,6 +5538,7 @@ async def create_admin_route(
 
     provider_choices = await _load_route_provider_choices(request)
     form = _route_form_from_values(
+        creation_intent=creation_intent,
         requested_model=requested_model,
         match_type=match_type,
         endpoint=endpoint,
@@ -5486,6 +5556,9 @@ async def create_admin_route(
         parsed = _parse_model_route_form(
             form, provider_choices=provider_choices, require_reason=True
         )
+        # 210-a: the creation intent (or the legacy checkbox when the
+        # field is absent) determines the effective enabled state.
+        parsed["enabled"] = _parse_route_creation_intent(form)
     except ValueError as exc:
         return _render_route_form(
             request,
@@ -5508,22 +5581,99 @@ async def create_admin_route(
         )
 
     try:
-        async with _admin_model_route_service_scope(request) as service:
-            created = await service.create_model_route(
-                requested_model=parsed["requested_model"],
-                match_type=parsed["match_type"],
-                endpoint=parsed["endpoint"],
-                provider=parsed["provider"],
-                upstream_model=parsed["upstream_model"],
-                priority=parsed["priority"],
-                enabled=parsed["enabled"],
-                visible_in_models=parsed["visible_in_models"],
-                supports_streaming=parsed["supports_streaming"],
-                capabilities=parsed["capabilities"],
-                notes=parsed["notes"],
-                actor_admin_id=action_context.admin_user.id,
-                reason=parsed["reason"],
-            )
+        if form.get("creation_intent"):
+            # 210-a: the NEW creation-intent path runs the SAME
+            # read-only complete configuration validation the CLI runs
+            # BEFORE a new route is stored (destination provider must
+            # exist; the canonicalized candidate is validated against
+            # the provider's actual kind and configuration, including
+            # completion selectors, provider retries, and the
+            # configured profile dir, with the ACTUAL installation
+            # ceilings) inside the same caller transaction as the
+            # write. Legacy no-intent POSTs keep their existing
+            # behavior below.
+            session_factory = get_sessionmaker_from_app(request)
+            async with session_factory() as session:
+                async with session.begin():
+                    # 210-a: the read-only validation runs BEFORE the
+                    # write in the SAME caller transaction. No refusal
+                    # is rendered inside the transaction: every failure
+                    # escapes session.begin() (rollback) first, then
+                    # the outer handlers render the fixed safe error
+                    # page - identical law to the reviewed apply.
+                    await validate_route_creation_candidate(
+                        session,
+                        requested_model=parsed["requested_model"],
+                        match_type=parsed["match_type"],
+                        provider=parsed["provider"],
+                        upstream_model=parsed["upstream_model"],
+                        priority=parsed["priority"],
+                        visible_in_models=parsed["visible_in_models"],
+                        enabled=parsed["enabled"],
+                        supports_streaming=parsed["supports_streaming"],
+                        notes=parsed["notes"],
+                        endpoint=parsed["endpoint"],
+                        capabilities=parsed["capabilities"],
+                        external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+                        profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+                    )
+                    service = ModelRouteService(
+                        model_routes_repository=ModelRoutesRepository(session),
+                        audit_repository=AuditRepository(session),
+                        external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+                    )
+                    created = await service.create_model_route(
+                        requested_model=parsed["requested_model"],
+                        match_type=parsed["match_type"],
+                        endpoint=parsed["endpoint"],
+                        provider=parsed["provider"],
+                        upstream_model=parsed["upstream_model"],
+                        priority=parsed["priority"],
+                        enabled=parsed["enabled"],
+                        visible_in_models=parsed["visible_in_models"],
+                        supports_streaming=parsed["supports_streaming"],
+                        capabilities=parsed["capabilities"],
+                        notes=parsed["notes"],
+                        actor_admin_id=action_context.admin_user.id,
+                        reason=parsed["reason"],
+                    )
+        else:
+            async with _admin_model_route_service_scope(request) as service:
+                created = await service.create_model_route(
+                    requested_model=parsed["requested_model"],
+                    match_type=parsed["match_type"],
+                    endpoint=parsed["endpoint"],
+                    provider=parsed["provider"],
+                    upstream_model=parsed["upstream_model"],
+                    priority=parsed["priority"],
+                    enabled=parsed["enabled"],
+                    visible_in_models=parsed["visible_in_models"],
+                    supports_streaming=parsed["supports_streaming"],
+                    capabilities=parsed["capabilities"],
+                    notes=parsed["notes"],
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=parsed["reason"],
+                )
+    except ProviderRouteConfigError as exc:
+        return _render_route_form(
+            request,
+            template_name="routes/create.html",
+            admin=action_context.admin_user,
+            csrf_token=csrf_token,
+            form=form,
+            provider_choices=provider_choices,
+            choices=await _load_admin_record_choices_safe(
+                request,
+                (
+                    ("provider", "provider", form.get("provider")),
+                    ("requested_model", "model", form.get("requested_model")),
+                    ("upstream_model", "model", form.get("upstream_model")),
+                    ("endpoint", "endpoint", form.get("endpoint")),
+                ),
+            ),
+            error=str(exc),
+            status_code=400,
+        )
     except ValueError:
         return _render_route_form(
             request,
@@ -7908,6 +8058,7 @@ async def _load_admin_record_choices(
     effects).
     """
     session_factory = get_sessionmaker_from_app(request)
+    settings = _settings(request)
     result: dict[str, list[RecordChoice]] = {}
     async with session_factory() as session:
         async with session.begin():
@@ -7925,6 +8076,9 @@ async def _load_admin_record_choices(
                     kind,
                     selected=selected_values,
                     target_type=target_type,
+                    # Same operator completion-profile directory as the
+                    # record-choices AJAX lookup (210-a).
+                    profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
                 )
     return result
 
@@ -9659,6 +9813,72 @@ def _owner_form_from_detail(owner: object) -> dict[str, str]:
     )
 
 
+def _provider_detail_display_projection(
+    detail: object, settings: Settings
+) -> object:
+    """210-a: project the provider detail's retained free-form display
+    fields (display name, base URL, notes) through the established
+    known-shape redaction before rendering.
+
+    The environment variable NAME (``api_key_env_var``) remains literal
+    and the stored row is never mutated: this builds a display copy
+    only. Ordinary values pass through byte-identical.
+    """
+    notes = detail.notes
+    return replace(
+        detail,
+        display_name=_admin_redact_key_form_value(detail.display_name, settings),
+        base_url=_admin_redact_key_form_value(
+            _admin_url_display_value(detail.base_url), settings
+        ),
+        notes=_admin_redact_key_form_value(notes, settings) if notes else notes,
+    )
+
+
+def _render_provider_secret_shape_refusal(
+    request: Request,
+    *,
+    template_name: str,
+    admin: object,
+    csrf_token: str,
+    form: dict[str, str],
+    parsed: Mapping[str, object],
+    provider_config_id: uuid.UUID | None = None,
+) -> Response | None:
+    """210-a: known-shape refusal for provider-form free-form fields.
+
+    Mirrors the 199 CLI law (``_refuse_known_secret_shapes`` for
+    create, the matching refusal inside ``partial_update_provider_config``
+    for update): when a submitted free-form value carries a recognized
+    credential pattern, render the fixed safe refusal (field named,
+    value never echoed) and return the 400 Response instead of
+    proceeding to any write. Ordinary values pass through untouched,
+    and the ENV variable NAME field is not part of the check. Returns
+    ``None`` when no field is refused.
+    """
+    for value, flag in (
+        (parsed.get("display_name"), "display_name"),
+        (parsed.get("base_url"), "base_url"),
+        (parsed.get("notes"), "notes"),
+        (parsed.get("reason"), "reason"),
+    ):
+        if value and contains_known_secret_shape(value):
+            return _render_provider_config_form(
+                request,
+                template_name=template_name,
+                admin=admin,
+                csrf_token=csrf_token,
+                form=form,
+                provider_config_id=provider_config_id,
+                error=(
+                    f"{flag}: value must not contain recognized "
+                    "credential patterns."
+                ),
+                status_code=400,
+            )
+    return None
+
+
 def _render_provider_config_form(
     request: Request,
     *,
@@ -9670,6 +9890,17 @@ def _render_provider_config_form(
     error: str | None = None,
     status_code: int = 200,
 ) -> Response:
+    # 210-a: retained re-displayed values (including the read-only
+    # notes_current projection and the free-form base URL) go through the
+    # established known-shape redaction before rendering.
+    # Credential-bearing base URL values are withheld entirely first;
+    # the generic redaction does not cover URL userinfo.
+    display_form = dict(form)
+    if "base_url" in display_form:
+        display_form["base_url"] = _admin_url_display_value(
+            str(display_form["base_url"])
+        )
+    settings = _settings(request)
     return templates.TemplateResponse(
         request,
         template_name,
@@ -9677,7 +9908,7 @@ def _render_provider_config_form(
             "admin": admin,
             "csrf_token": csrf_token,
             "provider_config_id": provider_config_id,
-            "form": form,
+            "form": _admin_redact_key_form_values(display_form, settings),
             "error": error,
         },
         status_code=status_code,
@@ -10077,10 +10308,13 @@ def _default_provider_config_form() -> dict[str, str]:
         "kind": "openai_compatible",
         "base_url": "",
         "api_key_env_var": "",
-        "enabled": "true",
+        # 210-a: provider CREATE prepares DISABLED by default; the
+        # operator enables explicitly. Existing edits keep their status.
+        "enabled": "",
         "timeout_seconds": "300",
         "max_retries": "2",
         "notes": "",
+        "notes_intent": "replace",
         "reason": "",
         "confirm_insecure_http": "",
     }
@@ -10096,7 +10330,14 @@ def _provider_config_form_from_detail(provider: object) -> dict[str, str]:
         enabled="true" if bool(getattr(provider, "enabled")) else "",
         timeout_seconds=str(getattr(provider, "timeout_seconds")),
         max_retries=str(getattr(provider, "max_retries")),
-        notes=str(getattr(provider, "notes") or ""),
+        # 210-a: the replacement entry starts BLANK (the stored notes are
+        # shown read-only through the projected notes_current), so a no-JS
+        # Clear never conflicts with a retained pre-filled value. A newly
+        # rendered edit form defaults to Preserve; a legacy POST without
+        # notes_intent keeps Replace (the handler Form default).
+        notes="",
+        notes_intent="preserve",
+        notes_current=str(getattr(provider, "notes") or ""),
         reason="",
         confirm_insecure_http="",
     )
@@ -10113,6 +10354,8 @@ def _provider_config_form_from_values(
     timeout_seconds: str,
     max_retries: str,
     notes: str,
+    notes_intent: str = "replace",
+    notes_current: str = "",
     reason: str,
     confirm_insecure_http: str = "",
 ) -> dict[str, str]:
@@ -10126,6 +10369,8 @@ def _provider_config_form_from_values(
         "timeout_seconds": timeout_seconds,
         "max_retries": max_retries,
         "notes": notes,
+        "notes_intent": notes_intent,
+        "notes_current": notes_current,
         "reason": reason,
         "confirm_insecure_http": confirm_insecure_http,
     }
@@ -10154,6 +10399,17 @@ def _render_route_form(
     choices: Mapping[str, Sequence[RecordChoice]] | None = None,
 ) -> Response:
     choices = dict(choices or {})
+    display_form = dict(form)
+    if error is not None:
+        # 210-a: a refusal re-display never re-renders the submitted
+        # advanced capabilities bytes (free-form JSON may carry
+        # credential-shaped values); the other retained values go
+        # through the established known-shape redaction. Ordinary
+        # values pass through byte-identical, legitimate GET editing
+        # state is untouched, and the stored route document is never
+        # mutated.
+        display_form["capabilities"] = ""
+        display_form = _admin_redact_key_form_values(display_form, _settings(request))
     return templates.TemplateResponse(
         request,
         template_name,
@@ -10161,7 +10417,7 @@ def _render_route_form(
             "admin": admin,
             "csrf_token": csrf_token,
             "route_id": route_id,
-            "form": form,
+            "form": display_form,
             "provider_choices": provider_choices,
             "error": error,
             "external_tool_runtime_status": "denied_pending_objectives_014_016",
@@ -10169,10 +10425,10 @@ def _render_route_form(
             "choice_labels": _choice_selected_labels(
                 choices,
                 (
-                    ("provider", form.get("provider")),
-                    ("requested_model", form.get("requested_model")),
-                    ("endpoint", form.get("endpoint")),
-                    ("upstream_model", form.get("upstream_model")),
+                    ("provider", display_form.get("provider")),
+                    ("requested_model", display_form.get("requested_model")),
+                    ("endpoint", display_form.get("endpoint")),
+                    ("upstream_model", display_form.get("upstream_model")),
                 ),
             ),
         },
@@ -10304,6 +10560,9 @@ def _render_fx_import_result(
 
 def _default_route_form() -> dict[str, str]:
     return {
+        # 210-a: route CREATE intent (automatic by default; see
+        # _parse_route_creation_intent). Edit forms do not render it.
+        "creation_intent": "automatic",
         "requested_model": "",
         "match_type": "exact",
         "endpoint": CHAT_COMPLETIONS_ENDPOINT,
@@ -10339,6 +10598,7 @@ def _route_form_from_detail(route: object) -> dict[str, str]:
 
 def _route_form_from_values(
     *,
+    creation_intent: str = "automatic",
     requested_model: str,
     match_type: str,
     endpoint: str,
@@ -10353,6 +10613,7 @@ def _route_form_from_values(
     reason: str,
 ) -> dict[str, str]:
     return {
+        "creation_intent": creation_intent,
         "requested_model": requested_model,
         "match_type": match_type,
         "endpoint": endpoint,
@@ -10367,6 +10628,44 @@ def _route_form_from_values(
         "reason": reason,
     }
 
+
+def _parse_route_creation_intent(form: dict[str, str]) -> bool:
+    """210-a route CREATE intent -> effective ``enabled`` state.
+
+    The creation-intent radios are the SOLE activation control of the
+    new create UI (the legacy enabled checkbox is not rendered there and
+    is never required alongside an intent - no JS-generated hidden box
+    and no contradictory duplicate control):
+
+    - ``automatic`` (the rendered default): a basic route with EMPTY
+      capabilities keeps the enabled default; a route created WITH a
+      complete capabilities document prepares DISABLED (preparation is
+      not readiness - enabling stays the existing status action).
+    - ``prepare_disabled``: created disabled regardless of capabilities.
+    - ``explicit_enable``: created enabled regardless of capabilities -
+      the radio selection itself is the explicit intent.
+
+    A legacy POST with NO creation_intent field (empty string) keeps the
+    pre-210 enabled-checkbox semantics exactly: the server uses the
+    legacy enabled checkbox ONLY when creation_intent is absent. When a
+    valid intent is present it alone decides (any checkbox value that
+    happens to be submitted alongside is ignored, not a conflict).
+    Unknown intent values are refused with a fixed message (closed
+    vocabulary).
+    """
+    intent = (form.get("creation_intent") or "").strip()
+    if not intent:  # legacy POST: the existing checkbox wins
+        return _is_checked(form.get("enabled"))
+    if intent == "automatic":
+        return not (form.get("capabilities") or "").strip()
+    if intent == "prepare_disabled":
+        return False
+    if intent == "explicit_enable":
+        return True
+    raise ValueError(
+        "Route creation intent must be automatic, prepare disabled, "
+        "or explicitly enable."
+    )
 
 def _parse_model_route_form(
     form: dict[str, str],
@@ -11165,6 +11464,28 @@ def _parse_provider_config_form(
     ):
         raise ValueError("HTTP generic backends require explicit confirmation and an audit reason.")
 
+    # 210-a notes intent (edit forms; the create form has nothing to
+    # clear, so 'clear' there is equivalent to no notes). The legacy
+    # default 'replace' keeps the pre-210 behavior exactly.
+    notes_intent = (form.get("notes_intent") or "replace").strip()
+    notes_text = _clean_admin_reason(form.get("notes"))
+    if notes_intent not in {"preserve", "replace", "clear"}:
+        raise ValueError("Notes intent must be preserve, replace, or clear.")
+    if notes_intent == "clear" and notes_text is not None:
+        raise ValueError(
+            "Choose either notes replacement or clearing, not both: "
+            "clearing does not keep the replacement text."
+        )
+    if notes_intent == "preserve":
+        notes_value: str | None = None
+        clear_notes = False
+    elif notes_intent == "replace":
+        notes_value = notes_text
+        clear_notes = False
+    else:
+        notes_value = None
+        clear_notes = True
+
     return {
         "provider": provider,
         "display_name": display_name,
@@ -11174,7 +11495,8 @@ def _parse_provider_config_form(
         "enabled": _is_checked(form.get("enabled")),
         "timeout_seconds": timeout_seconds,
         "max_retries": max_retries,
-        "notes": _clean_admin_reason(form.get("notes")),
+        "notes": notes_value,
+        "clear_notes": clear_notes,
         "reason": reason,
         "confirm_insecure_http": (
             insecure_http
@@ -12224,6 +12546,31 @@ def _admin_redact_key_form_values(
         name: _admin_redact_key_form_value(value, settings)
         for name, value in form.items()
     }
+
+
+def _admin_url_display_value(value: str) -> str:
+    """Display-only projection for URL form fields.
+
+    Withholds credential-bearing URL values entirely so a rejected
+    submission or a retained display context can never echo a submitted
+    username or password. Any userinfo in the netloc is
+    credential-bearing regardless of scheme (including empty userinfo,
+    which the validator also refuses), and malformed URLs that the
+    validator already refuses are withheld instead of re-raised, so a
+    400 recovery page can never become a 500. The generic known-shape
+    redaction does not cover URL userinfo. Ordinary URLs pass through
+    byte-identical. Display text only: URL acceptance, canonical values,
+    fingerprints, and stored data are unchanged.
+    """
+    if not value:
+        return value
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return ""
+    if "@" in parsed.netloc:
+        return ""
+    return value
 
 
 _ADMIN_MODEL_CREDENTIAL_SHAPE_MESSAGE = (

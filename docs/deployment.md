@@ -340,6 +340,18 @@ restart is needed - the application upgrade itself (new code) still
 requires the API/assets rebuild and API recreate/restart described
 above.
 
+Upgrading a deployment that predates 210 (objective 210-a: reviewed
+route configuration and provider preparation) is an application
+upgrade ONLY: rebuild the API/assets image and recreate/restart the
+API so the new code runs. There is **no Nginx change**: the signed
+route review envelope is bounded to ~175 KiB (178,858 base64url
+characters), well inside the existing default `client_max_body_size`,
+and no new location or allowance is introduced. No database migration
+and no existing-key or existing-route change or rotation follows this
+upgrade. Installed completion-service profiles are a process-local
+cache: deploy the profile files to the configured profile directory,
+then recreate/restart the API so the process picks them up.
+
 Streaming routes require anti-buffering and long timeouts:
 
 ```nginx

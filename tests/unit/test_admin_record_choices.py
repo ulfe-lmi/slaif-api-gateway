@@ -768,3 +768,164 @@ def test_one_time_secret_selected_in_batch_keeps_batch_label() -> None:
     # The batch row for the selected id carries the pending label; the
     # selection must not duplicate it under the hydrated "used" label.
     assert matches[0].label == f"{str(old)[:8]}… (pending)"
+
+
+# ---------------------------------------------------------------------------
+# completion_profile kind (210-a)
+# ---------------------------------------------------------------------------
+
+
+def _write_profile(directory: Path, name: str, size: int = 8, mode: int = 0o644) -> Path:
+    path = directory / name
+    path.write_bytes(b"{}" if size <= 2 else b"{" + b" " * (size - 2) + b"}")
+    path.chmod(mode)
+    return path
+
+
+def test_completion_profile_kind_lists_eligible_profiles(tmp_path) -> None:
+    import asyncio
+
+    root = tmp_path / "profiles"
+    root.mkdir()
+    _write_profile(root, "alpha-v1.json")
+    _write_profile(root, "beta-v2.json")
+    _write_profile(root, "bindings.json")
+    _write_profile(root, "Bad ID.json")
+    (root / "notes.txt").write_text("not a profile")
+
+    choices = asyncio.run(
+        load_choices(_FakeSession(), "completion_profile", profile_dir=str(root))
+    )
+    assert [c.id for c in choices] == ["alpha-v1", "beta-v2"]
+    assert all(c.label == c.id for c in choices)
+
+
+def test_completion_profile_query_filter_and_100_cap(tmp_path) -> None:
+    import asyncio
+
+    root = tmp_path / "profiles"
+    root.mkdir()
+    for index in range(105):
+        _write_profile(root, f"p{index:03d}.json")
+
+    all_choices = asyncio.run(
+        load_choices(_FakeSession(), "completion_profile", profile_dir=str(root))
+    )
+    # enumeration stops at the cap (filesystem order) and the bounded
+    # result is sorted - exactly 100 of the 105 eligible profiles
+    ids = [c.id for c in all_choices]
+    assert len(ids) == CHOICE_LIMIT
+    assert ids == sorted(ids)
+    assert set(ids) <= {f"p{i:03d}" for i in range(105)}
+
+    queried = asyncio.run(
+        load_choices(
+            _FakeSession(), "completion_profile", profile_dir=str(root), q="p104"
+        )
+    )
+    assert [c.id for c in queried] == ["p104"]
+
+
+def test_completion_profile_older_selected_hydrates_directly(tmp_path) -> None:
+    import asyncio
+
+    root = tmp_path / "profiles"
+    root.mkdir()
+    for index in range(105):
+        _write_profile(root, f"p{index:03d}.json")
+    # an ACTUAL bindings file exists in the directory: the exclusion
+    # must come from the law, not from a missing file
+    _write_profile(root, "bindings.json")
+
+    initial = asyncio.run(
+        load_choices(_FakeSession(), "completion_profile", profile_dir=str(root))
+    )
+    initial_ids = {c.id for c in initial}
+    eligible = {f"p{i:03d}" for i in range(105)} - initial_ids
+    assert eligible, "the cap must leave at least one eligible id outside"
+
+    # an older selected id (outside the OBSERVED initial batch) keeps its
+    # label without re-scanning the tree
+    older = sorted(eligible)[0]
+    hydrated = asyncio.run(
+        load_choices(
+            _FakeSession(),
+            "completion_profile",
+            profile_dir=str(root),
+            selected=(older,),
+        )
+    )
+    assert older in {c.id for c in hydrated}
+
+    # bindings is never hydrated as a profile, even though the file exists
+    none_hydrated = asyncio.run(
+        load_choices(
+            _FakeSession(),
+            "completion_profile",
+            profile_dir=str(root),
+            selected=("bindings",),
+        )
+    )
+    assert all(c.id != "bindings" for c in none_hydrated)
+
+
+def test_completion_profile_unsafe_custom_modes_refused(tmp_path) -> None:
+    import asyncio
+
+    root = tmp_path / "profiles"
+    root.mkdir()
+    _write_profile(root, "safe-v1.json", mode=0o644)
+    _write_profile(root, "group-writable-v1.json", mode=0o664)
+    _write_profile(root, "world-writable-v1.json", mode=0o602)
+    _write_profile(root, "oversize-v1.json", size=65537)
+    target = root / "safe-v1.json"
+    (root / "symlink-v1.json").symlink_to(target)
+
+    choices = asyncio.run(
+        load_choices(_FakeSession(), "completion_profile", profile_dir=str(root))
+    )
+    assert [c.id for c in choices] == ["safe-v1"]
+
+
+def test_completion_profile_relative_and_symlink_roots_refused(tmp_path) -> None:
+    import asyncio
+    import os as _os
+
+    real = tmp_path / "real-profiles"
+    real.mkdir()
+    _write_profile(real, "alpha-v1.json")
+
+    # a relative directory path offers no choices (core loader law)
+    old_cwd = _os.getcwd()
+    try:
+        _os.chdir(tmp_path)
+        relative_choices = asyncio.run(
+            load_choices(
+                _FakeSession(),
+                "completion_profile",
+                profile_dir="real-profiles",
+            )
+        )
+    finally:
+        _os.chdir(old_cwd)
+    assert relative_choices == []
+
+    # a symlinked root offers no choices either
+    link = tmp_path / "linked-profiles"
+    link.symlink_to(real)
+    symlink_root = asyncio.run(
+        load_choices(_FakeSession(), "completion_profile", profile_dir=str(link))
+    )
+    assert symlink_root == []
+
+
+def test_completion_profile_bundled_directory_lists_data_profiles() -> None:
+    import asyncio
+
+    choices = asyncio.run(
+        load_choices(_FakeSession(), "completion_profile", profile_dir="")
+    )
+    ids = [c.id for c in choices]
+    assert "facial-scoring-v1" in ids
+    assert "zap-it-v1" in ids
+    assert "bindings" not in ids

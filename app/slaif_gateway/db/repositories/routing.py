@@ -223,6 +223,7 @@ class ModelRoutesRepository:
         supports_streaming: bool | None = None,
         capabilities: dict[str, object] | None = None,
         notes: str | None = None,
+        clear_notes: bool = False,
     ) -> bool:
         row = await self.get_model_route_by_id(route_id)
         if row is None:
@@ -248,7 +249,11 @@ class ModelRoutesRepository:
             row.supports_streaming = supports_streaming
         if capabilities is not None:
             row.capabilities = capabilities
-        if notes is not None:
+        # notes=None (default) PRESERVES the stored notes; only the
+        # explicit clear_notes intent writes NULL (199-c provider law).
+        if clear_notes:
+            row.notes = None
+        elif notes is not None:
             row.notes = notes
 
         await self._session.flush()

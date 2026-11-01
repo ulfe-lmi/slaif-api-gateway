@@ -167,6 +167,7 @@ class ModelRouteService:
         supports_streaming: bool,
         capabilities: dict[str, object] | None,
         notes: str | None,
+        clear_notes: bool = False,
         endpoint: str = CHAT_COMPLETIONS_ENDPOINT,
         actor_admin_id: uuid.UUID | None = None,
         reason: str | None = None,
@@ -179,6 +180,11 @@ class ModelRouteService:
         normalized_match_type = _normalize_match_type(match_type)
         if priority < 0:
             raise ValueError("Priority must be non-negative")
+        cleaned_notes = _clean_optional(notes)
+        if cleaned_notes is not None and clear_notes:
+            raise ValueError(
+                "notes: Choose either --notes or --clear-notes, not both."
+            )
 
         updated = await self._routes.update_model_route_metadata(
             parsed_route_id,
@@ -197,7 +203,8 @@ class ModelRouteService:
                 endpoint=normalize_endpoint(endpoint),
                 external_tool_ceilings=self._external_tool_ceilings,
             ),
-            notes=_clean_optional(notes),
+            notes=cleaned_notes,
+            clear_notes=clear_notes,
         )
         if not updated:
             raise RecordNotFoundError("Model route")

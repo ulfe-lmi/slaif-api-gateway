@@ -911,3 +911,191 @@ configuration from the shipped templates plus `nginx -t` and reload in
 the same maintenance window (proxy-only edits need just the reload),
 no schema migration and no existing-key change or rotation. Strategic
 review and guarded merge remain the root's gates.
+
+## 210-a reviewed route configuration and provider preparation (objective 210, new PR, 2026-11-01)
+
+### Scope and GUI-CLI parity contract
+
+G06 (reviewed route-capability changes) and G07 (provider preparation
+and explicit clearing) of `docs/MISSING_GUI_FUNCTIONALITY.md`, delivered
+on branch `oap/210-gui-provider-route` (created from accepted `main`
+`32478e0`, the merged PR #365 head). The GUI reuses the SAME qualified
+core: the shared `provider_route_configuration` orchestration (strict
+reviewed-plan schema, fresh revalidation of route/provider identity and
+context, deterministic FOR UPDATE locking, stale refusal, the no-op law,
+and the merged-candidate validation including the configured-completion
+zero-retry rule), `ModelRouteService` (the audited CRUD path - one
+`model_route_updated` audit per changed route), `ProviderConfigService`
+(prior-state capture, HTTP confirmation, credential reference only),
+the record-choice infrastructure, and the review-intent token family.
+No GUI policy engine, no second validator, no schema,
+migration, model, CLI-semantics, worker, or accounting change. Route
+CREATE's finite creation intent (Automatic / Prepare disabled / Enable
+explicitly; legacy POSTs keep the enabled checkbox) and provider CREATE's
+default-OFF enabled checkbox with one optional Notes are preparation
+separations: provider status is never proof of backend authentication.
+
+### Bounded implementation
+
+New focused router `api/admin_provider_route_configuration.py` (GET
+form / POST plan / POST apply; registered from `main.py` composition;
+`admin.py` does not import it) over the route-purpose token extension of
+`api/admin_review_intent.py` (HMAC-SHA256, actor + session + purpose,
+15-minute expiry, 178,858-character encoded bound, and the 128 KiB
+decoded canonical-plan bound enforced at BUILD and VERIFY; malformed
+token formats are a fixed refusal before digest comparison). Bounded
+`admin.py` changes: provider detail/form display projections, provider
+create+edit known-shape refusals (the 199 CLI law) before any write,
+legacy route-form refusal blanking/redaction, the route-creation intent
+path (validated through `validate_route_creation_candidate` in the same
+caller transaction before write), the entry link, and the small
+`_admin_url_display_value` projection. Templates: three new
+`routes/configuration_*.html`, touched `routes/{detail,edit,create}.html`
+and `providers/{create,edit}.html`; progressive
+`web/static/js/catalog-configuration.js` (the capability-source fieldset
+hidden AND disabled by JS only; no-JS fully enabled; no value
+conversion). A
+bounded `completion_profile` choice kind (streaming `os.scandir`,
+filters before stat, stop at 100, `bindings.json` excluded,
+unsafe-mode/symlink/oversize refusals; configured profile directory
+wired to initial render AND AJAX).
+
+### Root-approved bounded shared-law exception (recorded with approval)
+
+A demonstrated defect: the reviewed preview promised a null notes target
+while the repository treated `notes=None` as preserve. Root approved the
+exact bounded paths (`services/model_route_service.py`,
+`db/repositories/routing.py`, `services/provider_route_configuration.py`
+plus their unit tests; the 199 CLI PG module needed no change):
+`update_model_route_metadata(..., clear_notes: bool = False)` writes
+NULL only when explicitly requested (`notes=None` without it still
+preserves), `update_model_route(..., clear_notes: bool = False)` refuses
+the conflicting notes+clear combination, and
+`execute_route_update_plan` passes `clear_notes=plan.notes is None` -
+the plan's notes is the reviewed canonical target, applied as an
+explicit clear (a no-op when already null; equality is checked first,
+and the service captures the REAL prior notes in its single audit). No
+schema/plan-version/permission/accounting change; the order bytes are
+immutable. Evidence: `unit-clear-1.xml` (202 PASS), the native
+clear-only PG case in `pg-210a-3.xml`, and `cli-pg-210a-1.xml` (31 PASS).
+
+### Focused test evidence (local; GitHub CI pending at publication)
+
+All JUnit files under `/tmp/slaif210/`; the final qualifying runs were
+in managed foreground terminals (two early background PG launches were
+diagnosed, found dead, and corrected rather than rerun blindly); owned
+loopback/tmpfs PostgreSQL fixtures with exact-ID cleanup.
+
+| Receipt | Scope | Result |
+| --- | --- | --- |
+| `unit-210a-3.xml` (latest; `unit-210a-2.xml` post-layout receipt reused for unchanged areas) | 210 unit module: form sources, leaf diff, tokens, boundaries, refusals | 58 PASS / 0 skip (24.033 s) |
+| `choices-210a-1.xml` / `choices-210a-3.xml` | completion-profile lookup + final six tail cases | 74 PASS / 6 PASS |
+| `unit-clear-1.xml` | 210 unit + `test_model_route_service` + `test_provider_route_configuration` after the shared-clear correction | 202 PASS / 0 skip (24.694 s) |
+| `pg-210a-1.xml` | 10 native PG cases (chronology below) | 10 PASS / 0 skip (6.480 s) |
+| `pg-210a-2.xml` | added real auth/CSRF denial case | 1 PASS (3.833 s) |
+| `pg-210a-3.xml` | full 210 PG: preview read-only, exact apply + 1 audit, stale no-write, late-failure rollback, zero-diff no-op, provider create disabled / edit clear, creation intents, real auth/CSRF denial, native clear-only (plan TAMPER is unit evidence, not a native PG case) | 12 PASS / 0 skip (7.739 s) |
+| `cli-pg-210a-1.xml` | 199 CLI PG module (affected by the execute-path change) | 31 PASS / 0 skip (36.378 s) |
+| `browser-210a-1.xml` | real Chromium: entry/initial state + desktop/narrow captures, keyboard guided plan/apply with independent DB/audit oracles, JS source transitions, full-document replacement, no-JS fallback incl. notes clear, provider edit clear, creation intents, help associations | 8 PASS / 0 skip (21.267 s) |
+| `affected-210a-1.xml` | main composition, legacy route form modules, consumer/doc drift, design/inventory, 9 OAP governance on the byte-exact order | 184 PASS / 0 skip (14.566 s) |
+| `affected-210a-2.xml` | legacy provider form module incl. the three URL display canaries | 17 PASS / 0 skip (8.203 s) |
+| `urlcanary-210a-2.xml` | focused URL canaries (supersedes `urlcanary-210a-1.xml`, 2 PASS pre-hardening) | 3 PASS / 0 skip (3.935 s) |
+
+Scoped root component probes (mocked auth, no real DB/provider) are
+reused: 11 pure review-helper checks (round-trip, actor/session/purpose,
+expiry, digest tamper, cross-purpose denial, decoded 128 KiB refusal
+inside wrapper slack), 8 completion-lookup metadata checks (bounded
+opens, older hydration, `bindings.json` exclusion, unsafe-mode
+refusals), 3 provider-detail projection checks, 2 provider create/edit
+known-shape canaries (refusal before any service call), 8 URL-fix ASGI
+refusal/recovery checks (https/ftp userinfo and malformed IPv6 across
+create/edit, ordinary-URL recovery, retained projections, literal ENV
+name, original row unchanged), and the AST audit that the seven
+pre-existing review helpers are unchanged.
+
+### Qualification chronology (honest failures)
+
+- **PG fixture**: the first `pg-210a-1.xml` run was 10 tests / 2
+  failures - the seed ENV names `210_SVC_KEY`/`210_MOD_KEY`/
+  `210_NEW_KEY` start with digits and violate the existing ENV-name
+  validator (a generic 400 blocked the intended validators). Corrected
+  to `GUI210_*` names; the corrected module is the recorded 10 PASS
+  receipt (the JUnit was overwritten; chronology preserved here).
+- **PG final module**: the first `pg-210a-3.xml` run of the two new
+  cases failed on an audit helper-key typo in the test (fixture-only -
+  the audit dict keys are `old`/`new`, not `old_values`/`new_values`);
+  the corrected module is the recorded 12 PASS receipt. The runner
+  wrapper then raised a `NameError` on `child_exit` AFTER the tests
+  and container cleanup had completed - a harness-only post-cleanup
+  failure, distinct from the test result; the wrapper was corrected for
+  later runs and the 12 PASS receipt was not rerun for it.
+- **Legacy provider module**: the first `affected-210a-2.xml` run was
+  14 / 1 failure - the pre-existing `_FakeSession` did not back the new
+  caller-transaction locked read. Fixture-only backing added (directly
+  affected behavior, authorized path); the module is the recorded 17
+  PASS receipt after the URL canaries joined it.
+- **Browser module (actual sequence)**: the first 2-case run failed 1
+  case (42.688 s) - the Chat flag lives inside an intentionally
+  collapsed disclosure and was force-interacted while hidden; the fix
+  opens the disclosure by keyboard (focus the summary, Enter/Space) and
+  never forces hidden interaction. The targeted rerun then failed
+  (11.197 s) on an unsupported oracle - the result template does not
+  render the audit reason, so the DB audit assertion is authoritative;
+  corrected, the case passed (10.808 s). The first FULL 8-case run
+  failed 4 cases (78.933 s), all fixture/oracle/navigation defects
+  (the provider is picked BEFORE the dependent requested model - the
+  picker parent change clears the dependent; the edit redirect carries
+  a `?message` query; the readable cost is asserted field-scoped; the
+  >100 selection must toggle each distinct initial option; the runner's
+  outer owned PG was removed so the browser fixture is the sole
+  container owner). The second FULL run failed 2 cases (21.927 s):
+  ONE was a REAL shared persistence defect - the reviewed preview
+  promised a null notes target while the repository treated
+  `notes=None` as preserve - repaired through the root-approved
+  bounded shared-law correction above, NOT a fixture fix; the other was
+  test-side (the raw-plan `<details>` was read while closed). The final
+  full run is the recorded 8 PASS receipt (21.267 s). No product
+  message, message-flow, or validator was changed to fit selectors.
+- **Demonstrated URL privacy edge and fix**: root reproduced (mocked
+  auth, no real DB/provider) that a credential-bearing (userinfo) base
+  URL is refused with 400 but the plaintext password remained in the
+  error HTML - the generic known-shape redaction does not cover URL
+  userinfo. The small field-specific `_admin_url_display_value`
+  projection withholds credential-bearing URL values entirely on
+  form/detail/review display (any userinfo, any scheme, including empty
+  userinfo; malformed URLs withheld safely instead of re-raised, so a
+  400 recovery page cannot become a 500), leaving ordinary URLs
+  byte-identical and URL acceptance, canonical values, fingerprints,
+  and stored data unchanged. Focused canaries:
+  `urlcanary-210a-2.xml` (3 PASS) and the root's independent 8 checks;
+  the two directly-affected unit modules were refreshed after each
+  hardening (recorded receipts above).
+- **Receipt supersession**: `unit-210a-2.xml` (58 PASS, post-layout),
+  `urlcanary-210a-1.xml` (2 PASS, pre-hardening), and the intermediate
+  14/16 PASS `affected-210a-2.xml` states were superseded by the
+  recorded latest receipts as product/test code moved; the superseded
+  states are described here, not rerun.
+
+### Operator notes
+
+Deploying 210 is an application upgrade: rebuild the API/assets image
+and recreate/restart the API so the new code runs. There is **no Nginx
+change**: the signed route review envelope is bounded to ~175 KiB
+(178,858 base64url characters), well inside the existing default
+`client_max_body_size`, and no new location or allowance is introduced.
+No database migration; existing keys and routes are untouched.
+Installed completion profiles are a process-local cache: deploy the
+profile files to the configured profile directory, then recreate/restart
+the API so the process picks them up. See `deployment.md`.
+
+### Honesty and limitations
+
+This is local, commit-specific evidence on the qualified owned fixtures
+and real Chromium: no real provider, mail, or upstream call; no
+production access. The 207/208/209 component proof and the unchanged
+CLI law are reused without rerun; the affected shared route-execute
+path WAS requalified after the shared-clear correction (the 199 CLI PG
+module, `cli-pg-210a-1.xml`, 31 PASS). GitHub CI had not yet run on
+the 210 head when these docs were committed (the PR opens after them);
+the actual first-head check status is recorded in the immutable 210-a
+report - a failed or skipped job is never reported as pass. Strategic
+review and guarded merge remain the root's gates.

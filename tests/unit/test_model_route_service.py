@@ -47,9 +47,14 @@ class _RoutesRepo:
     async def update_model_route_metadata(self, route_id, **kwargs):
         if self.row is None or self.row.id != route_id:
             return False
+        clear_notes = kwargs.pop("clear_notes", False)
         for key, value in kwargs.items():
             if value is not None:
                 setattr(self.row, key, value)
+        # Mirror the repository law: notes=None preserves; only the
+        # explicit clear_notes intent writes NULL.
+        if clear_notes:
+            self.row.notes = None
         return True
 
     async def set_model_route_enabled(self, route_id, *, enabled):
@@ -198,3 +203,67 @@ async def test_model_route_external_tool_metadata_is_canonical_before_mutation_a
         )
     assert len(audit.rows) == 1
     assert routes.row.capabilities["external_tools"] == policy
+
+
+def _update_kwargs(row: ModelRoute, **overrides: object) -> dict[str, object]:
+    kwargs: dict[str, object] = dict(
+        requested_model=row.requested_model,
+        match_type=row.match_type,
+        provider=row.provider,
+        upstream_model=row.upstream_model,
+        priority=row.priority,
+        visible_in_models=row.visible_in_models,
+        enabled=row.enabled,
+        supports_streaming=row.supports_streaming,
+        capabilities=row.capabilities,
+        notes=None,
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+@pytest.mark.asyncio
+async def test_model_route_update_notes_none_preserves_default() -> None:
+    """Legacy contract: notes=None WITHOUT clear_notes preserves the
+    stored notes (the repository treats None as 'unchanged')."""
+    existing = _route(notes="stored route notes")
+    service, routes, _audit = _service(existing)
+
+    await service.update_model_route(
+        existing.id, **_update_kwargs(existing, priority=11)
+    )
+
+    assert routes.row.notes == "stored route notes"
+    assert routes.row.priority == 11
+
+
+@pytest.mark.asyncio
+async def test_model_route_update_clear_notes_writes_null_with_real_audit() -> None:
+    """The explicit clear_notes intent (199-c provider law) writes NULL
+    and the single audit records the REAL old notes -> null."""
+    existing = _route(notes="stored route notes")
+    service, routes, audit = _service(existing)
+
+    await service.update_model_route(
+        existing.id, clear_notes=True, **_update_kwargs(existing)
+    )
+
+    assert routes.row.notes is None
+    assert audit.rows[0]["action"] == "model_route_updated"
+    assert audit.rows[0]["old_values"]["notes"] == "stored route notes"
+    assert audit.rows[0]["new_values"]["notes"] is None
+
+
+@pytest.mark.asyncio
+async def test_model_route_update_notes_and_clear_notes_refused() -> None:
+    existing = _route(notes="stored route notes")
+    service, routes, _audit = _service(existing)
+
+    with pytest.raises(ValueError, match="--notes or --clear-notes"):
+        await service.update_model_route(
+            existing.id,
+            clear_notes=True,
+            **_update_kwargs(existing, notes="replacement text"),
+        )
+
+    assert routes.row.notes == "stored route notes"

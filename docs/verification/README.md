@@ -10,6 +10,30 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-01 Objective 210-a GUI reviewed route configuration and provider preparation verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - admin GUI G06/G07 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME qualified core
+  orchestration and services: a reviewed route-configuration workflow
+  (ONE capability source - keep unchanged / guided partial / strict
+  version-1 complete document - with Match/Target scalars and notes
+  independent), a signed route-purpose review token strictly re-parsed
+  before any mutation (128 KiB canonical plan bound at build AND
+  verify), apply with confirmation / bounded reason / CSRF, stale
+  refusal with zero writes, and one audit per changed route; route
+  creation intent, provider create default-OFF with one optional Notes,
+  provider edit notes preserve/replace/clear under the 199 row lock,
+  the bounded installed completion-profile picker, and the touched
+  privacy projections (credential-bearing URL values withheld on
+  display). A root-approved bounded shared-law correction makes the
+  reviewed null notes target an explicit clear (`clear_notes` default
+  False; `notes=None` without it still preserves). 58 unit PASS, 202
+  clear-fix PASS, 12 owned-PG PASS, 31 affected CLI PG PASS, 8 real
+  Chromium PASS, 184 affected main/route/consumer/design/governance
+  PASS, 17 provider-module PASS incl. 3 URL canaries; the honest
+  chronology (including the real notes-clear persistence defect found
+  in a full browser run) is in the 210-a section. GitHub CI had not
+  yet run at doc-commit time; actual first-head status is in the
+  immutable 210-a report.
 - [`2026-11-01 Objective 209-b GUI key-batch CI qualification verification`](gui-cli-parity.md)
   (recorded 2026-11-01, same living record file) - same-PR qualification
   of the two demonstrated A IMPL final-head CI failures (run

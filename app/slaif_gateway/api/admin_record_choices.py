@@ -84,6 +84,7 @@ _KINDS: frozenset[str] = frozenset(
         "email_delivery_status",
         "one_time_secret",
         "tool_destination",
+        "completion_profile",
     }
 )
 
@@ -264,6 +265,7 @@ async def list_record_choices(
                     provider=provider_values,
                     endpoints=endpoint_values,
                     target_type=target_type_values,
+                    profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
                 )
     except UnknownChoiceKindError:
         return _bad_request("Unknown record-choices kind.")

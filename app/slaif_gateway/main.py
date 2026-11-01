@@ -10,6 +10,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from slaif_gateway import metrics as metrics_module
 from slaif_gateway.api.admin import router as admin_router
+from slaif_gateway.api.admin_provider_route_configuration import (
+    router as admin_provider_route_configuration_router,
+)
 from slaif_gateway.api.admin_key_batch import router as admin_key_batch_router
 from slaif_gateway.api.admin_key_clone import router as admin_key_clone_router
 from slaif_gateway.api.admin_record_choices import router as admin_record_choices_router
@@ -83,6 +86,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 209-a: reviewed key-configuration batch routes under the unambiguous
     # /admin/key-batch prefix (one-way helper reuse; no reverse import).
     app.include_router(admin_key_batch_router)
+    # Reviewed route configuration + provider preparation (210-a): the
+    # focused router reuses admin.py helpers one-way (admin.py does not
+    # import this router).
+    app.include_router(admin_provider_route_configuration_router)
     app.include_router(openai_compat_router)
 
     return app

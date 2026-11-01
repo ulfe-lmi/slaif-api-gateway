@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Reviewed Configuration Change{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="route-config-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Routing Catalog</p>
+      <h1 id="route-config-heading">Reviewed configuration change</h1>
+      <p class="muted">Route {{ form.requested_model }} ({{ route_id }}). Plan first, then apply the reviewed plan.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/routes/{{ route_id }}">Route detail</a>
+      <a class="button-link secondary" href="/admin/routes">Model routes</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/routes/{{ route_id }}/configuration/plan" data-cfg-root>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <p class="field-help" id="route-config-form-help">
+      Every control that says <em>Keep current</em> submits no change (omission keeps the stored value).
+      The route's ENABLED state is deliberately preserved by the preview: enable/disable stay on the existing status actions.
+      Preparing a plan is preparation, not readiness, and the shared validators check stored configuration only;
+      admission, pricing, and provider health are checked separately when a request is made.
+    </p>
+
+    <section class="action-panel" aria-labelledby="route-config-match-heading">
+      <h2 id="route-config-match-heading">Match</h2>
+      <div class="form-grid">
+        <div class="field">
+          <label for="cfg-requested_model_action">Requested model action</label>
+          <select id="cfg-requested_model_action" name="requested_model_action" data-cfg-action data-cfg-target="#cfg-requested_model_value" aria-describedby="route-config-form-help">
+            <option value="unchanged" {% if form.requested_model_action == "unchanged" %}selected{% endif %}>Keep current ({{ form.requested_model }})</option>
+            <option value="set" {% if form.requested_model_action == "set" %}selected{% endif %}>Change to</option>
+          </select>
+          <span id="cfg-requested_model_value">
+            {{ record_choice(
+                "requested_model", "model", "Requested model or pattern",
+                options=choices.requested_model or none,
+                selected_id=form.requested_model,
+                selected_label=choice_labels.requested_model,
+                allow_new=true,
+                nojs_value=form.requested_model,
+                depends_on="route-config-provider",
+                placeholder="gpt-4.1-mini",
+                help="Used only when the action is Change to; keeping current ignores this entry.",
+                help_id="route-config-match-model-help",
+            ) }}
+          </span>
+        </div>
+        <div class="field">
+          <label for="cfg-match_type_action">Match type action</label>
+          <select id="cfg-match_type_action" name="match_type_action" data-cfg-action data-cfg-target="#cfg-match_type_value" aria-describedby="route-config-form-help">
+            <option value="unchanged" {% if form.match_type_action == "unchanged" %}selected{% endif %}>Keep current ({{ form.match_type }})</option>
+            <option value="set" {% if form.match_type_action == "set" %}selected{% endif %}>Change to</option>
+          </select>
+          <label for="cfg-match_type_value">New match type</label>
+          <select id="cfg-match_type_value" name="match_type" aria-describedby="route-config-match-help">
+            <option value="exact" {% if form.match_type == "exact" %}selected{% endif %}>Exact</option>
+            <option value="prefix" {% if form.match_type == "prefix" %}selected{% endif %}>Prefix</option>
+            <option value="glob" {% if form.match_type == "glob" %}selected{% endif %}>Glob</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="cfg-endpoint_action">Endpoint action</label>
+          <select id="cfg-endpoint_action" name="endpoint_action" data-cfg-action data-cfg-target="#cfg-endpoint_value" aria-describedby="route-config-form-help">
+            <option value="unchanged" {% if form.endpoint_action == "unchanged" %}selected{% endif %}>Keep current ({{ form.endpoint }})</option>
+            <option value="set" {% if form.endpoint_action == "set" %}selected{% endif %}>Change to</option>
+          </select>
+          <span id="cfg-endpoint_value">
+            {{ record_choice(
+                "endpoint", "endpoint", "Endpoint",
+                options=choices.endpoint or none,
+                selected_id=form.endpoint,
+                selected_label=choice_labels.endpoint,
+                allow_new=false,
+                nojs_value=form.endpoint,
+                placeholder="/v1/chat/completions",
+                help="Used only when the action is Change to.",
+                help_id="route-config-match-endpoint-help",
+            ) }}
+          </span>
+        </div>
+      </div>
+      <p class="muted small" id="route-config-match-help">Change-to entries are used only when their action is Change to; keeping current ignores them.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-config-target-heading">
+      <h2 id="route-config-target-heading">Target</h2>
+      <div class="form-grid">
+        <div class="field">
+          <label for="cfg-provider_action">Destination provider action</label>
+          <select id="cfg-provider_action" name="provider_action" data-cfg-action data-cfg-target="#cfg-provider_value" aria-describedby="route-config-form-help">
+            <option value="unchanged" {% if form.provider_action == "unchanged" %}selected{% endif %}>Keep current ({{ form.provider }})</option>
+            <option value="set" {% if form.provider_action == "set" %}selected{% endif %}>Change to</option>
+          </select>
+          <span id="cfg-provider_value">
+            {{ record_choice(
+                "provider", "provider", "Destination provider config",
+                options=choices.provider or none,
+                selected_id=form.provider,
+                selected_label=choice_labels.provider,
+                allow_new=false,
+                nojs_value=form.provider,
+                clear_label="Select provider",
+                placeholder="Search providers",
+                input_id="route-config-provider",
+                help="Used only when the action is Change to; provider rows are referenced by slug, never key values.",
+                help_id="route-config-target-provider-help",
+            ) }}
+          </span>
+        </div>
+        <div class="field">
+          <label for="cfg-upstream_model_action">Upstream model action</label>
+          <select id="cfg-upstream_model_action" name="upstream_model_action" data-cfg-action data-cfg-target="#cfg-upstream_model_value" aria-describedby="route-config-form-help">
+            <option value="unchanged" {% if form.upstream_model_action == "unchanged" %}selected{% endif %}>Keep current ({{ form.upstream_model or "requested model" }})</option>
+            <option value="set" {% if form.upstream_model_action == "set" %}selected{% endif %}>Change to</option>
+          </select>
+          <span id="cfg-upstream_model_value">
+            {{ record_choice(
+                "upstream_model", "model", "Upstream model",
+                options=choices.upstream_model or none,
+                selected_id=form.upstream_model,
+                selected_label=choice_labels.upstream_model,
+                allow_new=true,
+                nojs_value=form.upstream_model,
+                depends_on="route-config-provider",
+                placeholder="Defaults to requested model",
+                help="Changing requires a nonblank value; there is no null-clear (keep current instead).",
+                help_id="route-config-target-upstream-help",
+            ) }}
+          </span>
+        </div>
+        <div class="field">
+          <label for="cfg-priority_action">Priority action</label>
+          <select id="cfg-priority_action" name="priority_action" data-cfg-action data-cfg-target="#cfg-priority_value" aria-describedby="route-config-form-help">
+            <option value="unchanged" {% if form.priority_action == "unchanged" %}selected{% endif %}>Keep current ({{ form.priority }})</option>
+            <option value="set" {% if form.priority_action == "set" %}selected{% endif %}>Change to</option>
+          </select>
+          <label for="cfg-priority_value">New priority</label>
+          <input name="priority" id="cfg-priority_value" value="{{ form.priority }}" inputmode="numeric" aria-describedby="route-config-target-help">
+        </div>
+      </div>
+      <p class="muted small" id="route-config-target-help">0 is a valid priority (whole numbers only). Change-to entries are used only when their action is Change to.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-config-flags-heading">
+      <h2 id="route-config-flags-heading">Flags</h2>
+      <div class="form-grid">
+        <label>
+          Visible in /v1/models
+          <select name="visible_in_models_action" aria-describedby="route-config-flags-help">
+            <option value="unchanged" {% if form.visible_in_models_action == "unchanged" %}selected{% endif %}>Keep current</option>
+            <option value="true" {% if form.visible_in_models_action == "true" %}selected{% endif %}>Set visible</option>
+            <option value="false" {% if form.visible_in_models_action == "false" %}selected{% endif %}>Set hidden</option>
+          </select>
+        </label>
+        <label>
+          Supports streaming
+          <select name="supports_streaming_action" aria-describedby="route-config-flags-help">
+            <option value="unchanged" {% if form.supports_streaming_action == "unchanged" %}selected{% endif %}>Keep current</option>
+            <option value="true" {% if form.supports_streaming_action == "true" %}selected{% endif %}>Set supported</option>
+            <option value="false" {% if form.supports_streaming_action == "false" %}selected{% endif %}>Set not supported</option>
+          </select>
+        </label>
+      </div>
+      <p class="muted small" id="route-config-flags-help">Keep current leaves the stored flag untouched. The route's enabled state is intentionally outside this reviewed change (preparation stays separate from readiness).</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-config-notes-heading">
+      <h2 id="route-config-notes-heading">Notes</h2>
+      <dl>
+        <dt>Current notes</dt>
+        <dd id="route-config-notes-current">{{ form.notes_current or "No notes." }}</dd>
+      </dl>
+      <fieldset aria-describedby="route-config-notes-help">
+        <legend>Notes intent</legend>
+        <label class="checkbox-row">
+          <input type="radio" name="notes_intent" value="preserve" aria-describedby="route-config-notes-help" {% if form.notes_intent == "preserve" %}checked{% endif %}>
+          <span>Preserve current notes</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="radio" name="notes_intent" value="replace" aria-describedby="route-config-notes-help" {% if form.notes_intent == "replace" %}checked{% endif %}>
+          <span>Replace with the text below</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="radio" name="notes_intent" value="clear" aria-describedby="route-config-notes-help" {% if form.notes_intent == "clear" %}checked{% endif %}>
+          <span>Clear notes</span>
+        </label>
+        <label>
+          Replacement text
+          <textarea name="notes" rows="2" aria-describedby="route-config-notes-help">{{ form.notes }}</textarea>
+        </label>
+        <p class="muted small" id="route-config-notes-help">
+          The replacement entry starts blank; a blank replacement KEEPS the current notes (replacing is not an implicit clear). Choose Clear to remove them; clearing while the entry holds text is refused.
+        </p>
+      </fieldset>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-config-capabilities-heading">
+      <h2 id="route-config-capabilities-heading">Capabilities</h2>
+      <fieldset aria-describedby="route-config-source-help">
+        <legend>Capability source</legend>
+        <label class="checkbox-row">
+          <input type="radio" name="capabilities_source" value="unchanged" aria-describedby="route-config-source-help" {% if form.capabilities_source == "unchanged" %}checked{% endif %}>
+          <span>Keep capabilities unchanged</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="radio" name="capabilities_source" value="guided" aria-describedby="route-config-source-help" {% if form.capabilities_source == "guided" %}checked{% endif %}>
+          <span>Guided partial change (explicit leaves only; every other capability is preserved deep)</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="radio" name="capabilities_source" value="full" aria-describedby="route-config-source-help" {% if form.capabilities_source == "full" %}checked{% endif %}>
+          <span>Complete replacement document (strict version-1 envelope)</span>
+        </label>
+        <p class="muted small" id="route-config-source-help">Exactly one source may be active. Guided leaves and the replacement document are never merged.</p>
+      </fieldset>
+
+      <fieldset id="cfg-guided-group">
+        <p class="field-help" id="route-config-guided-help">Each leaf keeps current unless its action says Set; a guided change needs at least one explicit leaf. Token leaves are raw token counts (not M-token display) and video frames is a raw frame count; values are positive whole numbers validated against the shared route ceilings, which are configuration limits and not physical provider or client context limits.</p>
+        <div class="form-grid">
+          {% for action_field, value_field, leaf, label in codex_leaf_fields + media_leaf_fields %}
+          <div class="field">
+            <label for="cfg-{{ action_field }}">{{ label }} action</label>
+            <select id="cfg-{{ action_field }}" name="{{ action_field }}" data-cfg-action data-cfg-active="set" data-cfg-target="#cfg-{{ value_field }}" aria-describedby="route-config-guided-help">
+              <option value="unchanged" {% if form[action_field] == "unchanged" %}selected{% endif %}>Keep current</option>
+              <option value="set" {% if form[action_field] == "set" %}selected{% endif %}>Set</option>
+            </select>
+            <label for="cfg-{{ value_field }}">New {{ label | lower }} (positive whole number, raw units)</label>
+            <input name="{{ value_field }}" id="cfg-{{ value_field }}" value="{{ form[value_field] }}" inputmode="numeric" aria-describedby="route-config-guided-help">
+          </div>
+          {% endfor %}
+          <div class="field">
+            <label for="cfg-completion_action">Completion service action</label>
+            <select id="cfg-completion_action" name="completion_action" data-cfg-action data-cfg-target="#cfg-completion_profile_value" aria-describedby="route-config-guided-help">
+              <option value="unchanged" {% if form.completion_action == "unchanged" %}selected{% endif %}>Keep current</option>
+              <option value="set" {% if form.completion_action == "set" %}selected{% endif %}>Set profile</option>
+              <option value="clear" {% if form.completion_action == "clear" %}selected{% endif %}>Clear profile</option>
+            </select>
+            <span id="cfg-completion_profile_value">
+              {{ record_choice(
+                  "completion_profile", "completion_profile", "Installed completion profile",
+                  options=choices.completion_profile or none,
+                  selected_id=form.completion_profile,
+                  selected_label=choice_labels.completion_profile,
+                  allow_new=false,
+                  nojs_value=form.completion_profile,
+                  clear_label="Select profile",
+                  placeholder="Search installed profiles",
+                  help="Installed data profiles only; the shared profile law re-validates the selected id. Used only for Set profile; Clear profile needs no selection.",
+                  help_id="route-config-guided-completion-help",
+              ) }}
+            </span>
+          </div>
+        </div>
+
+        <details aria-labelledby="cfg-chat-flags-summary">
+          <summary id="cfg-chat-flags-summary">Chat Completions flags ({{ chat_flag_fields | length }})</summary>
+          <p class="field-help" id="cfg-chat-flags-help">Current state is shown for reference; the select changes exactly that flag.</p>
+          <div class="form-grid">
+            {% for action_field, flag in chat_flag_fields %}
+            <label class="flag-row">
+              <span class="flag-name" title="{{ flag }}">{{ flag }}</span>
+              <span class="muted small">current: {{ "enabled" if form["chat_" ~ flag.replace("-", "_")] == "true" else "disabled or absent" }}</span>
+              <select name="{{ action_field }}" aria-describedby="cfg-chat-flags-help">
+                <option value="unchanged" {% if form[action_field] == "unchanged" %}selected{% endif %}>Keep current</option>
+                <option value="true" {% if form[action_field] == "true" %}selected{% endif %}>Set enabled</option>
+                <option value="false" {% if form[action_field] == "false" %}selected{% endif %}>Set disabled</option>
+              </select>
+            </label>
+            {% endfor %}
+          </div>
+        </details>
+
+        <details aria-labelledby="cfg-responses-flags-summary">
+          <summary id="cfg-responses-flags-summary">Responses flags ({{ responses_flag_fields | length }})</summary>
+          <p class="field-help" id="cfg-responses-flags-help">Current state is shown for reference; the select changes exactly that flag.</p>
+          <div class="form-grid">
+            {% for action_field, flag in responses_flag_fields %}
+            <label class="flag-row">
+              <span class="flag-name" title="{{ flag }}">{{ flag }}</span>
+              <span class="muted small">current: {{ "enabled" if form["responses_" ~ flag.replace("-", "_")] == "true" else "disabled or absent" }}</span>
+              <select name="{{ action_field }}" aria-describedby="cfg-responses-flags-help">
+                <option value="unchanged" {% if form[action_field] == "unchanged" %}selected{% endif %}>Keep current</option>
+                <option value="true" {% if form[action_field] == "true" %}selected{% endif %}>Set enabled</option>
+                <option value="false" {% if form[action_field] == "false" %}selected{% endif %}>Set disabled</option>
+              </select>
+            </label>
+            {% endfor %}
+          </div>
+        </details>
+      </fieldset>
+
+      <fieldset id="cfg-full-group">
+        <label>
+          Complete capabilities document (strict version-1 envelope)
+          <textarea name="capabilities_document" rows="8" spellcheck="false" aria-describedby="route-config-full-help" placeholder='{ "schema_version": 1, "capabilities": { "responses": { "text": true } } }'>{{ form.capabilities_document }}</textarea>
+        </label>
+        <p class="field-help" id="route-config-full-help">A complete replacement re-authors every capability group (including transport-contract groups) and is checked by the same shared validators before a plan is prepared; a refused document is blanked before the form is re-shown. Keep capabilities unchanged unless you have reviewed the full document.</p>
+      </fieldset>
+    </section>
+
+    <section class="action-panel" aria-labelledby="route-config-plan-heading">
+      <h2 id="route-config-plan-heading">Prepare reviewed plan</h2>
+      <p class="muted">Planning is READ ONLY: it mutates nothing and writes no audit row. The next page shows the readable diff and the review state for this route.</p>
+      <button type="submit">Prepare plan</button>
+    </section>
+  </form>
+  <script src="{{ asset_url('catalog-configuration.js') }}" defer></script>
+</section>
+{% endblock %}

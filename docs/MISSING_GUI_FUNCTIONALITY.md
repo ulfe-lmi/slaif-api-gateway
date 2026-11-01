@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06-G18 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08-G18 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -52,9 +52,9 @@ The HTTP-handler and CLI-command counts are inventory counts, not a parity score
 | Lazy waiting | `keys set-lazy-throttling` | Existing-key wait/reject form with wait/queue bounds; warning when Redis limiting is disabled | Present. Do not rebuild it. Add effective/inherited context alongside it (G03). |
 | Chat streaming live-burn | `keys set-chat-streaming-live-burn` | Existing-key enable/margin editor and summaries | Present; preserve negative/zero margins, disabled-state behavior, exact edit units, and audit. |
 | External tools | `keys external-tools show/update` | Policy view/editor, reviewed capability/destination choices, call ceiling, overrun acknowledgement and confirmation | Present within the same bounded runtime support. A policy setting alone does not make unsupported hosted tools runnable. |
-| Providers | `providers add/list/show/update/enable/disable` | Full create/edit forms, timeout, zero retries, credential **ENV-variable name**, status actions | Already present. Notes clearing and preparation defaults differ (G07). Provider status is not proof of backend authentication. |
+| Providers | `providers add/list/show/update/enable/disable` | Full create/edit forms, timeout, zero retries, credential **ENV-variable name**, status actions | Already present; notes preserve/replace/clear intent and disabled-by-default preparation are delivered by 210-a (G07, section 12). Provider status is not proof of backend authentication. |
 | Generic-provider model onboarding | `providers discover-models/setup-models` | Discover/preview/execute, model selection, public aliases, presets, pricing, priority, streaming/tools and confirmations | Existing workflow, including a fresh probe on execution. Do not list discovery or alias mapping as wholly missing. |
-| Routes | `routes add/list/show/update/enable/disable/import` | Create/edit/status/list/detail and import preview/execute; capabilities JSON textarea | Editing exists. CLI reviewed partial updates and associated validation are not mirrored by a full JSON form (G06). |
+| Routes | `routes add/list/show/update/enable/disable/import` | Create/edit/status/list/detail and import preview/execute; capabilities JSON textarea | Editing exists; the CLI's reviewed partial updates, complete-document replacement, and associated validation are mirrored by the reviewed configuration workflow delivered in 210-a (G06, section 12). |
 | Pricing | `pricing add/list/show/import/disable-model` | Create/edit/list/detail, per-row enable/disable, reviewed import | Broad coverage; GUI is richer for individual editing. CLI matching-model disable is a separate bulk convenience (G18). |
 | FX | `fx add/list/latest` | List/detail/create/edit/import preview/execute | Broad coverage and GUI-only edits/imports. Explicit effective/latest-pair lookup remains a small parity/discoverability task (G18). |
 | Calibration | `calibration summarize` | Trusted-calibration key preview with time range and multiplier | Existing summary/proposal workflow. A JSON preview download would cover CLI output-file convenience without running inference. |
@@ -338,17 +338,17 @@ The 207-b record (same
 earlier claims that reasons were bounded and that all canaries were
 covered.
 
-### Still open (G06-G18)
+### Still open (G08-G18)
 
-Nothing in 207-a, 207-b, 208-a, 208-b, 209-a claims G06
-(route-capability
-review), G07 (provider preparation/clearing), G08 (diagnostics), G09 (replay
-inspection), G10 (Codex migration), G11 (usage reporting), G12 (email
-inspection), G13 (list navigation), G14 (accounting recovery), G15 (catalog
-workflows), G16 (configuration inspection page), G17 (admin accounts), or
-G18 (small catalog operations) is complete. The section 3.1-3.5 findings for
-those areas remain as documented at the baseline. G04 is delivered by
-208-a (section 10); G05 is delivered by 209-a (section 11).
+Nothing in 207-a, 207-b, 208-a, 208-b, 209-a, or 210-a claims G08
+(diagnostics), G09 (replay inspection), G10 (Codex migration), G11 (usage
+reporting), G12 (email inspection), G13 (list navigation), G14 (accounting
+recovery), G15 (catalog workflows), G16 (configuration inspection page),
+G17 (admin accounts), or G18 (small catalog operations) is complete. The
+section 3.1-3.5 findings for those areas remain as documented at the
+baseline. G04 is delivered by 208-a (section 10); G05 is delivered by
+209-a (section 11); G06 (route-capability review) and G07 (provider
+preparation/clearing) are delivered by 210-a (section 12).
 
 ## 10. Delivery status (objective 208-a)
 
@@ -473,8 +473,9 @@ the 208-b section of `docs/verification/gui-cli-parity.md`.
 
 ### Still open
 
-G06-G18 remain open as documented in section 9 (G05 is delivered by
-209-a, section 11). Nothing in 208-a touches batch editing,
+G08-G18 remain open as documented in section 9 (G05 is delivered by
+209-a, section 11; G06/G07 by 210-a, section 12). Nothing in 208-a
+touches batch editing,
 route-capability review, provider preparation,
 diagnostics, replay inspection, Codex migration, usage reporting, email
 inspection, list navigation, accounting recovery, catalog workflows, the
@@ -670,10 +671,50 @@ until green.
 
 ### Still open
 
-G06-G18 remain open as documented in section 9. Nothing in 209-a or
+G08-G18 remain open as documented in section 9 (G06/G07 are delivered by
+210-a, section 12). Nothing in 209-a or
 209-b touches
 route-capability review, provider preparation, diagnostics, replay
 inspection, Codex migration, usage reporting, email inspection, list
 navigation, accounting recovery, catalog workflows, the configuration
 inspection page, admin accounts, or small catalog operations. The full
 GUI goal beyond G01-G05 remains broader than this objective.
+## 12. Delivery status (objective 210-a)
+
+Added 2026-11-01 for G06 (reviewed route-capability changes) and G07
+(provider preparation and explicit clearing) on branch
+`oap/210-gui-provider-route` (its own PR); the historical findings above
+are preserved as written at the baseline.
+
+- **G06**: route detail gains ONE "Reviewed configuration change" entry
+  to a reviewed workflow - exactly ONE source (Keep unchanged / Guided /
+  the strict version-1 complete document) for the CAPABILITIES, with the
+  Match/Target scalars and notes working independently, a review of the
+  exact
+  non-secret plan, a signed route-purpose token strictly re-parsed
+  before any mutation, and apply with confirmation, bounded reason,
+  CSRF, stale refusal with zero writes, and one audit per changed route.
+- **G07**: route CREATE gains the finite creation intent (Automatic /
+  Prepare disabled / Enable explicitly; legacy POSTs keep the enabled
+  checkbox); provider CREATE defaults the enabled checkbox OFF with one
+  optional Notes; provider EDIT shows current notes read-only with
+  preserve/replace/clear (blank keeps, Clear removes) under the 199
+  administrative row lock; a bounded installed completion-profile picker
+  is available. The known-shape refusal and the touched display
+  projections (credential-bearing URL values withheld) guard the new
+  surfaces.
+- A root-approved bounded shared-law correction adds explicit
+  `clear_notes` (default False) so a reviewed null notes target applies
+  as an explicit clear while `notes=None` without it still preserves -
+  no schema, plan-version, permission, or accounting change.
+
+Operator walkthrough: section 11 of
+[`admin-usability.md`](admin-usability.md); verification record and
+chronology: the 210-a section of
+[`verification/gui-cli-parity.md`](verification/gui-cli-parity.md);
+exact scope approval: the immutable 210-a report.
+
+### Still open
+
+G08-G18 remain open as documented in section 9; nothing in 210-a touches
+any of them. The full GUI goal beyond G01-G07 remains broader.

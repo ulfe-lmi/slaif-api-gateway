@@ -14,6 +14,7 @@
     </div>
     <div class="header-actions">
       <a class="button-link secondary" href="/admin/routes/{{ route_id }}">Route detail</a>
+      <a class="button-link secondary" href="/admin/routes/{{ route_id }}/configuration">Reviewed configuration change</a>
       <a class="button-link secondary" href="/admin/routes">Model routes</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -31,6 +32,7 @@
 
     <section class="action-panel" aria-labelledby="route-edit-match-heading">
       <h2 id="route-edit-match-heading">Match</h2>
+      <p class="field-help" id="route-edit-match-help">Use exact, prefix, or glob matching only - do not add broad defaults unless intended. The endpoint is the gateway path the route serves, and the requested model pattern is what /v1 clients send.</p>
       <div class="form-grid">
         {{ record_choice(
             "requested_model", "model", "Requested model or pattern",
@@ -40,10 +42,12 @@
             allow_new=true,
             nojs_value=form.requested_model,
             depends_on="route-provider",
+            help="The model pattern /v1 clients request; exact, prefix, or glob per the match type.",
+            help_id="route-edit-match-model-help",
         ) }}
         <label>
           Match type
-          <select name="match_type">
+          <select name="match_type" aria-describedby="route-edit-match-help">
             <option value="exact" {% if form.match_type == "exact" %}selected{% endif %}>Exact</option>
             <option value="prefix" {% if form.match_type == "prefix" %}selected{% endif %}>Prefix</option>
             <option value="glob" {% if form.match_type == "glob" %}selected{% endif %}>Glob</option>
@@ -56,13 +60,15 @@
             selected_label=choice_labels.endpoint,
             allow_new=false,
             nojs_value=form.endpoint,
+            help="The gateway path this route serves (implemented /v1 endpoints only).",
+            help_id="route-edit-match-endpoint-help",
         ) }}
       </div>
     </section>
 
     <section class="action-panel" aria-labelledby="route-edit-target-heading">
       <h2 id="route-edit-target-heading">Target</h2>
-      <p class="warning-text">Provider config choices expose environment variable names only. Do not enter provider key values in route metadata.</p>
+      <p class="warning-text" id="route-edit-target-help">Provider config choices expose environment variable names only. Do not enter provider key values in route metadata. The upstream model is the provider-side model name; leaving it empty forwards the requested model unchanged. Priority is a whole number where 0 is valid.</p>
       <div class="form-grid">
         {{ record_choice(
             "provider", "provider", "Provider config",
@@ -74,6 +80,8 @@
             clear_label="Select provider",
             placeholder="Search providers",
             input_id="route-provider",
+            help="Destination provider config by slug; only enabled routes and providers actually serve traffic.",
+            help_id="route-edit-target-provider-help",
         ) }}
         {{ record_choice(
             "upstream_model", "model", "Upstream model",
@@ -83,27 +91,29 @@
             allow_new=true,
             nojs_value=form.upstream_model,
             help="Leave empty to forward the requested model unchanged; new upstream model values stay editable.",
+            help_id="route-edit-target-upstream-help",
         ) }}
         <label>
           Priority
-          <input name="priority" value="{{ form.priority }}" inputmode="numeric" required>
+          <input name="priority" value="{{ form.priority }}" inputmode="numeric" required aria-describedby="route-edit-target-help">
         </label>
       </div>
     </section>
 
     <section class="action-panel" aria-labelledby="route-edit-flags-heading">
       <h2 id="route-edit-flags-heading">Flags</h2>
+      <p class="field-help" id="route-edit-flags-help">Enabled controls whether matching /v1 requests resolve this route. The other flags are advertised metadata for /v1/models and streaming behavior.</p>
       <div class="form-grid">
         <label class="checkbox-row">
-          <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
+          <input type="checkbox" name="enabled" value="true" aria-describedby="route-edit-flags-help" {% if form.enabled %}checked{% endif %}>
           <span>Enabled</span>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="visible_in_models" value="true" {% if form.visible_in_models %}checked{% endif %}>
+          <input type="checkbox" name="visible_in_models" value="true" aria-describedby="route-edit-flags-help" {% if form.visible_in_models %}checked{% endif %}>
           <span>Visible in /v1/models</span>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="supports_streaming" value="true" {% if form.supports_streaming %}checked{% endif %}>
+          <input type="checkbox" name="supports_streaming" value="true" aria-describedby="route-edit-flags-help" {% if form.supports_streaming %}checked{% endif %}>
           <span>Supports streaming</span>
         </label>
       </div>
@@ -113,16 +123,16 @@
       <h2 id="route-edit-metadata-heading">Metadata</h2>
       <label>
         Capabilities JSON
-        <textarea name="capabilities">{{ form.capabilities }}</textarea>
+        <textarea name="capabilities" aria-describedby="route-edit-metadata-help">{{ form.capabilities }}</textarea>
       </label>
-      <p class="warning-text">External-tool route metadata is one part of authorization. Runtime consumes it only for exact OpenAI Responses <code>provider_web_search</code> with matching key/provider/pricing facts; all other hosted capabilities remain denied.</p>
+      <p class="warning-text" id="route-edit-metadata-help">Capabilities is route metadata in the exact canonical schema. External-tool route metadata is one part of authorization: the runtime consumes it only for exact OpenAI Responses <code>provider_web_search</code> with matching key/provider/pricing facts; all other hosted capabilities remain denied. Notes are operator metadata only. The audit reason records why this change was made.</p>
       <label>
         Notes
-        <textarea name="notes">{{ form.notes }}</textarea>
+        <textarea name="notes" aria-describedby="route-edit-metadata-help">{{ form.notes }}</textarea>
       </label>
       <label>
         Audit reason
-        <input name="reason" value="{{ form.reason }}" required autocomplete="off">
+        <input name="reason" value="{{ form.reason }}" required autocomplete="off" aria-describedby="route-edit-metadata-help">
       </label>
     </section>
 

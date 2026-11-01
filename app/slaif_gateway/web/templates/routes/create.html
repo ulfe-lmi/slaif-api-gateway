@@ -30,7 +30,7 @@
 
     <section class="action-panel" aria-labelledby="route-match-heading">
       <h2 id="route-match-heading">Match</h2>
-      <p class="muted">Use exact, prefix, or glob matching only. Do not add broad defaults unless intended.</p>
+      <p class="muted" id="route-create-match-help">Use exact, prefix, or glob matching only. Do not add broad defaults unless intended. The endpoint is the gateway path the route serves.</p>
       <div class="form-grid">
         {{ record_choice(
             "requested_model", "model", "Requested model or pattern",
@@ -41,10 +41,12 @@
             nojs_value=form.requested_model,
             depends_on="route-provider",
             placeholder="gpt-4.1-mini",
+            help="The model pattern /v1 clients request; exact, prefix, or glob per the match type.",
+            help_id="route-create-match-model-help",
         ) }}
         <label>
           Match type
-          <select name="match_type">
+          <select name="match_type" aria-describedby="route-create-match-help">
             <option value="exact" {% if form.match_type == "exact" %}selected{% endif %}>Exact</option>
             <option value="prefix" {% if form.match_type == "prefix" %}selected{% endif %}>Prefix</option>
             <option value="glob" {% if form.match_type == "glob" %}selected{% endif %}>Glob</option>
@@ -58,13 +60,15 @@
             allow_new=false,
             nojs_value=form.endpoint,
             placeholder="/v1/chat/completions",
+            help="The gateway path this route serves (implemented /v1 endpoints only).",
+            help_id="route-create-match-endpoint-help",
         ) }}
       </div>
     </section>
 
     <section class="action-panel" aria-labelledby="route-target-heading">
       <h2 id="route-target-heading">Target</h2>
-      <p class="warning-text">Provider choices reference provider config rows by slug and display name, never provider key values.</p>
+      <p class="warning-text" id="route-create-target-help">Provider choices reference provider config rows by slug and display name, never provider key values. The upstream model is the provider-side model name; leaving it empty forwards the requested model unchanged. Priority is a whole number where 0 is valid.</p>
       <div class="form-grid">
         {{ record_choice(
             "provider", "provider", "Provider config",
@@ -76,6 +80,8 @@
             clear_label="Select provider",
             placeholder="Search providers",
             input_id="route-provider",
+            help="Destination provider config by slug; only enabled routes and providers actually serve traffic.",
+            help_id="route-create-target-provider-help",
         ) }}
         {{ record_choice(
             "upstream_model", "model", "Upstream model",
@@ -86,27 +92,44 @@
             nojs_value=form.upstream_model,
             placeholder="Defaults to requested model",
             help="Leave empty to forward the requested model unchanged; new upstream model values stay editable.",
+            help_id="route-create-target-upstream-help",
         ) }}
         <label>
           Priority
-          <input name="priority" value="{{ form.priority }}" inputmode="numeric" required>
+          <input name="priority" value="{{ form.priority }}" inputmode="numeric" required aria-describedby="route-create-target-help">
         </label>
       </div>
     </section>
 
     <section class="action-panel" aria-labelledby="route-flags-heading">
       <h2 id="route-flags-heading">Flags</h2>
-      <div class="form-grid">
+      <p class="field-help" id="route-create-flags-help">Visible in /v1/models controls the /v1/models listing; Supports streaming advertises SSE streaming for this route.</p>
+      <fieldset aria-describedby="route-creation-intent-help">
+        <legend>Route status on creation</legend>
         <label class="checkbox-row">
-          <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
-          <span>Enabled</span>
+          <input type="radio" name="creation_intent" value="automatic" aria-describedby="route-creation-intent-help" {% if not form.creation_intent or form.creation_intent == "automatic" %}checked{% endif %}>
+          <span>Automatic</span>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="visible_in_models" value="true" {% if form.visible_in_models %}checked{% endif %}>
+          <input type="radio" name="creation_intent" value="prepare_disabled" aria-describedby="route-creation-intent-help" {% if form.creation_intent == "prepare_disabled" %}checked{% endif %}>
+          <span>Prepare disabled</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="radio" name="creation_intent" value="explicit_enable" aria-describedby="route-creation-intent-help" {% if form.creation_intent == "explicit_enable" %}checked{% endif %}>
+          <span>Enable explicitly</span>
+        </label>
+        <p class="muted small" id="route-creation-intent-help">
+          Automatic keeps the enabled default for a basic route with empty capabilities; a route created with a capabilities document is prepared DISABLED (enabling later is the existing status action).
+          Prepare disabled and Enable explicitly create the route in that state. This selection is the only activation control on this form.
+        </p>
+      </fieldset>
+      <div class="form-grid">
+        <label class="checkbox-row">
+          <input type="checkbox" name="visible_in_models" value="true" aria-describedby="route-create-flags-help" {% if form.visible_in_models %}checked{% endif %}>
           <span>Visible in /v1/models</span>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="supports_streaming" value="true" {% if form.supports_streaming %}checked{% endif %}>
+          <input type="checkbox" name="supports_streaming" value="true" aria-describedby="route-create-flags-help" {% if form.supports_streaming %}checked{% endif %}>
           <span>Supports streaming</span>
         </label>
       </div>
@@ -116,16 +139,16 @@
       <h2 id="route-metadata-heading">Metadata</h2>
       <label>
         Capabilities JSON
-        <textarea name="capabilities" placeholder='{"vision": false}'>{{ form.capabilities }}</textarea>
+        <textarea name="capabilities" placeholder='{"vision": false}' aria-describedby="route-create-metadata-help">{{ form.capabilities }}</textarea>
       </label>
-      <p class="warning-text">Optional <code>external_tools</code> metadata must use the exact canonical route schema. Runtime consumes it only for exact OpenAI Responses <code>provider_web_search</code>; all other hosted capabilities remain denied.</p>
+      <p class="warning-text" id="route-create-metadata-help">Capabilities is route metadata in the exact canonical schema; optional <code>external_tools</code> metadata is consumed at runtime only for exact OpenAI Responses <code>provider_web_search</code>, and all other hosted capabilities remain denied. Notes are operator metadata only. The audit reason records why this route was created.</p>
       <label>
         Notes
-        <textarea name="notes">{{ form.notes }}</textarea>
+        <textarea name="notes" aria-describedby="route-create-metadata-help">{{ form.notes }}</textarea>
       </label>
       <label>
         Audit reason
-        <input name="reason" value="{{ form.reason }}" required autocomplete="off">
+        <input name="reason" value="{{ form.reason }}" required autocomplete="off" aria-describedby="route-create-metadata-help">
       </label>
     </section>
 

@@ -1045,3 +1045,121 @@ other admin/API limit unchanged - see
 [`deployment.md`](deployment.md). There is **no schema migration**: the
 batch reuses the existing key configuration columns, metadata, and
 audit rows.
+
+## 11. Reviewed route configuration and provider preparation (210-a)
+
+This section documents the G06/G07 surfaces delivered by objective 210-a
+(see section 12 of `docs/MISSING_GUI_FUNCTIONALITY.md`). It reuses the
+existing shared services (route configuration orchestration,
+`ModelRouteService`, `ProviderConfigService`, record pickers,
+review-intent tokens, the redaction seam, session/CSRF contexts) and the
+reviewed-plan schemas; no new database schema, table, or client/server
+module was added. The full verification record is in section
+"210-a reviewed route configuration and provider preparation" of
+`docs/verification/gui-cli-parity.md`.
+
+### 11.1 Navigation
+
+- **Route detail** (`/admin/routes/{id}`): a "Reviewed configuration
+  change" entry link to the configuration form. All prior route detail
+  behavior is unchanged.
+- **Route create** (`/admin/routes/new`): the existing create form,
+  extended with the finite creation-intent control (11.4).
+- **Provider create / edit**: the existing pages, extended ONLY with
+  the notes controls (11.4).
+
+### 11.2 Route configuration form semantics
+
+- **Match/Target scalars and notes work independently** of the
+  capability source: requested-model action + value, match-type action,
+  endpoint, provider, upstream model, and priority each offer
+  "Keep current" / "Change to" (omission preserves the stored value, so
+  a priority-only change leaves capabilities untouched - no capability
+  leaf is required), and the route's enabled state is deliberately
+  preserved by the preview (enable/disable stay on the existing status
+  actions).
+- **The capability source** is the ONE single-source choice:
+  **Keep capabilities unchanged** / **Guided partial change** /
+  **Complete replacement document**. Guided leaves and the replacement
+  document are never merged, and a guided change needs at least one
+  explicit leaf. With JavaScript the non-active capability group's
+  fieldset is hidden AND disabled (so its managed pickers' hidden inputs
+  are not submitted either); the script never converts, groups, or
+  scales a value, and the no-JS form is fully enabled and works through
+  to the persisted change. The server still enforces the single-source
+  law on every submission.
+- **Guided capability members**: the 51 Chat/Responses tri-state flags
+  grouped in accessible native disclosures (main route fields first),
+  the Codex token limits, the media settings, and the completion-profile
+  picker. Token leaves are raw token counts (video frames is a raw frame
+  count) - positive whole numbers validated against the shared route
+  ceilings, which are configuration limits, not physical provider or
+  client context limits. Each leaf keeps current unless its action says
+  Set (there is no null-clear - keep current instead); the
+  completion-profile picker additionally offers Clear profile, and the
+  notes intent offers preserve/replace/clear. The installed profile
+  lookup returns up to 100 eligible file IDs with search, and selected
+  older IDs hydrate on demand; `bindings.json` is never offered.
+- **Notes**: the current notes are shown read-only; the replacement entry
+  is blank with the default **Preserve**, and a BLANK replacement KEEPS
+  the current notes. Only the explicit **Clear** removes them (the
+  reviewed canonical target then carries null, applied as an explicit
+  clear).
+- Each picker and each input carries associated, individually linked
+  help text with the field's actual units and meanings (raw token/frame
+  counts, ceiling context, blank-means-keep for notes).
+
+### 11.3 Review and apply
+
+- The review page shows the EXACT non-secret plan: every changed leaf's
+  readable before/after with actual values (token leaves as M tokens
+  plus the exact raw count; capability enabled/disabled states; the
+  non-secret external-tool and transport-contract values), the
+  destination provider context (the credential ENV-variable NAME is
+  literal; the provider enabled state is labeled preparation, not
+  backend readiness), and the raw non-secret plan JSON as optional
+  detail.
+- The **Complete** replacement document is the strict version-1
+  envelope (`schema_version: 1` plus the `capabilities` object, at most
+  64 KiB) - deliberately distinct from the legacy route edit form's raw
+  `capabilities` object textarea, which remains as the existing
+  advanced editor.
+- The reviewed state is a signed route-purpose token (15-minute expiry,
+  bounded size). Apply requires the confirmation checkbox, a bounded
+  nonblank audit reason (at most 512 Unicode characters - a GUI-side
+  bound), and CSRF. A stale plan is refused with zero writes; a plan that
+  currently equals the target is the no-write, no-audit no-op; one
+  `model_route_updated` audit per changed route records the actor and
+  reason. The signed token is never shown on the result page, which is
+  no-store.
+
+### 11.4 Provider preparation
+
+- **Route create**: the finite **creation intent** (Automatic / Prepare
+  disabled / Enable explicitly) is the sole activation control of the new
+  route-create UI: Automatic keeps the enabled default for a basic
+  empty-capabilities route; a supplied complete-capabilities document
+  prepares the route DISABLED without an extra mode change; Enable
+  explicitly activates it. A legacy POST with no intent keeps the
+  existing enabled-checkbox semantics.
+- **Provider create**: the enabled checkbox is OFF by default (an
+  explicit check enables), with one plainly labeled optional Notes
+  textarea (blank = no notes). Provider status is preparation, not proof
+  of backend authentication.
+- **Edit**: current notes read-only, blank replacement preserves, Clear
+  removes; slug/status editing is unchanged. The full edit takes the
+  199 administrative row lock in the caller transaction before the
+  service prior-state capture, so it cannot interleave with a concurrent
+  partial update.
+- **Completion profiles** are process-local: install the profile files in
+  the configured profile directory, then recreate/restart the API so the
+  process picks them up (see `deployment.md`).
+
+### 11.5 Upgrade notes
+
+Deploying 210 is an application upgrade: rebuild the API/assets image and
+recreate/restart the API so the new code runs. There is **no Nginx
+change** (the signed route review envelope is bounded to ~175 KiB, well
+inside the existing defaults) and **no schema migration**; existing keys
+and routes are untouched - see
+[`deployment.md`](deployment.md).

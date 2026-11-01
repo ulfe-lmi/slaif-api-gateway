@@ -359,6 +359,164 @@ def test_provider_config_create_rejects_secret_looking_env_var_before_service(mo
     assert called is False
 
 
+def test_provider_config_create_withholds_userinfo_url_and_recovers(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+    provider_id = uuid.uuid4()
+    canary_url = "https://svc210user:svc210passcanary@svc210.example/v1"
+
+    async def create_provider_config(self, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(id=provider_id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.provider_config_service.ProviderConfigService.create_provider_config",
+        create_provider_config,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    refusal = client.post(
+        "/admin/providers/new",
+        data=_valid_form(base_url=canary_url),
+        follow_redirects=False,
+    )
+
+    assert refusal.status_code == 400
+    assert "must not contain credentials" in refusal.text
+    assert "svc210passcanary" not in refusal.text
+    assert "svc210user" not in refusal.text
+    assert not seen
+
+    # Safe recovery: a valid ordinary URL is accepted byte-identical.
+    recovery = client.post(
+        "/admin/providers/new",
+        data=_valid_form(base_url="https://svc210.example/v1"),
+        follow_redirects=False,
+    )
+
+    assert recovery.status_code == 303
+    assert recovery.headers["location"] == f"/admin/providers/{provider_id}?message=provider_config_created"
+    assert seen["base_url"] == "https://svc210.example/v1"
+
+
+def test_provider_config_edit_withholds_userinfo_url_and_shows_ordinary_verbatim(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+    provider_id = uuid.uuid4()
+    canary_url = "https://edit210user:edit210passcanary@svc210b.example/v1"
+
+    async def update_provider_config(self, provider_or_id, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(id=provider_id)
+
+    async def get_provider_config_for_update(self, provider_or_id):
+        return SimpleNamespace(id=provider_id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.provider_config_service.ProviderConfigService.update_provider_config",
+        update_provider_config,
+    )
+    monkeypatch.setattr(
+        admin_module.ProviderConfigsRepository,
+        "get_provider_config_for_update",
+        get_provider_config_for_update,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    refusal = client.post(
+        f"/admin/providers/{provider_id}/edit",
+        data=_valid_form(
+            provider="openrouter",
+            api_key_env_var="OPENROUTER_API_KEY",
+            base_url=canary_url,
+        ),
+        follow_redirects=False,
+    )
+
+    assert refusal.status_code == 400
+    assert "must not contain credentials" in refusal.text
+    assert "edit210passcanary" not in refusal.text
+    assert "edit210user" not in refusal.text
+    assert not seen
+
+    # An ordinary URL stays verbatim on an unrelated-field refusal
+    # (blank reason), and the resubmission is accepted byte-identical.
+    ordinary = "https://svc210b.example/v1"
+    retry = client.post(
+        f"/admin/providers/{provider_id}/edit",
+        data=_valid_form(
+            provider="openrouter",
+            api_key_env_var="OPENROUTER_API_KEY",
+            base_url=ordinary,
+            reason="",
+        ),
+        follow_redirects=False,
+    )
+
+    assert retry.status_code == 400
+    assert ordinary in retry.text
+    assert "edit210passcanary" not in retry.text
+    assert not seen
+
+    recovery = client.post(
+        f"/admin/providers/{provider_id}/edit",
+        data=_valid_form(
+            provider="openrouter",
+            api_key_env_var="OPENROUTER_API_KEY",
+            base_url=ordinary,
+        ),
+        follow_redirects=False,
+    )
+
+    assert recovery.status_code == 303
+    assert seen["base_url"] == ordinary
+
+
+def test_provider_config_withholds_malformed_and_other_scheme_userinfo_urls(
+    monkeypatch,
+) -> None:
+    seen: dict[str, object] = {}
+    provider_id = uuid.uuid4()
+
+    async def create_provider_config(self, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(id=provider_id)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.provider_config_service.ProviderConfigService.create_provider_config",
+        create_provider_config,
+    )
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+
+    # Malformed URL: the validator already refuses it; the display
+    # projection must withhold it instead of turning the 400 recovery
+    # page into a 500.
+    malformed = client.post(
+        "/admin/providers/new",
+        data=_valid_form(base_url="https://["),
+        follow_redirects=False,
+    )
+
+    assert malformed.status_code == 400
+    assert not seen
+
+    # Unsupported-scheme userinfo is still a credential-bearing refused
+    # value and must not be echoed either.
+    ftp = client.post(
+        "/admin/providers/new",
+        data=_valid_form(base_url="ftp://ftp210user:ftp210passcanary@files210.example/v1"),
+        follow_redirects=False,
+    )
+
+    assert ftp.status_code == 400
+    assert "ftp210passcanary" not in ftp.text
+    assert "ftp210user" not in ftp.text
+    assert not seen
+
+
 def test_provider_config_edit_get_renders_safe_current_values(monkeypatch) -> None:
     provider = _provider_detail()
 
@@ -390,9 +548,20 @@ def test_provider_config_edit_calls_service_with_actor_and_reason(monkeypatch) -
         seen.update(kwargs)
         return SimpleNamespace(id=provider_id)
 
+    async def get_provider_config_for_update(self, provider_or_id):
+        # 210-a: the full edit takes the 199-a administrative row lock in
+        # the caller transaction before the service prior-state capture;
+        # back that locked read like the other repository seams here.
+        return SimpleNamespace(id=provider_id)
+
     monkeypatch.setattr(
         "slaif_gateway.services.provider_config_service.ProviderConfigService.update_provider_config",
         update_provider_config,
+    )
+    monkeypatch.setattr(
+        admin_module.ProviderConfigsRepository,
+        "get_provider_config_for_update",
+        get_provider_config_for_update,
     )
     client = TestClient(_app())
     admin_user = _login_for_actions(monkeypatch, client)
