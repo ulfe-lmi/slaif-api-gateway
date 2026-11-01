@@ -141,7 +141,7 @@
         Capabilities JSON
         <textarea name="capabilities" placeholder='{"vision": false}' aria-describedby="route-create-metadata-help">{{ form.capabilities }}</textarea>
       </label>
-      <p class="warning-text" id="route-create-metadata-help">Capabilities is route metadata in the exact canonical schema; optional <code>external_tools</code> metadata is consumed at runtime only for exact OpenAI Responses <code>provider_web_search</code>, and all other hosted capabilities remain denied. Notes are operator metadata only. The audit reason records why this route was created.</p>
+      <p class="warning-text" id="route-create-metadata-help">Capabilities is route metadata in the exact canonical schema; optional <code>external_tools</code> metadata must use the exact canonical route schema. Runtime consumes it only for exact OpenAI Responses <code>provider_web_search</code>; all other hosted capabilities remain denied. Notes are operator metadata only. The audit reason records why this route was created.</p>
       <label>
         Notes
         <textarea name="notes" aria-describedby="route-create-metadata-help">{{ form.notes }}</textarea>
