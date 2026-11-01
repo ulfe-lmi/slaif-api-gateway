@@ -58,10 +58,13 @@ Status legend:
 
 GUI equivalent: objective 210-a delivered the reviewed route
 configuration (guided partial / strict version-1 complete document,
-signed review token, stale refusal, one audit per changed route) and
-provider preparation (creation intent, notes preserve/replace/clear)
-to the admin GUI by reusing the SAME core orchestration and services -
-no CLI change in that objective; see section 12 of
+signed review token, stale refusal, one audit per changed route) to
+the admin GUI by reusing the SAME core orchestration and services.
+ROUTE creation gains the finite creation intent; provider creation
+defaults disabled and provider EDIT gains the notes intent
+(preserve/replace/clear). The CLI commands and schema are unchanged,
+and the shared route-notes-clear persistence fix applies to the CLI
+as well; see section 12 of
 `docs/MISSING_GUI_FUNCTIONALITY.md` and section 11 of
 `docs/admin-usability.md`.
 
