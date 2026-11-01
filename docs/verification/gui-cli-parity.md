@@ -1192,3 +1192,57 @@ repaired by the bounded same-order commits recorded above
 `cea28df1`. The final docs-only head's checked status is recorded in
 the immutable 210-a report. Strategic
 review and guarded merge remain the root's gates.
+
+## 211-a GUI request diagnostics and process configuration (objective 211, new PR, 2026-11-01)
+
+### Scope and GUI-CLI parity contract
+
+G08 (content-free request diagnostics) and G16 (safe configuration,
+profile and version inspection) of
+`docs/MISSING_GUI_FUNCTIONALITY.md`, delivered on branch
+`oap/211-gui-diagnostics-config` (created from accepted `main`
+`f71f5799`, the merged PR #366 head). The GUI reuses the SAME qualified
+core: `RequestDiagnosticsService` (status, bounded retained lookup with
+explicit gateway/client/any namespaces, choice listing, and the
+transactional expired cleanup with its single actor/reason/count audit),
+the shared `configuration_inspection` 45-name allowlist (the shared
+inspector gained explicit API-process-scope wording; the CLI defaults
+and values are unchanged and re-qualified), and the record-choice
+infrastructure (ONE kind-specific branch: the diagnostics picker POSTs
+to a fixed private endpoint with the page's own non-rotating CSRF and
+the live namespace; every other kind keeps the exact GET transport).
+No schema, migration, permissions, capture activation, provider call,
+accounting, worker, or CLI-semantics change. All seeded records are
+synthetic, projected by the SHARED producer projection - no real
+provider/Codex request is involved, and no installed-qualification or
+deployment claim is made (final 219 remains required).
+
+### Final evidence (accepted receipts)
+
+| Receipt | Scope | Result |
+| --- | --- | --- |
+| `unit-211a-format-2.xml` | 211 unit module (typed found/ambiguity/overflow/unavailable, canaries, denials, cleanup service-call proofs, 45 allowlist, profile snapshot) | 34 PASS / 0 skip (15.281 s) |
+| `unit-211a-usage-alias-1.xml` | usage-detail entry link + incoming-alias display withholding regression | 4 PASS / 0 skip (4.372 s) |
+| `unit-211a-usage-alias-2.xml` | affected usage-rendering/numeric modules | 61 PASS / 0 skip (9.528 s) |
+| `pg-211a-4.xml` | owned-PG module: retained rendering, ambiguity/namespace, expiry/disabled reads, choices cap/dedup/hydration, native auth/CSRF denials, bounded cleanup + single audit, late-failure rollback, zero-delete audit | 8 PASS / 0 skip (12.498 s) |
+| `pg-211a-5.xml` | targeted re-qualification of the three strengthened read-only cases | 3 PASS / 0 skip (10.388 s) |
+| `unit-211a-affected-1.xml` | affected 211-unit + SLAIF-design + usability-inventory + main-app-structure guards after the disclosure/no-store corrections | 173 PASS / 0 skip (18.469 s) |
+| `browser-211a-8.xml` | actual Chromium (owned PG, sole container owner): login -> dashboard -> Operations -> diagnostics, keyboard picker lookup of the HTTP-200 stream failure, collision ambiguity + gateway resolve, pasted-credential canary (real handler via network capture; value in no URL/error body/page), existing kinds keep the GET lookup, usage-detail entry link with live-namespace POST evidence + same-page CSRF, no-JS lookup/validation recovery, process configuration + existing workflows, narrow/desktop captures | 7 PASS / 0 skip (18.807 s) |
+
+Owned-container lifecycle was independently verified per run (labeled,
+loopback, tmpfs; exact full ID removed; owner filter empty after).
+Earlier preliminary states - the unit fixture-oracle corrections, the
+PG encoding/oracle corrections, and the browser selector/oracle
+corrections including one INTERRUPTED run (a Playwright page-bound
+`Response.text()` stall; signalled to the exact pytest PID, exit 2, not
+a pass, container cleaned) - were superseded by the receipts above and
+are not catalogued here.
+
+### Limits of this record
+
+Synthetic fixture data only (no real provider/Codex request, no real
+captured content); the browser privacy case proves the pasted value
+never reaches a URL, error response, or rendered page through the real
+handler; native PG proves retention/expiry/cleanup/audit/rollback
+through authenticated HTTP; the installed whole-GUI qualification
+(objective 219) and all deployment remain explicitly OUT of scope.

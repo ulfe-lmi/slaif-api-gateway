@@ -1252,6 +1252,18 @@ capture) and is bounded as follows:
   cancellation. The operator-request-capture facility remains
   independently default OFF and is neither replaced nor armed by this
   facility.
+- **Admin GUI consumer (211-a).** The admin dashboard's Operations ->
+  Request diagnostics pages are a content-free, read-only consumer of the
+  same retained table: they render only these same safe projections, and
+  the ID lookup is a bounded authenticated POST so arbitrary typed input
+  never enters a URL, access log, or redirect. Its explicit expired
+  cleanup deletes at most 1,000 expired records per run in one
+  transaction with one actor/reason/count audit (a pre-commit failure,
+  including a late audit write, rolls the run back; a lost commit
+  acknowledgement leaves the outcome unconfirmed for the operator to
+  check in the audit log and retention status). The admin UI has no
+  request-capture control: capture remains the operator-local CLI
+  facility above, unchanged.
 
 Configuration: [configuration.md](configuration.md) (Request Failure
 Diagnostics, default OFF). Verification:

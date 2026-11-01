@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Operations{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell" aria-labelledby="operations-heading">
+  <header class="dashboard-header">
+    <div class="brand-copy">
+      <p class="eyebrow">Operations</p>
+      <h1 id="operations-heading">Operations</h1>
+      <p class="lead">Diagnostics and process-configuration inspection for this deployment.</p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Operations</h2>
+      <p class="dash-group-intro">Inspect failures and this deployment's configured state.</p>
+      <ul>
+        <li>
+          <a href="/admin/operations/diagnostics">Request diagnostics</a>
+          <p>Look up one retained content-free failure record and prune expired records.</p>
+        </li>
+        <li>
+          <a href="/admin/operations/process-configuration">Process configuration</a>
+          <p>Review the API process settings snapshot, profiles, and module identity.</p>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+{% endblock %}

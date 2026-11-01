@@ -170,6 +170,106 @@ class RequestDiagnosticsRepository:
         count, oldest, newest = result.one()
         return int(count), oldest, newest
 
+    async def recent_retained_ids(
+        self,
+        *,
+        namespace: DiagnosticsNamespace,
+        not_before: datetime,
+        query: str | None = None,
+        limit: int,
+    ) -> tuple[tuple[str, str, datetime], ...]:
+        """Bounded newest-first retained ID choices (211-a GUI picker).
+
+        The choice set follows the requested namespace: gateway-only,
+        client-only (non-null client IDs), or both tagged by namespace
+        for ``any``. An optional substring query is applied with escaped
+        LIKE wildcards so a pasted value is data, not a pattern.
+        DISTINCT IDs are grouped BEFORE the limit (newest ``recorded_at``
+        per ID), so repeated client IDs cannot consume the candidate
+        batch and hide older distinct choices; at most ``limit``
+        distinct IDs per namespace are loaded, newest first.
+        For ``any``, the merged gateway/client rows are de-duplicated by
+        submitted ID (newest write time wins) BEFORE the final cap, so a
+        value retained in both namespaces never hides an older distinct
+        choice.
+        """
+        limit = max(1, int(limit))
+        out: list[tuple[str, str, datetime]] = []
+        for column, tag in _namespace_choice_columns(namespace):
+            conditions = [RequestDiagnostic.occurred_at >= not_before]
+            if column is RequestDiagnostic.client_request_id:
+                conditions.append(RequestDiagnostic.client_request_id.is_not(None))
+            if query:
+                conditions.append(_escaped_ilike(column, query))
+            newest = func.max(RequestDiagnostic.recorded_at)
+            result = await self._session.execute(
+                select(column.label("value"), newest.label("recorded"))
+                .where(*conditions)
+                .group_by(column)
+                .order_by(newest.desc(), column.asc())
+                .limit(limit)
+            )
+            out.extend((str(value), tag, when) for value, when in result.all())
+        out.sort(key=lambda item: (item[2], item[1], item[0]), reverse=True)
+        deduped: list[tuple[str, str, datetime]] = []
+        seen: set[str] = set()
+        for value, tag, when in out:
+            if value in seen:
+                continue
+            seen.add(value)
+            deduped.append((value, tag, when))
+        return tuple(deduped[:limit])
+
+    async def retained_choice_for(
+        self,
+        *,
+        lookup_id: str,
+        namespace: DiagnosticsNamespace,
+        not_before: datetime,
+    ) -> tuple[str, datetime] | None:
+        """Bounded point read for one retained ID (picker hydration).
+
+        Returns ``(namespace_tag, recorded_at)`` from ONE read so the
+        namespace and its real write time travel together; ``None`` when
+        no retained row matches under the requested namespace law (a
+        vanished row is omitted, never re-timestamped).
+        """
+        for column, tag in _namespace_choice_columns(namespace):
+            conditions = [
+                column == lookup_id,
+                RequestDiagnostic.occurred_at >= not_before,
+            ]
+            if column is RequestDiagnostic.client_request_id:
+                conditions.append(RequestDiagnostic.client_request_id.is_not(None))
+            result = await self._session.execute(
+                select(column, RequestDiagnostic.recorded_at)
+                .where(*conditions)
+                .order_by(RequestDiagnostic.recorded_at.desc())
+                .limit(1)
+            )
+            row = result.first()
+            if row is not None:
+                return tag, row[1]
+        return None
+
+
+def _namespace_choice_columns(
+    namespace: DiagnosticsNamespace,
+) -> tuple[tuple[object, str], ...]:
+    if namespace is DiagnosticsNamespace.GATEWAY:
+        return ((RequestDiagnostic.gateway_request_id, "gateway"),)
+    if namespace is DiagnosticsNamespace.CLIENT:
+        return ((RequestDiagnostic.client_request_id, "client"),)
+    return (
+        (RequestDiagnostic.gateway_request_id, "gateway"),
+        (RequestDiagnostic.client_request_id, "client"),
+    )
+
+
+def _escaped_ilike(column: object, query: str) -> object:
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return column.ilike(f"%{escaped}%", escape="\\")
+
 
 def _row_to_record(row: RequestDiagnostic) -> RequestDiagnosticRecord:
     positions: dict[str, int] | None = None

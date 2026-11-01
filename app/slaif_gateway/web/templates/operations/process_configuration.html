@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}Process Configuration{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="proc-config-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations</p>
+      <h1 id="proc-config-heading">Process Configuration</h1>
+      <p class="muted">{{ snapshot_scope }} — a finite reviewed allowlist of numeric/boolean settings, profile identities, and module identity. Values are not per-key policy and are not the limits of every worker or the reverse proxy.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/">Operations</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="proc-config-identity-heading">
+    <h2 id="proc-config-identity-heading">Package and deployment identity</h2>
+    <dl>
+      <dt>Package version</dt><dd><code>{{ package_version }}</code></dd>
+      <dt>Deployed revision</dt><dd>{% if deployed_revision %}<code>{{ deployed_revision }}</code>{% else %}not recorded (not declared, not a safe revision value, or withheld){% endif %}</dd>
+      <dt>Revision provenance</dt><dd>{% if revision_provenance %}{{ revision_provenance }}{% else %}not recorded{% endif %}</dd>
+      <dt>Restart scope for every listed setting</dt><dd>{{ restart_scope }}</dd>
+    </dl>
+    <p class="field-help">The revision is operator-declared metadata shown as-is when it is a safe value; this page never inspects Git or the filesystem at request time, and it never arms request capture.</p>
+  </section>
+
+  <section class="action-panel" aria-labelledby="proc-config-settings-heading">
+    <h2 id="proc-config-settings-heading">API process settings (45 finite allowlist)</h2>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="API process configuration settings">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Setting</th>
+            <th scope="col">Units</th>
+            <th scope="col">Value</th>
+            <th scope="col">Source</th>
+            <th scope="col">Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in settings_rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td><code>{{ row.name }}</code></td>
+            <td>{{ row.units }}</td>
+            <td data-sort-value="{{ '' if row.value == '(none)' else row.value }}"{% if row.value != '(none)' %} title="{{ row.value }} {{ row.units }}"{% endif %}>{% if row.value == '(none)' %}(none){% elif row.units == 'tokens' %}{{ row.value | tokm }}M tokens{% elif row.units == 'tokens/minute or none' %}{{ row.value | tokm }}M tokens/minute{% else %}{{ row.value | num }}{% endif %}</td>
+            <td>{{ row.source }}</td>
+            <td>{{ row.meaning }}</td>
+          </tr>
+          {% endfor %}
+          {% if not settings_rows %}
+          <tr data-no-sort class="empty-state"><td colspan="6">No settings.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="proc-config-profiles-heading">
+    <h2 id="proc-config-profiles-heading">Upstream LLM profiles</h2>
+    <p class="muted">Startup-validated profile identities only (data content is not rendered). The route selector is the exact version / profile / revision / sha256 object the adapter consumes.</p>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Upstream LLM profiles">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Profile</th>
+            <th scope="col">Revision</th>
+            <th scope="col">Instruction placement</th>
+            <th scope="col">Tool encoding</th>
+            <th scope="col">SHA-256</th>
+            <th scope="col">Route selector</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in profile_rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>{% if row.profile_id %}<code>{{ row.profile_id }}</code>{% else %}unavailable{% endif %}</td>
+            <td data-sort-value="{{ row.revision }}">{{ row.revision | num }}</td>
+            <td>{{ row.instruction_placement }}</td>
+            <td>{{ row.tool_encoding }}</td>
+            <td>{% if row.sha256 %}<code>{{ row.sha256 }}</code>{% else %}unavailable{% endif %}</td>
+            <td>{% if row.selector %}<code>{{ row.selector | tojson }}</code>{% else %}unavailable{% endif %}</td>
+          </tr>
+          {% endfor %}
+          {% if not profile_rows %}
+          <tr data-no-sort class="empty-state"><td colspan="7">No upstream LLM profiles are configured.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="proc-config-codex-heading">
+    <h2 id="proc-config-codex-heading">Codex client identity</h2>
+    {% if codex_facts %}
+    <dl>
+      <dt>Module ID</dt><dd>{% if codex_facts.module_id %}<code>{{ codex_facts.module_id }}</code>{% else %}not recorded{% endif %}</dd>
+      <dt>Revision</dt><dd>{% if codex_facts.revision %}{{ codex_facts.revision }}{% else %}not recorded{% endif %}</dd>
+      <dt>Digest</dt><dd>{% if codex_facts.digest %}<code>{{ codex_facts.digest }}</code>{% else %}not recorded{% endif %}</dd>
+      <dt>CLI version</dt><dd>{% if codex_facts.cli_version %}{{ codex_facts.cli_version }}{% else %}not recorded{% endif %}</dd>
+      <dt>Source tag</dt><dd>{% if codex_facts.source_tag %}<code>{{ codex_facts.source_tag }}</code>{% else %}not recorded{% endif %}</dd>
+      <dt>Source commit</dt><dd>{% if codex_facts.source_commit %}<code>{{ codex_facts.source_commit }}</code>{% else %}not recorded{% endif %}</dd>
+    </dl>
+    {% else %}
+    <p class="muted">Not recorded: no Codex compatibility profile snapshot is bound to this process.</p>
+    {% endif %}
+  </section>
+
+  <section class="action-panel" aria-labelledby="proc-config-limits-heading">
+    <h2 id="proc-config-limits-heading">Limitations</h2>
+    <ul class="compact-list">
+      {% for item in limitations %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+  </section>
+</section>
+{% endblock %}

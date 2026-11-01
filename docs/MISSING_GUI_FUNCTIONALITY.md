@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08-G18 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G09-G15 and G17-G18 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -338,17 +338,18 @@ The 207-b record (same
 earlier claims that reasons were bounded and that all canaries were
 covered.
 
-### Still open (G08-G18)
+### Still open (G09-G15, G17, G18)
 
-Nothing in 207-a, 207-b, 208-a, 208-b, 209-a, or 210-a claims G08
-(diagnostics), G09 (replay inspection), G10 (Codex migration), G11 (usage
-reporting), G12 (email inspection), G13 (list navigation), G14 (accounting
-recovery), G15 (catalog workflows), G16 (configuration inspection page),
-G17 (admin accounts), or G18 (small catalog operations) is complete. The
-section 3.1-3.5 findings for those areas remain as documented at the
-baseline. G04 is delivered by 208-a (section 10); G05 is delivered by
-209-a (section 11); G06 (route-capability review) and G07 (provider
-preparation/clearing) are delivered by 210-a (section 12).
+Nothing in 207-a, 207-b, 208-a, 208-b, 209-a, 210-a, or 211-a claims G09
+(replay inspection), G10 (Codex migration), G11 (usage reporting), G12
+(email inspection), G13 (list navigation), G14 (accounting recovery), G15
+(catalog workflows), G17 (admin accounts), or G18 (small catalog
+operations) is complete. The section 3.1-3.5 findings for those areas
+remain as documented at the baseline. G04 is delivered by 208-a
+(section 10); G05 is delivered by 209-a (section 11); G06
+(route-capability review) and G07 (provider preparation/clearing) are
+delivered by 210-a (section 12); G08 (diagnostics) and G16
+(configuration inspection page) are delivered by 211-a (section 13).
 
 ## 10. Delivery status (objective 208-a)
 
@@ -716,5 +717,52 @@ exact scope approval: the immutable 210-a report.
 
 ### Still open
 
-G08-G18 remain open as documented in section 9; nothing in 210-a touches
-any of them. The full GUI goal beyond G01-G07 remains broader.
+G08-G18 remained open as documented in section 9 at the time of 210-a;
+nothing in 210-a touches any of them. (G08 and G16 were later delivered
+by 211-a, section 13.) The full GUI goal beyond G01-G07 remains broader.
+
+## 13. Delivery status (objective 211-a)
+
+Delivered by 211-a (`oap/211-gui-diagnostics-config`, one PR), synthetic
+fixture data only, no new schema/migrations:
+
+- **G08**: an Operations section with Request Diagnostics -
+  recording/retention/store status, a single searchable picker for the
+  retained safe IDs (server-rendered initial batch plus the kind-specific
+  POST lookup with live namespace and non-rotating page CSRF), found /
+  ambiguous / not-found / store-unavailable states, the explicit
+  client-namespace entry link from the usage detail page, and bounded
+  expired cleanup (at most 1,000 per run) in a labelled disclosure with
+  reason + confirmation, one actor/reason/count audit, and atomic
+  rollback on late failure ("Cleanup outcome unconfirmed", never a
+  success). Content-free facts only: wire status separate from stream
+  outcome, no attribution without an authenticated key, explicit
+  "Not recorded" historical module identity.
+- **G16**: Process configuration - the finite 45-setting allowlist with
+  units/source/restart scope (API-process scope, never an environment
+  dump), startup-validated upstream profile identities with the exact
+  version/profile/revision/sha256 selector, Codex identity facts (or
+  "Not recorded"), and the operator-declared deployment revision shown
+  only when safe.
+
+Bounded paths: new `api/admin_operations.py` router + `operations/`
+templates; `dashboard.html`/`base.html` entries; `usage/detail.html`
+scoped entry link; `record-choices.js` ONE kind-specific POST branch;
+`services/request_diagnostics.py` + repository choices/cleanup seams;
+`configuration_inspection.py` API-scope wording (CLI defaults unchanged).
+The touched display projections withhold known incoming authentication
+aliases and credential-shaped values (usage detail IDs, picker search/
+selected values, retained choice outputs); no general sanitizer.
+
+Operator walkthrough: section 12 of
+[`admin-usability.md`](admin-usability.md); verification record and
+chronology: the 211-a section of
+[`verification/gui-cli-parity.md`](verification/gui-cli-parity.md);
+exact scope approval: the immutable 211-a report.
+
+### Still open
+
+G09-G15 and G17-G18 remain open as documented in section 9; nothing in
+211-a touches them. The final 219 installed whole-GUI qualification and
+the remaining objectives stay mandatory; 211-a makes no
+installed-qualification or deployment claim.

@@ -100,6 +100,36 @@ class DiagnosticDisambiguationCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class DiagnosticIdChoice:
+    """One minimal safe ID choice for the diagnostics picker (211-a).
+
+    Carries the submitted lookup value, the namespace it was observed
+    in, and the time the record was written - never free-form content.
+    The value is an identifier, not authority or a guaranteed match.
+    """
+
+    id: str
+    namespace: str  # "gateway" | "client"
+    # When the record was WRITTEN (recency for the picker ordering and
+    # label); the diagnostic's occurred_at stays on the record itself.
+    recorded_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class DiagnosticIdChoiceResult:
+    """Typed outcome of the bounded diagnostics ID-choice read (211-a).
+
+    ``store_available=False`` is a distinct safe unavailable outcome
+    (empty choices, no details) - it is not conflated with a valid
+    empty match set.
+    """
+
+    choices: tuple[DiagnosticIdChoice, ...]
+    cutoff: datetime
+    store_available: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class DiagnosticLookupResult:
     """Typed lookup outcome for ``diagnostics request show``."""
 

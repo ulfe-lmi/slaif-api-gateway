@@ -302,7 +302,9 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
                 assert re.search(r'aria-label="[^"]+"', line), path
     # 209-a: +1 for the reviewed key-batch per-key scroll region.
     # 210-a: +1 for the reviewed route-configuration diff scroll region.
-    assert wrappers == 25
+    # 211-a: +3 for the operations tables (lookup candidates, API
+    # process settings, upstream LLM profiles).
+    assert wrappers == 28
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:
