@@ -142,14 +142,20 @@ def profile_id_from_capabilities(capabilities: object) -> str | None:
 
 @lru_cache(maxsize=64)
 def load_profile(profile_id: str, directory: str = "") -> CompletionProfile:
-    """Load one bounded JSON file; route metadata cannot select a file path."""
+    """Load one bounded JSON file; route metadata cannot select a file path.
+
+    The ID law rejects every path component BEFORE any I/O; the final
+    join re-derives the single root-relative filename with
+    ``os.path.basename`` so the by-construction boundary is explicit
+    (for a whitelisted ID the basename is the identity).
+    """
     try:
         if not _ID.fullmatch(profile_id):
             raise ValueError("Invalid profile ID")
         root = Path(directory) if directory else Path(__file__).parent / "profiles"
         if directory and (not root.is_absolute() or root.is_symlink()):
             raise ValueError("Profile directory must be an absolute operator path")
-        path = root / (profile_id + ".json")
+        path = root / (os.path.basename(profile_id) + ".json")
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as source:
             info = os.fstat(source.fileno())

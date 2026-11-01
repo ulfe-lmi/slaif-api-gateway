@@ -287,6 +287,34 @@ def test_route_metadata_cannot_select_paths_or_code(value):
         profile_id_from_capabilities({"completion_service": value})
 
 
+@pytest.mark.parametrize(
+    "bad_id",
+    ["../evil", "a/b", "/etc/passwd", "..", "zap/it", "a\\b"],
+)
+def test_loader_refuses_invalid_components_before_any_io(monkeypatch, bad_id):
+    opened: list[str] = []
+
+    def fail_open(path, *args, **kwargs):
+        opened.append(str(path))
+        raise AssertionError("I/O reached before the ID-law refusal")
+
+    monkeypatch.setattr(
+        "slaif_gateway.modules.servers.completion_service.profiles.os.open",
+        fail_open,
+    )
+    with pytest.raises(ProviderConfigurationError):
+        load_profile(bad_id)
+    assert opened == []
+
+
+def test_loader_valid_id_filename_is_basename_identity(tmp_path):
+    profile = load_profile("zap-it-v1").model_dump()
+    path = tmp_path / "zap-it-v1.json"
+    path.write_text(json.dumps(profile))
+    path.chmod(0o600)
+    loaded = load_profile("zap-it-v1", str(tmp_path))
+    assert loaded.profile_id == "zap-it-v1"
+
 def test_external_profiles_reject_code_fields_and_writable_or_symlink_files(tmp_path):
     profile = load_profile("zap-it-v1").model_dump()
     path = tmp_path / "zap-it-v1.json"

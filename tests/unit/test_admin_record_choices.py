@@ -869,6 +869,27 @@ def test_completion_profile_older_selected_hydrates_directly(tmp_path) -> None:
     assert all(c.id != "bindings" for c in none_hydrated)
 
 
+def test_completion_profile_invalid_selected_components_refused(tmp_path) -> None:
+    import asyncio
+
+    root = tmp_path / "profiles"
+    root.mkdir()
+    _write_profile(root, "alpha-v1.json")
+
+    # Path-component selected ids are refused by the ID law (before any
+    # I/O) and never offered; a valid name in the SAME call hydrates
+    # unchanged.
+    choices = asyncio.run(
+        load_choices(
+            _FakeSession(),
+            "completion_profile",
+            profile_dir=str(root),
+            selected=("../evil", "a/b", "alpha-v1"),
+        )
+    )
+    assert [c.id for c in choices] == ["alpha-v1"]
+
+
 def test_completion_profile_unsafe_custom_modes_refused(tmp_path) -> None:
     import asyncio
 

@@ -282,6 +282,11 @@ def _completion_profile_choices(
     re-scanning the tree). No profile body is loaded or parsed here -
     the reviewed plan still validates the selected id through the
     shared profile selectors.
+
+    Every path join re-derives the single root-relative filename with
+    ``os.path.basename`` AFTER the ID-law refusal, so the by-construction
+    boundary is explicit: no path component can ever reach the I/O (for
+    a whitelisted stem the basename is the identity).
     """
     custom = bool(profile_dir)
     root: Path
@@ -322,9 +327,10 @@ def _completion_profile_choices(
                 stem = _eligible_name(entry.name)
                 if stem is None:
                     continue
+                candidate = root / (os.path.basename(stem) + ".json")
                 try:
-                    if entry.is_symlink() or not _profile_file_ok(
-                        entry.path, custom=custom
+                    if candidate.is_symlink() or not _profile_file_ok(
+                        candidate, custom=custom
                     ):
                         continue
                 except OSError:
@@ -347,7 +353,7 @@ def _completion_profile_choices(
             or any(c.id == stem for c in available)
         ):
             continue
-        candidate = root / (stem + ".json")
+        candidate = root / (os.path.basename(stem) + ".json")
         try:
             if candidate.is_symlink() or not _profile_file_ok(
                 candidate, custom=custom
