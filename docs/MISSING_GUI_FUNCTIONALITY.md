@@ -648,9 +648,30 @@ the apply help, and the standard empty-state row plus the
 law, product message, or validator change resulted from these
 corrections.
 
+### CI qualification (209-b, same PR)
+
+209-b qualified the two demonstrated A IMPL final-head CI failures
+(run `41261553792`, unit job `124715694142`, terminal FAILURE at
+2026-11-01T01:36:04Z) with test-only changes: the batch router's
+exact path joined the finite external-tool contract consumer
+allowlist (a UI-gate consumer that reads `EXTERNAL_TOOL_FENCED` only
+to present and require the existing fresh apply-time acknowledgement;
+no runtime hosted-tool authority), and the table-wrapper count moved
+23 -> 24 for the new, already correctly labeled and keyboard-
+focusable, batch scroll region. No product bytes changed from A; the
+full chronology, the factual corrections (the core permits an empty
+cohort/status selection - the standard empty row is valid for that
+outcome; membership is rechecked after the last selected-key lock
+under READ COMMITTED with no serializability claim), and the focused
+evidence (27 affected-module PASS including both failed cases; 9
+governance PASS on the byte-exact B order) are in the 209-b section
+of `docs/verification/gui-cli-parity.md`. Final B-head CI is pending
+until green.
+
 ### Still open
 
-G06-G18 remain open as documented in section 9. Nothing in 209-a touches
+G06-G18 remain open as documented in section 9. Nothing in 209-a or
+209-b touches
 route-capability review, provider preparation, diagnostics, replay
 inspection, Codex migration, usage reporting, email inspection, list
 navigation, accounting recovery, catalog workflows, the configuration

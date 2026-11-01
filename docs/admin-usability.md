@@ -1016,6 +1016,13 @@ and explicit-UUID scope reports each actual exclusion.
   lists render state-aware (an empty list WITH the allow-all flag set
   grants access; "Deny all" is derived only from the explicit complete
   state).
+- A cohort whose members do not match the chosen persisted statuses
+  yields a zero-selected plan: the core permits that outcome
+  (`selected_count` minimum 0), the review shows the standard empty
+  per-key row, and no service or parser change was made. Membership is
+  rechecked after the last selected-key lock under the existing READ
+  COMMITTED law (later joins are untouched); no serializability or new
+  lock guarantee is claimed.
 - Applying re-derives every selected key under the row locks: a changed
   membership, status, or configuration drifts the plan STALE and the
   WHOLE batch is refused with zero writes and zero new audits; a set

@@ -811,3 +811,103 @@ component proof is reused, and one CI-order coexistence plus the
 implementation head is pending at publication (treated as pending, not
 pass); strategic review and guarded merge remain the root's gates. No
 production, security, compliance, or scale claim follows.
+
+## 209-b CI qualification and factual-record correction (objective 209, same PR, 2026-11-01)
+
+### Actual A IMPL CI failure (terminal)
+
+A IMPL `2aaf11d2714ec7e24c732293f3ef7088a2b1ba7c` CI run
+`41261553792`, unit job `124715694142`, completed FAILURE at
+2026-11-01T01:36:04Z. The actual job log identifies exactly two
+failures, both independently reproduced by root on the unchanged A SELF
+(two cases / two failures, closed exit 1):
+
+1. `tests/unit/test_documentation_contract_drift.py::
+   test_external_tool_policy_contract_consumers_remain_allowlisted` -
+   the new `app/slaif_gateway/api/admin_key_batch.py` imports the
+   authoritative external-tool contract constant but was absent from
+   the finite consumer allowlist.
+2. `tests/unit/test_admin_slaif_design.py::
+   test_table_wrappers_are_labeled_and_focusable` - actual 24 wrappers
+   versus the historical expected 23; the added batch scroll region
+   already carried its required `role="region"`, keyboard focus, and
+   accessible label.
+
+The A report's and the 209-a section's "no CI run exists on this head
+yet / CI pending at publication" statement is SUPERSEDED by this actual
+GitHub evidence, not rewritten: the A report remains immutable with its
+pending-at-publication statement, and the terminal A failure is
+recorded here.
+
+### Factual corrections to the A-era record (superseding, not rewritten)
+
+- The A-era chronology claim that the empty-state branch "never renders
+  for a real plan (the core requires at least one selected key)" is
+  FALSE: `KeyBatchService.plan` permits an empty cohort/status
+  selection and the strict schema's `selected_count` minimum is 0. The
+  standard empty-state row is the valid display for that outcome; no
+  service or parser change was made or is needed.
+- Membership-recheck precision: the core rechecks membership AFTER the
+  last selected-key lock under the existing READ COMMITTED law; later
+  joins are untouched. Nothing here implies serializability or a new
+  lock guarantee.
+- The A-era PG wording "an unchanged value snapshot" (real field-value
+  snapshots, not physical DB byte equality) and the corrected unit
+  receipt chronology (80 cases at `unit-209a-5.xml`, 81 cases at
+  `unit-209a-6.xml` and `unit-209a-7.xml`) stand as corrected.
+
+### Bounded B repair (tests only; no product bytes change from A)
+
+1. `tests/unit/test_documentation_contract_drift.py`: the finite
+   consumer allowlist gains the exact path
+   `app/slaif_gateway/api/admin_key_batch.py` - a UI-gate consumer that
+   reads `EXTERNAL_TOOL_FENCED` only to present and require the
+   existing fresh apply-time acknowledgement when the reviewed input
+   policy sets a fenced external-tool policy. The shared
+   `KeyBatchService`/`KeyService` still own validation, current
+   authorization, fences/holds and execution; this grants no runtime
+   hosted-tool authority. Every existing consumer, the whole-tree
+   scan, the operator-limit assertion, and the rejection of unlisted
+   modules are preserved; no wildcard allowlist, skipped test, or
+   contract duplication.
+2. `tests/unit/test_admin_slaif_design.py`: the demonstrated wrapper
+   count 23 -> 24 for the new batch scroll region. The per-wrapper
+   `role="region"` / `tabindex="0"` / non-empty `aria-label`
+   assertions and all other design tests are preserved; the product
+   wrapper markup is unchanged (it was already correct).
+
+### Focused B evidence (newly run)
+
+- The two affected test modules (which include both failed cases) run
+  once after the fixes: 27 PASS / 0 fail / 0 error / 0 skip, 5.016 s
+  (JUnit `unit-209b-1.xml`).
+- OAP governance: 9 PASS / 0 skip (JUnit `unit-209b-gov.xml`) with the
+  209-b order committed byte-exact.
+- Ruff clean on the current PR-changed Python files (small finite
+  set); `scripts/check_documentation.py` reports
+  `DOCUMENTATION_CHECK=OK`; `git diff --check` clean.
+
+### Reused unchanged A evidence (not rerun)
+
+The A component proof stands as recorded: 81 focused unit
+(`unit-209a-7.xml`), 119 admin-usability inventory
+(`unit-209a-inventory.xml`), 73 related 208/main-structure/actions
+(`related-209a.xml`), 6 owned-PG (`pg-209a-1.xml`), 20 CI-order
+coexist (`pg-209a-coexist-ci.xml`), 7 real Chromium
+(`browser-209a-3.xml`), and the scoped root JS component probe
+(`5a1362620fb65a78a78630c3262197180a9651b1bb9104490c4e359a5f5867fd`).
+The B changes touch no product, proxy, CLI, service, schema, or
+accounting bytes, so the negative/privacy/transaction evidence from A
+remains accepted for the unchanged product code.
+
+### Final-head status and operator notes
+
+Final B-head GitHub CI is PENDING until actually green (skipped/
+missing/pending is never pass); the A-era native proof remains scoped
+as recorded, and the whole-GUI goal remains incomplete (G06-G18 open,
+final installed 219 outstanding). The A operator notes still apply:
+API/assets rebuild with API recreate/restart, the reverse-proxy
+configuration from the shipped templates plus `nginx -t` and reload in
+the same maintenance window (proxy-only edits need just the reload),
+no schema migration and no existing-key change or rotation. Strategic
+review and guarded merge remain the root's gates.

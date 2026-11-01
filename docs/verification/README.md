@@ -10,6 +10,22 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-01 Objective 209-b GUI key-batch CI qualification verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - same-PR qualification
+  of the two demonstrated A IMPL final-head CI failures (run
+  41261553792, unit job 124715694142, terminal FAILURE at
+  2026-11-01T01:36:04Z): the batch router's missing entry in the finite
+  external-tool contract consumer allowlist, and the table-wrapper count
+  23 -> 24 for the new (already correctly labeled and focusable) batch
+  scroll region. Test-only repair; no product bytes change from A. 27
+  affected-module PASS (both failed cases) and 9 governance PASS on the
+  byte-exact B order; the A component proof (81 unit / 119 inventory /
+  73 related / 6 PG / 20 coexist / 7 Chromium) is reused unchanged.
+  Factual corrections: the A-era "core requires at least one selected
+  key" claim is false (the core plan permits an empty cohort/status
+  selection, selected_count minimum 0), and core membership is
+  rechecked after the last selected-key lock under READ COMMITTED with
+  no serializability claim. Final B-head CI pending until green.
 - [`2026-11-01 Objective 209-a GUI reviewed key batch verification`](gui-cli-parity.md)
   (recorded 2026-11-01, same living record file) - admin GUI G05 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` (reviewed changes to existing key
