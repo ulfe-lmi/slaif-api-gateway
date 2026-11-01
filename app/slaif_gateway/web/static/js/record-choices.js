@@ -46,6 +46,11 @@
   "use strict";
 
   const LOOKUP_PATH = "/admin/record-choices";
+  // 211-a: ONE kind-specific POST lookup (diagnostics picker). A fixed
+  // endpoint for exactly this kind only; every other kind keeps the exact
+  // shared GET transport above.
+  const DIAGNOSTIC_PICKER_KIND = "diagnostic_request_id";
+  const DIAGNOSTIC_LOOKUP_PATH = "/admin/operations/diagnostics/choices";
   const SEARCH_DEBOUNCE_MS = 200;
   const MAX_QUERY_LENGTH = 200;
 
@@ -90,6 +95,9 @@
     rc.classList.add("rc-js");
 
     const kind = rc.dataset.kind || "";
+    // 211-a: exactly one kind uses the kind-specific POST lookup; all
+    // other kinds keep the shared GET transport byte-for-byte.
+    const isDiagnosticPicker = kind === DIAGNOSTIC_PICKER_KIND;
     const inputName = rc.dataset.inputName || "";
     const multi = rc.dataset.multi === "1";
     const allowNew = rc.dataset.allowNew === "1";
@@ -318,10 +326,13 @@
           searchInput.focus();
         }
       }
-      if (selected.length > 0) {
+      if (isDiagnosticPicker || selected.length > 0) {
         // Re-hydrate the selection(s) that may live outside the initial
         // batch (single, or every multi chip; 195-a). runSearch applies
         // the control's optional hydration-prefix bound (209-a).
+        // 211-a: the diagnostics picker ALSO re-fetches on every open
+        // because its sibling namespace select can change the scope after
+        // render, so the server-rendered initial batch may be stale.
         runSearch("", { selectedIds: selected.map((v) => v.id) });
       }
     };
@@ -373,6 +384,29 @@
       const q = String(query == null ? "" : query).slice(0, MAX_QUERY_LENGTH);
       status.textContent = "Searching…";
       status.hidden = false;
+      // 211-a: FormData body for the diagnostics picker's POST lookup.
+      // The namespace is read live from the SAME form's finite select and
+      // the CSRF token is the page's own hidden field; the server applies
+      // its own bounds. No configurable endpoint: the fixed path constant
+      // above is used for exactly this kind.
+      const diagnosticPickerForm = (value, hydratedValues) => {
+        const form = rc.closest("form") || document;
+        const body = new FormData();
+        const csrf = form.querySelector('input[name="csrf_token"]');
+        if (csrf) {
+          body.append("csrf_token", csrf.value);
+        }
+        body.append("kind", kind);
+        if (value) {
+          body.append("q", value);
+        }
+        for (const id of hydratedValues) {
+          body.append("selected", id);
+        }
+        const nsSelect = form.querySelector('select[name="lookup_namespace"]');
+        body.append("namespace", nsSelect ? String(nsSelect.value) : "any");
+        return body;
+      };
       const params = new URLSearchParams();
       params.set("kind", kind);
       if (q) {
@@ -410,10 +444,21 @@
         searchInFlight.abort();
       }
       searchInFlight = new AbortController();
-      fetch(`${LOOKUP_PATH}?${params.toString()}`, {
-        headers: { Accept: "application/json" },
-        signal: searchInFlight.signal,
-      })
+      // 211-a: only the diagnostics kind switches transport (POST with
+      // CSRF + live namespace); every other kind keeps the exact GET
+      // request built above, including the dependency parameters.
+      const request = isDiagnosticPicker
+        ? fetch(DIAGNOSTIC_LOOKUP_PATH, {
+            method: "POST",
+            body: diagnosticPickerForm(q, hydrated),
+            headers: { Accept: "application/json" },
+            signal: searchInFlight.signal,
+          })
+        : fetch(`${LOOKUP_PATH}?${params.toString()}`, {
+            headers: { Accept: "application/json" },
+            signal: searchInFlight.signal,
+          });
+      request
         .then((response) => {
           if (!response.ok) {
             throw new Error(`status ${response.status}`);
@@ -683,6 +728,28 @@
       const dep = root.querySelector(`[data-rc-id="${CSS.escape(dependsOn)}"]`);
       if (dep) {
         dep.addEventListener("rc-change", onDepChange);
+      }
+    }
+
+    // 211-a: the diagnostics picker is scoped by its sibling namespace
+    // select in the same form. A scope change refreshes the options while
+    // the menu is open; a closed menu re-fetches on the next open.
+    if (isDiagnosticPicker) {
+      const nsSelect = (rc.closest("form") || document).querySelector(
+        'select[name="lookup_namespace"]'
+      );
+      if (nsSelect) {
+        nsSelect.addEventListener("change", () => {
+          if (!menuOpen) {
+            return;
+          }
+          options = [];
+          renderList([], "Loading choices…");
+          const query = String(
+            (searchInput && !allowNew ? searchInput : input).value || ""
+          ).trim();
+          runSearch(query, { selectedIds: selected.map((v) => v.id) });
+        });
       }
     }
 

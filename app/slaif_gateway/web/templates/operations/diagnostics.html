@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Request Diagnostics{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="diagnostics-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations</p>
+      <h1 id="diagnostics-heading">Request Diagnostics</h1>
+      <p class="muted">Content-free failure records only: bounded safe facts. No request or response bodies, no credentials, no prompts.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/">Operations</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error_message %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error_message }}</div>
+  {% endif %}
+  {% if cleanup_result is not none %}
+    {% if cleanup_result.store_available %}
+    <div class="admin-flash admin-flash-success" role="status">
+      Cleanup complete: deleted {{ cleanup_result.deleted_count | num }} expired record(s) (bounded batch: {{ cleanup_batch_limit | num }}).
+      {% if cleanup_result.deleted_count >= cleanup_batch_limit %}The batch limit was reached; another run may be needed.{% endif %}
+    </div>
+    {% else %}
+    <div class="admin-flash admin-flash-error" role="alert">Cleanup outcome unconfirmed: the store did not acknowledge the operation. Check the audit log for the <code>diagnostics_expired_cleanup</code> entry; a commit acknowledgement failure cannot prove whether records were deleted or retained.</div>
+    {% endif %}
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="diagnostics-status-heading">
+    <h2 id="diagnostics-status-heading">Status</h2>
+    <dl>
+      <dt>Recording</dt><dd>{{ "Enabled" if status.recording_enabled else "Disabled" }}</dd>
+      <dt>Retention</dt><dd title="{{ status.retention_seconds }} seconds">{{ status.retention_seconds | num }} seconds ({{ human_retention }})</dd>
+      <dt>Maximum records</dt><dd title="{{ status.max_records }}">{{ status.max_records | num }}</dd>
+      <dt>Write timeout</dt><dd title="{{ status.write_timeout_ms }} ms">{{ status.write_timeout_ms | num }} ms</dd>
+      <dt>Store</dt><dd>{{ "Available" if status.store_available else "Unavailable — retained reads and cleanup report the failure; no partial state" }}</dd>
+      {% if status.store_available %}
+      <dt>Retained records</dt><dd title="{{ status.retained_records if status.retained_records is not none else 0 }}">{{ status.retained_records | num if status.retained_records is not none else 0 }}</dd>
+      {% if status.oldest_occurred_at is not none %}
+      <dt>Oldest retained</dt><dd title="{{ status.oldest_occurred_at.isoformat() }}">{{ status.oldest_occurred_at | utc_date_display }} ({{ status.oldest_occurred_at.isoformat() }})</dd>
+      {% endif %}
+      {% if status.newest_occurred_at is not none %}
+      <dt>Newest retained</dt><dd title="{{ status.newest_occurred_at.isoformat() }}">{{ status.newest_occurred_at | utc_date_display }} ({{ status.newest_occurred_at.isoformat() }})</dd>
+      {% endif %}
+      {% endif %}
+    </dl>
+  </section>
+
+  <section class="action-panel" aria-labelledby="diagnostics-lookup-heading">
+    <h2 id="diagnostics-lookup-heading">Look up one retained record</h2>
+    <form class="create-form" method="post" action="/admin/operations/diagnostics/lookup">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {{ record_choice("lookup_id", "diagnostic_request_id", "Diagnostic request ID", options=picker_options, selected_id=lookup_value, nojs_value=lookup_value, allow_new=true, placeholder="Select or enter a gateway (gw-…) or client ID", help="One control for selection and entry: up to 100 retained IDs for the selected namespace (newest first); selecting one fills this field without submitting. Typing searches retained IDs beyond the initial list (max 200 characters per search) or enters a new ID (max 128 characters). Values that are not safe identifiers, or that are a known incoming authentication value, are refused and are not stored or redisplayed.", help_id="lookup-id-help") }}
+      <label>
+        Namespace
+          <select name="lookup_namespace" id="lookup-namespace-select"
+                  aria-describedby="lookup-namespace-help">
+          <option value="any" {% if lookup_namespace == "any" %}selected{% endif %}>Any (gateway + client)</option>
+          <option value="gateway" {% if lookup_namespace == "gateway" %}selected{% endif %}>Gateway</option>
+          <option value="client" {% if lookup_namespace == "client" %}selected{% endif %}>Client</option>
+        </select>
+      </label>
+      <p class="field-help" id="lookup-namespace-help">Which stored ID to match: the gateway ID, the client ID, or either.</p>
+      <button type="submit">Look up</button>
+    </form>
+  </section>
+
+  <section class="action-panel" aria-labelledby="diagnostics-result-heading">
+    <h2 id="diagnostics-result-heading">Result</h2>
+    {% if lookup_result is none %}
+    <p class="muted">Enter an ID to inspect one retained record.</p>
+    {% elif lookup_result.outcome.value == "found" %}
+      {% set record = lookup_result.record %}
+      <dl>
+        <dt>Gateway ID</dt><dd>{% if "gateway_request_id" in withheld_fields %}unavailable{% else %}<code>{{ record.gateway_request_id }}</code>{% endif %}</dd>
+        <dt>Client request ID</dt><dd>{% if "client_request_id" in withheld_fields %}unavailable{% elif record.client_request_id %}<code>{{ record.client_request_id }}</code>{% else %}unavailable ({{ record.client_id_unavailable_reason or "unknown" }}){% endif %}</dd>
+        <dt>Method / endpoint</dt><dd>{{ record.method }} {% if "endpoint_template" in withheld_fields %}unavailable{% else %}{{ record.endpoint_template or "(unavailable)" }}{% endif %}</dd>
+        <dt>Occurred (UTC)</dt><dd title="{{ record.occurred_at.isoformat() }}">{{ record.occurred_at | utc_date_display }} ({{ record.occurred_at.isoformat() }})</dd>
+        <dt>Wire HTTP status</dt><dd>{{ record.http_status if record.http_status is not none else "unavailable" }}</dd>
+        <dt>Stream outcome</dt>
+        <dd{% if record.stream_outcome != "http_rejection" %} class="warning-text"{% endif %}>{{ record.stream_outcome }}{% if record.stream_outcome == "stream_failure" and record.http_status == 200 %} — the response started with HTTP 200 but the stream FAILED: this is a failure, not a success{% endif %}</dd>
+        <dt>Source</dt><dd>{% if "source" in withheld_fields %}unavailable{% else %}{{ record.source or "unavailable" }}{% endif %}</dd>
+        <dt>Reason / error</dt><dd>{% if "reason_code" in withheld_fields %}unavailable{% else %}{{ record.reason_code or "—" }}{% endif %} / {% if "error_code" in withheld_fields %}unavailable{% else %}{{ record.error_code or "—" }}{% endif %}{% if "error_param" not in withheld_fields and record.error_param %} at <code>{{ record.error_param }}</code>{% endif %}</dd>
+        <dt>Positions</dt><dd>{{ facts.positions }}</dd>
+        <dt>Counts</dt><dd>{{ facts.counts }}</dd>
+        <dt>Limits</dt><dd>{{ facts.limits }}</dd>
+        <dt>Gateway key / route</dt><dd>{{ record.gateway_key_id or "—" }} / {{ record.route_id or "—" }}{% if "route_pattern" not in withheld_fields and record.route_pattern %} (<code>{{ record.route_pattern }}</code>){% endif %}</dd>
+        <dt>Deployment revision</dt><dd>{% if "deployment_revision" in withheld_fields %}unavailable{% else %}{{ record.deployment_revision or "not recorded" }}{% endif %}</dd>
+        <dt>Client module identity</dt><dd>Not recorded (no client module identity is stored with the diagnostic record; nothing is inferred from the currently bound module)</dd>
+        <dt>Token facts</dt>
+        <dd>
+          input estimate {% if record.estimated_input_tokens is not none %}<span title="{{ record.estimated_input_tokens | num }} tokens">{{ (record.estimated_input_tokens | tokm) ~ "M" }}</span>{% else %}not recorded{% endif %}
+          · output allowance {% if record.output_allowance_tokens is not none %}<span title="{{ record.output_allowance_tokens | num }} tokens">{{ (record.output_allowance_tokens | tokm) ~ "M" }}</span>{% else %}not recorded{% endif %}
+          · context window {% if record.context_window_tokens is not none %}<span title="{{ record.context_window_tokens | num }} tokens">{{ (record.context_window_tokens | tokm) ~ "M" }}</span>{% else %}not recorded{% endif %}
+        </dd>
+        <dt>Replay error</dt><dd>{% if "replay_error_code" in withheld_fields %}unavailable{% else %}{{ record.replay_error_code or "—" }}{% endif %}</dd>
+        <dt>Recorded (UTC)</dt><dd>{{ record.recorded_at.isoformat() }}</dd>
+      </dl>
+    {% elif lookup_result.outcome.value == "ambiguous" %}
+      <p class="muted" title="{{ lookup_result.match_count }}">{{ lookup_result.match_count | num }} retained row(s) match this ID across namespaces; resolve one gateway record.</p>
+      {% if lookup_result.overflow %}
+      <p class="warning-text">More than 100 retained rows match; narrow the namespace.</p>
+      {% endif %}
+      <div class="table-wrap" role="region" tabindex="0" aria-label="Ambiguous lookup candidates">
+        <table data-sortable>
+          <thead>
+            <tr>
+              <th data-ordinal aria-hidden="true">#</th>
+              <th scope="col">Gateway ID</th>
+              <th scope="col">Matched as</th>
+              <th scope="col">Occurred (UTC)</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for candidate in lookup_result.candidates %}
+            <tr>
+              <td class="row-ordinal">{{ loop.index }}</td>
+              <td><code>{{ candidate.gateway_request_id }}</code></td>
+              <td>{{ candidate.matched_namespace }}</td>
+              <td title="{{ candidate.occurred_at.isoformat() }}">{{ candidate.occurred_at | utc_date_display }} ({{ candidate.occurred_at.isoformat() }})</td>
+              <td>
+                <form method="post" action="/admin/operations/diagnostics/lookup">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <input type="hidden" name="lookup_id" value="{{ candidate.gateway_request_id }}">
+                  <input type="hidden" name="lookup_namespace" value="gateway">
+                  <button type="submit">Resolve in gateway</button>
+                </form>
+              </td>
+            </tr>
+            {% endfor %}
+            {% if not lookup_result.candidates %}
+            <tr data-no-sort class="empty-state"><td colspan="5">No candidates.</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    {% elif lookup_result.outcome.value == "not_found" %}
+      <p class="muted">No retained record matches this ID (it may be expired, never recorded, or outside the retention window).</p>
+    {% else %}
+      <p class="muted">The diagnostics store is unavailable; no rows were read.</p>
+    {% endif %}
+  </section>
+
+  <section class="action-panel" aria-labelledby="diagnostics-cleanup-heading">
+    <h2 id="diagnostics-cleanup-heading">Clean up expired records</h2>
+    <details aria-labelledby="diagnostics-cleanup-summary">
+      <summary id="diagnostics-cleanup-summary">Configure a bounded cleanup run (destructive, audited)</summary>
+      <p class="muted">Deletes at most {{ cleanup_batch_limit | num }} EXPIRED records (past the retention window) and writes one audit entry with your user ID, reason, and the deleted count — in one transaction. Retained records are never touched.</p>
+    <form method="post" action="/admin/operations/diagnostics/cleanup" class="create-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <label>
+          Audit reason
+          <input type="text" id="cleanup-reason" name="reason" maxlength="512"
+                 autocomplete="off" aria-describedby="cleanup-reason-help">
+        </label>
+      </div>
+      <p class="field-help" id="cleanup-reason-help">Recorded in the audit log together with your user ID and the deleted count (max 512 characters).</p>
+      <div class="checkbox-row">
+        <input type="checkbox" id="cleanup-confirm" name="confirm" value="1"
+               aria-describedby="cleanup-confirm-help">
+        <label for="cleanup-confirm">I confirm this cleanup of expired records</label>
+      </div>
+      <p class="field-help" id="cleanup-confirm-help">The operation is bounded: at most {{ cleanup_batch_limit | num }} expired records per run and retained records are never deleted. If the limit is reached, another run may be needed.</p>
+      <button type="submit">Run cleanup</button>
+    </form>
+    </details>
+  </section>
+</section>
+{% endblock %}

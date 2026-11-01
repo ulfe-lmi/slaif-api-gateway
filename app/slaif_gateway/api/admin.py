@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import structlog
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
@@ -164,6 +164,10 @@ from slaif_gateway.services.key_policy_validation import (
     validate_gateway_key_policy_values,
 )
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, ModelRouteService
+from slaif_gateway.services.request_diagnostics import (
+    is_known_incoming_secret_alias,
+    is_safe_diagnostic_id,
+)
 from slaif_gateway.services.provider_route_configuration import (
     contains_known_secret_shape,
     validate_route_creation_candidate,
@@ -7462,6 +7466,54 @@ async def admin_usage_detail(request: Request, usage_ledger_id: str) -> Response
     except AdminActivityNotFoundError:
         return _admin_error_page(request, status_code=404, message="Usage ledger row not found.")
 
+    # 211-a scoped diagnostics entry + secret projection: the usage
+    # request_id IS the diagnostic record's client_request_id (the
+    # diagnostics observer copies state.request_id into the record), so
+    # it is the guarded CLIENT-namespace prefill - with no
+    # gateway-namespace inference (the separate gw diagnostic ID is
+    # server-generated and not stored on the usage row). A retained row
+    # may echo a value that is a known incoming authentication alias
+    # (an opaque session cookie) or a credential shape, so the same
+    # pure known-incoming-alias helper the diagnostics router applies
+    # withholds the DISPLAYED request/client/upstream correlation IDs;
+    # ordinary IDs and unsafe-but-non-secret historical text render
+    # unchanged and no ledger row is mutated. Aliased values also get
+    # no prefill URL (the safe-ID grammar check runs on the projected
+    # value, so a withheld ID cannot be linked).
+    accepted_prefixes = settings.get_gateway_key_accepted_prefixes()
+
+    def _project_correlation_id(value: object) -> tuple[object, bool]:
+        if (
+            isinstance(value, str)
+            and value
+            and is_known_incoming_secret_alias(
+                value, scope=request.scope, accepted_prefixes=accepted_prefixes
+            )
+        ):
+            return None, True
+        return value, False
+
+    (
+        usage_request_id,
+        usage_request_id_withheld,
+    ) = _project_correlation_id(usage.request_id)
+    (
+        usage_client_request_id,
+        usage_client_request_id_withheld,
+    ) = _project_correlation_id(usage.client_request_id)
+    (
+        usage_upstream_request_id,
+        usage_upstream_request_id_withheld,
+    ) = _project_correlation_id(usage.upstream_request_id)
+
+    diagnostics_prefill = ""
+    if (
+        isinstance(usage_request_id, str)
+        and usage_request_id
+        and is_safe_diagnostic_id(usage_request_id)
+    ):
+        diagnostics_prefill = quote(usage_request_id, safe="")
+
     return templates.TemplateResponse(
         request,
         "usage/detail.html",
@@ -7469,6 +7521,13 @@ async def admin_usage_detail(request: Request, usage_ledger_id: str) -> Response
             "admin": context.admin_user,
             "csrf_token": csrf_token,
             "usage": usage,
+            "diagnostics_prefill": diagnostics_prefill,
+            "usage_request_id": usage_request_id,
+            "usage_request_id_withheld": usage_request_id_withheld,
+            "usage_client_request_id": usage_client_request_id,
+            "usage_client_request_id_withheld": usage_client_request_id_withheld,
+            "usage_upstream_request_id": usage_upstream_request_id,
+            "usage_upstream_request_id_withheld": usage_upstream_request_id_withheld,
         },
     )
 

@@ -25,9 +25,9 @@
       <h2>Request</h2>
       <dl>
         <dt>ID</dt><dd>{{ usage.id }}</dd>
-        <dt>Request ID</dt><dd>{{ usage.request_id }}</dd>
-        <dt>Client request ID</dt><dd>{{ usage.client_request_id or "n/a" }}</dd>
-        <dt>Upstream request ID</dt><dd>{{ usage.upstream_request_id or "n/a" }}</dd>
+        <dt>Request ID</dt><dd>{% if usage_request_id_withheld %}<span class="muted small">withheld</span>{% else %}{{ usage_request_id }}{% endif %}{% if diagnostics_prefill %} — <a href="/admin/operations/diagnostics?lookup={{ diagnostics_prefill }}&amp;namespace=client">Look up in request diagnostics (client namespace)</a>{% endif %}</dd>
+        <dt>Client request ID</dt><dd>{% if usage_client_request_id_withheld %}<span class="muted small">withheld</span>{% else %}{{ usage_client_request_id or "n/a" }}{% endif %}</dd>
+        <dt>Upstream request ID</dt><dd>{% if usage_upstream_request_id_withheld %}<span class="muted small">withheld</span>{% else %}{{ usage_upstream_request_id or "n/a" }}{% endif %}</dd>
         <dt>Endpoint</dt><dd>{{ usage.endpoint }}</dd>
         <dt>Streaming</dt><dd>{{ "yes" if usage.streaming else "no" }}</dd>
       </dl>

@@ -1163,3 +1163,60 @@ change** (the signed route review envelope is bounded to ~175 KiB, well
 inside the existing defaults) and **no schema migration**; existing keys
 and routes are untouched - see
 [`deployment.md`](deployment.md).
+
+## 12. Request diagnostics and process configuration (211-a)
+
+### 12.1 Navigation
+
+- Dashboard -> **Usage and operations** group -> **Operations** (also a
+  base-navigation entry) -> **Request diagnostics** / **Process
+  configuration**.
+- The **Usage detail** page's Request ID row carries a "Look up in
+  request diagnostics (client namespace)" link when the stored request
+  ID is a safe identifier and not a known incoming authentication
+  value.
+
+### 12.2 Diagnostics semantics
+
+- Status shows recording on/off, retention, record cap, write timeout,
+  and store availability; retained records are content-free safe facts
+  only (no bodies, credentials, or prompts).
+- The lookup is ONE searchable picker (selection and entry): a bounded
+  initial list of retained IDs for the selected namespace, plus typed
+  search (max 200 characters) that reaches older retained IDs; entered
+  values are validated server-side (safe identifier grammar; known
+  incoming authentication values are refused and never redisplayed).
+- **Namespace** is explicit: Gateway, Client, or Any. The same client
+  ID on two retained rows renders BOTH as ambiguity candidates, each
+  resolvable into its gateway record.
+- Wire HTTP status is shown separately from the stream outcome: an
+  HTTP-200 stream failure is labelled "this is a failure, not a
+  success". No key/route attribution is shown unless the record stored
+  it; the historical client module identity is explicitly "Not
+  recorded".
+- **Cleanup** (labelled disclosure, reason + confirmation) deletes at
+  most 1,000 EXPIRED records per run in one transaction with one
+  actor/reason/count audit; retained records are never touched. A
+  failure before commit (including a late audit write) rolls the whole
+  run back. A lost commit acknowledgement leaves the outcome unconfirmed
+  - the page renders "Cleanup outcome unconfirmed" and the operator must
+  check the audit log and retention status; the result is never rendered
+  as success.
+
+### 12.3 Process configuration semantics
+
+- Read-only: the finite 45-setting allowlist with units, value, source,
+  and restart scope. Values are the **API process** scope - not per-key
+  policy and not the limits of every worker or the reverse proxy.
+- Upstream profile rows are startup-validated identities with the exact
+  version/profile/revision/sha256 route selector; data content is not
+  rendered. Operator-declared deployment revision appears only when it
+  is a safe value. No environment dump, no settings writer, no request-
+  capture control (capture remains the operator-local CLI facility).
+
+### 12.4 Upgrade notes
+
+Deploying 211 is an application upgrade: rebuild the API/assets image
+and recreate/restart the API so the new code runs. There is **no Nginx
+change** and **no schema migration**; request-capture configuration and
+all keys/routes are untouched - see [`deployment.md`](deployment.md).

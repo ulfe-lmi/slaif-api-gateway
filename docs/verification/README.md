@@ -10,6 +10,16 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-01 Objective 211-a GUI request diagnostics and process configuration verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - admin GUI G08/G16 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME qualified core:
+  content-free retained diagnostics (status, one searchable picker with
+  explicit gateway/client/any namespaces, ambiguity candidates, and
+  bounded audited expired cleanup with atomic rollback) plus the
+  read-only 45-setting API-process configuration/profile inspection;
+  synthetic data only, 34+4+61 unit, 8+3 owned-PG, and 7 actual-Chromium
+  receipts; final 219 installed qualification still required.
+
 - [`2026-11-01 Objective 210-a GUI reviewed route configuration and provider preparation verification`](gui-cli-parity.md)
   (recorded 2026-11-01, same living record file) - admin GUI G06/G07 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME qualified core

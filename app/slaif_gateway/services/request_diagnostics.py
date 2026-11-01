@@ -52,6 +52,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from slaif_gateway.config import Settings
 from slaif_gateway.db.models import utcnow
+from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.db.repositories.request_diagnostics import RequestDiagnosticsRepository
 from slaif_gateway.schemas.request_diagnostics import (
     DIAGNOSTIC_LOOKUP_BOUND,
@@ -60,6 +61,8 @@ from slaif_gateway.schemas.request_diagnostics import (
     DiagnosticDisambiguationCandidate,
     DiagnosticLookupOutcome,
     DiagnosticLookupResult,
+    DiagnosticIdChoice,
+    DiagnosticIdChoiceResult,
     DiagnosticsCleanupResult,
     DiagnosticsNamespace,
     DiagnosticsStatus,
@@ -72,6 +75,12 @@ from slaif_gateway.utils.capture_redaction import (
     collect_incoming_secrets,
 )
 from slaif_gateway.utils.redaction import redact_text
+
+# Bounded picker-search query length (server-side; matches the shared
+# record-choices query bound; the endpoint refuses longer bodies).
+DIAGNOSTIC_CHOICE_QUERY_MAX_LENGTH = 200
+# Bounded picker hydration: at most this many retained point checks.
+DIAGNOSTIC_CHOICE_SELECTED_MAX = DIAGNOSTIC_LOOKUP_BOUND
 
 DIAGNOSTICS_SCOPE_STATE_KEY = "slaif.request_diagnostics"
 
@@ -597,10 +606,77 @@ def safe_route_pattern(value: object) -> str | None:
     return None
 
 
+def is_safe_diagnostic_id(value: object) -> bool:
+    """True only when ``value`` matches the safe diagnostic ID grammar.
+
+    Pure syntax check (211-a GUI redisplay decisions).  A value that
+    matches the grammar can STILL be a known incoming authentication
+    alias (e.g. an opaque session cookie); HTTP boundaries must also
+    apply :func:`is_known_incoming_secret_alias`.
+    """
+    return isinstance(value, str) and bool(_SAFE_ID_RE.fullmatch(value))
+
+
+def is_known_incoming_secret_alias(
+    value: object,
+    *,
+    scope: dict[str, Any],
+    accepted_prefixes: Sequence[str],
+) -> bool:
+    """Pure, fail-closed known-secret alias check for GUI lookup/search.
+
+    Reuses the exact pure discovery/masker helpers the diagnostic writer
+    uses: accepted gateway-key prefixes, the credential-shaped
+    ``redact_text`` discovery, and the bounded single-pass masker built
+    from incoming Authorization/proxy-authorization/cookie/X-API-Key
+    values and known credential query parameters.  Returns True when the
+    value IS or EMBEDS such an alias.  When discovery is incomplete the
+    value cannot be proven non-secret, so it is reported as an alias
+    (fail closed).  No capture is enabled, no I/O is performed, and no
+    authentication authority is involved.
+    """
+    text = value if isinstance(value, str) else None
+    if text is None or not text:
+        return False
+    prefixes = tuple(accepted_prefixes)
+    masker, complete = build_client_id_masker(scope, accepted_prefixes=prefixes)
+    if not complete:
+        return True  # discovery incomplete: cannot prove non-secret
+    for prefix in prefixes:
+        if prefix and text.startswith(prefix):
+            return True
+    try:
+        if redact_text(text, prefixes) != text:
+            return True
+    except Exception:  # noqa: BLE001 - fail closed on a redaction fault
+        return True
+    if masker is not None:
+        try:
+            raw = text.encode("utf-8")
+            if masker(raw) != raw:
+                return True
+        except Exception:  # noqa: BLE001 - fail closed on a masker fault
+            return True
+    return False
+
+
 def _deployment_revision(settings: Settings) -> str | None:
     revision = getattr(settings, "REQUEST_CAPTURE_DEPLOYED_REVISION", "")
     if isinstance(revision, str) and revision and _SAFE_REVISION_RE.fullmatch(revision):
         return revision
+    return None
+
+
+def safe_deployment_revision(value: object) -> str | None:
+    """Public safe projection of one operator-declared revision value.
+
+    The operator-declared deployment revision and its provenance label
+    are display values only: the GUI shows them when they match the
+    exact safe charset the write path records, and otherwise reports
+    them as unavailable. This never arms or configures capture.
+    """
+    if isinstance(value, str) and value and _SAFE_REVISION_RE.fullmatch(value):
+        return value[:128]
     return None
 
 
@@ -1009,3 +1085,123 @@ class RequestDiagnosticsService:
                 deleted_count=0, store_available=False, reason="store_unavailable"
             )
         return DiagnosticsCleanupResult(deleted_count=deleted, store_available=True)
+
+    async def cleanup_audited(
+        self,
+        *,
+        actor_admin_user_id: uuid.UUID | None,
+        reason: str,
+    ) -> DiagnosticsCleanupResult:
+        """One bounded physical prune PLUS its one audit, in ONE transaction.
+
+        211-a audited operator cleanup: the delete and its single
+        actor/reason/count/cutoff audit commit together or roll back
+        together, so a late audit/commit failure can never leave a
+        committed delete without its audit (and vice versa).  The CLI
+        ``cleanup()`` above keeps its exact un-audited signature, typed
+        output, and recording behavior.  A successful zero-delete action
+        is audited once with the actual count 0.
+        """
+        not_before = utcnow() - timedelta(seconds=self._settings.REQUEST_DIAGNOSTICS_RETENTION_SECONDS)
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    repository = RequestDiagnosticsRepository(session)
+                    deleted = await repository.delete_expired(not_before=not_before)
+                    await AuditRepository(session).add_audit_log(
+                        action="diagnostics_expired_cleanup",
+                        entity_type="request_diagnostics",
+                        admin_user_id=actor_admin_user_id,
+                        new_values={
+                            "deleted_count": int(deleted),
+                            "retention_cutoff": not_before.isoformat(),
+                        },
+                        note=reason,
+                    )
+        except Exception:  # noqa: BLE001 - a cleanup failure is a typed outcome
+            return DiagnosticsCleanupResult(
+                deleted_count=0, store_available=False, reason="store_unavailable"
+            )
+        return DiagnosticsCleanupResult(deleted_count=deleted, store_available=True)
+
+    async def lookup_choices(
+        self,
+        *,
+        namespace: DiagnosticsNamespace,
+        query: str | None = None,
+        selected: Sequence[str] = (),
+    ) -> DiagnosticIdChoiceResult:
+        """Bounded retained ID choices for the diagnostics picker (211-a).
+
+        The newest retained IDs (at most :data:`DIAGNOSTIC_LOOKUP_BOUND`)
+        for the requested namespace, optionally filtered by a bounded
+        substring query, plus direct hydration of submitted safe selected
+        IDs (older than the batch) under the SAME retention/namespace law.
+        Selected IDs RESERVE their slots before the recent batch fills
+        the remainder, so an explicitly selected older ID is never
+        dropped by a full recent batch; the merged set is de-duplicated
+        by submitted value before the final 100 cap.  Excess selected
+        inputs (more than the bound after cleaning) are refused
+        explicitly with a fixed reason.  Values are identifiers, not
+        authority: the resolve() law still decides.  A store failure is
+        a distinct safe unavailable outcome, never an empty match set.
+        """
+        not_before = utcnow() - timedelta(seconds=self._settings.REQUEST_DIAGNOSTICS_RETENTION_SECONDS)
+        clean_query = query.strip() if isinstance(query, str) else ""
+        if len(clean_query) > DIAGNOSTIC_CHOICE_QUERY_MAX_LENGTH:
+            raise ValueError("choice_query_over_bound")
+        stems: list[str] = []
+        seen_stems: set[str] = set()
+        for raw in selected:
+            stem = str(raw).strip()
+            if not stem or stem in seen_stems or not _SAFE_ID_RE.fullmatch(stem):
+                continue
+            seen_stems.add(stem)
+            stems.append(stem)
+        if len(stems) > DIAGNOSTIC_CHOICE_SELECTED_MAX:
+            raise ValueError("choice_selected_over_bound")
+        try:
+            async with self._session_factory() as session:
+                repository = RequestDiagnosticsRepository(session)
+                # Selected (older) IDs reserve their slots first; a
+                # vanished row is simply omitted (never re-timestamped).
+                choices: list[DiagnosticIdChoice] = []
+                seen: set[str] = set()
+                for stem in stems:
+                    hit = await repository.retained_choice_for(
+                        lookup_id=stem,
+                        namespace=namespace,
+                        not_before=not_before,
+                    )
+                    if hit is None:
+                        continue
+                    tag, when = hit
+                    seen.add(stem)
+                    choices.append(
+                        DiagnosticIdChoice(id=stem, namespace=tag, recorded_at=when)
+                    )
+                remaining = DIAGNOSTIC_LOOKUP_BOUND - len(choices)
+                if remaining > 0:
+                    recent = await repository.recent_retained_ids(
+                        namespace=namespace,
+                        not_before=not_before,
+                        query=clean_query or None,
+                        limit=remaining,
+                    )
+                    for value, tag, when in recent:
+                        if value in seen:
+                            continue
+                        seen.add(value)
+                        choices.append(
+                            DiagnosticIdChoice(id=value, namespace=tag, recorded_at=when)
+                        )
+        except Exception:  # noqa: BLE001 - an unavailable store is a typed outcome
+            return DiagnosticIdChoiceResult(
+                choices=(), cutoff=not_before, store_available=False
+            )
+        choices.sort(key=lambda choice: choice.recorded_at, reverse=True)
+        return DiagnosticIdChoiceResult(
+            choices=tuple(choices[:DIAGNOSTIC_LOOKUP_BOUND]),
+            cutoff=not_before,
+            store_available=True,
+        )

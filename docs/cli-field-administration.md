@@ -105,6 +105,14 @@ that objective; see section 11 of
 | Owner/cohort record edits (shared-service, audited) | `owners update` / `cohorts update` | `--reason` required and nonblank; omitted fields preserved; explicit `--clear-*` verbs for supported nullable fields; conflicting replacement+clear refused; unknown UUID refused. Moving an owner to an institution preserves `is_active`/`external_id`/`notes` and member keys. No invented cohort-institution relationship (the surface carries no institution flag). |
 | Finite process-configuration inspection | `config show` (`--json` / text) | Safe, allow-listed, PROCESS-LOCAL snapshot of the 45-field non-secret allowlist with effective value, configured-vs-default provenance, and per-entry restart scope. Process-local scope: it reports the CALLING CLI process's loaded Settings, not live API workers, which must be configured consistently (workers need reloaded/consistent settings; retained history cannot prove current recording). Invalid settings (e.g. a credential-shaped value in a numeric field) yield a fixed `configuration_unavailable` no-echo error (exit 1, no traceback). |
 
+GUI equivalent: objective 211-a delivered the same content-free
+diagnostics surface (status, bounded ID lookup with explicit
+namespace, bounded audited expired cleanup) and the same 45-entry
+process-configuration allowlist (API-process scope) to the admin GUI
+Operations pages - no CLI change in that objective; see section 13 of
+`docs/MISSING_GUI_FUNCTIONALITY.md` and section 12 of
+`docs/admin-usability.md`.
+
 ## Completion status
 
 All objectives named in the field brief are implemented: typed key-policy

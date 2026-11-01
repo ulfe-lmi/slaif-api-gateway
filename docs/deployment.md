@@ -221,9 +221,14 @@ docker compose exec -it api slaif-gateway config show
 
 `slaif-gateway config show` reports the CURRENT CLI process's cached
 `Settings` snapshot (finite reviewed allowlist, no credential values). It is
-NOT live API/worker state: if the CLI shell and the containers were started
-from different environments, the reported snapshot reflects only the CLI
-process.
+NOT live API/worker state: if the CLI shell and the containers were
+started from different environments, the reported snapshot reflects only
+the CLI process. The admin GUI's read-only Process configuration page
+(Dashboard -> Usage and operations -> Operations) displays the SAME
+finite allowlist for the API process with the same restart/recreate
+scope and no settings writer: changing any value still requires the
+environment change plus recreating/restarting the affected containers
+described below.
 
 Restart scope for environment-driven settings:
 
@@ -351,6 +356,18 @@ and no existing-key or existing-route change or rotation follows this
 upgrade. Installed completion-service profiles are a process-local
 cache: deploy the profile files to the configured profile directory,
 then recreate/restart the API so the process picks them up.
+
+Upgrading a deployment that predates 211 (objective 211-a: admin GUI
+request diagnostics and read-only process configuration) is an
+application upgrade ONLY: rebuild the API/assets image and
+recreate/restart the API so the new code runs. There is **no Nginx
+change** - no new location, allowance, or proxy setting is introduced -
+and **no database schema migration**; no existing-key, route, or
+profile change or rotation follows this upgrade. Request-capture
+configuration and request-failure diagnostics recording state are
+untouched by the upgrade; changing those environment settings later
+still requires the normal env change plus recreate/restart of the
+affected containers.
 
 Streaming routes require anti-buffering and long timeouts:
 

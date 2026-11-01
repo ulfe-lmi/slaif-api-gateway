@@ -134,6 +134,13 @@ EXPECTED_FIELDS: dict[str, dict[str, str]] = {
         "include_models": "record_choice",
         "exclude_models": "record_choice",
     },
+    # 211-a: the diagnostics lookup is ONE integrated record-choice
+    # (select a retained ID or type a new one) plus the finite namespace
+    # select; the cleanup reason/confirmation are deliberate free text.
+    "operations/diagnostics.html": {
+        "lookup_id": "record_choice",
+        "lookup_namespace": "select",
+    },
     "owners/create.html": {"institution_id": "record_choice"},
     "owners/edit.html": {"institution_id": "record_choice"},
     "owners/list.html": {
@@ -238,10 +245,10 @@ def _field_marker(template: str, field: str, kind: str) -> bool:
     raise ValueError(f"unknown control kind {kind!r}")
 
 
-def test_expected_field_inventory_is_the_108_field_baseline() -> None:
+def test_expected_field_inventory_is_the_110_field_baseline() -> None:
     total = sum(len(fields) for fields in EXPECTED_FIELDS.values())
-    assert total == 108, f"inventory drifted from the 108-field baseline: {total}"
-    assert len(EXPECTED_FIELDS) == 34
+    assert total == 110, f"inventory drifted from the 110-field baseline: {total}"
+    assert len(EXPECTED_FIELDS) == 35
 
 
 @pytest.mark.parametrize(
@@ -297,7 +304,7 @@ def test_every_admin_table_has_structural_ordinal_column() -> None:
       number or corrupt them.
     """
     tables = _iter_admin_tables()
-    assert len(tables) == 27, f"expected 27 sortable admin tables, got {len(tables)}"
+    assert len(tables) == 30, f"expected 30 sortable admin tables, got {len(tables)}"
     problems: list[str] = []
     for name, tag, block in tables:
         thead = re.search(r"<thead>.*?</thead>", block, flags=re.DOTALL)
@@ -505,14 +512,14 @@ if __name__ == "__main__":
 
 # ---------------------------------------------------------------------------
 # A1 regression: no NEW raw existing-record field may bypass the shared
-# pickers. The fixed 108-field baseline pins the known fields; this audit
+# pickers. The fixed 110-field baseline pins the known fields; this audit
 # additionally catches a newly added visible raw input/textarea whose
 # name has existing-record reference semantics (the *_id/*_uuid patterns
 # and the known semantic names) unless the field uses a shared
 # record-choice picker, a native select, or carries a documented
 # exception with a reason. Hidden inputs (CSRF etc.), checkboxes/radios/
 # submit/file controls, and genuine free-text/new-record/date/number
-# fields are out of scope here (the 108-field baseline classifies finite
+# fields are out of scope here (the 110-field baseline classifies finite
 # choices; this audit targets reference fields only).
 # ---------------------------------------------------------------------------
 

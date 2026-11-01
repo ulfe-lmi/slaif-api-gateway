@@ -1,5 +1,5 @@
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -337,6 +337,88 @@ def test_admin_activity_routes_return_html_and_accept_filters(monkeypatch) -> No
     email_detail = client.get(f"/admin/email-deliveries/{email.id}")
     assert email_detail.status_code == 200
     assert "smtp-message-id" in email_detail.text
+
+
+def test_usage_detail_diagnostics_client_prefill_link(monkeypatch) -> None:
+    """211-a: the guarded CLIENT-namespace diagnostics prefill.
+
+    The usage request_id IS the diagnostic record's client_request_id,
+    so the link is built from it (client namespace only, no gateway
+    inference). A normal row where client_request_id is None still gets
+    the link; unsafe or incoming-alias request_ids get NO URL at all.
+    A correlation ID that is a known incoming authentication alias (the
+    session cookie value) or a credential shape is also withheld from
+    the DISPLAYED request/client/upstream IDs, not just the URL, while
+    ordinary IDs and unsafe-but-non-secret historical text keep their
+    existing display.
+    """
+    base = _usage()
+    safe_usage = replace(base, request_id="req-diag-safe-1", client_request_id=None)
+    unsafe_usage = replace(
+        base, request_id="not safe id!", client_request_id=None
+    )
+    alias_usage = replace(
+        base,
+        request_id="session-plaintext",
+        client_request_id="session-plaintext",
+        upstream_request_id="session-plaintext",
+    )
+
+    def _detail(usage):
+        async def get_usage_detail(self, usage_ledger_id):
+            assert usage_ledger_id == usage.id
+            return usage
+
+        return get_usage_detail
+
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    # (1) normal row: client_request_id None, safe request_id -> link
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_activity_dashboard."
+        "AdminActivityDashboardService.get_usage_detail",
+        _detail(safe_usage),
+    )
+    response = client.get(f"/admin/usage/{safe_usage.id}")
+    assert response.status_code == 200
+    assert (
+        'href="/admin/operations/diagnostics'
+        "?lookup=req-diag-safe-1&amp;namespace=client" in response.text
+    )
+    # ordinary IDs still display (not just inside the href); the
+    # client_request_id=None row keeps its existing "n/a" display
+    assert "<dd>req-diag-safe-1" in response.text
+    assert "client_req" not in response.text
+    assert "<dd>n/a</dd>" in response.text
+
+    # (2) unsafe request_id: no URL constructed, old display kept
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_activity_dashboard."
+        "AdminActivityDashboardService.get_usage_detail",
+        _detail(unsafe_usage),
+    )
+    response = client.get(f"/admin/usage/{unsafe_usage.id}")
+    assert response.status_code == 200
+    assert "/admin/operations/diagnostics?lookup=" not in response.text
+    assert "not safe id!" in response.text
+
+    # (3) incoming-alias correlation IDs (the session cookie value in
+    # request/client/upstream): the known-incoming-alias guard withholds
+    # every displayed ID and the URL; the FULL cookie value is absent
+    # from the rendered response, not merely from the link
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_activity_dashboard."
+        "AdminActivityDashboardService.get_usage_detail",
+        _detail(alias_usage),
+    )
+    response = client.get(f"/admin/usage/{alias_usage.id}")
+    assert response.status_code == 200
+    assert "/admin/operations/diagnostics?lookup=" not in response.text
+    assert "session-plaintext" not in response.text
+    assert (
+        response.text.count('<span class="muted small">withheld</span>') == 3
+    )
 
 
 def test_admin_activity_missing_and_invalid_ids_are_safe(monkeypatch) -> None:
