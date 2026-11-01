@@ -223,7 +223,14 @@ def test_keys_list_visual(chromium, usab_env, name: str, width: int, height: int
         ] == [str(k + 1) for k in range(12)]
 
         # 194-a R6: the displayed-row count is the real rendered length.
-        assert "12 rows shown" in page.locator(".table-toolbar .rows-shown").inner_text()
+        # 214-b: target the stable, unique #keys-rows-shown toolbar
+        # element: the shared pagination nav now also renders a
+        # legitimate "Rows 1-12 on this page" .rows-shown range inside
+        # its own .table-toolbar, so the class-only selector is
+        # ambiguous (Playwright strict mode rejects two matches).
+        shown = page.locator("#keys-rows-shown")  # type: ignore[union-attr]
+        assert shown.count() == 1
+        assert "12 rows shown" in shown.inner_text()
 
         if name == "desktop-1440":
             # A valid custom limit outside the presets is preserved as an

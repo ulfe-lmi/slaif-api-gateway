@@ -1558,3 +1558,36 @@ Chromium modules, catalog consumer checks, OAP governance, scoped
 Ruff/docs/diff checks, and the browser second-page sort proof with
 offset ordinals); the report is the authoritative receipt set for
 this section.
+
+## 214-b selector-compatibility repair (objective 214, same PR #370)
+
+Test-only repair of the demonstrated blocking final-head browser
+regression on PR #370 (immutable 214-a SELF
+`b5f7a80f7e0084141d66d1193d6d9e5550486a29`). Final-head CI run
+41343115263 (browser job 124957397249, failed 19:48:32Z): 4 failed /
+91 passed - ALL four are the viewport parameterizations of
+`tests/browser/test_admin_visual_screenshots.py::test_keys_list_visual`
+at line 226. The pre-existing selector `.table-toolbar .rows-shown`
+now legitimately matches BOTH the original "12 rows shown" list
+toolbar (`#keys-rows-shown`) and the NEW shared pagination nav's
+"Rows 1-12 on this page" range (its `<nav>` also carries
+`class="table-toolbar"`); Playwright's strict locator rejects two
+matches. No loss of visual semantics or product behavior was
+demonstrated.
+
+Repair (test file only): the case now targets the stable, unique
+`#keys-rows-shown` element (asserting uniqueness) and keeps the
+literal "12 rows shown" assertion plus every other
+viewport/layout/typing/chips/sorting/ordinals/custom-limit
+expectation unchanged; no product template, class, or pagination
+change.
+
+Local focused receipt: ONE real Chromium / owned-PostgreSQL run of
+all four viewport parameterizations -
+`tests/browser/test_admin_visual_screenshots.py::test_keys_list_visual`
+`-m playwright -q --junitxml=/tmp/slaif214/browser-214b-1.xml` -
+tests=4 failures=0 errors=0 skipped=0 (all four actually ran;
+desktop-1440, desktop-1600, tablet-768, narrow-390), SHA256
+`a08e743f267d3159ebd723d689e05aee3b68d347f0b4ea05e5008c78c29ee1f8`.
+Unchanged 214-a modules were NOT rerun; the final-head GitHub CI
+qualifies broad regressions once the new SELF is published.
