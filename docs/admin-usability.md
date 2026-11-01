@@ -1293,3 +1293,88 @@ Deploying 212 is an application upgrade: rebuild the API/assets image
 and recreate/restart the API so the new code runs. There is **no Nginx
 change** and **no schema migration**; keys, routes, and existing
 bindings are untouched - see [`deployment.md`](deployment.md).
+
+## 14. Replay reference maintenance (213-a)
+
+### 14.1 Navigation
+
+- Dashboard -> **Usage and operations** group -> **Operations** ->
+  **Replay maintenance** (the index page).
+- The index lists exactly three explicit scope choices in one table
+  (one existing key, one cohort, every active key). There is no
+  implicit all-active default: the third row is a deliberate operator
+  choice made from this page.
+- **Key detail** -> **Replay maintenance** link: this ONE key's bound
+  scope page (key selection and search stay in the existing keys
+  workflow).
+- **Cohort detail** -> **Replay maintenance** link: this ONE cohort's
+  bound scope page.
+
+### 14.2 Scope pages and read-only inspection
+
+- The scope page restates the selected scope (canonical UUID plus the
+  key status or cohort name), the bound and lifetime semantics, and
+  the monotonic law before any action. Both forms POST privately; the
+  pages are no-store.
+- **Inspect scope** is read-only and writes nothing (no domain row,
+  no audit). It shows: keys in scope (and how many are active/valid),
+  retained references (active/expired), the UTC creation and expiry
+  ranges, a per-key aggregate table, a bounded route/model group
+  table (more than 100 groups shows explicit truncation metadata),
+  the labeled exclusion counts at the configured lifetime, and the
+  configured default lifetime.
+- The page states plainly that expiry eligibility here is maintenance
+  state - the stored HMAC version has a configured secret - NOT client
+  or model readiness, and NOT replay authorization. No raw reference
+  identifiers, provider identifiers, HMAC digests, stored content, or
+  secret values appear on the page.
+- Time bounds are ISO 8601 UTC, inclusive lower / exclusive upper;
+  blank means unbounded. The help beside the fields explains that
+  ongoing traffic can add references between preview and apply and
+  legitimately make an unbounded window stale: an explicit
+  created-until cutoff or a smaller scope stabilizes the review, and
+  nothing is ever silently cut off or relaxed.
+
+### 14.3 Preview, review, and apply
+
+- **Preview extension** fields: created-from / created-until (same
+  semantics as inspection); **Total lifetime, seconds (from ORIGINAL
+  creation)** - blank uses this deployment's configured default, an
+  explicit whole number is the TOTAL lifetime measured from each
+  reference's original creation time (never from now),
+  1..31,536,000, with an in-page example (2,592,000 = 30 days);
+  **Include already-expired** (OFF by default; an explicit choice that
+  still cannot restore unusable material); and the **Audit reason**
+  (up to 512 characters, saved exactly as entered - nothing is
+  trimmed).
+- The preview writes nothing. The review page shows the exact scope,
+  window, selected lifetime (flagged when it is the configured
+  default), include-expired choice, eligible/excluded counts, and the
+  current and expected post-apply expiry ranges, plus the verbatim
+  reason. The reviewed plan is signed to your session and expires in
+  15 minutes.
+- **Apply** requires checking "I confirm applying this exact reviewed
+  extension to this scope". Applying re-checks the live scope,
+  eligibility, and HMAC availability under the shared service's locks,
+  extends ONLY eligible rows monotonically (original creation +
+  selected lifetime; rows already at or beyond the target are never
+  shortened), and writes exactly one actor/reason audit record in the
+  same transaction.
+- Outcomes are truthful: "Applied" reports the ACTUAL extended count;
+  "Already applied" (the exact repeat) and "No eligible change" are
+  no-ops with no write and no audit; stale state asks for a fresh
+  preview; a commit that cannot be confirmed is reported as
+  UNCONFIRMED and points to the state and audit log instead of
+  promising a rollback.
+- A displayed or submitted value that matches a known incoming
+  authentication value is refused with a fixed no-echo message before
+  it is displayed, signed, or applied.
+
+### 14.4 Upgrade notes
+
+Deploying 213 is an application upgrade: rebuild the API/assets image
+and recreate/restart the API so the new code runs. There is **no Nginx
+change** and **no schema migration**; keys, routes, replay references,
+and accounting are untouched (an applied extension only lengthens
+`expires_at` on the reviewed eligible rows) - see
+[`deployment.md`](deployment.md).

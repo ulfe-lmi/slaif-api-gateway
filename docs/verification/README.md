@@ -10,6 +10,20 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-01 Objective 213-a GUI replay reference maintenance verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - admin GUI G09 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared replay
+  maintenance service the CLI uses: explicit key/cohort/all-active
+  scopes, read-only inspection (totals, ranges, bounded groups,
+  labeled exclusions; no domain/audit write), and a reviewed
+  monotonic expiry extension (strict bounded plan, 15-minute
+  actor/session review token, confirm-and-apply in one caller
+  transaction, honest repeat/stale/unconfirmed outcomes); synthetic
+  data only, 185 unit/guard (incl. the 43 new and the 9 OAP
+  governance), 11 owned-PG, 7 actual-Chromium, plus targeted
+  post-visual-fix rechecks (139 unit; the 02/07 browser overlap);
+  final 219 installed qualification still required.
+
 - [`2026-11-01 Objective 212-a GUI Codex compatibility management verification`](gui-cli-parity.md)
   (recorded 2026-11-01, same living record file) - admin GUI G10 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME qualified core:

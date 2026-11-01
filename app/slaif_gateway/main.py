@@ -20,6 +20,9 @@ from slaif_gateway.api.admin_key_batch import router as admin_key_batch_router
 from slaif_gateway.api.admin_key_clone import router as admin_key_clone_router
 from slaif_gateway.api.admin_record_choices import router as admin_record_choices_router
 from slaif_gateway.api.admin_operations import router as admin_operations_router
+from slaif_gateway.api.admin_replay_maintenance import (
+    router as admin_replay_maintenance_router,
+)
 from slaif_gateway.api.branding import router as branding_router
 from slaif_gateway.api.errors import (
     OpenAICompatibleError,
@@ -101,6 +104,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # preset export, and the shared CLI's exact module upgrade/rollback or
     # profile migration through dry-run -> signed review -> confirmed apply.
     app.include_router(admin_compatibility_router)
+    # 213-a: reviewed Codex replay-reference maintenance (G09): read-only
+    # inspection and the shared CLI's exact monotonic expiry extension
+    # through preview -> signed review -> confirmed apply.
+    app.include_router(admin_replay_maintenance_router)
     app.include_router(openai_compat_router)
 
     return app

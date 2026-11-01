@@ -1102,6 +1102,12 @@ command; backup/restore is the normal recovery responsibility and
 schema change, no quota or key-policy change, no runtime replay
 behavior change.
 
+The admin GUI (Operations -> Replay maintenance) offers the same
+read-only inspection and the reviewed monotonic extension over exactly
+these scopes (213-a), reusing this SAME shared service: the CLI commands,
+scope law, plan format, eligibility, ceilings, and audit behavior are
+unchanged.
+
 ```text
 slaif-gateway request-capture arm|status|stop|cleanup|inspect
 ```

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block title %}Replay maintenance - {{ scope_label }}{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="replay-scope-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations / Replay maintenance</p>
+      <h1 id="replay-scope-heading">{{ scope_label }}</h1>
+      {% if scope_code %}
+      <p class="lead">Selected scope: <code>{{ scope_code }}</code>
+      {% if key_status %}(key status: {{ key_status }}){% endif %}
+      {% if cohort_name %}(cohort: {{ cohort_name }}){% endif %}</p>
+      {% else %}
+      <p class="lead">Selected scope: every key currently in the active state, at inspection
+      and again at apply time, so the scope you see is the scope reviewed.</p>
+      {% endif %}
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/replay-maintenance/">Replay maintenance</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="replay-inspect-heading">
+    <h2 id="replay-inspect-heading">Inspect this scope (read-only)</h2>
+    <p class="muted">Totals, per-key aggregates, bounded route/model groups, and exclusion
+    counts. No writes and no audit record.</p>
+    <form class="create-form" method="post" action="/admin/operations/replay-maintenance/inspect">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="scope" value="{{ scope_kind }}">
+      {% if scope_kind == "key" %}<input type="hidden" name="key_id" value="{{ scope_code }}">{% endif %}
+      {% if scope_kind == "cohort" %}<input type="hidden" name="cohort_id" value="{{ scope_code }}">{% endif %}
+      <div class="field-row">
+        <label for="inspect-created-from">Created from (inclusive, UTC)</label>
+        <input type="text" id="inspect-created-from" name="created_from"
+               placeholder="2026-01-01T00:00:00Z" aria-describedby="inspect-bounds-help">
+        <label for="inspect-created-until">Created until (exclusive, UTC)</label>
+        <input type="text" id="inspect-created-until" name="created_until"
+               placeholder="2026-01-02T00:00:00Z" aria-describedby="inspect-bounds-help">
+      </div>
+      <p class="field-help" id="inspect-bounds-help">ISO 8601 UTC timestamps. Blank means
+      unbounded. Inclusive lower bound, exclusive upper bound.</p>
+      <button type="submit">Inspect scope</button>
+    </form>
+  </section>
+
+  <section class="action-panel" aria-labelledby="replay-preview-heading">
+    <h2 id="replay-preview-heading">Preview an expiry extension</h2>
+    <p class="muted">Preparing a preview writes nothing. It produces
+    the exact reviewed plan, which you confirm before anything can change.</p>
+    <form class="create-form" method="post" action="/admin/operations/replay-maintenance/preview">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="scope" value="{{ scope_kind }}">
+      {% if scope_kind == "key" %}<input type="hidden" name="key_id" value="{{ scope_code }}">{% endif %}
+      {% if scope_kind == "cohort" %}<input type="hidden" name="cohort_id" value="{{ scope_code }}">{% endif %}
+      <div class="field-row">
+        <label for="preview-created-from">Created from (inclusive, UTC)</label>
+        <input type="text" id="preview-created-from" name="created_from"
+               placeholder="2026-01-01T00:00:00Z" aria-describedby="preview-bounds-help">
+        <label for="preview-created-until">Created until (exclusive, UTC)</label>
+        <input type="text" id="preview-created-until" name="created_until"
+               placeholder="2026-01-02T00:00:00Z" aria-describedby="preview-bounds-help">
+      </div>
+      <p class="field-help" id="preview-bounds-help">ISO 8601 UTC timestamps; blank means
+      unbounded. Ongoing traffic can add references between preview and apply, which
+      legitimately makes an unbounded window stale and asks for a fresh preview. An explicit
+      created-until cutoff (or a smaller scope) stabilizes the review; nothing is ever silently
+      cut off or relaxed.</p>
+      <div class="field-row">
+        <label for="preview-ttl-seconds">Total lifetime, seconds (from ORIGINAL creation)</label>
+        <input type="number" id="preview-ttl-seconds" name="ttl_seconds" min="{{ ttl_min }}"
+               max="{{ ttl_max }}" step="1" aria-describedby="preview-ttl-help">
+      </div>
+      <p class="field-help" id="preview-ttl-help">Whole seconds, {{ ttl_min | num }}..{{ ttl_max | num }}.
+      This is the TOTAL lifetime measured from each reference's original creation time, never
+      from now. Blank uses this deployment's configured default ({{ configured_ttl_seconds | num }}
+      seconds). Example: {{ 2592000 | num }} = 30 days from original creation; the maximum is
+      {{ ttl_max | num }} (one year). An extension
+      only lengthens expiry: a reference already expiring later than its target keeps its later
+      expiry (never shortened).</p>
+      <div class="checkbox-row">
+        <input type="checkbox" id="preview-include-expired" name="include_expired" value="1"
+               aria-describedby="preview-expired-help">
+        <label for="preview-include-expired">Also include references already expired at preview time</label>
+      </div>
+      <p class="field-help" id="preview-expired-help">Off by default; include-expired is an
+      explicit choice. It lengthens the expiry of already-expired eligible references within the
+      selected lifetime, but it cannot restore unusable material: a reference still needs an
+      active, valid key, a finalized usage-ledger row, a supported item kind, and a configured
+      secret for its stored HMAC version. Excluded references and the reasons are shown in the
+      preview.</p>
+      <div class="field-row">
+        <label for="preview-reason">Audit reason</label>
+        <input type="text" id="preview-reason" name="reason" maxlength="{{ 512 }}"
+               placeholder="Extend reviewed replay references for the Q2 audit window"
+               aria-describedby="preview-reason-help" required>
+      </div>
+      <p class="field-help" id="preview-reason-help">Up to 512 characters, saved exactly as
+      entered (nothing is trimmed). Do not include passwords or keys. The reason is stored with
+      one audit record when the extension is applied.</p>
+      <button type="submit">Preview extension</button>
+    </form>
+  </section>
+</section>
+{% endblock %}

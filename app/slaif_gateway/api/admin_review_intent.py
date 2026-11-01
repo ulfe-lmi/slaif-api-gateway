@@ -42,6 +42,13 @@ from slaif_gateway.schemas.provider_route_configuration import (
     ROUTE_PLAN_FILE_MAX_BYTES,
     parse_route_update_plan_document,
     )
+from slaif_gateway.schemas.key_configuration import (
+    MAX_KEY_CONFIGURATION_REASON_LENGTH,
+)
+from slaif_gateway.schemas.codex_replay_maintenance import (
+    REPLAY_PLAN_MAX_BYTES,
+    parse_replay_extend_plan_document,
+    )
 from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_CLIENT_MODULE_ID,
 )
@@ -61,6 +68,10 @@ REVIEW_INTENT_ROUTE_PURPOSE = "admin.route-configuration.review.v1"
 # compatibility token is never valid for a clone/batch/route apply and
 # vice versa); same HMAC pattern, same 15-minute bound.
 REVIEW_INTENT_COMPATIBILITY_PURPOSE = "admin.codex-compatibility.review.v1"
+# 213-a: separate reviewed replay-maintenance purpose (a replay token is
+# never valid for a clone/batch/route/compatibility apply and vice
+# versa); same HMAC pattern, same 15-minute bound.
+REVIEW_INTENT_REPLAY_PURPOSE = "admin.replay-maintenance.review.v1"
 REVIEW_INTENT_TTL_SECONDS = 15 * 60
 
 # Bounded wrapper for the 128 KiB core plan: base64url expansion (4/3) of
@@ -92,6 +103,20 @@ MAX_REVIEW_INTENT_ROUTE_TOKEN_CHARS = (ROUTE_PLAN_FILE_MAX_BYTES * 4) // 3 + 409
 COMPATIBILITY_REVIEW_PLAN_MAX_BYTES = 8 * 1024
 MAX_REVIEW_INTENT_COMPATIBILITY_TOKEN_CHARS = (
     COMPATIBILITY_REVIEW_PLAN_MAX_BYTES * 4
+) // 3 + 4096
+
+# 213-a: the strict replay extend plan is bounded by REPLAY_PLAN_MAX_BYTES
+# (32 KiB) in its rendered form, whose canonical JSON is never larger; the
+# review wrapper adds ONE bounded nonblank Unicode reason plus the
+# identity/expiry envelope.  The canonical serializer uses ensure_ascii,
+# so a 512-character astral-Unicode reason can consume 6,144 escaped
+# bytes; the fixed +8192 wrapper allowance budgets that maximum plus the
+# identity/expiry keys before any signing/base64 work.  The token cap is
+# the derived 4/3 base64url expansion plus the digest and separator
+# (documented encoding overhead, not a second policy cap).
+REPLAY_REVIEW_PLAN_MAX_BYTES = REPLAY_PLAN_MAX_BYTES + 8192
+MAX_REVIEW_INTENT_REPLAY_TOKEN_CHARS = (
+    REPLAY_REVIEW_PLAN_MAX_BYTES * 4
 ) // 3 + 4096
 
 _CLONE_DELIVERY_MODES = frozenset({"none", "pending", "send-now", "enqueue"})
@@ -129,6 +154,18 @@ _COMPAT_EXPIRED_MESSAGE = (
 )
 _COMPAT_TOO_LARGE_MESSAGE = (
     "The compatibility migration exceeds the bounded review size."
+)
+_REPLAY_INVALID_MESSAGE = (
+    "The replay maintenance review state is missing or invalid."
+)
+_REPLAY_NOT_AUTHENTIC_MESSAGE = (
+    "The replay maintenance review state is not valid for this signed-in admin."
+)
+_REPLAY_EXPIRED_MESSAGE = (
+    "The replay maintenance review has expired. Preview the scope again."
+)
+_REPLAY_TOO_LARGE_MESSAGE = (
+    "The replay maintenance review plan exceeds the bounded review size."
 )
 
 # The digest half is exactly 64 lowercase hex characters; anything else is a
@@ -828,4 +865,151 @@ def verify_compatibility_review_token(
     document = _strict_compatibility_review_document(review)
     if len(_canonical_json(document)) > COMPATIBILITY_REVIEW_PLAN_MAX_BYTES:
         raise AdminReviewIntentError(_COMPAT_TOO_LARGE_MESSAGE)
+    return document
+
+# ---------------------------------------------------------------------------
+# 213-a: reviewed replay maintenance (strict extend plan + safe reason)
+# ---------------------------------------------------------------------------
+
+_REPLAY_REVIEW_KEYS = frozenset({"plan", "reason"})
+
+
+def _strict_replay_review_document(document: object) -> dict[str, Any]:
+    """Closed strict document: the COMPLETE strict extend plan + reason.
+
+    The plan dict must pass the shared strict plan schema (known fields,
+    types, ceilings, fingerprints, and the exact round-trip gate); the
+    reason follows the normal GUI convention: bounded nonblank Unicode
+    (at most MAX_KEY_CONFIGURATION_REASON_LENGTH characters).  The
+    string is NEVER trimmed here or in the Core - the reviewed string is
+    preserved through apply, where the shared service re-validates
+    nonblank content and credential shapes on the ORIGINAL string.
+    Every failure is the fixed safe message; no plan value or reason is
+    echoed.
+    """
+    if not isinstance(document, dict) or set(document) != _REPLAY_REVIEW_KEYS:
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE)
+    reason = document.get("reason")
+    if (
+        not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > MAX_KEY_CONFIGURATION_REASON_LENGTH
+    ):
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE)
+    plan_document = document.get("plan")
+    if not isinstance(plan_document, dict):
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE)
+    try:
+        parse_replay_extend_plan_document(plan_document)
+    except Exception:  # noqa: BLE001 - fixed safe vocabulary, never the plan
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE) from None
+    return document
+
+
+def build_replay_review_token(
+    *,
+    admin_session_secret: str,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    review_document: dict[str, Any],
+    ttl_seconds: int = REVIEW_INTENT_TTL_SECONDS,
+    now: datetime | None = None,
+) -> str:
+    """Bind one reviewed replay extension to actor/session/expiry.
+
+    ``review_document`` is the strict finite document validated by
+    :func:`_strict_replay_review_document` BEFORE canonical
+    serialization; the plan envelope and the token length are both
+    bounded before any signing work returns.
+    """
+    _strict_replay_review_document(review_document)
+    if len(_canonical_json(review_document)) > REPLAY_REVIEW_PLAN_MAX_BYTES:
+        raise AdminReviewIntentError(_REPLAY_TOO_LARGE_MESSAGE)
+    issued = now or datetime.now(UTC)
+    payload = {
+        "purpose": REVIEW_INTENT_REPLAY_PURPOSE,
+        "admin_user_id": str(admin_user_id),
+        "admin_session_id": str(admin_session_id),
+        "expires_at": (issued + timedelta(seconds=ttl_seconds)).isoformat(),
+        "review": review_document,
+    }
+    encoded = _canonical_json(payload)
+    token = (
+        base64.urlsafe_b64encode(encoded).decode("ascii")
+        + "."
+        + _digest(admin_session_secret, encoded)
+    )
+    if len(token) > MAX_REVIEW_INTENT_REPLAY_TOKEN_CHARS:
+        raise AdminReviewIntentError(_REPLAY_TOO_LARGE_MESSAGE)
+    return token
+
+
+def verify_replay_review_token(
+    *,
+    admin_session_secret: str,
+    token: str | None,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Verify, rebind, and strict-reparse one replay review token.
+
+    Returns the strict finite review document.  The outer payload is
+    CLOSED: exactly the identity/expiry keys plus ``review`` - unknown
+    outer keys are refused.  A clone/batch/route/compatibility token is
+    refused (different signed purpose).  Every failure path raises
+    :class:`AdminReviewIntentError` with a fixed safe message; the token
+    bytes never appear in an exception, log, or rendered error.
+    """
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > MAX_REVIEW_INTENT_REPLAY_TOKEN_CHARS
+    ):
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE)
+    body, separator, digest = token.rpartition(".")
+    if (
+        not separator
+        or not body
+        or not digest
+        or not _DIGEST_RE.fullmatch(digest)
+    ):
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE)
+    try:
+        encoded = base64.urlsafe_b64decode(body.encode("ascii"))
+    except (binascii.Error, UnicodeEncodeError, ValueError):
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE) from None
+    if not hmac.compare_digest(_digest(admin_session_secret, encoded), digest):
+        raise AdminReviewIntentError(_REPLAY_NOT_AUTHENTIC_MESSAGE)
+    try:
+        payload = json.loads(
+            encoded.decode("utf-8"), object_pairs_hook=_strict_pairs_hook
+        )
+    except (UnicodeDecodeError, ValueError):
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE) from None
+    if not isinstance(payload, dict) or set(payload) != _COMPAT_PAYLOAD_KEYS:
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE)
+    if payload.get("purpose") != REVIEW_INTENT_REPLAY_PURPOSE:
+        raise AdminReviewIntentError(_REPLAY_NOT_AUTHENTIC_MESSAGE)
+    if (
+        payload.get("admin_user_id") != str(admin_user_id)
+        or payload.get("admin_session_id") != str(admin_session_id)
+    ):
+        raise AdminReviewIntentError(_REPLAY_NOT_AUTHENTIC_MESSAGE)
+    expires_raw = payload.get("expires_at")
+    try:
+        expires_at = datetime.fromisoformat(expires_raw)
+    except (TypeError, ValueError):
+        raise AdminReviewIntentError(_REPLAY_INVALID_MESSAGE) from None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if (now or datetime.now(UTC)) >= expires_at:
+        raise AdminReviewIntentError(_REPLAY_EXPIRED_MESSAGE)
+    review = payload.get("review")
+    # Strict re-validation BEFORE canonical serialization: malformed
+    # plan values or an edited count yield the fixed safe error, never
+    # a serialization fault.
+    document = _strict_replay_review_document(review)
+    if len(_canonical_json(document)) > REPLAY_REVIEW_PLAN_MAX_BYTES:
+        raise AdminReviewIntentError(_REPLAY_TOO_LARGE_MESSAGE)
     return document

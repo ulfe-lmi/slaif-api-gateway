@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}Replay extension review{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="replay-review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations / Replay maintenance</p>
+      <h1 id="replay-review-heading">Reviewed replay extension</h1>
+      <p class="lead">{{ scope_label }} - one bounded, monotonic expiry extension.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="{{ scope_href }}">Back to the scope</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="review-facts-heading">
+    <h2 id="review-facts-heading">Reviewed facts</h2>
+    <dl>
+      <dt>Scope</dt>
+      <dd><code>{{ plan_context.scope_text }}</code></dd>
+      <dt>Created window (UTC)</dt>
+      <dd>{{ plan_context.created_from }} .. {{ plan_context.created_until }}
+      (inclusive .. exclusive; — means unbounded)</dd>
+      <dt>Selected lifetime</dt>
+      <dd>{{ plan_context.ttl_seconds | num }} seconds from original creation
+      {% if plan_context.ttl_is_configured_default %}(the configured default){% else %}(configured default: {{ plan_context.configured_ttl_seconds | num }} seconds){% endif %}</dd>
+      <dt>Include already-expired</dt>
+      <dd>{{ "yes" if plan_context.include_expired else "no" }}</dd>
+      <dt>Previewed at (UTC)</dt>
+      <dd>{{ plan_context.previewed_at }}</dd>
+      <dt>Selected keys</dt>
+      <dd>{{ plan_context.selected_keys | num }}</dd>
+      <dt>Eligible references</dt>
+      <dd>{{ plan_context.eligible_references | num }}</dd>
+      <dt>Audit reason (verbatim, never trimmed)</dt>
+      <dd>{{ reason }}</dd>
+    </dl>
+  </section>
+
+  {% if plan_context.has_eligible_range %}
+  <section class="action-panel" aria-labelledby="review-ranges-heading">
+    <h2 id="review-ranges-heading">Reviewed expiry ranges (UTC)</h2>
+    <dl>
+      <dt>Current expiry (eligible rows)</dt>
+      <dd>{{ plan_context.old_expiry_min }} .. {{ plan_context.old_expiry_max }}</dd>
+      <dt>Expected expiry after apply</dt>
+      <dd>{{ plan_context.new_expiry_min }} .. {{ plan_context.new_expiry_max }}</dd>
+    </dl>
+    <p class="muted">Monotonic: a row only changes when the target (original creation +
+    selected lifetime) is later than its stored expiry; rows already at or beyond the target
+    keep their later expiry and are never shortened.</p>
+  </section>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="review-exclusions-heading">
+    <h2 id="review-exclusions-heading">Excluded references (by reason)</h2>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Reviewed exclusion counts">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Reason</th>
+            <th scope="col" class="nowrap">References</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for reason_row in plan_context.exclusion_reasons %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <th scope="row">{{ reason_row.label }}</th>
+            <td data-sort-value="{{ reason_row.count }}">{{ reason_row.count | num }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort class="empty-state"><td colspan="3">No exclusion reasons.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if result is none %}
+  <section class="action-panel" aria-labelledby="review-confirm-heading">
+    <h2 id="review-confirm-heading">Confirm and apply</h2>
+    <div class="admin-flash" role="status">
+      Nothing has changed yet. This review is signed to your session and expires in
+      15 minutes. Applying re-checks the live scope, eligibility, and HMAC availability under
+      the shared service's locks before anything changes.
+    </div>
+    <details open aria-labelledby="review-apply-summary">
+      <summary id="review-apply-summary">Apply this exact reviewed extension</summary>
+      <p class="muted">
+        An extension only lengthens expiry (original creation + selected lifetime). It does not
+        restore unusable material, grant replay access, unlock cost holds, edit policy or the
+        default TTL, or rebind ownership. If ongoing traffic has added references since this
+        preview, the shared service reports the scope as stale and asks for a fresh preview
+        instead of guessing.
+      </p>
+      <form class="create-form" method="post" action="/admin/operations/replay-maintenance/apply">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="review_token" value="{{ review_token }}">
+        <div class="checkbox-row">
+          <input type="checkbox" id="confirm-apply" name="confirm_apply" value="1"
+                 aria-describedby="confirm-apply-help">
+          <label for="confirm-apply">I confirm applying this exact reviewed extension to this scope</label>
+        </div>
+        <p class="field-help" id="confirm-apply-help">What you reviewed above is exactly what
+        applies: the same scope, window, lifetime, and reason. One audit record with your user
+        ID is written together with the extension in the same transaction; if that transaction
+        cannot be confirmed, the outcome is reported as UNCONFIRMED and you are pointed to the
+        state and audit log.</p>
+        <button type="submit">Apply extension</button>
+      </form>
+    </details>
+  </section>
+  {% elif result.already_applied %}
+  <section class="action-panel" aria-labelledby="review-repeat-heading">
+    <h2 id="review-repeat-heading">Already applied</h2>
+    <div class="admin-flash admin-flash-success" role="status">
+      The reviewed extension is already in place: nothing was written and no audit record was
+      created.
+    </div>
+    <p>
+      <a class="button-link" href="{{ scope_href }}">Back to the scope</a>
+      · <a class="button-link secondary" href="/admin/audit">Audit log</a>
+    </p>
+  </section>
+  {% elif result.applied %}
+  <section class="action-panel" aria-labelledby="review-applied-heading">
+    <h2 id="review-applied-heading">Applied</h2>
+    <div class="admin-flash admin-flash-success" role="status">
+      Applied: {{ result.updated_references | num }} reference{{ "s" if result.updated_references != 1 }} extended (monotonic; original creation times preserved), covering {{ result.eligible_references | num }} eligible reference{{ "s" if result.eligible_references != 1 }} across {{ result.selected_keys | num }} selected key{{ "s" if result.selected_keys != 1 }}. One audit record with your user ID and the exact reviewed facts was written in the same transaction.
+    </div>
+    <p class="muted">
+      Rows whose stored expiry was already at or beyond the target were not changed. Repeating
+      the same review is a no-op (already applied) with no new write or audit. If a commit
+      acknowledgement were ever lost, this page would say UNCONFIRMED and point you to the
+      state and audit log instead of claiming a rollback.
+    </p>
+    <p>
+      <a class="button-link" href="{{ scope_href }}">Back to the scope</a>
+      · <a class="button-link secondary" href="/admin/audit">Audit log</a>
+    </p>
+  </section>
+  {% else %}
+  <section class="action-panel" aria-labelledby="review-noop-heading">
+    <h2 id="review-noop-heading">No eligible change</h2>
+    <div class="admin-flash admin-flash-success" role="status">
+      The reviewed plan produced no eligible change under the live state: nothing was written
+      and no audit record was created.
+    </div>
+    <p>
+      <a class="button-link" href="{{ scope_href }}">Back to the scope</a>
+      · <a class="button-link secondary" href="/admin/audit">Audit log</a>
+    </p>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

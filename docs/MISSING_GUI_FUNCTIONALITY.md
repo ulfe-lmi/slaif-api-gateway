@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09, G11-G15 and G17-G18 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11-G15 and G17-G18 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -834,3 +834,84 @@ G09, G11-G15 and G17-G18 remain open as documented in section 9;
 nothing in 212-a touches them. The final 219 installed whole-GUI
 qualification and the remaining objectives stay mandatory; 212-a makes
 no installed-qualification, deployment, or live-provider claim.
+
+## 15. Delivery status (objective 213-a)
+
+Delivered by 213-a (`oap/213-gui-replay-maintenance`, one PR), synthetic
+fixture data only, no new schema/migrations:
+
+- **G09**: an Operations / Replay maintenance surface with explicit
+  scope choices (Operations index card, key-detail link, cohort-detail
+  link) over the SAME shared service the CLI uses
+  (`CodexReplayMaintenanceService.inspect_replay_references` /
+  `preview_replay_extend` / `apply_replay_extend`) inside a
+  caller-owned transaction:
+  - **scope selection**: exactly one of one existing key, one cohort,
+    or explicitly every active key - the third is a deliberate
+    operator choice, never an implicit default. Key/cohort selection
+    reuses the existing searchable lists and detail pages (bound
+    links); the scope page verifies canonical UUID grammar and actual
+    record existence, including older records;
+  - **read-only inspection** (form submit): scope totals, active/expired
+    counts, UTC creation/expiry ranges, per-key aggregate table, bounded
+    route/model groups with explicit truncation metadata, labeled
+    exclusion counts, and the configured default lifetime. Eligibility
+    is presented as maintenance metadata (the stored HMAC version has a
+    configured secret), NOT client/model readiness or replay
+    authorization. No domain or audit write; no raw replay IDs,
+    provider IDs, digests, stored content, or secrets are displayed;
+  - **guided extension**: inclusive-from / exclusive-until UTC creation
+    bounds (blank = unbounded), an explicit TOTAL lifetime in seconds
+    from each reference's ORIGINAL creation (blank = configured
+    default; 1..31,536,000 with an in-page example, never now + TTL),
+    include-expired OFF by default with an explicit checkbox, and a
+    bounded nonblank audit reason saved verbatim (never trimmed);
+  - **preview -> review -> confirm -> apply**: the preview invokes the
+    shared dry run in a caller transaction (no writes), renders the
+    strict bounded 32-KiB plan, and binds the complete plan plus reason
+    to the signed-in actor/session with a 15-minute HMAC review token.
+    The review page displays the exact scope, window, lifetime
+    (flagged when it is the configured default), include-expired choice,
+    eligible/excluded counts, and expiry ranges before a separate
+    confirmation checkbox and Apply. Apply re-verifies token, actor,
+    session, purpose, and expiry, re-checks this request's known
+    incoming alias values, and calls the shared apply in ONE caller
+    transaction; the shared service determines stale scope/state/
+    eligibility, HMAC availability, and the accepted already-applied
+    repeat under its lock law;
+  - **outcome truth**: "Applied" shows the persisted aggregate (the
+    ACTUAL rows extended - rows already at or beyond the target keep
+    their later expiry and are never shortened) plus one
+    actor/reason audit; an exact repeat is an honest no-op ("Already
+    applied": no duplicate write or audit); stale state asks for a
+    fresh preview; an unconfirmed commit outcome is reported as
+    UNCONFIRMED with pointers to the state and audit log, never
+    promising a rollback.
+- Known-incoming-alias withholding applies to every dynamic label and
+  signed/reviewed fact at every output/sign/apply boundary; a refused
+  scope UUID is never re-exposed through a recovery link.
+
+Bounded paths: new `api/admin_replay_maintenance.py` router +
+`replay_maintenance/` templates; `main.py` router registration;
+`admin_review_intent.py` one replay purpose and strict bounded
+plan+reason wrapper reusing existing primitives (all old purposes
+unchanged); `operations/index.html` one card plus `keys/detail.html`
+and `cohorts/detail.html` bound-scope links; new unit / native-PG /
+Chromium test modules; touched guard inventories. The shared replay
+schemas, service, repository, runtime, CLI, and accounting modules are
+unchanged read-only reuse.
+
+Operator walkthrough: section 14 of
+[`admin-usability.md`](admin-usability.md); verification record and
+chronology: the 213-a section of
+[`verification/gui-cli-parity.md`](verification/gui-cli-parity.md);
+exact scope: the 213-a strategic work order; claims and evidence: the
+immutable 213-a report.
+
+### Still open
+
+G11-G15 and G17-G18 remain open as documented in section 9; nothing in
+213-a touches them. The final 219 installed whole-GUI qualification and
+the remaining objectives stay mandatory; 213-a makes no
+installed-qualification, deployment, live-provider, or real-Codex
+replay-usage claim.

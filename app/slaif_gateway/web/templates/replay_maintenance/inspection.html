@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}Replay inspection{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="replay-inspection-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations / Replay maintenance</p>
+      <h1 id="replay-inspection-heading">Read-only inspection</h1>
+      <p class="lead">{{ scope_label }} - inspected {{ summary.now }}. This page writes
+      nothing.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="{{ scope_href }}">Back to the scope</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="inspection-totals-heading">
+    <h2 id="inspection-totals-heading">Scope totals</h2>
+    <dl>
+      <dt>Scope</dt><dd><code>{{ summary.scope_text }}</code></dd>
+      <dt>Keys in scope</dt>
+      <dd>{{ summary.keys_count | num }} ({{ summary.keys_active_or_valid | num }} active/valid)</dd>
+      <dt>Retained references</dt>
+      <dd>{{ summary.references | num }} ({{ summary.active_references | num }} active,
+      {{ summary.expired_references | num }} expired)</dd>
+      <dt>Created range (UTC)</dt>
+      <dd>{{ summary.created_min }} .. {{ summary.created_max }}</dd>
+      <dt>Expiry range (UTC)</dt>
+      <dd>{{ summary.expiry_min }} .. {{ summary.expiry_max }}</dd>
+      <dt>Configured default lifetime</dt>
+      <dd>{{ summary.configured_ttl_seconds | num }} seconds from original creation</dd>
+    </dl>
+  </section>
+
+  <section class="action-panel" aria-labelledby="inspection-perkey-heading">
+    <h2 id="inspection-perkey-heading">Per-key aggregates</h2>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Per-key replay reference aggregates">
+      <table data-sortable class="table-wide">
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th class="col-key" scope="col">Key</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="nowrap">References</th>
+            <th scope="col" class="nowrap">Active</th>
+            <th scope="col" class="nowrap">Expired</th>
+            <th scope="col">Created (UTC)</th>
+            <th scope="col">Expiry (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in summary.per_key %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td class="col-key nowrap" data-sort-value="{{ row.key_id }}">
+              {% if row.key_href %}<a href="{{ row.key_href }}">{{ row.key_id }}</a>{% else %}{{ row.key_id }}{% endif %}
+            </td>
+            <td data-sort-value="{{ row.key_status }}">{{ row.key_status }}</td>
+            <td data-sort-value="{{ row.references }}">{{ row.references | num }}</td>
+            <td data-sort-value="{{ row.active_references }}">{{ row.active_references | num }}</td>
+            <td data-sort-value="{{ row.expired_references }}">{{ row.expired_references | num }}</td>
+            <td class="nowrap" data-sort-value="{{ row.created_min }}">{{ row.created_min }} .. {{ row.created_max }}</td>
+            <td class="nowrap" data-sort-value="{{ row.expiry_min }}">{{ row.expiry_min }} .. {{ row.expiry_max }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort class="empty-state"><td colspan="8">No retained replay references in this scope.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="inspection-groups-heading">
+    <h2 id="inspection-groups-heading">Route / model groups</h2>
+    {% if summary.route_model_groups_truncated %}
+    <p class="muted">Showing the bounded {{ summary.route_model_groups | length | num }} of
+    {{ summary.route_model_groups_total | num }} distinct groups (explicit truncation; the
+    complete set stays in the database).</p>
+    {% endif %}
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Route and model groups with retained replay references">
+      <table data-sortable class="table-wide">
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th class="col-key" scope="col">Route</th>
+            <th scope="col">Requested model</th>
+            <th scope="col" class="nowrap">References</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for group in summary.route_model_groups %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td class="col-key nowrap" data-sort-value="{{ group.route_id }}">
+              {% if group.route_href %}<a href="{{ group.route_href }}">{{ group.route_id }}</a>{% else %}{{ group.route_id }}{% endif %}
+            </td>
+            <td data-sort-value="{{ group.requested_model }}">{{ group.requested_model }}</td>
+            <td data-sort-value="{{ group.references }}">{{ group.references | num }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort class="empty-state"><td colspan="4">No route/model groups in this scope.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="action-panel" aria-labelledby="inspection-reasons-heading">
+    <h2 id="inspection-reasons-heading">Exclusion / reuse-limit reasons (at configured lifetime)</h2>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Exclusion reason counts">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Reason</th>
+            <th scope="col" class="nowrap">References</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for reason in summary.reasons %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <th scope="row">{{ reason.label }}</th>
+            <td data-sort-value="{{ reason.count }}">{{ reason.count | num }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort class="empty-state"><td colspan="3">No exclusion reasons.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Expiry eligibility here is maintenance state, not client or model
+    readiness, and not replay authorization. No raw reference identifiers, provider
+    identifiers, HMAC digests, stored content, or secrets appear on this page.</p>
+  </section>
+</section>
+{% endblock %}
