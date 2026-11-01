@@ -401,6 +401,88 @@ def test_admin_v2_ready_route_shows_profile_facts_and_artifact_links(monkeypatch
     assert client.get(f"/admin/routes/{route.id}/codex-profile/base").status_code == 404
 
 
+def test_admin_codex_artifact_download_is_read_only_and_no_store(monkeypatch) -> None:
+    """Route artifact downloads must authenticate read-only (touch=False,
+    no CSRF refresh) and mark success plus fixed-error responses
+    no-store; the existing UUID/ready/profile gates stay intact."""
+    route = replace(
+        _route(),
+        codex_qualification_state="protocol_qualified",
+        codex_qualification_badge=f"Protocol-qualified: profile {CODEX_PROFILE_ID} / metadata v2",
+        codex_qualification_reason_codes=(),
+        codex_protocol_ready=True,
+        codex_profile_id=CODEX_PROFILE_ID,
+        codex_metadata_version=2,
+        codex_cli_version="0.147.0",
+        codex_profile_name="slaif",
+        codex_provider_kind="openai",
+        codex_provider_display_name="OpenAI",
+        codex_wire_api="responses",
+        codex_real_provider_e2e=True,
+    )
+
+    async def get_route_detail(self, route_id):
+        return route
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.get_route_detail",
+        get_route_detail,
+    )
+
+    admin_user = _admin_user()
+    admin_session = _admin_session(admin_user)
+    touches: list[object] = []
+    refresh_calls: list[object] = []
+
+    async def validate_admin_session(self, **kwargs):
+        touches.append(kwargs.get("touch", "missing"))
+        return AdminSessionContext(admin_user=admin_user, admin_session=admin_session)
+
+    async def refresh_csrf_token(self, **kwargs):
+        refresh_calls.append(kwargs)
+        return "rotated-csrf"
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.validate_admin_session",
+        validate_admin_session,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.AdminSessionService.refresh_csrf_token",
+        refresh_csrf_token,
+    )
+
+    client = TestClient(_app(_settings(PUBLIC_BASE_URL="http://127.0.0.1:8000/v1")))
+    client.cookies.set("slaif_admin_session", "session-plaintext")
+
+    artifact = client.get(f"/admin/routes/{route.id}/codex-profile/base")
+    assert artifact.status_code == 200
+    assert "no-store" in artifact.headers.get("cache-control", "")
+    assert "api.openai.example" not in artifact.text
+    # Read-only authentication: no last-seen touch, no CSRF rotation.
+    assert touches == [False]
+    assert refresh_calls == []
+
+    # Gates unchanged: not-ready route refuses with a no-store 404.
+    async def get_not_ready(self, route_id):
+        return replace(route, codex_protocol_ready=False)
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.get_route_detail",
+        get_not_ready,
+    )
+    refused = client.get(f"/admin/routes/{route.id}/codex-profile/base")
+    assert refused.status_code == 404
+    assert "no-store" in refused.headers.get("cache-control", "")
+    assert touches == [False, False]
+
+    # Malformed route UUID still refuses before any catalog read.
+    malformed = client.get("/admin/routes/not-a-uuid/codex-profile/base")
+    assert malformed.status_code == 404
+    assert "no-store" in malformed.headers.get("cache-control", "")
+    assert touches == [False, False]
+    assert refresh_calls == []
+
+
 def test_admin_pricing_and_fx_routes_return_html_and_accept_filters(monkeypatch) -> None:
     pricing = _pricing()
     fx_rate = _fx()

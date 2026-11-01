@@ -10,6 +10,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from slaif_gateway import metrics as metrics_module
 from slaif_gateway.api.admin import router as admin_router
+from slaif_gateway.api.admin_compatibility import (
+    router as admin_compatibility_router,
+)
 from slaif_gateway.api.admin_provider_route_configuration import (
     router as admin_provider_route_configuration_router,
 )
@@ -94,6 +97,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 211-a: operations GUI (content-free request diagnostics + safe
     # process-configuration inspection); one-way helper reuse from admin.py.
     app.include_router(admin_operations_router)
+    # 212-a: reviewed Codex compatibility management (G10): inspection,
+    # preset export, and the shared CLI's exact module upgrade/rollback or
+    # profile migration through dry-run -> signed review -> confirmed apply.
+    app.include_router(admin_compatibility_router)
     app.include_router(openai_compat_router)
 
     return app

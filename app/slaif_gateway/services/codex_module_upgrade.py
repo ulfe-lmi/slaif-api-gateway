@@ -96,6 +96,65 @@ _LEGAL_TRANSITIONS = frozenset(
 _CLIENT_MODULE_FIELDS = frozenset({"id", "version", "fixture_sha256"})
 _REASON_PATTERN = re.compile(r"^[\x20-\x7E]{8,200}$")
 
+# Read-only legal-fact helpers (212-a).  These derive presentation facts
+# from the frozen tuples/edges above; they never mutate state and change
+# no CLI default law.
+_SELECTOR_ORDER = (
+    _UPGRADE_SOURCE_TARGET,
+    _UPGRADE_TARGET_0149_V5,
+    _UPGRADE_TARGET_0162_V1,
+    _UPGRADE_TARGET_0162_V2,
+)
+_UPGRADE_EDGES = frozenset(
+    {
+        (_UPGRADE_SOURCE_TARGET, _UPGRADE_TARGET_0149_V5),
+        (_UPGRADE_SOURCE_TARGET, _UPGRADE_TARGET_0162_V1),
+        (_UPGRADE_TARGET_0162_V1, _UPGRADE_TARGET_0162_V2),
+    }
+)
+
+
+def module_selector(module: Mapping[str, str]) -> str | None:
+    """Return the exact frozen selector of one exact tuple, else None.
+
+    Only the four frozen compatibility tuples carry selectors; a 0.162
+    data revision of 3 or higher (or any other module) has no selector and
+    is therefore outside the module upgrade/rollback law.
+    """
+    facts = _module_facts(module)
+    for selector in _SELECTOR_ORDER:
+        if selector == _UPGRADE_SOURCE_TARGET:
+            frozen = CODEX_0149_V4_CLIENT_MODULE
+        else:
+            frozen = UPGRADE_TARGET_CLIENT_MODULES[selector]
+        if facts == _module_facts(frozen):
+            return selector
+    return None
+
+
+def legal_module_operations(module: Mapping[str, str]) -> tuple[tuple[str, str], ...]:
+    """The (operation, target_selector) pairs legal from this exact pin.
+
+    Derived ONLY from the frozen transition set: an upgrade edge names the
+    "upgrade" operation, every other legal edge names "rollback".  No
+    direct cross-family/version move is ever synthesized.
+    """
+    source = module_selector(module)
+    if source is None:
+        return ()
+    pairs: list[tuple[str, str]] = []
+    for edge_source, edge_target in sorted(_LEGAL_TRANSITIONS):
+        if edge_source != source:
+            continue
+        operation = "upgrade" if (edge_source, edge_target) in _UPGRADE_EDGES else "rollback"
+        pairs.append((operation, edge_target))
+    return tuple(pairs)
+
+
+def is_0162_profile_module(module: Mapping[str, str]) -> bool:
+    """True when the exact tuple belongs to the 0.162 compatibility module."""
+    return str(module.get("id", "")) == CODEX_0162_CLIENT_MODULE_ID
+
 
 class CodexModuleUpgradeError(RecordServiceError):
     """Safe operator-facing error for the bounded client-module mutation.
@@ -334,6 +393,7 @@ async def migrate_codex_0162_key_profile(
     actor_admin_id: uuid.UUID | None,
     reason: str,
     apply: bool,
+    expected_target_module: Mapping[str, str] | None = None,
 ) -> CodexModuleUpgradeResult:
     """Migrate one key's 0.162 pinned profile tuple, explicitly and audited.
 
@@ -346,6 +406,13 @@ async def migrate_codex_0162_key_profile(
     exact target is a no-op with no audit record; a drifted or malformed
     source fails closed.  Only the ``client_module`` metadata is written,
     in one transaction with the audit record, under the row lock.
+
+    ``expected_target_module`` (212-a) is an optional exact-tuple guard:
+    when provided, the resolved target (including the symbolic ``active``
+    selector) must equal it at THIS process's actual target resolution, so
+    a reviewer that bound one active tuple cannot be applied by a worker
+    whose registry resolves a different one.  Omitted (all existing CLI
+    callers), behavior is unchanged.
     """
     _validate_reason(reason)
     source_version = _validate_profile_version(from_version)
@@ -373,6 +440,25 @@ async def migrate_codex_0162_key_profile(
             "The profile migration target is not an approved target.",
             code="codex_profile_migration_target_invalid",
         )
+    if expected_target_module is not None:
+        if (
+            not isinstance(expected_target_module, Mapping)
+            or set(expected_target_module) != _CLIENT_MODULE_FIELDS
+            or not all(
+                isinstance(expected_target_module.get(field), str)
+                and expected_target_module.get(field)
+                for field in _CLIENT_MODULE_FIELDS
+            )
+        ):
+            raise CodexModuleUpgradeError(
+                "The reviewed target identity is invalid; review the migration again.",
+                code="codex_profile_migration_target_invalid",
+            )
+        if _module_facts(target_module) != _module_facts(expected_target_module):
+            raise CodexModuleUpgradeError(
+                "The active Codex profile identity changed; review the migration again.",
+                code="codex_profile_migration_target_drifted",
+            )
     if source_version == target_module["version"] and (
         source_digest != target_module["fixture_sha256"]
     ):

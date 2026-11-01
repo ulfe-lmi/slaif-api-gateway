@@ -622,6 +622,32 @@ class TestRouteConfigurationApply:
         assert "not valid for this signed-in admin" in response.text
         assert state.execute_calls == []
 
+    def test_cross_purpose_compatibility_token_refused(
+        self, client: TestClient, state: _State
+    ) -> None:
+        # 212-a: a validly signed Codex-compatibility review token is a
+        # different signed purpose: the route-configuration verifier
+        # refuses it and the plan never executes.
+        from slaif_gateway.api.admin_review_intent import (
+            build_compatibility_review_token,
+        )
+        from tests.unit.test_admin_compatibility_212 import _module_review_doc
+
+        settings = _settings()
+        token = build_compatibility_review_token(
+            admin_session_secret=settings.ADMIN_SESSION_SECRET,
+            admin_user_id=ADMIN_ID,
+            admin_session_id=SESSION_ID,
+            review_document=_module_review_doc(
+                operation="module_upgrade", expected_source="0149-v4", target="0149-v5"
+            ),
+        )
+        response = _apply_post(client, token)
+        assert response.status_code == 400
+        # a different signed purpose is refused, never executed
+        assert "not valid for this signed-in admin" in response.text
+        assert state.execute_calls == []
+
     def test_stale_provider_context_refused(self, client: TestClient, state: _State) -> None:
         token = _reviewed_token(state, priority=50)
         state.execute_exc = ProviderRouteStaleError(

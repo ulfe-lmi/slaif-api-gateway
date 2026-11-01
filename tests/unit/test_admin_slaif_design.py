@@ -304,7 +304,11 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
     # 210-a: +1 for the reviewed route-configuration diff scroll region.
     # 211-a: +3 for the operations tables (lookup candidates, API
     # process settings, upstream LLM profiles).
-    assert wrappers == 28
+    # 212-a: +3 for the compatibility tables (index qualification,
+    # index presets, review tuples). The preset document region is a
+    # dual-class "config-json table-wrap" (labeled/focusable too) and is
+    # not matched by this single-class probe.
+    assert wrappers == 31
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

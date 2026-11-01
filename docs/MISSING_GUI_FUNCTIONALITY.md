@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G09-G15 and G17-G18 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09, G11-G15 and G17-G18 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -62,7 +62,7 @@ The HTTP-handler and CLI-command counts are inventory counts, not a parity score
 | Usage | `usage export` | Filtered usage ledger/detail and bounded, confirmed CSV export | Partial: no grouped summary or live-burn aggregate page; JSON export and filter contracts also differ (G11). |
 | Email | `email list/show/send-pending-key` | Delivery list/detail, secret lifecycle status, send-now and enqueue confirmations | Partial: newer inspection projection, explicit failed-retry intent/audit, and SMTP test are not fully mirrored (G12). |
 | OpenAI-assisted proposals | `openai-assisted pricing-proposal/route-proposal` | Proposal forms, model/source/filter choices, returned TSV and import-preview bridge | Already present. These are proposals, not the sealed catalog-refresh pipeline. CLI ENV/path flags need not become arbitrary browser inputs. |
-| Codex readiness and profile artifacts | `codex inspect/profile` | Route-level readiness/reason badges and credential-free base/profile/catalog downloads for ready registered profiles | Partial: route-specific features exist; global inspection, data-profile management and existing-key migrations are missing (G10/G16). |
+| Codex readiness and profile artifacts | `codex inspect/profile` | Route-level readiness/reason badges and credential-free base/profile/catalog downloads for ready registered profiles; global readiness inspection, preset inspection/export and reviewed existing-key migrations (212-a, section 14) | Route-level features pre-existed; G10 delivered by 212-a (section 14). Host-file deployment/activation remains separately controlled. |
 
 ### GUI capabilities that are not missing merely because they lack a matching CLI verb
 
@@ -766,3 +766,71 @@ G09-G15 and G17-G18 remain open as documented in section 9; nothing in
 211-a touches them. The final 219 installed whole-GUI qualification and
 the remaining objectives stay mandatory; 211-a makes no
 installed-qualification or deployment claim.
+
+## 14. Delivery status (objective 212-a)
+
+Delivered by 212-a (`oap/212-gui-codex-compatibility`, one PR), synthetic
+fixture data only, no new schema/migrations:
+
+- **G10**: an Operations / Codex Compatibility surface with three
+  entries (Operations index card, key detail link, route detail
+  "Codex compatibility" line) over the existing read-only contracts:
+  - a **Choose a key** entry (the existing key workflow owns selection)
+    plus a **Registered Codex qualification** table - shared readiness
+    state, named profile, module/data identity and exact reasons for
+    declared routes, with canonical credential-free artifact links on
+    ready rows only;
+  - an **API startup data identity** section showing the validated
+    0.162 snapshot this API process adopted (updating the host file
+    without a restart does NOT change what "active" resolves to - it
+    still points at the old adopted snapshot; to migrate to a newer
+    file, restart to adopt it, then run a fresh review/migration to
+    that active identity; worker target drift still refuses);
+  - **Validated shipped presets** (bounded safe facts, exact
+    identity strings) with an authenticated exact-document inspect
+    page and a private no-store export;
+  - a **per-key binding page**: the exact stored
+    (module, version, fixture digest) tuple, ONE finite operation
+    selector (legal module upgrade/rollback, or data-profile migration
+    to the active profile / approved frozen tuples), an 8-200
+    printable-ASCII audit reason saved verbatim, a 15-minute reviewed
+    preview (dry run), explicit confirmation, and an audited apply.
+    Nothing changes until confirmation; the exact repeat of an applied
+    token is a safe no-op ("Already at target"); rollback is offered
+    from the target pin. There is **no automatic key migration** and
+    host-file deployment/activation remains separately controlled.
+- The route Codex-profile artifact downloads became a read-only
+  attachment boundary (no form-CSRF rotation, no-store on success and
+  fixed errors) now that the global Compatibility surface links them.
+- Preexisting, out of scope for 212-a: the registered OpenAI 0.147
+  qualification profile declares `provider_kind="openai"`, which the
+  stored-provider kind constraint (openai_compatible/module) can never
+  satisfy, so a v2-declared gpt-5.6-sol route cannot reach
+  protocol_qualified in a real database. The 212-a ready-route
+  qualification uses the registered qwen38-27b 0.162 profile
+  (openai_compatible, single /v1/responses endpoint) instead. No
+  backend/registry/schema change is made or implied by 212-a.
+
+Bounded paths: new `api/admin_compatibility.py` router +
+`compatibility/` templates; `main.py` router registration; `admin.py`
+`_admin_attachment_context(touch=)` keyword and the codex-profile
+artifact handler attachment fix; `operations/index.html`,
+`keys/detail.html`, `routes/detail.html` entries; new unit / native-PG
+/ Chromium test modules; touched guard inventories. The signed
+review-apply flow reuses the shared Core orchestration: Core write law
+and default CLI behavior are preserved, using only the optional
+expected-target guard and read-only facts seam added by 212-a.
+
+Operator walkthrough: section 13 of
+[`admin-usability.md`](admin-usability.md); verification record and
+chronology: the 212-a section of
+[`verification/gui-cli-parity.md`](verification/gui-cli-parity.md);
+exact scope: the 212-a strategic work order; claims and evidence: the
+immutable 212-a report.
+
+### Still open
+
+G09, G11-G15 and G17-G18 remain open as documented in section 9;
+nothing in 212-a touches them. The final 219 installed whole-GUI
+qualification and the remaining objectives stay mandatory; 212-a makes
+no installed-qualification, deployment, or live-provider claim.

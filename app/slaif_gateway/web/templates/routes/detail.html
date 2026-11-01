@@ -52,6 +52,7 @@
         <dt>Codex provider identity</dt><dd>{{ route.codex_provider_display_name or route.codex_provider_kind or "None" }}</dd>
         <dt>Codex wire API</dt><dd>{{ route.codex_wire_api or "None" }}</dd>
         <dt>Codex paired route</dt><dd>{% if route.codex_paired_route_id %}<a href="/admin/routes/{{ route.codex_paired_route_id }}">{{ route.codex_paired_route_id }}</a>{% else %}None{% endif %}</dd>
+        <dt>Codex compatibility</dt><dd><a href="/admin/operations/compatibility/">Compatibility data and reviewed key migrations</a></dd>
         <dt>Created</dt><dd>{{ route.created_at.isoformat() }}</dd>
         <dt>Updated</dt><dd>{{ route.updated_at.isoformat() }}</dd>
       </dl>

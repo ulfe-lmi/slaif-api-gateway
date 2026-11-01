@@ -808,6 +808,28 @@ def test_apply_wrong_actor_refused(client, state: _State) -> None:
     assert not state.execute_calls
 
 
+def test_apply_cross_purpose_compatibility_token_refused(
+    client, state: _State
+) -> None:
+    # 212-a: a validly signed Codex-compatibility review token is a
+    # different signed purpose: the clone verifier refuses it and the
+    # clone plan never executes.
+    from tests.unit.test_admin_compatibility_212 import _module_review_doc
+
+    token = intent.build_compatibility_review_token(
+        admin_session_secret=_settings().ADMIN_SESSION_SECRET,
+        admin_user_id=ADMIN_ID,
+        admin_session_id=SESSION_ID,
+        review_document=_module_review_doc(
+            operation="module_upgrade", expected_source="0149-v4", target="0149-v5"
+        ),
+    )
+    result = _apply(client, token)
+    assert result.status_code == 400
+    assert "not valid for this signed-in admin" in result.text
+    assert not state.execute_calls
+
+
 def test_apply_expired_refused(client, state: _State) -> None:
     token = intent.build_review_intent_token(
         admin_session_secret="s" * 40,

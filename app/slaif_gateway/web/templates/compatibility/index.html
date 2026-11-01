@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block title %}Codex Compatibility{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="compatibility-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations</p>
+      <h1 id="compatibility-heading">Codex Compatibility</h1>
+      <p class="muted">Registered qualification and compatibility data, validated presets, and reviewed per-key migrations. Configuration inspection only: no live client or provider proof.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/">Operations</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="compatibility-choose-heading">
+    <h2 id="compatibility-choose-heading">Manage one key's compatibility binding</h2>
+    <p class="muted">Key selection and search live in the existing key workflow. Open a key from the keys list and continue to its compatibility review from the key detail page.</p>
+    <p><a class="button-link" href="/admin/keys">Choose a key</a></p>
+  </section>
+
+  <section class="action-panel" aria-labelledby="compatibility-qualification-heading">
+    <h2 id="compatibility-qualification-heading">Registered Codex qualification</h2>
+    {% if qualification_error %}
+    <p class="warning-text">The qualification projection is unavailable right now; the table was not read. No rows are implied.</p>
+    {% else %}
+    <p class="muted">Shared readiness facts for declared Codex routes: named profile, module/data identity, and exact reasons. Ready rows keep their canonical credential-free artifact downloads; unready rows have none.</p>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Registered Codex qualification rows">
+      <table data-sortable class="table-wide">
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">State</th>
+            <th scope="col">Model</th>
+            <th scope="col">Provider</th>
+            <th scope="col">Endpoint</th>
+            <th scope="col">Route</th>
+            <th scope="col">Profile</th>
+            <th scope="col">Client module</th>
+            <th scope="col">Reasons</th>
+            <th scope="col">Artifacts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in qualification_rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td data-sort-value="{{ "1" if row.ready else "0" }}" class="nowrap">{{ row.state_label }}</td>
+            <td>{{ row.requested_model }}</td>
+            <td>{{ row.provider }}</td>
+            <td><code>{{ row.endpoint }}</code></td>
+            <td>{% if row.route_href %}<a href="{{ row.route_href }}"><code>{{ row.route_id }}</code></a>{% else %}<code>{{ row.route_id }}</code>{% endif %}</td>
+            <td data-sort-value="{{ row.profile }}">{{ row.profile }}</td>
+            <td data-sort-value="{{ row.module }}">{{ row.module }}</td>
+            <td data-sort-value="{{ row.reasons }}">{{ row.reasons }}</td>
+            <td>
+              {% if row.artifacts %}
+              {% if row.artifacts.base %}<a href="/admin/routes/{{ row.route_id }}/codex-profile/base">Base fragment</a> · {% endif %}<a href="/admin/routes/{{ row.route_id }}/codex-profile/profile">Codex config</a>{% if row.artifacts.catalog %} · <a href="/admin/routes/{{ row.route_id }}/codex-profile/catalog">Model catalog</a>{% endif %}
+              {% else %}None{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not qualification_rows %}
+          <tr data-no-sort class="empty-state"><td colspan="10">No declared Codex routes.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="action-panel" aria-labelledby="compatibility-startup-heading">
+    <h2 id="compatibility-startup-heading">API startup data identity</h2>
+    <p class="muted">The validated compatibility data snapshot THIS API process adopted at startup (module, data revision, digest, provenance). It is distinct from the qualification profile column above and from the upstream LLM profiles. A configured-file inspection by another process is not API adoption: updating the file requires an operator restart to take effect here.</p>
+    {% if startup_profile_facts is none %}
+    <p class="warning-text">Startup compatibility snapshot unavailable: the API has no validated 0.162 profile loaded. Key data-profile migration to "active" is refused until the API restarts with a valid profile.</p>
+    {% else %}
+    <dl>
+      {% for key, value in startup_profile_facts.items() %}
+      <dt>{{ key }}</dt><dd><code>{{ value }}</code></dd>
+      {% endfor %}
+    </dl>
+    {% endif %}
+  </section>
+
+  <section class="action-panel" aria-labelledby="compatibility-presets-heading">
+    <h2 id="compatibility-presets-heading">Validated shipped presets</h2>
+    <p class="muted">Compatibility presets validated at load: bounded safe facts only (no CLI filesystem paths, no credentials). Registered and loaded never means every newer Codex is supported. Export is an authenticated private download of the exact validated document (64 KiB bound, no-store).</p>
+    {% if presets_error %}
+    <p class="warning-text">The preset registry is unavailable right now; the table was not read.</p>
+    {% else %}
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Validated shipped compatibility presets">
+      <table data-sortable class="table-wide">
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Preset</th>
+            <th scope="col">Data revision</th>
+            <th scope="col">Data digest</th>
+            <th scope="col">CLI version</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for preset in presets %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td data-sort-value="{{ preset.name }}" class="nowrap"><code>{{ preset.name }}</code></td>
+            <td data-sort-value="{{ preset.revision }}" class="nowrap"><code>{{ preset.revision }}</code></td>
+            <td data-sort-value="{{ preset.digest }}"><code>{{ preset.digest }}</code></td>
+            <td data-sort-value="{{ preset.cli_version }}">{{ preset.cli_version }}</td>
+            <td>
+              {% if preset.inspect_href %}
+              <a href="{{ preset.inspect_href }}">Inspect</a>
+              · <a href="{{ preset.download_href }}">Download JSON</a>
+              {% else %}None{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          {% if not presets %}
+          <tr data-no-sort class="empty-state"><td colspan="6">No shipped presets are registered.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </section>
+</section>
+{% endblock %}

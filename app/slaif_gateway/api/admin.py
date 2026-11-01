@@ -5974,36 +5974,55 @@ async def admin_codex_profile_artifact(
     route_id: str,
     artifact_name: str,
 ) -> Response:
-    """Download only artifacts from an actually ready registered profile."""
+    """Download only artifacts from an actually ready registered profile.
+
+    Read-only attachment boundary: authenticates without rotating form
+    CSRF (the origin page stays displayed) and marks every response,
+    including fixed errors, private/no-store.
+    """
+
+    def _artifact_error() -> Response:
+        response = _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
+        _set_no_store_headers(response)
+        return response
 
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
-        return _admin_not_found(request)
+        response = _admin_not_found(request)
+        _set_no_store_headers(response)
+        return response
     try:
         parsed_route_id = uuid.UUID(route_id)
     except ValueError:
-        return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
-    page_context = await _admin_page_context(request)
-    if isinstance(page_context, Response):
-        return page_context
+        return _artifact_error()
+    attachment_context = await _admin_attachment_context(request, touch=False)
+    if isinstance(attachment_context, Response):
+        _set_no_store_headers(attachment_context)
+        return attachment_context
     async with _admin_catalog_dashboard_service_scope(request) as service:
         try:
             route = await service.get_route_detail(parsed_route_id)
         except AdminCatalogNotFoundError:
-            return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
-    if not route.codex_protocol_ready or not route.codex_profile_id:
-        return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
+            return _artifact_error()
+    if not (route.codex_protocol_ready and route.codex_profile_id):
+        return _artifact_error()
     try:
         artifacts = render_codex_profile(settings.PUBLIC_BASE_URL, route.codex_profile_id)
     except ValueError:
-        return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
+        return _artifact_error()
     if artifact_name == "base":
-        return Response(artifacts.base_config_toml, media_type="text/plain", headers={"Content-Disposition": 'attachment; filename="codex-provider.config.toml"'})
+        response = Response(artifacts.base_config_toml, media_type="text/plain", headers={"Content-Disposition": 'attachment; filename="codex-provider.config.toml"'})
+        _set_no_store_headers(response)
+        return response
     if artifact_name == "profile":
-        return Response(artifacts.profile_config_toml, media_type="text/plain", headers={"Content-Disposition": f'attachment; filename="{artifacts.profile}.config.toml"'})
+        response = Response(artifacts.profile_config_toml, media_type="text/plain", headers={"Content-Disposition": f'attachment; filename="{artifacts.profile}.config.toml"'})
+        _set_no_store_headers(response)
+        return response
     if artifact_name == "catalog" and artifacts.model_catalog_json is not None:
-        return Response(artifacts.model_catalog_json, media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{artifacts.model_catalog_target}"'})
-    return _admin_error_page(request, status_code=404, message="Codex profile artifact not found.")
+        response = Response(artifacts.model_catalog_json, media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{artifacts.model_catalog_target}"'})
+        _set_no_store_headers(response)
+        return response
+    return _artifact_error()
 
 
 @router.get("/routes/{route_id}", response_class=HTMLResponse)
@@ -8077,13 +8096,19 @@ async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, st
         return response
 
 
-async def _admin_attachment_context(request: Request) -> AdminSessionContext | Response:
+async def _admin_attachment_context(
+    request: Request, *, touch: bool = True
+) -> AdminSessionContext | Response:
     """Authenticate a read-only attachment WITHOUT rotating form CSRF.
 
     Same session validation, active/expired/revoked handling, and
     login-cookie behavior as page renders, but the stored CSRF token is
     left untouched: the origin page stays displayed after the download,
     so the still-visible form token on that page must remain valid.
+
+    ``touch`` is passed through to session validation (default True
+    preserves the existing call behavior); a fully read-only download
+    may pass ``touch=False`` so even the last-seen stamp is not written.
     """
     settings = _settings(request)
     session_token = request.cookies.get(settings.ADMIN_SESSION_COOKIE_NAME)
@@ -8092,7 +8117,9 @@ async def _admin_attachment_context(request: Request) -> AdminSessionContext | R
 
     try:
         async with _admin_service_scope(request) as service:
-            return await service.validate_admin_session(session_token=session_token)
+            return await service.validate_admin_session(
+                session_token=session_token, touch=touch
+            )
     except (AdminSessionError, RuntimeError):
         response = RedirectResponse("/admin/login", status_code=303)
         _clear_session_cookie(response, settings)

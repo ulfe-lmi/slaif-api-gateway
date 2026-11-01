@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+
+{% block title %}Codex compatibility: key {{ key.public_key_id }}{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="compat-key-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations / Codex Compatibility</p>
+      <h1 id="compat-key-heading">Key compatibility binding</h1>
+      <p class="muted">Inspect this key's current Codex compatibility and review an approved migration.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/compatibility/">Compatibility</a>
+      <a class="button-link secondary" href="/admin/keys/{{ key.id }}">Key detail</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="compat-key-facts-heading">
+    <h2 id="compat-key-facts-heading">Key</h2>
+    <dl>
+      <dt>Key ID</dt><dd><code>{{ key.public_key_id }}</code></dd>
+      <dt>Gateway key UUID</dt><dd><code>{{ key.id }}</code></dd>
+      <dt>Status</dt><dd>{{ key.computed_display_status }}</dd>
+      <dt>Owner</dt><dd>{{ key.owner_display_name or key.owner_email or "—" }}</dd>
+    </dl>
+  </section>
+
+  <section class="action-panel" aria-labelledby="compat-key-pin-heading">
+    <h2 id="compat-key-pin-heading">Current client-module binding</h2>
+    {% if pin is none %}
+    <p class="warning-text">No readable client-module binding on this key. The responses policy carries no well-formed <code>client_module</code> identity, so no legal module upgrade/rollback or data-profile migration is offered.</p>
+    {% else %}
+    <p class="muted">The exact (module ID, data version, fixture digest) tuple currently stored on this key. It is configuration metadata only - not a live client or provider proof.</p>
+    <dl>
+      <dt>Module ID</dt><dd><code>{{ pin.id }}</code></dd>
+      <dt>Version</dt><dd><code>{{ pin.version }}</code></dd>
+      <dt>Fixture SHA-256</dt><dd><code>{{ pin.fixture_sha256 }}</code></dd>
+      {% if selector %}
+      <dt>Selector</dt><dd><code>{{ selector }}</code></dd>
+      {% endif %}
+    </dl>
+    {% endif %}
+  </section>
+
+  <section class="action-panel" aria-labelledby="compat-key-migrate-heading">
+    <h2 id="compat-key-migrate-heading">Review one migration</h2>
+    {% if not options %}
+    <p class="muted">No approved migration is available for this binding. Approved hops: 0149-v4 upgrades to 0149-v5 or 0162-v1 (0162-v2 only via the explicit two-hop sequence); 0149-v5 rolls back to 0149-v4; 0162-v1 rolls back to 0149-v4 or upgrades to 0162-v2; 0162-v2 rolls back to 0162-v1. A 0.162 data pin also migrates to the API's current active data profile or the approved frozen 0.162 tuples.</p>
+    {% else %}
+    <form class="create-form" method="post" action="/admin/operations/compatibility/key/{{ key.id }}/review">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="from_version" value="{{ pin_raw.from_version }}">
+      <input type="hidden" name="from_digest" value="{{ pin_raw.from_digest }}">
+      <input type="hidden" name="pin_selector" value="{{ pin_raw.pin_selector }}">
+      <div class="form-grid">
+        <label>
+          Operation and target
+          <select name="operation_target" id="operation-target-select"
+                  aria-describedby="operation-target-help">
+            {% for value, label in options %}
+            <option value="{{ value }}" {% if value == default_operation %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <p class="field-help" id="operation-target-help">Choose an approved target. The next step shows the exact source and target before you confirm.</p>
+      <div class="form-grid">
+        <label>
+          Audit reason
+          <input type="text" id="migration-reason" name="reason" maxlength="200"
+                 autocomplete="off" aria-describedby="migration-reason-help">
+        </label>
+      </div>
+      <p class="field-help" id="migration-reason-help">Enter 8-200 printable ASCII characters explaining this change; for example, <em>Adopt reviewed Codex profile</em>. Saved exactly as entered. Do not include passwords or keys.</p>
+      <button type="submit">Dry-run and review</button>
+    </form>
+    <p class="muted">Nothing changes until you confirm. The preview expires after 15 minutes.</p>
+  {% endif %}
+  </section>
+</section>
+{% endblock %}
