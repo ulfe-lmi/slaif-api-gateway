@@ -1038,19 +1038,26 @@ pre-existing review helpers are unchanged.
   PASS receipt after the URL canaries joined it.
 - **Browser module (actual sequence)**: the first 2-case run failed 1
   case (42.688 s) - the Chat flag lives inside an intentionally
-  collapsed disclosure and was force-interacted while hidden; the fix
-  opens the disclosure by keyboard (focus the summary, Enter/Space) and
-  never forces hidden interaction. The targeted rerun then failed
+  collapsed disclosure, and the ordinary `select_option` was attempted
+  on the control while it was still hidden; the fix opens the
+  disclosure by keyboard first (focus the summary, Enter/Space) and
+  only touches the flag once visible. The targeted rerun then failed
   (11.197 s) on an unsupported oracle - the result template does not
   render the audit reason, so the DB audit assertion is authoritative;
   corrected, the case passed (10.808 s). The first FULL 8-case run
-  failed 4 cases (78.933 s), all fixture/oracle/navigation defects
-  (the provider is picked BEFORE the dependent requested model - the
-  picker parent change clears the dependent; the edit redirect carries
-  a `?message` query; the readable cost is asserted field-scoped; the
-  >100 selection must toggle each distinct initial option; the runner's
-  outer owned PG was removed so the browser fixture is the sole
-  container owner). The second FULL run failed 2 cases (21.927 s):
+  failed 4 cases (78.933 s), all fixture/oracle defects: the
+  full-replacement raw-document expectation ignored the shared-
+  normalized canonical defaults (stored state is the reviewed
+  canonical target, so e.g. chat_text true -> true is correctly
+  absent from the leaf diff); the no-JS notes label expected
+  "No notes." where the template actually renders "(none)"; the
+  provider redirect success check did not allow the `?message`
+  query; and the route-creation fixture selected the requested model
+  before its provider, whose picker parent change clears the
+  dependent selection. Separately (setup correction, not one of the
+  four test failures): the runner's unused outer owned PG was removed
+  so the browser fixture is the sole container owner. The second FULL
+  run failed 2 cases (21.927 s):
   ONE was a REAL shared persistence defect - the reviewed preview
   promised a null notes target while the repository treated
   `notes=None` as preserve - repaired through the root-approved
