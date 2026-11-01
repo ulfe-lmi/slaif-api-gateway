@@ -240,7 +240,10 @@ def test_admin_owner_routes_return_html_and_accept_filters(monkeypatch) -> None:
     assert owner.display_name in detail.text
     assert seen["email"] == owner.email
     assert seen["institution_id"] == owner.institution_id
-    assert seen["limit"] == 25
+    # 214-a: the paged handler fetches limit+1 (cap+1 has_more); one
+    # row fetched means the page must NOT claim more
+    assert seen["limit"] == 26
+    assert "No more rows" in response.text
     assert seen["offset"] == 5
 
 
@@ -277,7 +280,10 @@ def test_admin_institution_routes_return_html_and_accept_filters(monkeypatch) ->
     assert institution.name in response.text
     assert institution.name in detail.text
     assert seen["name"] == "slaif"
-    assert seen["limit"] == 20
+    # 214-a: the paged handler fetches limit+1 (cap+1 has_more); one
+    # row fetched means the page must NOT claim more
+    assert seen["limit"] == 21
+    assert "No more rows" in response.text
     assert seen["offset"] == 2
 
 
@@ -315,7 +321,10 @@ def test_admin_cohort_routes_return_html_and_accept_filters(monkeypatch) -> None
     assert cohort.name in detail.text
     assert seen["name"] == "spring"
     assert seen["active"] is True
-    assert seen["limit"] == 10
+    # 214-a: the paged handler fetches limit+1 (cap+1 has_more); one
+    # row fetched means the page must NOT claim more
+    assert seen["limit"] == 11
+    assert "No more rows" in response.text
     assert seen["offset"] == 1
 
 

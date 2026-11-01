@@ -1,0 +1,40 @@
+{#-
+  214-a: shared Previous/Next navigation for admin offset/limit lists (G13).
+
+  Reusable no-JS filter-preserving navigation. Every actual offset/limit
+  list renders this partial; fixed bounded snapshot tables (no paging
+  contract) do not.
+
+  Required context:
+    page        AdminPage state (first_ordinal, can_prev, has_more, ...)
+    prev_url    allowlisted previous-page URL (may be "" when unavailable)
+    next_url    allowlisted next-page URL (may be "" when unavailable)
+    rows_shown  number of rows actually shown on this page
+    list_aria   human list label for the nav landmark
+
+  Semantics rendered:
+    - the first row ordinal continues across pages (offset + 1);
+    - "more" is honest: it comes from the cap+1 fetch, a full page alone
+      does NOT claim more results;
+    - previous/next availability matches the real offset state;
+    - the muted note states that ordinary offset paging can shift under
+      concurrent inserts (no frozen snapshot is promised).
+-#}
+<nav class="table-toolbar" aria-label="Pagination for {{ list_aria }}">
+  {% if rows_shown > 0 %}
+  <span class="rows-shown">Rows {{ page.first_ordinal | num }}–{{ (page.first_ordinal + rows_shown - 1) | num }} on this page</span>
+  {% else %}
+  <span class="rows-shown">No rows on this page</span>
+  {% endif %}
+  {% if page.can_prev %}
+  <a class="button-link secondary" href="{{ prev_url }}" rel="prev">&larr; Previous</a>
+  {% else %}
+  <span class="muted small">Beginning</span>
+  {% endif %}
+  {% if page.has_more %}
+  <a class="button-link" href="{{ next_url }}" rel="next">Next &rarr;</a>
+  {% else %}
+  <span class="muted small">No more rows</span>
+  {% endif %}
+</nav>
+<p class="muted small">Sorting applies to this page; new records may shift pages.</p>

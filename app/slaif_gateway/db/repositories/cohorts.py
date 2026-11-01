@@ -106,7 +106,9 @@ class CohortsRepository:
             statement = statement.where(active_filter if active else ~active_filter)
 
         statement = (
-            statement.order_by(Cohort.starts_at.desc().nullslast(), Cohort.name.asc()).limit(limit).offset(offset)
+            statement.order_by(
+                Cohort.starts_at.desc().nullslast(), Cohort.name.asc(), Cohort.id.asc()
+            ).limit(limit).offset(offset)
         )
         result = await self._session.execute(statement)
         return list(result.scalars().all())

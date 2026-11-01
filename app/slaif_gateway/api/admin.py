@@ -270,6 +270,11 @@ from slaif_gateway.utils.admin_list_filters import (
     normalize_filter_values,
     parse_uuid_filter_values,
 )
+from slaif_gateway.utils.admin_pagination import (
+    build_navigation_url,
+    build_page,
+    page_params,
+)
 from slaif_gateway.utils.redaction import redact_text
 from slaif_gateway.web.assets import asset_url
 from slaif_gateway.web.branding import (
@@ -939,16 +944,36 @@ async def list_admin_keys(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_key_dashboard_service_scope(request) as service:
-        rows = await service.list_keys(
+        fetched = await service.list_keys(
             status=status,
             owner_email=collapse_singleton(cleaned_owner_emails),
             public_key_id=collapse_singleton(cleaned_public_key_ids),
             institution_id=collapse_singleton(parsed_institution_ids),
             cohort_id=collapse_singleton(parsed_cohort_ids),
             expired=expired,
-            limit=limit,
+            # 214-a cap+1: a full page alone is not has_more.
+            limit=limit + 1,
             offset=offset,
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/keys",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *((("status", status),) if status else ()),
+            *[("owner_email", value) for value in (cleaned_owner_emails or ())],
+            *[("public_key_id", value) for value in (cleaned_public_key_ids or ())],
+            *[("institution_id", str(value)) for value in (parsed_institution_ids or ())],
+            *[("cohort_id", str(value)) for value in (parsed_cohort_ids or ())],
+            *((("expired", str(expired).lower()),) if expired is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", cleaned_owner_emails), ("key_public_id", "key_public_id", cleaned_public_key_ids), ("cohort", "cohort", parsed_cohort_ids), ("institution_id", "institution", parsed_institution_ids)))
 
@@ -961,6 +986,9 @@ async def list_admin_keys(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "keys": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Gateway keys",
             "filters": {
                 "status": status or "",
                 "owner_email": cleaned_owner_emails or (),
@@ -3466,13 +3494,30 @@ async def list_admin_owners(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_records_dashboard_service_scope(request) as service:
-        rows = await service.list_owners(
+        fetched = await service.list_owners(
             email=collapse_singleton(cleaned_emails),
             institution_id=collapse_singleton(parsed_institution_ids),
             cohort_id=collapse_singleton(parsed_cohort_ids),
-            limit=limit,
+            # 214-a cap+1: a full page alone is not has_more.
+            limit=limit + 1,
             offset=offset,
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/owners",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *[("email", value) for value in (cleaned_emails or ())],
+            *[("institution_id", str(value)) for value in (parsed_institution_ids or ())],
+            *[("cohort_id", str(value)) for value in (parsed_cohort_ids or ())],
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("email", "owner_email", cleaned_emails), ("institution_id", "institution", parsed_institution_ids), ("cohort_id", "cohort", parsed_cohort_ids)))
 
@@ -3485,6 +3530,9 @@ async def list_admin_owners(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "owners": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Owners",
             "filters": {
                 "email": cleaned_emails or (),
                 "institution_id": parsed_institution_ids or (),
@@ -3801,7 +3849,19 @@ async def list_admin_institutions(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_records_dashboard_service_scope(request) as service:
-        rows = await service.list_institutions(name=collapse_singleton(cleaned_names), limit=limit, offset=offset)
+        fetched = await service.list_institutions(name=collapse_singleton(cleaned_names), limit=limit + 1, offset=offset)  # 214-a cap+1
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/institutions",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[("name", value) for value in (cleaned_names or ())],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("name", "institution_name", cleaned_names),))
 
@@ -3813,6 +3873,9 @@ async def list_admin_institutions(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "institutions": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Institutions",
             "filters": {
                 "name": cleaned_names or (),
                 "limit": limit,
@@ -4054,7 +4117,22 @@ async def list_admin_cohorts(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_records_dashboard_service_scope(request) as service:
-        rows = await service.list_cohorts(name=collapse_singleton(cleaned_names), active=active, limit=limit, offset=offset)
+        fetched = await service.list_cohorts(name=collapse_singleton(cleaned_names), active=active, limit=limit + 1, offset=offset)  # 214-a cap+1
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/cohorts",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *[("name", value) for value in (cleaned_names or ())],
+            *((("active", str(active).lower()),) if active is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("name", "cohort_name", cleaned_names),))
 
@@ -4066,6 +4144,9 @@ async def list_admin_cohorts(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "cohorts": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Cohorts",
             "filters": {
                 "name": cleaned_names or (),
                 "active": "" if active is None else str(active).lower(),
@@ -4324,9 +4405,24 @@ async def list_admin_providers(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
-        rows = await service.list_providers(
-            provider=collapse_singleton(cleaned_providers), enabled=enabled, limit=limit, offset=offset
+        fetched = await service.list_providers(
+            provider=collapse_singleton(cleaned_providers), enabled=enabled, limit=limit + 1, offset=offset  # 214-a cap+1
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/providers",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *[("provider", value) for value in (cleaned_providers or ())],
+            *((("enabled", str(enabled).lower()),) if enabled is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("provider", "provider", cleaned_providers),))
 
@@ -4339,6 +4435,9 @@ async def list_admin_providers(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "providers": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Provider configs",
             "filters": {
                 "provider": cleaned_providers or (),
                 "enabled": "" if enabled is None else str(enabled).lower(),
@@ -5000,15 +5099,33 @@ async def list_admin_routes(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
-        rows = await service.list_routes(
+        fetched = await service.list_routes(
             provider=collapse_singleton(cleaned_providers),
             requested_model=collapse_singleton(cleaned_requested_models),
             match_type=match_type,
             enabled=enabled,
             visible=visible,
-            limit=limit,
+            limit=limit + 1,  # 214-a cap+1
             offset=offset,
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/routes",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *[("provider", value) for value in (cleaned_providers or ())],
+            *[("requested_model", value) for value in (cleaned_requested_models or ())],
+            *((("match_type", match_type),) if match_type else ()),
+            *((("enabled", str(enabled).lower()),) if enabled is not None else ()),
+            *((("visible", str(visible).lower()),) if visible is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("provider", "provider", cleaned_providers), ("model", "model", cleaned_requested_models)))
 
@@ -5021,6 +5138,9 @@ async def list_admin_routes(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "routes": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Model routes",
             "route_external_tool_policies": {
                 str(getattr(row, "id")): _external_tool_route_policy_for_display(
                     getattr(row, "capabilities", None),
@@ -5557,8 +5677,19 @@ async def create_admin_route(
         reason=reason,
     )
     try:
+        # 214-a: resolve provider existence with a bounded exact lookup
+        # before parsing; a provider slug format error still wins first.
+        try:
+            provider_slug = _parse_provider_slug(form.get("provider"))
+        except ValueError:
+            provider_slug = None
+        provider_exists = (
+            await _route_form_provider_exists(request, provider_slug)
+            if provider_slug is not None
+            else False
+        )
         parsed = _parse_model_route_form(
-            form, provider_choices=provider_choices, require_reason=True
+            form, provider_exists=provider_exists, require_reason=True
         )
         # 210-a: the creation intent (or the legacy checkbox when the
         # field is absent) determines the effective enabled state.
@@ -5792,8 +5923,19 @@ async def update_admin_route(
         reason=reason,
     )
     try:
+        # 214-a: resolve provider existence with a bounded exact lookup
+        # before parsing; a provider slug format error still wins first.
+        try:
+            provider_slug = _parse_provider_slug(form.get("provider"))
+        except ValueError:
+            provider_slug = None
+        provider_exists = (
+            await _route_form_provider_exists(request, provider_slug)
+            if provider_slug is not None
+            else False
+        )
         parsed = _parse_model_route_form(
-            form, provider_choices=provider_choices, require_reason=True
+            form, provider_exists=provider_exists, require_reason=True
         )
     except ValueError as exc:
         return _render_route_form(
@@ -6107,16 +6249,35 @@ async def list_admin_pricing_rules(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
-        rows = await service.list_pricing_rules(
+        fetched = await service.list_pricing_rules(
             provider=collapse_singleton(cleaned_providers),
             model=collapse_singleton(cleaned_models),
             endpoint=collapse_singleton(cleaned_endpoints),
             currency=collapse_singleton(cleaned_currencies),
             enabled=enabled,
             active=active,
-            limit=limit,
+            limit=limit + 1,  # 214-a cap+1
             offset=offset,
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/pricing",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *[("provider", value) for value in (cleaned_providers or ())],
+            *[("model", value) for value in (cleaned_models or ())],
+            *[("endpoint", value) for value in (cleaned_endpoints or ())],
+            *[("currency", value) for value in (cleaned_currencies or ())],
+            *((("enabled", str(enabled).lower()),) if enabled is not None else ()),
+            *((("active", str(active).lower()),) if active is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("provider", "provider", cleaned_providers), ("model", "model", cleaned_models), ("endpoint", "endpoint", cleaned_endpoints), ("currency", "currency", cleaned_currencies)))
 
@@ -6129,6 +6290,9 @@ async def list_admin_pricing_rules(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "pricing_rules": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Pricing rules",
             "filters": {
                 "provider": cleaned_providers or (),
                 "model": cleaned_models or (),
@@ -6847,14 +7011,31 @@ async def list_admin_fx_rates(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_catalog_dashboard_service_scope(request) as service:
-        rows = await service.list_fx_rates(
+        fetched = await service.list_fx_rates(
             base_currency=collapse_singleton(cleaned_base_currencies),
             quote_currency=collapse_singleton(cleaned_quote_currencies),
             source=collapse_singleton(cleaned_sources),
             active=active,
-            limit=limit,
+            limit=limit + 1,  # 214-a cap+1
             offset=offset,
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/fx",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *[("base_currency", value) for value in (cleaned_base_currencies or ())],
+            *[("quote_currency", value) for value in (cleaned_quote_currencies or ())],
+            *[("source", value) for value in (cleaned_sources or ())],
+            *((("active", str(active).lower()),) if active is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("base_currency", "currency", cleaned_base_currencies), ("quote_currency", "currency", cleaned_quote_currencies), ("source", "fx_source", cleaned_sources)))
 
@@ -6867,6 +7048,9 @@ async def list_admin_fx_rates(
             "csrf_token": csrf_token,
             "admin_status_message": _admin_status_message(request),
             "fx_rates": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "FX rates",
             "filters": {
                 "base_currency": cleaned_base_currencies or (),
                 "quote_currency": cleaned_quote_currencies or (),
@@ -7414,7 +7598,7 @@ async def list_admin_usage(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
-        rows = await service.list_usage(
+        fetched = await service.list_usage(
             provider=collapse_singleton(cleaned_providers),
             model=collapse_singleton(cleaned_models),
             endpoint=collapse_singleton(cleaned_endpoints),
@@ -7427,9 +7611,34 @@ async def list_admin_usage(
             streaming=streaming,
             start_at=start_at,
             end_at=end_at,
-            limit=limit,
+            limit=limit + 1,  # 214-a cap+1
             offset=offset,
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/usage",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *[("provider", value) for value in (cleaned_providers or ())],
+            *[("model", value) for value in (cleaned_models or ())],
+            *[("endpoint", value) for value in (cleaned_endpoints or ())],
+            *((("status", status),) if status else ()),
+            *[("gateway_key_id", str(value)) for value in (parsed_gateway_key_ids or ())],
+            *[("owner_id", str(value)) for value in (parsed_owner_ids or ())],
+            *[("institution_id", str(value)) for value in (parsed_institution_ids or ())],
+            *[("cohort_id", str(value)) for value in (parsed_cohort_ids or ())],
+            *[("request_id", value) for value in (cleaned_request_ids or ())],
+            *((("streaming", str(streaming).lower()),) if streaming is not None else ()),
+            *((("start_at", start_at.isoformat()),) if start_at is not None else ()),
+            *((("end_at", end_at.isoformat()),) if end_at is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("provider", "provider", cleaned_providers), ("model", "model", cleaned_models), ("endpoint", "endpoint", cleaned_endpoints), ("request_id", "request_id", cleaned_request_ids), ("gateway_key_id", "key", parsed_gateway_key_ids), ("owner_id", "owner", parsed_owner_ids), ("institution_id", "institution", parsed_institution_ids), ("cohort_id", "cohort", parsed_cohort_ids)))
 
@@ -7442,6 +7651,9 @@ async def list_admin_usage(
             "status_options": list(STATUS_VALUES_USAGE_LEDGER_ACCOUNTING),
             "csrf_token": csrf_token,
             "usage_rows": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Usage ledger",
             "filters": {
                 "provider": cleaned_providers or (),
                 "model": cleaned_models or (),
@@ -7672,7 +7884,7 @@ async def list_admin_audit_logs(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
-        rows = await service.list_audit_logs(
+        fetched = await service.list_audit_logs(
             actor_admin_id=collapse_singleton(parsed_actor_admin_ids),
             action=collapse_singleton(cleaned_actions),
             target_type=collapse_singleton(cleaned_target_types),
@@ -7680,9 +7892,29 @@ async def list_admin_audit_logs(
             request_id=collapse_singleton(cleaned_request_ids),
             start_at=start_at,
             end_at=end_at,
-            limit=limit,
+            limit=limit + 1,  # 214-a cap+1
             offset=offset,
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/audit",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *[("actor_admin_id", str(value)) for value in (parsed_actor_admin_ids or ())],
+            *[("action", value) for value in (cleaned_actions or ())],
+            *[("target_type", value) for value in (cleaned_target_types or ())],
+            *[("target_id", str(value)) for value in (parsed_target_ids or ())],
+            *[("request_id", value) for value in (cleaned_request_ids or ())],
+            *((("start_at", start_at.isoformat()),) if start_at is not None else ()),
+            *((("end_at", end_at.isoformat()),) if end_at is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("action", "audit_action", cleaned_actions), ("target_type", "audit_target_type", cleaned_target_types), ("target_id", "audit_target", parsed_target_ids, cleaned_target_types), ("request_id", "request_id", cleaned_request_ids), ("actor_admin_id", "audit_actor", parsed_actor_admin_ids)))
 
@@ -7694,6 +7926,9 @@ async def list_admin_audit_logs(
             "choices": choices,
             "csrf_token": csrf_token,
             "audit_logs": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Audit log",
             "filters": {
                 "actor_admin_id": parsed_actor_admin_ids or (),
                 "action": cleaned_actions or (),
@@ -7847,16 +8082,35 @@ async def list_admin_email_deliveries(
         return _admin_error_page(request, status_code=400, message=f"Invalid filter. {exc}")
 
     async with _admin_activity_dashboard_service_scope(request) as service:
-        rows = await service.list_email_deliveries(
+        fetched = await service.list_email_deliveries(
             status=status,
             owner_email=collapse_singleton(cleaned_owner_emails),
             gateway_key_id=collapse_singleton(parsed_gateway_key_ids),
             one_time_secret_id=collapse_singleton(parsed_one_time_secret_ids),
             start_at=start_at,
             end_at=end_at,
-            limit=limit,
+            limit=limit + 1,  # 214-a cap+1
             offset=offset,
         )
+
+    rows = fetched[:limit]
+    page_state = _admin_list_pagination(
+        request,
+        base_path="/admin/email-deliveries",
+        limit=limit,
+        offset=offset,
+        fetched_count=len(fetched),
+        filter_pairs=[
+            *((("status", status),) if status else ()),
+            *[("owner_email", value) for value in (cleaned_owner_emails or ())],
+            *[("gateway_key_id", str(value)) for value in (parsed_gateway_key_ids or ())],
+            *[("one_time_secret_id", str(value)) for value in (parsed_one_time_secret_ids or ())],
+            *((("start_at", start_at.isoformat()),) if start_at is not None else ()),
+            *((("end_at", end_at.isoformat()),) if end_at is not None else ()),
+        ],
+    )
+    if isinstance(page_state, Response):
+        return page_state
 
     choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", cleaned_owner_emails), ("gateway_key_id", "key", parsed_gateway_key_ids), ("one_time_secret_id", "one_time_secret", parsed_one_time_secret_ids)))
 
@@ -7868,6 +8122,9 @@ async def list_admin_email_deliveries(
             "choices": choices,
             "csrf_token": csrf_token,
             "email_deliveries": rows,
+            **page_state,
+            "rows_shown": len(rows),
+            "list_aria": "Email deliveries",
             "filters": {
                 "status": status or "",
                 "owner_email": cleaned_owner_emails or (),
@@ -8094,6 +8351,66 @@ async def _admin_page_context(request: Request) -> tuple[AdminSessionContext, st
         response = RedirectResponse("/admin/login", status_code=303)
         _clear_session_cookie(response, settings)
         return response
+
+
+def _admin_list_pagination(
+    request: Request,
+    *,
+    base_path: str,
+    limit: int,
+    offset: int,
+    fetched_count: int,
+    filter_pairs: list[tuple[str, str]],
+) -> dict[str, object] | Response:
+    """214-a: shared cap+1 page state for one admin offset/limit list.
+
+    ``fetched_count`` is the number of rows the handler fetched with the
+    cap+1 query (at most ``limit + 1``): a full page alone is NOT
+    ``has_more``.  The navigation URLs are built from the ALLOWLISTED,
+    ACCEPTED normalized filter pairs (repeated values preserved) plus
+    the page scope (limit/offset) - never a raw copy of the incoming
+    URL or unknown query parameters.
+    """
+
+    # 214-a: accepted text filters are additionally refused BEFORE any
+    # navigation URL embeds them when a value matches a known incoming
+    # authentication alias (fixed no-echo page; a safe refusal is
+    # preferred over silently dropping a selected filter).
+    for _name, value in filter_pairs:
+        if is_known_incoming_secret_alias(
+            value,
+            scope=request.scope,
+            accepted_prefixes=_settings(request).get_gateway_key_accepted_prefixes(),
+        ):
+            return _admin_error_page(
+                request,
+                status_code=400,
+                message=(
+                    "A selected filter value matches a known incoming "
+                    "authentication value and cannot be used in list "
+                    "navigation. Clear or change that filter and try again."
+                ),
+            )
+    page = build_page(page_size=limit, offset=offset, row_count=fetched_count)
+    prev_url = (
+        build_navigation_url(
+            base_path, page_params(limit=limit, offset=page.prev_offset, filters=filter_pairs)
+        )
+        if page.can_prev
+        else ""
+    )
+    next_url = (
+        build_navigation_url(
+            base_path, page_params(limit=limit, offset=page.next_offset, filters=filter_pairs)
+        )
+        if page.has_more
+        else ""
+    )
+    return {
+        "page": page,
+        "prev_url": prev_url,
+        "next_url": next_url,
+    }
 
 
 async def _admin_attachment_context(
@@ -10471,6 +10788,18 @@ async def _load_catalog_provider_choices(request: Request) -> list[object]:
         return await service.list_providers(limit=200)
 
 
+async def _route_form_provider_exists(request: Request, provider: str) -> bool:
+    """214-a: bounded exact provider-slug existence check for route forms.
+
+    The legacy 200-row choice page only fills the form select; save
+    validation must not reject an older eligible provider beyond that
+    page. One exact lookup (disabled configs included, matching the
+    legacy list) answers existence without fetching the full directory.
+    """
+    async with _admin_catalog_dashboard_service_scope(request) as service:
+        return await service.provider_config_exists(provider)
+
+
 def _render_route_form(
     request: Request,
     *,
@@ -10756,7 +11085,7 @@ def _parse_route_creation_intent(form: dict[str, str]) -> bool:
 def _parse_model_route_form(
     form: dict[str, str],
     *,
-    provider_choices: list[object],
+    provider_exists: bool,
     require_reason: bool,
 ) -> dict[str, object]:
     requested_model = _parse_route_text(form.get("requested_model"), field_name="Requested model")
@@ -10765,8 +11094,10 @@ def _parse_model_route_form(
         raise ValueError("Match type must be exact, prefix, or glob.")
     endpoint = _parse_route_endpoint(form.get("endpoint"))
     provider = _parse_provider_slug(form.get("provider"))
-    known_providers = {str(getattr(choice, "provider")) for choice in provider_choices}
-    if provider not in known_providers:
+    # 214-a: existence comes from a bounded exact lookup computed by the
+    # handler (see _route_form_provider_exists), not from membership in
+    # the first 200-row legacy choice page.
+    if not provider_exists:
         raise ValueError("Select a known provider config.")
     upstream_model = _clean_admin_reason(form.get("upstream_model")) or requested_model
     priority = _parse_required_non_negative_admin_int(form.get("priority"), field_name="priority")

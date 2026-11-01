@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11-G15 and G17-G18 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12, G14, G15 and G17 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -915,3 +915,153 @@ G11-G15 and G17-G18 remain open as documented in section 9; nothing in
 the remaining objectives stay mandatory; 213-a makes no
 installed-qualification, deployment, live-provider, or real-Codex
 replay-usage claim.
+
+## 16. Delivery status (objective 214-a)
+
+Delivered by 214-a (`oap/214-gui-reports-pagination`, one PR), synthetic
+fixture data only, no new schema/migrations:
+
+- **G11** (grouped usage and live-burn reporting, safe JSON export): a
+  Reports surface (Usage list header link + Operations index) reusing
+  the SAME shared `UsageReportService` the CLI uses:
+  - **usage summary report**: the seven CLI group dimensions
+    (provider, model, provider_model, owner, cohort, key, day) with
+    single-value CLI-parity filters (inclusive aware-UTC window,
+    provider, model, owner/cohort/key) over a bounded ledger source
+    (GUI ceiling 10,000 rows; fetched cap+1 through the existing
+    repository query and REFUSED overbound with narrowing help - never
+    a silent prefix, never a racing count; the refusal renders on the
+    report page with the existing filter form (submitted scope prefilled)
+    for in-page narrowing, with no result counts). Groups are paged in-memory
+    over the complete accepted group set with the shared
+    filter-preserving Previous/Next navigation; the new GUI result
+    carries a stable grouping-key final tie-break (the CLI
+    `summarize_usage` contract and JSON field set are unchanged).
+    Per-group cost availability (known/missing counts over the
+    complete accepted bounded set, additive `UsageSummaryReport`
+    projection) distinguishes genuine known zero, all-missing
+    (rendered "unavailable", never zero), and partial sums (explicitly
+    labelled incomplete, never a final actual cost). Provider-native
+    reported cost is shown as counts/explicit unavailable only - no
+    cross-currency sum is presented as meaningful money.
+  - **live-burn report**: the shared Chat streaming live-burn
+    aggregate (triggered totals, stop-reason split, final provider
+    usage available/missing, estimate sums) with the same bounded
+    source law and provenance wording (missing final provider usage is
+    counted, never inferred; estimates are never final actual cost).
+  - **safe JSON export**: confirmed/reasoned POST through the shared
+    `UsageExportRow` allowlist (exact raw machine units, nullable
+    costs), strict JSON (no NaN), the configured
+    `ADMIN_USAGE_EXPORT_MAX_ROWS` fetched cap+1 with overbound scope
+    REFUSED and the exact counts (no partial export, no first-page
+    completeness claim), session-derived actor + the existing safe
+    audit convention, and a private no-store attachment that never
+    rotates an open form's CSRF token.
+  - The GUI usage LEDGER list's richer multi-value OR-within/AND-across
+    filters are a DIFFERENT scope from these single-value report
+    filters (which follow the CLI's single-value summary/export
+    contract); the pages say so instead of pretending parity.
+- **G13** (complete stable navigation and lookup):
+  - reusable Previous/Next navigation on every ACTUAL offset/limit
+    GUI list (keys, owners, institutions, cohorts, providers, routes,
+    pricing, FX, usage, audit, email deliveries) built from the
+    allowlisted accepted normalized filter pairs (repeated values
+    preserved) plus the page scope; cap+1 fetches make "more" honest
+    (a full page alone is NOT has_more); the first row ordinal
+    continues across pages (offset + 1); fixed bounded snapshot
+    tables keep their honest scope without invented paginators;
+    `templates/list.html` (a fixed 50-row snapshot) is deliberately
+    untouched;
+  - deterministic identity tie-breaks on the directly touched paged
+    ADMIN list orderings (primary order and filter behavior retained;
+    `provider_configs` admin list is already deterministic through
+    its unique provider slug; the routing admin list's id tie-break
+    was added by 214-a; runtime selection/eligibility orderings are
+    unchanged);
+  - the legacy 200-row provider choice batch no longer acts as an
+    existence/authorization test for route-form save: a bounded exact
+    provider-slug lookup (disabled configs included, matching the
+    legacy list) decides existence, while the choice page remains a
+    display batch only; unknown/ineligible provider refusal and the
+    exact existing route parsing rules are preserved;
+  - navigation URLs refuse (fixed no-echo page, safe refusal rather
+    than silently dropping) accepted filter values that match a known
+    incoming authentication value;
+  - offset paging is documented as a view of the current filtered
+    scope at request time: records added while paging may shift
+    ordinary offset pages (no frozen snapshot, no cursor/session
+    infrastructure).
+- **G18** (small catalog operations):
+  - **reviewed matching-model pricing disable** (entry links on the
+    pricing list and rule detail): preview the EXACT enabled
+    provider/model/optional-endpoint scope with the existing
+    repository query filtered in SQL to enabled rows and bounded at
+    1000 (overbound scope refused, never trimmed or chunked); the
+    compact signed plan carries per-row identity + a stable source
+    fingerprint (scope identity, currency, validity window, typed
+    prices, and a private canonical hash of the `pricing_metadata`
+    pricing policy - raw metadata never rendered, signed, or logged;
+    notes/updated_at/source_url drift deliberately does not
+    invalidate; 128 KiB canonical cap) bound to the signed-in
+    actor/session with a 15-minute purpose-bound token through the
+    existing `admin_review_intent.py` primitives; the separate
+    confirmation/apply re-verifies the token and re-checks this
+    request's known incoming aliases, then the shared
+    `PricingRuleService.apply_disable_model_reviewed` locks the
+    reviewed rows deterministically (FOR UPDATE, `populate_existing`
+    refresh), re-checks every full fingerprint against fresh
+    post-lock facts, re-reads the bounded matching enabled
+    membership after the blocking locks (all-enabled: membership must
+    equal the reviewed set exactly; all-disabled repeat: membership
+    must be empty - a newly matching unreviewed row is never
+    disabled), disables ONLY the exact reviewed rows in ONE caller
+    transaction with a real per-row audit (session actor + the
+    verbatim reviewed reason), and reports the honest already-disabled
+    no-op. Late audit failure rolls all changes back; no
+    serializable catalog-wide insert-exclusion claim is made.
+    Disabling prices may block future requests for the model; past
+    usage is not recalculated. The legacy CLI `disable_model` default
+    and the individual enable/disable forms are unchanged.
+  - **effective FX lookup**: one explicit base/quote pair resolved at
+    UTC now by the existing `FxRateService.latest_fx_rate` helper,
+    with the selected pair/rate/source/validity or an honest missing
+    state; no historical-time feature, same-currency rate, external
+    fetch, or accounting-rate selection change.
+- Known-incoming-alias withholding extends to every new display DTO
+  (submitted scope, rendered group labels, review display rows, FX
+  source, exported DTO leaves, audit metadata) before output or
+  persistence.
+
+Bounded paths: new `api/admin_reports.py` router + `reports/`
+templates; `main.py` router registration; `admin_review_intent.py`
+one bounded pricing review purpose (plan-self 128 KiB gate separate
+from the wrapper envelope); new `utils/admin_pagination.py` shared
+navigation helper + `partials/pagination.html`; existing
+`api/admin.py` and the eleven list templates for navigation, the
+provider-validation seam, and direct links; deterministic id
+tie-breaks on the touched paged admin repository orderings only;
+`services/usage_report_service.py` + `schemas/usage.py` additive
+bounded reporting seams (CLI return shapes/JSON field sets
+unchanged); `services/pricing_rule_service.py` +
+`db/repositories/pricing.py` reviewed lock/revalidation seam;
+`services/admin_catalog_dashboard.py` one bounded provider-existence
+bridge; `web/static/js/table-sort.js` one opt-in per-table
+`data-ordinal-offset` value (default 0 preserves every existing
+table; paged templates supply the accepted server offset).
+
+Operator walkthrough and pagination semantics: section 15 of
+[`admin-usability.md`](admin-usability.md); verification record and
+chronology: the 214-a section of
+[`verification/gui-cli-parity.md`](verification/gui-cli-parity.md);
+catalog seal upgrade guidance: [`upgrade-runbook.md`](upgrade-runbook.md);
+exact scope: the 214-a strategic work order; claims and evidence: the
+immutable 214-a report.
+
+### Still open
+
+G12 (email inspection), G14 (controlled accounting recovery), G15
+(catalog workflows), and G17 (admin accounts) remain open as
+documented in section 9; nothing in 214-a touches them. The final 219
+installed whole-GUI qualification and the remaining objectives stay
+mandatory; 214-a makes no installed-qualification, deployment,
+live-provider, or production claim.

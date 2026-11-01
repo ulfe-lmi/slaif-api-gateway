@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Chat live-burn report{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="live-burn-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Reports / Usage</p>
+      <h1 id="live-burn-heading">Chat streaming live-burn report</h1>
+      <p class="muted">Safe aggregate provenance for Chat streaming live-burn stops over the bounded accepted ledger scope.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/reports/">Usage summary</a>
+      <a class="button-link secondary" href="/admin/usage">Usage ledger</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if bound_error %}
+  <div class="admin-flash admin-flash-error" role="alert">
+    <p><strong>Scope too large to report.</strong> {{ bound_error }}</p>
+    <p class="muted small">The source bound is {{ source_bound | num }} matched ledger rows. Add a narrowing
+    filter below and submit again. No rows are aggregated and no result counts are shown.</p>
+  </div>
+  {% endif %}
+
+  <form class="filter-bar compact" method="get" action="/admin/reports/live-burn" id="live-burn-filter">
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider or none, selected_id=filters.provider, allow_new=true, help="Exact provider slug; blank = any", input_id="burn-provider", help_id="burn-provider-help", control_id="burn-provider-input") }}
+    {{ record_choice("model", "model", "Model", options=choices.model or none, selected_id=filters.model, allow_new=true, help="Exact requested/resolved model; blank = any", input_id="burn-model", help_id="burn-model-help", control_id="burn-model-input") }}
+    {{ record_choice("owner_id", "owner", "Owner ID", options=choices.owner_id or none, selected_id=filters.owner_id, allow_new=true, help="One owner; blank = any", input_id="burn-owner", help_id="burn-owner-help", control_id="burn-owner-input") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id or none, selected_id=filters.cohort_id, allow_new=true, help="One cohort; blank = any", input_id="burn-cohort", help_id="burn-cohort-help", control_id="burn-cohort-input") }}
+    {{ record_choice("gateway_key_id", "key", "Key ID", options=choices.gateway_key_id or none, selected_id=filters.gateway_key_id, allow_new=true, help="One gateway key; blank = any", input_id="burn-key", help_id="burn-key-help", control_id="burn-key-input") }}
+    <label>
+      Start (UTC, inclusive)
+      <input name="start_at" id="burn-start-at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z" aria-describedby="burn-start-at-help">
+      <span class="field-help" id="burn-start-at-help">Inclusive aware-UTC window; naive input is treated as UTC.</span>
+    </label>
+    <label>
+      End (UTC, inclusive)
+      <input name="end_at" id="burn-end-at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z" aria-describedby="burn-end-at-help">
+      <span class="field-help" id="burn-end-at-help">Inclusive aware-UTC window; at or after the start (equal bounds are accepted).</span>
+    </label>
+    <button type="submit">Filter</button>
+  </form>
+
+  {% if not bound_error %}
+  <div class="admin-flash" role="status">
+    <p><strong>Scope:</strong> the accepted bounded ledger scope is capped at {{ source_bound | num }} matched ledger rows
+    (an overbound scope is refused - never a silent prefix); of those rows, only Chat streaming
+    requests with live-burn telemetry contribute to the aggregates below.</p>
+    <p class="muted small">Single-value CLI-parity report filters; the usage ledger list uses a different multi-value filter set - compare row counts only for matching scopes.</p>
+  </div>
+
+  <section class="action-panel" aria-labelledby="burn-triggered-heading">
+    <h2 id="burn-triggered-heading">Triggered stops</h2>
+    <dl>
+      <dt>Triggered total</dt>
+      <dd>{{ aggregate.triggered_total | num }}</dd>
+      <dt>Stop reason: tokens</dt>
+      <dd>{{ aggregate.stop_reason_tokens | num }}</dd>
+      <dt>Stop reason: cost</dt>
+      <dd>{{ aggregate.stop_reason_cost | num }}</dd>
+      <dt>Stop reason: both</dt>
+      <dd>{{ aggregate.stop_reason_both | num }}</dd>
+      <dt>Stop reason: unknown</dt>
+      <dd>{{ aggregate.stop_reason_unknown | num }}</dd>
+    </dl>
+  </section>
+
+  <section class="action-panel" aria-labelledby="burn-provenance-heading">
+    <h2 id="burn-provenance-heading">Provenance</h2>
+    <dl>
+      <dt>Final provider usage available</dt>
+      <dd>{{ aggregate.final_provider_usage_available | num }}</dd>
+      <dt>Final provider usage missing</dt>
+      <dd>{{ aggregate.final_provider_usage_missing | num }} <span class="muted small">(interrupted/estimated rows; never backfilled)</span></dd>
+      <dt>Estimated tokens at stop (sum of known estimates)</dt>
+      <dd data-sort-value="{{ aggregate.estimated_tokens_at_stop_sum }}" title="{{ aggregate.estimated_tokens_at_stop_sum | num }}">{{ aggregate.estimated_tokens_at_stop_sum | tokm }}M</dd>
+      <dt>Estimated cost EUR at stop (sum of known estimates)</dt>
+      <dd>{{ aggregate.estimated_cost_eur_at_stop_sum | num }} EUR <span class="muted small">(estimate, not a final actual cost)</span></dd>
+    </dl>
+    <p class="muted small">Held/interrupted/estimated facts stay explicit: a missing final provider usage is counted, not inferred, and estimates are never labelled invoice-grade or final actual cost.</p>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

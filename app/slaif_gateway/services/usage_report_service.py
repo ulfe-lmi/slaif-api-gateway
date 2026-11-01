@@ -10,7 +10,13 @@ from typing import Final
 
 from slaif_gateway.db.models import UsageLedger
 from slaif_gateway.db.repositories.usage import UsageLedgerRepository
-from slaif_gateway.schemas.usage import UsageExportRow, UsageReportFilters, UsageSummaryRow
+from slaif_gateway.schemas.usage import (
+    UsageExportRow,
+    UsageGroupCostAvailability,
+    UsageReportFilters,
+    UsageSummaryReport,
+    UsageSummaryRow,
+)
 from slaif_gateway.services.chat_live_burn_telemetry import (
     ChatLiveBurnAggregate,
     aggregate_chat_live_burn_usage,
@@ -18,6 +24,30 @@ from slaif_gateway.services.chat_live_burn_telemetry import (
 )
 
 GROUP_BY_VALUES: Final[set[str]] = {"provider", "model", "provider_model", "owner", "cohort", "key", "day"}
+
+
+class UsageReportSourceBoundError(ValueError):
+    """The accepted report source bound is exceeded by the matching scope.
+
+    214-a: the GUI reporting surface loads matching ledger rows through
+    the existing repository query with an OPTIONAL service bound
+    (``max_source_rows``) and fetches at most bound+1 rows.  When more
+    rows match, the scope is REFUSED with this error instead of being
+    silently summarized as a prefix or raced against a separate count.
+    The message is fixed and safe (no row values); narrowing help names
+    the supported single-value filters only.
+    """
+
+    def __init__(self, *, matched_rows: int, source_bound: int) -> None:
+        self.matched_rows = matched_rows
+        self.source_bound = source_bound
+        super().__init__(
+            "The usage report scope matches more ledger rows than the "
+            f"bounded source limit of {source_bound}. "
+            "Narrow the scope with the inclusive UTC start/end time window, "
+            "provider, model, owner, cohort, or gateway key filters before "
+            "reporting."
+        )
 
 
 class UsageReportService:
@@ -36,18 +66,76 @@ class UsageReportService:
         filters: UsageReportFilters | None = None,
         group_by: str = "provider_model",
         limit: int | None = 100,
+        max_source_rows: int | None = None,
     ) -> list[UsageSummaryRow]:
         normalized_group_by = _normalize_group_by(group_by)
         rows = await self._usage.list_usage_records(
             **_filters_kwargs(filters),
-            limit=None,
+            limit=(max_source_rows + 1) if max_source_rows is not None else None,
             ascending=True,
         )
+        if max_source_rows is not None and len(rows) > max_source_rows:
+            raise UsageReportSourceBoundError(
+                matched_rows=len(rows), source_bound=max_source_rows
+            )
         summaries = _aggregate_rows(rows, group_by=normalized_group_by)
         summaries.sort(key=lambda row: (row.request_count, _timestamp(row.last_seen_at)), reverse=True)
         if limit is not None:
             summaries = summaries[:limit]
         return summaries
+
+    async def summarize_usage_report(
+        self,
+        *,
+        filters: UsageReportFilters | None = None,
+        group_by: str = "provider_model",
+        limit: int | None = 100,
+        max_source_rows: int | None = None,
+    ) -> UsageSummaryReport:
+        """214-a additive bounded reporting result for the GUI.
+
+        Same bounded source rows, same canonical grouping, and same
+        display sort law as :meth:`summarize_usage`; additionally returns
+        the per-group cost availability evidence over the COMPLETE
+        accepted bounded source set (never only the displayed page of
+        groups).  The existing :meth:`summarize_usage` return shape and
+        the CLI JSON field set are unchanged.
+        """
+        normalized_group_by = _normalize_group_by(group_by)
+        rows = await self._usage.list_usage_records(
+            **_filters_kwargs(filters),
+            limit=(max_source_rows + 1) if max_source_rows is not None else None,
+            ascending=True,
+        )
+        if max_source_rows is not None and len(rows) > max_source_rows:
+            raise UsageReportSourceBoundError(
+                matched_rows=len(rows), source_bound=max_source_rows
+            )
+        summaries = _aggregate_rows(rows, group_by=normalized_group_by)
+        # 214-a: the new GUI result is fully deterministic - the grouping
+        # key is unique per group, so it is a stable FINAL tie-break for
+        # this result only (the CLI summarize_usage sort contract is
+        # unchanged).
+        summaries.sort(
+            key=lambda row: (
+                row.request_count,
+                _timestamp(row.last_seen_at),
+                row.grouping_key,
+            ),
+            reverse=True,
+        )
+        availability_all = _aggregate_cost_availability(rows, group_by=normalized_group_by)
+        truncated = limit is not None and len(summaries) > limit
+        display = summaries if limit is None else summaries[:limit]
+        availability = tuple(availability_all[row.grouping_key] for row in display)
+        return UsageSummaryReport(
+            group_by=normalized_group_by,
+            filters=filters or UsageReportFilters(),
+            source_row_count=len(rows),
+            rows=tuple(display),
+            availability=availability,
+            truncated_groups=truncated,
+        )
 
     async def export_usage(
         self,
@@ -66,12 +154,17 @@ class UsageReportService:
         self,
         *,
         filters: UsageReportFilters | None = None,
+        max_source_rows: int | None = None,
     ) -> ChatLiveBurnAggregate:
         rows = await self._usage.list_usage_records(
             **_filters_kwargs(filters),
-            limit=None,
+            limit=(max_source_rows + 1) if max_source_rows is not None else None,
             ascending=True,
         )
+        if max_source_rows is not None and len(rows) > max_source_rows:
+            raise UsageReportSourceBoundError(
+                matched_rows=len(rows), source_bound=max_source_rows
+            )
         details = [
             parse_chat_live_burn_usage_detail(
                 endpoint=row.endpoint,
@@ -192,6 +285,54 @@ def _owner_label(row: UsageLedger) -> str:
     if row.owner_email_snapshot:
         return f"{label} <{row.owner_email_snapshot}>" if label else str(row.owner_email_snapshot)
     return label or (str(row.owner_id) if row.owner_id is not None else "unknown")
+
+
+def _aggregate_cost_availability(
+    rows: Iterable[UsageLedger], *, group_by: str
+) -> dict[str, UsageGroupCostAvailability]:
+    """Per-group known/missing cost evidence over the same rows/grouping.
+
+    214-a: grouped monetary sums coerce missing values to zero, so the
+    rendered total alone cannot prove every row carried a known cost.
+    This projection reuses the SAME rows and the SAME canonical
+    grouping law (no companion query, no money recomputation) and only
+    counts known versus missing per group.
+    """
+    grouped: dict[str, UsageGroupCostAvailability] = {}
+    for row in rows:
+        key, label = _group_key_and_label(row, group_by=group_by)
+        current = grouped.get(key)
+        estimated_known = row.estimated_cost_eur is not None
+        actual_known = row.actual_cost_eur is not None
+        provider_reported_known = _provider_reported_cost(row) is not None
+        if current is None:
+            grouped[key] = UsageGroupCostAvailability(
+                grouping_key=key,
+                grouping_label=label,
+                row_count=1,
+                estimated_cost_known_count=1 if estimated_known else 0,
+                estimated_cost_missing_count=0 if estimated_known else 1,
+                actual_cost_known_count=1 if actual_known else 0,
+                actual_cost_missing_count=0 if actual_known else 1,
+                provider_reported_cost_known_count=1 if provider_reported_known else 0,
+                provider_reported_cost_missing_count=0 if provider_reported_known else 1,
+            )
+            continue
+        grouped[key] = replace(
+            current,
+            row_count=current.row_count + 1,
+            estimated_cost_known_count=current.estimated_cost_known_count + (1 if estimated_known else 0),
+            estimated_cost_missing_count=current.estimated_cost_missing_count + (0 if estimated_known else 1),
+            actual_cost_known_count=current.actual_cost_known_count + (1 if actual_known else 0),
+            actual_cost_missing_count=current.actual_cost_missing_count + (0 if actual_known else 1),
+            provider_reported_cost_known_count=(
+                current.provider_reported_cost_known_count + (1 if provider_reported_known else 0)
+            ),
+            provider_reported_cost_missing_count=(
+                current.provider_reported_cost_missing_count + (0 if provider_reported_known else 1)
+            ),
+        )
+    return grouped
 
 
 def _provider_reported_cost(row: UsageLedger) -> Decimal | None:

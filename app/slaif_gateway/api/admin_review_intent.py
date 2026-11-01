@@ -49,6 +49,10 @@ from slaif_gateway.schemas.codex_replay_maintenance import (
     REPLAY_PLAN_MAX_BYTES,
     parse_replay_extend_plan_document,
     )
+from slaif_gateway.services.pricing_rule_service import (
+    PRICING_DISABLE_PLAN_MAX_BYTES,
+    parse_pricing_disable_plan_document,
+)
 from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_CLIENT_MODULE_ID,
 )
@@ -1012,4 +1016,183 @@ def verify_replay_review_token(
     document = _strict_replay_review_document(review)
     if len(_canonical_json(document)) > REPLAY_REVIEW_PLAN_MAX_BYTES:
         raise AdminReviewIntentError(_REPLAY_TOO_LARGE_MESSAGE)
+    return document
+# 214-a: separate reviewed pricing-disable purpose (a pricing token is
+# never valid for a clone/batch/route/compatibility/replay apply and vice
+# versa); same HMAC pattern, same 15-minute bound.
+REVIEW_INTENT_PRICING_PURPOSE = "admin.pricing-disable.review.v1"
+
+# 214-a: the compact signed pricing plan is bounded by
+# PRICING_DISABLE_PLAN_MAX_BYTES (128 KiB) in canonical form; the review
+# wrapper adds ONE bounded nonblank Unicode reason plus the
+# identity/expiry envelope.  The canonical serializer uses ensure_ascii,
+# so a 512-character astral-Unicode reason can consume 6,144 escaped
+# bytes; the fixed +8192 wrapper allowance budgets that maximum plus the
+# identity/expiry keys before any signing/base64 work.  The token cap is
+# the derived 4/3 base64url expansion plus the digest and separator
+# (documented encoding overhead, not a second policy cap).
+PRICING_REVIEW_PLAN_MAX_BYTES = PRICING_DISABLE_PLAN_MAX_BYTES + 8192
+MAX_REVIEW_INTENT_PRICING_TOKEN_CHARS = (
+    PRICING_REVIEW_PLAN_MAX_BYTES * 4
+) // 3 + 4096
+
+_PRICING_INVALID_MESSAGE = (
+    "The pricing disable review state is missing or invalid."
+)
+_PRICING_NOT_AUTHENTIC_MESSAGE = (
+    "The pricing disable review state is not valid for this signed-in admin."
+)
+_PRICING_EXPIRED_MESSAGE = (
+    "The pricing disable review has expired. Preview the scope again."
+)
+_PRICING_TOO_LARGE_MESSAGE = (
+    "The pricing disable review plan exceeds the bounded review size."
+)
+
+_PRICING_REVIEW_KEYS = frozenset({"plan", "reason"})
+
+
+def _strict_pricing_review_document(document: object) -> dict[str, Any]:
+    """Closed strict document: the COMPLETE compact pricing plan + reason.
+
+    The plan dict must pass the shared strict compact plan schema (known
+    fields, the bounded row count, unique {id, fingerprint} rows); the
+    reason follows the normal GUI convention: bounded nonblank Unicode
+    (at most MAX_KEY_CONFIGURATION_REASON_LENGTH characters).  The
+    string is NEVER trimmed here or in the Core - the reviewed string is
+    preserved through apply, where the GUI re-checks it against this
+    request's known incoming aliases.  Every failure is the fixed safe
+    message; no plan value or reason is echoed.
+    """
+    if not isinstance(document, dict) or set(document) != _PRICING_REVIEW_KEYS:
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE)
+    reason = document.get("reason")
+    if (
+        not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > MAX_KEY_CONFIGURATION_REASON_LENGTH
+    ):
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE)
+    plan_document = document.get("plan")
+    if not isinstance(plan_document, dict):
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE)
+    try:
+        parse_pricing_disable_plan_document(plan_document)
+    except Exception:  # noqa: BLE001 - fixed safe vocabulary, never the plan
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE) from None
+    # The PLAN ITSELF is bounded by its own 128 KiB cap, separately from
+    # the +8192 reason/wrapper envelope cap checked by the caller: a
+    # conformant-but-oversized plan is refused here, on both the build
+    # and the strict re-parse verify path.
+    if len(_canonical_json(plan_document)) > PRICING_DISABLE_PLAN_MAX_BYTES:
+        raise AdminReviewIntentError(_PRICING_TOO_LARGE_MESSAGE)
+    return document
+
+
+def build_pricing_review_token(
+    *,
+    admin_session_secret: str,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    review_document: dict[str, Any],
+    ttl_seconds: int = REVIEW_INTENT_TTL_SECONDS,
+    now: datetime | None = None,
+) -> str:
+    """Bind one reviewed pricing-disable plan to actor/session/expiry.
+
+    ``review_document`` is the strict finite document validated by
+    :func:`_strict_pricing_review_document` BEFORE canonical
+    serialization; the plan envelope and the token length are both
+    bounded before any signing work returns.
+    """
+    _strict_pricing_review_document(review_document)
+    if len(_canonical_json(review_document)) > PRICING_REVIEW_PLAN_MAX_BYTES:
+        raise AdminReviewIntentError(_PRICING_TOO_LARGE_MESSAGE)
+    issued = now or datetime.now(UTC)
+    payload = {
+        "purpose": REVIEW_INTENT_PRICING_PURPOSE,
+        "admin_user_id": str(admin_user_id),
+        "admin_session_id": str(admin_session_id),
+        "expires_at": (issued + timedelta(seconds=ttl_seconds)).isoformat(),
+        "review": review_document,
+    }
+    encoded = _canonical_json(payload)
+    token = (
+        base64.urlsafe_b64encode(encoded).decode("ascii")
+        + "."
+        + _digest(admin_session_secret, encoded)
+    )
+    if len(token) > MAX_REVIEW_INTENT_PRICING_TOKEN_CHARS:
+        raise AdminReviewIntentError(_PRICING_TOO_LARGE_MESSAGE)
+    return token
+
+
+def verify_pricing_review_token(
+    *,
+    admin_session_secret: str,
+    token: str | None,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Verify, rebind, and strict-reparse one pricing review token.
+
+    Returns the strict finite review document.  The outer payload is
+    CLOSED: exactly the identity/expiry keys plus ``review`` - unknown
+    outer keys are refused.  A clone/batch/route/compatibility/replay
+    token is refused (different signed purpose).  Every failure path
+    raises :class:`AdminReviewIntentError` with a fixed safe message; the
+    token bytes never appear in an exception, log, or rendered error.
+    """
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > MAX_REVIEW_INTENT_PRICING_TOKEN_CHARS
+    ):
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE)
+    body, separator, digest = token.rpartition(".")
+    if (
+        not separator
+        or not body
+        or not digest
+        or not _DIGEST_RE.fullmatch(digest)
+    ):
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE)
+    try:
+        encoded = base64.urlsafe_b64decode(body.encode("ascii"))
+    except (binascii.Error, UnicodeEncodeError, ValueError):
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE) from None
+    if not hmac.compare_digest(_digest(admin_session_secret, encoded), digest):
+        raise AdminReviewIntentError(_PRICING_NOT_AUTHENTIC_MESSAGE)
+    try:
+        payload = json.loads(
+            encoded.decode("utf-8"), object_pairs_hook=_strict_pairs_hook
+        )
+    except (UnicodeDecodeError, ValueError):
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE) from None
+    if not isinstance(payload, dict) or set(payload) != _COMPAT_PAYLOAD_KEYS:
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE)
+    if payload.get("purpose") != REVIEW_INTENT_PRICING_PURPOSE:
+        raise AdminReviewIntentError(_PRICING_NOT_AUTHENTIC_MESSAGE)
+    if (
+        payload.get("admin_user_id") != str(admin_user_id)
+        or payload.get("admin_session_id") != str(admin_session_id)
+    ):
+        raise AdminReviewIntentError(_PRICING_NOT_AUTHENTIC_MESSAGE)
+    expires_raw = payload.get("expires_at")
+    try:
+        expires_at = datetime.fromisoformat(expires_raw)
+    except (TypeError, ValueError):
+        raise AdminReviewIntentError(_PRICING_INVALID_MESSAGE) from None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if (now or datetime.now(UTC)) >= expires_at:
+        raise AdminReviewIntentError(_PRICING_EXPIRED_MESSAGE)
+    review = payload.get("review")
+    # Strict re-validation BEFORE canonical serialization: malformed
+    # plan values or an edited count yield the fixed safe error, never
+    # a serialization fault.
+    document = _strict_pricing_review_document(review)
+    if len(_canonical_json(document)) > PRICING_REVIEW_PLAN_MAX_BYTES:
+        raise AdminReviewIntentError(_PRICING_TOO_LARGE_MESSAGE)
     return document

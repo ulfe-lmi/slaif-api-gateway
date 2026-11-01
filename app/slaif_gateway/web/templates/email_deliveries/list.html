@@ -53,7 +53,7 @@
     </label>
   </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Email deliveries">
-    <table data-sortable>
+    <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>
         <tr>
           <th data-ordinal scope="col" aria-label="Row number">#</th>
@@ -67,7 +67,7 @@
       <tbody>
         {% for row in email_deliveries %}
         <tr>
-          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
           <td class="col-email">
             <a href="/admin/email-deliveries/{{ row.id }}">{{ row.to_email }}</a>
             <div class="muted small">{{ row.owner_email or "No owner" }}</div>
@@ -85,5 +85,6 @@
       </tbody>
     </table>
   </div>
+  {% include "partials/pagination.html" %}
 </section>
 {% endblock %}

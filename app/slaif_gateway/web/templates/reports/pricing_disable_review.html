@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}Pricing disable review{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="pd-review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Reports / Catalog</p>
+      <h1 id="pd-review-heading">Reviewed pricing disable</h1>
+      <p class="lead">{{ plan_context.provider }} / {{ plan_context.model }} ({{ plan_context.endpoint }}) - {{ plan_context.row_count | num }} pricing rule(s) to disable.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/reports/pricing-disable">New preview</a>
+      <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="pd-review-facts-heading">
+    <h2 id="pd-review-facts-heading">What you are reviewing</h2>
+    <dl>
+      <dt>Provider</dt>
+      <dd><code>{{ plan_context.provider }}</code></dd>
+      <dt>Model</dt>
+      <dd><code>{{ plan_context.model }}</code></dd>
+      <dt>Endpoint</dt>
+      <dd>{{ plan_context.endpoint }}</dd>
+      <dt>Affected pricing rules</dt>
+      <dd>{{ plan_context.row_count | num }} rule(s) matching this exact scope - only these rules will be disabled, nothing else.</dd>
+      <dt>Audit reason</dt>
+      <dd>{{ reason }} <span class="muted small">(exactly as you entered it)</span></dd>
+      <dt>Review expiry</dt>
+      <dd>This review is valid for 15 minutes and only for your signed-in session. After that, run a fresh preview.</dd>
+    </dl>
+  </section>
+
+  {% if plan_context.display_rows %}
+  <section class="action-panel" aria-labelledby="pd-rows-heading">
+    <h2 id="pd-rows-heading">Affected rules (as previewed)</h2>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Affected pricing rules">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Rule ID</th>
+            <th scope="col">Endpoint</th>
+            <th scope="col">Currency</th>
+            <th scope="col" data-sort-type="money">In /1M</th>
+            <th scope="col" data-sort-type="money">Out /1M</th>
+            <th scope="col" data-sort-type="datetime">Valid (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in plan_context.display_rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td><code>{{ row.pricing_rule_id }}</code></td>
+            <td>{{ row.endpoint }}</td>
+            <td>{{ row.currency }}</td>
+            <td data-sort-value="{{ row.input_price_per_1m | dec }}">{{ row.input_price_per_1m | num }}</td>
+            <td data-sort-value="{{ row.output_price_per_1m | dec }}">{{ row.output_price_per_1m | num }}</td>
+            <td data-sort-value="{{ row.valid_from.isoformat() }}">{{ row.valid_from }} .. {{ row.valid_until if row.valid_until else "open" }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort>
+            <td colspan="7" class="empty-state">No reviewed pricing rows.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  <details aria-labelledby="pd-ids-summary">
+    <summary id="pd-ids-summary">All reviewed rule IDs ({{ plan_context.row_count | num }})</summary>
+    <p>{% for row_id in plan_context.row_ids %}<code>{{ row_id }}</code><br> {% endfor %}</p>
+  </details>
+
+  <div class="admin-flash" role="status">
+    Disabling these pricing rules may BLOCK FUTURE requests for this model when no other matching
+    enabled pricing rule exists. Past usage is NOT recalculated: already recorded costs and usage
+    rows are unchanged.
+  </div>
+
+  {% if result is none %}
+  <section class="action-panel" aria-labelledby="pd-confirm-heading">
+    <h2 id="pd-confirm-heading">Confirm and apply</h2>
+    <div class="admin-flash" role="status">
+      Nothing has changed yet. When you apply, the system re-checks the live rules first: if any
+      affected rule changed after this preview (price, currency, validity, or pricing policy) or a
+      new matching rule appeared, the whole operation is refused and NOTHING changes.
+    </div>
+    <details open aria-labelledby="pd-apply-summary">
+      <summary id="pd-apply-summary">Apply this reviewed disable</summary>
+      <p class="muted">
+        All-or-nothing: the disabled rules and their audit records are written together - either
+        every affected rule is disabled (each logged with your user ID and the reason above) or
+        nothing is. If every affected rule was already disabled, applying does nothing further and
+        reports that honestly.
+      </p>
+      <form class="create-form" method="post" action="/admin/reports/pricing-disable/apply">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="review_token" value="{{ review_token }}">
+        <div class="checkbox-row">
+          <input type="checkbox" id="pd-confirm-apply" name="confirm_apply" value="1" aria-describedby="pd-confirm-apply-help">
+          <label for="pd-confirm-apply">I confirm disabling exactly these reviewed pricing rules</label>
+        </div>
+        <p class="field-help" id="pd-confirm-apply-help">You can only apply what you reviewed above: the same rules, the same reason.</p>
+        <button type="submit">Apply pricing disable</button>
+      </form>
+    </details>
+  </section>
+  {% else %}
+  <section class="action-panel" aria-labelledby="pd-result-heading">
+    <h2 id="pd-result-heading">Outcome</h2>
+    {% if result.already_disabled %}
+    <div class="admin-flash" role="status">
+      Already disabled: every reviewed rule was already disabled when you applied. Nothing was
+      changed again and no new audit record was created.
+    </div>
+    {% else %}
+    <div class="admin-flash" role="status">
+      Applied: <strong>{{ result.disabled_count | num }}</strong> pricing rule(s) disabled, each with its
+      own audit record (your user ID + the reason above). The disables and their audit records were
+      committed together. If you ever see an UNCONFIRMED outcome instead, check the pricing rule state
+      and the audit log before retrying.
+    </div>
+    {% endif %}
+    <p class="muted small">Verify the current state in the <a href="/admin/pricing">pricing rule list</a> and the audit log.</p>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

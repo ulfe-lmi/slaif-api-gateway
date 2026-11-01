@@ -304,12 +304,20 @@ def test_every_admin_table_has_structural_ordinal_column() -> None:
       number or corrupt them.
     """
     tables = _iter_admin_tables()
+    # Approved first-cell forms: the legacy static table (server renders
+    # 1..N, the fixed sorter renumbers from offset 0) and the 214-a
+    # paged table (server renders CONTINUED ordinals across pages and
+    # hands the accepted server offset to the sorter).
+    static_cell = '<td class="row-ordinal">{{ loop.index }}</td>'
+    paged_cell = '<td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>'
     # 212-a: +3 for the compatibility pages (index qualification rows,
     # index shipped presets, key migration review tuples).
     # 213-a: +5 for the replay-maintenance pages (index scopes,
     # inspection per-key aggregates, inspection route/model groups,
     # inspection exclusion reasons, review exclusion counts).
-    assert len(tables) == 38, f"expected 38 sortable admin tables, got {len(tables)}"
+    # 214-a: +2 for the report pages (usage-summary group table,
+    # reviewed pricing-disable row table).
+    assert len(tables) == 40, f"expected 40 sortable admin tables, got {len(tables)}"
     problems: list[str] = []
     for name, tag, block in tables:
         thead = re.search(r"<thead>.*?</thead>", block, flags=re.DOTALL)
@@ -353,10 +361,17 @@ def test_every_admin_table_has_structural_ordinal_column() -> None:
                 continue
             data_rows += 1
             first_cell = row.split("</td>")[0] + "</td>"
-            if '<td class="row-ordinal">{{ loop.index }}</td>' not in first_cell:
+            if static_cell not in first_cell and paged_cell not in first_cell:
                 problems.append(
                     f"{name}: data row does not START with the SSR ordinal cell: {first_cell[:100]}"
                 )
+        # 214-a: a table that renders continued ordinals must also give
+        # the fixed sorter the accepted server offset (opt-in attribute;
+        # default 0 preserves every static table).
+        if paged_cell in block and "data-ordinal-offset" not in tag:
+            problems.append(
+                f"{name}: continued SSR ordinals without data-ordinal-offset on <table>"
+            )
         if data_rows != 1:
             problems.append(f"{name}: expected exactly 1 authored data row, got {data_rows}")
         if empty_rows != 1:

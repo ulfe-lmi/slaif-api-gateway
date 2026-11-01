@@ -270,3 +270,29 @@ old file as the active snapshot, migrate the key from its new revision/digest
 to that old active profile, and then downgrade the image. Do not use a frozen
 `0162-v1` selector to stand for revision 3, 4, 5, or 6. Reopen traffic only after
 all workers and key pins agree. See [the Qwen runbook](runbooks/codex-qwen38.md).
+
+
+## Admin GUI upgrade: catalog seal verification after the 214 asset change
+
+The 214 GUI objective changes the bytes of the bundled
+`web/static/js/table-sort.js` asset (an opt-in per-table
+`data-ordinal-offset` value; default 0 preserves every existing
+table's behavior, and the catalog report renderer picks the asset up
+at render time). Consequences for `slaif-catalog-refresh` seals:
+
+- Previously sealed catalog runs that embedded the OLD script bytes
+  will FAIL verification after the upgrade. This is a SAFE REFUSAL:
+  the seal binds the exact asset bytes, and the mismatch is reported
+  rather than silently accepted. It changes no catalog data and no
+  verification law.
+- **Finish pending catalog runs before upgrading** (let in-flight
+  refresh/review runs complete and review their reports on the old
+  binary), or
+- **Collect and review a FRESH run after upgrading** (a new
+  refresh seals the current bytes and verifies cleanly).
+- **Never rewrite or regenerate an old seal** to make it match the
+  new bytes: an old seal is historical evidence for the bytes it
+  bound, and editing it destroys the audit property.
+
+There is no schema migration in this change; keys, routes, pricing,
+FX, and accounting are untouched.

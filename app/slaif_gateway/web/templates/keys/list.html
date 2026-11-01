@@ -68,7 +68,7 @@
   </div>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Gateway keys">
-    <table data-sortable class="table-wide">
+    <table data-sortable class="table-wide" data-ordinal-offset="{{ page.offset }}">
       <thead>
         {# 194-a: pure group row (plain, never sortable); the leaf row below
            holds every column header 1:1 with the body cells. #}
@@ -97,7 +97,7 @@
       <tbody>
         {% for key in keys %}
         <tr>
-          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
           <td class="col-key">
             <a href="/admin/keys/{{ key.id }}">{{ key.key_prefix }}{{ key.public_key_id }}</a>
             {% if key.key_hint %}<div class="muted small">{{ key.key_hint }}</div>{% endif %}
@@ -139,5 +139,6 @@
       </tbody>
     </table>
   </div>
+  {% include "partials/pagination.html" %}
 </section>
 {% endblock %}

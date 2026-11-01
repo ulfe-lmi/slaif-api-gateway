@@ -23,6 +23,9 @@ from slaif_gateway.api.admin_operations import router as admin_operations_router
 from slaif_gateway.api.admin_replay_maintenance import (
     router as admin_replay_maintenance_router,
 )
+from slaif_gateway.api.admin_reports import (
+    router as admin_reports_router,
+)
 from slaif_gateway.api.branding import router as branding_router
 from slaif_gateway.api.errors import (
     OpenAICompatibleError,
@@ -108,6 +111,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # inspection and the shared CLI's exact monotonic expiry extension
     # through preview -> signed review -> confirmed apply.
     app.include_router(admin_replay_maintenance_router)
+    # 214-a: GUI reports (grouped usage summary, live-burn provenance,
+    # safe strict-JSON export) and reviewed catalog tools (reviewed
+    # matching-model pricing disable, effective FX lookup); one-way
+    # helper reuse from admin.py.
+    app.include_router(admin_reports_router)
     app.include_router(openai_compat_router)
 
     return app

@@ -201,7 +201,9 @@ class PricingRulesRepository:
             statement = statement.where(active_condition if active else ~active_condition)
 
         statement = (
-            statement.order_by(PricingRule.valid_from.desc(), PricingRule.created_at.desc())
+            statement.order_by(
+                PricingRule.valid_from.desc(), PricingRule.created_at.desc(), PricingRule.id.asc()
+            )
             .limit(limit)
             .offset(offset)
         )
@@ -233,6 +235,8 @@ class PricingRulesRepository:
         provider: str,
         upstream_model: str,
         endpoint: str | None = None,
+        enabled_only: bool = False,
+        limit: int | None = None,
     ) -> list[PricingRule]:
         statement: Select[tuple[PricingRule]] = select(PricingRule).where(
             PricingRule.provider == provider,
@@ -240,6 +244,10 @@ class PricingRulesRepository:
         )
         if endpoint is not None:
             statement = statement.where(PricingRule.endpoint == endpoint)
+        if enabled_only:
+            statement = statement.where(PricingRule.enabled == True)  # noqa: E712
+        if limit is not None:
+            statement = statement.limit(limit)
 
         statement = statement.order_by(PricingRule.valid_from.desc(), PricingRule.created_at.desc())
         result = await self._session.execute(statement)
@@ -253,6 +261,38 @@ class PricingRulesRepository:
         row.enabled = enabled
         await self._session.flush()
         return True
+
+    async def lock_pricing_rules_for_review(
+        self,
+        pricing_rule_ids: Sequence[uuid.UUID],
+    ) -> list[PricingRule]:
+        """214-a: deterministic FOR UPDATE lock read for one reviewed set.
+
+        Returns exactly the locked rows (by id, ascending) for the
+        bounded reviewed plan; rows no longer present are simply absent
+        from the result so the caller can detect the drift.  No other
+        pricing state is touched and the ordering (id ASC) is the
+        deterministic review order the service applies.
+
+        ``populate_existing`` is required: FOR UPDATE alone does not
+        overwrite attributes of instances already present in the session
+        identity map.  The reviewer session may have loaded the same
+        rows during the preview step, so the locked re-read must refresh
+        every attribute from the post-lock database state; the service
+        fingerprints those fresh facts after the blocking locks.
+        """
+        ids = tuple(pricing_rule_ids)
+        if not ids:
+            return []
+        statement: Select[tuple[PricingRule]] = (
+            select(PricingRule)
+            .where(PricingRule.id.in_(ids))
+            .order_by(PricingRule.id.asc())
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
 
     async def update_pricing_rule_metadata(
         self,

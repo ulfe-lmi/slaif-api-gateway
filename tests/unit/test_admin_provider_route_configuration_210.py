@@ -292,6 +292,12 @@ def client(monkeypatch, state: _State) -> TestClient:
         def __init__(self, session: Any) -> None:
             self.session = session
 
+        async def get_provider_config_by_provider(self, provider: str) -> Any:
+            # 214-a: the route forms' bounded exact existence lookup.
+            if provider == state.provider_row.provider:
+                return state.provider_row
+            return None
+
         async def get_provider_config_for_update(self, provider_or_id: Any) -> Any:
             assert state.provider_lock_calls is not None
             state.provider_lock_calls.append(str(provider_or_id))
