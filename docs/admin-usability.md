@@ -1220,3 +1220,76 @@ Deploying 211 is an application upgrade: rebuild the API/assets image
 and recreate/restart the API so the new code runs. There is **no Nginx
 change** and **no schema migration**; request-capture configuration and
 all keys/routes are untouched - see [`deployment.md`](deployment.md).
+
+## 13. Codex compatibility management (212-a)
+
+### 13.1 Navigation
+
+- Dashboard -> **Usage and operations** group -> **Operations** ->
+  **Codex compatibility** (the index page).
+- **Key detail** -> **Compatibility** link: opens this ONE key's
+  binding page (key selection and search stay in the existing keys
+  workflow; the compatibility index links to the keys list).
+- **Route detail** -> **Codex compatibility** line: back to the index;
+  ready routes additionally render their credential-free Codex
+  artifact downloads in the route page itself (unchanged route-level
+  surface).
+
+### 13.2 Index (read-only)
+
+- **Registered Codex qualification**: one row per declared Codex route
+  with readiness state (ready rows show the short "Protocol-qualified"
+  label), model, provider, endpoint, route link, named profile, client
+  module identity and exact not-ready reasons. Ready rows keep their
+  canonical credential-free artifact links (base fragment only when
+  the profile is not self-contained; model catalog only when the
+  profile ships one); unready rows have none.
+- **API startup data identity**: the validated 0.162 snapshot THIS API
+  process adopted at startup. Updating the host file without a
+  restart does not change what "active" resolves to - it still points
+  at the old adopted snapshot. To migrate keys to a newer file:
+  restart to adopt it, then run a fresh review/migration to that
+  active identity. A worker whose target drifted is still refused.
+- **Validated shipped presets**: bounded safe facts only (name, data
+  revision, data digest, CLI version) with an authenticated exact-
+  document **Inspect** page and a private no-store **Download JSON**
+  export of the exact validated bytes.
+
+### 13.3 Per-key migration workflow
+
+- The key page shows the exact stored (module ID, data version,
+  fixture SHA-256) tuple plus the finite operations legal for THIS
+  pin, for example:
+  - `0149-v4`: upgrade to 0149-v5 or 0162-v1 (0162-v2 only via the
+    explicit two-hop sequence);
+  - `0149-v5` / `0162-v1`: roll back to 0149-v4; `0162-v1` may also
+    upgrade to 0162-v2;
+  - `0162-v2`: roll back to 0162-v1;
+  - a 0.162 data pin: migrate to the API's current **active** data
+    profile or to the approved frozen 0.162 tuples.
+- **Audit reason**: 8-200 printable ASCII characters, saved exactly as
+  entered (do not include passwords or keys).
+- Flow: choose one operation -> **Dry-run and review** -> the review
+  page shows the exact source and target identities and the verbatim
+  reason (the preview expires after 15 minutes) -> open the
+  **Confirm and apply** disclosure, check "I confirm applying this
+  exact reviewed migration to this key", and **Apply migration**.
+  Nothing changes until confirmation; each applied migration writes
+  exactly one real actor/reason audit, and a transaction that cannot
+  be confirmed is reported as UNCONFIRMED (check the audit), never as
+  success.
+- The exact repeat of an applied review is a safe no-op ("Already at
+  target"): no new audit, no row change. A stale or tampered review is
+  refused with zero binding/accounting/audit writes (normal
+  authentication/session activity tracking is preserved).
+- **No automatic key migration** exists or is implied: every binding
+  change is an explicit, reviewed, audited operator action. Host-file
+  deployment and activation remain separately controlled operator
+  steps.
+
+### 13.4 Upgrade notes
+
+Deploying 212 is an application upgrade: rebuild the API/assets image
+and recreate/restart the API so the new code runs. There is **no Nginx
+change** and **no schema migration**; keys, routes, and existing
+bindings are untouched - see [`deployment.md`](deployment.md).

@@ -10,6 +10,20 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-01 Objective 212-a GUI Codex compatibility management verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - admin GUI G10 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME qualified core:
+  global Codex readiness inspection (registered qualification rows with
+  canonical credential-free artifact links, API startup data identity,
+  validated preset inspection/no-store export) plus reviewed per-key
+  module upgrade/rollback and data-profile migration (finite options,
+  exact source/target review, 15-minute preview, audited apply, safe
+  repeat); synthetic data only, 44 unit (rechecked after the display
+  fix), 139 guards, 107 cross, 9 catalog, 12 owned-PG, 8 actual-Chromium
+  (plus a 1-case visual-only overlapping recheck), and a 19-case
+  strategic CLI/OAP receipt; final 219 installed qualification still
+  required.
+
 - [`2026-11-01 Objective 211-a GUI request diagnostics and process configuration verification`](gui-cli-parity.md)
   (recorded 2026-11-01, same living record file) - admin GUI G08/G16 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME qualified core:

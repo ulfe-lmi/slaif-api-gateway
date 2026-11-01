@@ -304,7 +304,9 @@ def test_every_admin_table_has_structural_ordinal_column() -> None:
       number or corrupt them.
     """
     tables = _iter_admin_tables()
-    assert len(tables) == 30, f"expected 30 sortable admin tables, got {len(tables)}"
+    # 212-a: +3 for the compatibility pages (index qualification rows,
+    # index shipped presets, key migration review tuples).
+    assert len(tables) == 33, f"expected 33 sortable admin tables, got {len(tables)}"
     problems: list[str] = []
     for name, tag, block in tables:
         thead = re.search(r"<thead>.*?</thead>", block, flags=re.DOTALL)

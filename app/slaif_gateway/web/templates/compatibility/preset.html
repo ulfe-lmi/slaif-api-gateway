@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Compatibility preset {{ name }}{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="preset-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations / Codex Compatibility</p>
+      <h1 id="preset-heading">Compatibility preset: <code>{{ name }}</code></h1>
+      <p class="muted">Bounded safe facts and the exact validated document. Registered and loaded never means every newer Codex is supported.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/compatibility/">Compatibility</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="preset-facts-heading">
+    <h2 id="preset-facts-heading">Safe facts</h2>
+    <dl>
+      {% for key, value in (facts or {}).items() %}
+      <dt>{{ key }}</dt><dd><code>{{ value }}</code></dd>
+      {% endfor %}
+    </dl>
+  </section>
+
+  <section class="action-panel" aria-labelledby="preset-document-heading">
+    <h2 id="preset-document-heading">Validated document</h2>
+    <p class="muted">The exact bytes the strict loader validated (bounded to 64 KiB, credential-free). The export serves these unmodified bytes; if masking a known credential value were ever necessary, the export is refused instead of rewritten.</p>
+    {% if document is none and document_withheld %}
+    <p class="warning-text">The document is withheld for display: it contains a value that matches a known incoming authentication value. The canonical preset on disk is unchanged; the export is refused for this request.</p>
+    {% elif document is none %}
+    <p class="warning-text">The document could not be loaded for display.</p>
+    {% else %}
+    <div class="config-json table-wrap" role="region" tabindex="0" aria-label="Validated preset document">
+      <pre class="config-json"><code>{{ document }}</code></pre>
+    </div>
+    {% endif %}
+    <p><a class="button-link" href="/admin/operations/compatibility/preset/{{ name }}/download">Download the validated JSON</a></p>
+  </section>
+</section>
+{% endblock %}

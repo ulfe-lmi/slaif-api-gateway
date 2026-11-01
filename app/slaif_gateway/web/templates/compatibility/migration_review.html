@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+
+{% set operation_labels = {
+  "module_upgrade": "Module upgrade",
+  "module_rollback": "Module rollback",
+  "profile_migrate": "Data-profile migration",
+} %}
+
+{% block title %}Codex migration review{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="migration-review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations / Codex Compatibility</p>
+      <h1 id="migration-review-heading">Reviewed migration</h1>
+      <p class="muted">One bounded operation on one key, with the exact source and target identity. Applying changes only this key's compatibility metadata.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/compatibility/key/{{ key_id }}">Key compatibility</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="migration-reviewed-heading">
+    <h2 id="migration-reviewed-heading">Reviewed facts</h2>
+    <dl>
+      <dt>Operation</dt><dd>{{ operation_labels.get(review_document.operation, review_document.operation) }}</dd>
+      <dt>Gateway key</dt><dd><code>{{ review_document.gateway_key_id }}</code></dd>
+      {% if review_document.operation == "profile_migrate" %}
+      <dt>Expected source</dt><dd>exact current pin: version <code>{{ review_document.from_version }}</code> / digest <code>{{ review_document.from_digest }}</code></dd>
+      {% else %}
+      <dt>Expected source</dt><dd><code>{{ review_document.expected_source }}</code></dd>
+      {% endif %}
+      <dt>Target</dt><dd><code>{{ review_document.target }}</code></dd>
+      <dt>Audit reason (verbatim, never trimmed)</dt><dd>{{ review_document.reason }}</dd>
+    </dl>
+  </section>
+
+  <section class="action-panel" aria-labelledby="migration-tuples-heading">
+    <h2 id="migration-tuples-heading">Exact source and target identity</h2>
+    <div class="table-wrap" role="region" tabindex="0" aria-label="Reviewed source and target tuples">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Field</th>
+            <th scope="col">Source</th>
+            <th scope="col">Target</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% set fields = [
+            ("Module ID", review_document.source_tuple.id, review_document.target_tuple.id),
+            ("Version", review_document.source_tuple.version, review_document.target_tuple.version),
+            ("Fixture SHA-256", review_document.source_tuple.fixture_sha256, review_document.target_tuple.fixture_sha256),
+          ] %}
+          {% for label, source_value, target_value in fields %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <th scope="row">{{ label }}</th>
+            <td data-sort-value="{{ source_value }}"><code>{{ source_value }}</code></td>
+            <td data-sort-value="{{ target_value }}"><code>{{ target_value }}</code></td>
+          </tr>
+          {% else %}
+          <tr data-no-sort class="empty-state"><td colspan="4">No reviewed tuples.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if result.status == "applied" %}
+  <section class="action-panel" aria-labelledby="migration-applied-heading">
+    <h2 id="migration-applied-heading">Applied</h2>
+    <div class="admin-flash admin-flash-success" role="status">
+      Applied: the key now carries the target identity above, and one audit record
+      (<code>{{ result.action }}</code>) with your user ID, the exact source/target tuples, and the
+      reason was written in the same transaction.
+    </div>
+    <p class="muted">
+      Reload the key page to see the persisted binding. Repeating the same operation is a no-op
+      (already at target) with no new write or audit. If a commit acknowledgement were ever lost,
+      this page would say UNCONFIRMED and point you to the audit log instead of claiming a rollback.
+    </p>
+    <p>
+      <a class="button-link" href="/admin/operations/compatibility/key/{{ key_id }}">Back to the key's compatibility binding</a>
+      · <a class="button-link secondary" href="/admin/keys/{{ key_id }}">Key detail</a>
+    </p>
+  </section>
+
+  {% elif result.status == "already_at_target" %}
+  <section class="action-panel" aria-labelledby="migration-repeat-heading">
+    <h2 id="migration-repeat-heading">Already at target</h2>
+    <div class="admin-flash admin-flash-success" role="status">
+      The key already carries the exact target identity: nothing was written and no audit record was
+      created - including when another authorized action already reached the same target.
+    </div>
+    <p>
+      <a class="button-link" href="/admin/operations/compatibility/key/{{ key_id }}">Back to the key's compatibility binding</a>
+      · <a class="button-link secondary" href="/admin/keys/{{ key_id }}">Key detail</a>
+    </p>
+  </section>
+
+  {% else %}
+  <section class="action-panel" aria-labelledby="migration-dryrun-heading">
+    <h2 id="migration-dryrun-heading">Dry run complete</h2>
+    <div class="admin-flash admin-flash-success" role="status">
+      Dry run: the exact source, target, and reason validated with NO writes. The review below is
+      signed to your session and expires in 15 minutes; applying it re-checks the current binding
+      and the live data-profile identity before anything changes.
+    </div>
+    <details open aria-labelledby="migration-apply-summary">
+      <summary id="migration-apply-summary">Confirm and apply this reviewed migration</summary>
+      <p class="muted">
+        Before applying, pause traffic that depends on the affected compatibility behavior and use a
+        fresh client session afterwards. Applying updates ONLY this key's compatibility metadata: it
+        does not reload files, qualify a backend, grant tool permissions, transfer replay ownership,
+        rewrite old replay material, or guarantee replay across different compatibility data - and it
+        preserves the key's restrictions, limits, counters, usage, and reservations.
+      </p>
+      <p class="muted">
+        Rollback limits: a module rollback returns to the exact frozen predecessor tuple. A
+        data-profile migration targets the API's current active data profile or the approved frozen
+        0.162 tuples; to reach an older approved data file, the operator restores that file and
+        restarts the API first, then migrates to the active profile.
+      </p>
+      <form class="create-form" method="post" action="/admin/operations/compatibility/key/{{ key_id }}/apply">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="review_token" value="{{ review_token }}">
+        <div class="checkbox-row">
+          <input type="checkbox" id="confirm-apply" name="confirm_apply" value="1"
+                 aria-describedby="confirm-apply-help">
+          <label for="confirm-apply">I confirm applying this exact reviewed migration to this key</label>
+        </div>
+        <p class="field-help" id="confirm-apply-help">What you reviewed above is exactly what applies: the same key, source, target, and reason. One audit record with your user ID is written together with the binding change; if that transaction cannot be confirmed, the outcome is reported as UNCONFIRMED.</p>
+        <button type="submit">Apply migration</button>
+      </form>
+    </details>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

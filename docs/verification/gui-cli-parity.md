@@ -1274,3 +1274,108 @@ on real Chromium with the qualified owned-PG fixture -
 `browser-211b-1.xml` 2 PASS / 0 skip (16.829s), owned container
 cleanup verified. Reused unchanged A evidence: unit 173/35, native
 8 + overlap 3, browser 7, and the other 70 CI browser passes.
+
+
+## 212-a GUI Codex compatibility management (objective 212, new PR, 2026-11-01)
+
+### Scope and GUI-CLI parity contract
+
+G10 (Codex policy-data inspection and existing-key migration) of
+`docs/MISSING_GUI_FUNCTIONALITY.md`, delivered on branch
+`oap/212-gui-codex-compatibility` (created from accepted `main`
+`4d90d016`). The GUI reuses the SAME qualified Core:
+`CodexQualificationService.inspect()` for the global readiness table,
+`render_codex_profile` for the credential-free artifacts, the existing
+route-detail artifact handlers, the shared reviewed
+review/apply/stale-refusal orchestration (Core write law and default
+CLI behavior unchanged; 212 adds only the optional expected-target
+guard and read-only facts seam), and the existing
+`_admin_attachment_context` read-only boundary. No schema, migration,
+permissions, provider call, accounting, worker, or CLI-semantics
+change. All seeded keys/providers/routes are synthetic; no real
+provider/Codex request is involved; the final 219 installed
+whole-GUI qualification remains required and is NOT claimed.
+
+### Final evidence (accepted receipts)
+
+| Receipt | Scope | Result |
+| --- | --- | --- |
+| `unit-212a-1.xml` | 212 unit module: finite option/edge law, reason law on the ORIGINAL string, signed-doc verification, review/apply dispatch, alias withholding (reason/from/tuples, apply-time), index projection withholding, preset exact-bytes/no-store/non-rotating download, denials | 44 PASS / 0 skip (19.592 s) SHA `1e6d52b0…` |
+| `guards-212a-1.xml` | usability inventory (33 tables) + SLAIF design + main-app structure after the new templates | 139 PASS / 0 skip (5.638 s) |
+| `cross-212a-1.xml` | affected 208 key-clone (48) + 210 provider/route configuration (59) modules unchanged behavior | 107 PASS / 0 skip (38.957 s) |
+| `pg-212a-1.xml` | owned-PG ordered module (sole container owner), authenticated HTTP/TestClient (NOT the browser): review writes no key-policy/accounting/audit state, one-audit exact apply, exact-repeat no-op, rollback to the exact predecessor, ORIGINAL-token-after-a-different-authorized-action Already-at-target, non-target drift refusal, wrong-active-tuple refusal at apply, profile migrate-to-active + repeat no-op, LATE-AUDIT-failure rollback of policy and audit, retry-after-unconfirmed, native auth/CSRF denials - every refusal proves zero key-policy/accounting/domain/audit writes while normal authentication/session last-seen tracking is preserved | 12 PASS / 0 skip (9.830 s) |
+| `catalog-212a-1.xml` | existing catalog-route module incl. the NEW route-artifact read-only regression (touch=False, no CSRF refresh, no-store on success and fixed errors, UUID/ready gates intact) | 9 PASS / 0 skip (6.100 s) |
+| `browser-212a-2.xml` | actual Chromium (owned PG, sole owner): login -> Operations -> Compatibility index (entry, qualification row, exact preset identities, startup identity), key detail -> Compatibility entry, ready-route index row + route-detail Compatibility entry + credential-free no-store artifact downloads, keyboard module upgrade with same-page preset AND route-artifact downloads (form CSRF survives), DB oracles (exact tuple, one audit, full-row digest), persisted reload, browser-context HTTP repeat of the ORIGINAL token (Already at target), preset exact document, active profile migration, no-JS rollback, narrow/desktop captures | 8 PASS / 0 skip (19.256 s) |
+| `unit-212a-visual-1.xml` | the same 44-case 212 unit module RECHECKED (not 88 distinct cases) after the display-only wide-table / short-State-label correction | 44 PASS / 0 skip (19.354 s) |
+| `browser-212a-visual-1.xml` | visual-only overlapping recheck: the ONE existing narrow/desktop capture case for final images (not a ninth workflow case) | 1 PASS / 0 skip (10.257 s) |
+| `root-cli-oap-212a.xml` | strategic-run: selected CLI wiring/import/safe-error nodes (module-mutation selector wiring, codex-CLI import isolation, migrate-key-profile bootstrap error) + full OAP governance | 19 PASS / 0 fail / 0 error / 0 skip (SHA `1544d250…`) |
+
+The `root-cli-oap-212a.xml` run is a MOCKED CLI-runner wiring / import /
+error proof, not an installed CLI or backend run.
+
+The strategic model independently RAN scoped component probes (synthetic,
+mocked auth/persistence - NOT native evidence): the review helper (11
+pure probes incl. self-edge / tuple-mismatch / wrong-type / outer-extra
+refusals), the alias guard (3 router probes: target alias at review,
+source alias at review, target alias introduced only at apply), and the
+index projection (2 probes: digest/name alias withheld across
+text/attributes/hrefs, canonical preset unchanged). It also INDEPENDENTLY
+REVIEWED (parsed, not rerun) the formal JUnit receipts above, including
+the native 12 - it did not independently rerun that suite.
+
+### In-order corrections (superseded states; product and test changes both occurred)
+
+- The preliminary unit receipts failed with `NameError: Mapping
+  undefined` in the NEW PRODUCT alias helper (a missing
+  `collections.abc` import in `admin_compatibility.py`, not a
+  fixture-only defect); after that product import fix the earlier
+  38-PASS receipt is pre-alias-fix history, not final evidence.
+- The first browser module runs failed on fixture/oracle defects
+  observed for THIS objective: a trailing-slash link oracle, a Python
+  `ElementHandle.value` assumption (the value attribute / `input_value`
+  must be read instead), an unavailable upgrade repeat select (after
+  v4->v5 the finite UI correctly offers rollback, not upgrade:v5), and
+  a shipped-preset schema assumption (the current shipped presets are
+  schema-2 documents with no top-level digest key); later states also
+  corrected the preset bytes-vs-str/decode oracle and a dependent
+  no-JS rollback state. Both earlier full-run states (4 failures; then
+  3 failures over 7 tests) are superseded.
+- The first stored-ready-route seed used provider kind `openai`, which
+  the EXISTING `provider_configs` check constraint
+  (openai_compatible/module) rejects: a fixture-only 8-ERROR state,
+  corrected to the registered qwen38-27b 0.162 profile per the
+  strategic order (single `/v1/responses` endpoint, client-local
+  compaction, `codex_accounting` pricing metadata; verified
+  `protocol_qualified` with empty reason codes by running the real
+  service). No backend/schema change.
+- The route Codex-profile artifact handler became a read-only
+  attachment (no form-CSRF rotation, no-store on success and fixed
+  errors) because the new global surface links those downloads; the
+  bounded admin.py fix is a PRODUCT read-boundary change covered by the
+  catalog receipt above.
+- The index State cell was shortened to a "Protocol-qualified" label
+  and both wide tables reuse the existing `.table-wide` / `.nowrap`
+  classes (display-only; the 44-case unit recheck and 1-case browser
+  capture recheck cover it).
+
+### Preexisting observation (out of scope, no change made)
+
+The registered OpenAI 0.147 qualification profile declares
+`provider_kind="openai"`, which the stored-provider kind constraint
+(openai_compatible/module) can never satisfy, so a v2-declared
+gpt-5.6-sol route cannot reach protocol_qualified in a real database.
+212-a's ready-route qualification therefore uses the registered
+qwen38-27b 0.162 profile. This record makes no claim that the OpenAI
+profile was repaired; it was not.
+
+### Limits of this record
+
+Synthetic fixture keys/providers/routes only (no real Codex or
+provider request, no real DB beyond the owned disposable PostgreSQL in
+the native/browser fixtures); browser evidence is real Chromium +
+real uvicorn + real DB oracles, with browser-context HTTP steps
+labeled as such (not UI clicks); mocked-auth probes are component
+evidence, not native proof; the installed whole-GUI qualification
+(objective 219) and all deployment remain explicitly OUT of scope.
+Final-head GitHub CI status per head is recorded in the immutable
+212-a report.

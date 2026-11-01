@@ -195,6 +195,10 @@ slaif-gateway codex inspect-profile-file \
 
 Export refuses to overwrite an existing file. Presets contain no credentials.
 They are server-side policy, not the user's `qwen-students.config.toml`.
+The admin GUI (Operations -> Codex Compatibility) also offers authenticated
+inspection of these same validated presets with a private no-store export of
+the exact validated document (212-a); the CLI commands, schema, and export
+bytes are unchanged.
 Export creates mode 0600. Grant the serving account read access to the file
 and traversal access to its directory before promotion; the secret-loading
 entrypoint may drop root privileges before reading the preset. Keep operator
