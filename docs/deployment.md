@@ -302,9 +302,43 @@ Admin upload limits remain separate. Custom ingress configurations need the
 same explicit API setting; omitting it leaves Nginx's default 1 MiB limit,
 which returns an HTML 413 before the gateway can authenticate or validate.
 
-After editing an existing deployment, run `nginx -t` and reload Nginx. An
-application rebuild, API restart, database migration or key rotation is not
-needed for this setting.
+The reviewed key-batch admin transport (objective 209) needs its own
+bounded allowance: the signed `batch_review_intent` review envelope
+expands an 8 MiB canonical plan to ~10.67 MiB (11,184,812 base64url
+characters, 10.67 MiB) plus the small form fields, which exceeds
+Nginx's default 1 MiB `client_max_body_size`. Both shipped templates
+therefore carry a dedicated location for the batch endpoints ONLY:
+
+```nginx
+location /admin/key-batch/ {
+    client_max_body_size 16m;
+    ...
+}
+```
+
+16 m is the derived envelope headroom (10.67 MiB envelope plus the
+bounded form fields), and every other admin and `/v1` limit, proxy
+header, and security behavior is unchanged. The gateway side enforces
+the same bound: the apply route parses the form with a bounded
+per-field headroom and refuses oversized envelopes with a fixed safe
+400, so the Nginx value is a transport allowance, not an authorization.
+
+Upgrading a deployment that predates 209 is an application upgrade
+plus a proxy update in the SAME maintenance window: rebuild the
+API/assets image and recreate/restart the API so the new batch code
+runs, and update the reverse-proxy configuration from the shipped
+templates (or add the `location /admin/key-batch/` block above to a
+custom ingress), then `nginx -t` and reload Nginx - a new app behind
+an old proxy 413s large reviewed batches before they reach the
+gateway. No database migration and no existing-key change or rotation
+follow this upgrade.
+
+Editing ONLY the proxy setting (the 16 m batch location, for example on
+an already-upgraded app) needs just `nginx -t` and a Nginx reload: for
+that proxy-only configuration change no application rebuild or API
+restart is needed - the application upgrade itself (new code) still
+requires the API/assets rebuild and API recreate/restart described
+above.
 
 Streaming routes require anti-buffering and long timeouts:
 

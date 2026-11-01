@@ -80,6 +80,12 @@ Status legend:
 | --- | --- | --- |
 | Reviewed batch rate/policy changes | `keys batch plan` / `keys batch apply` | Two-step reviewed plan over a cohort or an explicit UUID set. Preview resolves exact UUIDs, reports selected/changed/unchanged counts, and applies the active-status filter at the DB boundary (only ACTIVE members selected; the cohort preview reports no per-key exclusions). Explicit-UUID selection names revoked/suspended members only as EXCLUDED (never selected, never changed). New membership added after preview makes the saved plan STALE: apply refuses with `key_batch_stale` (zero changes/audits). Apply is atomic through the shared per-key service with one audit per changed key and untouched usage/reservations/material; the saved plan is a staleness guard, not signed authority. Editing existing keys is NOT a cohort default for future keys. |
 
+GUI equivalent: objective 209-a delivered this reviewed batch to the
+admin GUI (G05) by reusing the SAME core service - no CLI change in
+that objective; see section 11 of
+`docs/MISSING_GUI_FUNCTIONALITY.md` and section 10 of
+`docs/admin-usability.md`.
+
 ## Implemented in objective 204 (owner/cohort edits + configuration inspection)
 
 | Field / group | CLI surface | Notes |

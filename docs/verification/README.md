@@ -10,6 +10,41 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-01 Objective 209-b GUI key-batch CI qualification verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - same-PR qualification
+  of the two demonstrated A IMPL final-head CI failures (run
+  41261553792, unit job 124715694142, terminal FAILURE at
+  2026-11-01T01:36:04Z): the batch router's missing entry in the finite
+  external-tool contract consumer allowlist, and the table-wrapper count
+  23 -> 24 for the new (already correctly labeled and focusable) batch
+  scroll region. Test-only repair; no product bytes change from A. 27
+  affected-module PASS (both failed cases) and 9 governance PASS on the
+  byte-exact B order; the A component proof (81 unit / 119 inventory /
+  73 related / 6 PG / 20 coexist / 7 Chromium) is reused unchanged.
+  Factual corrections: the A-era "core requires at least one selected
+  key" claim is false (the core plan permits an empty cohort/status
+  selection, selected_count minimum 0), and core membership is
+  rechecked after the last selected-key lock under READ COMMITTED with
+  no serializability claim. Final B-head CI pending until green.
+- [`2026-11-01 Objective 209-a GUI reviewed key batch verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - admin GUI G05 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` (reviewed changes to existing key
+  sets) reusing the SAME qualified 203 core `KeyBatchService`
+  plan/apply law: batch form with exactly ONE selection source (cohort
+  or up to 1,000 explicit UUIDs via the latest-100 picker with older
+  search) and ONE input source (guided controls or the advanced strict
+  version-1 document), a signed bounded review-intent token (8 MiB plan
+  -> 11,184,812 base64url chars, ~10.67 MiB) strictly re-parsed before
+  any mutation, apply with confirmation / fenced acknowledgement /
+  bounded reason (512 UTF-8 bytes), whole-batch stale refusal with zero
+  writes and one-transaction rollback, one audit per changed key; the
+  batch-apply route's bounded self form-parsing (the Starlette 1 MiB
+  per-field transport defect) and the 16 m `/admin/key-batch/` Nginx
+  locations in both shipped configs. 81 unit PASS, 6 owned-PG PASS, 20
+  CI-order coexist PASS, 7 real Chromium PASS (keyboard happy flow,
+  no-JS fallback, 390px review, >100 selection); the 207/208 component
+  proof is reused unchanged; GitHub CI on the 209 head pending at
+  publication.
 - [`2026-10-31 Objective 208-b GUI clone CI qualification verification`](gui-cli-parity.md)
   (recorded 2026-10-31, same living record file) - same-PR
   qualification of the demonstrated 208-a final-head CI failures:

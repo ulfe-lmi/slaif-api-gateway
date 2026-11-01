@@ -362,6 +362,14 @@ def test_external_tool_policy_contract_consumers_remain_allowlisted() -> (
         # therefore require a fresh execute-time confirmation. It grants no
         # runtime hosted-tool authority.
         REPO_ROOT / "app/slaif_gateway/services/key_clone_service.py",
+        # 209-a: the reviewed key-batch router is a UI-gate consumer - it
+        # reads EXTERNAL_TOOL_FENCED only to present and require the
+        # existing fresh apply-time acknowledgement when the reviewed
+        # input policy sets a fenced external-tool policy. The shared
+        # KeyBatchService/KeyService still own validation, current
+        # authorization, fences/holds and execution; this grants no
+        # runtime hosted-tool authority.
+        REPO_ROOT / "app/slaif_gateway/api/admin_key_batch.py",
     }
     for path in (REPO_ROOT / "app/slaif_gateway").rglob("*.py"):
         if path == module_path or path in allowed_consumers:

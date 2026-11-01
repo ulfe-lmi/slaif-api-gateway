@@ -635,3 +635,279 @@ recorded here. The 208-a operator/upgrade notes still apply: ordinary
 API/assets rebuild and restart, no schema or existing-key migration,
 no production action authorized. Strategic review and guarded merge
 remain the root's gates.
+
+## 209-a reviewed key batches (objective 209, new PR, 2026-11-01)
+
+### Scope and GUI-CLI parity contract
+
+Admin GUI G05 of `docs/MISSING_GUI_FUNCTIONALITY.md` (reviewed
+changes to existing key sets). The GUI reuses the SAME qualified 203
+core `KeyBatchService` plan/apply law (preview resolves exact UUIDs,
+staleness revalidation under row locks, one caller-owned transaction,
+one `update_key_configuration` audit per changed key, atomic
+rollback) - there is no second policy engine, no GUI drift surface.
+No database schema, table, migration, or runtime accounting change;
+the record pickers (192/193), the redaction seam (207), and the
+session/CSRF contexts are reused as well.
+
+### Bounded implementation
+
+`app/slaif_gateway/api/admin_key_batch.py` (focused router: form,
+plan, apply), the batch-purpose token in
+`app/slaif_gateway/api/admin_review_intent.py`, the router include in
+`app/slaif_gateway/main.py`, the three `keys/batch_*.html` templates
+(form / review / result), the batch entry link in `keys/list.html`,
+`web/static/js/key-batch.js` (one composed disabled-state sync;
+progressive enablement/disabling only - never value conversion), the
+batch-opt-in `web/static/js/record-choices.js` changes (hydration cap
+applied centrally to searches; omitted `selected` hydration on
+non-empty queries) and the optional `help_id`/`hydrate_cap`
+parameters of `_record_choice.html` (batch callers only; other
+callers keep their exact markup), the asset registration, the `.field`
+wrapper and `.config-json` containment stylesheet rules, and the
+bounded 16 m `/admin/key-batch/` locations in BOTH shipped Nginx
+configs plus the `deployment.md` operator note.
+
+### Focused test evidence (local; GitHub CI pending at publication)
+
+- **Fake-persistence ASGI/Jinja unit suite: 81 PASS / 0 skip** (JUnit
+  `unit-209a-7.xml`; the module was green at 80 cases at
+  `unit-209a-5.xml` and at 81 cases at `unit-209a-6.xml`, then
+  re-verified after the in-order accessibility/hint corrections).
+  Coverage: guided/advanced composition and the single-source law,
+  list-mode allow-all/deny-all and credential-shaped refusals,
+  selection overflow/malformed with the full-1000 accepted, review
+  rendering (ordinals, raw ungrouped sort keys, M-token and
+  money-string display, state-aware empty lists, excluded entries as
+  real UUID/status, the five picker help links, apply-input help with
+  the 512-UTF-8-byte bound and fenced acknowledgement), token
+  round-trip plus expiry/actor/session/tamper/malformed/oversize
+  refusals, apply flows (confirmation, reason, fenced, stale refusals
+  with zero writes, canary absence), the actual near-8 MiB signed
+  envelope through real ASGI urlencoded apply, the over-bound form
+  refusal as a controlled fixed 400, and the full-1000 transport
+  round-trip.
+- **Owned-PostgreSQL integration: 6 PASS / 0 skip** (JUnit
+  `pg-209a-1.xml`, 8.876 s, qualified loopback/tmpfs fixture, exact-ID
+  container cleanup). Cohort-scope plan (107 selected over
+  active+suspended; zero writes on preview), explicit 108-UUID plan
+  with exact exclusions and 105 persisted changes (changed-key
+  comparison allowing only the requested quotas plus `updated_at`;
+  excluded and an unselected control key an unchanged value snapshot), 105
+  actor-attributed audits, the SAME original reviewed token
+  reapplied as `already_at_target`, direct-DB drift and status-change
+  refusals with no-write snapshot proof, and an injected late per-key
+  write failure rolling back ALL provisional updates and audits. The
+  PG module seeds NO provider/route rows (quota-only batch); the
+  browser fixture separately get-or-creates the two DB-unique
+  provider slugs for the picker catalogs.
+- **CI collection-order coexistence: 20 PASS / 0 skip** (JUnit
+  `pg-209a-coexist-ci.xml`, 26.883 s: 6x209 + 4x208 + 10x207 in the
+  CI order) on one session database; the reverse order reuses the
+  208-b owned-PG proof. One CI-order coexistence satisfies this
+  order.
+- **Real Chromium on the owned fixture: 7 PASS / 0 skip, 32.655 s**
+  (JUnit `browser-209a-3.xml`, exact container cleanup; actual
+  uvicorn app, real stylesheet). Entry link plus safe initial
+  disabled states (real composed sync), the populated transition
+  regressions (stale allow-list values never ride along; guided<->
+  advanced round trip; keys<->cohort scope change while advanced;
+  inactive chip removal), the >100 multi-key selection with older
+  search (no `selected` hydration on typed queries; the full 101
+  selection submitted), the keyboard happy flow (combobox
+  ArrowDown/Enter cohort selection, Space/type/Enter apply, 390px
+  review with no document overflow and the apply control still
+  reachable, independent persisted-DB and audit oracles: 105 cost
+  caps persisted, 105 audits, then the no-JS flow's 105 request caps
+  and 105 more audits), and the no-JS fallback flow through to the
+  persisted change.
+- **JS component root (separate, mocked lookup, no app auth/PG):** the
+  populated-state regressions pass on the final
+  `web/static/js/key-batch.js` SHA
+  `5a1362620fb65a78a78630c3262197180a9651b1bb9104490c4e359a5f5867fd`;
+  the durable native browser cases above cover the same states on the
+  actual rendered page.
+- **Static/governance receipts (publication gate):** the full
+  `tests/unit/test_admin_usability_inventory.py` module: 119 PASS /
+  0 skip (JUnit `unit-209a-inventory.xml`), and OAP governance:
+  9 PASS / 0 skip (JUnit `unit-209a-gov.xml`) with the 209-a order
+  byte-exact in the tree. Ruff clean on the changed Python paths,
+  `scripts/check_documentation.py` reports `DOCUMENTATION_CHECK=OK`
+  (135 files), and `git diff --check` is clean.
+
+### Qualification chronology (honest failures)
+
+- Browser run 1: 7 FAIL - all fixture/selector issues (the h1 is
+  "Change Existing Keys", the multi picker has no `rc-open` button,
+  hidden inputs need `state="attached"`, transition step (iv) must
+  return to guided first, the cost formatter renders `5` not `5.00`).
+  No product defect.
+- Browser run 2: 3 PASS / 4 FAIL - the remaining root failure was the
+  display assertion matching the literal `&rarr;` entity while the
+  serialized page decodes it to the arrow; the other three cascaded
+  from the happy Apply never executing. No product defect.
+- Browser run 3: 7 PASS / 0 skip after the fixture corrections plus
+  the in-order accessibility corrections (keyboard cohort selection,
+  keyboard-only apply, the narrow-viewport review block, the
+  visible-text display assertion).
+- The in-order template corrections (one label per control, the
+  picker `help_id` spans, the apply-input help, the M-token rate
+  readout, the hint wording, the 512-UTF-8-byte reason bound) were
+  re-verified by the unit module (`unit-209a-7.xml`) and the browser
+  module (run 3 renders both corrected pages); the unchanged PG 6 /
+  coexist 20 component proof is reused, not rerun.
+- Pre-publication gate (root probe, closed exit 1): the inventory
+  ordinal guard expected 25 sortable admin tables; the new batch
+  review table is the 26th, and its tbody lacked the standard
+  empty-state row. Same-order focused correction: the guard count
+  25 -> 26 (assertions preserved) and the standard for-else
+  empty-state row (`data-no-sort`, `colspan="8"`, unnumbered) in
+  `batch_review.html`. The full inventory module then passed
+  119/119 (`unit-209a-inventory.xml`); the empty branch never renders
+  for a real plan (the core requires at least one selected key), so
+  the unit 81 / browser 7 / PG 6 / coexist 20 receipts stand
+  unchanged and were not rerun for this static correction.
+
+### Transport bound (demonstrated defect and fix)
+
+An 8 MiB canonical plan expands to 11,184,812 base64url characters
+(~10.67 MiB) plus the digest/separator in the signed
+`batch_review_intent` field. Starlette's default per-field cap (1 MiB)
+refused the actual full-1000 apply before any gateway logic ran, and
+Nginx's default 1 MiB `client_max_body_size` would refuse it in
+transit. The fix is bounded to the batch surface: the APPLY route
+parses its own form with envelope-sized headroom (no files, bounded
+field count) BEFORE the framework auto-form parsing and maps both
+bounded-parse failure forms to one fixed safe 400; both shipped Nginx
+templates carry `client_max_body_size 16m` for the
+`/admin/key-batch/` locations ONLY. No global body middleware,
+storage, jobs, compression, or schema; every other route and limit is
+unchanged. The near-8 MiB valid envelope is qualified through real
+ASGI urlencoded apply (exactly one apply call, full strictly parsed
+plan, all 1000 IDs) and the over-bound builder/API refusal is a
+controlled fixed 400.
+
+### Operator notes
+
+Deploying 209 is an application upgrade: rebuild the API/assets image
+and recreate/restart the API so the new batch code runs, together with
+the reverse-proxy configuration from the shipped templates (or the
+`location /admin/key-batch/` block added to a custom ingress) and
+`nginx -t` + Nginx reload in the same maintenance window - a new app
+behind an old proxy 413s large reviewed batches before they reach the
+gateway. Editing only the proxy setting needs just `nginx -t` and a
+reload. No schema migration, no existing-key change or rotation.
+
+### Honesty and limitations
+
+Component distinctions: the 81-case unit suite runs on synthetic fake
+persistence (no real DB); the 6-case suite runs on the qualified owned
+PostgreSQL; the 7-case browser suite runs the actual uvicorn app plus
+the real stylesheet against the same owned fixture; the JS component
+root used a mocked record-choices lookup without app auth/PG. No full
+local matrix was rerun for this objective (the unchanged 207/208
+component proof is reused, and one CI-order coexistence plus the
+208-b reverse proof cover cross-module seeding). GitHub CI on the 209
+implementation head is pending at publication (treated as pending, not
+pass); strategic review and guarded merge remain the root's gates. No
+production, security, compliance, or scale claim follows.
+
+## 209-b CI qualification and factual-record correction (objective 209, same PR, 2026-11-01)
+
+### Actual A IMPL CI failure (terminal)
+
+A IMPL `2aaf11d2714ec7e24c732293f3ef7088a2b1ba7c` CI run
+`41261553792`, unit job `124715694142`, completed FAILURE at
+2026-11-01T01:36:04Z. The actual job log identifies exactly two
+failures, both independently reproduced by root on the unchanged A SELF
+(two cases / two failures, closed exit 1):
+
+1. `tests/unit/test_documentation_contract_drift.py::
+   test_external_tool_policy_contract_consumers_remain_allowlisted` -
+   the new `app/slaif_gateway/api/admin_key_batch.py` imports the
+   authoritative external-tool contract constant but was absent from
+   the finite consumer allowlist.
+2. `tests/unit/test_admin_slaif_design.py::
+   test_table_wrappers_are_labeled_and_focusable` - actual 24 wrappers
+   versus the historical expected 23; the added batch scroll region
+   already carried its required `role="region"`, keyboard focus, and
+   accessible label.
+
+The A report's and the 209-a section's "no CI run exists on this head
+yet / CI pending at publication" statement is SUPERSEDED by this actual
+GitHub evidence, not rewritten: the A report remains immutable with its
+pending-at-publication statement, and the terminal A failure is
+recorded here.
+
+### Factual corrections to the A-era record (superseding, not rewritten)
+
+- The A-era chronology claim that the empty-state branch "never renders
+  for a real plan (the core requires at least one selected key)" is
+  FALSE: `KeyBatchService.plan` permits an empty cohort/status
+  selection and the strict schema's `selected_count` minimum is 0. The
+  standard empty-state row is the valid display for that outcome; no
+  service or parser change was made or is needed.
+- Membership-recheck precision: the core rechecks membership AFTER the
+  last selected-key lock under the existing READ COMMITTED law; later
+  joins are untouched. Nothing here implies serializability or a new
+  lock guarantee.
+- The A-era PG wording "an unchanged value snapshot" (real field-value
+  snapshots, not physical DB byte equality) and the corrected unit
+  receipt chronology (80 cases at `unit-209a-5.xml`, 81 cases at
+  `unit-209a-6.xml` and `unit-209a-7.xml`) stand as corrected.
+
+### Bounded B repair (tests only; no product bytes change from A)
+
+1. `tests/unit/test_documentation_contract_drift.py`: the finite
+   consumer allowlist gains the exact path
+   `app/slaif_gateway/api/admin_key_batch.py` - a UI-gate consumer that
+   reads `EXTERNAL_TOOL_FENCED` only to present and require the
+   existing fresh apply-time acknowledgement when the reviewed input
+   policy sets a fenced external-tool policy. The shared
+   `KeyBatchService`/`KeyService` still own validation, current
+   authorization, fences/holds and execution; this grants no runtime
+   hosted-tool authority. Every existing consumer, the whole-tree
+   scan, the operator-limit assertion, and the rejection of unlisted
+   modules are preserved; no wildcard allowlist, skipped test, or
+   contract duplication.
+2. `tests/unit/test_admin_slaif_design.py`: the demonstrated wrapper
+   count 23 -> 24 for the new batch scroll region. The per-wrapper
+   `role="region"` / `tabindex="0"` / non-empty `aria-label`
+   assertions and all other design tests are preserved; the product
+   wrapper markup is unchanged (it was already correct).
+
+### Focused B evidence (newly run)
+
+- The two affected test modules (which include both failed cases) run
+  once after the fixes: 27 PASS / 0 fail / 0 error / 0 skip, 5.016 s
+  (JUnit `unit-209b-1.xml`).
+- OAP governance: 9 PASS / 0 skip (JUnit `unit-209b-gov.xml`) with the
+  209-b order committed byte-exact.
+- Ruff clean on the current PR-changed Python files (small finite
+  set); `scripts/check_documentation.py` reports
+  `DOCUMENTATION_CHECK=OK`; `git diff --check` clean.
+
+### Reused unchanged A evidence (not rerun)
+
+The A component proof stands as recorded: 81 focused unit
+(`unit-209a-7.xml`), 119 admin-usability inventory
+(`unit-209a-inventory.xml`), 73 related 208/main-structure/actions
+(`related-209a.xml`), 6 owned-PG (`pg-209a-1.xml`), 20 CI-order
+coexist (`pg-209a-coexist-ci.xml`), 7 real Chromium
+(`browser-209a-3.xml`), and the scoped root JS component probe
+(`5a1362620fb65a78a78630c3262197180a9651b1bb9104490c4e359a5f5867fd`).
+The B changes touch no product, proxy, CLI, service, schema, or
+accounting bytes, so the negative/privacy/transaction evidence from A
+remains accepted for the unchanged product code.
+
+### Final-head status and operator notes
+
+Final B-head GitHub CI is PENDING until actually green (skipped/
+missing/pending is never pass); the A-era native proof remains scoped
+as recorded, and the whole-GUI goal remains incomplete (G06-G18 open,
+final installed 219 outstanding). The A operator notes still apply:
+API/assets rebuild with API recreate/restart, the reverse-proxy
+configuration from the shipped templates plus `nginx -t` and reload in
+the same maintenance window (proxy-only edits need just the reload),
+no schema migration and no existing-key change or rotation. Strategic
+review and guarded merge remain the root's gates.
