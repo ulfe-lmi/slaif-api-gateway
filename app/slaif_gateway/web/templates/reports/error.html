@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}{{ error_status }} — SLAIF Gateway Admin{% endblock %}
+
+{% block body %}
+{#- 214-a: report-owned error surface.  Same status/message contract as
+    the shared admin error page, plus ONE direct safe recovery link to a
+    fixed allowlisted report/form destination (no raw query, token, or
+    secret echo; the destination is validated by the router helper). -#}
+<section class="error-page" aria-labelledby="error-heading">
+  <p class="error-status">HTTP {{ error_status }}</p>
+  <h1 id="error-heading">{{ error_status_text }}</h1>
+  <p>{{ error_message }}</p>
+  {% if recovery_href %}
+  <a class="button-link" href="{{ recovery_href }}">{{ recovery_label }}</a>
+  {% endif %}
+  <a class="button-link secondary" href="/admin">Go to admin</a>
+</section>
+{% endblock %}

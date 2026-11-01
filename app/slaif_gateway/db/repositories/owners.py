@@ -131,7 +131,7 @@ class OwnersRepository:
                 )
             )
 
-        statement = statement.order_by(Owner.created_at.desc()).limit(limit).offset(offset)
+        statement = statement.order_by(Owner.created_at.desc(), Owner.id.asc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 

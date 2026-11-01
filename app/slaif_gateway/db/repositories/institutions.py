@@ -74,7 +74,7 @@ class InstitutionsRepository:
                 )
             )
 
-        statement = statement.order_by(Institution.name.asc()).limit(limit).offset(offset)
+        statement = statement.order_by(Institution.name.asc(), Institution.id.asc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Usage JSON export{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="usage-export-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Reports / Usage</p>
+      <h1 id="usage-export-heading">Safe JSON usage export</h1>
+      <p class="muted">Strict-JSON attachment with the shared usage-export allowlist (exact raw machine units, nullable costs). Audited; capped; never a silent partial.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/reports/">Usage summary</a>
+      <a class="button-link secondary" href="/admin/usage">Usage ledger</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="create-form" method="post" action="/admin/reports/export">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <section class="action-panel" aria-labelledby="export-scope-heading">
+      <h2 id="export-scope-heading">Scope</h2>
+      <div class="form-grid">
+        {{ record_choice("provider", "provider", "Provider", options=choices.provider or none, selected_id=filters.provider, allow_new=true, help="Exact provider slug; blank = any", input_id="export-provider", help_id="export-provider-help", control_id="export-provider-input") }}
+        {{ record_choice("model", "model", "Model", options=choices.model or none, selected_id=filters.model, allow_new=true, help="Exact requested/resolved model; blank = any", input_id="export-model", help_id="export-model-help", control_id="export-model-input") }}
+        {{ record_choice("owner_id", "owner", "Owner ID", options=choices.owner_id or none, selected_id=filters.owner_id, allow_new=true, help="One owner; blank = any", input_id="export-owner", help_id="export-owner-help", control_id="export-owner-input") }}
+        {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id or none, selected_id=filters.cohort_id, allow_new=true, help="One cohort; blank = any", input_id="export-cohort", help_id="export-cohort-help", control_id="export-cohort-input") }}
+        {{ record_choice("gateway_key_id", "key", "Key ID", options=choices.gateway_key_id or none, selected_id=filters.gateway_key_id, allow_new=true, help="One gateway key; blank = any", input_id="export-key", help_id="export-key-help", control_id="export-key-input") }}
+      </div>
+      <div class="form-grid">
+        <label>
+          Start (UTC, inclusive)
+          <input name="start_at" id="export-start-at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z" aria-describedby="export-start-at-help">
+          <span class="field-help" id="export-start-at-help">Inclusive aware-UTC window; naive input is treated as UTC. Single-value CLI-parity scope.</span>
+        </label>
+        <label>
+          End (UTC, inclusive)
+          <input name="end_at" id="export-end-at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z" aria-describedby="export-end-at-help">
+          <span class="field-help" id="export-end-at-help">Inclusive aware-UTC window; at or after the start (equal bounds are accepted).</span>
+        </label>
+        <label>
+          Row limit
+          <input name="limit" id="export-limit" value="{{ export_max_rows }}" inputmode="numeric" aria-describedby="export-limit-help">
+          <span class="field-help" id="export-limit-help">Configured ceiling: {{ export_max_rows | num }} rows. The export fetches cap+1 and REFUSES an overbound scope with the exact counts - no partial export, no first-page completeness claim.</span>
+        </label>
+      </div>
+    </section>
+
+    <section class="action-panel" aria-labelledby="export-audit-heading">
+      <h2 id="export-audit-heading">Audit</h2>
+      <label>Audit reason<textarea name="reason" id="export-reason" rows="3" required placeholder="Reason for this export" aria-describedby="export-reason-help"></textarea></label>
+      <p class="field-help" id="export-reason-help">Nonblank, at most {{ reason_max_length | num }} characters; written to the audit log with your admin user ID.</p>
+      <div class="checkbox-row">
+        <input type="checkbox" id="export-confirm" name="confirm_export" value="1" required aria-describedby="export-confirm-help">
+        <label for="export-confirm">I confirm this export is audited and contains usage metadata only.</label>
+      </div>
+      <p class="field-help" id="export-confirm-help">Prompts, completions, raw request/response bodies, and secret fields are excluded. The attachment is private (no-store) and must not be shared outside approved operational channels.</p>
+      <button type="submit">Export usage JSON</button>
+      <a class="button-link secondary" href="/admin/reports/">Back to the summary</a>
+    </section>
+  </form>
+</section>
+{% endblock %}

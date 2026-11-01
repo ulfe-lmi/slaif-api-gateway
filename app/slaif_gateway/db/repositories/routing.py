@@ -124,7 +124,9 @@ class ModelRoutesRepository:
             statement = statement.where(ModelRoute.visible_in_models == visible)
 
         statement = (
-            statement.order_by(ModelRoute.priority.asc(), ModelRoute.created_at.asc())
+            statement.order_by(
+                ModelRoute.priority.asc(), ModelRoute.created_at.asc(), ModelRoute.id.asc()
+            )
             .limit(limit)
             .offset(offset)
         )

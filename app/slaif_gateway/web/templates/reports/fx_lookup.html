@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Effective FX lookup{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="fx-lookup-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Reports / Catalog</p>
+      <h1 id="fx-lookup-heading">Effective FX rate lookup</h1>
+      <p class="muted">The current effective rate for one explicit base/quote pair at UTC now, from the shared FX rate service.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/fx">FX rates</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar compact" method="get" action="/admin/reports/fx-lookup" id="fx-lookup-filter">
+    <div class="form-grid">
+      {{ record_choice("base_currency", "currency", "Base currency", options=choices.base_currency or none, selected_id=filters.base_currency, allow_new=true, help="ISO 4217 code of the currency being converted FROM", input_id="fxl-base", help_id="fxl-base-help", control_id="fxl-base-input") }}
+      {{ record_choice("quote_currency", "currency", "Quote currency", options=choices.quote_currency or none, selected_id=filters.quote_currency, allow_new=true, help="ISO 4217 code of the currency being converted TO", input_id="fxl-quote", help_id="fxl-quote-help", control_id="fxl-quote-input") }}
+    </div>
+    <button type="submit">Look up rate</button>
+  </form>
+
+  {% if lookup is not none and lookup.missing %}
+  <div class="admin-flash" role="status">
+    <p>No FX rate is effective for <strong>{{ lookup.base_currency }} / {{ lookup.quote_currency }}</strong> at the current time.</p>
+    <p class="muted small">This is an honest missing state - no rate is inferred, fetched externally, or converted through another pair. Add a rate in the <a href="/admin/fx">FX rate list</a> if one should exist.</p>
+  </div>
+  {% elif lookup is not none %}
+  <section class="action-panel" aria-labelledby="fx-lookup-result-heading">
+    <h2 id="fx-lookup-result-heading">Effective rate</h2>
+    <dl>
+      <dt>Pair</dt>
+      <dd><code>{{ lookup.base_currency }} / {{ lookup.quote_currency }}</code></dd>
+      <dt>Rate</dt>
+      <dd>{{ lookup.rate | num }} {{ lookup.quote_currency }} per 1 {{ lookup.base_currency }}</dd>
+      <dt>Source</dt>
+      <dd>{{ lookup.source if lookup.source else "—" }}</dd>
+      <dt>Valid from (UTC)</dt>
+      <dd>{{ lookup.valid_from }}</dd>
+      <dt>Valid until (UTC)</dt>
+      <dd>{{ lookup.valid_until if lookup.valid_until else "open" }}</dd>
+    </dl>
+    <p class="muted small">Resolved by the shared <code>latest_fx_rate</code> helper at UTC now (the same helper accounting uses); no historical-time query, same-currency rate, or external fetch.</p>
+  </section>
+  {% else %}
+  <p class="muted">Select a base and a quote currency (they must differ) to look up the current effective rate.</p>
+  {% endif %}
+</section>
+{% endblock %}

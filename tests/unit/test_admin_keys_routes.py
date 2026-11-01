@@ -1,3 +1,4 @@
+import html
 import re
 import uuid
 from contextlib import asynccontextmanager
@@ -284,7 +285,9 @@ def test_admin_keys_list_returns_html_and_accepts_filters(monkeypatch) -> None:
 
     async def list_keys(self, **kwargs):
         seen.update(kwargs)
-        return [_row()]
+        # 214-a: return exactly the fetched cap+1 overflow (26 rows for a
+        # 25-row page) so the page shows 25 and has_more is REAL.
+        return [_row() for _ in range(kwargs.get("limit", 26))]
 
     monkeypatch.setattr(
         "slaif_gateway.services.admin_key_dashboard.AdminKeyDashboardService.list_keys",
@@ -316,8 +319,19 @@ def test_admin_keys_list_returns_html_and_accepts_filters(monkeypatch) -> None:
     assert seen["public_key_id"] == "public-test-id"
     assert seen["cohort_id"] == cohort_id
     assert seen["expired"] is False
-    assert seen["limit"] == 25
+    # 214-a: the paged handler fetches limit+1 (cap+1 has_more) ...
+    assert seen["limit"] == 26
     assert seen["offset"] == 5
+    # ... the displayed page is still exactly the requested 25 rows ...
+    assert response.text.count('class="row-ordinal"') == 25
+    # ... and has_more is real: the next link continues offset 30 with
+    # the accepted page scope (Jinja escapes attribute & as &amp;).
+    assert 'rel="next"' in response.text
+    next_hrefs = [
+        html.unescape(href)
+        for href in re.findall(r'href="([^"]+)"', response.text)
+    ]
+    assert any("limit=25" in href and "offset=30" in href for href in next_hrefs)
 
 
 def test_admin_keys_list_marks_trusted_calibration(monkeypatch) -> None:

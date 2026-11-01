@@ -45,7 +45,7 @@
     </label>
   </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Institutions">
-    <table data-sortable>
+    <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>
         <tr>
           <th data-ordinal scope="col" aria-label="Row number">#</th>
@@ -59,7 +59,7 @@
       <tbody>
         {% for institution in institutions %}
         <tr>
-          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
           <td><a href="/admin/institutions/{{ institution.id }}">{{ institution.name }}</a></td>
           <td>{{ institution.country or "Not set" }}</td>
           <td data-sort-value="{{ institution.owner_count }}">{{ institution.owner_count | num }}</td>
@@ -77,5 +77,6 @@
       </tbody>
     </table>
   </div>
+  {% include "partials/pagination.html" %}
 </section>
 {% endblock %}

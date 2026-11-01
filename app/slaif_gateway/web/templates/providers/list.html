@@ -49,7 +49,7 @@
     </label>
   </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Provider configs">
-    <table data-sortable>
+    <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>
         <tr>
           <th data-ordinal scope="col" aria-label="Row number">#</th>
@@ -63,7 +63,7 @@
       <tbody>
         {% for provider in providers %}
         <tr>
-          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
           <td>
             <a href="/admin/providers/{{ provider.id }}">{{ provider.display_name }}</a>
             <div class="muted small">{{ provider.provider }} / {{ provider.kind }}</div>
@@ -84,5 +84,6 @@
       </tbody>
     </table>
   </div>
+  {% include "partials/pagination.html" %}
 </section>
 {% endblock %}

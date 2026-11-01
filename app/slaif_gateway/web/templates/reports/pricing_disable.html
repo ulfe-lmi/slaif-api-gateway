@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Review pricing disable{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="pricing-disable-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Reports / Catalog</p>
+      <h1 id="pricing-disable-heading">Reviewed matching-model pricing disable</h1>
+      <p class="muted">Preview the exact enabled pricing rows for one provider/model scope, review them, then apply the disable only to the reviewed rows.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/pricing">Pricing rules</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/reports/pricing-disable/preview">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <section class="action-panel" aria-labelledby="pd-scope-heading">
+      <h2 id="pd-scope-heading">Exact scope</h2>
+      <div class="form-grid">
+        {{ record_choice("provider", "provider", "Provider", options=choices.provider or none, selected_id=filters.provider, allow_new=true, help="Exact provider slug", input_id="pd-provider", help_id="pd-provider-help", control_id="pd-provider-input") }}
+        {{ record_choice("model", "model", "Model", options=choices.model or none, selected_id=filters.model, allow_new=true, help="Exact upstream model", input_id="pd-model", help_id="pd-model-help", control_id="pd-model-input") }}
+        {{ record_choice("endpoint", "endpoint", "Endpoint (optional)", options=choices.endpoint or none, selected_id=filters.endpoint or none, allow_new=false, help="Blank previews every enabled row for the provider/model; an endpoint narrows the exact scope.", placeholder="Blank = all endpoints", input_id="pd-endpoint", help_id="pd-endpoint-help", control_id="pd-endpoint-input") }}
+      </div>
+      <p class="muted small">The preview matches CURRENTLY ENABLED rows only, in SQL, bounded at {{ max_reviewed_rows | num }} rows. A larger match is refused outright - never silently trimmed or chunked. Newly added matches after the preview (new rows, or re-enabled rules) require a fresh review - the apply is refused if the scope changed.</p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="pd-audit-heading">
+      <h2 id="pd-audit-heading">Audit</h2>
+      <label>
+        Audit reason
+        <textarea name="reason" id="pd-reason" rows="3" required placeholder="For example: maintenance window for model-a prices" aria-describedby="pd-reason-help"></textarea>
+        <span class="field-help" id="pd-reason-help">Nonblank, at most {{ reason_max_length | num }} characters; carried into the review and written per-row to the audit log with your admin user ID at apply.</span>
+      </label>
+      <p class="muted small">Previewing binds these rules to your session for 15 minutes. Applying re-checks the live rules first: if any rule changed after the preview, or a new matching rule appeared, the operation is refused and nothing changes. If every rule was already disabled, applying does nothing and says so.</p>
+      <button type="submit">Preview matching enabled rows</button>
+      <a class="button-link secondary" href="/admin/pricing">Cancel</a>
+    </section>
+  </form>
+</section>
+{% endblock %}

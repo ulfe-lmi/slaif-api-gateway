@@ -311,7 +311,9 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
     # 213-a: +5 for the replay-maintenance tables (index scopes,
     # inspection per-key, inspection route/model groups, inspection
     # exclusion reasons, review exclusion counts).
-    assert wrappers == 36
+    # 214-a: +2 for the report scroll regions (usage-summary group table,
+    # reviewed pricing-disable row table).
+    assert wrappers == 38
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

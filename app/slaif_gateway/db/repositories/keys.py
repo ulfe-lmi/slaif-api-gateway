@@ -341,7 +341,7 @@ class GatewayKeysRepository:
             else:
                 statement = statement.where(GatewayKey.valid_until > now)
 
-        statement = statement.order_by(GatewayKey.created_at.desc()).limit(limit).offset(offset)
+        statement = statement.order_by(GatewayKey.created_at.desc(), GatewayKey.id.desc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 

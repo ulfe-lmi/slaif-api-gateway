@@ -15,6 +15,7 @@
     <div class="header-actions">
       <a class="button-link" href="/admin/fx/import">Preview FX import</a>
       <a class="button-link" href="/admin/fx/new">Create FX rate</a>
+      <a class="button-link secondary" href="/admin/reports/fx-lookup">Effective rate lookup</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -56,14 +57,14 @@
     </label>
   </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="FX rates">
-    <table data-sortable>
+    <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>
         <tr><th data-ordinal scope="col" aria-label="Row number">#</th><th>Pair</th><th data-sort-type="number">Rate</th><th data-sort-type="datetime">Validity (from)</th><th>Source</th><th data-sort-type="datetime">Created</th></tr>
       </thead>
       <tbody>
         {% for fx_rate in fx_rates %}
         <tr>
-          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
           <td><a href="/admin/fx/{{ fx_rate.id }}">{{ fx_rate.base_currency }} / {{ fx_rate.quote_currency }}</a></td>
           <td data-sort-value="{{ fx_rate.rate }}">{{ fx_rate.rate | num }}</td>
           <td data-sort-value="{{ fx_rate.valid_from.isoformat() }}">
@@ -79,5 +80,6 @@
       </tbody>
     </table>
   </div>
+  {% include "partials/pagination.html" %}
 </section>
 {% endblock %}

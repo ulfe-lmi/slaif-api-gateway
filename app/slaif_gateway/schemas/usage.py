@@ -77,6 +77,53 @@ class UsageReportFilters:
 
 
 @dataclass(frozen=True, slots=True)
+class UsageGroupCostAvailability:
+    """Per-group cost availability evidence for one bounded source set.
+
+    214-a additive reporting projection: the grouped monetary sums on
+    :class:`UsageSummaryRow` coerce missing values to zero, so a rendered
+    group total alone cannot prove every row carried a known cost.  This
+    projection counts, per group and over the SAME bounded source rows and
+    canonical grouping, how many rows had a KNOWN versus MISSING
+    estimated/actual gateway EUR cost and how many carried an optional
+    provider-native reported cost.  It adds no money of its own and never
+    changes the existing summary or export result shapes.
+    """
+
+    grouping_key: str
+    grouping_label: str | None
+    row_count: int
+    estimated_cost_known_count: int
+    estimated_cost_missing_count: int
+    actual_cost_known_count: int
+    actual_cost_missing_count: int
+    provider_reported_cost_known_count: int
+    provider_reported_cost_missing_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class UsageSummaryReport:
+    """Bounded opt-in GUI reporting result (214-a).
+
+    ``rows`` keeps the EXACT existing :class:`UsageSummaryRow` display
+    shape and sort law (display-limited); ``availability`` carries the
+    per-group known/missing cost evidence for the displayed groups over
+    the complete accepted bounded source set; ``source_row_count`` is the
+    number of ledger rows accepted and aggregated (the bounded scope);
+    ``truncated_groups`` marks that more groups existed beyond the display
+    limit.  The CLI ``summarize_usage`` contract is unchanged: it still
+    returns ``list[UsageSummaryRow]`` with the exact pre-214 fields.
+    """
+
+    group_by: str
+    filters: UsageReportFilters
+    source_row_count: int
+    rows: tuple[UsageSummaryRow, ...]
+    availability: tuple[UsageGroupCostAvailability, ...]
+    truncated_groups: bool
+
+
+@dataclass(frozen=True, slots=True)
 class UsageDayGroup:
     """Normalized day group key."""
 

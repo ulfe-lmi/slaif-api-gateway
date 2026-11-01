@@ -12,6 +12,9 @@ from typing import Any
 
 from slaif_gateway.metrics import increment_auth_failure
 from slaif_gateway.schemas.errors import OpenAIErrorDetail, OpenAIErrorResponse
+from slaif_gateway.services.request_diagnostics import (
+    is_known_incoming_secret_alias,
+)
 
 _DEFAULT_ERROR_TYPES_BY_STATUS = {
     400: "invalid_request_error",
@@ -158,6 +161,10 @@ def _record_local_rejection(request: Request, exc: OpenAICompatibleError) -> Non
 
 _MAX_VALIDATION_FACTS = 10
 _MAX_LOC_PARTS = 8
+# 214-a: bounded ADMIN-path validation detail (admin forms are small; the
+# bound is a fixed safety cap, not a protocol field).
+_MAX_ADMIN_VALIDATION_ERRORS = 32
+_MAX_ADMIN_VALIDATION_MSG_CHARS = 256
 
 
 def _validation_rejection_facts(exc: RequestValidationError) -> dict[str, Any]:
@@ -213,6 +220,74 @@ def _http_error_rejection_facts(exc: StarletteHTTPException) -> dict[str, Any]:
         "reason_code": "http_error",
         "status_code": int(exc.status_code),
     }
+
+
+def _safe_admin_validation_detail(
+    request: Request, exc: RequestValidationError
+) -> list[dict[str, Any]]:
+    """214-a: safe ADMIN-path projection of one validation rejection.
+
+    The default FastAPI projection echoes the raw ``input`` (and
+    ``ctx``/``url``), so a credential value submitted against an admin
+    query/form field (for example ``limit=<gateway key>``) would be
+    reflected verbatim in the 422 body.  This projection preserves the
+    detail-array structure with the stable ``loc``/``type`` vocabulary
+    and the generated ``msg`` only where safe:
+
+    - the raw ``input``, ``ctx``, and ``url`` are ALWAYS omitted;
+    - a location part or message that matches a known incoming
+      authentication alias is withheld (the existing pure fail-closed
+      discovery helper; no auth/DB lookup, no new middleware);
+    - the 422 rejection semantics are unchanged, the /v1 OpenAI branch
+      is untouched, and the projection never consults dashboard state
+      (the disabled-dashboard 404 is a route-guard outcome ordered
+      after validation and stays exactly as before).
+    """
+    settings = getattr(request.app.state, "settings", None)
+    accepted_prefixes = (
+        settings.get_gateway_key_accepted_prefixes() if settings is not None else ()
+    )
+    scope = request.scope
+
+    def _is_alias(value: str) -> bool:
+        try:
+            return is_known_incoming_secret_alias(
+                value, scope=scope, accepted_prefixes=accepted_prefixes
+            )
+        except Exception:  # noqa: BLE001 - fail closed: withhold on fault
+            return True
+
+    detail: list[dict[str, Any]] = []
+    for error in exc.errors():
+        if len(detail) >= _MAX_ADMIN_VALIDATION_ERRORS:
+            break
+        if not isinstance(error, dict):
+            continue
+        entry: dict[str, Any] = {}
+        loc: list[str | int] = []
+        raw_loc = error.get("loc")
+        if isinstance(raw_loc, (list, tuple)):
+            for part in raw_loc[:_MAX_LOC_PARTS]:
+                if isinstance(part, str):
+                    # Check the ORIGINAL full string first: truncating
+                    # before the alias check could expose the leading
+                    # 128 chars of a long opaque cookie/token.  Only a
+                    # proven-safe location name is truncated for display.
+                    if _is_alias(part):
+                        continue  # withhold credential-valued location part
+                    loc.append(part[:128])
+                elif isinstance(part, int) and not isinstance(part, bool):
+                    loc.append(part)
+        if loc:
+            entry["loc"] = loc
+        error_type = error.get("type")
+        if isinstance(error_type, str) and error_type:
+            entry["type"] = error_type[:64]
+        msg = error.get("msg")
+        if isinstance(msg, str) and msg and not _is_alias(msg):
+            entry["msg"] = msg[:_MAX_ADMIN_VALIDATION_MSG_CHARS]
+        detail.append(entry)
+    return detail
 
 
 def _record_diagnostic_facts(request: Request, facts: object) -> None:
@@ -303,6 +378,15 @@ async def request_validation_exception_handler(
             message="Invalid request",
             status_code=422,
             code="validation_error",
+        )
+
+    if request.url.path.startswith("/admin"):
+        # 214-a: the raw FastAPI detail echoes the submitted ``input``
+        # (and ``ctx``/``url``); a credential value posted against an
+        # admin field must never be reflected in the rejection body.
+        return JSONResponse(
+            status_code=422,
+            content={"detail": _safe_admin_validation_detail(request, exc)},
         )
 
     return JSONResponse(status_code=422, content={"detail": exc.errors()})

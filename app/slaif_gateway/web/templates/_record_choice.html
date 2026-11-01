@@ -41,6 +41,10 @@
                   visible field references that span via aria-describedby
                   (batch pickers only; other callers omit it and keep
                   their exact markup)
+    control_id    optional ACTUAL control ID set on the visible
+                  input/textarea (default empty leaves old callers
+                  unchanged); used with help_id by the 214-a report
+                  forms that require unique actual control IDs
 -#}
 {#-
   Visual contract (193-a): the control reads as ONE integrated
@@ -67,7 +71,8 @@
     input_id="",
     nojs_value=none,
     hydrate_cap="",
-    help_id=""
+    help_id="",
+    control_id=""
 ) -%}
 <label class="rc-field">
   <span class="rc-name">{{ label_text }}</span>
@@ -94,6 +99,7 @@
     {% if multi %}
     <span class="rc-main rc-main-multi">
       <textarea class="rc-input" name="{{ name }}" rows="2" autocomplete="off"
+                {% if control_id %}id="{{ control_id }}"{% endif %}
                 spellcheck="false" placeholder="{{ field_placeholder }}"
                 {% if help_id %}aria-describedby="{{ help_id }}"{% endif %}>{{ multi_value or '' }}</textarea>
       <span class="rc-chevron rc-chevron-static" aria-hidden="true"></span>
@@ -101,6 +107,7 @@
     {% else %}
     <span class="rc-main">
       <input type="text" class="rc-input" name="{{ name }}" autocomplete="off"
+             {% if control_id %}id="{{ control_id }}"{% endif %}
              spellcheck="false" placeholder="{{ field_placeholder }}"
              value="{{ nojs_value if nojs_value is not none else (selected_label or selected_id or '') }}"
              {% if help_id %}aria-describedby="{{ help_id }}"{% endif %}

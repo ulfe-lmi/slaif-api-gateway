@@ -270,7 +270,10 @@ def test_admin_provider_routes_return_html_and_accept_filters(monkeypatch) -> No
     assert provider.api_key_env_var in detail.text
     assert seen["provider"] == "openai"
     assert seen["enabled"] is True
-    assert seen["limit"] == 20
+    # 214-a: the paged handler fetches limit+1 (cap+1 has_more); one
+    # row fetched means the page must NOT claim more
+    assert seen["limit"] == 21
+    assert "No more rows" in response.text
 
 
 def test_admin_route_routes_return_html_and_accept_filters(monkeypatch) -> None:

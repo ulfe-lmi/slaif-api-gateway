@@ -164,6 +164,18 @@ class AdminCatalogDashboardService:
         )
         return [_to_provider_list_row(row) for row in rows]
 
+    async def provider_config_exists(self, provider: str) -> bool:
+        """214-a: bounded exact provider-slug existence check.
+
+        The legacy ``list_providers(limit=200)`` choice batch is a display
+        page, not the complete provider directory; route-form save must not
+        treat a provider beyond that page as unknown. This performs one
+        bounded exact lookup by provider slug (disabled configurations
+        included, matching the legacy list) and returns a boolean only.
+        """
+        row = await self._providers.get_provider_config_by_provider(provider)
+        return row is not None
+
     async def get_provider_detail(self, provider_config_id: uuid.UUID) -> AdminProviderDetail:
         row = await self._providers.get_provider_config_for_admin_detail(provider_config_id)
         if row is None:

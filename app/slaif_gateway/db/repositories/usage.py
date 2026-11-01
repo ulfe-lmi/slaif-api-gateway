@@ -470,7 +470,9 @@ class UsageLedgerRepository:
             start_at=start_at,
             end_at=end_at,
         )
-        statement = statement.order_by(UsageLedger.created_at.desc()).limit(limit).offset(offset)
+        statement = statement.order_by(
+            UsageLedger.created_at.desc(), UsageLedger.id.asc()
+        ).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 

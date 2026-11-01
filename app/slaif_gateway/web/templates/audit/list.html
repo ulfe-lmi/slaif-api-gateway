@@ -83,7 +83,7 @@
     </label>
   </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Audit log rows">
-    <table data-sortable>
+    <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>
         <tr>
           <th data-ordinal scope="col" aria-label="Row number">#</th>
@@ -97,7 +97,7 @@
       <tbody>
         {% for row in audit_logs %}
         <tr>
-          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
           <td><a href="/admin/audit/{{ row.id }}">{{ row.action }}</a></td>
           <td>
             <div>{{ row.target_type }}</div>
@@ -115,5 +115,6 @@
       </tbody>
     </table>
   </div>
+  {% include "partials/pagination.html" %}
 </section>
 {% endblock %}

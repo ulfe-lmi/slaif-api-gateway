@@ -1496,3 +1496,98 @@ probes are component evidence, not native proof. The installed
 whole-GUI qualification (objective 219) and all deployment remain
 explicitly OUT of scope. Final-head GitHub CI status is recorded in
 the immutable 213-a report.
+
+
+## 214-a GUI reports, pagination and reviewed catalog tools (objective 214,
+new PR, 2026-11-01)
+
+### Scope and GUI-CLI parity contract
+
+G11 (grouped usage and live-burn reporting, safe JSON export), G13
+(complete filter-preserving list navigation and the safe provider
+lookup), and G18 (reviewed matching-model pricing disable and
+effective FX lookup) of `docs/MISSING_GUI_FUNCTIONALITY.md`, delivered
+on branch `oap/214-gui-reports-pagination` (created from verified
+remote `main` `7ede8cc5`). The GUI reuses the SAME shared services
+the CLI uses (`UsageReportService.summarize_usage` /
+`summarize_chat_live_burn` / `export_usage` through the additive
+`summarize_usage_report` bounded projection,
+`PricingRuleService.preview_disable_model` /
+`apply_disable_model_reviewed`, `FxRateService.latest_fx_rate`)
+inside caller-owned transactions; the controllers only bind scope,
+confirmation, and identity through the existing HMAC review-intent
+pattern and enforce the GUI's known-incoming-alias withholding.
+
+Parity facts (deliberate differences are documented, not hidden):
+
+- The report/export filters are the CLI's single-value
+  `UsageReportFilters` (inclusive aware-UTC window, provider, model,
+  owner/cohort/key); the usage LEDGER list keeps its richer
+  multi-value OR-within/AND-across contract. The pages state the
+  difference.
+- The GUI source ceiling (10,000 ledger rows per report view; fetched
+  cap+1, overbound scope refused) and the configured
+  `ADMIN_USAGE_EXPORT_MAX_ROWS` export ceiling are GUI bounds; the
+  CLI `summarize_usage`/`export_usage`/`live-burn-summary` defaults
+  are UNCHANGED, and the CLI `UsageSummaryRow` JSON field set is
+  unchanged (the availability evidence is an additive
+  `UsageSummaryReport` projection).
+- The reviewed pricing disable adds actor/reason/review-set guards
+  that the bare CLI `pricing disable-model` convenience does not
+  carry; the CLI default is preserved.
+- The FX lookup resolves one explicit pair at UTC now through the
+  exact `latest_fx_rate` helper the accounting path uses.
+- The legacy 200-row provider choice page remains a display batch;
+  route-form save existence now comes from a bounded exact
+  provider-slug lookup (disabled configs included), so an older
+  provider beyond that page can be saved while unknown/ineligible
+  provider refusal and the exact route parsing rules are preserved.
+
+No schema, migration, permission, adapter, request-acceptance,
+accounting, runtime-selection, or replay-law change; no raw
+pricing metadata in the signed review (identity + stable source
+fingerprint only); no serializable catalog-wide insert-exclusion
+claim; no production calls. All seeded keys/rules/rates are
+synthetic; the final 219 installed whole-GUI qualification remains
+required and is NOT claimed.
+
+### Final evidence (214-a)
+
+Recorded in the immutable 214-a report (focused unit / native-PG /
+Chromium modules, catalog consumer checks, OAP governance, scoped
+Ruff/docs/diff checks, and the browser second-page sort proof with
+offset ordinals); the report is the authoritative receipt set for
+this section.
+
+## 214-b selector-compatibility repair (objective 214, same PR #370)
+
+Test-only repair of the demonstrated blocking final-head browser
+regression on PR #370 (immutable 214-a SELF
+`b5f7a80f7e0084141d66d1193d6d9e5550486a29`). Final-head CI run
+41343115263 (browser job 124957397249, failed 19:48:32Z): 4 failed /
+91 passed - ALL four are the viewport parameterizations of
+`tests/browser/test_admin_visual_screenshots.py::test_keys_list_visual`
+at line 226. The pre-existing selector `.table-toolbar .rows-shown`
+now legitimately matches BOTH the original "12 rows shown" list
+toolbar (`#keys-rows-shown`) and the NEW shared pagination nav's
+"Rows 1-12 on this page" range (its `<nav>` also carries
+`class="table-toolbar"`); Playwright's strict locator rejects two
+matches. No loss of visual semantics or product behavior was
+demonstrated.
+
+Repair (test file only): the case now targets the stable, unique
+`#keys-rows-shown` element (asserting uniqueness) and keeps the
+literal "12 rows shown" assertion plus every other
+viewport/layout/typing/chips/sorting/ordinals/custom-limit
+expectation unchanged; no product template, class, or pagination
+change.
+
+Local focused receipt: ONE real Chromium / owned-PostgreSQL run of
+all four viewport parameterizations -
+`tests/browser/test_admin_visual_screenshots.py::test_keys_list_visual`
+`-m playwright -q --junitxml=/tmp/slaif214/browser-214b-1.xml` -
+tests=4 failures=0 errors=0 skipped=0 (all four actually ran;
+desktop-1440, desktop-1600, tablet-768, narrow-390), SHA256
+`a08e743f267d3159ebd723d689e05aee3b68d347f0b4ea05e5008c78c29ee1f8`.
+Unchanged 214-a modules were NOT rerun; the final-head GitHub CI
+qualifies broad regressions once the new SELF is published.

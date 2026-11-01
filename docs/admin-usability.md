@@ -1378,3 +1378,139 @@ change** and **no schema migration**; keys, routes, replay references,
 and accounting are untouched (an applied extension only lengthens
 `expires_at` on the reviewed eligible rows) - see
 [`deployment.md`](deployment.md).
+
+
+## 15. Grouped reports, list navigation, and reviewed catalog tools (214-a)
+
+### 15.1 List navigation semantics (all paged lists)
+
+Every ACTUAL offset/limit admin list (keys, owners, institutions,
+cohorts, providers, routes, pricing, FX rates, usage ledger, audit
+log, email deliveries) now renders the same reusable Previous/Next
+navigation (no-JS anchor links) below the table:
+
+- **Filter-preserving:** the Previous/Next URLs carry the page scope
+  (row limit) plus the EXACT accepted selected filters - repeated
+  values for OR-within fields included - built from the allowlisted
+  normalized pairs, never a raw copy of the incoming URL. Changing a
+  filter or the row limit starts coherently at the first page.
+- **Honest "more":** each page fetches one row beyond the row limit
+  (cap+1). "Next" is offered only when that extra row exists; a full
+  page alone never claims more results. "Beginning" is shown when the
+  offset is 0; "No more rows" when the fetch did not overflow.
+- **Continuing ordinals:** row numbers continue across pages (the
+  first row of a page is `offset + 1`, not 1), so a copied row number
+  still identifies its position in the filtered list.
+- **Offset-shift caveat (documented, not hidden):** offset paging is a
+  view of the current filtered scope at request time. Records added or
+  removed while paging can shift ordinary offset pages; no frozen
+  snapshot and no cursor/session state is promised or stored.
+- **Custom limits** (1..200) remain valid and round-trip through the
+  navigation.
+- Fixed bounded snapshot tables without a paging contract (for
+  example the legacy `templates/list.html` 50-row snapshot) keep
+  their honest scope and do not get an invented database paginator.
+
+### 15.2 Usage reports (G11)
+
+Navigation: the **Usage ledger** header offers **Usage reports**; the
+**Operations** index lists the reports entry.
+
+- **Usage summary report** (`/admin/reports/`): pick one of the seven
+  group dimensions (provider, model, provider_model, owner, cohort,
+  key, day) and the single-value CLI-parity scope (inclusive
+  aware-UTC start/end, provider, model, owner/cohort/key; naive times
+  are treated as UTC). The banner states how many ledger rows were
+  aggregated (the accepted bounded scope, ceiling 10,000) and how many
+  groups are shown of the total. An overbound scope is refused with
+  narrowing help instead of silently summarizing a prefix; the refusal
+  renders on the report page itself with the existing filter form
+  (submitted scope prefilled), so an operator narrows the scope and
+  resubmits without editing URLs, and no result counts are shown.
+  Groups are paged with the 15.1 navigation.
+  - **Cost availability:** each group's estimated/actual EUR shows
+    "unavailable" when EVERY row lacks that cost (a genuine known
+    zero still shows zero), or an explicitly labelled incomplete sum
+    when only some rows carry the cost - an incomplete sum is never
+    presented as a final actual cost, missing values are never
+    inferred, and holds are never unlocked.
+  - **Provider-reported cost** is native-currency evidence without a
+    cross-currency compatibility rule: the page shows how many rows
+    carried it, never a summed "money" figure.
+- **Live-burn report** (`/admin/reports/live-burn`): the same bounded
+  scope law; of the matched ledger rows, only Chat streaming requests
+  with live-burn telemetry contribute. Triggered totals and the
+  stop-reason split are counts; final provider usage is shown as
+  available/missing (missing = interrupted/estimated rows, never
+  backfilled); the estimate sums are explicitly estimates, not final
+  actual cost.
+  - An overbound live-burn scope is refused the same way: the refusal
+    renders with the existing filter form for in-page narrowing, with
+    no aggregates or count claims.
+- **Safe JSON export** (`/admin/reports/export`): choose the same
+  single-value scope plus a row limit (configured ceiling), enter a
+  bounded audit reason, confirm, and the browser downloads a
+  strict-JSON attachment (usage metadata allowlist only, exact raw
+  machine units, nullable costs; no prompts, bodies, or secrets). The
+  export fetches cap+1 and refuses an overbound scope with the exact
+  counts - you never receive a silent partial. The attachment is
+  private (no-store) and the page's form token stays valid after the
+  download. Export generation is audited with your admin user ID and
+  the reason.
+- **Deliberate bound differences (stated on the pages):** the report
+  filters are the CLI's single-value summary/export filters; the
+  usage LEDGER list keeps its richer multi-value OR-within/AND-across
+  filters. The filter sets differ and the pages say so; compare row
+  counts only for matching scopes. The GUI source
+  ceiling (10,000) and the configured export ceiling are GUI bounds;
+  the CLI defaults are unchanged.
+
+### 15.3 Reviewed matching-model pricing disable (G18)
+
+Navigation: **Pricing rules** header -> **Review pricing disable**
+(also from a pricing rule detail page and the Operations index).
+
+1. **Scope + preview:** enter the exact provider and model (and
+   optionally an endpoint to narrow the scope) plus a bounded audit
+   reason. The preview matches CURRENTLY ENABLED pricing rows for
+   that exact scope, in SQL, bounded at 1000 rows; a larger match is
+   refused outright.
+2. **Review:** the review page restates the affected rules (as
+   previewed), the reason exactly as entered, and that the review is
+   valid 15 minutes for your session only. Every reviewed rule ID
+   stays available (collapsed list).
+3. **Apply:** confirm to apply. The system re-checks the live rules
+   first: if any affected rule changed after the preview (price,
+   currency, validity, or pricing policy), if a reviewed rule is
+   missing, or if a new matching enabled rule appeared, the whole
+   operation is refused and nothing changes. Otherwise exactly the
+   reviewed rules are disabled, together with one audit record per
+   rule (your user ID + the reason), in a single all-or-nothing
+   step; if any part cannot be confirmed, everything rolls back. If
+   every reviewed rule was already disabled, applying is an honest
+   no-op (nothing re-disabled, no new receipt).
+4. **Effect:** disabling pricing rules may block FUTURE requests for
+   the model when no other matching enabled pricing rule exists. Past
+   usage is NOT recalculated.
+
+### 15.4 Effective FX lookup (G18)
+
+Navigation: **FX rates** header -> **Effective rate lookup** (also
+from the Operations index). Select a base and a quote currency (they
+must differ) to see the current effective rate for that pair at UTC
+now - rate, source, and validity - or an honest "no rate is
+effective" state (nothing is inferred, fetched, or converted through
+another pair).
+
+### 15.5 Upgrade note (no schema migration)
+
+Recreate/restart the API so the new code runs. There is **no Nginx
+change** and **no schema migration**; keys, routes, pricing rules,
+FX rates, and accounting are untouched. One operator note: the
+bundled `table-sort.js` asset changed bytes in this objective (an
+opt-in per-table ordinal offset; default 0 keeps every existing
+table's behavior). Previously sealed catalog-refresh reports that
+embed the old script bytes will FAIL verification after the upgrade
+(safe refusal) - finish pending catalog runs before upgrading, or
+collect and review a fresh run after upgrading; never rewrite an old
+seal. See [`upgrade-runbook.md`](upgrade-runbook.md).

@@ -13,6 +13,7 @@
       <p class="muted">Read-only accounting metadata. Prompts, completions, and raw request or response bodies are not displayed.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link secondary" href="/admin/reports/">Usage reports</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -108,7 +109,7 @@
     </label>
   </div>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Usage ledger rows">
-    <table data-sortable>
+    <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>
         <tr>
           <th data-ordinal scope="col" aria-label="Row number">#</th>
@@ -124,7 +125,7 @@
       <tbody>
         {% for row in usage_rows %}
         <tr>
-          <td class="row-ordinal">{{ loop.index }}</td>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
           <td>
             <a href="/admin/usage/{{ row.id }}">{{ row.request_id }}</a>
             <div class="muted small">{{ row.endpoint }}</div>
@@ -156,5 +157,6 @@
       </tbody>
     </table>
   </div>
+  {% include "partials/pagination.html" %}
 </section>
 {% endblock %}

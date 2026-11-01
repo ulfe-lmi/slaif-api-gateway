@@ -137,7 +137,7 @@ class AuditRepository:
         if end_at is not None:
             statement = statement.where(AuditLog.created_at <= end_at)
 
-        statement = statement.order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)
+        statement = statement.order_by(AuditLog.created_at.desc(), AuditLog.id.asc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 

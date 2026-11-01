@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Usage summary report{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="usage-summary-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Reports / Usage</p>
+      <h1 id="usage-summary-heading">Usage summary report</h1>
+      <p class="muted">Grouped accounting metadata over the bounded accepted ledger scope. Prompts, completions, and raw request or response bodies are not displayed.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/reports/live-burn">Live-burn report</a>
+      <a class="button-link secondary" href="/admin/reports/export">JSON export</a>
+      <a class="button-link secondary" href="/admin/usage">Usage ledger</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if bound_error %}
+  <div class="admin-flash admin-flash-error" role="alert">
+    <p><strong>Scope too large to report.</strong> {{ bound_error }}</p>
+    <p class="muted small">The source bound is {{ source_bound | num }} ledger rows. Add a narrowing filter
+    below and submit again. No rows are summarized and no result counts are shown.</p>
+  </div>
+  {% else %}
+  <div class="admin-flash" role="status">
+    <p><strong>Scope:</strong> <strong>{{ report.source_row_count | num }}</strong> ledger rows -
+    <strong>{{ total_groups | num }}</strong> groups ({{ group_by }}); showing <strong>{{ rows_shown | num }}</strong> on this page.
+    Source bound {{ source_bound | num }} rows; an overbound scope is refused.</p>
+    <p class="muted small">Single-value filters (CLI summary contract); the usage ledger list uses a different multi-value filter set - compare row counts only for matching scopes.</p>
+  </div>
+  {% endif %}
+
+  <form class="filter-bar compact" method="get" action="/admin/reports/" id="usage-summary-filter">
+    <label>
+      Group by
+      <select name="group_by" id="summary-group-by" aria-describedby="summary-group-by-help">
+        {% for option in group_by_options %}
+        <option value="{{ option }}" {% if group_by == option %}selected{% endif %}>{{ option | replace("_", " ") }}</option>
+        {% endfor %}
+      </select>
+      <span class="field-help" id="summary-group-by-help">Aggregates all accepted rows into one row per selected dimension value.</span>
+    </label>
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider or none, selected_id=filters.provider, allow_new=true, help="Exact provider slug; blank = any", input_id="summary-provider", help_id="summary-provider-help", control_id="summary-provider-input") }}
+    {{ record_choice("model", "model", "Model", options=choices.model or none, selected_id=filters.model, allow_new=true, help="Exact requested/resolved model; blank = any", input_id="summary-model", help_id="summary-model-help", control_id="summary-model-input") }}
+    {{ record_choice("owner_id", "owner", "Owner ID", options=choices.owner_id or none, selected_id=filters.owner_id, allow_new=true, help="One owner; blank = any", input_id="summary-owner", help_id="summary-owner-help", control_id="summary-owner-input") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id or none, selected_id=filters.cohort_id, allow_new=true, help="One cohort; blank = any", input_id="summary-cohort", help_id="summary-cohort-help", control_id="summary-cohort-input") }}
+    {{ record_choice("gateway_key_id", "key", "Key ID", options=choices.gateway_key_id or none, selected_id=filters.gateway_key_id, allow_new=true, help="One gateway key; blank = any", input_id="summary-key", help_id="summary-key-help", control_id="summary-key-input") }}
+    <label>
+      Start (UTC, inclusive)
+      <input name="start_at" id="summary-start-at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z" aria-describedby="summary-start-at-help">
+      <span class="field-help" id="summary-start-at-help">Inclusive aware-UTC window; naive input is treated as UTC.</span>
+    </label>
+    <label>
+      End (UTC, inclusive)
+      <input name="end_at" id="summary-end-at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z" aria-describedby="summary-end-at-help">
+      <span class="field-help" id="summary-end-at-help">Inclusive aware-UTC window; at or after the start (equal bounds are accepted).</span>
+    </label>
+    <label>
+      Rows
+      <select name="limit" id="summary-limit" aria-describedby="summary-limit-help">
+        {% for n in (10, 25, 50, 100, 200) %}
+        <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+        {% if filters.limit not in (10, 25, 50, 100, 200) %}
+        <option value="{{ filters.limit }}" selected>{{ filters.limit }} (current)</option>
+        {% endif %}
+      </select>
+      <span class="field-help" id="summary-limit-help">Groups per page; the source scope is unaffected by paging.</span>
+    </label>
+    <button type="submit">Filter</button>
+  </form>
+
+  {% if not bound_error %}
+  <div class="table-toolbar" aria-label="Usage summary groups">
+    <span class="rows-shown" id="usage-summary-rows-shown">{{ rows_shown | num }} groups shown</span>
+  </div>
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Usage summary groups">
+    <table class="table-wide" data-sortable data-ordinal-offset="{{ filters.offset }}">
+      <thead>
+        <tr>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
+          <th>{{ group_by | replace("_", " ") }}</th>
+          <th data-sort-type="number">Requests</th>
+          <th data-sort-type="number">OK</th>
+          <th data-sort-type="number">Fail</th>
+          <th data-sort-type="number">Tokens (total)</th>
+          <th data-sort-type="money">Estimated cost (EUR)</th>
+          <th data-sort-type="money">Actual cost (EUR)</th>
+          <th>Provider-reported cost</th>
+          <th data-sort-type="datetime">Window (UTC, sorted by last activity)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in groups %}
+        {%- set w_first = group.first_seen_at %}
+        {%- set w_last = group.last_seen_at %}
+        <tr>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
+          <th scope="row">{{ group.label }}</th>
+          <td class="num nowrap" data-sort-value="{{ group.request_count }}">{{ group.request_count | num }}</td>
+          <td class="num nowrap" data-sort-value="{{ group.success_count }}">{{ group.success_count | num }}</td>
+          <td class="num nowrap" data-sort-value="{{ group.failure_count }}">{{ group.failure_count | num }}</td>
+          <td class="num nowrap" data-sort-value="{{ group.total_tokens }}" title="{{ group.total_tokens | num }}">{{ group.total_tokens | tokm }}M</td>
+          <td class="num nowrap" data-sort-value="{{ group.estimated_cost.value | dec if group.estimated_cost.available else '' }}"{% if group.estimated_cost.available and group.estimated_cost.label %} title="{{ group.estimated_cost.label }}"{% endif %}>
+            {%- if group.estimated_cost.available %}
+              {{ group.estimated_cost.value | num }} EUR{% if group.estimated_cost.label %} <span class="muted small">incomplete</span>{% endif %}
+            {%- else %}
+              unavailable
+            {%- endif %}
+          </td>
+          <td class="num nowrap" data-sort-value="{{ group.actual_cost.value | dec if group.actual_cost.available else '' }}"{% if group.actual_cost.available and group.actual_cost.label %} title="{{ group.actual_cost.label }}"{% endif %}>
+            {%- if group.actual_cost.available %}
+              {{ group.actual_cost.value | num }} EUR{% if group.actual_cost.label %} <span class="muted small">incomplete</span>{% endif %}
+            {%- else %}
+              unavailable
+            {%- endif %}
+          </td>
+          <td class="num nowrap" title="{{ group.provider_reported_status }}{% if group.provider_reported_shown %} - native currency; not summed as EUR{% endif %}">
+              {{ group.provider_reported_known | num }}/{{ group.provider_reported_total | num }} known
+          </td>
+          <td class="nowrap" data-sort-value="{{ w_last.isoformat() if w_last is not none else '' }}"
+              title="{{ (w_first.isoformat() ~ ' .. ' ~ w_last.isoformat()) if (w_first is not none and w_last is not none and w_first != w_last) else (w_last.isoformat() if w_last is not none else '') }}">
+            {%- if w_first is none and w_last is none %}
+              &mdash;
+            {%- elif w_first == w_last %}
+              {{ w_last | utc_datetime_local }}
+            {%- else %}
+              {{ w_first | utc_datetime_local }} - {{ w_last | utc_datetime_local }}
+            {%- endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-no-sort>
+          <td colspan="10" class="empty-state">No groups in the accepted scope.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+
+  <p class="muted small">
+    Cost notes: "unavailable" = no row in the group has that cost (never a known zero);
+    "incomplete" = sum over the known rows only, not a final cost;
+    provider-reported counts are native-currency evidence, never summed across currencies.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}

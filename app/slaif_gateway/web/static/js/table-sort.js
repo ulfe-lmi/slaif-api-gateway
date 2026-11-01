@@ -443,7 +443,12 @@
       // the moved unit head cells (1..N in the new displayed order).
       // Continuation cells stay empty; fixed/no-sort rows are untouched.
       if (ordIdx !== -1) {
-        let n = 0;
+        // 214-a opt-in: a paged table supplies the accepted server page
+        // offset via data-ordinal-offset so renumbering continues the
+        // page ordinal (offset + 1 ...). Tables without the attribute
+        // keep the exact pre-214 1..N behavior (default 0).
+        const ordinalOffset = Number(table.dataset.ordinalOffset) || 0;
+        let n = ordinalOffset;
         for (const unit of sorted) {
           n += 1;
           const cell = unit.head.cells[ordIdx];

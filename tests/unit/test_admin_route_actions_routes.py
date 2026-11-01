@@ -183,6 +183,12 @@ def _patch_provider_choices(monkeypatch, provider: AdminProviderListRow | None =
     async def list_providers(self, **kwargs):
         return [row]
 
+    # 214-a: the route forms resolve provider existence with a bounded
+    # exact lookup (not choice-page membership); this fake directory
+    # contains exactly the one provider row above.
+    async def provider_config_exists(self, provider_slug):
+        return provider_slug == row.provider
+
     async def fake_record_choices(request, specs):
         # 192-a: the provider field renders as a record-choice control
         # fed by the read-only lookup loader. Give it the same
@@ -204,6 +210,10 @@ def _patch_provider_choices(monkeypatch, provider: AdminProviderListRow | None =
     monkeypatch.setattr(
         "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.list_providers",
         list_providers,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.provider_config_exists",
+        provider_config_exists,
     )
     monkeypatch.setattr(
         "slaif_gateway.api.admin._load_admin_record_choices_safe",

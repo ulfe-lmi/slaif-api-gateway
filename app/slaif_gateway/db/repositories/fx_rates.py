@@ -98,7 +98,7 @@ class FxRatesRepository:
             )
             statement = statement.where(active_condition if active else ~active_condition)
 
-        statement = statement.order_by(FxRate.valid_from.desc(), FxRate.created_at.desc()).limit(limit).offset(offset)
+        statement = statement.order_by(FxRate.valid_from.desc(), FxRate.created_at.desc(), FxRate.id.asc()).limit(limit).offset(offset)
         result = await self._session.execute(statement)
         return list(result.scalars().all())
 
