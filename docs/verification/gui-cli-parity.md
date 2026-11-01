@@ -1000,6 +1000,7 @@ loopback/tmpfs PostgreSQL fixtures with exact-ID cleanup.
 | `affected-210a-2.xml` | legacy provider form module incl. the three URL display canaries | 17 PASS / 0 skip (8.203 s) |
 | `urlcanary-210a-2.xml` | focused URL canaries (supersedes `urlcanary-210a-1.xml`, 2 PASS pre-hardening) | 3 PASS / 0 skip (3.935 s) |
 | `pathfix-210a-1.xml` | focused re-verification of the completion-profile path boundary (loader + choices modules) | 117 PASS / 0 skip (15.745 s) |
+| `pathfix2-210a-1.xml` | FINAL completion-profile path-boundary re-verification (loader + choices modules; includes the root-containment guard and the separator-safe root-prefix tests) | 121 PASS / 0 skip (15.699 s) |
 | `smoke-210a-1.xml` | focused re-verification of the repaired dashboard smoke case (owned PG, exact-ID cleanup) | 1 PASS / 0 skip (10.183 s) |
 
 Scoped root component probes (mocked auth, no real DB/provider) are
@@ -1097,7 +1098,35 @@ pre-existing review helpers are unchanged.
   modes, and O_NOFOLLOW are unchanged; no suppression, dismissal,
   config change, or directory framework. Focused re-verification:
   `pathfix-210a-1.xml` (117 PASS / 0 skip; invalid components refused
-  before any I/O, valid names unchanged).
+  before any I/O, valid names unchanged). The follow-up CodeQL runs
+  on the next heads (`bfe1ab43`, `784ed9c5`) STILL reported the same
+  three HIGH alerts: the basename re-derivation alone was insufficient
+  for the analysis (the SARIF still traced the submitted IDs through
+  the basename join), so a further bounded guard was authorized.
+- **CodeQL root-containment guard (commit `c32c6ca9`):** following the
+  official CodeQL recommendation, the shared helper
+  `profiles.contained_child` (used by the loader and by both
+  enumeration/hydration joins) canonicalizes the TRUSTED ROOT only
+  (`os.path.realpath`; the root's original absolute/non-symlink law is
+  still checked first and unchanged), `os.path.normpath`s the joined
+  validated filename, and requires the normalized candidate to start
+  with the canonical root plus a separator BEFORE any I/O. The final
+  file is never resolved and never opened through a symlink target:
+  `O_NOFOLLOW`, symlink/mode/size refusal, streaming caps, and the
+  pre-I/O ID-law rejection are all preserved. No directory framework,
+  suppression, dismissal, or config change; same two approved modules
+  plus `tests/unit/test_completion_service.py`. Focused re-verification:
+  `pathfix2-210a-1.xml` (121 PASS / 0 skip, incl. inside-root and
+  outside-root symlinked profile refusals and relative/symlinked root
+  refusals).
+- **Separator-safe root prefix (commit `cea28df1`, final CODE head):**
+  `canonical_root + os.sep` builds `"//"` when the accepted root is
+  `/` and would wrongly refuse `/profile.json`; the root prefix is now
+  derived with `os.path.join(canonical_root, "")`, which keeps exactly
+  one trailing separator (`/` itself at the root). The strict-child and
+  separator-boundary requirements are unchanged; a pure helper
+  assertion covers the `/` root without any filesystem write. Same
+  focused suite: `pathfix2-210a-1.xml` (121 PASS / 0 skip).
 - **First IMPL head `edf201e3` - browser job `124761536375` FAILED** on
   exactly one case: `tests/browser/test_admin_dashboard_smoke.py::
   test_admin_dashboard_browser_smoke` (line 487) - the new associated
@@ -1115,8 +1144,16 @@ pre-existing review helpers are unchanged.
   (root-verified accepted) - the legacy editor takes the raw
   capability object, never the reviewed `schema_version` wrapper.
   Template hint only; IDs and behavior unchanged, no unrelated rerun.
-- The final IMPL head's actual check results are recorded in the
-  immutable 210-a report (queried per head; a failed or skipped job is
+- **Final CODE head `cea28df1` - CodeQL aggregate SUCCESS**
+  (queried 2026-11-01T05:58:50Z), together with Unit/lint/migration,
+  OpenAI-compatible E2E, Docker Compose smoke, documentation hygiene,
+  and the three CodeQL analyze jobs all `completed/success` at the same
+  timestamp; the Playwright browser smoke and PostgreSQL integration
+  jobs were still `in_progress` at that timestamp (the same suites have
+  local green receipts: `browser-210a-1.xml` 8 PASS, `pg-210a-3.xml`
+  12 PASS, `smoke-210a-1.xml` 1 PASS). The final docs-only IMPL head's
+  checks and the merge gate are root-owned; per-head check states are
+  recorded in the immutable 210-a report (a failed or skipped job is
   never reported as pass).
 
 ### Operator notes
@@ -1141,8 +1178,10 @@ path WAS requalified after the shared-clear correction (the 199 CLI PG
 module, `cli-pg-210a-1.xml`, 31 PASS). GitHub CI had not yet run on
 the 210 head when the first docs were committed; the FIRST IMPL head
 actually FAILED the CodeQL aggregate (three HIGH path-injection
-alerts) and one dashboard-smoke wording assertion, and both were
-repaired by bounded same-order commits with focused re-verification
-(chronology above). The final head's checked status is recorded in
+alerts) and one dashboard-smoke wording assertion; the basename
+clarification alone did not clear the CodeQL flow, and both were
+repaired by the bounded same-order commits recorded above
+(chronology), ending in CodeQL aggregate SUCCESS on final CODE head
+`cea28df1`. The final docs-only head's checked status is recorded in
 the immutable 210-a report. Strategic
 review and guarded merge remain the root's gates.
