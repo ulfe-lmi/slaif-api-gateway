@@ -34,8 +34,15 @@ from slaif_gateway.schemas.key_clone import (
     MAX_CLONE_PLAN_FILE_BYTES,
     parse_clone_plan_document,
 )
+from slaif_gateway.schemas.key_batch import (
+    KEY_BATCH_PLAN_MAX_BYTES,
+    parse_key_batch_plan,
+)
 
 REVIEW_INTENT_PURPOSE = "admin.key-clone.review.v1"
+# 209-a: separate batch purpose (a clone token is never valid for a batch
+# apply and vice versa); same HMAC pattern, same 15-minute bound.
+REVIEW_INTENT_BATCH_PURPOSE = "admin.key-batch.review.v1"
 REVIEW_INTENT_TTL_SECONDS = 15 * 60
 
 # Bounded wrapper for the 128 KiB core plan: base64url expansion (4/3) of
@@ -44,12 +51,28 @@ REVIEW_INTENT_TTL_SECONDS = 15 * 60
 # cap; the decoded plan itself is bounded by the core schema on re-parse.
 MAX_REVIEW_INTENT_TOKEN_CHARS = (MAX_CLONE_PLAN_FILE_BYTES * 4) // 3 + 4096
 
+# Bounded wrapper for the 8 MiB core batch plan: base64url expansion (4/3)
+# of the canonical payload plus the digest and separator (documented
+# encoding overhead, not a second policy cap). The decoded plan is bounded
+# by the core schema on re-parse; the shipped Nginx templates carry a
+# 16m allowance for the batch locations (largest envelope
+# 11,184,812 base64url chars = 10.67 MiB + the other small form fields).
+MAX_REVIEW_INTENT_BATCH_TOKEN_CHARS = (KEY_BATCH_PLAN_MAX_BYTES * 4) // 3 + 4096
+
 _CLONE_DELIVERY_MODES = frozenset({"none", "pending", "send-now", "enqueue"})
 
 _INVALID_MESSAGE = "The clone review state is missing or invalid."
 _NOT_AUTHENTIC_MESSAGE = "The clone review state is not valid for this signed-in admin."
 _EXPIRED_MESSAGE = "The clone review has expired. Review the clone plan again."
 _TOO_LARGE_MESSAGE = "The clone plan exceeds the bounded review size."
+_BATCH_INVALID_MESSAGE = "The key batch review state is missing or invalid."
+_BATCH_NOT_AUTHENTIC_MESSAGE = (
+    "The key batch review state is not valid for this signed-in admin."
+)
+_BATCH_EXPIRED_MESSAGE = (
+    "The key batch review has expired. Review the batch plan again."
+)
+_BATCH_TOO_LARGE_MESSAGE = "The key batch plan exceeds the bounded review size."
 
 # The digest half is exactly 64 lowercase hex characters; anything else is a
 # malformed format and is refused BEFORE digest comparison (compare_digest
@@ -202,3 +225,115 @@ def verify_review_intent_token(
     if delivery_mode not in _CLONE_DELIVERY_MODES:
         raise AdminReviewIntentError(_INVALID_MESSAGE)
     return plan_document, delivery_mode
+
+
+def build_batch_review_token(
+    *,
+    admin_session_secret: str,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    plan_document: dict[str, Any],
+    ttl_seconds: int = REVIEW_INTENT_TTL_SECONDS,
+    now: datetime | None = None,
+) -> str:
+    """Bind one reviewed key-batch plan to actor/session/expiry (209-a).
+
+    ``plan_document`` is the EXACT strict version-1 batch plan document
+    produced by ``render_key_batch_plan`` (re-parsed here so a caller can
+    never bind a non-conformant plan). The token is reviewed data, not
+    authority; it is bounded by
+    :data:`MAX_REVIEW_INTENT_BATCH_TOKEN_CHARS` (the core 8 MiB plan bound
+    plus documented base64url/wrapper overhead).
+    """
+    parse_key_batch_plan(plan_document)
+    # Builder-side decoded-plan bound: the embedded plan must fit the core
+    # 8 MiB plan budget in canonical bytes (the strict document parser
+    # alone does not enforce a byte limit).
+    if len(_canonical_json(plan_document)) > KEY_BATCH_PLAN_MAX_BYTES:
+        raise AdminReviewIntentError(_BATCH_TOO_LARGE_MESSAGE)
+    issued = now or datetime.now(UTC)
+    payload = {
+        "purpose": REVIEW_INTENT_BATCH_PURPOSE,
+        "admin_user_id": str(admin_user_id),
+        "admin_session_id": str(admin_session_id),
+        "expires_at": (issued + timedelta(seconds=ttl_seconds)).isoformat(),
+        "plan": plan_document,
+    }
+    encoded = _canonical_json(payload)
+    token = (
+        base64.urlsafe_b64encode(encoded).decode("ascii")
+        + "."
+        + _digest(admin_session_secret, encoded)
+    )
+    if len(token) > MAX_REVIEW_INTENT_BATCH_TOKEN_CHARS:
+        raise AdminReviewIntentError(_BATCH_TOO_LARGE_MESSAGE)
+    return token
+
+
+def verify_batch_review_token(
+    *,
+    admin_session_secret: str,
+    token: str | None,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Verify, rebind, and strict-reparse one batch review-intent token.
+
+    Returns the exact strict version-1 batch plan document. Every failure
+    path raises :class:`AdminReviewIntentError` with a fixed safe message;
+    the token bytes never appear in an exception, log, or rendered error.
+    A clone-purpose token is refused (different signed purpose).
+    """
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > MAX_REVIEW_INTENT_BATCH_TOKEN_CHARS
+    ):
+        raise AdminReviewIntentError(_BATCH_INVALID_MESSAGE)
+    body, separator, digest = token.rpartition(".")
+    if (
+        not separator
+        or not body
+        or not digest
+        or not _DIGEST_RE.match(digest)
+    ):
+        raise AdminReviewIntentError(_BATCH_INVALID_MESSAGE)
+    try:
+        encoded = base64.urlsafe_b64decode(body.encode("ascii"))
+    except (binascii.Error, UnicodeEncodeError, ValueError):
+        raise AdminReviewIntentError(_BATCH_INVALID_MESSAGE) from None
+    if not hmac.compare_digest(_digest(admin_session_secret, encoded), digest):
+        raise AdminReviewIntentError(_BATCH_NOT_AUTHENTIC_MESSAGE)
+    try:
+        payload = json.loads(
+            encoded.decode("utf-8"), object_pairs_hook=_strict_pairs_hook
+        )
+    except (UnicodeDecodeError, ValueError):
+        raise AdminReviewIntentError(_BATCH_INVALID_MESSAGE) from None
+    if not isinstance(payload, dict):
+        raise AdminReviewIntentError(_BATCH_INVALID_MESSAGE)
+    if payload.get("purpose") != REVIEW_INTENT_BATCH_PURPOSE:
+        raise AdminReviewIntentError(_BATCH_NOT_AUTHENTIC_MESSAGE)
+    if (
+        payload.get("admin_user_id") != str(admin_user_id)
+        or payload.get("admin_session_id") != str(admin_session_id)
+    ):
+        raise AdminReviewIntentError(_BATCH_NOT_AUTHENTIC_MESSAGE)
+    expires_raw = payload.get("expires_at")
+    try:
+        expires_at = datetime.fromisoformat(expires_raw)
+    except (TypeError, ValueError):
+        raise AdminReviewIntentError(_BATCH_INVALID_MESSAGE) from None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if (now or datetime.now(UTC)) >= expires_at:
+        raise AdminReviewIntentError(_BATCH_EXPIRED_MESSAGE)
+    plan_document = payload.get("plan")
+    if not isinstance(plan_document, dict):
+        raise AdminReviewIntentError(_BATCH_INVALID_MESSAGE)
+    try:
+        parse_key_batch_plan(plan_document)
+    except Exception:
+        raise AdminReviewIntentError(_BATCH_INVALID_MESSAGE) from None
+    return plan_document

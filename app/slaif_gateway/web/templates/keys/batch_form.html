@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Change Existing Keys{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="batch-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="batch-heading">Change Existing Keys</h1>
+      <p class="muted">Prepare one reviewed batch of key-configuration changes for existing keys. Nothing changes until you review and confirm the apply step; the apply re-checks every key at execution and refuses the WHOLE batch on any drift.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">
+    <p>{{ error }}</p>
+    {% if diagnostic_id %}
+    <p class="small">Reference ID: <code>{{ diagnostic_id }}</code></p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/key-batch/plan">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="batch-selection-heading" data-batch-selection>
+      <h2 id="batch-selection-heading">Selection And Status Scope</h2>
+      <p class="muted">Choose EXACTLY ONE target source: one cohort, or an explicit set of gateway key UUIDs. The batch never edits a visible page only; cohort scope covers the cohort's current eligible members at plan time.</p>
+      <label class="checkbox-row">
+        <input type="radio" name="selection_kind" value="cohort"
+               {% if form.selection_kind == "cohort" or not form.selection_kind %}checked{% endif %}
+               aria-describedby="batch-selection-help">
+        By cohort (current members, filtered in the database)
+      </label>
+      <label class="checkbox-row">
+        <input type="radio" name="selection_kind" value="keys"
+               {% if form.selection_kind == "keys" %}checked{% endif %}
+               aria-describedby="batch-selection-help">
+        By explicit gateway key UUIDs
+      </label>
+      <div class="form-grid">
+        <div data-batch-cohort-control>
+          {{ record_choice(
+              "cohort_id", "cohort", "Target cohort",
+              options=choices.cohort_id or none,
+              selected_id=form.cohort_id,
+              selected_label=choice_labels.cohort_id,
+              allow_new=false,
+              nojs_value=form.cohort_id,
+              clear_label="Select cohort",
+              placeholder="Search cohorts",
+              help_id="batch-help-cohort",
+              help="Existing cohort UUID. Without JavaScript, type or paste the cohort UUID.",
+          ) }}
+        </div>
+        <div data-batch-keys-control>
+          {{ record_choice(
+              "key_ids", "key",
+              "Gateway key UUIDs (up to " ~ (max_keys | num) ~ ")",
+              options=choices.key_ids or none,
+              multi=true,
+              multi_value=form.key_ids,
+              serialize="newline",
+              allow_new=true,
+              placeholder="Paste exact key UUIDs",
+              help_id="batch-help-keys",
+              help="Chips plus bounded newline/comma UUID entry; the FULL set is submitted, not only the first page. Older keys stay searchable; their labels fall back to the exact UUID. Without JavaScript, paste exact key UUIDs one per line.",
+              hydrate_cap=100,
+          ) }}
+        </div>
+      </div>
+      <fieldset aria-describedby="batch-status-help">
+        <legend>Persisted status scope</legend>
+        <label class="checkbox-row">
+          <input type="checkbox" name="status_active" value="true"
+                 {% if form.status_active %}checked{% endif %} aria-describedby="batch-status-help">
+          Active
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="status_suspended" value="true"
+                 {% if form.status_suspended %}checked{% endif %} aria-describedby="batch-status-help">
+          Suspended
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" name="status_revoked" value="true"
+                 {% if form.status_revoked %}checked{% endif %} aria-describedby="batch-status-help">
+          Revoked
+        </label>
+      </fieldset>
+      <p class="field-help" id="batch-status-help">
+        The scope is the PERSISTED status (active/suspended/revoked), not expiry: an active key whose validity window has passed stays in scope as active, and the review page re-checks it at execution. At least one status is required; the default is active only.
+      </p>
+      <p class="field-help" id="batch-selection-help">
+        Cohort scope is filtered in the database by the selected statuses; members excluded by status are NOT enumerated on the review page. Explicit UUID scope reports each actual excluded key and its status on the review page.
+      </p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="batch-input-heading" data-batch-input>
+      <h2 id="batch-input-heading">Input Mode</h2>
+      <p class="muted">Choose ONE input source for the policy change: the guided controls, or the advanced strict version-1 configuration document. The other source's fields must stay at their defaults/blank.</p>
+      <label class="checkbox-row">
+        <input type="radio" name="input_mode" value="guided"
+               {% if form.input_mode == "guided" or not form.input_mode %}checked{% endif %}
+               aria-describedby="batch-input-help">
+        Guided form controls (usual quota, rate, provider, model, endpoint, lazy, and live-burn fields)
+      </label>
+      <label class="checkbox-row">
+        <input type="radio" name="input_mode" value="advanced"
+               {% if form.input_mode == "advanced" %}checked{% endif %}
+               aria-describedby="batch-input-help">
+        Advanced: strict version-1 configuration document (full supported configuration surface)
+      </label>
+      <label data-batch-advanced>
+        Configuration document (JSON)
+        <textarea name="configuration_json" rows="6" spellcheck="false"
+                  aria-describedby="batch-input-help">{{ form.configuration_json }}</textarea>
+      </label>
+      <p class="field-help" id="batch-input-help">
+        The document is the same strict version-1 key configuration the CLI accepts: <code>schema_version</code> 1 plus any subset of the supported fields. Omission = unchanged, explicit <code>null</code> = clear (unlimited/inherit/remove depending on the field), zero = zero. An empty provider list is deny all; an empty model or endpoint list alone is NOT deny-all while the separate allow-all flag is retained (allow-all is the flag set with an empty list). Complete policy blocks are replacements where the core says so. Guided mode leaves this document blank; advanced mode leaves every guided policy control at its default.
+      </p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="batch-policy-heading" data-batch-policy>
+      <h2 id="batch-policy-heading">Policy Changes (guided)</h2>
+      <p class="muted">The guided controls compose ONE partial strict version-1 configuration document that is applied to EVERY selected key, independently per target. At least one change is required. "Leave unchanged" omits the field (preserved); "Clear" sends explicit null; a value is only used with "Set".</p>
+
+      <h3>Lifetime quotas (PostgreSQL hard limits)</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label for="batch-cost-action">Cost limit (EUR)</label>
+          <select id="batch-cost-action" name="cost_action" aria-describedby="batch-quota-help">
+            <option value="unchanged" {% if form.cost_action == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="set" {% if form.cost_action == "set" %}selected{% endif %}>Set value</option>
+            <option value="clear" {% if form.cost_action == "clear" %}selected{% endif %}>Clear (unlimited)</option>
+          </select>
+          <label for="batch-cost-value">Cost limit (EUR) value</label>
+          <input id="batch-cost-value" name="cost_value" value="{{ form.cost_value }}" inputmode="decimal" autocomplete="off"
+                 aria-describedby="batch-quota-help">
+        </div>
+        <div class="field">
+          <label for="batch-token-action">Token limit</label>
+          <select id="batch-token-action" name="token_action" aria-describedby="batch-quota-help">
+            <option value="unchanged" {% if form.token_action == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="set" {% if form.token_action == "set" %}selected{% endif %}>Set value</option>
+            <option value="clear" {% if form.token_action == "clear" %}selected{% endif %}>Clear (unlimited)</option>
+          </select>
+          <label for="batch-token-value">Token limit value</label>
+          <input id="batch-token-value" name="token_value" value="{{ form.token_value }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-quota-help">
+        </div>
+        <div class="field">
+          <label for="batch-request-action">Request limit</label>
+          <select id="batch-request-action" name="request_action" aria-describedby="batch-quota-help">
+            <option value="unchanged" {% if form.request_action == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="set" {% if form.request_action == "set" %}selected{% endif %}>Set value</option>
+            <option value="clear" {% if form.request_action == "clear" %}selected{% endif %}>Clear (unlimited)</option>
+          </select>
+          <label for="batch-request-value">Request limit value</label>
+          <input id="batch-request-value" name="request_value" value="{{ form.request_value }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-quota-help">
+        </div>
+      </div>
+      <p class="field-help" id="batch-quota-help">
+        Clear (null) means UNLIMITED for that lifetime quota; setting 0 means a ZERO limit; leave unchanged preserves the key's current value. Values are finite numbers of zero or more (cost: decimal EUR; tokens/requests: whole numbers).
+      </p>
+
+      <h3>Rate limits (Redis counters, per selected window)</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label for="batch-rate-requests-action">Requests per window</label>
+          <select id="batch-rate-requests-action" name="rate_action_requests" aria-describedby="batch-rate-help">
+            <option value="unchanged" {% if form.rate_action_requests == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="set" {% if form.rate_action_requests == "set" %}selected{% endif %}>Set value</option>
+            <option value="clear" {% if form.rate_action_requests == "clear" %}selected{% endif %}>Clear (inherit deployment)</option>
+          </select>
+          <label for="batch-rate-requests-value">Requests per window value</label>
+          <input id="batch-rate-requests-value" name="rate_value_requests" value="{{ form.rate_value_requests }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-rate-help">
+        </div>
+        <div class="field">
+          <label for="batch-rate-tokens-action">Tokens per window</label>
+          <select id="batch-rate-tokens-action" name="rate_action_tokens" aria-describedby="batch-rate-help">
+            <option value="unchanged" {% if form.rate_action_tokens == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="set" {% if form.rate_action_tokens == "set" %}selected{% endif %}>Set value</option>
+            <option value="clear" {% if form.rate_action_tokens == "clear" %}selected{% endif %}>Clear (inherit deployment)</option>
+          </select>
+          <label for="batch-rate-tokens-value">Tokens per window value</label>
+          <input id="batch-rate-tokens-value" name="rate_value_tokens" value="{{ form.rate_value_tokens }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-rate-help">
+        </div>
+        <div class="field">
+          <label for="batch-rate-concurrency-action">Concurrent requests</label>
+          <select id="batch-rate-concurrency-action" name="rate_action_concurrency" aria-describedby="batch-rate-help">
+            <option value="unchanged" {% if form.rate_action_concurrency == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="set" {% if form.rate_action_concurrency == "set" %}selected{% endif %}>Set value</option>
+            <option value="clear" {% if form.rate_action_concurrency == "clear" %}selected{% endif %}>Clear (inherit deployment)</option>
+          </select>
+          <label for="batch-rate-concurrency-value">Concurrent requests value</label>
+          <input id="batch-rate-concurrency-value" name="rate_value_concurrency" value="{{ form.rate_value_concurrency }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-rate-help">
+        </div>
+        <div class="field">
+          <label for="batch-rate-window-action">Window (seconds)</label>
+          <select id="batch-rate-window-action" name="rate_action_window" aria-describedby="batch-rate-help">
+            <option value="unchanged" {% if form.rate_action_window == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="set" {% if form.rate_action_window == "set" %}selected{% endif %}>Set value</option>
+            <option value="clear" {% if form.rate_action_window == "clear" %}selected{% endif %}>Clear (inherit deployment)</option>
+          </select>
+          <label for="batch-rate-window-value">Window (seconds) value</label>
+          <input id="batch-rate-window-value" name="rate_value_window" value="{{ form.rate_value_window }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-rate-help">
+        </div>
+      </div>
+      <p class="field-help" id="batch-rate-help">
+        Counts are positive whole numbers per the key's SELECTED window (the window member is part of the same policy). An omitted member is preserved; a cleared member (null) inherits the deployment; clearing all four members clears the whole block. Redis rate limiting only enforces while ENABLE_REDIS_RATE_LIMITS is true.
+      </p>
+
+      <h3>Providers, models, and endpoints</h3>
+      <div class="form-grid">
+        <div class="field">
+          <label for="batch-providers-mode">Providers</label>
+          <select id="batch-providers-mode" name="providers_mode" aria-describedby="batch-list-help">
+            <option value="unchanged" {% if form.providers_mode == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="unrestricted" {% if form.providers_mode == "unrestricted" %}selected{% endif %}>Unrestricted (null)</option>
+            <option value="deny_all" {% if form.providers_mode == "deny_all" %}selected{% endif %}>Deny all (empty list)</option>
+            <option value="allow_list" {% if form.providers_mode == "allow_list" %}selected{% endif %}>Allow list</option>
+          </select>
+          {{ record_choice(
+              "providers_value", "policy_provider", "Provider allow list",
+              options=choices.providers_value or none,
+              multi=true,
+              multi_value=form.providers_value,
+              serialize="newline",
+              allow_new=true,
+              placeholder="Enabled provider slugs, one per line",
+              help_id="batch-help-providers",
+              help="Searchable latest-100 enabled provider catalog with older search; direct entry stays available. Without JavaScript, paste provider slugs one per line.",
+          ) }}
+        </div>
+        <div class="field">
+          <label for="batch-models-mode">Models</label>
+          <select id="batch-models-mode" name="models_mode" aria-describedby="batch-list-help">
+            <option value="unchanged" {% if form.models_mode == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="all" {% if form.models_mode == "all" %}selected{% endif %}>Allow all models</option>
+            <option value="deny_all" {% if form.models_mode == "deny_all" %}selected{% endif %}>Deny all (empty list)</option>
+            <option value="allow_list" {% if form.models_mode == "allow_list" %}selected{% endif %}>Allow list</option>
+          </select>
+          {{ record_choice(
+              "models_value", "policy_model", "Model allow list",
+              options=choices.models_value or none,
+              multi=true,
+              multi_value=form.models_value,
+              serialize="newline",
+              allow_new=true,
+              placeholder="Requested model tokens, one per line",
+              help_id="batch-help-models",
+              help="Searchable latest-100 qualified model catalog with older search; direct entry stays available. Without JavaScript, paste model tokens one per line.",
+          ) }}
+        </div>
+        <div class="field">
+          <label for="batch-endpoints-mode">Endpoints</label>
+          <select id="batch-endpoints-mode" name="endpoints_mode" aria-describedby="batch-list-help">
+            <option value="unchanged" {% if form.endpoints_mode == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="all" {% if form.endpoints_mode == "all" %}selected{% endif %}>Allow all endpoints</option>
+            <option value="deny_all" {% if form.endpoints_mode == "deny_all" %}selected{% endif %}>Deny all (empty list)</option>
+            <option value="allow_list" {% if form.endpoints_mode == "allow_list" %}selected{% endif %}>Allow list</option>
+          </select>
+          {{ record_choice(
+              "endpoints_value", "endpoint", "Endpoint allow list",
+              options=choices.endpoints_value or none,
+              multi=true,
+              multi_value=form.endpoints_value,
+              serialize="newline",
+              allow_new=true,
+              placeholder="Implemented endpoint paths, one per line",
+              help_id="batch-help-endpoints",
+              help="Searchable implemented endpoint catalog; direct entry stays available. Without JavaScript, paste endpoint paths one per line.",
+          ) }}
+        </div>
+      </div>
+      <p class="field-help" id="batch-list-help">
+        Allow lists take one entry per line (or comma-separated), up to 100 entries of 256 characters (the searchable picker keeps the full selection even beyond its latest-100 display batch). Providers: null = unrestricted, empty list = deny all. Models/endpoints: "allow all" sets the allow-all flag with an empty list; "deny all" sends an explicit empty list; an allow list also clears the allow-all flag. At execution the shared configuration validators re-check the resulting configuration per key (validation of stored policy, not an inference test; admission, pricing, and provider health are checked separately when a request is made); a resulting state the validators refuse rejects the whole batch with zero writes.
+      </p>
+
+      <h3>Lazy throttling (wait for capacity)</h3>
+      <div class="form-grid">
+        <label>
+          Lazy mode
+          <select name="lazy_mode" aria-describedby="batch-lazy-help">
+            <option value="unchanged" {% if form.lazy_mode == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="reject" {% if form.lazy_mode == "reject" %}selected{% endif %}>Reject (no waiting)</option>
+            <option value="wait" {% if form.lazy_mode == "wait" %}selected{% endif %}>Wait for capacity</option>
+            <option value="remove" {% if form.lazy_mode == "remove" %}selected{% endif %}>Remove stored policy (deployment default)</option>
+          </select>
+        </label>
+        <label data-batch-lazy-wait>
+          Max wait (seconds)
+          <input name="lazy_wait_seconds" value="{{ form.lazy_wait_seconds }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-lazy-help">
+        </label>
+        <label data-batch-lazy-wait>
+          Max waiting requests
+          <input name="lazy_waiting" value="{{ form.lazy_waiting }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-lazy-help">
+        </label>
+      </div>
+      <p class="field-help" id="batch-lazy-help">
+        Reject replaces the stored policy with reject mode; wait needs BOTH positive whole-number values; remove sends explicit null (the deployment default applies again).
+      </p>
+
+      <h3>Chat streaming live-burn (streaming chat surface only)</h3>
+      <div class="form-grid">
+        <label>
+          Live-burn mode
+          <select name="live_burn_mode" aria-describedby="batch-live-burn-help">
+            <option value="unchanged" {% if form.live_burn_mode == "unchanged" %}selected{% endif %}>Leave unchanged</option>
+            <option value="enable" {% if form.live_burn_mode == "enable" %}selected{% endif %}>Enable monitoring</option>
+            <option value="disable" {% if form.live_burn_mode == "disable" %}selected{% endif %}>Disable monitoring</option>
+          </select>
+        </label>
+        <label data-batch-live-burn>
+          Cost margin (EUR)
+          <input name="live_burn_cost_margin" value="{{ form.live_burn_cost_margin }}" inputmode="decimal" autocomplete="off"
+                 aria-describedby="batch-live-burn-help">
+        </label>
+        <label data-batch-live-burn>
+          Token margin
+          <input name="live_burn_token_margin" value="{{ form.live_burn_token_margin }}" inputmode="numeric" autocomplete="off"
+                 aria-describedby="batch-live-burn-help">
+        </label>
+      </div>
+      <p class="field-help" id="batch-live-burn-help">
+        A complete block with the installation's bounded margins is sent for enable/disable; blank margins take the surface defaults. The change applies only to the chat streaming surface with streaming; final provider usage/cost remains authoritative.
+      </p>
+    </section>
+
+    <button type="submit">Prepare batch plan</button>
+  </form>
+</section>
+<script src="{{ asset_url('key-batch.js') }}"></script>
+{% endblock %}

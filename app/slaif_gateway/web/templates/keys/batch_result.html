@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Key Batch Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="batch-result-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="batch-result-heading">Key Batch Result</h1>
+      <p class="muted">This page is not cached and displays no review state.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link" href="/admin/key-batch">New batch</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="batch-result-status-heading">
+    <h2 id="batch-result-status-heading">Outcome</h2>
+    <p class="status-pill">{{ result.status }}</p>
+    <p>{{ status_labels[result.status] }}</p>
+    <dl class="compact-dl">
+      <dt>Selected keys</dt>
+      <dd>{{ result.selected_count | num }}</dd>
+      <dt>Changed</dt>
+      <dd>{{ result.changed_count | num }}</dd>
+      <dt>Unchanged</dt>
+      <dd>{{ result.unchanged_count | num }}</dd>
+      <dt>Audit reason</dt>
+      <dd>{{ reason }}</dd>
+    </dl>
+    {% if result.key_ids %}
+    <p class="muted">Keys in this operation:</p>
+    <ul class="uuid-list">
+      {% for key_id in result.key_ids %}
+      <li><code>{{ key_id }}</code>{% if key_labels.get(key_id) %} <span class="muted">{{ key_labels[key_id] }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    <p class="field-help">
+      The signed review token is not retained on this page. Re-submitting the SAME reviewed plan (within its 15-minute lifetime) is an ordinary repeat: the core decides it as the already-at-target outcome - zero writes, zero new audit rows - when the selected keys CURRENTLY equal the target. That is a present-state equality decision, not a historical receipt lookup; if a response was lost, a fresh plan is always available from the batch form.
+    </p>
+  </section>
+</section>
+{% endblock %}

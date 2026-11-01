@@ -10,6 +10,25 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-01 Objective 209-a GUI reviewed key batch verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - admin GUI G05 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` (reviewed changes to existing key
+  sets) reusing the SAME qualified 203 core `KeyBatchService`
+  plan/apply law: batch form with exactly ONE selection source (cohort
+  or up to 1,000 explicit UUIDs via the latest-100 picker with older
+  search) and ONE input source (guided controls or the advanced strict
+  version-1 document), a signed bounded review-intent token (8 MiB plan
+  -> 11,184,812 base64url chars, ~10.67 MiB) strictly re-parsed before
+  any mutation, apply with confirmation / fenced acknowledgement /
+  bounded reason (512 UTF-8 bytes), whole-batch stale refusal with zero
+  writes and one-transaction rollback, one audit per changed key; the
+  batch-apply route's bounded self form-parsing (the Starlette 1 MiB
+  per-field transport defect) and the 16 m `/admin/key-batch/` Nginx
+  locations in both shipped configs. 81 unit PASS, 6 owned-PG PASS, 20
+  CI-order coexist PASS, 7 real Chromium PASS (keyboard happy flow,
+  no-JS fallback, 390px review, >100 selection); the 207/208 component
+  proof is reused unchanged; GitHub CI on the 209 head pending at
+  publication.
 - [`2026-10-31 Objective 208-b GUI clone CI qualification verification`](gui-cli-parity.md)
   (recorded 2026-10-31, same living record file) - same-PR
   qualification of the demonstrated 208-a final-head CI failures:

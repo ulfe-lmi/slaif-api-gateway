@@ -297,7 +297,7 @@ def test_every_admin_table_has_structural_ordinal_column() -> None:
       number or corrupt them.
     """
     tables = _iter_admin_tables()
-    assert len(tables) == 25, f"expected 25 sortable admin tables, got {len(tables)}"
+    assert len(tables) == 26, f"expected 26 sortable admin tables, got {len(tables)}"
     problems: list[str] = []
     for name, tag, block in tables:
         thead = re.search(r"<thead>.*?</thead>", block, flags=re.DOTALL)

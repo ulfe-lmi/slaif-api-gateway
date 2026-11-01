@@ -955,3 +955,86 @@ are not touched: cloning is an explicit two-step operator action that
 creates a NEW key with independent material, identity, zero usage and
 reservations, and its own replay ownership. The only operator-facing
 behavior change on the key-detail page is the new action panel.
+
+## 10. Reviewed key batches (209-a)
+
+This section documents the batch-change surface delivered by objective
+209-a (G05 of `docs/MISSING_GUI_FUNCTIONALITY.md`). It reuses the
+existing shared services (`KeyBatchService`, record pickers, redaction
+seam, session/CSRF contexts) and the reviewed-plan schemas; no new
+database schema, table, or client/server module was added. The batch
+never edits a displayed page: cohort scope is resolved in the database
+and explicit-UUID scope reports each actual exclusion.
+
+### 10.1 Navigation
+
+- **Key list** (`/admin/keys`): a "Change existing keys" entry link to
+  the batch form. All prior list behavior is unchanged.
+- **Batch form** (`/admin/key-batch`): exactly ONE selection source
+  (one cohort, or an explicit set of up to 1,000 gateway key UUIDs via
+  the latest-100 picker with older search - the FULL selection is what
+  submits, never only the first page), the persisted status scope
+  (active/suspended/revoked checkboxes; default active only), ONE input
+  source (guided policy controls, or the advanced strict version-1
+  configuration document), and the guided members: lifetime cost/token/
+  request quotas (unchanged/set/clear), the four rate members (three
+  counts plus the window), provider/model/endpoint list modes
+  (unchanged / unrestricted
+  / deny-all / allow-list, or all / deny-all / allow-list for
+  models+endpoints), lazy throttling, and chat live-burn margins.
+- **Review** (form POST result): the exact non-secret plan with every
+  selected key's readable before/after (shared sortable table; raw
+  values sort, grouped/M display stays readable; field-specific null
+  labels: unlimited / unrestricted / inherit), the excluded-by-status
+  entries for explicit-UUID scope (cohort scope is filtered in the
+  database and does NOT enumerate excluded members), the submitted
+  policy summary, the raw non-secret plan JSON as optional detail, and
+  the apply form (fresh confirmation checkbox, bounded audit reason).
+- **Result**: the outcome (`applied` / `already_at_target`), counts,
+  and the operation's key list. The signed review state is not
+  retained on this page and the page is no-store.
+
+### 10.2 Form semantics and the single-source law
+
+- "Leave unchanged" omits the field (preserved); "Clear" sends
+  explicit null (unlimited for lifetime quotas, inherit deployment for
+  rate members); a value is used only with "Set"; zero is a real zero.
+- Exactly one input source and one selection source are active at a
+  time; with JavaScript the non-selected controls are disabled (and
+  therefore not submitted) by a single composed form sync, so a mode
+  switch can never send a stale subordinate value - the server still
+  enforces every single-source law for every submission (including
+  no-JS). The no-JS fallback leaves the non-selected fields at
+  defaults/blank and works through to the persisted change.
+- The progressive-enhancement script never converts, groups, or scales
+  a value; it only enables/disables controls.
+
+### 10.3 Review and apply readout
+
+- Quota/rate rows use the common `num`/`tokm` grouped/M formatters with
+  exact raw values available in the JSON detail; empty model/endpoint
+  lists render state-aware (an empty list WITH the allow-all flag set
+  grants access; "Deny all" is derived only from the explicit complete
+  state).
+- Applying re-derives every selected key under the row locks: a changed
+  membership, status, or configuration drifts the plan STALE and the
+  WHOLE batch is refused with zero writes and zero new audits; a set
+  that currently equals the target is an explicit no-write
+  `already_at_target` (present-state equality, not a historical
+  receipt). Re-submitting the same reviewed operation within the token
+  lifetime is that ordinary repeat.
+- Every changed key gets its own `update_key_configuration` audit with
+  the actor and the bounded audit reason; one caller-owned transaction
+  rolls back ALL keys and ALL provisional audits on any late failure.
+
+### 10.4 Upgrade notes
+
+Deploying this change is a normal API/assets rebuild - recreate and
+restart the API so the new code runs - plus the reverse-proxy update:
+the shipped Nginx templates add a bounded 16 m
+`client_max_body_size` location for `/admin/key-batch/` ONLY (the signed
+review envelope expands an 8 MiB plan to ~10.67 MiB), leaving every
+other admin/API limit unchanged - see
+[`deployment.md`](deployment.md). There is **no schema migration**: the
+batch reuses the existing key configuration columns, metadata, and
+audit rows.

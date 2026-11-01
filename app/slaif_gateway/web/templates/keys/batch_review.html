@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+
+{% block title %}Review Key Batch{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="batch-review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Key Management</p>
+      <h1 id="batch-review-heading">Review Key Batch</h1>
+      <p class="muted">Nothing changes until you confirm the apply step below. This page shows the EXACT non-secret plan the core prepared, including every selected key.</p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/key-batch">Back to batch form</a>
+      <a class="button-link secondary" href="/admin/keys">All keys</a>
+    </div>
+  </header>
+
+  <section class="action-panel" aria-labelledby="batch-review-plan-heading">
+    <h2 id="batch-review-plan-heading">Reviewed Plan</h2>
+    <dl class="compact-dl">
+      <dt>Target source</dt>
+      <dd>
+        {% if plan.selection_kind == "cohort" %}
+        Cohort {{ cohort_label }} - filtered in the database by the selected persisted statuses. Members excluded by status are NOT enumerated for cohort scope.
+        {% else %}
+        Explicit key UUIDs ({{ plan.key_ids | length | num }} keys)
+        {% endif %}
+      </dd>
+      <dt>Status scope</dt>
+      <dd>{{ plan.statuses | join(", ") }}</dd>
+      <dt>Counts</dt>
+      <dd>{{ plan.selected_count | num }} selected, {{ plan.changed_count | num }} changed, {{ plan.unchanged_count | num }} unchanged{% if plan.excluded_by_status %}, {{ plan.excluded_by_status | length | num }} excluded by status{% endif %}</dd>
+      <dt>Selected keys (exact UUIDs)</dt>
+      <dd>
+        <ul class="uuid-list">
+          {% for key_id in plan.key_ids %}
+          <li><code>{{ key_id }}</code>{% if key_labels.get(key_id) %} <span class="muted">{{ key_labels[key_id] }}</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </dd>
+      {% if plan.excluded_by_status %}
+      <dt>Excluded by status (explicit scope)</dt>
+      <dd>
+        <ul class="uuid-list">
+          {% for entry in plan.excluded_by_status %}
+          <li><code>{{ entry.key_id }}</code> <span class="muted">{{ entry.status }}</span></li>
+          {% endfor %}
+        </ul>
+      </dd>
+      {% endif %}
+      {% if requires_fenced_confirmation %}
+      <dt>Fenced external-tool policy</dt>
+      <dd class="warning-text">The submitted policy explicitly sets a fenced external-tool policy: a FRESH fenced confirmation is required at apply, including a repeat of this same reviewed operation.</dd>
+      {% endif %}
+    </dl>
+    <details>
+      <summary>Raw non-secret plan JSON</summary>
+      <pre class="config-json">{{ plan | tojson }}</pre>
+    </details>
+  </section>
+
+  <section class="action-panel" aria-labelledby="batch-review-policy-heading">
+    <h2 id="batch-review-policy-heading">Submitted Policy (partial version-1 document)</h2>
+    <dl class="compact-dl">
+      {% for field, text in policy_summary.items() %}
+      <dt>{{ field_labels.get(field, field) }}</dt>
+      <dd>{{ text }}</dd>
+      {% endfor %}
+    </dl>
+    <p class="field-help">Only the listed fields are present; every omitted field is preserved per key. At execution the shared configuration validators re-check the resulting configuration per key (validation of stored policy, not an inference test; admission, pricing, and provider health are checked separately when a request is made).</p>
+  </section>
+
+  <section class="action-panel" aria-labelledby="batch-review-keys-heading">
+    <h2 id="batch-review-keys-heading">Per-key Before/After (readable diff)</h2>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Per-key before/after rows">
+      <table data-sortable class="table-wide" aria-describedby="batch-review-keys-help">
+        <thead>
+          {# 194-a pattern: plain group row + complete leaf header row. #}
+          <tr class="group-row">
+            <th class="group-th group-th-spacer" aria-hidden="true"></th>
+            <th colspan="2" class="group-th" scope="colgroup">Key</th>
+            <th colspan="4" class="group-th" scope="colgroup">Quota limits</th>
+            <th class="group-th" scope="colgroup">Other changes</th>
+          </tr>
+          <tr>
+            <th data-ordinal scope="col" aria-label="Row number">#</th>
+            <th class="col-key" scope="col">Key</th>
+            <th scope="col">Label</th>
+            <th class="num" data-sort-type="number" scope="col">Requests before</th>
+            <th class="num" data-sort-type="number" scope="col">Requests after</th>
+            <th class="num" data-sort-type="number" scope="col">Tokens before</th>
+            <th class="num" data-sort-type="number" scope="col">Tokens after</th>
+            <th scope="col">Other changes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in plan_rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td class="col-key"><a href="/admin/keys/{{ row.key_id }}"><code>{{ row.key_id }}</code></a></td>
+            <td>{{ row.label or "—" }}</td>
+            <td class="num" data-sort-value="{{ row.request_before[1] }}">{{ row.request_before[0] }}</td>
+            <td class="num" data-sort-value="{{ row.request_after[1] }}">{{ row.request_after[0] }}</td>
+            <td class="num" data-sort-value="{{ row.token_before[1] }}" title="{{ row.token_before[1] or none }}">{{ row.token_before[0] }}</td>
+            <td class="num" data-sort-value="{{ row.token_after[1] }}" title="{{ row.token_after[1] or none }}">{{ row.token_after[0] }}</td>
+            <td>
+              {% if row.other_changes %}
+              <ul class="change-list">
+                {% for label, before, after in row.other_changes %}
+                <li>{{ label }}: {{ before }} &rarr; {{ after }}</li>
+                {% endfor %}
+              </ul>
+              {% else %}
+              <span class="muted">no other changes</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr data-no-sort>
+            <td colspan="8" class="empty-state">No keys in this reviewed plan.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="field-help" id="batch-review-keys-help">Headers use the shared sortable table (raw values sort, grouped/M display stays readable); the Key links open the existing key detail page. Unchanged keys are listed too: the apply re-derives and re-checks every selected key, and any drift (membership, status, configuration) refuses the WHOLE batch with zero writes. Exact raw documents remain in the plan JSON disclosure above.</p>
+  </section>
+
+  <section class="action-panel" aria-labelledby="batch-review-apply-heading">
+    <h2 id="batch-review-apply-heading">Apply This Reviewed Batch</h2>
+    <form method="post" action="/admin/key-batch/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="batch_review_intent" value="{{ batch_review_intent }}">
+      <label class="checkbox-row" for="batch-confirm-apply">
+        <input type="checkbox" id="batch-confirm-apply" name="confirm_apply" value="true" required
+               aria-describedby="batch-apply-help">
+        I confirm this exact reviewed batch plan ({{ plan.selected_count | num }} selected keys)
+      </label>
+      {% if requires_fenced_confirmation %}
+      <label class="checkbox-row" for="batch-confirm-fenced">
+        <input type="checkbox" id="batch-confirm-fenced" name="confirm_external_tool_fenced" value="true"
+               aria-describedby="batch-apply-help">
+        Fresh fenced external-tool confirmation (required for this plan)
+      </label>
+      {% endif %}
+      <label for="batch-reason">
+        Audit reason
+        <input id="batch-reason" name="reason" required maxlength="512" autocomplete="off" placeholder="Required reason"
+               aria-describedby="batch-apply-help">
+      </label>
+      <p class="field-help" id="batch-apply-help">
+        The review state is bound to your signed-in admin and session and expires after 15 minutes. The audit reason is required: it is the bounded nonblank entry (at most 512 UTF-8 bytes, the stored bound - multibyte text uses more than one byte per character) recorded on EVERY changed key's update_key_configuration audit row. When this plan explicitly sets a fenced external-tool policy, the fresh fenced confirmation checkbox is required at apply - including a repeat of this same reviewed operation. Re-submitting the SAME reviewed plan is an ordinary repeat: the core decides it as the already-at-target outcome (zero writes, zero new audits) when the selected keys CURRENTLY equal the target - a present-state equality decision, not a historical receipt lookup.
+      </p>
+      <button type="submit">Apply batch</button>
+    </form>
+  </section>
+</section>
+{% endblock %}

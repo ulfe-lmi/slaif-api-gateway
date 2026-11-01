@@ -320,7 +320,8 @@
       }
       if (selected.length > 0) {
         // Re-hydrate the selection(s) that may live outside the initial
-        // batch (single, or every multi chip; 195-a).
+        // batch (single, or every multi chip; 195-a). runSearch applies
+        // the control's optional hydration-prefix bound (209-a).
         runSearch("", { selectedIds: selected.map((v) => v.id) });
       }
     };
@@ -377,7 +378,21 @@
       if (q) {
         params.set("q", q);
       }
-      for (const id of selectedIds) {
+      // 209-a batch opt-in: a control may bound the hydrated-selection
+      // prefix for the EMPTY-query lookup (menu open). On a typed
+      // (non-empty) query, sending selected IDs would make the server
+      // hydrate them into the finite result slots and evict the actual
+      // matches the operator is searching for, so no selection hydration
+      // is sent at all. Existing selections keep their value-as-label
+      // fallback labels, and the FULL selection still submits through the
+      // managed form field. Other callers never set the attribute and
+      // are unchanged.
+      const hydrateCap = Number.parseInt(rc.dataset.rcHydrateCap || "", 10);
+      let hydrated = selectedIds;
+      if (Number.isFinite(hydrateCap) && hydrateCap > 0) {
+        hydrated = q ? [] : selectedIds.slice(0, hydrateCap);
+      }
+      for (const id of hydrated) {
         params.append("selected", id);
       }
       const dep = depValues();

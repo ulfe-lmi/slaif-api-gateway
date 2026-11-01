@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-10-31):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05-G18 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06-G18 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -338,9 +338,9 @@ The 207-b record (same
 earlier claims that reasons were bounded and that all canaries were
 covered.
 
-### Still open (G05-G18)
+### Still open (G06-G18)
 
-Nothing in 207-a, 207-b, or 208-a claims G05 (batch), G06
+Nothing in 207-a, 207-b, 208-a, 208-b, 209-a claims G06
 (route-capability
 review), G07 (provider preparation/clearing), G08 (diagnostics), G09 (replay
 inspection), G10 (Codex migration), G11 (usage reporting), G12 (email
@@ -348,7 +348,7 @@ inspection), G13 (list navigation), G14 (accounting recovery), G15 (catalog
 workflows), G16 (configuration inspection page), G17 (admin accounts), or
 G18 (small catalog operations) is complete. The section 3.1-3.5 findings for
 those areas remain as documented at the baseline. G04 is delivered by
-208-a; see section 10 below.
+208-a (section 10); G05 is delivered by 209-a (section 11).
 
 ## 10. Delivery status (objective 208-a)
 
@@ -473,9 +473,186 @@ the 208-b section of `docs/verification/gui-cli-parity.md`.
 
 ### Still open
 
-G05-G18 remain open as documented in section 9. Nothing in 208-a touches
-batch editing, route-capability review, provider preparation,
+G06-G18 remain open as documented in section 9 (G05 is delivered by
+209-a, section 11). Nothing in 208-a touches batch editing,
+route-capability review, provider preparation,
 diagnostics, replay inspection, Codex migration, usage reporting, email
 inspection, list navigation, accounting recovery, catalog workflows, the
 configuration inspection page, admin accounts, or small catalog
 operations.
+
+## 11. Delivery status (objective 209-a)
+
+Added 2026-11-01 as the delivery update for G05 (reviewed changes to
+existing key sets) on branch `oap/209-gui-key-batch` (its own PR). The
+historical findings above are preserved as written at the baseline; this
+section records what 209-a delivered and what remains open.
+
+### Delivered by 209-a (G05)
+
+- **Batch entry on the key list.** The existing key list (`/admin/keys`)
+  gains exactly ONE "Change existing keys" entry link to the batch form.
+  All prior list behavior is unchanged.
+- **Batch form.** `/admin/key-batch` accepts exactly ONE selection source
+  (one cohort, or an explicit set of up to 1,000 gateway key UUIDs via
+  the latest-100 picker with older search - the FULL selection is what
+  submits, never only the first page), the persisted status scope
+  (active/suspended/revoked checkboxes; default active only; the scope is
+  the persisted status, not expiry), and ONE input source: the guided
+  policy controls (lifetime cost/token/request quotas with
+  unchanged/set/clear, the four rate members (three counts plus the
+  window), provider/model/endpoint list modes, lazy throttling, chat
+  live-burn
+  margins) or the advanced strict version-1 configuration document. With
+  JavaScript, a single composed form sync disables every non-selected
+  control (and disabled controls are never submitted), so a mode switch
+  can never send a stale subordinate value; the server still enforces
+  every single-source law for every submission, including no-JS, where
+  the plain named fields work through to the persisted change. The form
+  markup associates one label with each control (no label wraps two
+  controls and no label nests the picker's own label), and each batch
+  picker's visible field references its own help span.
+- **Review before confirm.** POSTing the form calls the core
+  `KeyBatchService.plan` (no GUI policy engine; no mutation, no policy
+  audit) and renders the EXACT non-secret plan: every selected key with
+  a readable before/after (shared sortable table inside a labeled,
+  keyboard-focusable scroll region - raw values sort, grouped/M display
+  stays readable, field-specific null labels: unlimited / unrestricted /
+  inherit), the excluded-by-status entries for explicit-UUID scope
+  (cohort scope is filtered in the database and does NOT enumerate
+  excluded members), the submitted policy summary (token quantities in
+  the shared M-token display with the exact count beside it; empty
+  model/endpoint lists rendered state-aware against the allow-all flag,
+  providers keeping deny-all semantics), and the raw non-secret plan
+  JSON as optional detail. The review page never shows key material.
+- **Signed review-intent binding.** The review state is an HMAC-SHA256
+  token over the strict plan plus the acting admin user and session, a
+  15-minute expiry, and the batch purpose. Apply verifies format, the
+  constant-time HMAC, purpose/actor/session, expiry, and strictly
+  re-parses the embedded plan BEFORE any mutation; a mutable apply field
+  can never change the reviewed plan. Bounded encoded token size is
+  enforced (an 8 MiB canonical plan expands to 11,184,812 base64url
+  characters, ~10.67 MiB).
+- **Apply with confirmation, reason, and rollback.** Apply requires the
+  explicit confirmation checkbox, a bounded nonblank audit reason (at
+  most 512 UTF-8 bytes, the stored core bound - multibyte text uses more
+  than one byte per character; masked through the existing redaction
+  seam before storage), and CSRF. A plan that explicitly sets a fenced
+  external-tool policy requires the fresh fenced checkbox, including a
+  repeat of the same reviewed operation. The core `apply` re-derives
+  every selected key under the row locks: any drift in membership,
+  status, or configuration refuses the WHOLE batch with a fixed 400 and
+  zero writes and zero new audits; a set that currently equals the
+  target is the ordinary no-write `already_at_target` repeat
+  (present-state equality, not a historical receipt). One caller-owned
+  transaction rolls back ALL keys and ALL provisional audits on any
+  late per-key failure; every changed key gets its own
+  `update_key_configuration` audit with the actor and the reason.
+- **Transport bound for the signed envelope.** The signed review token
+  is the largest single form field (~10.67 MiB), far above Starlette's
+  default 1 MiB per-field cap. The batch APPLY route parses its own form
+  with the bounded envelope headroom (no files, bounded field count)
+  BEFORE the framework auto-form parsing, maps both bounded-parse
+  failure forms to one fixed safe 400, and leaves every other route and
+  global limit at the framework defaults.
+- **Shipped Nginx batch location.** Both shipped proxy configs
+  (`nginx/production.conf` and `deploy/nginx/slaif-api-gateway.conf`)
+  add a documented bounded 16 m `client_max_body_size` for the
+  `/admin/key-batch/` locations ONLY (an 8 MiB reviewed plan expands
+  beyond the admin default); every other admin/API limit, proxy,
+  header, and security behavior is unchanged. See
+  [`deployment.md`](deployment.md).
+
+### Bounded paths (209-a)
+
+`app/slaif_gateway/api/admin_key_batch.py` (focused router), the
+batch-purpose token in
+`app/slaif_gateway/api/admin_review_intent.py`, the router include in
+`app/slaif_gateway/main.py`, three `keys/batch_*.html` templates, the
+batch-opt-in `web/static/js/record-choices.js` changes (the hydration
+cap applied centrally to searches, and the omitted `selected`
+hydration on non-empty queries; other callers unchanged), the optional
+`help_id`/`hydrate_cap` parameters of `_record_choice.html` (batch
+callers only; other callers keep their exact markup), the batch entry
+link in `keys/list.html`, `web/static/js/key-batch.js` (progressive
+enablement/disabling only - never value conversion), the asset
+registration, the `.field` wrapper and `.config-json` containment
+stylesheet rules, the two shipped Nginx configs, and the
+`deployment.md` operator note. No schema, migration, model, CLI,
+worker, or runtime accounting change: the 203 core batch service law
+(plan staleness, one-transaction apply, per-key audit) is reused and
+re-qualified, not re-implemented.
+
+### Focused evidence (209-a)
+
+- Fake-persistence ASGI/Jinja unit suite (81 cases): form/guided/advanced
+  composition and the single-source law, list-mode allow-all/deny-all
+  semantics and credential-shaped refusals, selection overflow/malformed
+  refusals with the full-1000 accepted, token round-trip plus
+  expiry/actor/session/tamper/malformed/oversize refusals, review
+  rendering (ordinals, raw sort keys, M-token and money-string display,
+  state-aware empty lists, excluded entries as real UUID/status,
+  picker help links, apply-input help with the 512-UTF-8-byte bound and
+  fenced acknowledgement), apply flows (confirmation, reason, fenced,
+  stale refusals with zero writes, canary absence, over-bound form
+  refusal with a controlled fixed 400), the actual near-8 MiB signed
+  envelope through real ASGI urlencoded apply, and the full-1000
+  transport round-trip (JUnit `unit-209a-7.xml`, 81 PASS / 0 skip).
+- Owned-PostgreSQL integration suite (6 cases on the qualified
+  loopback/tmpfs fixture): cohort-scope plan (107 selected over
+  active+suspended, zero writes on preview), explicit 108-UUID plan with
+  exact exclusions and 105 persisted changes (changed-key comparison
+  allowing only the requested quotas plus `updated_at`; excluded and an
+  unselected control key an unchanged value snapshot), 105 actor-attributed audits,
+  the SAME original reviewed token reapplied as `already_at_target`,
+  direct-DB drift and status-change refusals with no-write snapshot
+  proof, and an injected late per-key write failure rolling back ALL
+  provisional updates and audits (JUnit `pg-209a-1.xml`, 6 PASS / 0
+  skip). The PG module seeds NO provider/route rows (the batch changes
+  quotas only, so none are required) and therefore coexists with the
+  207/208 modules on one session database, while the browser fixture
+  separately get-or-creates the two DB-unique provider slugs for the
+  picker catalogs. The CI collection order was verified once (20 PASS:
+  6x209 + 4x208 + 10x207, JUnit `pg-209a-coexist-ci.xml`), reusing the
+  208-b reverse-order proof.
+- Real Chromium on the owned fixture (7 cases, actual uvicorn app and
+  real stylesheet): entry link plus safe initial disabled states with
+  real composed sync, the populated transition regressions (stale
+  allow-list values never ride along; guided<->advanced round trip;
+  keys<->cohort scope change while advanced; inactive chip removal), the
+  >100 multi-key selection with older search (no `selected` hydration on
+  typed queries, the full 101 selection submitted), the keyboard happy
+  flow (combobox ArrowDown/Enter cohort selection, Space/type/Enter
+  apply, 390px review with no document overflow and the apply control
+  still reachable, independent persisted-DB and audit oracles), and the
+  no-JS fallback flow through to the persisted change (JUnit
+  `browser-209a-3.xml`, 7 PASS / 0 skip, 32.655 s, exact container
+  cleanup). The progressive script's component behavior (real
+  Chromium, mocked lookup, no app auth/PG) is separately rooted with
+  the populated-state regressions; its SHA is
+  `5a1362620fb65a78a78630c3262197180a9651b1bb9104490c4e359a5f5867fd`.
+
+### In-order routine corrections (test/fixture/display only)
+
+While qualifying the same order, routine corrections stayed in this
+order/PR: browser selector/keyboard corrections (the h1 is "Change
+Existing Keys"; the multi picker opens by focusing its entry field; the
+visible-text arrow is asserted, not the entity; the keyboard cohort
+selection and the narrow-viewport review block), the `.table-wrap`
+containment reuse for the review table, the `.config-json` scroll
+containment, the one-label-per-control form restructuring with the
+optional picker `help_id` links, the M-token rate-member readout, the
+precise empty-list hint wording, the 512-UTF-8-byte reason bound in
+the apply help, and the standard empty-state row plus the
+26th-table count in the admin-usability inventory guard. No Core
+law, product message, or validator change resulted from these
+corrections.
+
+### Still open
+
+G06-G18 remain open as documented in section 9. Nothing in 209-a touches
+route-capability review, provider preparation, diagnostics, replay
+inspection, Codex migration, usage reporting, email inspection, list
+navigation, accounting recovery, catalog workflows, the configuration
+inspection page, admin accounts, or small catalog operations. The full
+GUI goal beyond G01-G05 remains broader than this objective.

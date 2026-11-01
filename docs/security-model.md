@@ -1454,6 +1454,43 @@ the configured policy) are fixed no-echo states; the source policy is
 never reset or weakened to force eligibility. No schema, migration,
 worker, or runtime-accounting change accompanies this surface.
 
+### Reviewed key-batch and review-intent state (objective 209)
+
+The admin GUI batch workflow (G05) reuses the same browser-session
+review-intent pattern for the reviewed key batch: the plan step renders
+a `batch_review_intent` token that is an HMAC-SHA256 over the strict
+canonical batch plan document plus the acting admin user ID, admin
+session ID, a short expiry, and the `batch` purpose, keyed with the
+existing `ADMIN_SESSION_SECRET`. The token is purpose-bound (a clone
+token is refused by the batch route and vice versa), never echoed in
+errors, logs, or the result page (the result page is no-store and
+carries no review state), and a bounded encoded size is enforced at
+build and verify so the token cannot be used as an unbounded storage
+channel. Apply verifies format, HMAC, purpose/actor/session binding,
+expiry, and a STRICT re-parse of the embedded plan before any mutation;
+the fresh apply-time confirmation is the only accepted source of the
+fenced external-tool control (the stored plan is a review artifact,
+never authority), and the bounded audit reason is validated with the
+same credential-shape law as every other admin action.
+
+One transport boundary is documented because it changed in this
+objective: the signed review token is the largest single form field
+(up to ~10.67 MiB of base64url for an 8 MiB canonical plan), far above
+Starlette's default 1 MiB per-field cap for URLENCODED forms. The batch
+apply route therefore parses the form ITSELF with a bounded envelope
+headroom (`max_part_size` sized to the token bound plus a fixed margin,
+`max_fields` bounded, no files) BEFORE the shared verify/execute path;
+a bounded-parse failure is a fixed safe 400 refusal with no size or
+field detail redisplayed. No global parser, middleware, storage, or
+compression change accompanies this; every other route and the global
+Nginx allowances are unchanged (the shipped Nginx templates add a
+documented 16 m `client_max_body_size` allowance ONLY for the new
+`/admin/key-batch/` locations). The core batch execution law
+(objectives 202/203) is unchanged and reused: locked revalidation,
+stale refusal on membership/status/configuration drift, per-key
+`update_key_configuration` audits inside ONE caller-owned transaction,
+and whole-operation rollback on any late failure.
+
 ## Admin Web Sessions And CSRF
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder

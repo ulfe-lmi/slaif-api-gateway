@@ -1033,6 +1033,14 @@ td a {
   align-items: start;
 }
 
+/* 209-a: paired action/value fields are ONE wrapper with a distinct
+   associated <label> per control (a label element must not wrap two
+   controls); the controls keep the standard full-width geometry. */
+.field {
+  display: grid;
+  gap: 6px;
+}
+
 .live-burn-fields-disabled {
   opacity: 0.55;
 }
@@ -1804,6 +1812,10 @@ td.col-subject {
   font-size: 0.8rem;
   width: 100%;
   min-height: 9rem;
+  /* 209-a: the raw plan JSON is a single long line; contain it in its own
+     scroll box (same pattern as .config-sample) so the review page cannot
+     overflow narrow viewports. */
+  overflow-x: auto;
 }
 
 .config-sample {

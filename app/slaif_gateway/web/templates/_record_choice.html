@@ -37,6 +37,10 @@
     nojs_value    exact value the no-JS fallback field submits (defaults to
                   selected_label or selected_id; forms with id-based server
                   fields pass the raw id so a no-JS submission stays valid)
+    help_id       optional id for the control's OWN help span; when set the
+                  visible field references that span via aria-describedby
+                  (batch pickers only; other callers omit it and keep
+                  their exact markup)
 -#}
 {#-
   Visual contract (193-a): the control reads as ONE integrated
@@ -61,7 +65,9 @@
     depends_param="provider",
     clear_label="Any",
     input_id="",
-    nojs_value=none
+    nojs_value=none,
+    hydrate_cap="",
+    help_id=""
 ) -%}
 <label class="rc-field">
   <span class="rc-name">{{ label_text }}</span>
@@ -74,6 +80,7 @@
         data-serialize="{{ 'newline' if serialize == 'newline' else 'single' }}"
         data-depends-on="{{ depends_on }}"
         data-depends-param="{{ depends_param if depends_param in ['provider', 'target_type'] else 'provider' }}"
+        {% if hydrate_cap %}data-rc-hydrate-cap="{{ hydrate_cap }}"{% endif %}
         data-clear-label="{{ clear_label }}"
         {% if input_id %}data-rc-id="{{ input_id }}"{% endif %}
         {% if not multi %}
@@ -87,7 +94,8 @@
     {% if multi %}
     <span class="rc-main rc-main-multi">
       <textarea class="rc-input" name="{{ name }}" rows="2" autocomplete="off"
-                spellcheck="false" placeholder="{{ field_placeholder }}">{{ multi_value or '' }}</textarea>
+                spellcheck="false" placeholder="{{ field_placeholder }}"
+                {% if help_id %}aria-describedby="{{ help_id }}"{% endif %}>{{ multi_value or '' }}</textarea>
       <span class="rc-chevron rc-chevron-static" aria-hidden="true"></span>
     </span>
     {% else %}
@@ -95,6 +103,7 @@
       <input type="text" class="rc-input" name="{{ name }}" autocomplete="off"
              spellcheck="false" placeholder="{{ field_placeholder }}"
              value="{{ nojs_value if nojs_value is not none else (selected_label or selected_id or '') }}"
+             {% if help_id %}aria-describedby="{{ help_id }}"{% endif %}
              aria-expanded="false" aria-autocomplete="list"
              role="combobox">
       <button type="button" class="rc-clear" hidden
@@ -118,6 +127,6 @@
       <span class="rc-status" role="status" hidden></span>
     </span>
   </span>
-  {% if help %}<span class="rc-help">{{ help }}</span>{% endif %}
+  {% if help %}<span class="rc-help"{% if help_id %} id="{{ help_id }}"{% endif %}>{{ help }}</span>{% endif %}
 </label>
 {%- endmacro %}
