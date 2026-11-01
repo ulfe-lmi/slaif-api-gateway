@@ -345,6 +345,15 @@ def test_contained_child_proves_single_child_inside_the_canonical_root(tmp_path)
             contained_child(tmp_path, escape)
 
 
+def test_contained_child_root_slash_is_separator_safe_without_writing():
+    # The "/" root must not build a "//" prefix that rejects /profile.json;
+    # pure path algebra only, nothing is written to the root.
+    assert contained_child("/", "profile.json") == "/profile.json"
+    # The root itself is not a child: ".." collapses to "/" and is refused.
+    with pytest.raises(ValueError):
+        contained_child("/", "..")
+
+
 def test_loader_refuses_symlinked_profiles_inside_and_outside_the_root(tmp_path):
     profile = load_profile("zap-it-v1").model_dump()
     root = tmp_path / "root"

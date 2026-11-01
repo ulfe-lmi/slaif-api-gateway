@@ -150,14 +150,19 @@ def contained_child(root: str | Path, filename: str) -> str:
     symlinks in the operator root's own ancestry (the caller already
     enforces the root's absolute/non-symlink law before this). The
     joined candidate is normalized and must remain inside the
-    canonical root plus a separator. The final file is NEVER resolved
+    canonical root plus a separator (separator-safe when the root is
+    ``/``). The final file is NEVER resolved
     or opened through its target: callers keep ``O_NOFOLLOW`` plus
     symlink/mode/size refusal on the last component, so a symlinked
     profile file - inside or outside the root - is refused.
     """
     canonical_root = os.path.realpath(os.fspath(root))
     candidate = os.path.normpath(os.path.join(canonical_root, filename))
-    if candidate == canonical_root or not candidate.startswith(canonical_root + os.sep):
+    # Separator-safe root prefix: ``os.path.join(root, "")`` keeps exactly
+    # one trailing separator, which is just ``"/"`` when the root is ``/``
+    # (so ``canonical_root + os.sep`` would wrongly build ``"//"`` there).
+    root_prefix = os.path.join(canonical_root, "")
+    if candidate == canonical_root or not candidate.startswith(root_prefix):
         raise ValueError("Profile filename escapes the profile root")
     return candidate
 
