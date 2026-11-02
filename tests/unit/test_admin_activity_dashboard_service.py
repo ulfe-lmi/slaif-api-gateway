@@ -38,6 +38,17 @@ class _AuditRepo:
     async def get_audit_log_for_admin_detail(self, audit_log_id):
         return self.row if self.row is not None and audit_log_id == self.row.id else None
 
+    async def get_latest_email_error_for_delivery(self, email_delivery_id):
+        # 215-a seam: only an exact-delivery email-error row is eligible
+        # (the generic fixture row is a key row, so no match).
+        if (
+            self.row is not None
+            and self.row.entity_type == "email_delivery"
+            and self.row.entity_id == email_delivery_id
+        ):
+            return self.row
+        return None
+
 
 class _EmailRepo:
     def __init__(self, row: EmailDelivery | None = None) -> None:

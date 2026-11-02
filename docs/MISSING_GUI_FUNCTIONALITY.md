@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12, G14, G15 and G17 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14, G15 and G17 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -1065,3 +1065,129 @@ documented in section 9; nothing in 214-a touches them. The final 219
 installed whole-GUI qualification and the remaining objectives stay
 mandatory; 214-a makes no installed-qualification, deployment,
 live-provider, or production claim.
+
+
+## 17. Delivery status (objective 215-a)
+
+Delivered by 215-a (`oap/215-gui-email-parity`, one PR), synthetic
+fixture data only, no new schema/migrations and no new dependencies:
+
+- **G12** (complete email delivery inspection, explicit failed retry and
+  bounded SMTP test):
+  - **List**: the status filter offers the six CANONICAL persisted
+    delivery statuses only, validated by the SAME shared
+    `validate_delivery_status` the CLI uses (unsupported values -
+    including the secret-lifecycle labels consumed/expired, which were
+    never persisted delivery states - are a fixed "Invalid filter."
+    refusal, no echo); additive EXACT filters (delivery UUID, owner
+    UUID, exact trimmed/lower-cased owner email) with CLI parity and the
+    unchanged legacy substring OR-within/AND-across semantics; inclusive
+    UTC date bounds (naive input treated as UTC, end-before-start a
+    fixed no-echo refusal, BLANK controls normalize to unbounded so the
+    real HTML form submit is always legal); cap+1 honest "more" plus the
+    shared filter-preserving Previous/Next navigation (214); recipient
+    and owner address projections reuse the shared credential-shape
+    withhold so list metadata cannot expose complete credentials.
+  - **Detail**: the shared finite latest-recorded-failure provenance
+    (known finite error code, action, time; unknown/missing recorded
+    codes project to `unavailable`; raw legacy provider prose never
+    reaches the DOM) and the bounded bridge to the SAME shared Core
+    `EmailDeliveryService.get_key_email_delivery_sendability` the
+    CLI/send/enqueue actions use (same-secret history, consumed and
+    ambiguous truth), called at most once per detail page (no list N+1);
+    legacy detail shapes and metadata are preserved.
+  - **Explicit failed retry**: a distinct failed-only action
+    (send-now or enqueue mode; REQUIRED nonblank audit reason bounded
+    to 1024 UTF-8 bytes; confirmation checkbox; known-incoming
+    opaque-auth alias reasons withheld) with the shared Core
+    sendability/history preflight. A non-failed row receives a TRUTHFUL
+    not-failed/not-applicable refusal (the FAILED-only wording stays
+    reserved for the genuine failed-row redirects of the ordinary
+    actions); every refusal performs no SMTP. Enqueue commits the
+    shared requested-intent audit (server actor, explicit retry intent,
+    durable) BEFORE broker dispatch; a recording failure prevents
+    dispatch; a broker failure/lost ack is
+    requested-but-unconfirmed, never queued/sent success.
+  - **Ordinary pending flows (unchanged shapes)**: send-now and
+    enqueue keep their existing confirmations; BOTH now withhold a
+    PROVIDED reason matching a known incoming opaque-auth alias
+    BEFORE any audit/SMTP/broker (missing/blank reasons stay accepted;
+    the failed-only required rule does not apply, and CLI pending
+    semantics are unchanged); the ordinary pending enqueue now commits
+    the SAME shared requested-intent audit (retry_failed=False) before
+    broker dispatch with the same safe unconfirmed recovery.
+  - **Bounded SMTP test**: a two-stage prepare -> review -> apply
+    surface. Prepare validates ONE complete mailbox recipient (strict
+    standard-library parse; list-parser reinterpretations, groups and
+    trailing syntax, raw CR/LF/NUL and credential shapes are refused;
+    the canonical recipient is exactly what is signed and sent),
+    subject/body defaults and UTF-8 byte bounds, and signs a bounded,
+    escape-budgeted one-use review token bound to the admin and session
+    (15 minutes). Review shows the exact reviewed facts; a retriable
+    missing-confirm error KEEPS the valid one-use form (no restart),
+    while non-retryable outcomes hide it. Apply verifies the signed
+    facts (posted values confer nothing), refuses known incoming
+    authentication aliases immediately after verify, then records the
+    durable one-use CLAIM (actor-bound, entity UUID derived from the
+    nonce, committed) BEFORE the bounded SMTP attempt under a per-actor
+    3-attempts/60-seconds budget with a fixed cooldown. Outcomes are
+    honest: accepted (SMTP acceptance, not confirmed inbox arrival),
+    unconfirmed (unknown outcome after dispatch - never a no-message
+    promise), failed (explicit refusal), unavailable (disabled/
+    misconfigured). A lost commit acknowledgement keeps the durable
+    claim and the repeat is refused by it (no duplicate, never an
+    assumed rollback). The reviewed message never has a gateway key or
+    other secret attached automatically, and the page says so.
+  - **Recovery**: submission uses POST at the apply URL, and a direct
+    GET of it serves a safe NO-SEND recovery surface (fixed notice +
+    link to a new test; no resend, no re-claim, no live token). A
+    reload after the form POST can resubmit the consumed POST; the
+    durable one-use claim refuses it with a truthful already-used
+    refusal.
+  - **Audit safety**: the SMTP test handler withholds known incoming
+    authentication aliases from the persisted user agent BEFORE
+    persistence (UTF-8-safe decode, fail closed) and the global log
+    sanitizer, sender, schema and CLI are unchanged; review tokens are
+    budgeted for JSON/UTF-8 worst-case escaping with a finite
+    full-envelope cap and derived base64 cap.
+  - **Qualification**: focused unit layer (including the escape-bound
+    token round-trips and the alias canaries through valid
+    auth/CSRF/eligible targets), native owned-PostgreSQL HTTP
+    qualification (durable-before-broker proven from INSIDE the
+    dispatch stubs with separate fresh sessions; controlled fault
+    seams with pre-commit and real-commit-then-raise ack-loss modes;
+    deterministic row-lock contention; bounded preservation sentinels
+    and full mapped-field digests; loopback-only STANDARD-LIBRARY
+    synthetic SMTP sink - a LOCAL MOCK SMTP, not an inbox/provider/TLS
+    qualification), and real-Chromium browser qualification (real
+    uvicorn + owned PG: canonical status/date controls, real picker
+    selection semantics, retry-failed through the UI with a real
+    sink message-count proof, no-JS missing-confirm -> confirm -> send,
+    the enqueue UI path with a recording stub at the existing seam
+    (exact three-UUID payload, truthful queued/unconfirmed feedback, no
+    real broker), the full SMTP test flow with truthful reload
+    (observed method) plus direct-GET recovery, keyboard/no-JS
+    filter-preserving pagination, and desktop + narrow captures under
+    `/tmp/slaif215`). The native owned-PG fixture default-denies
+    live dispatch at BOTH enqueue helper bindings (each enqueue case
+    installs an explicit recording/broken stub); in the browser
+    fixture the broker URL in settings stays inert and the enqueue UI
+    case patches/restores the existing seam with recording/broken
+    stubs (no real broker contact). No real recipients, providers or
+    Codex calls are used.
+  - Documentation: [`admin-usability.md`](admin-usability.md),
+    [`cli-reference.md`](cli-reference.md),
+    [`security-model.md`](security-model.md),
+    [`upgrade-runbook.md`](upgrade-runbook.md), and
+    [`verification/gui-cli-parity.md`](verification/gui-cli-parity.md);
+    exact scope: the 215-a strategic work order; claims and evidence:
+    the immutable 215-a report.
+
+### Still open
+
+G14 (controlled accounting recovery), G15 (catalog workflows), and
+G17 (admin accounts) remain open as documented in section 9; nothing in
+215-a touches them. The final 219 installed whole-GUI qualification and
+the remaining objectives stay mandatory; 215-a makes no
+installed-qualification, deployment, live-provider, or production
+claim.

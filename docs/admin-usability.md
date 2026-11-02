@@ -1514,3 +1514,96 @@ embed the old script bytes will FAIL verification after the upgrade
 (safe refusal) - finish pending catalog runs before upgrading, or
 collect and review a fresh run after upgrading; never rewrite an old
 seal. See [`upgrade-runbook.md`](upgrade-runbook.md).
+
+## 16. Email delivery inspection, explicit retry, and SMTP test (215-a)
+
+### 16.1 Email deliveries list
+
+Navigation: **Email** in the admin header (existing), plus the
+email-deliveries entry from the Operations index.
+
+- **Status filter:** the dropdown offers the six persisted delivery
+  statuses (pending, sending, sent, failed, ambiguous, cancelled).
+  The secret-lifecycle labels (consumed/expired) are shown where the
+  SECRET is discussed, never as a delivery query meaning; submitting
+  any unsupported status is a fixed "Invalid filter." refusal.
+- **Exact filters (advanced):** delivery UUID, owner UUID, and exact
+  owner email (trimmed, lower-cased - the same shared normalization as
+  the CLI). They combine with the legacy substring owner-email filter;
+  values within a field match any (OR), across fields all (AND).
+- **Date bounds:** inclusive UTC creation window. Naive datetimes are
+  treated as UTC; blank fields mean unbounded (the form always
+  round-trips); an end before the start is refused with a fixed
+  message.
+- **Pagination and redaction:** the shared filter-preserving
+  Previous/Next navigation (214) with continuing row ordinals;
+  recipient and owner address cells use the shared credential-shape
+  withhold, so list metadata never exposes complete credentials.
+
+### 16.2 Email delivery detail
+
+- Read-only metadata with the SAME safe projection as the CLI
+  inspection: status, secret lifecycle, and the latest recorded
+  failure as a FINITE error code with its action and time (unknown or
+  missing recorded codes show as `unavailable`; raw provider error
+  prose is never rendered).
+- The sendability panel bridges to the SAME shared Core truth the
+  CLI/send/enqueue actions use: a same-secret sibling that is
+  sending/sent/ambiguous blocks resend; a consumed or expired secret
+  blocks it; only a sendable pending/failed row offers actions.
+- **Pending rows** offer the ordinary **Send Key Email now** and
+  **Queue email delivery** confirmations (optional safe audit note).
+- **Sendable failed rows** offer the explicit **Retry failed delivery**
+  form: mode (send now / enqueue), a REQUIRED nonblank audit reason
+  (at most 1024 UTF-8 bytes - multibyte text counts by bytes), and an
+  explicit confirmation checkbox, each with associated help.
+
+### 16.3 Ordinary and retry action semantics
+
+- A retry on a row that is no longer failed shows a truthful
+  not-failed/not-applicable message; the ordinary send/queue actions
+  on a failed row show the FAILED-only message. No action sends when
+  it refuses.
+- A provided audit note that matches a known incoming authentication
+  value (for example a value from your own cookies or authorization
+  headers) is withheld before anything is recorded or sent; blank or
+  missing notes stay accepted for the ordinary pending flows.
+- Queueing (ordinary or retry) first commits the requested intent to
+  the audit log with your admin identity; only then is the task
+  dispatched. If the broker does not acknowledge, the page says
+  requested-but-unconfirmed (never "queued"); if the intent recording
+  itself cannot be confirmed, nothing is dispatched.
+
+### 16.4 SMTP test (Operations index -> SMTP test)
+
+- One harmless test message; host, port, TLS, authentication, and
+  From all come from server settings (the browser cannot override the
+  transport). The gateway never attaches a gateway key or other secret
+  to the test, and the form says not to paste credentials.
+- The recipient must be ONE complete mailbox address; subject and
+  body are bounded plain text with safe defaults.
+- Prepare produces a REVIEWED intent bound to you and your session
+  (15 minutes, one-use). The review page shows the exact facts; you
+  must tick the confirmation before anything is sent. A missing
+  confirmation keeps the valid reviewed form so you can correct and
+  re-submit without restarting.
+- Budget: at most 3 test attempts per 60 seconds per admin (attempted
+  and unconfirmed sends both count), with a fixed cooldown message.
+  A reviewed intent is one-use: an accidental double submit sends at
+  most one message.
+- Outcomes are honest: **accepted** (the configured SMTP service
+  accepted the message - not confirmed inbox arrival), **unconfirmed**
+  (the outcome is unknown after dispatch; the attempt and budget were
+  consumed and nothing is auto-retried), **failed** (explicitly
+  refused), **unavailable** (delivery disabled or configuration
+  incomplete).
+- Reloading or bookmarking the apply URL shows a safe recovery notice
+  (no resend, no re-claim) with a link to start a new test.
+
+### 16.5 Upgrade note (no schema migration)
+
+Recreate/restart the API so the new code runs. There is **no Nginx
+change** and **no schema migration**; existing keys, deliveries,
+secrets, and audit history are untouched. No new environment
+variables or dependencies. See
+[`upgrade-runbook.md`](upgrade-runbook.md).

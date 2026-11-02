@@ -33,6 +33,12 @@ from slaif_gateway.schemas.email_inspection import (
     validate_delivery_status,
     validate_page,
 )
+from slaif_gateway.services.email_admin_operations import (
+    RETRY_REASON_MAX_BYTES,
+    EmailAdminOperationError,
+    record_enqueue_request_audit,
+    validate_retry_reason,
+)
 from slaif_gateway.services.email_delivery_service import (
     KEY_EMAIL_PURPOSES,
     EmailDeliveryService,
@@ -46,8 +52,18 @@ from slaif_gateway.services.provider_route_configuration import contains_known_s
 # task module is NOT imported at CLI module import.
 
 # Consistent with the existing operator audit-reason bound
-# (services/openai_compatible_setup.py: 1024 UTF-8 bytes).
-_RETRY_REASON_MAX_BYTES = 1024
+# (services/openai_compatible_setup.py: 1024 UTF-8 bytes).  Kept as a
+# module attribute for the stable CLI/testing surface (215-a); the
+# value is the shared seam constant.
+_RETRY_REASON_MAX_BYTES = RETRY_REASON_MAX_BYTES
+
+# 215-a: fixed safe CLI refusal text per shared validator code - the
+# exact legacy CLI messages are preserved byte-for-byte.
+_RETRY_REASON_CLI_MESSAGES = {
+    "blank": "--retry-failed requires a nonblank --reason",
+    "too_long": "Audit reason is too long",
+    "known_secret": "--reason must not contain recognized credential patterns",
+}
 
 
 app = typer.Typer(help="Test and send configured email deliveries")
@@ -265,10 +281,18 @@ def send_pending_key(
                     raise typer.BadParameter(
                         "The selected delivery is FAILED; use --retry-failed with a nonblank --reason to retry it"
                     )
-                if reason is None or not reason.strip():
-                    raise typer.BadParameter("--retry-failed requires a nonblank --reason")
-                if len(reason.encode("utf-8")) > _RETRY_REASON_MAX_BYTES:
-                    raise typer.BadParameter("Audit reason is too long")
+                # 215-a: shared nonblank/1024-UTF-8-bytes/known-secret law
+                # (the web retry action uses the same seam); the exact
+                # legacy CLI refusal text is preserved per code.
+                try:
+                    validate_retry_reason(reason)
+                except EmailAdminOperationError as exc:
+                    raise typer.BadParameter(
+                        _RETRY_REASON_CLI_MESSAGES.get(
+                            exc.code,
+                            "--retry-failed requires a nonblank --reason",
+                        )
+                    ) from None
             elif retry_failed:
                 raise typer.BadParameter("Only an existing FAILED delivery can be explicitly retried")
             if enqueue:
@@ -531,24 +555,22 @@ async def _record_enqueue_request_audit(
     names such as ``one_time_secret_id`` from every audit record, and this
     event must not relax that global boundary. The reference keeps the
     intent attributable for no-ID enqueues (where entity_id is NULL).
+
+    215-a: delegates to the shared application seam
+    (``services/email_admin_operations.py``) with unchanged ordering,
+    metadata, and defaults on the CLI's own session - the admin GUI uses
+    the same shared function and never imports this CLI module.
     """
     session_factory = await _open_inspection_session()
     async with session_factory() as session:
-        await AuditRepository(session).add_audit_log(
-            action="email_key_enqueue_requested",
-            entity_type="email_delivery",
-            entity_id=email_delivery_id,
-            admin_user_id=actor_admin_id,
-            note=reason,
-            new_values={
-                "one_time_reference_id": str(one_time_secret_id),
-                "email_delivery_id": str(email_delivery_id) if email_delivery_id else None,
-                "actor_admin_id": str(actor_admin_id) if actor_admin_id else None,
-                "intent": "enqueue_requested",
-                "retry_failed": retry_failed,
-            },
+        await record_enqueue_request_audit(
+            session=session,
+            one_time_secret_id=one_time_secret_id,
+            email_delivery_id=email_delivery_id,
+            actor_admin_id=actor_admin_id,
+            reason=reason,
+            retry_failed=retry_failed,
         )
-        await session.commit()
 
 
 async def _send_test_email(*, to: str, subject: str, body: str | None):

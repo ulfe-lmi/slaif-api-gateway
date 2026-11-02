@@ -10,6 +10,27 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-01 Objective 215-a GUI email inspection, retry and SMTP test verification`](gui-cli-parity.md)
+  (recorded 2026-11-01, same living record file) - admin GUI G12 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared email
+  inspection core the CLI uses: canonical persisted-status filtering
+  (shared `validate_delivery_status`; unsupported values a fixed
+  no-echo refusal), exact delivery/owner/email filters, inclusive
+  UTC date bounds (blank unbounded), credential-shape withholding,
+  the shared finite latest-failure provenance, the SAME Core
+  sendability bridge, a distinct failed-only explicit retry (shared
+  requested-intent audit durable before broker; recording failure
+  prevents dispatch; broker failure requested-but-unconfirmed),
+  provided-reason alias withholding, and a bounded two-stage signed
+  SMTP test (one-use durable claim before SMTP, per-actor budget,
+  honest outcomes, POST apply + safe GET recovery); no
+  schema/migration/dependency change; synthetic data and a
+  loopback-only standard-library LOCAL MOCK SMTP sink (not an
+  inbox/provider/TLS qualification); focused unit (114 affected;
+  accepted 290-test component layer), 23 native owned-PG, and 9
+  actual-Chromium receipts; final 219 installed qualification still
+  required.
+
 - [`2026-11-01 Objective 213-a GUI replay reference maintenance verification`](gui-cli-parity.md)
   (recorded 2026-11-01, same living record file) - admin GUI G09 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared replay

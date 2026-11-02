@@ -167,6 +167,52 @@ class AuditRepository:
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def get_smtp_test_claim(
+        self, *, admin_user_id: uuid.UUID, intent_nonce: str
+    ) -> AuditLog | None:
+        """215-a: exact one-use claim for one reviewed SMTP test intent.
+
+        The one-use intent identity is the bound column ``entity_id``
+        (the 32-hex nonce IS a UUID) - NOT sanitized metadata, so the
+        durable claim lookup matches the original intent exactly (a
+        nonce-named metadata key would be masked by the global
+        sanitizer). Exact action + entity_type + actor + entity;
+        deterministic ``(created_at DESC, id DESC)`` tie-break.
+        """
+        statement = (
+            select(AuditLog)
+            .where(
+                AuditLog.action == "email_smtp_test_claimed",
+                AuditLog.entity_type == "email_smtp_test",
+                AuditLog.entity_id == uuid.UUID(hex=intent_nonce),
+                AuditLog.admin_user_id == admin_user_id,
+            )
+            .order_by(desc(AuditLog.created_at), desc(AuditLog.id))
+            .limit(1)
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def count_recent_smtp_test_attempts(
+        self, *, admin_user_id: uuid.UUID, since: datetime
+    ) -> int:
+        """215-a: per-actor SMTP test attempt count since ``since``.
+
+        Counts COMMITTED claim rows (attempted and unconfirmed sends both
+        count honestly); bounded by the created_at index predicate.
+        """
+        statement = (
+            select(func.count())
+            .select_from(AuditLog)
+            .where(
+                AuditLog.action == "email_smtp_test_claimed",
+                AuditLog.admin_user_id == admin_user_id,
+                AuditLog.created_at >= since,
+            )
+        )
+        result = await self._session.execute(statement)
+        return int(result.scalar_one())
+
     async def count_recent_admin_login_failures(
         self,
         *,

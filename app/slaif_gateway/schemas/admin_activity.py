@@ -98,3 +98,9 @@ class AdminEmailDeliveryDetail(AdminEmailDeliveryListRow):
     can_send_now: bool
     can_enqueue: bool
     safe_blocking_reason: str | None
+    # 215-a: shared safe latest-recorded-failure provenance (finite known
+    # code from the latest exact-delivery error audit; None = no matching
+    # safe record). Same projection the CLI inspection uses.
+    last_recorded_failure_code: str | None = None
+    last_recorded_failure_action: str | None = None
+    last_recorded_failure_at: datetime | None = None

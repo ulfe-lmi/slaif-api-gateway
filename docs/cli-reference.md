@@ -972,6 +972,29 @@ slaif-gateway email show <delivery-uuid> [--json]
   nonzero and leaves the honest intent; it never changes the delivery to
   sent/queued or mutates/consumes the secret.
 
+**GUI parity (215-a).** The admin email-deliveries list/detail now
+reuses these same shared surfaces: the SAME `validate_delivery_status`
+six-persisted-status allowlist (unsupported values - including the
+secret-lifecycle labels consumed/expired - are refused, never treated
+as delivery states), the SAME exact owner-email strip/lower
+normalization, the SAME safe last-recorded-failure finite-code
+projection, and the SAME shared Core sendability truth (same-secret
+history, consumed/ambiguous blocking). The ordinary pending
+enqueue commits the SAME `email_key_enqueue_requested` intent audit
+before broker dispatch with the same honest unconfirmed recovery, and
+both ordinary pending actions withhold a provided audit note matching
+a known incoming authentication value before any record/send. The 215-a
+GUI additions are the browser WORKFLOWS around those shared
+operations, not new capabilities: the explicit failed-retry FORM
+(confirmation, required nonblank bounded audit reason, matched
+target, shared sendability preflight) wraps the CLI's existing
+`email send-pending-key --retry-failed --reason` operation, and the
+bounded reviewed SMTP test SURFACE (two-step prepare -> review,
+one-use signed intent, per-admin budget, honest
+accepted/unconfirmed/failed/unavailable outcomes, safe no-send GET
+recovery) wraps the CLI's existing `email test` operation. The CLI
+commands and their output contracts are unchanged by 215-a.
+
 ## Codex and diagnostics
 
 ```text

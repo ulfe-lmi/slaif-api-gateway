@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}SMTP Test{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell" aria-labelledby="smtp-test-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Email Operations</p>
+      <h1 id="smtp-test-heading">SMTP Test</h1>
+      <p class="muted">
+        Send one harmless test message through the server-configured SMTP service (host, port, TLS,
+        authentication, and From all come from server settings; the browser can never override the
+        transport). The gateway does not automatically attach a gateway key or other secret material
+        to this message, and SMTP acceptance is not confirmed inbox arrival.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/email-deliveries">Email deliveries</a>
+      <a class="button-link secondary" href="/admin/operations">Operations</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if not readiness.available %}
+  <section class="action-panel" aria-labelledby="smtp-test-unavailable-heading">
+    <h2 id="smtp-test-unavailable-heading">Unavailable</h2>
+    <p class="muted small">
+      {% if not readiness.enabled %}Email delivery is disabled on this deployment (ENABLE_EMAIL_DELIVERY is off).
+      {% else %}SMTP configuration is incomplete (SMTP_HOST and SMTP_FROM are required).{% endif %}
+      Complete the server configuration, then prepare a test again.
+    </p>
+  </section>
+  {% else %}
+  <section class="action-panel">
+  <form class="form-stack" method="post" action="/admin/email-operations/smtp-test/review">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      Test recipient (required)
+      <input type="text" name="recipient" id="smtp-test-recipient" autocomplete="off" aria-describedby="smtp-test-recipient-help" required>
+    </label>
+    <span class="muted small" id="smtp-test-recipient-help">
+      One complete email address (no lists, display names, or transport overrides). Use a mailbox
+      you control; no real customer data is required.
+    </span>
+    <label>
+      Subject (optional)
+      <input type="text" name="subject" id="smtp-test-subject" autocomplete="off" value="{{ default_subject }}" aria-describedby="smtp-test-subject-help">
+    </label>
+    <span class="muted small" id="smtp-test-subject-help">
+      At most 255 UTF-8 bytes; blank uses the safe default. No line breaks.
+    </span>
+    <label>
+      Plain-text body (optional)
+      <textarea name="body" rows="4" id="smtp-test-body" autocomplete="off" aria-describedby="smtp-test-body-help">{{ default_body }}</textarea>
+    </label>
+    <span class="muted small" id="smtp-test-body-help">
+      At most 4096 UTF-8 bytes; blank uses the safe default. No HTML, no attachments.
+      The gateway does not attach a key automatically; do not paste gateway keys, passwords, or
+      other credentials into the test message.
+    </span>
+    <p class="muted small">
+      Cooldown: at most {{ budget_attempts }} test attempts per {{ budget_window_seconds }} seconds per admin
+      (attempted and unconfirmed sends both count). Each reviewed intent is one-use: an accidental
+      double submit sends at most one message.
+    </p>
+    <button type="submit">Prepare reviewed test</button>
+  </form>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

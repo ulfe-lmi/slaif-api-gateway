@@ -13,6 +13,7 @@
       <p class="muted">Read-only delivery metadata. Email bodies and plaintext key material are not displayed.</p>
     </div>
     <div class="header-actions">
+      <a class="button-link secondary" href="/admin/email-operations/smtp-test">SMTP test</a>
       <a class="button-link secondary" href="/admin">Dashboard</a>
       <form method="post" action="/admin/logout">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -22,20 +23,43 @@
   </header>
 
   <form class="filter-bar compact" method="get" action="/admin/email-deliveries" id="email-deliveries-filter">
-    <label>
+    <label id="email-status-label">
       Status
-      <select name="status">
+      <select name="status" id="email-status-select" aria-describedby="email-status-help">
         <option value="" {% if filters.status == "" %}selected{% endif %}>Any</option>
-        <option value="pending" {% if filters.status == "pending" %}selected{% endif %}>Pending</option>
-        <option value="sent" {% if filters.status == "sent" %}selected{% endif %}>Sent</option>
-        <option value="failed" {% if filters.status == "failed" %}selected{% endif %}>Failed</option>
-        <option value="consumed" {% if filters.status == "consumed" %}selected{% endif %}>Consumed</option>
-        <option value="expired" {% if filters.status == "expired" %}selected{% endif %}>Expired</option>
+        {% for status in email_delivery_status_options %}
+        <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
       </select>
+      <span class="muted small" id="email-status-help">
+        Persisted delivery status. Consumed/expired are one-time-secret lifecycle states shown on the delivery detail, not delivery statuses.
+      </span>
     </label>
-    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, multi=true, multi_value=filters.owner_email|join("\n"), allow_new=true, help="Matches any selected value", input_id="email-owner-email") }}
-    {{ record_choice("gateway_key_id", "key", "Gateway key ID", options=choices.gateway_key_id, multi=true, multi_value=filters.gateway_key_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="email-key") }}
-    {{ record_choice("one_time_secret_id", "one_time_secret", "One-time secret ID", options=choices.one_time_secret_id, multi=true, multi_value=filters.one_time_secret_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="email-ots") }}
+    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, multi=true, multi_value=filters.owner_email|join("\n"), allow_new=true, help="Contains (case-insensitive substring); one value per line; matches any selected value.", input_id="email-owner-email", control_id="email-owner-email-input", help_id="email-owner-email-help") }}
+    {{ record_choice("gateway_key_id", "key", "Gateway key ID", options=choices.gateway_key_id, multi=true, multi_value=filters.gateway_key_id|join("\n"), allow_new=true, help="Exact key UUID(s); one per line; matches any selected value.", input_id="email-key", control_id="email-key-input", help_id="email-key-help") }}
+    {{ record_choice("one_time_secret_id", "one_time_secret", "One-time secret ID", options=choices.one_time_secret_id, multi=true, multi_value=filters.one_time_secret_id|join("\n"), allow_new=true, help="Exact one-time secret UUID(s); one per line; matches any selected value.", input_id="email-ots", control_id="email-ots-input", help_id="email-ots-help") }}
+    <label id="email-start-label">
+      Created from (UTC)
+      <input name="start_at" id="email-start-at-input" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z" aria-describedby="email-dates-help">
+    </label>
+    <label id="email-end-label">
+      Created to (UTC)
+      <input name="end_at" id="email-end-at-input" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z" aria-describedby="email-dates-help">
+    </label>
+    <span class="muted small" id="email-dates-help">
+      Inclusive creation-time bounds. A value without a timezone is treated as UTC; end before start is refused. Blank = unbounded.
+    </span>
+    <details aria-labelledby="email-advanced-summary">
+      <summary id="email-advanced-summary">Exact filters (advanced)</summary>
+      <p class="muted small">
+        These additive filters match EXACT values (the CLI inspection parity): unlike the
+        substring owner-email filter above, the exact owner email compares the trimmed
+        lower-cased address. Combinations narrow the list (AND across fields).
+      </p>
+      {{ record_choice("delivery_id", "email_delivery", "Delivery ID (exact)", options=choices.delivery_id, multi=true, multi_value=filters.delivery_id|join("\n"), allow_new=false, help="Exact delivery UUID(s); one per line; matches any selected value. Known-record picker (latest 100 + older search).", input_id="email-delivery-id", control_id="email-delivery-id-input", help_id="email-delivery-id-help") }}
+      {{ record_choice("owner_id", "owner", "Owner ID (exact)", options=choices.owner_id, multi=true, multi_value=filters.owner_id|join("\n"), allow_new=true, help="Exact owner UUID(s); one per line; matches any selected value.", input_id="email-owner-id", control_id="email-owner-id-input", help_id="email-owner-id-help") }}
+      {{ record_choice("owner_email_exact", "owner_email", "Owner email (exact)", options=choices.owner_email_exact, multi=true, multi_value=filters.owner_email_exact|join("\n"), allow_new=true, help="EXACT trimmed lower-cased owner email; one per line; matches any selected value. Different from the substring Owner email filter above.", input_id="email-owner-email-exact", control_id="email-owner-email-exact-input", help_id="email-owner-email-exact-help") }}
+    </details>
     <button type="submit">Filter</button>
   </form>
 

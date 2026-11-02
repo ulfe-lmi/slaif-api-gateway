@@ -11,6 +11,19 @@ from slaif_gateway.services.email_delivery_service import KeyEmailDeliverySendab
 
 
 class _FakeSession:
+    """Read-mostly session fake; supports the 215-a committed audit.
+
+    ``add``/``flush``/``commit`` back the shared
+    ``record_enqueue_request_audit`` seam (AuditRepository.add_audit_log
+    + session.commit BEFORE broker dispatch); every step is appended to
+    the shared ``events`` list so tests can assert the real order.
+    """
+
+    def __init__(self, events: list[str] | None = None) -> None:
+        self.events = events if events is not None else []
+        self.added: list[object] = []
+        self.commits = 0
+
     async def __aenter__(self):
         return self
 
@@ -20,10 +33,27 @@ class _FakeSession:
     def begin(self):
         return self
 
+    def add(self, row: object) -> None:
+        self.added.append(row)
+        self.events.append("audit-add")
+
+    async def flush(self) -> None:
+        return None
+
+    async def commit(self) -> None:
+        self.commits += 1
+        self.events.append("commit")
+
 
 class _FakeSessionmaker:
+    def __init__(self, events: list[str] | None = None) -> None:
+        self.events = events if events is not None else []
+        self.sessions: list[_FakeSession] = []
+
     def __call__(self):
-        return _FakeSession()
+        session = _FakeSession(self.events)
+        self.sessions.append(session)
+        return session
 
 
 class _FakeAsyncResult:
@@ -53,9 +83,9 @@ def _settings(**overrides) -> Settings:
     return Settings(**values)
 
 
-def _app(settings: Settings | None = None):
+def _app(settings: Settings | None = None, sessionmaker: _FakeSessionmaker | None = None):
     app = create_app(settings or _settings())
-    app.state.db_sessionmaker = _FakeSessionmaker()
+    app.state.db_sessionmaker = sessionmaker or _FakeSessionmaker()
     return app
 
 
@@ -211,6 +241,7 @@ def test_send_now_calls_email_delivery_service_with_actor_and_ids(monkeypatch) -
     delivery_id = uuid.uuid4()
     secret_id = uuid.uuid4()
     seen: dict[str, object] = {}
+    send_calls: list[dict[str, object]] = []
 
     async def get_key_email_delivery_sendability(self, email_delivery_id):
         assert email_delivery_id == delivery_id
@@ -218,6 +249,7 @@ def test_send_now_calls_email_delivery_service_with_actor_and_ids(monkeypatch) -
 
     async def send_pending_key_email(self, **kwargs):
         seen.update(kwargs)
+        send_calls.append(dict(kwargs))
         return PendingKeyEmailResult(
             email_delivery_id=delivery_id,
             one_time_secret_id=secret_id,
@@ -257,6 +289,26 @@ def test_send_now_calls_email_delivery_service_with_actor_and_ids(monkeypatch) -
         "actor_admin_id": admin_user.id,
         "reason": "manual retry",
     }
+    assert len(send_calls) == 1
+
+    # 215-a canary: a PROVIDED reason matching an ACTUAL incoming
+    # opaque cookie is withheld BEFORE any audit/SMTP - fixed safe
+    # feedback, no service call, no new intent.
+    client.cookies.set("slaif_opaque_token", "opaque-cookie-secret-215")
+    response = client.post(
+        f"/admin/email-deliveries/{delivery_id}/send-now",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "confirm_send": "true",
+            "reason": "token=opaque-cookie-secret-215",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/admin/email-deliveries/{delivery_id}?message=email_delivery_reason_withheld"
+    )
+    assert len(send_calls) == 1  # still exactly ONE (the valid one)
 
 
 def test_enqueue_requires_confirmation_before_task_call(monkeypatch) -> None:
@@ -283,6 +335,8 @@ def test_enqueue_calls_celery_task_with_ids_only(monkeypatch) -> None:
     delivery_id = uuid.uuid4()
     secret_id = uuid.uuid4()
     fake_task = _FakeTask()
+    events: list[str] = []
+    sessionmaker = _FakeSessionmaker(events)
 
     async def get_key_email_delivery_sendability(self, email_delivery_id):
         assert email_delivery_id == delivery_id
@@ -293,8 +347,18 @@ def test_enqueue_calls_celery_task_with_ids_only(monkeypatch) -> None:
         get_key_email_delivery_sendability,
     )
     monkeypatch.setattr("slaif_gateway.api.admin.send_pending_key_email_task", fake_task)
-    client = TestClient(_app())
+    client = TestClient(_app(sessionmaker=sessionmaker))
     admin_user = _login_for_actions(monkeypatch, client)
+    # The broker stub records its own dispatch event so the committed
+    # audit order can be asserted against it.
+    original_delay = fake_task.delay
+
+    def _delay(*args):
+        result = original_delay(*args)
+        events.append("task-delay")
+        return result
+
+    fake_task.delay = _delay
 
     response = client.post(
         f"/admin/email-deliveries/{delivery_id}/enqueue",
@@ -311,6 +375,62 @@ def test_enqueue_calls_celery_task_with_ids_only(monkeypatch) -> None:
     assert fake_task.calls == [(str(secret_id), str(delivery_id), str(admin_user.id))]
     assert "sk-slaif-" not in repr(fake_task.calls)
     assert "plaintext" not in repr(fake_task.calls).lower()
+
+    # 215-a: the ordinary pending enqueue commits the SAME shared
+    # requested-intent audit BEFORE broker dispatch (blank reason
+    # stays None; retry_failed=False; server actor).
+    audits = [
+        row
+        for session in sessionmaker.sessions
+        for row in session.added
+        if getattr(row, "action", None) == "email_key_enqueue_requested"
+    ]
+    assert len(audits) == 1
+    audit = audits[0]
+    assert audit.entity_type == "email_delivery"
+    assert audit.entity_id == delivery_id
+    assert audit.admin_user_id == admin_user.id
+    assert audit.note is None
+    assert audit.new_values["retry_failed"] is False
+    assert audit.new_values["intent"] == "enqueue_requested"
+    assert audit.new_values["one_time_reference_id"] == str(secret_id)
+    add_at = events.index("audit-add")
+    delay_at = events.index("task-delay")
+    assert add_at < delay_at
+    assert "commit" in events[add_at:delay_at]  # committed BEFORE dispatch
+
+    # 215-a canary: a PROVIDED reason matching an ACTUAL incoming
+    # opaque cookie is withheld BEFORE any audit/broker - fixed safe
+    # feedback, no new intent, no second dispatch. (The auth context
+    # still opens its own session; the withheld flow must open NO
+    # action session and add NO audit row.)
+    sessions_before = len(sessionmaker.sessions)
+    client.cookies.set("slaif_opaque_token", "opaque-cookie-secret-215")
+    response = client.post(
+        f"/admin/email-deliveries/{delivery_id}/enqueue",
+        data={
+            "csrf_token": "dashboard-csrf",
+            "confirm_enqueue": "true",
+            "reason": "opaque-cookie-secret-215",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        f"/admin/email-deliveries/{delivery_id}?message=email_delivery_reason_withheld"
+    )
+    assert fake_task.calls == [(str(secret_id), str(delivery_id), str(admin_user.id))]
+    canary_sessions = sessionmaker.sessions[sessions_before:]
+    # At most the single auth-context session; it carries no audit row
+    # and no commit - the intent scope was never entered.
+    assert all(len(s.added) == 0 and s.commits == 0 for s in canary_sessions)
+    audits_after = [
+        row
+        for session in sessionmaker.sessions
+        for row in session.added
+        if getattr(row, "action", None) == "email_key_enqueue_requested"
+    ]
+    assert len(audits_after) == 1
 
 
 def test_expired_or_consumed_secret_prevents_send_and_enqueue(monkeypatch) -> None:

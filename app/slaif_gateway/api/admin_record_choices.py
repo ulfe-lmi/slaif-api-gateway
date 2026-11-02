@@ -83,6 +83,7 @@ _KINDS: frozenset[str] = frozenset(
         "request_id",
         "email_delivery_status",
         "one_time_secret",
+        "email_delivery",
         "tool_destination",
         "completion_profile",
     }

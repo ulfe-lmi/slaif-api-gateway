@@ -51,6 +51,7 @@ from slaif_gateway.modules.servers.completion_service import profiles as _comple
 from slaif_gateway.db.models import (
     STATUS_VALUES_EMAIL_DELIVERIES,
     AdminUser,
+    EmailDelivery,
     AuditLog,
     Cohort,
     FxRate,
@@ -240,6 +241,21 @@ def _one_time_secret_choice(row: Any) -> RecordChoice:
         id=str(row.id),
         label=f"{str(row.id)[:8]}… ({row.status})",
         sub=str(row.purpose or ""),
+    )
+
+
+def _email_delivery_choice(row: Any) -> RecordChoice:
+    # 215-a: minimal public identity + lifecycle + created time only -
+    # never subject/body/secret/provider prose.
+    delivery_id = str(row.id)
+    created = row.created_at
+    created_label = (
+        created.strftime("%Y-%m-%d %H:%M") if created is not None else ""
+    )
+    return RecordChoice(
+        id=delivery_id,
+        label=f"{delivery_id[:8]}… ({row.status})",
+        sub=_sub(created_label, delivery_id),
     )
 
 
@@ -1327,6 +1343,28 @@ async def load_choices(
             choices = _merge_selected_keep_cap(
                 choices,
                 await _fetch_selected(session, sel_stmt, selected, _one_time_secret_choice),
+            )
+
+    elif kind == "email_delivery":
+        # 215-a: one focused delivery-choice kind for the exact
+        # delivery-id list filter - latest 100 + older UUID search +
+        # selected hydration, minimal columns (id/status/created only).
+        stmt = select(EmailDelivery.id, EmailDelivery.status, EmailDelivery.created_at)
+        if query:
+            stmt = stmt.where(_ilike(EmailDelivery.id.cast(String), query))
+        stmt = stmt.order_by(desc(EmailDelivery.created_at), asc(EmailDelivery.id)).limit(
+            CHOICE_LIMIT
+        )
+        rows = (await session.execute(stmt)).all()
+        choices = [_email_delivery_choice(row) for row in rows]
+        parsed = _uuids(selected)
+        if parsed:
+            sel_stmt = select(
+                EmailDelivery.id, EmailDelivery.status, EmailDelivery.created_at
+            ).where(EmailDelivery.id.in_(parsed))
+            choices = _merge_selected_keep_cap(
+                choices,
+                await _fetch_selected(session, sel_stmt, selected, _email_delivery_choice),
             )
 
     elif kind == "completion_profile":

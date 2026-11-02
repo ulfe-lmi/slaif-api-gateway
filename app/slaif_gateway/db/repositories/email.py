@@ -167,6 +167,9 @@ class EmailDeliveriesRepository:
         owner_email: str | Sequence[str] | None = None,
         gateway_key_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         one_time_secret_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        delivery_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_email_exact: str | Sequence[str] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         limit: int = 50,
@@ -176,23 +179,42 @@ class EmailDeliveriesRepository:
         emails = as_value_tuple(owner_email)
         key_ids = as_uuid_tuple(gateway_key_id)
         secret_ids = as_uuid_tuple(one_time_secret_id)
+        delivery_ids = as_uuid_tuple(delivery_id)
+        owner_ids = as_uuid_tuple(owner_id)
+        exact_emails = as_value_tuple(owner_email_exact)
         # 195-a: OR WITHIN a field, AND ACROSS fields; predicates apply in
         # SQL BEFORE LIMIT/OFFSET. Pre-195 per-member normalization
         # preserved (case-insensitive substring for owner email, exact
         # equality for the UUID ids and status).
+        # 215-a: additive EXACT filters (delivery UUID, owner UUID,
+        # normalized exact owner email) on the SAME query; the exact email
+        # values arrive pre-normalized (strip/lower) by the caller, never
+        # re-derived here.
         statement = _email_delivery_admin_statement()
         if status is not None:
             statement = statement.where(EmailDelivery.status == status)
+        if emails is not None or exact_emails is not None:
+            statement = statement.join(EmailDelivery.owner)
         if emails is not None:
-            statement = statement.join(EmailDelivery.owner).where(
+            statement = statement.where(
                 or_(
                     *[func.lower(Owner.email).like(f"%{value.lower()}%") for value in emails]
+                )
+            )
+        if exact_emails is not None:
+            statement = statement.where(
+                or_(
+                    *[func.lower(Owner.email) == value for value in exact_emails]
                 )
             )
         if key_ids is not None:
             statement = statement.where(or_equals(EmailDelivery.gateway_key_id, key_ids))
         if secret_ids is not None:
             statement = statement.where(or_equals(EmailDelivery.one_time_secret_id, secret_ids))
+        if delivery_ids is not None:
+            statement = statement.where(or_equals(EmailDelivery.id, delivery_ids))
+        if owner_ids is not None:
+            statement = statement.where(or_equals(EmailDelivery.owner_id, owner_ids))
         if start_at is not None:
             statement = statement.where(EmailDelivery.created_at >= start_at)
         if end_at is not None:

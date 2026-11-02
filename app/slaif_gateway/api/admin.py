@@ -99,6 +99,7 @@ from slaif_gateway.services.calibration_summary_service import (
     CalibrationSummaryError,
     CalibrationSummaryService,
 )
+from slaif_gateway.services.email_admin_operations import record_enqueue_request_audit
 from slaif_gateway.services.email_delivery_service import (
     EmailDeliveryService,
     PendingKeyEmailResult,
@@ -228,6 +229,12 @@ from slaif_gateway.services.route_import import (
     parse_route_import_tsv,
     provider_refs_from_rows,
     validate_route_import_rows,
+)
+from slaif_gateway.schemas.email_inspection import (
+    EMAIL_DELIVERY_STATUSES,
+    EmailInspectionValidationError,
+    normalize_owner_email,
+    validate_delivery_status,
 )
 from slaif_gateway.schemas.keys import (
     ActivateGatewayKeyInput,
@@ -686,6 +693,70 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "email_delivery_configuration_required": (
         "error",
         "Email delivery configuration is incomplete.",
+    ),
+    "email_delivery_retry_required": (
+        "error",
+        "This delivery is FAILED; only the explicit retry-failed action with a reason can retry it.",
+    ),
+    "email_delivery_retry_not_applicable": (
+        "error",
+        "This delivery is not FAILED, so the failed-delivery retry action does not apply to it. Use the ordinary send or enqueue action for its current state.",
+    ),
+    "email_delivery_retry_confirmation_required": (
+        "error",
+        "Confirm the failed-delivery retry before continuing.",
+    ),
+    "email_delivery_retry_reason_required": (
+        "error",
+        "A nonblank audit reason (at most 1024 UTF-8 bytes) is required to retry a failed delivery.",
+    ),
+    "email_delivery_retry_reason_too_long": (
+        "error",
+        "Audit reason is too long. Keep it to at most 1024 UTF-8 bytes (multibyte text counts by bytes, not characters).",
+    ),
+    "email_delivery_retry_reason_withheld": (
+        "error",
+        "Audit reason withheld: it matches a recognized credential or known authentication pattern.",
+    ),
+    "email_delivery_reason_withheld": (
+        "error",
+        "Audit reason withheld: it matches a recognized credential or known authentication pattern.",
+    ),
+    "email_delivery_retry_mode_required": (
+        "error",
+        "Select how to retry the failed delivery (send now or enqueue).",
+    ),
+    "email_delivery_enqueue_unconfirmed": (
+        "error",
+        "Enqueue requested but unconfirmed: the broker did not acknowledge the task. The requested intent is recorded in the audit log; check the delivery and audit state before retrying.",
+    ),
+    "email_delivery_enqueue_recording_unconfirmed": (
+        "error",
+        "The requested retry recording could not be confirmed, so nothing was sent or enqueued. Check the delivery state and try the retry again.",
+    ),
+    "email_smtp_test_sent": (
+        "success",
+        "Test email accepted by the configured SMTP service. This is SMTP acceptance, not confirmed inbox arrival.",
+    ),
+    "email_smtp_test_unconfirmed": (
+        "error",
+        "Test email UNCONFIRMED: the SMTP outcome is unknown after dispatch (timeout, disconnect, or stage-unknown failure). SMTP may have accepted; the one-use attempt and budget were consumed and nothing was auto-retried.",
+    ),
+    "email_smtp_test_failed": (
+        "error",
+        "Test email failed safely: the configured SMTP service explicitly refused the message before or during dispatch. The one-use attempt and budget were consumed.",
+    ),
+    "email_smtp_test_unavailable": (
+        "error",
+        "Test email unavailable: email delivery is disabled or SMTP configuration is incomplete.",
+    ),
+    "email_smtp_test_cooldown": (
+        "error",
+        "Test email cooldown active: at most 3 attempts per 60 seconds per admin. Wait, then submit a new test.",
+    ),
+    "email_smtp_test_already_claimed": (
+        "error",
+        "This reviewed test intent was already used. Submit a new test if another attempt is needed.",
     ),
     "provider_config_created": ("success", "Provider config created."),
     "provider_config_updated": ("success", "Provider config updated."),
@@ -8057,8 +8128,11 @@ async def list_admin_email_deliveries(
     owner_email: list[str] = Query([]),
     gateway_key_id: list[str] = Query([]),
     one_time_secret_id: list[str] = Query([]),
-    start_at: datetime | None = Query(None),
-    end_at: datetime | None = Query(None),
+    delivery_id: list[str] = Query([]),
+    owner_id: list[str] = Query([]),
+    owner_email_exact: list[str] = Query([]),
+    start_at: str | None = Query(None),
+    end_at: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> Response:
@@ -8075,7 +8149,31 @@ async def list_admin_email_deliveries(
         cleaned_owner_emails = normalize_filter_values(owner_email, field_name="owner_email")
         parsed_gateway_key_ids = parse_uuid_filter_values(gateway_key_id, field_name="gateway_key_id")
         parsed_one_time_secret_ids = parse_uuid_filter_values(one_time_secret_id, field_name="one_time_secret_id")
-    except AdminListFilterError as exc:
+        # 215-a: additive EXACT filters (CLI inspection parity); the
+        # legacy substring owner_email and OR-within/AND-across semantics
+        # are unchanged. Exact emails use the SAME shared
+        # normalization/equality as the CLI (strip/lower, single
+        # mailbox).
+        parsed_delivery_ids = parse_uuid_filter_values(delivery_id, field_name="delivery_id")
+        parsed_owner_ids = parse_uuid_filter_values(owner_id, field_name="owner_id")
+        cleaned_owner_email_exacts = _normalize_exact_owner_email_filter(owner_email_exact)
+        # 215-a: the status filter is a PERSISTED delivery status only.
+        # Shared validation (same as the CLI) after normal blank/strip
+        # normalization; secret-lifecycle labels (consumed/expired) and
+        # any other value are a fixed invalid-filter refusal.
+        cleaned_status = status.strip() if isinstance(status, str) else ""
+        if cleaned_status:
+            cleaned_status = validate_delivery_status(cleaned_status)
+        # 215-a: inclusive UTC bounds. The HTML filter form submits
+        # BLANK date controls, so blank/missing both mean unbounded;
+        # nonblank input is parsed here (never a raw framework 422)
+        # with the existing safe semantics: naive is treated as UTC,
+        # end-before-start is refused (fixed message, no echo).
+        start_at, end_at = _normalize_admin_datetime_bounds(
+            _parse_admin_email_datetime_filter(start_at, field_name="start_at"),
+            _parse_admin_email_datetime_filter(end_at, field_name="end_at"),
+        )
+    except (AdminListFilterError, ValueError) as exc:
         # Stable legacy "Invalid filter." summary first (pre-195
         # contract, asserted by existing oracles), then the fixed
         # per-field detail; the detail never echoes submitted values.
@@ -8083,10 +8181,13 @@ async def list_admin_email_deliveries(
 
     async with _admin_activity_dashboard_service_scope(request) as service:
         fetched = await service.list_email_deliveries(
-            status=status,
+            status=cleaned_status or None,
             owner_email=collapse_singleton(cleaned_owner_emails),
             gateway_key_id=collapse_singleton(parsed_gateway_key_ids),
             one_time_secret_id=collapse_singleton(parsed_one_time_secret_ids),
+            delivery_id=collapse_singleton(parsed_delivery_ids),
+            owner_id=collapse_singleton(parsed_owner_ids),
+            owner_email_exact=collapse_singleton(cleaned_owner_email_exacts),
             start_at=start_at,
             end_at=end_at,
             limit=limit + 1,  # 214-a cap+1
@@ -8101,10 +8202,13 @@ async def list_admin_email_deliveries(
         offset=offset,
         fetched_count=len(fetched),
         filter_pairs=[
-            *((("status", status),) if status else ()),
+            *((("status", cleaned_status),) if cleaned_status else ()),
             *[("owner_email", value) for value in (cleaned_owner_emails or ())],
             *[("gateway_key_id", str(value)) for value in (parsed_gateway_key_ids or ())],
             *[("one_time_secret_id", str(value)) for value in (parsed_one_time_secret_ids or ())],
+            *[("delivery_id", str(value)) for value in (parsed_delivery_ids or ())],
+            *[("owner_id", str(value)) for value in (parsed_owner_ids or ())],
+            *[("owner_email_exact", value) for value in (cleaned_owner_email_exacts or ())],
             *((("start_at", start_at.isoformat()),) if start_at is not None else ()),
             *((("end_at", end_at.isoformat()),) if end_at is not None else ()),
         ],
@@ -8112,7 +8216,7 @@ async def list_admin_email_deliveries(
     if isinstance(page_state, Response):
         return page_state
 
-    choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", cleaned_owner_emails), ("gateway_key_id", "key", parsed_gateway_key_ids), ("one_time_secret_id", "one_time_secret", parsed_one_time_secret_ids)))
+    choices = await _load_admin_record_choices(request, (("owner_email", "owner_email", cleaned_owner_emails), ("gateway_key_id", "key", parsed_gateway_key_ids), ("one_time_secret_id", "one_time_secret", parsed_one_time_secret_ids), ("delivery_id", "email_delivery", parsed_delivery_ids), ("owner_id", "owner", parsed_owner_ids), ("owner_email_exact", "owner_email", cleaned_owner_email_exacts)))
 
     return templates.TemplateResponse(
         request,
@@ -8122,14 +8226,18 @@ async def list_admin_email_deliveries(
             "choices": choices,
             "csrf_token": csrf_token,
             "email_deliveries": rows,
+            "email_delivery_status_options": EMAIL_DELIVERY_STATUSES,
             **page_state,
             "rows_shown": len(rows),
             "list_aria": "Email deliveries",
             "filters": {
-                "status": status or "",
+                "status": cleaned_status,
                 "owner_email": cleaned_owner_emails or (),
                 "gateway_key_id": parsed_gateway_key_ids or (),
                 "one_time_secret_id": parsed_one_time_secret_ids or (),
+                "delivery_id": parsed_delivery_ids or (),
+                "owner_id": parsed_owner_ids or (),
+                "owner_email_exact": cleaned_owner_email_exacts or (),
                 "start_at": start_at.isoformat() if start_at is not None else "",
                 "end_at": end_at.isoformat() if end_at is not None else "",
                 "limit": limit,
@@ -8199,10 +8307,26 @@ async def send_admin_email_delivery_now(
             message="email_delivery_send_confirmation_required",
         )
 
+    # 215-a: a PROVIDED reason matching a known incoming opaque-auth
+    # alias is withheld BEFORE any audit/SMTP (missing/blank stays
+    # accepted; the failed-only required rule does not apply here).
+    pending_send_reason = _clean_admin_reason(reason)
+    if pending_send_reason is not None and _admin_reason_is_known_alias(request, pending_send_reason):
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id,
+            message="email_delivery_reason_withheld",
+        )
+
     try:
         _validate_admin_email_delivery_preconditions(settings, "send-now")
         async with _admin_email_delivery_action_scope(request) as service:
             sendability = await service.get_key_email_delivery_sendability(parsed_email_delivery_id)
+            if sendability.email_delivery_status == "failed":
+                # 215-a: a FAILED row is never sent by the ordinary
+                # send action; only the explicit retry-failed intent is.
+                return _redirect_to_admin_email_delivery(
+                    parsed_email_delivery_id, message="email_delivery_retry_required"
+                )
             if not sendability.can_send or sendability.one_time_secret_id is None:
                 return _redirect_to_admin_email_delivery(
                     parsed_email_delivery_id, message="email_delivery_not_sendable"
@@ -8211,7 +8335,7 @@ async def send_admin_email_delivery_now(
                 one_time_secret_id=sendability.one_time_secret_id,
                 email_delivery_id=parsed_email_delivery_id,
                 actor_admin_id=action_context.admin_user.id,
-                reason=_clean_admin_reason(reason),
+                reason=pending_send_reason,
             )
     except ValueError:
         return _redirect_to_admin_email_delivery(
@@ -8258,15 +8382,69 @@ async def enqueue_admin_email_delivery(
             message="email_delivery_enqueue_confirmation_required",
         )
 
+    # 215-a: a PROVIDED reason matching a known incoming opaque-auth
+    # alias is withheld BEFORE any audit/broker (blank/missing stays
+    # accepted; the failed-only nonblank/byte-bound rule does NOT apply
+    # to the ordinary pending flow).
+    pending_reason = reason.strip() if isinstance(reason, str) and reason.strip() else None
+    if pending_reason is not None and _admin_reason_is_known_alias(request, pending_reason):
+        return _redirect_to_admin_email_delivery(
+            parsed_email_delivery_id,
+            message="email_delivery_reason_withheld",
+        )
+
     try:
         _validate_admin_email_delivery_preconditions(settings, "enqueue")
         async with _admin_email_delivery_action_scope(request) as service:
             sendability = await service.get_key_email_delivery_sendability(parsed_email_delivery_id)
+            if sendability.email_delivery_status == "failed":
+                # 215-a: a FAILED row is never enqueued by the ordinary
+                # enqueue action; only the explicit retry-failed intent
+                # is.
+                return _redirect_to_admin_email_delivery(
+                    parsed_email_delivery_id, message="email_delivery_retry_required"
+                )
             if not sendability.can_send or sendability.one_time_secret_id is None:
                 return _redirect_to_admin_email_delivery(
                     parsed_email_delivery_id, message="email_delivery_not_sendable"
                 )
             one_time_secret_id = sendability.one_time_secret_id
+            # 215-a: the ordinary pending enqueue now commits the SAME
+            # shared requested-intent audit as the explicit retry-failed
+            # action - server actor, preserved OPTIONAL reason (blank or
+            # missing stays None; the failed-only nonblank/byte-bound
+            # rule does NOT apply here), retry_failed=False - and that
+            # commit must succeed BEFORE broker dispatch.  A recording
+            # failure prevents dispatch; a broker failure/lost ack is
+            # requested-but-unconfirmed, never queued/sent success.
+            try:
+                await record_enqueue_request_audit(
+                    session=service._session,
+                    one_time_secret_id=one_time_secret_id,
+                    email_delivery_id=parsed_email_delivery_id,
+                    actor_admin_id=action_context.admin_user.id,
+                    reason=pending_reason,
+                    retry_failed=False,
+                )
+            except Exception:  # noqa: BLE001 - safe fixed recovery
+                return _redirect_to_admin_email_delivery(
+                    parsed_email_delivery_id,
+                    message="email_delivery_enqueue_recording_unconfirmed",
+                )
+            try:
+                _enqueue_admin_pending_key_email(
+                    one_time_secret_id=one_time_secret_id,
+                    email_delivery_id=parsed_email_delivery_id,
+                    actor_admin_id=action_context.admin_user.id,
+                )
+            except Exception:  # noqa: BLE001 - honest requested-but-unconfirmed
+                return _redirect_to_admin_email_delivery(
+                    parsed_email_delivery_id,
+                    message="email_delivery_enqueue_unconfirmed",
+                )
+            return _redirect_to_admin_email_delivery(
+                parsed_email_delivery_id, message="email_delivery_queued"
+            )
     except ValueError:
         return _redirect_to_admin_email_delivery(
             parsed_email_delivery_id,
@@ -8276,22 +8454,6 @@ async def enqueue_admin_email_delivery(
         return _redirect_to_admin_email_delivery(
             parsed_email_delivery_id, message="email_delivery_not_sendable"
         )
-
-    try:
-        _enqueue_admin_pending_key_email(
-            one_time_secret_id=one_time_secret_id,
-            email_delivery_id=parsed_email_delivery_id,
-            actor_admin_id=action_context.admin_user.id,
-        )
-    except Exception:  # noqa: BLE001
-        return _redirect_to_admin_email_delivery(
-            parsed_email_delivery_id, message="email_delivery_send_failed"
-        )
-
-    _ = reason
-    return _redirect_to_admin_email_delivery(
-        parsed_email_delivery_id, message="email_delivery_queued"
-    )
 
 
 @router.post("/logout", response_class=HTMLResponse)
@@ -8908,12 +9070,28 @@ async def _admin_activity_dashboard_service_scope(
     request: Request,
 ) -> AsyncIterator[AdminActivityDashboardService]:
     session_factory = get_sessionmaker_from_app(request)
+    settings = _settings(request)
     async with session_factory() as session:
         async with session.begin():
+            # 215-a: the detail view bridges to the SAME shared Core
+            # sendability the CLI/send/enqueue actions use (same-secret
+            # history, consumed/ambiguous truth) - a bound method on the
+            # same session, called at most once per detail fetch.
+            email_delivery_service = EmailDeliveryService(
+                settings=settings,
+                one_time_secrets_repository=OneTimeSecretsRepository(session),
+                email_deliveries_repository=EmailDeliveriesRepository(session),
+                gateway_keys_repository=GatewayKeysRepository(session),
+                owners_repository=OwnersRepository(session),
+                audit_repository=AuditRepository(session),
+                email_service=EmailService(settings),
+                session=session,
+            )
             yield AdminActivityDashboardService(
                 usage_ledger_repository=UsageLedgerRepository(session),
                 audit_repository=AuditRepository(session),
                 email_deliveries_repository=EmailDeliveriesRepository(session),
+                sendability_provider=email_delivery_service.get_key_email_delivery_sendability,
             )
 
 
@@ -12342,6 +12520,65 @@ def _parse_admin_email_delivery_mode(value: str | None) -> str:
     return mode
 
 
+def _normalize_exact_owner_email_filter(
+    raw_values: list[str],
+) -> tuple[str, ...] | None:
+    """215-a: repeatable EXACT owner-email filter (CLI normalization).
+
+    Same shared normalization/equality as the CLI inspection: each
+    member is strip/lower-cased and must be one mailbox. Bounds reuse
+    the existing list-filter law (per-member size, count caps); the
+    fixed messages never echo submitted values.
+    """
+    members = normalize_filter_values(raw_values, field_name="owner_email_exact")
+    if members is None:
+        return None
+    normalized: list[str] = []
+    for member in members:
+        try:
+            normalized.append(normalize_owner_email(member))
+        except EmailInspectionValidationError as exc:
+            raise AdminListFilterError(
+                f"owner_email_exact: {exc.safe_message}"
+            ) from exc
+    return tuple(dict.fromkeys(normalized))
+
+
+def _parse_admin_email_datetime_filter(value: str | None, *, field_name: str) -> datetime | None:
+    """215-a: parse ONE email-list date filter value.
+
+    Blank/missing means UNBOUNDED (the HTML form's blank date controls
+    are legal, not validation errors). Nonblank values must be ISO 8601
+    datetimes; anything else is a fixed invalid-filter refusal (no
+    echo of the submitted value) - never a raw framework 422.
+    """
+    if value is None or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise AdminListFilterError(f"{field_name} must be an ISO 8601 datetime (blank means unbounded).") from exc
+
+
+def _normalize_admin_datetime_bounds(
+    start_at: datetime | None, end_at: datetime | None
+) -> tuple[datetime | None, datetime | None]:
+    """215-a: inclusive UTC creation bounds, naive input treated as UTC.
+
+    Callers pass already-parsed values (the email-list handler parses
+    blank/missing as unbounded and nonblank as ISO 8601 with fixed
+    no-echo errors); a naive value is an explicit UTC instant here, and
+    end-before-start is refused safely with a fixed message.
+    """
+    if start_at is not None and start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=UTC)
+    if end_at is not None and end_at.tzinfo is None:
+        end_at = end_at.replace(tzinfo=UTC)
+    if start_at is not None and end_at is not None and end_at < start_at:
+        raise ValueError("end_at must be greater than or equal to start_at.")
+    return start_at, end_at
+
+
 def _validate_admin_email_delivery_preconditions(settings: Settings, mode: str) -> None:
     if mode in {"none", "pending"}:
         return
@@ -12907,6 +13144,23 @@ def _clean_admin_reason(reason: str | None) -> str | None:
         return None
     cleaned = reason.strip()
     return cleaned or None
+
+
+def _admin_reason_is_known_alias(request: Request, reason: str | None) -> bool:
+    """215-a: pure known-incoming-opaque-auth alias check for a PROVIDED
+    pending-flow audit reason (missing/blank reasons are accepted).
+
+    The SAME fail-closed pure helper the retry/SMTP/diagnostic routes
+    apply; no global sanitizer, sender, schema, or helper-framework
+    change.
+    """
+    if not reason:
+        return False
+    return is_known_incoming_secret_alias(
+        reason,
+        scope=request.scope,
+        accepted_prefixes=_settings(request).get_gateway_key_accepted_prefixes(),
+    )
 
 
 _ADMIN_REASON_TOO_LONG_MESSAGE = (

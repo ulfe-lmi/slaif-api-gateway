@@ -6,7 +6,7 @@ import json
 import re
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -19,6 +19,9 @@ from slaif_gateway.schemas.admin_activity import (
     AdminUsageDetail,
     AdminUsageListRow,
 )
+from slaif_gateway.schemas.email_inspection import project_latest_recorded_failure
+from slaif_gateway.services.email_delivery_service import KeyEmailDeliverySendability
+from slaif_gateway.services.email_inspection import SendabilityProvider
 from slaif_gateway.services.chat_live_burn_telemetry import parse_chat_live_burn_usage_detail
 from slaif_gateway.utils.redaction import is_sensitive_key, redact_text
 from slaif_gateway.utils.admin_list_filters import clean_text_filter
@@ -65,6 +68,10 @@ class AuditDashboardRepository(Protocol):
 
     async def get_audit_log_for_admin_detail(self, audit_log_id: uuid.UUID) -> AuditLog | None: ...
 
+    async def get_latest_email_error_for_delivery(
+        self, email_delivery_id: uuid.UUID
+    ) -> AuditLog | None: ...
+
 
 class EmailDeliveryDashboardRepository(Protocol):
     async def list_email_deliveries_for_admin(
@@ -74,6 +81,9 @@ class EmailDeliveryDashboardRepository(Protocol):
         owner_email: str | Sequence[str] | None = None,
         gateway_key_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         one_time_secret_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        delivery_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_email_exact: str | Sequence[str] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         limit: int = 50,
@@ -96,10 +106,16 @@ class AdminActivityDashboardService:
         usage_ledger_repository: UsageLedgerDashboardRepository,
         audit_repository: AuditDashboardRepository,
         email_deliveries_repository: EmailDeliveryDashboardRepository,
+        sendability_provider: SendabilityProvider | None = None,
     ) -> None:
         self._usage = usage_ledger_repository
         self._audit = audit_repository
         self._email_deliveries = email_deliveries_repository
+        # 215-a: bounded bridge to the shared Core
+        # EmailDeliveryService.get_key_email_delivery_sendability bound
+        # method (same-secret history / consumed / ambiguous truth).
+        # Detail-only; never per list row.
+        self._sendability_provider = sendability_provider
 
     async def list_usage(
         self,
@@ -182,16 +198,26 @@ class AdminActivityDashboardService:
         owner_email: str | Sequence[str] | None = None,
         gateway_key_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
         one_time_secret_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        delivery_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_id: uuid.UUID | Sequence[uuid.UUID] | None = None,
+        owner_email_exact: str | Sequence[str] | None = None,
         start_at: datetime | None = None,
         end_at: datetime | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[AdminEmailDeliveryListRow]:
+        # 215-a: additive exact filters pass through untouched (values are
+        # already validated/normalized by the handler); the legacy
+        # substring owner_email and OR-within/AND-across semantics are
+        # unchanged.
         rows = await self._email_deliveries.list_email_deliveries_for_admin(
             status=_clean(status),
             owner_email=clean_text_filter(owner_email),
             gateway_key_id=gateway_key_id,
             one_time_secret_id=one_time_secret_id,
+            delivery_id=delivery_id,
+            owner_id=owner_id,
+            owner_email_exact=owner_email_exact,
             start_at=start_at,
             end_at=end_at,
             limit=limit,
@@ -203,7 +229,29 @@ class AdminActivityDashboardService:
         row = await self._email_deliveries.get_email_delivery_for_admin_detail(email_delivery_id)
         if row is None:
             raise AdminActivityNotFoundError("Email delivery row was not found")
-        return _email_delivery_detail(row)
+        # 215-a: bounded bridge to the shared Core sendability (the
+        # same-secret history / consumed / ambiguous truth the CLI uses) -
+        # called ONCE per detail fetch, never per list row.  Legacy
+        # constructors without a provider keep the pre-215 projection.
+        sendability: KeyEmailDeliverySendability | None = None
+        if self._sendability_provider is not None:
+            sendability = await self._sendability_provider(email_delivery_id)
+        detail = _email_delivery_detail(row, sendability=sendability)
+        # 215-a: shared safe latest-recorded-failure provenance (ONE
+        # bounded exact-delivery audit query on the detail view only -
+        # never per list row, never all history).  dataclasses.replace
+        # merges onto the existing DTO (the failure fields already exist
+        # with defaults; spreading them again would pass duplicate kwargs).
+        failure_row = await self._audit.get_latest_email_error_for_delivery(email_delivery_id)
+        failure = project_latest_recorded_failure(failure_row)
+        if failure is not None:
+            detail = replace(
+                detail,
+                last_recorded_failure_code=failure.error_code,
+                last_recorded_failure_action=failure.action,
+                last_recorded_failure_at=failure.recorded_at,
+            )
+        return detail
 
 
 def _usage_list_row(row: UsageLedger) -> AdminUsageListRow:
@@ -283,15 +331,21 @@ def _audit_detail(row: AuditLog) -> AdminAuditDetail:
 
 
 def _email_delivery_list_row(row: EmailDelivery) -> AdminEmailDeliveryListRow:
+    # 215-a: the SAME known-shape redaction the CLI inspection projection
+    # applies at the output boundary - the GUI list/detail rows must not
+    # be able to expose a complete credential-shaped recipient or owner
+    # address that a corrupted/legacy row could carry.  Normal addresses
+    # pass through unchanged.
+    owner_email = row.owner.email if row.owner is not None else None
     return AdminEmailDeliveryListRow(
         id=row.id,
         owner_id=row.owner_id,
-        owner_email=row.owner.email if row.owner is not None else None,
+        owner_email=redact_text(owner_email) if owner_email is not None else None,
         gateway_key_id=row.gateway_key_id,
         public_key_id=row.gateway_key.public_key_id if row.gateway_key is not None else None,
         one_time_secret_id=row.one_time_secret_id,
         status=row.status,
-        to_email=row.recipient_email,
+        to_email=redact_text(row.recipient_email),
         subject=_safe_text(row.subject),
         template_name=row.template_name,
         sent_at=row.sent_at,
@@ -300,10 +354,22 @@ def _email_delivery_list_row(row: EmailDelivery) -> AdminEmailDeliveryListRow:
     )
 
 
-def _email_delivery_detail(row: EmailDelivery) -> AdminEmailDeliveryDetail:
+def _email_delivery_detail(
+    row: EmailDelivery,
+    *,
+    sendability: KeyEmailDeliverySendability | None = None,
+) -> AdminEmailDeliveryDetail:
     base = _email_delivery_list_row(row)
-    one_time_secret_status, blocking_reason = _email_delivery_action_state(row)
-    can_send = blocking_reason is None
+    if sendability is not None:
+        # 215-a: shared Core eligibility (same-secret history, consumed,
+        # ambiguous acceptance) - the CLI shape, not a second classifier.
+        # Project the Core verdict directly instead of re-deriving it.
+        one_time_secret_status = sendability.one_time_secret_status
+        blocking_reason = sendability.blocking_reason
+        can_send = sendability.can_send
+    else:
+        one_time_secret_status, blocking_reason = _email_delivery_action_state(row)
+        can_send = blocking_reason is None
     return AdminEmailDeliveryDetail(
         **asdict(base),
         provider_message_id=_safe_optional_text(row.provider_message_id),
