@@ -19,6 +19,9 @@ from slaif_gateway.api.admin_provider_route_configuration import (
 from slaif_gateway.api.admin_key_batch import router as admin_key_batch_router
 from slaif_gateway.api.admin_key_clone import router as admin_key_clone_router
 from slaif_gateway.api.admin_record_choices import router as admin_record_choices_router
+from slaif_gateway.api.admin_email_operations import (
+    router as admin_email_operations_router,
+)
 from slaif_gateway.api.admin_operations import router as admin_operations_router
 from slaif_gateway.api.admin_replay_maintenance import (
     router as admin_replay_maintenance_router,
@@ -90,6 +93,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(branding_router)
     app.include_router(admin_record_choices_router)
     app.include_router(admin_router)
+    # 215-a: focused email-operation surfaces (explicit failed-delivery
+    # retry intent + bounded SMTP test). Paths are disjoint from the
+    # legacy admin router routes.
+    app.include_router(admin_email_operations_router)
     # 208-a: purpose-bound reviewed key-clone routes (one-way helper reuse;
     # admin.py does not import this router).
     app.include_router(admin_key_clone_router)

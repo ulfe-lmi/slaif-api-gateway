@@ -1591,3 +1591,106 @@ desktop-1440, desktop-1600, tablet-768, narrow-390), SHA256
 `a08e743f267d3159ebd723d689e05aee3b68d347f0b4ea05e5008c78c29ee1f8`.
 Unchanged 214-a modules were NOT rerun; the final-head GitHub CI
 qualifies broad regressions once the new SELF is published.
+
+## 215-a GUI email inspection, explicit retry and SMTP test (objective 215,
+new PR, 2026-11-01)
+
+### Scope and GUI-CLI parity contract
+
+G12 (complete email delivery inspection, explicit failed-delivery
+retry, and bounded SMTP test) of
+`docs/MISSING_GUI_FUNCTIONALITY.md`, delivered on branch
+`oap/215-gui-email-parity` (created from verified remote `main`
+`279f71a8`). The GUI reuses the SAME shared surfaces the CLI uses:
+
+- the list status filter offers the six CANONICAL persisted delivery
+  statuses only and validates with the SAME shared
+  `validate_delivery_status` the CLI uses (unsupported values -
+  including the secret-lifecycle labels consumed/expired, which were
+  never persisted delivery states - get a fixed no-echo refusal);
+- the detail page derives button eligibility from the SAME shared
+  Core `EmailDeliveryService.get_key_email_delivery_sendability`
+  (same-secret history, consumed and ambiguous truth), called at most
+  once per detail page (no list N+1), alongside the shared finite
+  latest-recorded-failure provenance (unknown/missing recorded codes
+  project to `unavailable`; raw legacy provider prose never reaches
+  the DOM);
+- the explicit failed retry and the ordinary pending enqueue commit
+  the SAME shared requested-intent audit (server actor, explicit
+  retry intent, durable) BEFORE broker dispatch; a recording failure
+  prevents dispatch, and a broker failure or lost ack is
+  requested-but-unconfirmed, never queued/sent success;
+- the bounded SMTP test records its durable one-use claim (actor-
+  bound, entity UUID derived from the nonce) BEFORE the bounded SMTP
+  attempt, under a per-actor 3-attempts/60-seconds budget, with
+  honest outcomes (accepted = SMTP acceptance, not confirmed inbox
+  arrival; unconfirmed never promises no-message).
+
+Deliberate differences (documented, not hidden): the list adds
+inclusive UTC date bounds (naive input treated as UTC; end-before-
+start a fixed no-echo refusal; BLANK controls normalize to unbounded
+so the real HTML form submit is always legal), additive EXACT
+delivery/owner/owner-email filters over the unchanged legacy
+substring OR-within/AND-across semantics, cap+1 honest "more" plus
+the shared filter-preserving Previous/Next navigation (214), and
+credential-shape withholding on recipient/owner address projections;
+the explicit retry is failed-only with a REQUIRED nonblank audit
+reason bounded to 1024 UTF-8 bytes, while the ordinary pending
+flows keep their existing confirmations and accept missing/blank
+reasons; both now withhold a PROVIDED reason matching a known
+incoming opaque-auth alias BEFORE any audit/SMTP/broker. CLI pending
+semantics are unchanged.
+
+No schema, migration, permission, or dependency change; no global
+sanitizer, sender, or CLI rewrite; the new SMTP-test handler
+withholds known incoming authentication aliases from the persisted
+user agent BEFORE persistence (UTF-8-safe decode, fail closed). The
+apply URL is POST for submission and direct GET serves a safe
+NO-SEND recovery surface (fixed notice + link to a new test; no
+resend, no re-claim, no live token; a reload after the form POST can
+resubmit the consumed POST and the durable one-use claim refuses it
+with a truthful already-used refusal).
+
+### Final evidence (215-a)
+
+Recorded in the immutable 215-a report (focused affected unit layer
+114 PASS; accepted 290-test component unit layer; 23 native
+owned-PostgreSQL cases proving durable-before-broker from INSIDE the
+dispatch stubs with separate fresh sessions, pre-commit and
+real-commit-then-raise ack-loss fault seams, controlled row-lock
+contention, and bounded preservation sentinels; 9 actual-Chromium
+cases on real uvicorn + owned PG with a loopback-only STANDARD-
+LIBRARY synthetic SMTP sink - a LOCAL MOCK SMTP, not an
+inbox/provider/TLS qualification - covering canonical status/date
+controls, real picker selection semantics, retry-failed send-now
+with a real sink message-count proof, no-JS missing-confirm ->
+confirm -> send, the enqueue UI path with a recording stub at the
+existing seam (exact three-UUID payload, truthful queued/
+requested-but-unconfirmed feedback, no real broker contact), the
+full SMTP test flow with truthful reload (observed method) plus
+direct-GET recovery, keyboard/no-JS filter-preserving pagination,
+and desktop + narrow captures under `/tmp/slaif215`; OAP governance
+and scoped static checks).
+
+Broker boundaries, stated exactly: the native owned-PG fixture
+default-denies live dispatch at BOTH enqueue helper bindings (each
+enqueue case installs an explicit recording/broken stub); in the
+browser fixture the broker URL in settings stays inert and the
+enqueue UI case patches/restores the existing seam with
+recording/broken stubs. No real recipients, providers, or Codex
+calls are used.
+
+Setup deviations (preserved honestly; no reruns): before the
+accepted qualification, one early probe (call `81215e8dc2d4c319`,
+21:03:25Z) attempted eight unowned localhost PostgreSQL connections
+on 5432/54330 with username guesses; the inspected output showed
+password prompts only - no successful SELECT result and no DDL/DML -
+and ROOT stopped it; all subsequent qualification used fresh owned
+PostgreSQL fixtures only. Separately, the hash-only protected
+`uv.lock` was grepped for two installed dependency-name lines; no
+content change was observed and the file remains protected/
+untracked. This record therefore does NOT claim "no ambient DB
+attempts" or "no protected-file reads".
+
+All seeded rows are synthetic; the final 219 installed whole-GUI
+qualification remains required and is NOT claimed.

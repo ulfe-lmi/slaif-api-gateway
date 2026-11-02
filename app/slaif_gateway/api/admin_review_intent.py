@@ -53,6 +53,14 @@ from slaif_gateway.services.pricing_rule_service import (
     PRICING_DISABLE_PLAN_MAX_BYTES,
     parse_pricing_disable_plan_document,
 )
+from slaif_gateway.services.email_admin_operations import (
+    SMTP_TEST_BODY_MAX_BYTES,
+    SMTP_TEST_RECIPIENT_MAX_CHARS,
+    SMTP_TEST_SUBJECT_MAX_BYTES,
+    validate_smtp_test_body,
+    validate_smtp_test_recipient,
+    validate_smtp_test_subject,
+)
 from slaif_gateway.modules.clients.codex_0162 import (
     CODEX_0162_CLIENT_MODULE_ID,
 )
@@ -1195,4 +1203,209 @@ def verify_pricing_review_token(
     document = _strict_pricing_review_document(review)
     if len(_canonical_json(document)) > PRICING_REVIEW_PLAN_MAX_BYTES:
         raise AdminReviewIntentError(_PRICING_TOO_LARGE_MESSAGE)
+    return document
+
+# 215-a: separate bounded SMTP-test intent purpose (a test token is never
+# valid for a clone/batch/route/compatibility/replay/pricing apply and
+# vice versa); same HMAC pattern, same 15-minute bound.  The strict closed
+# document is exactly the reviewed recipient/subject/body plus the one-use
+# intent nonce - no transport overrides, no address lists, no gateway key
+# material.
+REVIEW_INTENT_SMTP_TEST_PURPOSE = "admin.smtp-test.review.v1"
+
+# 215-a: the signed SMTP test document is bounded by its own field caps
+# (recipient 254 CHARS, subject 255 UTF-8 BYTES, body 4096 UTF-8 BYTES,
+# 32-hex nonce).  JSON ESCAPING is budgeted separately from the raw
+# field caps: the canonical serializer is ensure_ascii, so a fully
+# multiline/escaped/Unicode body expands before signing.  Per code point
+# the worst case is a SURROGATE-PAIR escape of 12 bytes (astral plane,
+# e.g. emoji: 4 UTF-8 bytes -> ``\\ud83d\\ude00``); a BMP code point
+# costs at most 6 (``\\uXXXX``).  The recipient is char-bounded, so its
+# per-code-point worst case (12) applies directly; a byte-bounded field
+# of N bytes holds at most N code points, and a 1-byte code point is
+# the per-BYTE worst case (6 bytes escaped), so 6 x N bounds it.  The
+# escaped document size is therefore finite WITHOUT trimming the body
+# or loosening field validation.
+_JSON_ESCAPE_WORST_CASE_ASTRAL = 12
+_JSON_ESCAPE_WORST_CASE_PER_BYTE = 6
+# Exact fixed canonical-JSON overhead of the closed document
+# ``{"body":"...","nonce":"...","recipient":"...","subject":"..."}``:
+# 2 braces + 3 commas + 4 colons + 16 quotes + key lengths
+# (4+5+9+7=25) = 50 bytes.
+_SMTP_TEST_DOCUMENT_FIXED_OVERHEAD = 50
+SMTP_TEST_REVIEW_ENVELOPE_MAX_BYTES = (
+    SMTP_TEST_RECIPIENT_MAX_CHARS * _JSON_ESCAPE_WORST_CASE_ASTRAL
+    + (SMTP_TEST_SUBJECT_MAX_BYTES + SMTP_TEST_BODY_MAX_BYTES)
+    * _JSON_ESCAPE_WORST_CASE_PER_BYTE
+    + 32  # the 32-hex nonce (never escaped)
+    + _SMTP_TEST_DOCUMENT_FIXED_OVERHEAD
+)
+
+# The signed payload wraps the review document in the closed
+# purpose/actor/session/expiry envelope: 2 braces + 4 commas + 5 colons
+# + 10 key quotes + key lengths (16+13+10+7+6=52) + 8 value quotes +
+# two 36-char UUID values + the 25-char purpose + a 33-char ISO-8601
+# expiry = 211 bytes exact overhead.
+SMTP_TEST_REVIEW_PAYLOAD_MAX_BYTES = (
+    SMTP_TEST_REVIEW_ENVELOPE_MAX_BYTES + 211
+)
+
+# Derived base64url token cap: 4*ceil(payloadBytes/3) expansion of the
+# bounded payload plus the separator and the 64-hex digest (documented
+# encoding overhead, not a second policy cap).  The ceiling matters: a
+# floor undercounts the base64 length by up to 2 characters.
+MAX_REVIEW_INTENT_SMTP_TEST_TOKEN_CHARS = (
+    4 * ((SMTP_TEST_REVIEW_PAYLOAD_MAX_BYTES + 2) // 3) + 1 + 64
+)
+
+_SMTP_TEST_INVALID_MESSAGE = (
+    "The SMTP test review state is missing or invalid."
+)
+_SMTP_TEST_NOT_AUTHENTIC_MESSAGE = (
+    "The SMTP test review state is not valid for this signed-in admin."
+)
+_SMTP_TEST_EXPIRED_MESSAGE = (
+    "The SMTP test review has expired. Prepare the test again."
+)
+_SMTP_TEST_TOO_LARGE_MESSAGE = (
+    "The SMTP test review exceeds the bounded review size."
+)
+
+_SMTP_TEST_REVIEW_KEYS = frozenset({"recipient", "subject", "body", "nonce"})
+_SMTP_TEST_NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _strict_smtp_test_review_document(document: object) -> dict[str, Any]:
+    """Closed strict document: exactly recipient/subject/body/nonce.
+
+    Every field passes the SAME shared bounded law the CLI-style
+    validation uses (finite caps, no CR/LF in the subject, no lists or
+    transport overrides in the recipient, no known credential shapes).
+    The body is the EXACT text that will be sent (safe defaults already
+    applied by the caller before signing).  Every failure is the fixed
+    safe message; no field value is echoed.
+    """
+    if not isinstance(document, dict) or set(document) != _SMTP_TEST_REVIEW_KEYS:
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE)
+    for value in document.values():
+        if not isinstance(value, str):
+            raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE)
+    try:
+        validate_smtp_test_recipient(document["recipient"])
+        validate_smtp_test_subject(document["subject"])
+        validate_smtp_test_body(document["body"])
+    except Exception:  # noqa: BLE001 - fixed safe vocabulary, never the field
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE) from None
+    if not _SMTP_TEST_NONCE_RE.fullmatch(document["nonce"]):
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE)
+    return document
+
+
+def build_smtp_test_review_token(
+    *,
+    admin_session_secret: str,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    review_document: dict[str, Any],
+    ttl_seconds: int = REVIEW_INTENT_TTL_SECONDS,
+    now: datetime | None = None,
+) -> str:
+    """Bind one reviewed SMTP test intent to actor/session/expiry.
+
+    ``review_document`` is the strict finite document validated by
+    :func:`_strict_smtp_test_review_document` BEFORE canonical
+    serialization; the document envelope and the token length are both
+    bounded before any signing work returns.
+    """
+    _strict_smtp_test_review_document(review_document)
+    if len(_canonical_json(review_document)) > SMTP_TEST_REVIEW_ENVELOPE_MAX_BYTES:
+        raise AdminReviewIntentError(_SMTP_TEST_TOO_LARGE_MESSAGE)
+    issued = now or datetime.now(UTC)
+    payload = {
+        "purpose": REVIEW_INTENT_SMTP_TEST_PURPOSE,
+        "admin_user_id": str(admin_user_id),
+        "admin_session_id": str(admin_session_id),
+        "expires_at": (issued + timedelta(seconds=ttl_seconds)).isoformat(),
+        "review": review_document,
+    }
+    encoded = _canonical_json(payload)
+    token = (
+        base64.urlsafe_b64encode(encoded).decode("ascii")
+        + "."
+        + _digest(admin_session_secret, encoded)
+    )
+    if len(token) > MAX_REVIEW_INTENT_SMTP_TEST_TOKEN_CHARS:
+        raise AdminReviewIntentError(_SMTP_TEST_TOO_LARGE_MESSAGE)
+    return token
+
+
+def verify_smtp_test_review_token(
+    *,
+    admin_session_secret: str,
+    token: str | None,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Verify, rebind, and strict-reparse one SMTP test review token.
+
+    Returns the strict finite review document.  The outer payload is
+    CLOSED: exactly the identity/expiry keys plus ``review`` - unknown
+    outer keys are refused.  A clone/batch/route/compatibility/replay/
+    pricing token is refused (different signed purpose).  Every failure
+    path raises :class:`AdminReviewIntentError` with a fixed safe
+    message; the token bytes never appear in an exception, log, or
+    rendered error.
+    """
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > MAX_REVIEW_INTENT_SMTP_TEST_TOKEN_CHARS
+    ):
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE)
+    body, separator, digest = token.rpartition(".")
+    if (
+        not separator
+        or not body
+        or not digest
+        or not _DIGEST_RE.fullmatch(digest)
+    ):
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE)
+    try:
+        encoded = base64.urlsafe_b64decode(body.encode("ascii"))
+    except (binascii.Error, UnicodeEncodeError, ValueError):
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE) from None
+    if not hmac.compare_digest(_digest(admin_session_secret, encoded), digest):
+        raise AdminReviewIntentError(_SMTP_TEST_NOT_AUTHENTIC_MESSAGE)
+    try:
+        payload = json.loads(
+            encoded.decode("utf-8"), object_pairs_hook=_strict_pairs_hook
+        )
+    except (UnicodeDecodeError, ValueError):
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE) from None
+    if not isinstance(payload, dict) or set(payload) != _COMPAT_PAYLOAD_KEYS:
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE)
+    if payload.get("purpose") != REVIEW_INTENT_SMTP_TEST_PURPOSE:
+        raise AdminReviewIntentError(_SMTP_TEST_NOT_AUTHENTIC_MESSAGE)
+    if (
+        payload.get("admin_user_id") != str(admin_user_id)
+        or payload.get("admin_session_id") != str(admin_session_id)
+    ):
+        raise AdminReviewIntentError(_SMTP_TEST_NOT_AUTHENTIC_MESSAGE)
+    expires_raw = payload.get("expires_at")
+    try:
+        expires_at = datetime.fromisoformat(expires_raw)
+    except (TypeError, ValueError):
+        raise AdminReviewIntentError(_SMTP_TEST_INVALID_MESSAGE) from None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if (now or datetime.now(UTC)) >= expires_at:
+        raise AdminReviewIntentError(_SMTP_TEST_EXPIRED_MESSAGE)
+    review = payload.get("review")
+    # Strict re-validation BEFORE canonical serialization: a tampered or
+    # edited field yields the fixed safe error, never a serialization
+    # fault.
+    document = _strict_smtp_test_review_document(review)
+    if len(_canonical_json(document)) > SMTP_TEST_REVIEW_ENVELOPE_MAX_BYTES:
+        raise AdminReviewIntentError(_SMTP_TEST_TOO_LARGE_MESSAGE)
     return document

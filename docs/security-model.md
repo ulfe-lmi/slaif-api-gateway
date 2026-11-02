@@ -1323,6 +1323,53 @@ explicit intent; the one-time secret is referenced through the safe field
 secret-bearing key names) committed before dispatch, and the Celery task
 payload remains exactly the existing three UUIDs — no reason, body,
 secret, boolean, policy, or context crosses the broker.
+
+### Bounded SMTP test and email action audit safety (objective 215)
+
+The admin SMTP test surface is bounded and one-use:
+
+- **Reviewed intent, not browser authority.** Prepare validates ONE
+  complete mailbox recipient (strict standard-library parse; list-parser
+  reinterpretations, group/trailing syntax, raw CR/LF/NUL and credential
+  shapes are refused) plus bounded plain-text subject/body, then signs
+  a review token bound to the admin, the admin session, and a 15-minute
+  expiry. The reviewed facts are JSON-escaped and budgeted against a
+  finite full-envelope cap with a derived base64 cap, so a valid
+  maximum-size body is never rejected by the token cap. Apply verifies
+  the signed facts; posted recipient/subject/body values confer
+  nothing. A known incoming authentication alias in a reviewed value is
+  refused immediately after verification, before any render or claim.
+- **Durable one-use claim before dispatch.** The claim is committed
+  durably (actor-bound audit row; the operation identity is the nonce
+  derived UUID entity, never the raw nonce text in sanitized metadata)
+  BEFORE the bounded SMTP attempt, under a per-actor 3-attempts/60
+  seconds budget that counts attempted and unconfirmed sends. A repeat
+  or concurrent submit of the same intent is refused by the durable
+  claim (at most one message).
+- **Lost-acknowledgement semantics.** If the claim commit's
+  acknowledgement is lost, the write may be durable: the outcome is
+  reported as UNCONFIRMED (never "was not durable"), no SMTP call is
+  made, and the durable claim - if it landed - refuses any repeat of
+  the same intent. If the SMTP is accepted and only the RESULT
+  recording fails, the acceptance is shown truthfully with a
+  record-unconfirmed note; the claim and budget stay consumed and the
+  row/secret are never rolled back into a pretend no-message state.
+- **Audit redaction at the boundary.** The SMTP test handler withholds
+  known incoming authentication aliases from the persisted user agent
+  BEFORE persistence (UTF-8-safe, fail closed on decode faults) and the
+  global durable metadata sanitizer is unchanged. The review/apply
+  pages never render raw provider responses; outcomes are finite
+  accepted/unconfirmed/failed/unavailable labels. The reviewed message
+  never has a gateway key or other secret attached automatically, and
+  the review copy says not to paste credentials.
+- **Pending-flow audit notes.** The ordinary pending send-now/enqueue
+  actions withhold a PROVIDED audit note matching a known incoming
+  opaque-auth alias before any audit/SMTP/broker (missing/blank notes
+  remain accepted; the failed-only required rule does not apply). The
+  ordinary pending enqueue commits the same bounded
+  `email_key_enqueue_requested` intent audit before broker dispatch,
+  and the Celery task payload remains exactly the existing three UUIDs.
+
 ## Redaction And Logging
 
 Structured logging redacts configured/custom gateway key prefixes, bearer keys,

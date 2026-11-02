@@ -37,6 +37,24 @@ class AdminUsersRepository:
         await self._session.flush()
         return admin_user
 
+    async def get_admin_user_for_update(
+        self, admin_user_id: uuid.UUID
+    ) -> AdminUser | None:
+        """215-a: existing-row lock seam for the bounded SMTP test guard.
+
+        SELECT ... FOR UPDATE on the actor row so concurrent one-use
+        claims by the same actor across API workers serialize. Used ONLY
+        by the bounded SMTP test claim path; normal authentication and
+        session behavior is unchanged.
+        """
+        statement = (
+            select(AdminUser)
+            .where(AdminUser.id == admin_user_id)
+            .with_for_update()
+        )
+        result = await self._session.execute(statement)
+        return result.scalar_one_or_none()
+
     async def get_admin_user_by_id(self, admin_user_id: uuid.UUID) -> AdminUser | None:
         return await self._session.get(AdminUser, admin_user_id)
 

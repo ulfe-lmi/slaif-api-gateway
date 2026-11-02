@@ -296,3 +296,24 @@ at render time). Consequences for `slaif-catalog-refresh` seals:
 
 There is no schema migration in this change; keys, routes, pricing,
 FX, and accounting are untouched.
+
+## Admin GUI upgrade: email inspection, retry and SMTP test (215-a)
+
+The 215-a GUI objective (G12) adds the email-delivery inspection,
+explicit failed retry, and bounded SMTP test controls under the
+existing `/admin` exposure. Upgrade is **recreate/restart only**:
+
+- **No schema migration**: existing delivery rows, secrets, and audit
+  records are untouched and read exactly as before; the views add
+  shared projections and controls over the same tables.
+- **No Nginx change**: the new routes sit under the existing `/admin`
+  exposure; streaming/anti-buffering settings are unaffected.
+- **No new environment variables and no new dependencies**: the SMTP
+  test uses the server's existing configured SMTP transport.
+- Existing pending/failed deliveries keep their state; the explicit
+  retry is a NEW distinct failed-only route and changes no legacy
+  send/enqueue behavior.
+
+Rollback to the previous image restores the prior email views; the
+append-only audit rows written by 215-a actions are inert historical
+evidence to older binaries.

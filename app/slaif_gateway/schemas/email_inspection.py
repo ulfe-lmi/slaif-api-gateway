@@ -126,6 +126,28 @@ class EmailDeliveryDetail:
     last_recorded_failure: EmailDeliveryLastRecordedFailure | None = None
 
 
+def project_latest_recorded_failure(row: object | None) -> EmailDeliveryLastRecordedFailure | None:
+    """215-a: shared finite-code projection over ONE latest audit row.
+
+    Used by both the CLI inspection service and the admin GUI detail so
+    the safe latest exact-delivery error provenance is one code path:
+    exact entity/action rows only (resolved by the caller), a finite
+    known error code, and unavailable (never inferred, parsed from
+    prose, or taken from an older event) for unknown/missing/unsafe
+    recorded codes. ``row=None`` projects to None (no matching audit).
+    """
+    if row is None:
+        return None
+    new_values = row.new_values if isinstance(row.new_values, dict) else {}  # type: ignore[attr-defined]
+    raw_code = new_values.get("error_code") if new_values else None
+    error_code = raw_code if isinstance(raw_code, str) and raw_code in KNOWN_EMAIL_ERROR_CODES else "unavailable"
+    return EmailDeliveryLastRecordedFailure(
+        error_code=error_code,
+        action=row.action,  # type: ignore[attr-defined]
+        recorded_at=row.created_at,  # type: ignore[attr-defined]
+    )
+
+
 def validate_delivery_status(status: str) -> str:
     """Return the status when it is a persisted status; else raise."""
     if status not in EMAIL_DELIVERY_STATUSES:

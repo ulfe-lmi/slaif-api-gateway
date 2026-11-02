@@ -26,21 +26,29 @@
       <dl>
         <dt>ID</dt><dd>{{ email_delivery.id }}</dd>
         <dt>Status</dt><dd>{{ email_delivery.status }}</dd>
-        <dt>Recipient</dt><dd>{{ email_delivery.to_email }}</dd>
+        <dt>Recipient (recorded)</dt><dd>{{ email_delivery.to_email }}</dd>
         <dt>Subject</dt><dd>{{ email_delivery.subject }}</dd>
         <dt>Template</dt><dd>{{ email_delivery.template_name }}</dd>
         <dt>Provider message ID</dt><dd>{{ email_delivery.provider_message_id or "n/a" }}</dd>
       </dl>
+      <p class="muted small">
+        The recorded recipient is attempt metadata captured when the delivery was prepared;
+        older history is not reconstructed. An enqueue review does not freeze a future SMTP
+        destination or prove inbox arrival.
+      </p>
     </section>
 
     <section class="detail-panel">
       <h2>Related Records</h2>
       <dl>
-        <dt>Owner</dt><dd>{{ email_delivery.owner_email or email_delivery.owner_id or "n/a" }}</dd>
+        <dt>Current owner</dt><dd>{{ email_delivery.owner_email or email_delivery.owner_id or "n/a" }}</dd>
         <dt>Gateway key</dt><dd>{{ email_delivery.public_key_id or email_delivery.gateway_key_id or "n/a" }}</dd>
         <dt>One-time secret</dt><dd>{{ email_delivery.one_time_secret_id or "n/a" }}</dd>
         <dt>Secret status</dt><dd>{{ email_delivery.one_time_secret_status }}</dd>
       </dl>
+      <p class="muted small">
+        The current owner address is informational and may differ from the recorded recipient.
+      </p>
     </section>
 
     <section class="detail-panel">
@@ -53,10 +61,24 @@
     </section>
 
     <section class="detail-panel">
-      <h2>Failure</h2>
+      <h2>Last recorded failure</h2>
+      {% if email_delivery.last_recorded_failure_code %}
       <dl>
-        <dt>Reason</dt><dd>{{ email_delivery.failure_reason or "n/a" }}</dd>
+        <dt>Code</dt><dd>{{ email_delivery.last_recorded_failure_code }}</dd>
+        <dt>Action</dt><dd>{{ email_delivery.last_recorded_failure_action }}</dd>
+        <dt>Recorded</dt><dd>{{ email_delivery.last_recorded_failure_at }}</dd>
       </dl>
+      <p class="muted small">
+        Provenance: last recorded audit error. The row may be historical (a sent delivery can
+        retain its last recorded failure); it is never the current attempt's error.
+        <code>unavailable</code> means the latest matching audit entry carries no known finite code.
+      </p>
+      {% else %}
+      <p class="muted small">
+        No safe failure code is recorded for this delivery: there is no matching error audit
+        entry, or the latest entry's code is outside the finite known set.
+      </p>
+      {% endif %}
     </section>
 
     <section class="detail-panel">
@@ -66,7 +88,7 @@
         Expired or consumed secrets cannot be resent; lost keys must be rotated.
         In-progress or ambiguous deliveries must not be retried automatically.
       </p>
-      {% if email_delivery.can_send_now %}
+      {% if email_delivery.email_delivery_status == "pending" and email_delivery.can_send_now %}
       <form class="form-stack" method="post" action="/admin/email-deliveries/{{ email_delivery.id }}/send-now">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
@@ -80,7 +102,7 @@
         <button type="submit">Send now</button>
       </form>
       {% else %}
-      <p class="muted small">{{ email_delivery.safe_blocking_reason or "This delivery cannot be sent." }}</p>
+      <p class="muted small">{% if email_delivery.email_delivery_status == "failed" and email_delivery.can_send_now %}This delivery is FAILED; the ordinary send action cannot retry it. Use the explicit retry-failed action below.{% else %}{{ email_delivery.safe_blocking_reason or "This delivery cannot be sent." }}{% endif %}</p>
       <button type="button" disabled>Send now</button>
       {% endif %}
     </section>
@@ -92,7 +114,7 @@
         email bodies, or one-time-secret material. Ambiguous delivery state requires operator review and key rotation
         if receipt cannot be confirmed.
       </p>
-      {% if email_delivery.can_enqueue %}
+      {% if email_delivery.email_delivery_status == "pending" and email_delivery.can_enqueue %}
       <form class="form-stack" method="post" action="/admin/email-deliveries/{{ email_delivery.id }}/enqueue">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
@@ -106,8 +128,75 @@
         <button type="submit">Enqueue delivery</button>
       </form>
       {% else %}
-      <p class="muted small">{{ email_delivery.safe_blocking_reason or "This delivery cannot be queued." }}</p>
+      <p class="muted small">{% if email_delivery.email_delivery_status == "failed" and email_delivery.can_enqueue %}This delivery is FAILED; the ordinary enqueue action cannot retry it. Use the explicit retry-failed action below.{% else %}{{ email_delivery.safe_blocking_reason or "This delivery cannot be queued." }}{% endif %}</p>
       <button type="button" disabled>Enqueue delivery</button>
+      {% endif %}
+    </section>
+
+    <section class="detail-panel">
+      <h2>Retry Failed Delivery</h2>
+      <p class="muted small">
+        Explicit retry of this FAILED delivery only. It re-checks the exact delivery, secret binding,
+        and current eligibility on the server before acting. Consumed, expired, sending, or ambiguous
+        secrets are never made resendable by this action; if this delivery is no longer retryable,
+        rotate the key and create a new delivery.
+      </p>
+      {% if email_delivery.email_delivery_status == "failed" and email_delivery.can_send_now %}
+      <form class="form-stack" method="post" action="/admin/email-deliveries/{{ email_delivery.id }}/retry-failed">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="retry-mode-select">
+          Retry mode
+          <select name="retry_mode" id="retry-mode-select" aria-describedby="retry-mode-help">
+            <option value="send-now">Send now (immediately, from this page)</option>
+            <option value="enqueue">Enqueue (background worker)</option>
+          </select>
+        </label>
+        <span class="muted small" id="retry-mode-help">
+          Send now sends as soon as this request is processed. Enqueue records the request first
+          and sends from the background worker. Both record your identity and reason.
+        </span>
+        <label for="retry-reason-input">
+          Audit reason (required)
+          <textarea name="reason" rows="2" autocomplete="off" id="retry-reason-input" aria-describedby="retry-reason-help" required></textarea>
+        </label>
+        <span class="muted small" id="retry-reason-help">
+          Nonblank audit reason, at most 1024 UTF-8 bytes (multibyte text counts by bytes, not
+          characters). Credential-looking text is refused. It is recorded with your admin identity
+          and the explicit retry intent.
+        </span>
+        <label class="checkbox-row" for="retry-confirm-checkbox">
+          <input type="checkbox" name="confirm_retry" value="true" id="retry-confirm-checkbox" aria-describedby="retry-confirm-help">
+          I confirm this explicitly retries the FAILED delivery.
+        </label>
+        <span class="muted small" id="retry-confirm-help">
+          Required: this is a distinct retry action for a failed delivery, separate from the
+          ordinary pending send/enqueue above.
+        </span>
+        <button type="submit">Retry failed delivery</button>
+      </form>
+      <p class="muted small">
+        A retry review does not freeze a future SMTP destination or prove inbox arrival: the
+        prepared destination comes from the current owner at execution time (including deferred
+        workers), and enqueue records the requested intent only. The worker independently claims
+        and consumes the one-time secret.
+      </p>
+      {% else %}
+      <p class="muted small">
+        {% if email_delivery.email_delivery_status == "failed" %}
+        This FAILED delivery is not currently retryable:
+        {{ email_delivery.safe_blocking_reason or "its one-time secret is no longer usable." }}
+        A consumed or expired one-time secret (or a same-secret in-progress/ambiguous
+        attempt) can never be made resendable by this action; rotate the key and create
+        a new delivery if the key is needed again.
+        {% else %}
+        This delivery is {{ email_delivery.email_delivery_status }}, not FAILED, so the
+        explicit retry action does not apply.
+        {% if email_delivery.email_delivery_status == "pending" and email_delivery.can_send_now %}
+        Use the ordinary Send now or Enqueue actions above.
+        {% endif %}
+        {% endif %}
+      </p>
+      <button type="button" disabled>Retry failed delivery</button>
       {% endif %}
     </section>
   </div>

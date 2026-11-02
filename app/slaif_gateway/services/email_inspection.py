@@ -15,12 +15,12 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 
 from slaif_gateway.schemas.email_inspection import (
-    KNOWN_EMAIL_ERROR_CODES,
     EmailDeliveryDetail,
     EmailDeliveryLastRecordedFailure,
     EmailDeliveryListItem,
     EmailDeliveryListPage,
     EmailDeliverySecretLifecycle,
+    project_latest_recorded_failure,
     LIST_LIMIT_DEFAULT,
     validate_creation_window,
     validate_delivery_status,
@@ -131,16 +131,7 @@ class EmailInspectionService:
         not guessed or parsed from prose; no fallback to an older entry.
         """
         row = await self._audit_repository.get_latest_email_error_for_delivery(delivery_id)
-        if row is None:
-            return None
-        new_values = row.new_values if isinstance(row.new_values, dict) else {}
-        raw_code = new_values.get("error_code") if new_values else None
-        error_code = raw_code if isinstance(raw_code, str) and raw_code in KNOWN_EMAIL_ERROR_CODES else "unavailable"
-        return EmailDeliveryLastRecordedFailure(
-            error_code=error_code,
-            action=row.action,
-            recorded_at=row.created_at,
-        )
+        return project_latest_recorded_failure(row)
 
 
 def _delivery_item(row: object) -> EmailDeliveryListItem:

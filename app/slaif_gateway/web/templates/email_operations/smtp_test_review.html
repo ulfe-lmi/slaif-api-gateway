@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+
+{% block title %}SMTP Test Review{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell" aria-labelledby="smtp-test-review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Email Operations</p>
+      <h1 id="smtp-test-review-heading">SMTP Test Review</h1>
+      <p class="muted">
+        Review the exact test content below, then confirm. The reviewed facts are bound to this
+        signed-in admin and session and expire in 15 minutes; each reviewed intent is one-use.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/email-operations/smtp-test">New SMTP test</a>
+      <a class="button-link secondary" href="/admin/operations">Operations</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <section class="action-panel">
+    <p class="status-message status-error" role="alert">{{ error }}</p>
+  </section>
+  {% endif %}
+
+  {% if recovery %}
+  <section class="action-panel">
+    <p class="status-message" role="status">
+      This page only accepts the reviewed test submission. A reviewed intent processed here was
+      one-use; this page does not send or resend anything.
+      <a class="button-link" href="/admin/email-operations/smtp-test">Start a new SMTP test</a>
+    </p>
+  </section>
+  {% endif %}
+
+  {% if result %}
+  <section class="action-panel" aria-labelledby="smtp-test-outcome-heading">
+    <h2 id="smtp-test-outcome-heading">Outcome</h2>
+    {% if result.result == "accepted" %}
+    <p class="status-message status-success" role="status">
+      Test email accepted by the configured SMTP service. This is SMTP acceptance, not confirmed inbox arrival.
+    </p>
+    {% elif result.result == "unconfirmed" %}
+    <p class="status-message status-error" role="status">
+      Test email UNCONFIRMED: the SMTP outcome is unknown after dispatch (timeout, disconnect, or
+      stage-unknown client failure). SMTP may have accepted. The one-use attempt and the per-actor
+      budget were consumed, and nothing was auto-retried. Check the delivery state and audit log
+      before submitting a new test.
+    </p>
+    {% elif result.result == "failed" %}
+    <p class="status-message status-error" role="status">
+      Test email failed safely: the configured SMTP service explicitly refused the message before
+      or during dispatch. The one-use attempt and the per-actor budget were consumed. Review the
+      server SMTP configuration, then submit a new test.
+    </p>
+    {% else %}
+    <p class="status-message status-error" role="status">
+      Test email unavailable: email delivery is disabled or SMTP configuration is incomplete.
+    </p>
+    {% endif %}
+    {% if result_recorded %}
+    <p class="muted small">
+      The attempt is recorded in the audit log with your admin identity and a bounded outcome label
+      (no raw provider responses are stored or displayed).
+    </p>
+    {% else %}
+    <p class="status-message status-error" role="alert">
+      Result recording UNCONFIRMED: the attempt happened as shown above, but its result could not
+      be recorded durably. The one-use claim and the per-actor budget stay consumed; do not resend
+      this reviewed intent. Check the delivery state and audit log, then submit a new test if
+      needed.
+    </p>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if facts %}
+  <section class="action-panel" aria-labelledby="smtp-test-reviewed-content-heading">
+    <h2 id="smtp-test-reviewed-content-heading">Reviewed test content</h2>
+    <dl>
+      <dt>Recipient</dt><dd>{{ facts.recipient }}</dd>
+      <dt>Subject</dt><dd>{{ facts.subject }}</dd>
+      <dt>Body</dt><dd><pre class="smtp-test-body-preview config-sample">{{ facts.body }}</pre></dd>
+    </dl>
+    <p class="muted small">
+      Will use the server-configured SMTP service with a per-attempt deadline of
+      {{ outer_deadline_seconds }} seconds (bounded by the configured SMTP timeout when it is shorter).
+      The gateway does not automatically attach a gateway key or other secret material to the
+      reviewed message; do not paste keys, passwords, or other credentials into test messages.
+    </p>
+    {# A RETRIABLE error (e.g. missing confirm) keeps the valid signed
+       token: the operator can correct and re-submit without restarting.
+       Non-retryable outcomes (already-claimed / cooldown / claim
+       fault) pass review_token=None, so the form stays hidden. #}
+    {% if review_token and not result %}
+    <form class="form-stack" method="post" action="/admin/email-operations/smtp-test/apply">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="review_token" value="{{ review_token }}">
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_send_test" value="true" id="smtp-test-confirm-checkbox" aria-describedby="smtp-test-confirm-help">
+        I confirm this sends the reviewed test message through the configured SMTP service (one-use;
+        at most {{ budget_attempts }} attempts per {{ budget_window_seconds }} seconds per admin).
+      </label>
+      <span class="muted small" id="smtp-test-confirm-help">
+        One-time confirmation: submitting sends this exact reviewed message once through the
+        configured SMTP service. If the outcome cannot be confirmed, nothing is retried
+        automatically; submit a new test if another attempt is needed.
+      </span>
+      <button type="submit">Send reviewed test</button>
+    </form>
+    {% endif %}
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

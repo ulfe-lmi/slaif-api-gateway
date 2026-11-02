@@ -284,8 +284,18 @@ def test_admin_activity_pages_render_only_safe_metadata(monkeypatch) -> None:
     assert "Gateway key delivery" in html
     assert "pub_safe_email" in html
     assert "/admin/email-deliveries/" in html
-    assert "confirm_send" in html
-    assert "confirm_enqueue" in html
+    # 215-a: a FAILED row no longer exposes the ordinary send/enqueue
+    # confirm controls; the explicit retry-failed surface renders
+    # instead (labeled controls + associated help), and the disabled
+    # ordinary actions say so in branch-specific copy.
+    assert "confirm_send" not in html
+    assert "confirm_enqueue" not in html
+    assert "confirm_retry" in html
+    assert "retry-mode-select" in html
+    assert "retry-reason-input" in html
+    assert "retry-confirm-checkbox" in html
+    assert "the ordinary send action cannot retry it" in html
+    assert "the ordinary enqueue action cannot retry it" in html
     assert "one-time secret" in html
     assert "plaintext gateway key will not be shown" in html
     assert "Celery" in html
