@@ -522,9 +522,11 @@ docker compose run --rm --no-deps --entrypoint sh api -c '
 #     CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS keep their defaults unless
 #     you change them deliberately)
 
-# 4) Apply: recreate/restart the API and ALL worker services (settings
-#    are read at startup):
-docker compose up -d --force-recreate api worker scheduler
+# 4) Apply: build the NEW checkout code into the image, then recreate
+#    the API and ALL worker services (settings are read at startup;
+#    on upgrades --build matters - --force-recreate alone would
+#    relaunch the stale existing image):
+docker compose up -d --build --force-recreate api worker scheduler
 
 # 5) Proxy (only if your proxy fronts the admin uploads) [manual host]:
 #    a) SHIPPED optional nginx profile (the `nginx` service,
@@ -568,8 +570,7 @@ docker compose up -d --force-recreate api worker scheduler
 #    api worker scheduler` - take the archive - then `docker compose
 #    start api worker scheduler`. Without quiescing, the archive is a
 #    best-effort snapshot, not a transactional backup. The archive
-#    covers the current key + runs tree size (gzip-compressed, so the
-#    file is at most that size).
+#    covers the current key + runs tree size (gzip-compressed).
 #    The archive name is created with mktemp: a NEWLY CREATED private
 #    file (0600), so an earlier backup is never overwritten and the
 #    permissions do not depend on the shell umask:
