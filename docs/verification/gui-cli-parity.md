@@ -1742,6 +1742,17 @@ values are refused or withheld with the existing pure alias guards.
 
 ### Evidence (216-a; scopes stated exactly)
 
+216-b (same PR, 2026-11-10): final-head CI unit failures were two
+stale inventory expectations caused by the six G14 tables - the
+admin-table inventory now expects 46 sortable tables (was 40) and the
+labeled-wrapper inventory 44 wrappers (was 38); reaching the existing
+structural assertions exposed three real new-template violations that
+were minimally repaired in
+`templates/accounting_operations/` only (provider-completed empty-
+state colspan 12 -> 11; missing fixed `data-no-sort` empty-state rows
+in BOTH review tables). No coverage was weakened, removed, skipped, or
+converted to `>=`; all other G14 behavior is unchanged.
+
 Recorded in the immutable 216-a report: focused unit module 43 PASS
 (mocked DB/service seams; NOT native proof); six affected
 reconciliation/hold/CLI consumer modules 52 PASS; 20 native

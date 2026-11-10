@@ -313,7 +313,10 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
     # exclusion reasons, review exclusion counts).
     # 214-a: +2 for the report scroll regions (usage-summary group table,
     # reviewed pricing-disable row table).
-    assert wrappers == 38
+    # 216-a: +6 for the accounting operations scroll regions (expired,
+    # fences, holds, provider-completed, review reviewed-rows, review
+    # per-row outcomes).
+    assert wrappers == 44
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

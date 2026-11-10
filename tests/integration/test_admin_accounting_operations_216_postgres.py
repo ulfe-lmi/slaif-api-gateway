@@ -1337,7 +1337,11 @@ def test_expired_dry_run_preserves_state_and_review_display(env216: dict[str, An
     assert 'data-sort-value="0.02"' in text
     assert "Release the reserved cost, tokens and requests" in text
     assert "Audit reason: <strong>dry run inspection</strong>" in text
-    assert re.search(r"bound to your signed-in\s+session for 15 minutes", text)
+    # Visible hint only; normalize HTML/visible whitespace because the
+    # template may reflow the line across "session for / 15 minutes".
+    assert re.search(
+        r"bound to your signed-in\s+session for 15 minutes", re.sub(r"\s+", " ", text)
+    )
     # The dry-run status is a CURRENT fact shown as observed detail, never a
     # proposed post-apply state.
     assert ">Status:</span> pending" in text
