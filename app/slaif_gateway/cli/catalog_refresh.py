@@ -10,6 +10,13 @@ enabled, the isolated Codex semantic research fallback (real CLI in an
 enforced outer boundary, parent re-grounding; deterministic parsing stays
 first) may transcribe eligible unresolved facts from the captured bytes.
 
+217-a (G15): the collect/review/publication pipeline bodies now delegate to
+the shared application composition in
+:mod:`slaif_gateway.services.catalog_refresh.application` (the same
+composition the admin-GUI worker tasks compose); this module keeps the CLI
+entrypoints, option parsing, output, and exit semantics unchanged and adds
+no second pipeline.
+
 Exit codes:
 - 0  review state READY
 - 10 review state READY_WITH_WARNINGS
@@ -23,7 +30,6 @@ Exit codes:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import uuid
@@ -34,24 +40,15 @@ from typing import Annotated, Any
 import typer
 
 from slaif_gateway.cli.common import CliError, emit_json, run_async
-from slaif_gateway.schemas.catalog_refresh import BaselineDocument, RefreshBundle
-from slaif_gateway.services.catalog_refresh import collection as catalog_collection
+from slaif_gateway.schemas.catalog_refresh import BaselineDocument
+from slaif_gateway.services.catalog_refresh import application as catalog_application
 from slaif_gateway.services.catalog_refresh import research as catalog_research
-from slaif_gateway.services.catalog_refresh import sources as catalog_sources
-from slaif_gateway.services.catalog_refresh.sources import SourceFetchError
 from slaif_gateway.services.catalog_refresh.apply import (
     apply_reviewed_run,
     apply_status,
 )
 from slaif_gateway.services.catalog_refresh.baseline import (
-    MAX_BASELINE_BYTES,
     export_baseline,
-    load_baseline,
-)
-from slaif_gateway.services.catalog_refresh.bundle import (
-    MAX_BUNDLE_BYTES,
-    canonical_bundle_bytes,
-    load_bundle,
 )
 from slaif_gateway.services.catalog_refresh.errors import (
     CatalogRefreshBlockedError,
@@ -61,36 +58,12 @@ from slaif_gateway.services.catalog_refresh.errors import (
 from slaif_gateway.services.catalog_refresh.filesystem import (
     AnchoredDir,
     PublicationConflictError,
-    cleanup_staged_directory,
     load_seal_key_bytes,
-    mkdir_private_child,
     open_anchored_handle,
-    publish_new_only_directory,
     publish_new_only_file,
-    read_user_file,
-    write_staged_file,
-)
-from slaif_gateway.services.catalog_refresh.policy import policy_from_document
-from slaif_gateway.services.catalog_refresh.rendering import (
-    build_manifest,
-    esc,
-    render_report,
 )
 from slaif_gateway.services.catalog_refresh.sealing import (
-    MANIFEST_NAME,
-    ensure_seal_key,
-    first_install_baseline_bytes,
-    seal_run,
     verify_run,
-)
-from slaif_gateway.services.catalog_refresh.validation import (
-    ACQUISITION_LIVE,
-    ACQUISITION_OFFLINE,
-    SQL_CAPTURE_DOCUMENT,
-    SQL_CAPTURE_FIRST_INSTALL,
-    SQL_CAPTURE_LIVE_EXPORT,
-    validate_against_baseline_document,
-    validation_json_bytes,
 )
 
 app = typer.Typer(help="Bounded catalog refresh: collect, review, verify, export-baseline, apply, status")
@@ -101,30 +74,12 @@ EXIT_BLOCKED = 20
 EXIT_VERIFY_INVALID = 30
 EXIT_DATA_ERROR = 65
 
-STAGE_LINE = (
-    "offline review: this invocation reviewed supplied bytes and performed no "
-    "live retrieval; export/verify available; any sealed research facts are "
-    "re-verified against the captured source bytes; apply is a separate "
-    "explicit command"
-)
-STAGE_LINE_COLLECT = (
-    "live collection: bounded official-source retrieval performed by this command, "
-    "then review of the collected bundle; the isolated Codex semantic research "
-    "fallback (when enabled) is part of the live collection path and its sealed "
-    "facts are re-verified in this review; apply is a separate explicit command"
-)
-# 181-i (I1): failed collects must be labeled by the path actually REACHED.
-# A label can never claim a retrieval that was not performed.
-STAGE_LINE_COLLECT_NOT_STARTED = (
-    "collection not started: baseline resolution failed before any retrieval; "
-    "no live collection (and no research) was performed by this command; apply "
-    "is a separate explicit command"
-)
-STAGE_LINE_COLLECT_INCOMPLETE = (
-    "collection attempted and failed before completion: bounded official-source "
-    "retrieval was attempted, but no complete collection was produced and no "
-    "sealed collected review exists; apply is a separate explicit command"
-)
+# Stage lines live in the shared composition (217-a); they are re-exported
+# unchanged for the CLI surface and existing consumers.
+STAGE_LINE = catalog_application.STAGE_LINE
+STAGE_LINE_COLLECT = catalog_application.STAGE_LINE_COLLECT
+STAGE_LINE_COLLECT_NOT_STARTED = catalog_application.STAGE_LINE_COLLECT_NOT_STARTED
+STAGE_LINE_COLLECT_INCOMPLETE = catalog_application.STAGE_LINE_COLLECT_INCOMPLETE
 
 DEFAULT_SEAL_KEY = Path("~/.local/state/slaif/catalog-refresh/seal.key")
 
@@ -150,6 +105,31 @@ def _settings_database_url() -> str:
     return settings.DATABASE_URL
 
 
+def _settings_database_url_or_none() -> str | None:
+    from slaif_gateway.config import get_settings
+
+    return get_settings().DATABASE_URL or None
+
+
+def _check_key_containment(
+    run_root: Path,
+    seal_key_path: Path,
+    run_root_handle: AnchoredDir | None,
+    key_handle: AnchoredDir | None,
+) -> None:
+    """CLI mapping of the shared containment check (usage error text and
+    exit semantics unchanged)."""
+    try:
+        catalog_application.check_key_containment(
+            run_root, seal_key_path, run_root_handle, key_handle
+        )
+    except catalog_application.ApplicationUsageError as exc:
+        raise typer.BadParameter(exc.detail) from exc
+
+
+_assert_review_bindings = catalog_application.assert_review_bindings
+
+
 def _read_existing_seal_key(path: Path, handle: AnchoredDir | None = None) -> bytes:
     """Read a runner-owned seal key; verify never creates keys.
 
@@ -164,126 +144,6 @@ def _read_existing_seal_key(path: Path, handle: AnchoredDir | None = None) -> by
         return load_seal_key_bytes(Path(path).expanduser(), parent_handle=handle)
     except CatalogRefreshSealError as exc:
         raise CliError(str(exc)) from exc
-
-
-def _minimal_blocked_html(*, run_id: str, code: str, detail: str, generated_at: str, stage: str = STAGE_LINE) -> bytes:
-    css = (
-        "body{font-family:system-ui,-apple-system,sans-serif;margin:24px;color:#1a202c;"
-        "line-height:1.45}.state{font-weight:600;padding:10px 14px;border:1px solid #c53030;"
-        "background:#fff5f5;color:#742a2a;border-radius:6px}dl{display:grid;"
-        "grid-template-columns:max-content 1fr;gap:2px 14px;font-size:.9rem;margin:12px 0}"
-        "dt{font-weight:600}dd{margin:0;word-break:break-all}.muted{color:#718096}"
-        "footer{margin-top:24px;color:#718096;font-size:.8rem;border-top:1px solid #e2e8f0;"
-        "padding-top:8px}"
-    )
-    parts = [
-        "<!DOCTYPE html>",
-        '<html lang="en">',
-        "<head>",
-        '<meta charset="utf-8">',
-        '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'">',
-        f"<title>SLAIF catalog refresh review — BLOCKED — {esc(run_id)}</title>",
-        f"<style>{css}</style>",
-        "</head>",
-        "<body>",
-        "<main>",
-        "<h1>SLAIF catalog refresh review</h1>",
-        f"<p class='state'><strong>BLOCKED</strong> — {esc(code)}</p>",
-        "<p>No baseline comparison was performed and no import plan was produced for this run.</p>",
-        "<dl>",
-        f"<dt>Run ID</dt><dd>{esc(run_id)}</dd>",
-        f"<dt>Blocking code</dt><dd>{esc(code)}</dd>",
-        f"<dt>Detail</dt><dd>{esc(detail)}</dd>",
-        f"<dt>Generated at</dt><dd>{esc(generated_at)}</dd>",
-        "</dl>",
-        "<p class='muted'>This minimal blocked run is not sealed: sealing requires the complete canonical input set, which was unavailable for this run.</p>",
-        f"<footer>Scope: {esc(stage)}.</footer>",
-        "</main>",
-        "</body>",
-        "</html>",
-    ]
-    return ("\n".join(parts) + "\n").encode("utf-8")
-
-
-def _minimal_blocked_validation_json(*, run_id: str, code: str, detail: str, generated_at: str) -> bytes:
-    payload = {
-        "state": "BLOCKED",
-        "state_reason": f"{code}: {detail}",
-        "code": code,
-        "run_id": run_id,
-        "generated_at": generated_at,
-        "note": "minimal blocked run; no comparison performed; not sealed",
-    }
-    return (json.dumps(payload, sort_keys=True, indent=1) + "\n").encode("utf-8")
-
-
-def _publish_blocked_run(
-    *,
-    run_root: Path,
-    seal_key_path: Path,
-    run_root_handle: AnchoredDir | None,
-    key_handle: AnchoredDir | None,
-    run_name: str,
-    code: str,
-    detail: str,
-    stage: str = STAGE_LINE,
-    generated_at: str,
-    bundle_canonical: bytes | None,
-) -> Path:
-    """Publish a safe, unsealed BLOCKED run directory (new only, atomic).
-
-    The small run is assembled in a private staging directory and
-    published with one atomic NEW-ONLY directory rename through the
-    HELD run-root handle; a failure leaves nothing at the final path.
-    The checked lifecycle bindings (run root, seal-key parent) must
-    still hold or the publication is refused.
-    """
-    files: dict[str, bytes] = {
-        "REVIEW.html": _minimal_blocked_html(run_id=run_name, code=code, detail=detail, generated_at=generated_at, stage=stage),
-        "validation.json": _minimal_blocked_validation_json(run_id=run_name, code=code, detail=detail, generated_at=generated_at),
-    }
-    if bundle_canonical is not None:
-        files["catalog-refresh.json"] = bundle_canonical
-    owns_handle = False
-    if run_root_handle is None:
-        run_root_handle = open_anchored_handle(run_root, create_missing=True)
-        run_root_handle.assert_mutation_namespace("run root directory")
-        owns_handle = True
-    try:
-        _assert_review_bindings(run_root, seal_key_path, run_root_handle, key_handle)
-    except CatalogRefreshSealError as exc:
-        raise CliError(f"checked path binding changed; refusing to publish: {exc}") from exc
-    try:
-        staging_name, staging_fd, staging_identity = mkdir_private_child(
-            run_root_handle.dir_fd, f".staging-{run_name}-"
-        )
-        created: list[str] = []
-        try:
-            try:
-                for name in sorted(files):
-                    write_staged_file(staging_fd, name, files[name], 0o644)
-                    created.append(name)
-                os.fchmod(staging_fd, 0o755)
-                try:
-                    publish_new_only_directory(
-                        run_root_handle.dir_fd, staging_name, run_name, staging_identity
-                    )
-                except PublicationConflictError as exc:
-                    raise CliError(
-                        f"run directory already exists; refusing to overwrite: {run_root / run_name}"
-                    ) from exc
-            finally:
-                os.close(staging_fd)
-        except BaseException:
-            cleanup_staged_directory(
-                run_root_handle.dir_fd, staging_name, staging_identity, created
-            )
-            raise
-    finally:
-        if owns_handle:
-            run_root_handle.close()
-    return run_root / run_name
 
 
 def _emit_review_summary(
@@ -315,6 +175,16 @@ def _emit_review_summary(
         return
     for key in ("state", "reason", "run_id", "report", "run_dir", "changed", "warnings", "blockers", "stage"):
         typer.echo(f"{key}: {summary[key]}")
+
+
+def _outcome_exit_code(outcome: "catalog_application.ReviewOutcome") -> int:
+    if outcome.exit_class == "ready":
+        return EXIT_READY
+    if outcome.exit_class == "ready_with_warnings":
+        return EXIT_READY_WITH_WARNINGS
+    if outcome.exit_class == "blocked_data_error":
+        return EXIT_DATA_ERROR
+    return EXIT_BLOCKED
 
 
 @app.command("review")
@@ -382,9 +252,6 @@ def review_bundle(
     except CatalogRefreshSealError as exc:
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_DATA_ERROR) from exc
-    except CatalogRefreshBlockedError as exc:
-        typer.secho(f"Error: {exc.code}: {exc.detail}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(EXIT_DATA_ERROR) from exc
 
 
 def _open_optional_anchored_handle(path: Path) -> AnchoredDir | None:
@@ -392,47 +259,6 @@ def _open_optional_anchored_handle(path: Path) -> AnchoredDir | None:
         return open_anchored_handle(path)
     except CatalogRefreshSealError:
         return None
-
-
-def _check_key_containment(
-    run_root: Path,
-    seal_key_path: Path,
-    run_root_handle: AnchoredDir | None,
-    key_handle: AnchoredDir | None,
-) -> None:
-    """180-g (G2): the seal key must stay outside the run tree. When BOTH
-    paths exist, containment is verified on the anchored (st_dev, st_ino)
-    chains of the held directory descriptors — a lexical check alone could
-    be raced. When either path does not exist yet, a static absolute-path
-    containment check applies (the run tree is only created, anchored, at
-    publication). The mutation namespaces (run root, key parent) must be
-    operator-owned and not peer-writable; unsafe supplied parents fail
-    closed (they are never chmod'ed). Nothing is created here."""
-    if run_root_handle is not None and key_handle is not None:
-        if run_root_handle.identity in key_handle.chain:
-            raise typer.BadParameter("--seal-key must be outside the run directory tree")
-    elif seal_key_path.is_relative_to(run_root):
-        raise typer.BadParameter("--seal-key must be outside the run directory tree")
-    if run_root_handle is not None:
-        run_root_handle.assert_mutation_namespace("run root directory")
-    if key_handle is not None:
-        key_handle.assert_mutation_namespace("seal key parent directory")
-
-
-def _assert_review_bindings(
-    run_root: Path,
-    seal_key_path: Path,
-    run_root_handle: AnchoredDir | None,
-    key_handle: AnchoredDir | None,
-) -> None:
-    """Lifecycle gate: the checked run-root and seal-key-parent bindings
-    must still hold (hop by hop, through the held descriptors). A
-    directory swapped in at ANY level — cross-phase rename included —
-    voids the review: no publication, no success announcement."""
-    if run_root_handle is not None:
-        run_root_handle.assert_name_binding(str(run_root))
-    if key_handle is not None:
-        key_handle.assert_name_binding(str(seal_key_path.parent))
 
 
 def _review_impl(
@@ -461,17 +287,42 @@ def _review_impl(
     key_handle = _open_optional_anchored_handle(seal_key_path.parent)
     try:
         _check_key_containment(run_root, seal_key_path, run_root_handle, key_handle)
-        return _review_pipeline(
-            bundle_path=bundle_path,
-            baseline_file=baseline_file,
-            first_install=first_install,
-            db_url=db_url,
-            run_root=run_root,
-            seal_key_path=seal_key_path,
+        # 217-a (G15): lazy resolution seam - the configured DATABASE_URL
+        # getter is passed as a callable, never pre-read. The shared
+        # pipeline parses the bundle once, selects its VALIDATED
+        # baseline.mode, and evaluates the getter ONLY for a db_snapshot
+        # bundle lacking an explicit --db-url (the legacy resolution
+        # point); offline and explicit-URL reviews never consult
+        # settings.
+        try:
+            outcome = catalog_application.run_review(
+                bundle_path=bundle_path,
+                baseline_file=baseline_file,
+                first_install=first_install,
+                db_url=db_url,
+                run_root=run_root,
+                seal_key_path=seal_key_path,
+                run_root_handle=run_root_handle,
+                key_handle=key_handle,
+                settings_database_url=_settings_database_url_or_none,
+            )
+        except catalog_application.ApplicationUsageError as exc:
+            raise typer.BadParameter(exc.detail) from exc
+        except catalog_application.ApplicationDataError as exc:
+            raise CliError(exc.message) from exc
+        _emit_review_summary(
+            state=outcome.state,
+            reason=outcome.reason,
+            run_id=outcome.run_id,
+            report_path=outcome.report_path,
+            run_dir=outcome.run_dir,
+            changed=outcome.changed,
+            warnings=outcome.warnings,
+            blockers=outcome.blockers,
             json_output=json_output,
-            run_root_handle=run_root_handle,
-            key_handle=key_handle,
+            stage=outcome.stage,
         )
+        return _outcome_exit_code(outcome)
     except typer.BadParameter:
         raise
     except CatalogRefreshSealError as exc:
@@ -483,128 +334,9 @@ def _review_impl(
             key_handle.close()
 
 
-def _review_pipeline(
-    *,
-    bundle_path: Path,
-    baseline_file: Path | None,
-    first_install: bool,
-    db_url: str | None,
-    run_root: Path,
-    seal_key_path: Path,
-    json_output: bool,
-    run_root_handle: AnchoredDir | None,
-    key_handle: AnchoredDir | None,
-) -> int:
-    # 1) Load the canonical bundle through the anchored bounded reader;
-    #    the 8 MiB cap is enforced from the open descriptor BEFORE any
-    #    content is allocated. Unparseable input gets a minimal blocked run.
-    try:
-        raw = read_user_file(Path(bundle_path), MAX_BUNDLE_BYTES)
-    except CatalogRefreshSealError as exc:
-        raise CliError(f"bundle file is not readable: {bundle_path}") from exc
-    try:
-        bundle = load_bundle(raw)
-    except CatalogRefreshBlockedError as exc:
-        run_name = f"blocked-invalid-{hashlib.sha256(raw).hexdigest()[:16]}"
-        run_dir = _publish_blocked_run(
-            run_root=run_root,
-            seal_key_path=seal_key_path,
-            run_root_handle=run_root_handle,
-            key_handle=key_handle,
-            run_name=run_name,
-            code=exc.code,
-            detail=exc.detail,
-            generated_at=datetime.now(UTC).isoformat(),
-            bundle_canonical=None,
-        )
-        _emit_review_summary(
-            state="BLOCKED",
-            reason=f"bundle invalid: {exc.code}",
-            run_id=run_name,
-            report_path=run_dir / "REVIEW.html",
-            run_dir=run_dir,
-            changed=0,
-            warnings=0,
-            blockers=1,
-            json_output=json_output,
-        )
-        return EXIT_DATA_ERROR
-
-    # 2) Resolve the baseline according to the bundle's declared mode.
-    # 180-e (E5): the SQL capture is the ACTUAL path this review command took,
-    # recorded as it is taken. It is checked for consistency with the bundle's
-    # declared mode inside validate_bundle; a label cannot claim SQL evidence
-    # this path did not produce.
-    sql_capture: str
-    mode = bundle.baseline.mode
-    if mode == "first_install":
-        if baseline_file is not None or db_url is not None:
-            raise typer.BadParameter("bundle baseline mode is first_install; do not supply a baseline source")
-        baseline_doc: BaselineDocument | None = None
-        sql_capture = SQL_CAPTURE_FIRST_INSTALL
-    elif mode == "db_snapshot":
-        if baseline_file is not None:
-            raise typer.BadParameter("bundle baseline mode is db_snapshot; use --db-url (or DATABASE_URL), not --baseline-file")
-        url = db_url or _settings_database_url()
-        try:
-            baseline_doc = run_async(export_baseline(url, now=datetime.now(UTC)))
-            sql_capture = SQL_CAPTURE_LIVE_EXPORT
-        except CatalogRefreshBlockedError as exc:
-            run_dir = _publish_blocked_run(
-                run_root=run_root,
-                seal_key_path=seal_key_path,
-                run_root_handle=run_root_handle,
-                key_handle=key_handle,
-                run_name=f"blocked-{exc.code}-{hashlib.sha256(canonical_bundle_bytes(bundle)).hexdigest()[:16]}",
-                code=exc.code,
-                detail=exc.detail,
-                generated_at=bundle.generated_at.isoformat(),
-                bundle_canonical=canonical_bundle_bytes(bundle),
-            )
-            _emit_review_summary(
-                state="BLOCKED",
-                reason=f"{exc.code}: {exc.detail}",
-                run_id=run_dir.name,
-                report_path=run_dir / "REVIEW.html",
-                run_dir=run_dir,
-                changed=0,
-                warnings=0,
-                blockers=1,
-                json_output=json_output,
-            )
-            return EXIT_BLOCKED
-    else:  # exported_file
-        if db_url is not None:
-            raise typer.BadParameter("bundle baseline mode is exported_file; use --baseline-file, not --db-url")
-        if baseline_file is None:
-            raise CliError("refresh bundle requires an explicit exported baseline; pass --baseline-file")
-        try:
-            baseline_raw = read_user_file(Path(baseline_file), MAX_BASELINE_BYTES)
-        except CatalogRefreshSealError as exc:
-            raise CliError(f"baseline file is not readable: {baseline_file}") from exc
-        try:
-            baseline_doc = load_baseline(baseline_raw)
-            sql_capture = SQL_CAPTURE_DOCUMENT
-        except CatalogRefreshBlockedError as exc:
-            raise CliError(f"baseline file invalid: {exc.code}") from exc
-
-    # 3-6) Shared review tail: baseline identity checks, deterministic
-    # recomputation, seal-key lifecycle, staged publish, summary.
-    return _finalize_review_pipeline(
-        bundle=bundle,
-        baseline_doc=baseline_doc,
-        sql_capture=sql_capture,
-        run_root=run_root,
-        seal_key_path=seal_key_path,
-        json_output=json_output,
-        run_root_handle=run_root_handle,
-        key_handle=key_handle,
-    )
-
-
 def _finalize_review_pipeline(
     *,
-    bundle: RefreshBundle,
+    bundle: Any,
     baseline_doc: BaselineDocument | None,
     sql_capture: str,
     run_root: Path,
@@ -613,183 +345,43 @@ def _finalize_review_pipeline(
     run_root_handle: AnchoredDir | None,
     key_handle: AnchoredDir | None,
     stage: str = STAGE_LINE,
-    acquisition: str = ACQUISITION_OFFLINE,
+    acquisition: str = "offline_supplied",
 ) -> int:
-    """Shared tail of review and collect.
+    """CLI compatibility wrapper over the shared finalize tail (217-a).
 
-    The run-root and key-parent anchored handles are held for the whole
-    tail and their checked bindings are re-asserted before the seal-key
-    load and before publication (180-g lifecycle gates unchanged).
+    The pipeline itself lives in
+    :func:`slaif_gateway.services.catalog_refresh.application.
+    finalize_review_pipeline`; this wrapper keeps the historical signature
+    (and the compact summary emission + exit-code contract) for the CLI and
+    existing consumers.
     """
-    # 1) Baseline identity checks (declared identity must match the resolved document).
-    # 181-b (B2): the database name is compared as before, and when the
-    # bundle declares explicit host/port identity fields they must match
-    # too. The full target identity remains bound inside the content
-    # digest (a substituted document is rejected above), so nothing is
-    # weakened; the comparison is now consistent with the collector's
-    # declared representation.
-    if baseline_doc is not None:
-        declared = bundle.baseline
-        if declared.content_sha256 is not None and declared.content_sha256 != baseline_doc.content_sha256:
-            _blocked_identity(
-                run_root=run_root,
-                seal_key_path=seal_key_path,
-                run_root_handle=run_root_handle,
-                key_handle=key_handle,
-                bundle=bundle, code="baseline_identity_mismatch",
-                detail="baseline content digest does not match the bundle's declared baseline identity",
-                json_output=json_output,
-                stage=stage,
-            )
-        if declared.target_database is not None and declared.target_database != baseline_doc.target.database:
-            _blocked_identity(
-                run_root=run_root,
-                seal_key_path=seal_key_path,
-                run_root_handle=run_root_handle,
-                key_handle=key_handle,
-                bundle=bundle, code="baseline_target_mismatch",
-                detail=f"baseline target {baseline_doc.target.database!r} does not match declared {declared.target_database!r}",
-                json_output=json_output,
-                stage=stage,
-            )
-        if declared.target_host is not None and (
-            declared.target_host != baseline_doc.target.server_host
-            or declared.target_port != baseline_doc.target.server_port
-        ):
-            _blocked_identity(
-                run_root=run_root,
-                seal_key_path=seal_key_path,
-                run_root_handle=run_root_handle,
-                key_handle=key_handle,
-                bundle=bundle, code="baseline_target_mismatch",
-                detail=(
-                    f"baseline target host:port {baseline_doc.target.server_host}:{baseline_doc.target.server_port} "
-                    f"does not match declared {declared.target_host}:{declared.target_port}"
-                ),
-                json_output=json_output,
-                stage=stage,
-            )
-
-    # 2) Deterministic recomputation. 181-i (I1): the acquisition scope is
-    # the RUNNER-SELECTED path of THIS invocation (review = offline;
-    # collect = live), never inferred from the bundle's collection field.
-    policy = policy_from_document(bundle.policy)
     try:
-        report, artifacts = validate_against_baseline_document(
-            bundle,
-            baseline_doc,
-            policy,
+        outcome = catalog_application.finalize_review_pipeline(
+            bundle=bundle,
+            baseline_doc=baseline_doc,
             sql_capture=sql_capture,
-            acquisition=acquisition,
-        )
-    except CatalogRefreshBlockedError as exc:
-        _blocked_identity(
             run_root=run_root,
             seal_key_path=seal_key_path,
             run_root_handle=run_root_handle,
             key_handle=key_handle,
-            bundle=bundle, code=exc.code, detail=exc.detail, json_output=json_output,
             stage=stage,
+            acquisition=acquisition,
         )
-
-    # 3) Seal key: lifecycle gate (checked bindings must still hold) then
-    #    load through the HELD key-parent descriptor (descriptor lineage).
-    try:
-        _assert_review_bindings(run_root, seal_key_path, run_root_handle, key_handle)
-        key_bytes = ensure_seal_key(
-            seal_key_path,
-            key_parent_fd=key_handle.dir_fd if key_handle is not None else None,
-        )
-    except CatalogRefreshSealError as exc:
-        raise CliError(f"checked path binding changed or seal key cannot be safely loaded: {exc}") from exc
-
-    # 4) Build the complete run in a private staged directory, then publish
-    #    it with one atomic NEW-ONLY directory operation. The run is sealed
-    #    last, so a failure at any point removes the staging tree and never
-    #    leaves a publicly complete-looking unsealed review at the final
-    #    path. The run-root handle is held across the entire
-    #    create/write/seal/publish/cleanup lifecycle; sealing consumes the
-    #    SAME held staging descriptor (descriptor lineage, capture-once);
-    #    failure cleanup is identity-checked through the held parent, and
-    #    the mutation namespace is enforced to be operator-owned and not
-    #    peer-writable, so a replaced staging entry is never published or
-    #    removed.
-    content: dict[str, bytes] = {
-        "catalog-refresh.json": canonical_bundle_bytes(bundle),
-        "catalog-baseline.json": (
-            first_install_baseline_bytes() if baseline_doc is None else _baseline_document_bytes(baseline_doc)
-        ),
-        "routes-proposal.tsv": artifacts["routes-proposal.tsv"],
-        "pricing-proposal.tsv": artifacts["pricing-proposal.tsv"],
-        "fx-proposal.json": artifacts["fx-proposal.json"],
-        "validation.json": validation_json_bytes(report),
-        "REVIEW.html": render_report(bundle, report.to_dict()),
-    }
-    owns_run_handle = False
-    if run_root_handle is None:
-        try:
-            run_root_handle = open_anchored_handle(run_root, create_missing=True)
-            run_root_handle.assert_mutation_namespace("run root directory")
-        except CatalogRefreshSealError as exc:
-            raise CliError(f"run root cannot be safely opened: {exc}") from exc
-        owns_run_handle = True
-    run_dir = run_root / bundle.run_id
-    try:
-        try:
-            _assert_review_bindings(run_root, seal_key_path, run_root_handle, key_handle)
-        except CatalogRefreshSealError as exc:
-            raise CliError(f"checked path binding changed; refusing to publish: {exc}") from exc
-        staging_name, staging_fd, staging_identity = mkdir_private_child(
-            run_root_handle.dir_fd, f".staging-{bundle.run_id}-"
-        )
-        created: list[str] = [*sorted(content), MANIFEST_NAME, "receipt.json"]
-        try:
-            try:
-                for name in sorted(content):
-                    write_staged_file(staging_fd, name, content[name], 0o644)
-                write_staged_file(staging_fd, MANIFEST_NAME, build_manifest(content), 0o644)
-                seal_run(staging_fd, key_bytes)  # receipt.json is the final file
-                os.fchmod(staging_fd, 0o755)  # standard run directory mode at publication
-                try:
-                    publish_new_only_directory(
-                        run_root_handle.dir_fd, staging_name, bundle.run_id, staging_identity
-                    )
-                except PublicationConflictError as exc:
-                    raise CliError(
-                        f"run directory already exists; refusing to overwrite completed output: {run_dir}"
-                    ) from exc
-            finally:
-                os.close(staging_fd)
-        except BaseException:
-            # Never leave a partial, unsealed run behind; the original
-            # error is re-raised to the caller after the identity-checked
-            # staging cleanup.
-            cleanup_staged_directory(
-                run_root_handle.dir_fd, staging_name, staging_identity, created
-            )
-            raise
-    finally:
-        if owns_run_handle:
-            run_root_handle.close()
-
-    blockers = sum(1 for warning in report.warnings if warning.severity == "BLOCKER")
+    except catalog_application.ApplicationDataError as exc:
+        raise CliError(exc.message) from exc
     _emit_review_summary(
-        state=report.state,
-        reason=report.state_reason,
-        run_id=bundle.run_id,
-        report_path=run_dir / "REVIEW.html",
-        run_dir=run_dir,
-        changed=report.counts.get("changed", 0),
-        warnings=len(report.warnings),
-        blockers=blockers,
+        state=outcome.state,
+        reason=outcome.reason,
+        run_id=outcome.run_id,
+        report_path=outcome.report_path,
+        run_dir=outcome.run_dir,
+        changed=outcome.changed,
+        warnings=outcome.warnings,
+        blockers=outcome.blockers,
         json_output=json_output,
-        stage=stage,
+        stage=outcome.stage,
     )
-    if report.state == "READY":
-        return EXIT_READY
-    if report.state == "READY_WITH_WARNINGS":
-        return EXIT_READY_WITH_WARNINGS
-    return EXIT_BLOCKED
+    return _outcome_exit_code(outcome)
 
 
 @app.command("collect")
@@ -1004,170 +596,55 @@ def _collect_impl(
     key_handle = _open_optional_anchored_handle(seal_key_path.parent)
     try:
         _check_key_containment(run_root, seal_key_path, run_root_handle, key_handle)
-
-        # 1) Resolve the baseline BEFORE collection: the collector needs the
-        #    document for refresh preservation, and the SQL capture label is
-        #    the ACTUAL path this command took.
-        if bootstrap:
-            baseline_mode = "first_install"
-            baseline_doc: BaselineDocument | None = None
-            sql_capture = SQL_CAPTURE_FIRST_INSTALL
-        elif baseline_file is not None:
-            baseline_mode = "exported_file"
-            try:
-                baseline_raw = read_user_file(baseline_file, MAX_BASELINE_BYTES)
-            except CatalogRefreshSealError as exc:
-                raise CliError(f"baseline file is not readable: {baseline_file}") from exc
-            try:
-                baseline_doc = load_baseline(baseline_raw)
-            except CatalogRefreshBlockedError as exc:
-                raise CliError(f"baseline file invalid: {exc.code}") from exc
-            sql_capture = SQL_CAPTURE_DOCUMENT
-        else:
-            baseline_mode = "db_snapshot"
-            url = db_url or _settings_database_url()
-            try:
-                baseline_doc = run_async(export_baseline(url, now=datetime.now(UTC)))
-            except CatalogRefreshBlockedError as exc:
-                digest = hashlib.sha256(f"db-export:{exc.code}".encode("utf-8")).hexdigest()[:16]
-                run_dir = _publish_blocked_run(
-                    run_root=run_root,
-                    seal_key_path=seal_key_path,
-                    run_root_handle=run_root_handle,
-                    key_handle=key_handle,
-                    run_name=f"blocked-{exc.code}-{digest}",
-                    code=exc.code,
-                    detail=exc.detail,
-                    stage=STAGE_LINE_COLLECT_NOT_STARTED,
-                    generated_at=datetime.now(UTC).isoformat(),
-                    bundle_canonical=None,
-                )
-                _emit_review_summary(
-                    state="BLOCKED",
-                    reason=f"{exc.code}: {exc.detail}",
-                    run_id=run_dir.name,
-                    report_path=run_dir / "REVIEW.html",
-                    run_dir=run_dir,
-                    changed=0,
-                    warnings=0,
-                    blockers=1,
-                    json_output=json_output,
-                    stage=STAGE_LINE_COLLECT_NOT_STARTED,
-                )
-                return EXIT_BLOCKED
-            sql_capture = SQL_CAPTURE_LIVE_EXPORT
-
-        # 2) Collection: bounded official retrieval + deterministic parsing.
-        # The collector measures its own start/finish window (passing a
-        # pre-fetch ``now`` would date the run BEFORE the retrievals it
-        # records and trip the future-timestamp gate).
-        now = datetime.now(UTC)
-        client = catalog_sources.new_client()
+        # 217-a (G15): legacy LAZY resolution point - the configured
+        # DATABASE_URL is consulted ONLY on the refresh-without-exported-
+        # file path (no --db-url, no --baseline-file); bootstrap and
+        # exported-file modes never touch settings at all.
+        settings_database_url = None
+        if not bootstrap and baseline_file is None and db_url is None:
+            settings_database_url = _settings_database_url_or_none()
         try:
-            bundle = catalog_collection.collect_bundle(
+            outcome = catalog_application.run_collect(
+                bootstrap=bootstrap,
+                refresh=refresh,
+                profile=profile,
                 providers=provider_tuple,
                 model_include=model_include,
-                baseline_mode=baseline_mode,
-                baseline=baseline_doc,
-                client=client,
-                research=research_config,
-            )
-        except (CatalogRefreshBlockedError, SourceFetchError) as exc:
-            code = getattr(exc, "code", None) or "collection_failed"
-            detail = getattr(exc, "detail", None) or str(exc)
-            digest = hashlib.sha256(f"{code}:{detail}".encode("utf-8")).hexdigest()[:16]
-            run_dir = _publish_blocked_run(
+                baseline_file=baseline_file,
+                db_url=db_url,
                 run_root=run_root,
                 seal_key_path=seal_key_path,
                 run_root_handle=run_root_handle,
                 key_handle=key_handle,
-                run_name=f"blocked-{code}-{digest}",
-                code=code,
-                detail=detail,
-                stage=STAGE_LINE_COLLECT_INCOMPLETE,
-                generated_at=now.isoformat(),
-                bundle_canonical=None,
+                research=research_config,
+                settings_database_url=settings_database_url,
             )
-            _emit_review_summary(
-                state="BLOCKED",
-                reason=f"collection failed: {code}: {detail}",
-                run_id=run_dir.name,
-                report_path=run_dir / "REVIEW.html",
-                run_dir=run_dir,
-                changed=0,
-                warnings=0,
-                blockers=1,
-                json_output=json_output,
-                stage=STAGE_LINE_COLLECT_INCOMPLETE,
-            )
-            # 181-b (B4): the run was published as state BLOCKED; a
-            # semantically blocked collect exits 20 (65 is reserved for
-            # data errors where no blocked run is published).
-            return EXIT_BLOCKED
-        finally:
-            client.close()
-
-        # 3-6) Shared review tail: identity checks, deterministic
-        # recomputation, seal-key lifecycle, staged publish, summary.
-        return _finalize_review_pipeline(
-            bundle=bundle,
-            baseline_doc=baseline_doc,
-            sql_capture=sql_capture,
-            run_root=run_root,
-            seal_key_path=seal_key_path,
+        except catalog_application.ApplicationUsageError as exc:
+            raise typer.BadParameter(exc.detail) from exc
+        except catalog_application.ApplicationDataError as exc:
+            raise CliError(exc.message) from exc
+        _emit_review_summary(
+            state=outcome.state,
+            reason=outcome.reason,
+            run_id=outcome.run_id,
+            report_path=outcome.report_path,
+            run_dir=outcome.run_dir,
+            changed=outcome.changed,
+            warnings=outcome.warnings,
+            blockers=outcome.blockers,
             json_output=json_output,
-            run_root_handle=run_root_handle,
-            key_handle=key_handle,
-            stage=STAGE_LINE_COLLECT,
-            # 181-i (I1): only the collect path selects the acquired (live)
-            # context — this invocation executed the collection path.
-            acquisition=ACQUISITION_LIVE,
+            stage=outcome.stage,
         )
+        return _outcome_exit_code(outcome)
+    except typer.BadParameter:
+        raise
+    except CatalogRefreshSealError as exc:
+        raise CliError(f"refusing unsafe directory configuration: {exc}") from exc
     finally:
         if run_root_handle is not None:
             run_root_handle.close()
         if key_handle is not None:
             key_handle.close()
-
-
-def _blocked_identity(
-    *,
-    run_root: Path,
-    seal_key_path: Path,
-    run_root_handle: AnchoredDir | None,
-    key_handle: AnchoredDir | None,
-    bundle: Any,
-    code: str,
-    detail: str,
-    json_output: bool,
-    stage: str = STAGE_LINE,
-) -> None:
-    canonical = canonical_bundle_bytes(bundle)
-    run_dir = _publish_blocked_run(
-        run_root=run_root,
-        seal_key_path=seal_key_path,
-        run_root_handle=run_root_handle,
-        key_handle=key_handle,
-        run_name=f"blocked-{code}-{hashlib.sha256(canonical).hexdigest()[:16]}",
-        code=code,
-        detail=detail,
-        stage=stage,
-        generated_at=bundle.generated_at.isoformat(),
-        bundle_canonical=canonical,
-    )
-    _emit_review_summary(
-        state="BLOCKED",
-        reason=f"{code}: {detail}",
-        run_id=run_dir.name,
-        report_path=run_dir / "REVIEW.html",
-        run_dir=run_dir,
-        changed=0,
-        warnings=0,
-        blockers=1,
-        json_output=json_output,
-        stage=stage,
-    )
-    raise typer.Exit(EXIT_BLOCKED)
 
 
 @app.command("verify")
@@ -1240,7 +717,10 @@ def export_baseline_command(
     ],
     db_url: Annotated[
         str | None,
-        typer.Option("--db-url", help="PostgreSQL URL for the read-only export. Defaults to DATABASE_URL."),
+        typer.Option(
+            "--db-url",
+            help="PostgreSQL URL for the read-only export. Defaults to DATABASE_URL.",
+        ),
     ] = None,
     json_output: Annotated[
         bool,
@@ -1270,7 +750,7 @@ def export_baseline_command(
         publish_new_only_file(out_path.parent, out_path.name, _baseline_document_bytes(doc), 0o644)
     except PublicationConflictError:
         typer.secho(f"Error: refusing to overwrite existing output: {out_path}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(EXIT_DATA_ERROR)
+        raise typer.Exit(EXIT_DATA_ERROR) from None
     except CatalogRefreshSealError as exc:
         typer.secho(f"Error: output cannot be safely published: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_DATA_ERROR) from exc
@@ -1532,5 +1012,5 @@ def apply_status_command(
         typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_DATA_ERROR) from exc
     except CatalogRefreshBlockedError as exc:
-        typer.secho(f"Error: {exc.code}: {exc.detail}", fg=typer.colors.RED, err=True)
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(EXIT_DATA_ERROR) from exc

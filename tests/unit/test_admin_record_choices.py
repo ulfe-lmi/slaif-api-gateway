@@ -306,6 +306,109 @@ def test_plain_value_selected_in_batch_protected_from_eviction() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 217-a collect upstream-model projection (catalog_upstream kind)
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedChoiceSession:
+    """Returns one canned ``(model, latest)`` result set per execute call,
+    in source order, so a test can prove WHICH columns a kind queries
+    (the ``model`` kind issues five, ``catalog_upstream`` exactly two)."""
+
+    def __init__(self, per_call: list[list[tuple[str, object]]]) -> None:
+        self._per_call = per_call
+        self._index = 0
+
+    async def execute(self, stmt: object) -> object:
+        rows = self._per_call[min(self._index, len(self._per_call) - 1)]
+        self._index += 1
+        return _ModelRows(rows)
+
+
+class _ModelRows:
+    def __init__(self, rows: list[tuple[str, object]]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[object]:
+        return list(self._rows)
+
+
+def test_catalog_upstream_projects_upstream_ids_only() -> None:
+    # ``model`` queries FIVE sources in order (route requested, route
+    # upstream, pricing upstream, usage requested, usage resolved).
+    # ``catalog_upstream`` queries exactly TWO (route upstream, pricing
+    # upstream). A requested alias and a usage-only generic token appear
+    # only in the ``model`` sources and must not be selectable for collect.
+    alias = "provider/alias-one"          # a public requested alias
+    generic_only = "provider/usage-only"   # seen only in usage history
+    upstream_one = "provider/upstream-one"
+    upstream_two = "provider/upstream-two"
+    model_calls = [
+        [(alias, None)],            # route requested
+        [(upstream_one, None)],     # route upstream
+        [(upstream_one, None)],     # pricing upstream
+        [(alias, None)],            # usage requested
+        [(generic_only, None)],     # usage resolved
+    ]
+    choices_model = asyncio.run(
+        load_choices(_ScriptedChoiceSession(model_calls), "model")
+    )
+    model_ids = {c.id for c in choices_model}
+    assert {alias, upstream_one, generic_only} <= model_ids
+
+    catalog_calls = [
+        [(upstream_one, None)],     # route upstream
+        [(upstream_two, None)],     # pricing upstream
+    ]
+    choices_catalog = asyncio.run(
+        load_choices(_ScriptedChoiceSession(catalog_calls), "catalog_upstream")
+    )
+    catalog_ids = {c.id for c in choices_catalog}
+    assert catalog_ids == {upstream_one, upstream_two}
+    # alias != upstream: the requested alias is NOT a collect choice.
+    assert alias not in catalog_ids
+    # generic/usage-only tokens are excluded (routes/pricing only).
+    assert generic_only not in catalog_ids
+    # the projection labels every value as an official upstream id.
+    assert all(c.sub == "official upstream" for c in choices_catalog)
+
+
+def test_catalog_upstream_withholds_credential_shaped_upstream() -> None:
+    secret_upstream = "sk-slaif-0000000000000000000000000000"
+    plain_upstream = "provider/upstream-plain"
+    catalog_calls = [
+        [(secret_upstream, None), (plain_upstream, None)],  # route upstream
+        [(plain_upstream, None)],                            # pricing upstream
+    ]
+    choices = asyncio.run(
+        load_choices(
+            _ScriptedChoiceSession(catalog_calls),
+            "catalog_upstream",
+            accepted_prefixes=("sk-slaif-"),
+        )
+    )
+    ids = {c.id for c in choices}
+    assert secret_upstream not in ids  # credential-shaped token withheld
+    assert plain_upstream in ids
+
+
+def test_catalog_upstream_selected_future_upstream_hydrates_plain() -> None:
+    # A future official upstream id not yet in the catalog stays selectable
+    # (the collect operator may type it explicitly).
+    catalog_calls = [[("provider/upstream-one", None)]]
+    choices = asyncio.run(
+        load_choices(
+            _ScriptedChoiceSession(catalog_calls),
+            "catalog_upstream",
+            selected=("provider/future-upstream",),
+        )
+    )
+    ids = [c.id for c in choices]
+    assert "provider/future-upstream" in ids
+    assert "provider/upstream-one" in ids
+
+
+# ---------------------------------------------------------------------------
 # Loader call-site spec shape (tuple of 3-tuples) in admin.py
 # ---------------------------------------------------------------------------
 

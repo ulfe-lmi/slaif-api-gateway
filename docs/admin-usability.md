@@ -1681,3 +1681,81 @@ or dependency**; reservations, ledger rows, fences, and audit history
 are untouched. The CLI `reconcile-*` commands are unchanged. See
 [`upgrade-runbook.md`](upgrade-runbook.md) and
 [`runbooks/admin-access.md`](runbooks/admin-access.md).
+
+
+## 18. Catalog workspace (G15, 217-a)
+
+- Dashboard -> **Operations** -> **Catalog workspace**
+  (`/admin/operations/catalog/`): Setup/status index, **Proposals**,
+  **Collect**, **Review supplied bundle**, sealed-run detail
+  (`/runs/<run-id>/`), reviewed **apply** + **apply status**, and
+  **Export baseline**. The feature is default-off; a disabled or
+  incomplete/unsafe setup renders a useful, authenticated setup/status
+  page (zero dispatch, network, or mutation) while every other dashboard
+  surface stays usable.
+
+### 18.1 Layout (frozen)
+
+- The index shows concise **Setup** and **Storage** summary sections and
+  **full-width** jobs / sealed-runs sections; the sealed-run review page
+  renders compact facts first with full-width, readable tables
+  (row counts, warnings, dispositions, price comparisons, bounded
+  apply-plan projection) and the actions near the outcome. Long URLs and
+  digests wrap instead of clipping; desktop and 420 px narrow renders are
+  both covered. Operator copy is short (review the changes, then apply
+  explicitly); detailed setup/security limits live in the associated help
+  and documentation.
+
+### 18.2 Stable forms and job status
+
+- Pages do NOT auto-reload: every active job offers an explicit
+  **Refresh status** link bound to the EXACT job id
+  (`?job=<id>`). An explicit unknown, cleaned-up, malformed, or
+  foreign-family job id shows a fixed "Job status unavailable" refusal
+  and NEVER substitutes the newest job; the absent parameter keeps the
+  newest-job view.
+- The proposal result shows the provider scope that was actually
+  generated, so a reset/default form cannot mislabel prior output.
+- Price comparisons display the currency AND the actual unit (token
+  dimensions per 1,000,000 tokens; the request dimension per request);
+  missing/new prices render as a clear "no prior price", never `None`.
+- Optional file inputs are handled like real browser submissions: an
+  unselected file (native empty filename, zero bytes) is ignored, while a
+  deliberately empty named file stays a strict validation refusal.
+
+### 18.3 Pickers and bounded choices
+
+- Model choices on Collect and the proposal include/exclude filters use
+  the NEW closed **`catalog_upstream`** record choice: the official
+  UPSTREAM model IDs from routes + pricing (latest ~100, older search,
+  manual entry) — the collector selects literal upstream IDs, so the
+  alias-unioning generic model picker would offer values that cannot
+  select their intended official model. Legacy model pickers elsewhere
+  are unchanged.
+- Proposals use finite closed choices (provider scope, endpoint-scope
+  vocabulary `chat_completions`/`responses`, package presets) rather than
+  free text; oversized explicit model selections are refused, never
+  truncated.
+
+### 18.4 Authorization and privacy
+
+- Apply (reviewed confirmation) and the custody-cleanup actions require
+  the EXISTING `superadmin` role; inspection, collect, review, verify,
+  export, and proposal generation remain available to ordinary
+  signed-in admins (see
+  [`runbooks/admin-access.md`](runbooks/admin-access.md)).
+- Artifact downloads and status polls use non-rotating authenticated read
+  contexts (no CSRF churn); mutating forms keep fresh CSRF validation.
+  Secret-persistence guards refuse known-incoming-secret values BEFORE
+  they are stored in custody.
+- Generated proposal artifacts are UNSEALED: the UI makes no
+  cryptographic "verified" claim for them.
+
+### 18.5 Upgrade note
+
+Recreate/restart the API and worker services after changing
+`CATALOG_REFRESH_*` values (same mounted custody volume; scoped nginx
+`client_max_body_size` for the bounded uploads). There is **no schema
+migration**, **no key-policy migration**, and **no new dependency**;
+disabling the feature leaves custody contents untouched and the CLI
+unaffected.

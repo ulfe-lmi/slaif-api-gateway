@@ -68,6 +68,122 @@ existing proposal surface; catalog refresh consumes the same route/pricing/FX
 parse, validate, classify, and execution-plan functions and does not duplicate
 their rules.
 
+## Admin GUI workspace (G15, delivered by 217-a)
+
+The same workflow is also available as the bounded **"Catalog workspace"**
+under the admin dashboard at `/admin/operations/catalog/` (Operations
+navigation). It is **default-off** and feature-local: enabling it changes
+nothing about the CLI, the existing standalone import / OpenAI-assisted
+proposal pages, or any other gateway surface, and incomplete or unsafe
+catalog configuration never takes the rest of the app down.
+
+Setup is created **OFFLINE by the operator** — the GUI never creates or
+repairs any path or key:
+
+- `CATALOG_REFRESH_ROOT`: an operator-owned `0700` directory OUTSIDE the
+  repository source tree and outside any local PostgreSQL data directory
+  (configured paths inside the gateway source/package/repository root or a
+  recognizable PGDATA are refused; missing/unsafe configuration renders
+  useful setup help with zero dispatch, network, or mutation).
+- `CATALOG_REFRESH_SEAL_KEY`: an EXISTING operator-generated `0600` key
+  file, outside the repository and the run tree.
+- Both paths must be visible to the **API container and every worker**
+  (the same mounted volume in Docker Compose), because read-only jobs
+  execute in the worker while the API page reads the same custody state.
+- After changing any `CATALOG_REFRESH_*` setting, recreate/restart the
+  **API service and all worker services** (the Celery app reads them at
+  startup). A reverse-proxy change (the scoped nginx
+  `client_max_body_size 48m` for the bounded 8 MiB bundle / 32 MiB
+  baseline uploads) takes effect for new connections only after the
+  established proxy configuration-test + reload/recreate procedure (see
+  [Deployment: Streaming And Nginx](deployment.md#streaming-and-nginx));
+  the copy-ready procedure is in
+  [Deployment: Catalog Refresh Custody](deployment.md#catalog-refresh-custody-optional-default-off).
+
+The GUI drives the EXISTING Core services (`collect`, `review`,
+`verify`, `export-baseline`, `apply`, `status`) — it adds orchestration,
+a bounded admin surface, and operator custody for job state; it is not a
+second catalog backend:
+
+- **Proposals** run `generate_provider_catalog_proposal` as a queued
+  read-only job (closed endpoint-scope vocabulary `chat_completions` /
+  `responses`, closed package presets, docs / API / OpenAI-only assisted
+  sources behind the existing deployment-secret + risk-ack gates); the
+  generated route/pricing TSVs bridge to the EXISTING import preview and
+  are UNSEALED proposal artifacts (no cryptographic "verified" claim).
+- **Collect** (bootstrap vs refresh, explicit provider/model choices via
+  the closed `catalog_upstream` upstream-ID picker, live DB or uploaded
+  baseline) publishes one sealed run through the same Core pipeline as the
+  CLI.
+- **Run review / verify** render the authenticated canonical plan (honest
+  configured-vs-SQL-observed target semantics, warnings, price
+  comparisons with explicit units, bounded apply-plan projection); the
+  sealed `REVIEW.html` remains a verified attachment.
+- **Apply** is the reviewed explicit confirmation (bounded reason,
+  server-derived actor, FRESH EXISTING superadmin gate) through the
+  session-bound HMAC review intent and `apply_reviewed_run`; **status**
+  reports the authoritative `apply_status` records — an exact committed
+  repeat returns `already_committed` with no duplicate rows, and
+  broker/commit acknowledgment loss stays `unconfirmed` until authoritative
+  status resolves it.
+- **Review supplied bundle** and **Export baseline** are queued jobs as
+  well (the standalone supplied-bundle review publishes under its SUPPLIED
+  run id NEW-ONLY; export is a read-only consistent allowlisted document).
+
+Operator custody is bounded by four finite knobs (all enforced under
+concurrent requests/workers; full capacity refuses explicitly):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `CATALOG_REFRESH_MAX_ACTIVE_JOBS` | `1` | concurrent queued/running jobs |
+| `CATALOG_REFRESH_MAX_RETAINED_RUNS` | `20` | retained sealed runs / proposal artifacts |
+| `CATALOG_REFRESH_MAX_TOTAL_BYTES` | `1 GiB` | total custody bytes (runs, uploads, staging, reservations) |
+| `CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS` | `300` | read-only job time budget |
+
+Lifecycle guarantees:
+
+- **NEW-ONLY publication**: a run id already published in the same root is
+  refused (byte/inode identity), so a late or duplicate worker delivery can
+  never overwrite published sealed artifacts; the GUI's old-artifact
+  identity refusal is the same guarantee surfaced on the page. Existing
+  sealed artifacts that no longer match their recorded identity (for
+  example after an out-of-band change) are REFUSED, not repaired: keep the
+  same seal key and original baseline, and supported regeneration produces
+  a NEW run id — the workflow never bypasses verification or re-signs
+  existing artifacts.
+- **Cancellation** applies to read-only queued/running jobs only (apply is
+  never a cancelable queued job). A cancel request on a still-QUEUED job
+  terminates it terminally under the admission lock and it can never
+  execute on delayed broker delivery; an already-running job reports
+  truthful `cancel requested` (cooperative) until the worker observes the
+  checkpoint.
+- **Cleanup** removes one TERMINAL job (record + its OWN generated
+  artifacts) or one terminal run through identity-checked anchored
+  helpers. The preflight checks refuse extras, non-terminal state, or
+  foreign entries before any deletion; a mid-removal I/O failure can
+  leave PARTIAL owned artifacts behind (the operator re-runs or removes
+  them through the same bounded paths) — cleanup is not a transaction and
+  never touches database or catalog state (nothing is rolled back by it).
+  Retention is operator-managed — there is no automatic expiry.
+- **Rollback limits**: disabling `CATALOG_REFRESH_GUI_ENABLED` keeps the
+  catalog workspace routes registered (an authenticated operator still
+  gets the disabled/setup-help page) but permits NO catalog work — no
+  dispatch, no jobs, no apply, no custody changes — and touches no
+  custody contents. The CLI workflow is independent and unaffected by
+  the flag. Nothing in this workspace performs a schema migration or a
+  key-policy migration. The legacy CLI/API behavior is preserved: the
+  CLI delegates backwards-compatibly to the shared collect/review
+  composition; the one intentional behavior change disclosed here is that
+  the proposal generator's public `max_models` cap is now honored for the
+  OpenAI provider as well (previously only OpenRouter), applied after
+  include/exclude filtering.
+
+The workspace pages do not auto-reload; each active job offers an explicit
+"Refresh status" link bound to the EXACT job id (an explicit unknown,
+cleaned-up, or foreign-family job id is refused, never substituted by the
+newest job). The run reference reuses the EXACT Core run-id grammar
+(`^[a-z0-9][a-z0-9-]{0,63}$`) — there is no extra browser-UUID mapping.
+
 ## One-command administrator workflow (`slaif-catalog-refresh`)
 
 The installed administrator workflow is one read-only command that

@@ -145,6 +145,34 @@ class Settings(BaseSettings):
     LAZY_THROTTLING_MAX_WAITING_TOTAL: int = 256
     LAZY_THROTTLING_WAITING_LEASE_TTL_SECONDS: int = 300
 
+    # Admin GUI catalog refresh (G15 / 217-a): default OFF. When enabled,
+    # the operator must explicitly configure an operator-owned run root and
+    # the path of the EXISTING 0600 seal key (both outside the repository
+    # and database, mounted for the API and worker). The GUI opens the
+    # existing root and key only: it never creates or replaces the seal
+    # key, repairs permissions, or chooses paths. The bounded custody
+    # limits below are enforced under concurrent requests/workers:
+    # active background jobs, retained runs, total run-tree bytes, and the
+    # read-only work time budget. See docs/configuration.md.
+    CATALOG_REFRESH_GUI_ENABLED: bool = False
+    CATALOG_REFRESH_ROOT: str | None = None
+    CATALOG_REFRESH_SEAL_KEY: str | None = None
+    CATALOG_REFRESH_MAX_ACTIVE_JOBS: int = 1
+    CATALOG_REFRESH_MAX_RETAINED_RUNS: int = 20
+    CATALOG_REFRESH_MAX_TOTAL_BYTES: int = 1024 * 1024 * 1024  # 1 GiB
+    CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS: int = 300
+    # Opt-in isolated semantic research for GUI collect (G15): the finite
+    # operator-configured EXISTING isolated runner. The browser only sees a
+    # bounded enable choice (available when fully configured); the
+    # executable, HTTPS endpoint, model, and credential-ENV-NAME come from
+    # deployment settings, never from the browser. Unset = research stays
+    # NOT_RUN for GUI collect.
+    CATALOG_REFRESH_RESEARCH_CLI_BIN: str | None = None
+    CATALOG_REFRESH_RESEARCH_ENDPOINT: str | None = None
+    CATALOG_REFRESH_RESEARCH_MODEL: str | None = None
+    CATALOG_REFRESH_RESEARCH_AUTH_ENV: str | None = None
+    CATALOG_REFRESH_RESEARCH_TIMEOUT_SECONDS: int = 120
+
     ACTIVE_HMAC_KEY_VERSION: str = "1"
     TOKEN_HMAC_SECRET_V1: str | None = None
     TOKEN_HMAC_SECRET: str | None = None
@@ -483,7 +511,50 @@ class Settings(BaseSettings):
         self._validate_admin_session_settings()
         self._validate_email_settings()
         self._validate_reconciliation_settings()
+        self._validate_catalog_refresh_settings()
         return self
+
+    def _validate_catalog_refresh_settings(self) -> None:
+        """G15 (217-a): bounded, finite catalog-refresh custody settings.
+
+        Only the NUMERIC custody bounds are validated here (finite ranges
+        with documented tuning, docs/configuration.md). An enabled-but-
+        INCOMPLETE setup (missing root or seal key paths) is deliberately
+        NOT a deployment error: the catalog setup inspector reports a
+        useful authenticated unavailable/setup-help state, catalog actions
+        fail closed with zero dispatch/network/mutation, and every
+        unrelated app route stays usable. Missing/unsafe custody or key
+        configuration is handled at the setup inspector/action gates,
+        which only open EXISTING properly-owned custody and key material.
+        """
+        if not 1 <= self.CATALOG_REFRESH_MAX_ACTIVE_JOBS <= 16:
+            raise ValueError(
+                "CATALOG_REFRESH_MAX_ACTIVE_JOBS must be between 1 and 16"
+            )
+        if not 1 <= self.CATALOG_REFRESH_MAX_RETAINED_RUNS <= 500:
+            raise ValueError(
+                "CATALOG_REFRESH_MAX_RETAINED_RUNS must be between 1 and 500"
+            )
+        _MiB = 1024 * 1024
+        if not 64 * _MiB <= self.CATALOG_REFRESH_MAX_TOTAL_BYTES <= 1024 * 1024 * _MiB:
+            raise ValueError(
+                "CATALOG_REFRESH_MAX_TOTAL_BYTES must be between 64 MiB and 1 TiB"
+            )
+        if not 10 <= self.CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS <= 3600:
+            raise ValueError(
+                "CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS must be between "
+                "10 and 3600"
+            )
+        # Feature-local setup rule (same as the custody root/key): an
+        # INCOMPLETE or unsafe CATALOG_REFRESH_RESEARCH_* configuration is
+        # NOT a deployment error - it must not take unrelated gateway/GUI
+        # routes or deterministic catalog collection down. The research
+        # setup inspector exposes research as unavailable with safe setup
+        # guidance, and the research runner is only used (never an
+        # unsandboxed fallback or call) once the FULL existing-runner
+        # configuration is verified safe at USE time: HTTPS endpoint,
+        # readable executable, credential-ENV-NAME present and non-empty,
+        # and the finite 10..600 second timeout bound.
 
     def local_coding_signing_secret(self) -> bytes:
         """Return the dedicated active Local Coding signing secret."""

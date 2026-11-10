@@ -22,6 +22,55 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "catalog_refresh"
 runner = CliRunner()
 
 
+def _stamp_synthetic_collection_identity(bundle: object) -> object:
+    """217-a (G15): stamp a SYNTHETIC live-collection identity on a supplied
+    bundle so a fake collect seam returns a bundle that satisfies the
+    live-collection context. Retrieval records faithfully cover the
+    bundle's own DISTINCT source URLs with the bundle's recorded content
+    digests (synthetic official-source bytes; no physical network). The
+    identity is the test's own measurement, exactly what the runner
+    adopts in the live context."""
+    from datetime import UTC, datetime
+
+    from slaif_gateway.schemas.catalog_refresh import (
+        CollectionIdentity,
+        SourceRetrievalRecord,
+    )
+
+    started = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+    by_url: dict[str, str] = {}
+    providers: set[str] = set()
+    for source in bundle.sources:  # type: ignore[attr-defined]
+        by_url.setdefault(source.url, source.content_sha256)
+        if source.provider in ("openai", "openrouter"):
+            providers.add(source.provider)
+    identity = CollectionIdentity(
+        tool="slaif-gateway/catalog-refresh/synthetic-test",
+        code_revision="0" * 64,
+        profile="standard-v1",
+        providers=tuple(sorted(providers)),
+        model_include=(),
+        started_at=started,
+        finished_at=started,
+        retrievals=tuple(
+            SourceRetrievalRecord(
+                requested_url=url,
+                retrieved_at=started,
+                outcome="ok",
+                status=200,
+                content_bytes=2048,
+                content_sha256=content_sha256,
+            )
+            for url, content_sha256 in sorted(by_url.items())
+        ),
+        inventory=(),
+        deduplicated_fetches=True,
+        source_model_counts={},
+    )
+    # The bundle model is frozen: stamp via an immutable update copy.
+    return bundle.model_copy(update={"collection": identity})  # type: ignore[union-attr]
+
+
 def _review(args: list[str], tmp_path: Path):
     return runner.invoke(
         app,
@@ -49,6 +98,112 @@ def test_review_first_install_is_ready(tmp_path: Path) -> None:
     report = tmp_path / "runs" / "fixture-first-install-001" / "REVIEW.html"
     assert report.is_file()
     assert (tmp_path / "runs" / "fixture-first-install-001" / "receipt.json").is_file()
+
+
+def test_review_first_install_with_configured_database_url(tmp_path: Path) -> None:
+    """217-a (G15): a deployment-configured DATABASE_URL must not alter the
+    first-install review path. The caller passes no --db-url; the
+    configured ambient database is never consulted, and the outcome is
+    identical to the unconfigured run (no DB error, no usage error)."""
+    import slaif_gateway.cli.catalog_refresh as cli_mod
+    from slaif_gateway.config import get_settings
+
+    def forbidden_settings(*args: object, **kwargs: object) -> None:
+        raise AssertionError("first-install review must not consult settings")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://synthetic@127.0.0.1:1/proof",
+    )
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        cli_mod, "_settings_database_url_or_none", forbidden_settings
+    )
+    try:
+        result = _review(
+            [str(FIXTURES / "bundle-first-install.json"), "--first-install"],
+            tmp_path,
+        )
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    assert result.exit_code == 10, result.output
+    lines = result.stdout.splitlines()
+    assert lines[0] == "state: READY_WITH_WARNINGS"
+    assert "changed: 0" in lines
+    assert "warnings: 1" in lines
+    assert "BadParameter" not in result.stdout
+    assert "DATABASE_URL" not in result.stdout
+    assert (tmp_path / "runs" / "fixture-first-install-001" / "receipt.json").is_file()
+
+
+def test_review_first_install_bundle_without_flag_does_not_consult_settings(
+    tmp_path: Path,
+) -> None:
+    """217-a (G15): the baseline path is selected from the bundle's
+    VALIDATED mode, not from the optional --first-install flag. A
+    first-install bundle reviewed with NO flag and a configured ambient
+    DATABASE_URL stays fully offline: the lazy settings getter is never
+    evaluated and the outcome matches the flagged run."""
+    import slaif_gateway.cli.catalog_refresh as cli_mod
+    from slaif_gateway.config import get_settings
+
+    def forbidden_settings(*args: object, **kwargs: object) -> None:
+        raise AssertionError(
+            "offline first-install review must not consult settings"
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://synthetic@127.0.0.1:1/proof",
+    )
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        cli_mod, "_settings_database_url_or_none", forbidden_settings
+    )
+    try:
+        result = _review(
+            [str(FIXTURES / "bundle-first-install.json")],
+            tmp_path,
+        )
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    assert result.exit_code == 10, result.output
+    lines = result.stdout.splitlines()
+    assert lines[0] == "state: READY_WITH_WARNINGS"
+    assert "BadParameter" not in result.stdout
+    assert (tmp_path / "runs" / "fixture-first-install-001" / "receipt.json").is_file()
+
+
+def test_review_invalid_bundle_does_not_consult_settings(tmp_path: Path) -> None:
+    """217-a (G15): a malformed bundle is rejected during load, BEFORE
+    any baseline mode is known: the lazy settings getter must never be
+    evaluated, and only the minimal blocked run is published."""
+    import slaif_gateway.cli.catalog_refresh as cli_mod
+    from slaif_gateway.config import get_settings
+
+    def forbidden_settings(*args: object, **kwargs: object) -> None:
+        raise AssertionError("invalid-bundle review must not consult settings")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://synthetic@127.0.0.1:1/proof",
+    )
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        cli_mod, "_settings_database_url_or_none", forbidden_settings
+    )
+    try:
+        result = _review([str(FIXTURES / "bundle-duplicate-key.json")], tmp_path)
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    assert result.exit_code == 65, result.output
+    assert "bundle invalid: bundle_invalid_json" in result.stdout
 
 
 def test_review_refresh_with_changes_is_blocked(tmp_path: Path) -> None:
@@ -374,13 +529,15 @@ def test_export_baseline_refuses_existing_output(tmp_path: Path, monkeypatch) ->
 
 def test_review_failure_leaves_no_partial_run_at_final_path(tmp_path: Path, monkeypatch) -> None:
     """A publish failure must not leave an unsealed, complete-looking run."""
-    import slaif_gateway.cli.catalog_refresh as cr
+    # 217-a (G15): the review pipeline body now lives in the shared
+    # application composition; the fault seam follows it there.
+    import slaif_gateway.services.catalog_refresh.application as cr_app
     from slaif_gateway.services.catalog_refresh.errors import CatalogRefreshSealError
 
     def boom(_run_dir, _key):
         raise CatalogRefreshSealError("simulated seal failure")
 
-    monkeypatch.setattr(cr, "seal_run", boom)
+    monkeypatch.setattr(cr_app, "seal_run", boom)
     result = _review(
         [str(FIXTURES / "bundle-first-install.json"), "--first-install"], tmp_path
     )
@@ -546,6 +703,7 @@ def test_collect_preacquisition_baseline_failure_labels_path_and_publishes(
     import socket
 
     import slaif_gateway.cli.catalog_refresh as cli_mod
+    import slaif_gateway.services.catalog_refresh.application as app_comp
     import slaif_gateway.services.catalog_refresh.sources as sources_mod
     from slaif_gateway.services.catalog_refresh.errors import (
         CatalogRefreshBlockedError,
@@ -564,7 +722,9 @@ def test_collect_preacquisition_baseline_failure_labels_path_and_publishes(
         raise AssertionError("acquisition was not supposed to be reached")
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(cli_mod, "export_baseline", baseline_fail)
+    # 217-a (G15): baseline resolution now happens inside the shared
+    # application composition; the fault seam follows it there.
+    monkeypatch.setattr(app_comp, "export_baseline", baseline_fail)
     monkeypatch.setattr(sources_mod, "new_client", forbidden)
     monkeypatch.setattr(socket, "getaddrinfo", forbidden)
     monkeypatch.setattr(socket.socket, "connect", forbidden)
@@ -605,6 +765,68 @@ def test_collect_preacquisition_baseline_failure_labels_path_and_publishes(
     assert "retrieval performed by this command" not in html
 
 
+def test_collect_bootstrap_with_configured_database_url(tmp_path: Path) -> None:
+    """217-a (G15): a deployment-configured DATABASE_URL must not conflict
+    with collect --bootstrap when the caller passes no --db-url. Bootstrap
+    resolves the synthetic first-install baseline; the configured ambient
+    database is never consulted, and the collected (synthetic) bundle is
+    reviewed as first-install."""
+    import types
+
+    import slaif_gateway.cli.catalog_refresh as cli_mod
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.services.catalog_refresh import (
+        collection as collection_mod,
+        sources as sources_mod,
+    )
+    from slaif_gateway.services.catalog_refresh.bundle import load_bundle
+
+    seen: dict[str, bool] = {}
+
+    def fake_collect_bundle(**kwargs: object) -> object:
+        seen["reached"] = True
+        return _stamp_synthetic_collection_identity(
+            load_bundle((FIXTURES / "bundle-first-install.json").read_bytes())
+        )
+
+    def forbidden_settings(*args: object, **kwargs: object) -> None:
+        raise AssertionError("bootstrap collect must not consult settings")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://synthetic@127.0.1:1/proof",
+    )
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        cli_mod, "_settings_database_url_or_none", forbidden_settings
+    )
+    monkeypatch.setattr(collection_mod, "collect_bundle", fake_collect_bundle)
+    monkeypatch.setattr(
+        sources_mod,
+        "new_client",
+        lambda: types.SimpleNamespace(close=lambda: None),
+    )
+    try:
+        result = runner.invoke(
+            app,
+            ["catalog-refresh", "collect", "--bootstrap",
+             "--providers", "openrouter",
+             "--run-root", str(tmp_path / "runs"),
+             "--seal-key", str(tmp_path / "seal.key"),
+             "--json"],
+        )
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    assert result.exit_code == 10, result.output
+    assert seen.get("reached") is True
+    summary = json.loads(result.stdout)
+    assert summary["state"] == "READY_WITH_WARNINGS"
+    assert "BadParameter" not in result.stdout
+    assert "DATABASE_URL" not in result.stdout
+
+
 def test_collect_failed_attempt_labels_attempted_and_publishes(tmp_path: Path) -> None:
     """181-i (I1): a collect whose retrieval ATTEMPT fails is labeled
     attempted-and-incomplete (not live, not not-started); the JSON stage
@@ -614,6 +836,10 @@ def test_collect_failed_attempt_labels_attempted_and_publishes(tmp_path: Path) -
     import types
 
     import slaif_gateway.cli.catalog_refresh as cli_mod
+    from slaif_gateway.services.catalog_refresh import (
+        collection as collection_mod,
+        sources as sources_mod,
+    )
     from slaif_gateway.services.catalog_refresh.sources import SourceFetchError
 
     events: list[str] = []
@@ -627,9 +853,11 @@ def test_collect_failed_attempt_labels_attempted_and_publishes(tmp_path: Path) -
         raise AssertionError("no physical network in this test")
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(cli_mod.catalog_collection, "collect_bundle", fake_collect_bundle)
+    # 217-a (G15): collect now delegates to the shared application
+    # composition, which resolves these seams from the service modules.
+    monkeypatch.setattr(collection_mod, "collect_bundle", fake_collect_bundle)
     monkeypatch.setattr(
-        cli_mod.catalog_sources,
+        sources_mod,
         "new_client",
         lambda: types.SimpleNamespace(close=lambda: None),
     )
@@ -701,6 +929,11 @@ def test_collect_postcollection_block_keeps_live_stage_and_publishes(
     fixture_bundle = load_bundle(
         (FIXTURES / "bundle-refresh-ready.json").read_bytes()
     )
+    from slaif_gateway.services.catalog_refresh import (
+        collection as collection_mod,
+        sources as sources_mod,
+    )
+
     seen: dict[str, bool] = {}
 
     def fake_collect_bundle(**kwargs: object) -> object:
@@ -708,9 +941,10 @@ def test_collect_postcollection_block_keeps_live_stage_and_publishes(
         return fixture_bundle
 
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(cli_mod.catalog_collection, "collect_bundle", fake_collect_bundle)
+    # 217-a (G15): seams resolve from the service modules now.
+    monkeypatch.setattr(collection_mod, "collect_bundle", fake_collect_bundle)
     monkeypatch.setattr(
-        cli_mod.catalog_sources,
+        sources_mod,
         "new_client",
         lambda: types.SimpleNamespace(close=lambda: None),
     )
@@ -1078,3 +1312,177 @@ def test_cli_review_of_intact_collected_bundle_is_offline_with_measured_generato
     }
     assert payload["current_generator"]["tool"] == expected_tool
     assert payload["checks"]["acquisition"].startswith("replayed original mode")
+
+def test_review_exported_baseline_with_configured_database_url(
+    tmp_path: Path,
+) -> None:
+    """217-a (G15): an exported-baseline review with a deployment-configured
+    DATABASE_URL must not consult settings at all: the explicit
+    --baseline-file is the only baseline source, and the outcome is the
+    unconfigured exported-baseline outcome (BLOCKED on the fixture's
+    changed row)."""
+    import slaif_gateway.cli.catalog_refresh as cli_mod
+    from slaif_gateway.config import get_settings
+
+    def forbidden_settings(*args: object, **kwargs: object) -> None:
+        raise AssertionError("exported-file review must not consult settings")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+asyncpg://synthetic@127.0.0.1:1/proof",
+    )
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        cli_mod, "_settings_database_url_or_none", forbidden_settings
+    )
+    try:
+        result = _review(
+            [str(FIXTURES / "bundle-refresh-ready.json"),
+             "--baseline-file", str(FIXTURES / "baseline-synthetic.json")],
+            tmp_path,
+        )
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    assert result.exit_code == 20, result.output
+    assert "changed: 1" in result.stdout
+    assert "BadParameter" not in result.stdout
+    assert "DATABASE_URL" not in result.stdout
+
+
+def test_collect_refresh_env_only_uses_ambient_database_url(
+    tmp_path: Path,
+) -> None:
+    """217-a (G15): collect --refresh with NO --db-url and NO --baseline-file
+    falls back to the deployment-configured DATABASE_URL exactly where the
+    legacy pipeline resolved it: the preflight accepts the ambient DB, the
+    live baseline export receives the ambient URL, and the invocation
+    proceeds to (synthetic) collection. No physical DB/network is touched
+    (export and collection are seams)."""
+    import types
+
+    import slaif_gateway.services.catalog_refresh.application as app_comp
+    from slaif_gateway.config import get_settings
+    from slaif_gateway.services.catalog_refresh import (
+        collection as collection_mod,
+        sources as sources_mod,
+    )
+    from slaif_gateway.services.catalog_refresh.baseline import load_baseline
+    from slaif_gateway.services.catalog_refresh.bundle import load_bundle
+
+    ambient = "postgresql+asyncpg://synthetic@127.0.0.1:1/proof"
+    exported_urls: list[str] = []
+
+    async def fake_export_baseline(url: object, now: object = None) -> object:
+        exported_urls.append(str(url))
+        return load_baseline((FIXTURES / "baseline-synthetic.json").read_bytes())
+
+    seen: dict[str, bool] = {}
+
+    def fake_collect_bundle(**kwargs: object) -> object:
+        seen["reached"] = True
+        # The db_snapshot-mode synthetic bundle whose baseline identity
+        # matches the ambient-exported document.
+        payload = json.loads(
+            (FIXTURES / "bundle-refresh-ready.json").read_text(encoding="utf-8")
+        )
+        payload["baseline"]["mode"] = "db_snapshot"
+        payload["baseline"]["postgres_version"] = "16.4"
+        return _stamp_synthetic_collection_identity(
+            load_bundle(json.dumps(payload, sort_keys=True).encode("utf-8"))
+        )
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setenv("DATABASE_URL", ambient)
+    get_settings.cache_clear()
+    monkeypatch.setattr(app_comp, "export_baseline", fake_export_baseline)
+    monkeypatch.setattr(collection_mod, "collect_bundle", fake_collect_bundle)
+    monkeypatch.setattr(
+        sources_mod,
+        "new_client",
+        lambda: types.SimpleNamespace(close=lambda: None),
+    )
+    try:
+        result = runner.invoke(
+            app,
+            ["catalog-refresh", "collect", "--refresh",
+             "--providers", "openrouter",
+             "--run-root", str(tmp_path / "runs"),
+             "--seal-key", str(tmp_path / "seal.key"),
+             "--json"],
+        )
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    # Preflight accepted the ambient DB and the live export used it.
+    assert exported_urls == [ambient], exported_urls
+    assert seen.get("reached") is True
+    assert result.exit_code == 20, result.output
+    summary = json.loads(result.stdout)
+    assert summary["state"] == "BLOCKED"  # fixture changed row: import gate
+    assert "refresh_requires_baseline" not in summary["reason"]
+    assert "database_url_missing" not in summary["reason"]
+    assert "BadParameter" not in result.stdout
+
+
+def test_collect_refresh_without_any_baseline_source_is_usage_error(
+    tmp_path: Path,
+) -> None:
+    """217-a (G15): explicit conflict refusals are unchanged: collect
+    --refresh with no --db-url, no --baseline-file, and NO configured
+    DATABASE_URL is still a usage error, and combining both explicit
+    baseline sources is still refused."""
+    import re as _re
+    from slaif_gateway.config import get_settings
+    import slaif_gateway.cli.catalog_refresh as _cli_mod
+
+    def _plain(result: object) -> str:
+        # Unstyle the rich/ANSI terminal output (strips SGR escapes and
+        # the error-panel border characters) and fold every whitespace
+        # run to one space: the validation REASON text is then compared
+        # independent of terminal width/panel wrapping, while the
+        # intended reason wording stays asserted verbatim.
+        text = str(result.stdout) + (str(result.stderr) or "")
+        text = _re.sub(r"\x1b\[[0-9;]*[A-Za-z]", " ", text)
+        text = _re.sub(r"[╭╮╰╯│─=]", " ", text)
+        return " ".join(text.split())
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    get_settings.cache_clear()
+    # Hermetic intended input: pin the EXISTING settings-getter seam to
+    # "no configured DATABASE_URL" so the no-source case does not depend
+    # on ambient env or cached settings state; the CLI preflight reads
+    # exactly these helpers.
+    monkeypatch.setattr(
+        _cli_mod, "_settings_database_url_configured", lambda: False
+    )
+    monkeypatch.setattr(_cli_mod, "_settings_database_url_or_none", lambda: None)
+    try:
+        result = runner.invoke(
+            app,
+            ["catalog-refresh", "collect", "--refresh",
+             "--providers", "openrouter",
+             "--run-root", str(tmp_path / "runs"),
+             "--seal-key", str(tmp_path / "seal.key"),
+             "--json"],
+        )
+        assert result.exit_code == 2, result.output
+        assert "refresh requires" in _plain(result)
+
+        result = runner.invoke(
+            app,
+            ["catalog-refresh", "collect", "--refresh",
+             "--db-url", "postgresql+asyncpg://synthetic@127.0.0.1:1/x",
+             "--baseline-file", str(FIXTURES / "baseline-synthetic.json"),
+             "--providers", "openrouter",
+             "--run-root", str(tmp_path / "runs"),
+             "--seal-key", str(tmp_path / "seal.key"),
+             "--json"],
+        )
+        assert result.exit_code == 2, result.output
+        assert "not both" in _plain(result)
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()

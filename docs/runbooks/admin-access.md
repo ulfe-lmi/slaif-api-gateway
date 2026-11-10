@@ -5,20 +5,28 @@
 
 ## Current Admin Model
 
-Legacy admin authority is broad: apart from the enforced G14 apply
-boundary described below, every active admin retains full operator
-authority over the existing admin surfaces. MFA and full RBAC are not
-implemented in the current RC-beta system.
+Legacy admin authority is broad: apart from the enforced
+existing-`superadmin` boundaries described below, every active admin
+retains full operator authority over the existing admin surfaces. MFA and
+full RBAC are not implemented in the current RC-beta system.
 
-There is exactly one enforced role boundary today: applying reviewed
-accounting recovery operations (the confirm-and-apply step of the admin
-console's accounting operations area, G14/216) requires the authenticated
-user's EXISTING `superadmin` role. All other admin authority, including
-every read-only accounting view, preview, and review step, is unchanged
-for ordinary `admin` accounts; a non-superadmin receives a fixed safe
-refusal at apply only. No automatic elevation exists: an account becomes
-a superadmin only by being created with the explicit flag (below); there
-is no promote command, and the first created admin is not elevated
+There are two enforced role boundaries today, both at the mutating
+confirm-and-apply / custody-cleanup step only:
+
+1. Applying reviewed accounting recovery operations (the confirm-and-apply
+   step of the admin console's accounting operations area, G14/216)
+   requires the authenticated user's EXISTING `superadmin` role.
+2. The admin catalog workspace's reviewed catalog-refresh apply and its
+   custody cleanup actions (G15/217) require the same EXISTING
+   `superadmin` role.
+
+All other admin authority — every read-only view, preview, review,
+collection, proposal, export, and inspection step, including every catalog
+workspace surface other than apply/cleanup — is unchanged for ordinary
+`admin` accounts; a non-superadmin receives a fixed safe refusal at those
+mutating steps only. No automatic elevation exists: an account becomes a
+superadmin only by being created with the explicit flag (below); there is
+no promote command, and the first created admin is not elevated
 automatically.
 
 Protect `/admin` with HTTPS, strong passwords, login rate limiting, and

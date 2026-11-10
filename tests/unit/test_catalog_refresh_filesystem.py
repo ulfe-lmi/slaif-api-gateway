@@ -593,7 +593,9 @@ def test_cross_phase_directory_swap_voids_run(tmp_path: Path, monkeypatch) -> No
     key-tree names are swapped (real directories, no symlink, no inode
     reuse). The checked binding changes, so no run may be published and no
     READY may be announced for the stale display pathname."""
-    import slaif_gateway.cli.catalog_refresh as cr
+    # 217-a (G15): after extraction the seal-key step executes inside the
+    # shared application composition, so this hook relocates there.
+    import slaif_gateway.services.catalog_refresh.application as app_comp
 
     run_root = tmp_path / "runs"
     keys = tmp_path / "keys"
@@ -601,7 +603,7 @@ def test_cross_phase_directory_swap_voids_run(tmp_path: Path, monkeypatch) -> No
     keys.mkdir()
     os.chmod(run_root, 0o700)
     os.chmod(keys, 0o700)
-    real_ensure = cr.ensure_seal_key
+    real_ensure = app_comp.ensure_seal_key
 
     def swap_ensure(path, key_parent_fd=None):
         key = real_ensure(path, key_parent_fd=key_parent_fd)
@@ -609,7 +611,7 @@ def test_cross_phase_directory_swap_voids_run(tmp_path: Path, monkeypatch) -> No
         os.rename(keys, run_root)
         return key
 
-    monkeypatch.setattr(cr, "ensure_seal_key", swap_ensure)
+    monkeypatch.setattr(app_comp, "ensure_seal_key", swap_ensure)
     result = runner.invoke(
         app,
         [
@@ -634,7 +636,9 @@ def test_swap_between_check_and_key_gate_voids_run(tmp_path: Path, monkeypatch) 
     """A swap that lands between the containment check and the key-load
     gate is caught at the key gate: no key is created and nothing is
     published."""
-    import slaif_gateway.cli.catalog_refresh as cr
+    # 217-a (G15): after extraction the first bounded read executes inside
+    # the shared application composition, so this hook relocates there.
+    import slaif_gateway.services.catalog_refresh.application as app_comp
 
     run_root = tmp_path / "runs"
     keys = tmp_path / "keys"
@@ -642,7 +646,7 @@ def test_swap_between_check_and_key_gate_voids_run(tmp_path: Path, monkeypatch) 
     keys.mkdir()
     os.chmod(run_root, 0o700)
     os.chmod(keys, 0o700)
-    real_read = cr.read_user_file
+    real_read = app_comp.read_user_file
     state = {"swapped": False}
 
     def swap_read(path, cap):
@@ -653,7 +657,7 @@ def test_swap_between_check_and_key_gate_voids_run(tmp_path: Path, monkeypatch) 
             os.rename(keys, run_root)
         return data
 
-    monkeypatch.setattr(cr, "read_user_file", swap_read)
+    monkeypatch.setattr(app_comp, "read_user_file", swap_read)
     result = runner.invoke(
         app,
         [

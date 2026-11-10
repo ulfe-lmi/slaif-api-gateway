@@ -327,7 +327,9 @@ def _hmac_payload(run_id: str, generated_at: str, manifest_sha256: str, files: d
     ).encode("utf-8")
 
 
-def verify_run(run_dir: Path, key: bytes) -> VerifyResult:
+def verify_run(
+    run_dir: Path, key: bytes, run_handle: "fs.AnchoredDir | None" = None
+) -> VerifyResult:
     """Verify seal, digests, and semantic/renderer correspondence.
 
     Read-only: never initializes a key, never writes, never re-signs, and
@@ -339,7 +341,14 @@ def verify_run(run_dir: Path, key: bytes) -> VerifyResult:
     HMAC, semantic recomputation and artifact/report correspondence. Any
     manipulation of proposal+report+manifest together fails without the
     external key.
+
+    When the caller passes a ``run_handle`` retained from an earlier
+    checked lifecycle handle (217-a: descriptor lineage - no path reopen),
+    the held descriptor serves every read and is NOT closed here; the
+    caller re-asserts the binding immediately before verification.
     """
+    if run_handle is not None:
+        return _verify_run_fd(run_handle.dir_fd, key)
     run_dir = Path(run_dir)
     try:
         run_fd, _chain = fs._open_anchored(run_dir)

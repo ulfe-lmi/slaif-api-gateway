@@ -16,9 +16,10 @@ import re
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from contextvars import ContextVar
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from html.parser import HTMLParser
 from io import StringIO
 from pathlib import Path
@@ -28,6 +29,7 @@ from urllib.parse import urlparse
 import httpx
 
 from slaif_gateway.services.pricing_import import parse_pricing_import_tsv, validate_pricing_import_rows
+from slaif_gateway.schemas.catalog_refresh import parse_decimal_text
 from slaif_gateway.services.route_import import (
     RouteImportProviderRef,
     parse_route_import_tsv,
@@ -110,6 +112,7 @@ SUPPORTED_OUTPUT_FILES = (
 PACKAGE_INDEX_FILENAME = "packages/package-index.json"
 PACKAGE_INDEX_MARKDOWN_FILENAME = "packages/package-index.md"
 PROPOSAL_TSV_VALIDATION_ERROR_CODE = "proposal_tsv_validation_failed"
+PROPOSAL_OUTPUT_SIZE_EXCEEDED_CODE = "proposal_output_size_exceeded"
 SUPPORTED_CHAT_PARAMETERS = {
     "tools",
     "tool_choice",
@@ -275,6 +278,192 @@ class ProviderCatalogRouteCandidate:
 
 
 @dataclass(frozen=True, slots=True)
+class ProposalFxCapture:
+    """Immutable USD->target FX fact captured ONCE for one proposal run.
+
+    Every field is a safe string projection (no raw Decimal/UUID/datetime
+    objects), so the capture can be embedded in report/metadata/manifest
+    projections without echoing secrets or environment values. Official
+    source amounts stay native USD through parsing and cross-checking; a
+    non-USD proposal is generated with the capture whose target_currency
+    matches the requested output currency. USD output is the identity
+    conversion and needs no capture (and no database).
+    """
+
+    base_currency: str
+    target_currency: str
+    fx_rate_id: str
+    rate: str
+    valid_from: str
+    valid_until: str | None
+    captured_at: str
+
+
+def make_proposal_fx_capture(
+    *,
+    target_currency: str,
+    fx_rate_id: str | uuid.UUID,
+    rate: Decimal,
+    valid_from: datetime,
+    valid_until: datetime | None,
+    captured_at: datetime,
+) -> ProposalFxCapture:
+    """Build one immutable capture from ONE configured USD->target row.
+
+    Pure and fail-closed: the source currency is always native USD, the
+    rate must be a positive finite Decimal, timestamps must be aware,
+    and captured_at must lie inside the row's validity window (the
+    repository already filters by at_time; this re-checks the pure seam
+    so a stale row can never be captured into an output).
+    """
+    target = target_currency.strip().upper()
+    if len(target) != 3 or not target.isalpha():
+        raise ValueError("currency must be a 3-letter ISO code")
+    if not isinstance(rate, Decimal) or not rate.is_finite() or rate <= 0:
+        raise ValueError("fx rate must be a positive finite Decimal")
+    if valid_from.tzinfo is None:
+        raise ValueError("fx rate valid_from must be timezone-aware")
+    if valid_until is not None and valid_until.tzinfo is None:
+        raise ValueError("fx rate valid_until must be timezone-aware")
+    if valid_until is not None and valid_until <= valid_from:
+        raise ValueError("fx rate validity window is empty")
+    if captured_at.tzinfo is None:
+        raise ValueError("fx capture time must be timezone-aware")
+    if captured_at < valid_from:
+        raise ValueError("fx rate is not yet valid at the capture time")
+    if valid_until is not None and captured_at >= valid_until:
+        raise ValueError("fx rate is expired at the capture time")
+    # The source rate id is a canonical UUID fact (the configured row's
+    # identity), not free text: normalize through UUID, refuse otherwise.
+    if not isinstance(fx_rate_id, uuid.UUID):
+        try:
+            fx_rate_id = uuid.UUID(str(fx_rate_id))
+        except ValueError as exc:
+            raise ValueError("fx rate id must be a canonical UUID") from exc
+    return ProposalFxCapture(
+        base_currency="USD",
+        target_currency=target,
+        fx_rate_id=str(fx_rate_id),
+        rate=_decimal_to_string(rate),
+        valid_from=_utc_z(valid_from),
+        valid_until=_utc_z(valid_until) if valid_until is not None else None,
+        captured_at=_utc_z(captured_at),
+    )
+
+
+def _utc_z(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+_PROPOSAL_FX_QUANTUM = Decimal("0.000000001")
+_PROPOSAL_FX_MAX = Decimal("999999999.999999999")
+
+
+def _convert_proposal_price_text(text: str | None, rate: Decimal) -> str | None:
+    """Apply ONE captured USD->target rate to one canonical price text.
+
+    Follows the established price contract (Numeric(18,9)): quantize to
+    1e-9 with ROUND_HALF_UP under a sufficient local precision, preserve
+    missing (None) and exact zero, and refuse positive-to-zero underflow
+    and values above the 9-integer/9-fraction import bound. Never
+    silently underflows a positive price to a free one.
+    """
+    if text is None:
+        return None
+    if not isinstance(text, str):
+        raise ValueError("proposal price must be an exact decimal string")
+    # Reuse the EXISTING Numeric(18,9) validation (finite, non-negative,
+    # within the 9-integer/9-fraction bound) BEFORE any arithmetic rather
+    # than trusting the candidate text.
+    try:
+        checked = parse_decimal_text(text, field="proposal price", non_negative=True)
+    except ValueError as exc:
+        raise ValueError("proposal price is outside the Numeric(18,9) contract") from exc
+    value = Decimal(checked)
+    if value == 0:
+        return "0"
+    with localcontext() as ctx:
+        ctx.prec = 50
+        converted = (value * rate).quantize(_PROPOSAL_FX_QUANTUM, rounding=ROUND_HALF_UP)
+    if converted == 0:
+        raise ValueError("fx conversion underflow: a positive price became zero")
+    if converted > _PROPOSAL_FX_MAX:
+        raise ValueError("fx conversion overflow: price exceeds the import bound")
+    return _decimal_to_string(converted)
+
+
+def apply_proposal_fx(
+    candidates: Sequence[ProviderCatalogPricingCandidate],
+    capture: ProposalFxCapture | None,
+) -> list[ProviderCatalogPricingCandidate]:
+    """Convert every pricing candidate into the capture's target currency.
+
+    Pure and applied ONCE per run, before any writer: USD (or no capture)
+    returns the candidates unchanged (byte-identical, no FX metadata).
+    A non-USD capture applies one Decimal conversion to EVERY monetary
+    dimension (per-1M token prices and the per-request price), updates
+    the row currency, and preserves the original source-currency amounts
+    plus the applied FX pair/rate id/rate/validity/capture time in the
+    candidate's pricing_metadata. Raises ValueError on underflow/
+    overflow so the caller refuses before writing any output.
+    """
+    if capture is None or capture.target_currency == capture.base_currency:
+        return list(candidates)
+    rate = Decimal(capture.rate)
+    converted: list[ProviderCatalogPricingCandidate] = []
+    for candidate in candidates:
+        # The shared composition always hands this converter native-USD
+        # source candidates: any other label means the candidate was
+        # already converted (or forged) and a second multiplication must
+        # be impossible, not silent.
+        if candidate.currency != capture.base_currency:
+            raise ValueError(
+                "proposal fx double application: candidate currency is not "
+                "the capture base currency"
+            )
+        source_prices = {
+            "input_price_per_1m": candidate.input_price_per_1m,
+            "cached_input_price_per_1m": candidate.cached_input_price_per_1m,
+            "output_price_per_1m": candidate.output_price_per_1m,
+            "reasoning_price_per_1m": candidate.reasoning_price_per_1m,
+            "request_price": candidate.request_price,
+        }
+        metadata = dict(candidate.pricing_metadata)
+        metadata["source_currency"] = candidate.currency
+        metadata["source_prices"] = source_prices
+        metadata["fx"] = {
+            "base_currency": capture.base_currency,
+            "target_currency": capture.target_currency,
+            "fx_rate_id": capture.fx_rate_id,
+            "rate": capture.rate,
+            "valid_from": capture.valid_from,
+            "valid_until": capture.valid_until,
+            "captured_at": capture.captured_at,
+        }
+        # The original source pricing_unit (e.g. "usd_per_token") is the
+        # OFFICIAL SOURCE unit and stays untouched: the row currency plus
+        # the fx metadata state the applied conversion; the source unit is
+        # never relabeled.
+        converted.append(
+            replace(
+                candidate,
+                currency=capture.target_currency,
+                input_price_per_1m=_convert_proposal_price_text(candidate.input_price_per_1m, rate),
+                cached_input_price_per_1m=_convert_proposal_price_text(
+                    candidate.cached_input_price_per_1m, rate
+                ),
+                output_price_per_1m=_convert_proposal_price_text(candidate.output_price_per_1m, rate),
+                reasoning_price_per_1m=_convert_proposal_price_text(
+                    candidate.reasoning_price_per_1m, rate
+                ),
+                request_price=_convert_proposal_price_text(candidate.request_price, rate),
+                pricing_metadata=metadata,
+            )
+        )
+    return converted
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderCatalogModelStatus:
     provider: ProviderName
     model_id: str
@@ -342,6 +531,17 @@ class ProviderCatalogProposalValidationError(ValueError):
         super().__init__(f"{PROPOSAL_TSV_VALIDATION_ERROR_CODE}: {message}")
 
 
+class ProviderCatalogProposalSizeError(ValueError):
+    """Raised when generated proposal artifacts exceed the ENFORCED byte
+    ceiling bound to the custody admission reservation. The generator
+    stops mid-generation (before further growth) so the reservation is a
+    real enforced ceiling, not an estimate; the caller retracts the
+    partial output so no over-ceiling artifact is ever left behind."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"{PROPOSAL_OUTPUT_SIZE_EXCEEDED_CODE}: {message}")
+
+
 @dataclass(frozen=True, slots=True)
 class _FetchedSource:
     provider: ProviderName
@@ -384,6 +584,57 @@ class _OpenAIModelRecord:
     warnings: tuple[str, ...] = ()
 
 
+class _ProposalOutputBudget:
+    """Small BEFORE-GROWTH write-admission budget for ONE proposal
+    generation. ``cap`` is the enforced ceiling (the custody admission
+    reservation). ``committed`` is a CONSERVATIVE per-generation
+    admission counter: each payload's FULL size is charged BEFORE its
+    file is written, and is NEVER refunded on a partial/failed/overwrite
+    attempt (a source-details helper may catch a write error and continue,
+    so successful-write-only charging would under-count). Admission is
+    O(1) per write (no full-tree rescan): a payload is admitted only if
+    committed + size <= cap, so an over-ceiling payload is refused and
+    never written. The ACTUAL at-rest bytes are measured separately by
+    the custody gate (``account_proposal_output``); this budget only
+    bounds growth before it happens."""
+
+    def __init__(self, cap: int) -> None:
+        self.cap = int(cap)
+        self.committed = 0
+
+    def admit(self, size: int) -> None:
+        if self.committed + int(size) > self.cap:
+            raise ProviderCatalogProposalSizeError(
+                f"provider catalog proposal write of {size} bytes would "
+                f"exceed its enforced byte ceiling (committed {self.committed} "
+                f"+ {size} > {self.cap} bytes)"
+            )
+        self.committed += int(size)  # charge BEFORE the write; no refund
+
+
+# Default-optional injected generation budget (ContextVar, so every write
+# in the current generation task routes through the same O(1) admission
+# without threading the object through every fetch/write signature). The
+# default None leaves CLI behavior unchanged (the CLI composes this
+# directly and reserves no custody bytes).
+_PROPOSAL_OUTPUT_BUDGET: ContextVar[_ProposalOutputBudget | None] = ContextVar(
+    "slaif_proposal_output_budget", default=None
+)
+
+
+def _emit(path: Path, data: bytes) -> None:
+    """Admit-then-write the encoded payload for the active generation
+    budget, THEN write. ``admit`` runs BEFORE any open/truncate/write and
+    charges the full size with NO refund, so an over-ceiling payload is
+    refused and never written, and a caught/partial/failed write still
+    conservatively consumes the budget. A None budget (CLI) writes
+    freely."""
+    budget = _PROPOSAL_OUTPUT_BUDGET.get()
+    if budget is not None:
+        budget.admit(len(data))
+    path.write_bytes(data)
+
+
 async def generate_provider_catalog_proposal(
     *,
     provider_scope: ProviderName | Literal["all"],
@@ -408,6 +659,8 @@ async def generate_provider_catalog_proposal(
     include_ambiguous_capabilities: bool = False,
     http_client: httpx.AsyncClient | None = None,
     now: datetime | None = None,
+    max_output_bytes: int | None = None,
+    fx_capture: ProposalFxCapture | None = None,
 ) -> ProviderCatalogProposalResult:
     """Generate proposal artifacts without mutating local metadata."""
 
@@ -419,6 +672,20 @@ async def generate_provider_catalog_proposal(
         include_api_models=include_api_models,
     )
     normalized_currency = _normalize_currency(currency)
+    if fx_capture is None and normalized_currency != "USD":
+        # Fail closed BEFORE any directory/network work: a non-USD output
+        # currency always carries one captured configured FX rate; there
+        # is no silent relabeling path. USD remains offline-capable.
+        raise ValueError(
+            "a non-USD output currency requires an fx capture (one "
+            "configured direct USD->target FX rate); USD is the only "
+            "offline-capable output currency"
+        )
+    if fx_capture is not None:
+        if fx_capture.base_currency != "USD":
+            raise ValueError("fx capture base currency must be USD (native source currency)")
+        if fx_capture.target_currency != normalized_currency:
+            raise ValueError("fx capture target does not match the requested output currency")
     normalized_package_names = _normalize_openrouter_package_names(
         provider_scope=provider_scope,
         package_names=package_names,
@@ -443,15 +710,26 @@ async def generate_provider_catalog_proposal(
     route_candidates: list[ProviderCatalogRouteCandidate] = []
     comparison_rows: list[ProviderCatalogModelStatus] = []
 
+    budget = (
+        _ProposalOutputBudget(max_output_bytes)
+        if max_output_bytes is not None
+        else None
+    )
+    budget_token = _PROPOSAL_OUTPUT_BUDGET.set(budget)
     try:
         for provider in providers:
+            # The provider proposers always receive the NATIVE source
+            # currency (USD): official source amounts stay native USD
+            # through parsing and cross-checking (assisted outputs
+            # included). The requested output currency is applied exactly
+            # once by apply_proposal_fx, below, before any writer.
             if provider == OPENROUTER_PROVIDER:
                 provider_bundle = await _propose_openrouter(
                     client=client,
                     endpoint_scopes=endpoint_scope_values,
                     include_models=include_models,
                     exclude_models=exclude_models,
-                    currency=normalized_currency,
+                    currency="USD",
                     source_methods=source_method_values,
                     max_models=max_models,
                     fetch_details_limit=fetch_details_limit,
@@ -467,10 +745,11 @@ async def generate_provider_catalog_proposal(
                     endpoint_scopes=endpoint_scope_values,
                     include_models=include_models,
                     exclude_models=exclude_models,
-                    currency=normalized_currency,
+                    currency="USD",
                     source_methods=source_method_values,
                     include_api_models=include_api_models,
                     max_web_calls=max_web_calls,
+                    max_models=max_models,
                     save_source_snapshots=save_source_snapshots,
                     source_dir=source_dir,
                     acknowledge_assisted_proposal_risk=acknowledge_assisted_proposal_risk,
@@ -480,7 +759,14 @@ async def generate_provider_catalog_proposal(
                 )
             sources.extend(provider_bundle.sources)
             models.extend(provider_bundle.models)
-            pricing_candidates.extend(provider_bundle.pricing_candidates)
+            # ONE conversion, applied before ANY writer (root JSON/TSV/
+            # report and the package outputs all share these candidates):
+            # native USD candidates are converted to the requested output
+            # currency with the single captured rate, or left
+            # byte-identical for USD.
+            pricing_candidates.extend(
+                apply_proposal_fx(provider_bundle.pricing_candidates, fx_capture)
+            )
             route_candidates.extend(provider_bundle.route_candidates)
             comparison_rows.extend(provider_bundle.comparison_rows)
             bundle_warnings.extend(provider_bundle.warnings)
@@ -504,6 +790,7 @@ async def generate_provider_catalog_proposal(
             normalized_path,
             {
                 "providers": list(providers),
+                "fx": _fx_projection(fx_capture),
                 "export_filters": {
                     "paired_ready_only": paired_ready_only,
                     "ordinary_chat_only": ordinary_chat_only,
@@ -527,15 +814,18 @@ async def generate_provider_catalog_proposal(
             {
                 "sources": [_jsonify_dataclass(item) for item in sources],
                 "output_files": list(SUPPORTED_OUTPUT_FILES),
+                "fx": _fx_projection(fx_capture),
                 "generated_at": _timestamp(now),
                 "extractor_version": "provider_catalog_proposal_v1",
             },
         )
         _write_route_tsv(routes_path, exported_route_candidates, ordinary_chat_only=ordinary_chat_only)
         _write_pricing_tsv(pricing_path, exported_pricing_candidates)
-        report_path.write_text(
+        _emit(
+            report_path,
             _render_report(
                 providers=providers,
+                fx_capture=fx_capture,
                 comparison_rows=comparison_rows,
                 warnings=bundle_warnings,
                 route_candidates=route_candidates,
@@ -544,8 +834,7 @@ async def generate_provider_catalog_proposal(
                 exported_pricing_candidates=exported_pricing_candidates,
                 paired_ready_only=paired_ready_only,
                 ordinary_chat_only=ordinary_chat_only,
-            ),
-            encoding="utf-8",
+            ).encode("utf-8"),
         )
         _validate_generated_route_tsv(routes_path, exported_route_candidates)
         _validate_generated_pricing_tsv(pricing_path, exported_pricing_candidates)
@@ -557,7 +846,6 @@ async def generate_provider_catalog_proposal(
                 package_names=normalized_package_names,
                 include_models=include_models,
                 exclude_models=exclude_models,
-                currency=normalized_currency,
                 source_methods=source_method_values,
                 max_models=max_models,
                 fetch_details_limit=fetch_details_limit,
@@ -568,6 +856,7 @@ async def generate_provider_catalog_proposal(
                 include_ambiguous_capabilities=include_ambiguous_capabilities,
                 now=now,
                 source_manifest_path=manifest_path,
+                fx_capture=fx_capture,
             )
             package_index_path = output_dir / PACKAGE_INDEX_FILENAME
             package_index_markdown_path = output_dir / PACKAGE_INDEX_MARKDOWN_FILENAME
@@ -599,6 +888,7 @@ async def generate_provider_catalog_proposal(
             package_names=normalized_package_names,
         )
     finally:
+        _PROPOSAL_OUTPUT_BUDGET.reset(budget_token)
         if owns_client:
             await client.aclose()
 
@@ -869,6 +1159,7 @@ async def _propose_openai(
     source_methods: tuple[ProposalSourceMethod, ...],
     include_api_models: bool,
     max_web_calls: int,
+    max_models: int,
     save_source_snapshots: bool,
     source_dir: Path,
     acknowledge_assisted_proposal_risk: bool,
@@ -980,13 +1271,34 @@ async def _propose_openai(
             for model_id in api_model_ids
             if _model_allowed(model_id, include_models=include_models, exclude_models=exclude_models)
         }
+    # Honor the SAME public max_models cap OpenRouter uses: after the
+    # include/exclude filtering, take the first ``max_models`` of the
+    # sorted eligible ids (deterministic). The cap is the operator's
+    # explicit finite choice; the omitted scope is reported honestly in
+    # the warnings (count + which ids were dropped), never silently.
+    eligible_model_ids = sorted(all_model_ids)
+    omitted_model_ids = eligible_model_ids[max_models:]
+    eligible_model_ids = eligible_model_ids[:max_models]
+    if omitted_model_ids:
+        warnings.append(
+            ProviderCatalogWarning(
+                code="model_cap_applied",
+                message=(
+                    f"max_models={max_models} kept {len(eligible_model_ids)} "
+                    f"eligible model(s) and omitted {len(omitted_model_ids)} "
+                    f"more (e.g. {', '.join(omitted_model_ids[:5])}"
+                    f"{'...' if len(omitted_model_ids) > 5 else ''})"
+                ),
+                provider=OPENAI_PROVIDER,
+            )
+        )
     pricing_by_model = _group_openai_pricing_records(pricing_records)
     model_candidates: list[ProviderCatalogModelCandidate] = []
     pricing_candidates: list[ProviderCatalogPricingCandidate] = []
     route_candidates: list[ProviderCatalogRouteCandidate] = []
     comparison_rows: list[ProviderCatalogModelStatus] = []
 
-    for model_id in sorted(all_model_ids):
+    for model_id in eligible_model_ids:
         docs_model = model_records.get(model_id)
         doc_prices = pricing_by_model.get(model_id, ())
         selected_doc_pricing = _select_openai_text_pricing_record(doc_prices)
@@ -1459,7 +1771,7 @@ def _save_source_snapshot(
 ) -> str:
     filename = f"{provider}-{source_type}.{extension}"
     path = source_dir / filename
-    path.write_text(content, encoding="utf-8")
+    _emit(path, content.encode("utf-8"))
     return str(path)
 
 
@@ -2446,7 +2758,6 @@ async def _generate_openrouter_package_outputs(
     package_names: Sequence[str],
     include_models: Sequence[str],
     exclude_models: Sequence[str],
-    currency: str,
     source_methods: Sequence[ProposalSourceMethod],
     max_models: int,
     fetch_details_limit: int,
@@ -2457,13 +2768,14 @@ async def _generate_openrouter_package_outputs(
     include_ambiguous_capabilities: bool,
     now: datetime | None,
     source_manifest_path: Path,
+    fx_capture: ProposalFxCapture | None = None,
 ) -> tuple[ProviderCatalogPackageResult, ...]:
     package_bundle = await _propose_openrouter(
         client=client,
         endpoint_scopes=("chat_completions", "responses"),
         include_models=include_models,
         exclude_models=exclude_models,
-        currency=currency,
+        currency="USD",
         source_methods=source_methods,
         max_models=max_models,
         fetch_details_limit=fetch_details_limit,
@@ -2473,10 +2785,15 @@ async def _generate_openrouter_package_outputs(
         ordinary_chat_only=False,
         now=now,
     )
+    # SAME single captured rate as the root output (the package re-proposes
+    # natively in USD; conversion happens here, before selection/writers).
+    package_pricing_candidates = apply_proposal_fx(
+        package_bundle.pricing_candidates, fx_capture
+    )
     model_by_id = {row.model_id: row for row in package_bundle.models}
     paired_routes, paired_pricing = _select_export_candidates(
         package_bundle.route_candidates,
-        package_bundle.pricing_candidates,
+        package_pricing_candidates,
         paired_ready_only=True,
     )
     routes_by_key = {
@@ -2801,7 +3118,8 @@ def _write_openrouter_package(
         "file_input_rows": _count_capability(routes, CHAT_CAPABILITY_FILE_INPUTS),
     }
     _write_json(manifest_path, manifest)
-    review_path.write_text(
+    _emit(
+        review_path,
         _render_package_model_review(
             package_name=package_name,
             endpoint=endpoint,
@@ -2810,10 +3128,10 @@ def _write_openrouter_package(
             model_by_id=model_by_id,
             recommendation=recommendation,
             safety_mode=safety_mode,
-        ),
-        encoding="utf-8",
+        ).encode("utf-8"),
     )
-    report_path.write_text(
+    _emit(
+        report_path,
         _render_package_report(
             package_name=package_name,
             endpoint=endpoint,
@@ -2825,8 +3143,7 @@ def _write_openrouter_package(
             excluded_counts=excluded_counts,
             recommendation=recommendation,
             safety_mode=safety_mode,
-        ),
-        encoding="utf-8",
+        ).encode("utf-8"),
     )
     return ProviderCatalogPackageResult(
         package_name=package_name,
@@ -2949,6 +3266,12 @@ def _render_package_model_review(
         (row.provider, row.model_id, row.endpoint): row
         for row in pricing
     }
+    # Display currency is derived from the ACTUAL rows: this run has a
+    # single output currency (the converted candidate currency, or the
+    # native USD default when no rows survived). The USD SOURCE-evidence
+    # metadata on each row is untouched; only this label follows the
+    # values it describes.
+    display_currency = pricing[0].currency if pricing else "USD"
     lines = [
         f"# {package_name} review",
         "",
@@ -2959,7 +3282,7 @@ def _render_package_model_review(
         "",
         "<table>",
         "  <thead>",
-        "    <tr><th>model</th><th>endpoint</th><th>input USD per 1M</th><th>cached input USD per 1M</th><th>output USD per 1M</th><th>reasoning USD per 1M</th><th>context</th><th>max output</th><th>capability badges</th><th>package status</th></tr>",
+        f"    <tr><th>model</th><th>endpoint</th><th>input {display_currency} per 1M</th><th>cached input {display_currency} per 1M</th><th>output {display_currency} per 1M</th><th>reasoning {display_currency} per 1M</th><th>context</th><th>max output</th><th>capability badges</th><th>package status</th></tr>",
         "  </thead>",
         "  <tbody>",
     ]
@@ -2993,7 +3316,7 @@ def _render_package_model_review(
             "  </tbody>",
             "</table>",
             "",
-            "Reasoning-capable and separately priced reasoning are distinct. `reasoning USD per 1M` stays `—` when no separate reasoning price is exposed.",
+            f"Reasoning-capable and separately priced reasoning are distinct. `reasoning {display_currency} per 1M` stays `—` when no separate reasoning price is exposed.",
             "",
         ]
     )
@@ -3153,7 +3476,7 @@ def _write_package_indexes(
                 "",
             ]
         )
-    package_index_markdown_path.write_text("\n".join(lines), encoding="utf-8")
+    _emit(package_index_markdown_path, "\n".join(lines).encode("utf-8"))
 
 
 def _package_capability_badges(route: ProviderCatalogRouteCandidate) -> list[str]:
@@ -3226,8 +3549,8 @@ def _write_route_tsv(
         "capabilities",
         "notes",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+    with StringIO() as buffer:
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
         for row in rows:
             if not row.ready_for_import:
@@ -3251,6 +3574,8 @@ def _write_route_tsv(
                     "notes": row.notes,
                 }
             )
+        data = buffer.getvalue().encode("utf-8")
+    _emit(path, data)
 
 
 def _write_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidate]) -> None:
@@ -3270,8 +3595,8 @@ def _write_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidat
         "pricing_metadata",
         "notes",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+    with StringIO() as buffer:
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
         for row in rows:
             if not row.ready_for_import:
@@ -3294,6 +3619,8 @@ def _write_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidat
                     "notes": row.notes,
                 }
             )
+        data = buffer.getvalue().encode("utf-8")
+    _emit(path, data)
 
 
 def _validate_generated_route_tsv(
@@ -3484,6 +3811,7 @@ def _validate_tsv_cell(*, path_name: str, row_number: int, field_name: str, valu
 def _render_report(
     *,
     providers: Sequence[str],
+    fx_capture: ProposalFxCapture | None = None,
     comparison_rows: Sequence[ProviderCatalogModelStatus],
     warnings: Sequence[ProviderCatalogWarning],
     route_candidates: Sequence[ProviderCatalogRouteCandidate],
@@ -3498,6 +3826,26 @@ def _render_report(
         "",
         f"Providers: {', '.join(providers)}",
         "",
+    ]
+    if fx_capture is not None and fx_capture.target_currency != fx_capture.base_currency:
+        # Truthful, safe, bounded operator-visible fact (string projections
+        # only - never a raw row, DSN, or environment value): the source
+        # amounts stayed native USD and were converted with ONE captured
+        # configured direct rate, frozen until the proposal is re-run.
+        lines.extend(
+            [
+                f"Output currency: {fx_capture.target_currency} (native source "
+                f"{fx_capture.base_currency}; one captured direct "
+                f"USD->{fx_capture.target_currency} rate {fx_capture.rate}, "
+                f"rate id {fx_capture.fx_rate_id}, valid from "
+                f"{fx_capture.valid_from}, valid until "
+                f"{fx_capture.valid_until or 'open'}, captured "
+                f"{fx_capture.captured_at}; frozen until re-run)",
+                "",
+            ]
+        )
+    lines.extend(
+        [
         f"Route rows ready: {len(exported_route_candidates)}",
         f"Pricing rows ready: {len(exported_pricing_candidates)}",
         f"Warnings: {len(warnings)}",
@@ -3508,7 +3856,8 @@ def _render_report(
         "",
         "| model | provider | pricing_status | route_status | sources_seen | confidence | warnings | ready_for_route_import | ready_for_pricing_import |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
+        ]
+    )
     for row in comparison_rows:
         lines.append(
             "| "
@@ -3535,8 +3884,30 @@ def _render_report(
     return "\n".join(lines) + "\n"
 
 
+def _fx_projection(fx_capture: ProposalFxCapture | None) -> dict[str, object] | None:
+    """Safe known projection of one captured FX fact (or None for USD).
+
+    USD output is the identity conversion and carries no FX metadata;
+    non-USD emits only the frozen string projections of the capture so
+    root JSON/manifest/report stay consistent without echoing secrets,
+    raw rows, or environment content.
+    """
+    if fx_capture is None or fx_capture.target_currency == fx_capture.base_currency:
+        return None
+    return {
+        "base_currency": fx_capture.base_currency,
+        "target_currency": fx_capture.target_currency,
+        "fx_rate_id": fx_capture.fx_rate_id,
+        "rate": fx_capture.rate,
+        "valid_from": fx_capture.valid_from,
+        "valid_until": fx_capture.valid_until,
+        "captured_at": fx_capture.captured_at,
+    }
+
+
 def _write_json(path: Path, payload: Mapping[str, object]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    _emit(path, data)
 
 
 def _jsonify_dataclass(value: object) -> object:

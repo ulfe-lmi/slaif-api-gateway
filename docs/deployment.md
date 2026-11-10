@@ -403,8 +403,10 @@ The `scheduler` service runs:
 celery -A slaif_gateway.workers.celery_app:celery_app beat --loglevel=${CELERY_LOG_LEVEL:-INFO}
 ```
 
-The worker handles explicit key email delivery tasks. Celery payloads carry IDs
-only, never plaintext gateway keys or email bodies.
+The worker handles explicit key email delivery tasks and — when the optional
+catalog workspace is enabled — the bounded read-only catalog refresh/proposal
+job family. Celery payloads carry IDs only, never plaintext gateway keys or
+email bodies.
 
 Scheduled reconciliation is disabled by default. Enabling
 `ENABLE_SCHEDULED_RECONCILIATION=true` schedules safe backlog inspection only.
@@ -424,6 +426,198 @@ usage-ledger IDs. Treat the webhook URL as a secret if it contains tokens.
 Operational procedures for stale reservations and provider-completed recovery
 are in [`runbooks/stale-reservation-reconciliation.md`](runbooks/stale-reservation-reconciliation.md)
 and [`runbooks/provider-completed-reconciliation.md`](runbooks/provider-completed-reconciliation.md).
+
+## Catalog Refresh Custody (Optional, Default Off)
+
+The admin GUI catalog workspace (G15, see
+[Catalog Refresh](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a)
+and [Configuration](configuration.md#catalog-refresh-admin-gui-217-a)) stores
+its job records, uploads, and sealed runs in operator custody — files only,
+never PostgreSQL. Enabling it requires:
+
+1. **Shared custody volume**: `docker-compose.yml` already mounts the named
+   volume `catalog-refresh-data` into BOTH the `api` and `worker` services at
+   `/var/slaif/catalog-refresh`, so queued jobs (worker) and page reads (API)
+   see one state tree. The volume contents must be owned by the container
+   service user with mode `0700`. The app opens this root only; it never
+   creates, repairs, or re-chowns it.
+2. **OFFLINE seal key**: the operator generates the 64-hex seal key OUTSIDE
+   the container (or on a host-managed mount) with mode `0600`, owned by the
+   same service user, and points `CATALOG_REFRESH_SEAL_KEY` at it. The GUI
+   never creates or replaces the key.
+3. **Location rule**: the root and key must be OUTSIDE the repository
+   source/package tree and outside any local PostgreSQL data directory;
+   configured paths inside those locations are refused.
+4. **Restart scope**: after changing any `CATALOG_REFRESH_*` value,
+   recreate/restart the `api` and ALL `worker` services (they read the
+   settings at startup). A reverse-proxy change (the scoped nginx
+   `client_max_body_size 48m` for the bounded 8 MiB bundle / 32 MiB baseline
+   uploads) takes effect for new connections only after the established
+   `nginx -t` + reload/recreate procedure ([Streaming And
+   Nginx](#streaming-and-nginx)); editing the proxy file alone changes
+   nothing.
+5. **Backup/rollback**: custody files are operator state, not database
+   state. Back them up with your normal file-state procedure if the sealed
+   runs matter to you; removing the volume or disabling
+   `CATALOG_REFRESH_GUI_ENABLED` never touches PostgreSQL, and no schema or
+   key-policy migration is performed by this feature.
+
+### New install / upgrade procedure (copy-ready)
+
+Two proxy shapes are supported, and the steps distinguish them explicitly:
+the Compose stack ships an OPTIONAL nginx profile (the `nginx` service,
+`profiles: [nginx]`, included in `docker compose up` only when
+`--profile nginx` is passed - it is NOT always-on), while an
+external/host-level Nginx deployment uses your own proxy. Steps marked
+**[manual host]** are host/proxy controls you run yourself; they are
+documented, not automated. No new init service, dependency, or
+production-execution step is introduced.
+
+```bash
+# 1) [manual host] Dedicated custody ownership + service UID, ONCE before
+#    first use. A fresh named volume is root-owned while the
+#    api/worker/scheduler containers run as the non-root `slaif` user,
+#    so prepare it with a one-off container of the EXISTING api image,
+#    explicitly as root (--user root) and with no dependency services
+#    started (--no-deps); no network is needed. This reports the ACTUAL
+#    service uid/gid from the image (not root's):
+docker compose run --rm --no-deps --user root --entrypoint sh api -c '
+  id -u slaif && id -g slaif &&
+  mkdir -p /var/slaif/catalog-refresh &&
+  chown $(id -u slaif):$(id -g slaif) /var/slaif/catalog-refresh &&
+  chmod 0700 /var/slaif/catalog-refresh
+'
+#    If you bind-mount a host directory instead of the named volume in
+#    your own compose override, apply the SAME ownership (the uid/gid
+#    reported above) and mode 0700 to that host path instead.
+
+# 2) [manual host] The EXISTING 0600 seal key - preserve or create
+#    OFFLINE. PRESERVE an existing key byte-for-byte: it is the identity
+#    of every sealed run, and replacing it makes old runs unverifiable.
+#    NEVER print or paste the key contents, and never use an
+#    overwrite-style generator (for example `openssl rand -hex 32 >
+#    seal.key`) against a path where a key may already exist. The
+#    OFFLINE create-if-absent step reuses the EXISTING application
+#    function through the same image and the same volume, run as the
+#    service user after step 1: it creates the 0600 key ONLY when
+#    absent, loads and validates an existing key without modifying it
+#    (an invalid existing key is refused, never replaced), prints
+#    nothing, and performs no live collection. The GUI itself NEVER
+#    creates, replaces, or rewrites the key - it only opens the
+#    existing one:
+docker compose run --rm --no-deps --entrypoint sh api -c '
+  python -c "from slaif_gateway.services.catalog_refresh.filesystem import ensure_seal_key; ensure_seal_key(\"/var/slaif/catalog-refresh/seal.key\")"
+'
+#    (If your custody root is a host bind mount, the SAME in-container
+#    command applies; the key ends up 0600, owned by the service uid
+#    reported in step 1.)
+
+# 3) The three GUI settings in .env (see docs/configuration.md):
+#    CATALOG_REFRESH_GUI_ENABLED=true
+#    CATALOG_REFRESH_ROOT=/var/slaif/catalog-refresh
+#    CATALOG_REFRESH_SEAL_KEY=/var/slaif/catalog-refresh/seal.key
+#    (both paths OUTSIDE the repository source tree and any local PGDATA;
+#     the finite knobs CATALOG_REFRESH_MAX_ACTIVE_JOBS /
+#     CATALOG_REFRESH_MAX_RETAINED_RUNS / CATALOG_REFRESH_MAX_TOTAL_BYTES /
+#     CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS keep their defaults unless
+#     you change them deliberately)
+
+# 4) Apply: build the NEW checkout code into the image, then recreate
+#    the API and ALL worker services (settings are read at startup;
+#    on upgrades --build matters - --force-recreate alone would
+#    relaunch the stale existing image):
+docker compose up -d --build --force-recreate api worker scheduler
+
+# 5) Proxy (only if your proxy fronts the admin uploads) [manual host]:
+#    a) SHIPPED optional nginx profile (the `nginx` service,
+#       `profiles: [nginx]`, nginx:1.27-alpine, mounting
+#       deploy/nginx/slaif-api-gateway.conf read-only): the scoped
+#       `location /admin/operations/catalog/ { client_max_body_size
+#       48m; ... }` allowance is already in that template. Enable the
+#       profile once with:
+#         docker compose --profile nginx up -d nginx
+#       and, after any template change, config-test + reload (or
+#       recreate) the EXISTING service:
+#         docker compose --profile nginx exec nginx nginx -t \
+#           && docker compose --profile nginx exec nginx nginx -s reload
+#         # or re-read the config from scratch:
+#         docker compose --profile nginx up -d --force-recreate nginx
+#    b) EXTERNAL/host-level Nginx: update your own proxy config from
+#       the same template and run ITS established `nginx -t` +
+#       reload/recreate procedure (see Streaming And Nginx).
+#    Either way, editing the proxy file alone does NOTHING for new
+#    connections until the configuration-test + reload/recreate runs;
+#    until then uploads still use the old limit.
+
+# 6) Verify setup-ready (browser): sign in at /admin and open
+#    Operations -> Catalog workspace. The Setup section must read READY
+#    (root + seal key verified) with the storage summary; while it is not
+#    ready the page shows fixed setup help and NO catalog action is
+#    dispatchable. Optionally queue one read-only Export baseline job and
+#    download the document as an end-to-end check.
+
+# 7) Backup of the SAME seal key + runs (periodic) [manual host]. A named
+#    volume is NOT a host path: /var/slaif exists only inside the
+#    containers, so a host `tar -C /var/slaif ...` cannot reach the
+#    custody - and a `tar | gzip` pipeline can produce an EMPTY archive
+#    that still exits 0. The EXISTING image therefore streams the shared
+#    volume to the host with the stdlib only and NO buffering: the
+#    required inputs are checked first, the archive is written with
+#    tarfile's streaming gzip writer, and any failure exits non-zero.
+#    The key contents are never printed.
+#    For a coherent file-state backup, first quiesce the writers (or use
+#    your established maintenance procedure): `docker compose stop
+#    api worker scheduler` - take the archive - then `docker compose
+#    start api worker scheduler`. Without quiescing, the archive is a
+#    best-effort snapshot, not a transactional backup. The archive
+#    covers the current key + runs tree size (gzip-compressed).
+#    The archive name is created with mktemp: a NEWLY CREATED private
+#    file (0600), so an earlier backup is never overwritten and the
+#    permissions do not depend on the shell umask:
+archive=$(mktemp "./backup-catalog-refresh-$(date -u +%Y%m%d).tar.gz.XXXXXX") || exit 1
+if docker compose run --rm --no-deps -T --entrypoint sh api -c '
+python - <<PY
+import os, sys, tarfile
+root = "/var/slaif/catalog-refresh"
+seal = os.path.join(root, "seal.key")
+runs = os.path.join(root, "runs")
+if not os.path.isfile(seal):
+    sys.exit("backup refused: seal key missing")
+if os.path.exists(runs) and not os.path.isdir(runs):
+    sys.exit("backup refused: runs path is not a directory")
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz") as t:
+    t.add(seal, arcname="seal.key")
+    if os.path.isdir(runs):
+        t.add(runs, arcname="runs")
+PY
+' > "$archive"; then
+  ls -l "$archive"   # -rw------- (0600) created by mktemp
+else
+  status=$?
+  # Failed run: remove ONLY this owned partial file; never report success.
+  rm -f -- "$archive"
+  exit "$status"
+fi
+#    If your custody root is a host bind mount, you MAY instead archive
+#    that host path directly with your normal file-state tooling - apply
+#    the same checks (non-empty archive containing seal.key + the runs
+#    tree, restrictive archive permissions, non-zero failure
+#    propagation). The seal key is INSIDE that tree (it is identity, not
+#    a recoverable secret): protect the archive as you protect the key;
+#    never print the key. "Rotating" means generating a NEW key file and
+#    re-pointing CATALOG_REFRESH_SEAL_KEY - old sealed runs remain bound
+#    to their original key.
+```
+
+Upgrade note: upgrading a deployment that predates 217 is an application
+upgrade plus the optional proxy allowance in the SAME maintenance window:
+rebuild/recreate `api`, `worker`, and `scheduler` so the new code and
+settings run, and - only if your proxy fronts the admin uploads - add the
+scoped `/admin/operations/catalog/` allowance to the active proxy shape
+and run its established configuration-test + reload/recreate (step 5
+above). No database migration, no schema change, and no key-policy change
+follow this upgrade; an existing-but-disabled deployment gains nothing
+until step 3/4 above.
 
 ## Backups
 

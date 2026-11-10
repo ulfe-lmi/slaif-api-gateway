@@ -695,6 +695,17 @@ configured upstream `/models` endpoint. Imports and proposal previews are local
 metadata workflows unless their dedicated documentation states otherwise.
 Pricing and FX rows are operator-reviewed local accounting inputs, not provider
 invoice attestations.
+`provider-catalog propose`'s `--max-models` is a finite PER-PROVIDER cap
+honored for both supported providers after include/exclude filtering (see
+[Provider catalog proposals](provider-catalog-proposals.md)).
+
+`provider-catalog propose --currency` sets the OUTPUT currency of the
+generated pricing rows. `USD` (default) keeps the native source prices
+and needs no database; any other 3-letter code converts every price with
+ONE active, configured direct USD→<CCY> FX rate captured once before
+generation and refuses safely (no database, or no configured/active
+direct pair) — never relabeling. See [Output currency and FX
+conversion](provider-catalog-proposals.md#output-currency-and-fx-conversion-217-a).
 
 ### Provider and route configuration parity (`providers update`, `routes update`, objective 199)
 
@@ -1223,6 +1234,16 @@ default. Full semantics, the source registry, policy thresholds, sealing,
 apply ordering, and exit codes live in
 [Catalog refresh (collect, review, and
 verify)](catalog-refresh.md).
+
+The same workflow is also available as the bounded admin GUI "Catalog
+workspace" (217-a, default-off) — see the
+[Admin GUI workspace](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a)
+section. The CLI commands are unchanged and delegate
+backwards-compatibly to the shared collect/review composition the GUI uses;
+the only intentional behavior change shared with the GUI is that
+`provider-catalog propose --max-models` is now honored for the OpenAI
+provider as well (previously only OpenRouter), applied after include/exclude
+filtering.
 
 ```bash
 # ONE refresh, ONE report: the supported administrator entry point.

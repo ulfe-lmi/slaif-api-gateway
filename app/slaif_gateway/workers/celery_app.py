@@ -18,6 +18,7 @@ def create_celery_app(settings: Settings | None = None) -> Celery:
         include=(
             "slaif_gateway.workers.tasks_email",
             "slaif_gateway.workers.tasks_reconciliation",
+            "slaif_gateway.workers.tasks_catalog_refresh",
         ),
     )
     app.conf.update(

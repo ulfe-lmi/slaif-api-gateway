@@ -108,6 +108,9 @@ KNOWN_EMAIL_DELIVERY_STATUSES: tuple[str, ...] = tuple(STATUS_VALUES_EMAIL_DELIV
 _PLAIN_VALUE_KINDS: frozenset[str] = frozenset(
     {
         "model",
+        # 217-a: collect upstream-model projection - the operator may type
+        # a future official upstream id that is not yet in the catalog.
+        "catalog_upstream",
         "endpoint",
         "currency",
         "fx_source",
@@ -1009,6 +1012,51 @@ async def load_choices(
                 continue
             choices.append(RecordChoice(id=model, label=model))
 
+    elif kind == "catalog_upstream":
+        # 217-a collect seam: the collector's ``model_include`` selects
+        # LITERAL UPSTREAM model ids (collection.py resolves no public
+        # aliases), so the shared ``model`` kind (which unions requested
+        # and upstream tokens plus usage history) offers values that
+        # cannot select their intended official model. This kind projects
+        # exactly the upstream identities the collector consumes - route
+        # + pricing upstream ids for the supported official providers -
+        # with the same latest-first ordering, ILIKE search, selected
+        # plain-value hydration, and credential-shape guard as ``model``.
+        sources = (
+            (ModelRoute, ModelRoute.upstream_model),
+            (PricingRule, PricingRule.upstream_model),
+        )
+        by_model: dict[str, Any] = {}
+        for table, column in sources:
+            rows = (
+                await session.execute(
+                    _grouped_model_stmt(table, column, provider=provider_values, query=query)
+                )
+            ).all()
+            for model, latest in rows:
+                if model is None:
+                    continue
+                key = str(model)
+                previous = by_model.get(key)
+                if previous is None or (latest is not None and (previous is None or latest > previous)):
+                    by_model[key] = latest
+        ordered = sorted(
+            by_model.items(),
+            key=lambda item: (
+                item[1] is None,
+                -(item[1].timestamp() if item[1] is not None else 0),
+                item[0],
+            ),
+        )
+        for model, _latest in ordered[:CHOICE_LIMIT]:
+            if is_known_incoming_secret_alias(
+                model, scope={}, accepted_prefixes=tuple(accepted_prefixes)
+            ):
+                continue
+            choices.append(
+                RecordChoice(id=model, label=model, sub="official upstream")
+            )
+
     elif kind == "policy_model":
         # Key-policy model allow-list search: only REQUESTED model tokens
         # from ENABLED routes on ENABLED providers over IMPLEMENTED
@@ -1491,7 +1539,10 @@ async def load_choices(
     # whatever path produced the option (initial batch, ILIKE search, or
     # selected plain-value re-hydration above).  Ordinary model tokens
     # and every other kind are untouched (no id corruption).
-    if kind == "model":
+    # 217-a: the collect ``catalog_upstream`` projection reuses the same
+    # credential-shape guard so a credential-shaped upstream token is
+    # never selectable there either.
+    if kind in {"model", "catalog_upstream"}:
         choices = [
             c
             for c in choices

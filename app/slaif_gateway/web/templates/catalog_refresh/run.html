@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+
+{% block title %}Sealed Run{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide catalog-run" aria-labelledby="catalog-run-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Refresh</p>
+      <h1 id="catalog-run-heading">Sealed run</h1>
+      <p class="muted">
+        <code>{{ detail.run_id }}</code> — this page renders the SAME authenticated canonical plan
+        (sealed validation report); the existing sealed REVIEW.html is available as a verified
+        attachment for local review, never inlined here.
+      </p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/catalog/">Catalog refresh</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if verified_state %}
+  <div class="admin-flash" role="status">
+    <strong>Explicit verification:</strong> seal/digest/semantic state = {{ verified_state }}
+    {% if not verified_ok %} — the run did NOT verify cleanly; treat every fact here as untrusted until resolved.{% endif %}
+  </div>
+  {% endif %}
+
+  {# Compact outcome facts first, with the actions near the outcome. #}
+  <div class="catalog-run-result">
+    <div class="dash-group">
+      <h2>Result</h2>
+      <dl>
+        <dt>State</dt><dd>{{ detail.state }} — {{ detail.state_reason }}</dd>
+        <dt>Generated (UTC)</dt><dd>{{ detail.generated_at }}</dd>
+        <dt>Acquisition mode</dt><dd>{{ detail.acquisition or 'n/a' }} (live collection vs offline-supplied)</dd>
+        <dt>Policy version</dt><dd>{{ detail.policy_version | num }}</dd>
+        <dt>Bundle (semantic)</dt><dd><code>{{ detail.bundle_sha256 }}</code></dd>
+        <dt>Receipt HMAC</dt><dd><code>{{ detail.receipt_hmac_sha256 }}</code></dd>
+      </dl>
+    </div>
+
+    <div class="dash-group">
+      <h2>Actions</h2>
+      <ul>
+        <li>
+          <form method="post" action="/admin/operations/catalog/runs/{{ detail.run_id }}/verify" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Verify (explicit, read-only)</button>
+          </form>
+          <p>Re-authenticates the seal, digests, and semantic replay under the held run handle.</p>
+        </li>
+        {% if is_superadmin and detail.apply_plan_present and detail.state in ('READY', 'READY_WITH_WARNINGS') %}
+        <li>
+          <form method="post" action="/admin/operations/catalog/runs/{{ detail.run_id }}/apply-preview" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Prepare reviewed apply…</button>
+          </form>
+          <p>Opens the bounded review-confirmation step (existing superadmin role, sealed binding, fresh per-request gate).</p>
+        </li>
+        {% endif %}
+        {% if is_superadmin %}
+        <li>
+          <form method="post" action="/admin/operations/catalog/runs/{{ detail.run_id }}/remove" class="inline-form" onsubmit="return confirm('Remove this sealed run from custody (identity-checked)?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Remove from custody</button>
+          </form>
+          <p>Identity-checked cleanup: only the exact sealed Core file set is removed.</p>
+        </li>
+        {% endif %}
+      </ul>
+    </div>
+  </div>
+
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Target and baseline</h2>
+      <dl>
+        <dt>Baseline mode</dt><dd>{{ detail.baseline.get('mode') or 'n/a' }}</dd>
+        <dt>Target</dt><dd>{{ detail.baseline.get('target_database') or 'n/a' }} @ {{ detail.baseline.get('target_host') or 'n/a' }}:{{ detail.baseline.get('target_port') or 'n/a' }} (PostgreSQL {{ detail.baseline.get('postgres_version') or 'n/a' }})</dd>
+        <dt>Target provenance</dt><dd>{{ detail.baseline.get('target_origin') or 'n/a' }}</dd>
+        <dt>SQL checked</dt><dd>{% if detail.baseline.get('sql_checked') %}yes — target observed by the read-only export{% else %}no — no SQL observation (bootstrap/first-install){% endif %}</dd>
+        <dt>Baseline content</dt><dd><code>{{ detail.baseline.get('content_sha256') or 'n/a' }}</code></dd>
+        <dt>Exported at</dt><dd>{{ detail.baseline.get('exported_at') or 'n/a' }}</dd>
+      </dl>
+      <table data-sortable class="table-narrow">
+        <thead><tr><th data-ordinal aria-hidden="true">#</th><th scope="col">Table</th><th scope="col" class="num" data-sort-type="number">Rows</th></tr></thead>
+        <tbody>
+          {% for name, count in detail.row_counts.items() %}
+          <tr><td class="row-ordinal">{{ loop.index }}</td><td>{{ name }}</td><td class="num" data-sort-value="{{ count }}">{{ count | num }}</td></tr>
+          {% else %}
+          <tr data-no-sort><td colspan="3" class="empty-state">No row counts (bootstrap/first-install: no SQL observation).</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="dash-group">
+      <h2>Counts and sources</h2>
+      <dl>
+        {% for key, value in detail.counts.items() %}<dt>{{ key }}</dt><dd>{{ value | num }}</dd>{% endfor %}
+      </dl>
+      {% if detail.sources %}
+      <p class="muted">Source provenance (bounded view):</p>
+      <ul>
+        {% for s in detail.sources %}<li><code>{{ s.url[:96] }}</code> — retrieved {{ s.retrieved_at }} — <code>{{ s.content_hash }}…</code></li>{% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="dash-group catalog-wide">
+    <h2>Warnings and blockers</h2>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Sealed run warnings">
+      <table data-sortable>
+        <thead><tr><th data-ordinal aria-hidden="true">#</th><th scope="col">Severity</th><th scope="col">Code</th><th scope="col">Provider</th><th scope="col">Model</th><th scope="col">Detail</th></tr></thead>
+        <tbody>
+          {% for w in detail.warnings %}
+          <tr><td class="row-ordinal">{{ loop.index }}</td><td>{{ w.severity }}</td><td><code>{{ w.code }}</code></td><td>{{ w.provider or '—' }}</td><td>{{ w.model or '—' }}</td><td>{{ w.detail }}</td></tr>
+          {% else %}
+          <tr data-no-sort><td colspan="6" class="empty-state">No sealed warnings in this run.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="dash-group catalog-wide">
+    <h2>Changed rows (dispositions)</h2>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Sealed run dispositions">
+      <table data-sortable>
+        <thead><tr><th data-ordinal aria-hidden="true">#</th><th scope="col">Provider</th><th scope="col">Model</th><th scope="col">Disposition</th><th scope="col">Detail</th></tr></thead>
+        <tbody>
+          {% for d in detail.dispositions %}
+          <tr><td class="row-ordinal">{{ loop.index }}</td><td>{{ d.provider }}</td><td>{{ d.model }}</td><td>{{ d.disposition }}</td><td>{{ d.detail }}</td></tr>
+          {% else %}
+          <tr data-no-sort><td colspan="5" class="empty-state">No changed rows in this run (nothing would be applied).</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="dash-group catalog-wide">
+    <h2>Price comparisons</h2>
+    <p class="dash-group-intro">Bounded view (up to 50 sealed comparisons). Missing prices are
+    shown explicitly; the sealed values are never altered.</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Sealed run price comparisons">
+      <table data-sortable>
+        <thead><tr><th data-ordinal aria-hidden="true">#</th><th scope="col">Provider</th><th scope="col">Model</th><th scope="col">Dimension</th><th scope="col">Old price</th><th scope="col">New price</th><th scope="col">Change</th><th scope="col">State</th></tr></thead>
+        <tbody>
+          {% for p in detail.price_comparisons[:50] %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>{{ p.provider }}</td>
+            <td><code>{{ p.model }}</code></td>
+            <td>{{ p.dimension }}</td>
+            <td>{% if p.old %}{{ p.old }} {{ p.currency_old or '' }} <span class="muted">({{ p.unit }})</span>{% else %}— (no prior price){% endif %}</td>
+            <td>{% if p.new %}{{ p.new }} {{ p.currency_new or '' }} <span class="muted">({{ p.unit }})</span>{% else %}— (no new price){% endif %}</td>
+            <td>{% if p.percent_change %}{{ p.percent_change }}% <span class="muted">({{ p.unit }})</span>{% else %}n/a (new or missing price){% endif %}</td>
+            <td>{{ p.state }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort><td colspan="8" class="empty-state">No sealed price comparisons in this run.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="dash-group catalog-wide">
+    <h2>Apply plan and identity</h2>
+    <dl>
+      <dt>Apply plan</dt><dd>{% if detail.apply_plan_present %}{{ detail.plan_operations | num }} operations — <code>{{ detail.plan_sha256 }}</code>{% else %}none (nothing executable){% endif %}</dd>
+      <dt>Original generator identity</dt><dd><code>{{ detail.original_generator_identity }}</code> ({{ detail.original_generator_tool }})</dd>
+      <dt>Current verifier identity</dt><dd><code>{{ detail.current_verifier_identity }}</code></dd>
+      <dt>Identity match</dt><dd>{{ 'yes — same measured code set' if detail.identity_match else 'NO — changed measured identity/renderer may refuse old artifacts; verify/regenerate with the supported original baseline and same protected seal key' }}</dd>
+    </dl>
+    <p class="muted">Plan operations — a bounded safe projection of the SAME sealed plan (the full
+    plan bytes remain in the verified catalog-refresh.json download; nothing here is re-derived).</p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Sealed apply plan operations (bounded projection)">
+      <table data-sortable>
+        <thead><tr><th data-ordinal aria-hidden="true">#</th><th scope="col">Type</th><th scope="col">Provider</th><th scope="col">Subject</th><th scope="col">Scope</th></tr></thead>
+        <tbody>
+          {% for op in detail.plan_op_rows %}
+          <tr><td class="row-ordinal">{{ loop.index }}</td><td><code>{{ op.type }}</code></td><td>{{ op.provider }}</td><td><code>{{ op.subject }}</code></td><td><code>{{ op.scope }}</code></td></tr>
+          {% else %}
+          <tr data-no-sort><td colspan="5" class="empty-state">No apply-plan operations (nothing executable).</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="dash-group catalog-wide">
+    <h2>Artifacts (verified downloads)</h2>
+    <p class="muted">Sealed content artifacts served as verified attachments (no-store, nosniff). The authentication files (manifest/receipt) are never served raw.</p>
+    <ul>
+      {% for a in detail.artifacts %}
+      <li><a href="/admin/operations/catalog/runs/{{ detail.run_id }}/artifact/{{ a.name }}">{{ a.name }}</a> — {{ a.bytes | num }} bytes</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+{% endblock %}

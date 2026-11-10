@@ -52,6 +52,11 @@ services:
       PROMETHEUS_MULTIPROC_DIR: /var/slaif/metrics
     tmpfs:
       - /var/slaif/metrics:mode=1777
+    volumes:
+      # Operator-owned catalog-refresh custody, shared with the worker so
+      # queued jobs and the API see one state tree. Only used when
+      # CATALOG_REFRESH_GUI_ENABLED=true (default OFF).
+      - catalog-refresh-data:/var/slaif/catalog-refresh
     command:
       - gunicorn
       - slaif_gateway.main:app
@@ -78,6 +83,10 @@ services:
         condition: service_healthy
       mailpit:
         condition: service_started
+    volumes:
+      # Same operator-owned custody volume as the api service (catalog
+      # refresh, 217-a; only used when CATALOG_REFRESH_GUI_ENABLED=true).
+      - catalog-refresh-data:/var/slaif/catalog-refresh
     command:
       - celery
       - -A
@@ -116,3 +125,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  catalog-refresh-data:

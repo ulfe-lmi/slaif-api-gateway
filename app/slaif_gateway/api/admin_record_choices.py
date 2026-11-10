@@ -71,6 +71,8 @@ _KINDS: frozenset[str] = frozenset(
         "key_public_id",
         "provider",
         "model",
+        # 217-a: collect upstream-model projection (literal upstream ids).
+        "catalog_upstream",
         "policy_model",
         "policy_provider",
         "endpoint",

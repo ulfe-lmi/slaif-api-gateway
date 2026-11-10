@@ -59,6 +59,11 @@ CODE_IDENTITY_UNAVAILABLE = "unavailable"
 IDENTITY_FILES: tuple[str, ...] = (
     "cli/catalog_refresh.py",
     "schemas/catalog_refresh.py",
+    # 217-a (G15): the shared application composition (extracted
+    # collect/review/publication semantics) and the concrete renderer
+    # dependency used by the sealed report and the admin review tables.
+    "services/catalog_refresh/application.py",
+    "web/static/js/table-sort.js",
     "services/catalog_refresh/apply.py",
     "services/catalog_refresh/baseline.py",
     "services/catalog_refresh/bundle.py",

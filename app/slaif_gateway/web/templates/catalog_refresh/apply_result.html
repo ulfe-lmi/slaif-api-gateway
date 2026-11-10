@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Apply Result{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="catalog-apply-result-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Refresh</p>
+      <h1 id="catalog-apply-result-heading">Apply result</h1>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/catalog/runs/{{ detail.run_id if detail else '' }}/">Back to run</a>
+      <a class="button-link secondary" href="/admin/operations/catalog/">Catalog refresh</a>
+      {% if csrf_token %}
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+      {% endif %}
+    </div>
+  </header>
+
+  <div class="admin-flash" role="status" aria-live="polite">
+    <strong>Status:</strong> {{ apply_status_value }}
+  </div>
+
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Outcome</h2>
+      <dl>
+        {% if apply_run_id %}<dt>Run</dt><dd><code>{{ apply_run_id }}</code></dd>{% endif %}
+        {% if apply_bundle_sha256 %}<dt>Bundle</dt><dd><code>{{ apply_bundle_sha256 }}</code></dd>{% endif %}
+        {% if not apply_records %}
+        {% if apply_effective_at %}<dt>Effective at</dt><dd>{{ apply_effective_at }}</dd>{% endif %}
+        {% if apply_counts %}
+        <dt>Applied counts</dt>
+        <dd>
+          {% for key, value in apply_counts.items() %}{{ key }}: {{ value | num }}{{ ' ' if not loop.last }}{% endfor %}
+        </dd>
+        {% endif %}
+        {% endif %}
+      </dl>
+      {% if apply_records %}
+      {# The authoritative committed application records: rendered exactly as
+         the durable record stores them (never collapsed to a run id, never
+         re-derived). #}
+      {% for rec in apply_records %}
+      <div class="dash-group">
+        <h2>Authoritative record {{ loop.index }} &mdash; {{ rec.outcome or 'committed' }}</h2>
+        <dl>
+          <dt>Mode</dt><dd>{{ rec.mode or 'n/a' }}</dd>
+          <dt>Effective at</dt><dd>{{ rec.effective_at or 'n/a' }} (UTC)</dd>
+          <dt>Bundle</dt><dd><code>{{ rec.bundle_sha256 or 'n/a' }}</code></dd>
+          <dt>Plan</dt><dd><code>{{ rec.plan_sha256 or 'n/a' }}</code></dd>
+          <dt>Receipt HMAC</dt><dd><code>{{ rec.receipt_hmac_sha256 or 'n/a' }}</code></dd>
+          <dt>Operator actor</dt><dd>{{ rec.operator_actor or 'n/a' }}</dd>
+          <dt>DB actor</dt><dd>{{ rec.db_actor or 'n/a' }}</dd>
+          <dt>Admin user</dt><dd>{{ rec.admin_user_id or 'n/a' }}</dd>
+          <dt>Reason</dt><dd>{{ rec.reason or 'n/a' }}</dd>
+        </dl>
+        <p class="muted">
+          Created &mdash; providers: {{ rec.created_providers | num }}, routes: {{ rec.created_routes | num }},
+          pricing: {{ rec.created_pricing | num }}, fx: {{ rec.created_fx | num }}.
+          Superseded &mdash; pricing: {{ rec.superseded_pricing | num }}, fx: {{ rec.superseded_fx | num }}.
+        </p>
+      </div>
+      {% endfor %}
+      {% endif %}
+      {% if apply_unconfirmed %}
+      <p class="muted">
+        A broker ack loss, worker interruption, or DB commit-ack failure is UNCONFIRMED until the
+        authoritative committed status resolves it. Use the status action below; never assume
+        applied or rolled back.
+      </p>
+      {% else %}
+      <p class="muted">
+        The outcome above is from the authoritative application record. An exact committed repeat
+        returns this same result; nothing new is committed on re-apply.
+      </p>
+      {% endif %}
+      <form method="get" action="/admin/operations/catalog/runs/{{ detail.run_id if detail else '' }}/apply-status" class="inline-form">
+        <button type="submit">Check authoritative status</button>
+      </form>
+    </div>
+  </div>
+</section>
+{% endblock %}

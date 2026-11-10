@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -17,8 +19,10 @@ from slaif_gateway.services.provider_catalog_proposal import (
     OPENAI_PRICING_DOCS_URL,
     OPENROUTER_MODELS_API_URL,
     OPENROUTER_MODELS_DOCS_MARKDOWN_URL,
+    ProviderCatalogPricingCandidate,
     ProviderCatalogProposalValidationError,
     ProviderCatalogProposalResult,
+    ProposalFxCapture,
     _build_chat_capabilities,
     _openrouter_model_warnings,
     _confirm_openrouter_pricing_unit,
@@ -26,6 +30,8 @@ from slaif_gateway.services.provider_catalog_proposal import (
     _parse_openai_models_docs,
     _parse_openai_pricing_docs,
     _validate_generated_pricing_tsv,
+    apply_proposal_fx,
+    make_proposal_fx_capture,
     generate_provider_catalog_proposal,
 )
 from slaif_gateway.services.route_import import (
@@ -896,3 +902,453 @@ def test_provider_catalog_skill_exists_and_is_repo_local() -> None:
     assert skill_path.exists()
     assert skill_path.read_text(encoding="utf-8").lower().count("proposal-only") >= 1
     assert not Path(".codex/skills/provider-catalog-proposal/SKILL.md").exists()
+
+
+OPENAI_TWO_CHAT_MODELS_DOC = """
+## gpt-5.5
+Endpoints: /v1/chat/completions
+Features: streaming
+Context length: 400000
+Max output tokens: 16384
+
+## gpt-5.6
+Endpoints: /v1/chat/completions
+Features: streaming
+Context length: 256000
+Max output tokens: 8192
+"""
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_honors_max_models_cap_with_honest_omission(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    """The EXISTING public max_models cap is honored for OpenAI too
+    (same-service argument, applied AFTER the include/exclude filtering):
+    cap 1 of two eligible models keeps the deterministic sorted-first id
+    and reports the omitted scope honestly in the warnings. A within-cap
+    catalog keeps its current default output (no cap warning)."""
+    respx_mock.get(OPENAI_PRICING_DOCS_URL).mock(
+        return_value=httpx.Response(200, text="Pricing\n")
+    )
+    respx_mock.get(OPENAI_MODELS_DOCS_URL).mock(
+        return_value=httpx.Response(200, text=OPENAI_TWO_CHAT_MODELS_DOC)
+    )
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openai",
+        output_dir=tmp_path / "capped",
+        source_methods=("docs",),
+        endpoint_scopes=("chat_completions",),
+        max_models=1,
+    )
+    normalized = json.loads(result.normalized_path.read_text(encoding="utf-8"))
+    kept = {item["model_id"] for item in normalized["models"]}
+    assert kept == {"gpt-5.5"}  # deterministic sorted-first within the cap
+    warnings_payload = json.loads(result.warnings_path.read_text(encoding="utf-8"))
+    cap_warnings = [
+        item for item in warnings_payload["warnings"] if item["code"] == "model_cap_applied"
+    ]
+    assert len(cap_warnings) == 1
+    assert "omitted 1" in cap_warnings[0]["message"]
+    assert "gpt-5.6" in cap_warnings[0]["message"]
+    assert "max_models=1" in cap_warnings[0]["message"]
+
+    # legacy regression: within the cap, the default output is unchanged
+    # (both models, no cap warning).
+    result_full = await generate_provider_catalog_proposal(
+        provider_scope="openai",
+        output_dir=tmp_path / "within",
+        source_methods=("docs",),
+        endpoint_scopes=("chat_completions",),
+    )
+    normalized_full = json.loads(result_full.normalized_path.read_text(encoding="utf-8"))
+    kept_full = {item["model_id"] for item in normalized_full["models"]}
+    assert kept_full == {"gpt-5.5", "gpt-5.6"}
+    warnings_full = json.loads(result_full.warnings_path.read_text(encoding="utf-8"))
+    assert not any(
+        item["code"] == "model_cap_applied" for item in warnings_full["warnings"]
+    )
+
+
+# --- FX conversion (human-approved real FX, one configured direct USD->target row) ---
+
+FX_RATE_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
+
+
+def _fx_capture(**overrides) -> ProposalFxCapture:
+    values = dict(
+        target_currency="EUR",
+        fx_rate_id=FX_RATE_ID,
+        rate=Decimal("1.083"),
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+        valid_until=None,
+        captured_at=datetime(2026, 6, 9, tzinfo=UTC),
+    )
+    values.update(overrides)
+    return make_proposal_fx_capture(**values)
+
+
+def _fx_candidate(**overrides) -> ProviderCatalogPricingCandidate:
+    values = dict(
+        provider="openrouter",
+        model_id="openai/gpt-test-mini",
+        endpoint=CHAT_COMPLETIONS_ENDPOINT,
+        currency="USD",
+        input_price_per_1m="2",
+        cached_input_price_per_1m="1",
+        output_price_per_1m="8",
+        reasoning_price_per_1m="3",
+        request_price="0.1",
+        source_url=OPENROUTER_MODELS_API_URL,
+        source_retrieved_at="2026-06-09T00:00:00Z",
+        pricing_metadata={"pricing_unit": "usd_per_token"},
+        notes="synthetic",
+        confidence="high",
+        ready_for_import=True,
+    )
+    values.update(overrides)
+    return ProviderCatalogPricingCandidate(**values)
+
+
+def test_make_proposal_fx_capture_valid_and_fail_closed() -> None:
+    capture = _fx_capture()
+    assert capture.base_currency == "USD"
+    assert capture.target_currency == "EUR"  # normalized from "eur"-shaped input
+    assert capture.fx_rate_id == str(FX_RATE_ID)
+    assert capture.rate == "1.083"
+    assert capture.valid_from == "2026-01-01T00:00:00Z"
+    assert capture.valid_until is None
+    assert capture.captured_at == "2026-06-09T00:00:00Z"
+    # the uuid fact is canonical (string fact in, canonical UUID string out)
+    assert _fx_capture(fx_rate_id=str(FX_RATE_ID)).fx_rate_id == str(FX_RATE_ID)
+
+    bad_targets = ["US", "1US", "EU R"]
+    for target in bad_targets:
+        with pytest.raises(ValueError, match="3-letter"):
+            _fx_capture(target_currency=target)
+    for rate in (Decimal("0"), Decimal("-1"), Decimal("NaN")):
+        with pytest.raises(ValueError, match="positive finite"):
+            _fx_capture(rate=rate)
+    with pytest.raises(ValueError, match="valid_from"):
+        _fx_capture(valid_from=datetime(2026, 1, 1))
+    # naive valid_until is refused BEFORE the window comparison (safe
+    # ValueError, never a TypeError from an aware/naive compare)
+    with pytest.raises(ValueError, match="valid_until"):
+        _fx_capture(valid_until=datetime(2027, 1, 1))
+    with pytest.raises(ValueError, match="empty"):
+        _fx_capture(
+            valid_until=datetime(2025, 12, 31, tzinfo=UTC)
+        )
+    with pytest.raises(ValueError, match="capture time"):
+        _fx_capture(captured_at=datetime(2026, 6, 9))
+    with pytest.raises(ValueError, match="not yet valid"):
+        _fx_capture(captured_at=datetime(2025, 1, 1, tzinfo=UTC))
+    with pytest.raises(ValueError, match="expired"):
+        _fx_capture(
+            valid_until=datetime(2026, 6, 9, tzinfo=UTC)
+        )
+    with pytest.raises(ValueError, match="UUID"):
+        _fx_capture(fx_rate_id="not-a-uuid")
+
+
+def test_convert_proposal_price_text_numeric_contract() -> None:
+    from slaif_gateway.services.provider_catalog_proposal import (
+        _convert_proposal_price_text,
+    )
+
+    assert _convert_proposal_price_text(None, Decimal("1.083")) is None
+    assert _convert_proposal_price_text("0", Decimal("1.083")) == "0"
+    # exact values
+    assert _convert_proposal_price_text("2", Decimal("1.083")) == "2.166"
+    assert _convert_proposal_price_text("0.5", Decimal("1.083")) == "0.5415"
+    # the established 9-fraction contract round-trips at the quantum
+    assert _convert_proposal_price_text("0.000000001", Decimal("1")) == "0.000000001"
+    # ROUND_HALF_UP at the 9th fraction
+    assert _convert_proposal_price_text("1", Decimal("1.0000000005")) == "1.000000001"
+    # positive-to-zero underflow is refused (never a silent free price)
+    with pytest.raises(ValueError, match="underflow"):
+        _convert_proposal_price_text("0.000000001", Decimal("0.0000001"))
+    # overflow beyond the Numeric(18,9) import bound is refused
+    with pytest.raises(ValueError, match="overflow"):
+        _convert_proposal_price_text("999999999.999999999", Decimal("2"))
+    # contract violations are refused BEFORE arithmetic
+    for bad in ("abc", "1e999", "-1", "1.2345678901"):
+        with pytest.raises(ValueError):
+            _convert_proposal_price_text(bad, Decimal("1.083"))
+
+
+def test_apply_proposal_fx_identity_conversion_and_double_apply_refusal() -> None:
+    candidate = _fx_candidate()
+    # USD identity: None capture or USD->USD capture leave rows unchanged
+    assert apply_proposal_fx([candidate], None) == [candidate]
+    identity = _fx_capture(target_currency="USD")
+    assert apply_proposal_fx([candidate], identity) == [candidate]
+
+    converted = apply_proposal_fx([candidate], _fx_capture())
+    assert len(converted) == 1
+    row = converted[0]
+    assert row.currency == "EUR"
+    assert row.input_price_per_1m == "2.166"
+    assert row.cached_input_price_per_1m == "1.083"
+    assert row.output_price_per_1m == "8.664"
+    assert row.reasoning_price_per_1m == "3.249"
+    assert row.request_price == "0.1083"
+    # original USD amounts + the applied FX facts are preserved
+    assert row.pricing_metadata["source_currency"] == "USD"
+    assert row.pricing_metadata["source_prices"] == {
+        "input_price_per_1m": "2",
+        "cached_input_price_per_1m": "1",
+        "output_price_per_1m": "8",
+        "reasoning_price_per_1m": "3",
+        "request_price": "0.1",
+    }
+    assert row.pricing_metadata["fx"]["fx_rate_id"] == str(FX_RATE_ID)
+    assert row.pricing_metadata["fx"]["rate"] == "1.083"
+    # the OFFICIAL SOURCE unit is never relabeled
+    assert row.pricing_metadata["pricing_unit"] == "usd_per_token"
+    # missing/zero semantics preserved
+    sparse = _fx_candidate(
+        cached_input_price_per_1m=None, reasoning_price_per_1m=None, request_price="0"
+    )
+    sparse_row = apply_proposal_fx([sparse], _fx_capture())[0]
+    assert sparse_row.cached_input_price_per_1m is None
+    assert sparse_row.reasoning_price_per_1m is None
+    assert sparse_row.request_price == "0"
+    # double application is impossible, not silent
+    with pytest.raises(ValueError, match="double application"):
+        apply_proposal_fx([row], _fx_capture())
+
+
+def _mock_openrouter(respx_mock) -> None:
+    respx_mock.get(OPENROUTER_MODELS_DOCS_MARKDOWN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            text="All pricing values are in USD per token/request/unit.",
+            headers={"content-type": "text/markdown"},
+        )
+    )
+    respx_mock.get(OPENROUTER_MODELS_API_URL).mock(
+        return_value=httpx.Response(200, json=OPENROUTER_MODELS_FIXTURE)
+    )
+    respx_mock.get("https://openrouter.ai/api/v1/models/openai/gpt-test-mini/endpoints").mock(
+        return_value=httpx.Response(
+            200,
+            json={"data": {"max_completion_tokens": 8192}},
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_openrouter_catalog_proposal_non_usd_fx_conversion(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    """ONE captured configured USD->EUR rate converts EVERY monetary
+    dimension before ANY writer; root and package artifacts agree and
+    the strict import consumer accepts the converted output."""
+    _mock_openrouter(respx_mock)
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openrouter",
+        output_dir=tmp_path,
+        fetch_details_limit=1,
+        currency="EUR",
+        fx_capture=_fx_capture(),
+        package_names=("openrouter-chat-text",),
+    )
+    assert result.pricing_rows_ready == 1
+
+    # strict import consumer accepts the CONVERTED rows (EUR, converted)
+    rows = parse_pricing_import_tsv(result.pricing_proposal_path.read_text(encoding="utf-8"))
+    preview = validate_pricing_import_rows(rows, max_rows=10)
+    assert preview.valid_count == 1
+    row = preview.rows[0]
+    assert row.currency == "EUR"
+    assert row.input_price_per_1m == "2.166"
+    assert row.cached_input_price_per_1m == "1.083"
+    assert row.output_price_per_1m == "8.664"
+    assert row.reasoning_price_per_1m == "3.249"
+    assert row.request_price == "0"  # zero preserved, never scaled
+    # the row metadata carries the source USD facts + the applied FX pair
+    metadata = rows[0]["pricing_metadata"]
+    assert '"source_currency":"USD"' in metadata
+    assert '"source_prices"' in metadata
+    assert '"fx_rate_id":"' + str(FX_RATE_ID) + '"' in metadata
+
+    # root normalized JSON: fx fact + source amounts visible
+    normalized = json.loads(result.normalized_path.read_text(encoding="utf-8"))
+    assert normalized["fx"]["target_currency"] == "EUR"
+    assert normalized["fx"]["rate"] == "1.083"
+    assert normalized["fx"]["fx_rate_id"] == str(FX_RATE_ID)
+    pricing_doc = normalized["pricing_candidates"][0]
+    assert pricing_doc["currency"] == "EUR"
+    assert pricing_doc["pricing_metadata"]["source_prices"]["input_price_per_1m"] == "2"
+    assert pricing_doc["pricing_metadata"]["pricing_unit"] == "usd_per_token"
+
+    # manifest agrees with the same capture (no double conversion)
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["fx"] == normalized["fx"]
+
+    # report states the applied conversion truthfully
+    report = result.report_path.read_text(encoding="utf-8")
+    assert "Output currency: EUR" in report
+    assert "1.083" in report
+    assert str(FX_RATE_ID) in report
+
+    # the PACKAGE output is converted with the SAME capture
+    package_dir = tmp_path / "packages" / "openrouter-chat-text"
+    package_rows = parse_pricing_import_tsv(
+        (package_dir / "pricing-proposal.tsv").read_text(encoding="utf-8")
+    )
+    package_preview = validate_pricing_import_rows(package_rows, max_rows=10)
+    assert package_preview.valid_count == 1
+    assert package_preview.rows[0].currency == "EUR"
+    assert package_preview.rows[0].input_price_per_1m == "2.166"
+    # the package review labels the DISPLAYED currency (not hardcoded USD)
+    review = (package_dir / "model-review.md").read_text(encoding="utf-8")
+    assert "input EUR per 1M" in review
+    assert "input USD per 1M" not in review
+
+
+@pytest.mark.asyncio
+async def test_generate_openrouter_catalog_proposal_usd_keeps_native_and_fx_absent(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    """USD output is the identity conversion: byte-identical native
+    values, NO fx metadata anywhere, no capture (and no database)
+    required."""
+    _mock_openrouter(respx_mock)
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openrouter",
+        output_dir=tmp_path,
+        fetch_details_limit=1,
+    )
+    rows = parse_pricing_import_tsv(result.pricing_proposal_path.read_text(encoding="utf-8"))
+    assert rows[0]["currency"] == "USD"
+    assert rows[0]["input_price_per_1m"] == "2"
+    normalized = json.loads(result.normalized_path.read_text(encoding="utf-8"))
+    assert normalized["fx"] is None
+    assert normalized["pricing_candidates"][0]["pricing_metadata"].get("source_prices") is None
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["fx"] is None
+    assert "Output currency:" not in result.report_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_generate_proposal_rejects_non_usd_without_capture_or_mismatched_capture(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    """Non-USD without a capture (or with a mismatched capture) is
+    refused BEFORE any directory/network work: no output directory is
+    created and no source request is made (never silent relabeling)."""
+    _mock_openrouter(respx_mock)
+    out_dir = tmp_path / "out"
+    with pytest.raises(ValueError, match="fx capture"):
+        await generate_provider_catalog_proposal(
+            provider_scope="openrouter",
+            output_dir=out_dir,
+            currency="EUR",
+        )
+    assert not out_dir.exists()
+    # a capture for a DIFFERENT target currency is refused too
+    with pytest.raises(ValueError, match="target does not match"):
+        await generate_provider_catalog_proposal(
+            provider_scope="openrouter",
+            output_dir=tmp_path / "out2",
+            currency="EUR",
+            fx_capture=_fx_capture(target_currency="GBP"),
+        )
+    assert not (tmp_path / "out2").exists()
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_assisted_non_usd_keeps_native_source_and_converts_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock,
+) -> None:
+    """The OpenAI-assisted seam receives NATIVE USD (never asked to
+    invent or apply exchange rates); the requested non-USD output is
+    produced by the ONE captured configured rate AFTER the assisted
+    cross-check, with the source USD facts preserved."""
+    monkeypatch.setenv(OPENAI_ADMIN_DISCOVERY_API_KEY_ENV_VAR, "admin-discovery-key")
+    respx_mock.get(OPENAI_PRICING_DOCS_URL).mock(
+        return_value=httpx.Response(200, text=OPENAI_PRICING_DOC_FIXTURE)
+    )
+    respx_mock.get(OPENAI_MODELS_DOCS_URL).mock(
+        return_value=httpx.Response(200, text=OPENAI_MODELS_DOC_FIXTURE)
+    )
+
+    assisted_kwargs: dict[str, dict[str, object]] = {}
+
+    async def fake_pricing_cross_check(**kwargs) -> OpenAIAssistedProposalTextResult:  # noqa: ANN003
+        assisted_kwargs["pricing"] = kwargs
+        return OpenAIAssistedProposalTextResult(
+            proposal_type="pricing",
+            tsv_text=(
+                "provider\tmodel\tendpoint\tcurrency\tinput_price_per_1m\t"
+                "cached_input_price_per_1m\toutput_price_per_1m\treasoning_price_per_1m\t"
+                "request_price\tvalid_from\tsource_url\tsource_retrieved_at\tpricing_metadata\tnotes\n"
+                "openai\tgpt-5.5\t/v1/chat/completions\tUSD\t5\t0.5\t15\t\t\t"
+                "2026-06-09T00:00:00Z\thttps://developers.openai.com/api/docs/pricing\t"
+                "2026-06-09T00:00:00Z\t{}\tsafe\n"
+            ),
+            row_count=1,
+            warnings=(),
+            source_urls=(OPENAI_PRICING_DOCS_URL, OPENAI_MODELS_DOCS_URL),
+        )
+
+    async def fake_route_cross_check(**kwargs) -> OpenAIAssistedProposalTextResult:  # noqa: ANN003
+        assisted_kwargs["route"] = kwargs
+        return OpenAIAssistedProposalTextResult(
+            proposal_type="route",
+            tsv_text=(
+                "requested_model\tmatch_type\tendpoint\tprovider\tupstream_model\tpriority\t"
+                "enabled\tvisible_in_models\tsupports_streaming\tcapabilities\tnotes\n"
+                "gpt-5.5\texact\t/v1/chat/completions\topenai\tgpt-5.5\t100\ttrue\ttrue\ttrue\t{}\tsafe\n"
+            ),
+            row_count=1,
+            warnings=(),
+            source_urls=(OPENAI_MODELS_DOCS_URL,),
+        )
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.provider_catalog_proposal.generate_openai_pricing_proposal_text",
+        fake_pricing_cross_check,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.provider_catalog_proposal.generate_openai_route_proposal_text",
+        fake_route_cross_check,
+    )
+
+    rate = Decimal("0.84")
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openai",
+        output_dir=tmp_path,
+        source_methods=("docs", "assisted"),
+        acknowledge_assisted_proposal_risk=True,
+        currency="GBP",
+        fx_capture=_fx_capture(target_currency="GBP", rate=rate),
+    )
+    # the assisted helpers were given the NATIVE source currency, not GBP
+    assert assisted_kwargs["pricing"]["currency"] == "USD"
+    assert "currency" not in assisted_kwargs["route"] or assisted_kwargs["route"].get("currency") == "USD"
+
+    rows = parse_pricing_import_tsv(result.pricing_proposal_path.read_text(encoding="utf-8"))
+    preview = validate_pricing_import_rows(rows, max_rows=10)
+    assert preview.valid_count == 1
+    row = preview.rows[0]
+    # docs 5.00/0.50/15.00 USD per 1M converted with the ONE captured rate
+    assert row.currency == "GBP"
+    assert row.input_price_per_1m == "4.2"
+    assert row.cached_input_price_per_1m == "0.42"
+    assert row.output_price_per_1m == "12.6"
+    # source USD facts preserved in the row metadata
+    metadata = rows[0]["pricing_metadata"]
+    assert '"source_currency":"USD"' in metadata
+    assert '"input_price_per_1m":"5"' in metadata.replace(" ", "")
+    normalized = json.loads(result.normalized_path.read_text(encoding="utf-8"))
+    assert normalized["fx"]["target_currency"] == "GBP"
+    assert normalized["fx"]["rate"] == "0.84"

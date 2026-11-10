@@ -32,12 +32,18 @@ slaif-gateway provider-catalog propose all \
 
 Optional comparison flags:
 
+- `--max-models N` (finite per-provider cap, honored for BOTH supported
+  providers AFTER include/exclude filtering; models beyond the cap are
+  reported as omitted scope, never silently mixed in)
 - `--source api`
 - `--source assisted`
 - `--include-model`
 - `--exclude-model`
 - `--endpoint-scope chat_completions`
 - `--endpoint-scope responses`
+- `--currency EUR` (output currency; see [Output currency and FX
+  conversion](#output-currency-and-fx-conversion-217-a); default `USD`
+  keeps the native source prices and needs no database)
 - `--save-source-snapshots`
 - `--json`
 - `--allow-zero-prices`
@@ -136,6 +142,110 @@ Package aliases are also accepted:
 
 `--all-packages` emits every current OpenRouter package preset.
 
+## Admin GUI proposal workspace (217-a)
+
+The same generator is available as a bounded queued job in the admin
+dashboard "Catalog workspace" (`/admin/operations/catalog/proposals`),
+default-off behind the same `CATALOG_REFRESH_*` operator setup as the
+[catalog refresh GUI](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a).
+
+- The form exposes the SAME closed choices as the CLI: provider scope
+  (`openai` / `openrouter` / `all`), the closed endpoint-scope vocabulary
+  (`chat_completions`, `responses`), the closed package presets, currency,
+  and the finite model/detail/web-call caps (the public `max_models` cap is
+  PER PROVIDER and is honored for both providers after include/exclude
+  filtering).
+- Source methods are captured honestly: OpenRouter ALWAYS uses docs + the
+  models API (the selection does not remove either); `api`/`assisted` are
+  OpenAI-only and require the EXISTING `OPENAI_ADMIN_DISCOVERY_API_KEY`
+  deployment secret (never the model-facing key) plus, for `assisted`, the
+  explicit risk acknowledgement. `max_web_calls` is a REQUESTED prompt
+  budget, not proven hard provider call/cost enforcement. Unsupported
+  combinations (e.g. OpenRouter + assisted) are refused before any
+  dispatch or network activity, with a useful fixed refusal rather than a
+  post-fetch failure.
+- The include/exclude model filters are the closed `catalog_upstream`
+  record choice (official upstream IDs, latest ~100 + older search +
+  manual entry; oversized explicit selections are refused, never
+  truncated).
+- The generated route/pricing TSVs (plus normalized JSON, warnings,
+  report, source manifest) are bounded downloads from operator custody,
+  with a CLOSED preset + closed-file package selector; they bridge to the
+  EXISTING import preview and are UNSEALED proposal artifacts (no
+  cryptographic "verified" claim). The GUI displays prices with their
+  actual units (token dimensions per 1,000,000 tokens; the request
+  dimension per request), with the row's ACTUAL currency (the output
+  currency after one captured FX conversion, or native USD by default).
+  Non-USD output uses a real FX conversion as documented in
+  [Output currency and FX conversion](#output-currency-and-fx-conversion-217-a).
+- The job acknowledgement and "Refresh status" navigation bind to the
+  EXACT server-created job id (an explicit unknown or foreign-family id is
+  refused, never substituted by the newest job), and the result page
+  displays the provider scope that was actually generated.
+
+## Output currency and FX conversion (217-a)
+
+The proposal's `--currency` option (CLI) and the Currency select (GUI:
+the closed `USD` / `EUR` / `GBP` / `CHF` choices) set the OUTPUT currency
+of the generated pricing rows. Official source amounts stay NATIVE USD
+through parsing and cross-checking (assisted outputs included) — the
+conversion is a bounded post-extraction step, never an instruction to a
+source or model.
+
+- **USD (default)**: the identity conversion. Native source prices are
+  emitted unchanged, with NO database access — USD output remains
+  offline-capable.
+- **Non-USD**: ONE explicit, currently-active, configured
+  **direct USD→target** rate row (managed through the existing FX
+  administration, e.g. `slaif-gateway fx add`) is captured exactly once,
+  at job start, with a single database transaction that is closed before
+  any network or generation. That one captured rate converts EVERY
+  monetary dimension (per-1M-token prices and the per-request price) of
+  EVERY row with one Decimal conversion following the established
+  price contract (quantum 0.000000001, ROUND_HALF_UP, Numeric(18,9)
+  bound). Missing/zero prices stay missing/zero; a positive price that
+  would underflow to zero or overflow the import bound refuses the whole
+  proposal.
+- Each candidate batch (the root output and every selected package) is
+  converted before ITS artifacts are written, and ALL of them use the
+  ONE captured FX fact — so a completed proposal's root JSON/TSV/report
+  and package outputs agree. A failed or partial generation is NOT a
+  complete proposal and must not be imported. Each converted row keeps
+  the original USD amounts plus the applied FX pair, rate UUID, rate,
+  validity window, and capture time in its metadata; the normalized
+  JSON and source manifest carry the same FX fact, and the report
+  states the applied conversion. The official source unit
+  (e.g. `usd_per_token`) is never relabeled.
+- Refusal semantics (CLI and GUI): a missing or not-currently-active
+  configured direct pair (including an unconfigured database) refuses
+  the proposal safely BEFORE generation (`proposal_fx_unavailable` /
+  `proposal_fx_rate_missing` in the GUI job; a fixed safe CLI error).
+  Prices are NEVER relabeled, and there is no inferred inverse,
+  cross-currency graph, or automatic FX fetch. Other validation or
+  conversion failures (e.g. underflow/overflow) fail the job normally
+  without publishing a complete proposal.
+- The captured rate is FROZEN until the proposal is re-run; re-running
+  captures the latest active configured pair at that time. Runtime
+  quota/accounting behavior is unchanged by a proposal's output currency.
+  This proposal-side USD→target conversion is DISTINCT from the UNCHANGED
+  runtime accounting requirement that published pricing resolves to
+  EUR. The existing pricing service captures FX during REQUEST
+  pricing/accounting, not during this proposal import — so: a GBP
+  output needs the configured USD→GBP pair for the proposal
+  conversion, and USING those GBP prices for EUR accounting still needs
+  the configured GBP→EUR pair under the unchanged runtime rules (EUR
+  pricing is identity). Importing prices does not create or infer that
+  second pair. The two surfaces use independently configured direct
+  pairs; there is no rate graph, no inferred inverse, and no accounting
+  change.
+
+This is an intentional correctness fix: before 217-a, a non-USD
+`--currency` relabeled the native USD amounts (the pre-existing
+dual-currency per-million label behavior). The shared CLI and GUI
+generator now performs the same verified conversion; the default USD
+output is unchanged.
+
+## Source Methods
 ## Source Methods
 
 OpenRouter:

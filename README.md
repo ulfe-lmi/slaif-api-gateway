@@ -92,7 +92,7 @@ substituted server-side and never reach the client.
 | Per-key policy and hard quotas | Explicit model, endpoint, capability, quota, rate, and validity controls per key; unknown or unsupported input fails closed. |
 | Durable accounting | PostgreSQL is the authoritative store for reservations, usage, and EUR cost metadata, with operator reconciliation surfaces. |
 | OpenAI client compatibility | Standard `OPENAI_API_KEY`/`OPENAI_BASE_URL` usage with OpenAI-shaped requests, responses, SSE streaming, and errors for the supported endpoint set. |
-| Audit and operator surfaces | Immutable audit records, usage and audit exports, plus a server-rendered admin dashboard and CLI for keys, providers, routes, pricing, and delivery workflows. |
+| Audit and operator surfaces | Immutable audit records, usage and audit exports, plus a server-rendered admin dashboard and CLI for keys, providers, routes, pricing, delivery workflows, and the optional operator catalog-refresh/proposal workspace (default-off). |
 | Self-hosted control | Docker Compose deployment you operate; one organization per deployment; prompts and completions are not stored by default. |
 
 The supported endpoint set is bounded and documented exactly in the
@@ -128,6 +128,7 @@ explicitly deferred / unsupported-by-policy classification is the
 | Configure it | [configuration reference](docs/configuration.md) |
 | Integrate a client | [compatibility matrix](docs/compatibility-matrix.md) → [OpenAI compatibility](docs/openai-compatibility.md) → [provider forwarding contract](docs/provider-forwarding-contract.md) |
 | Operate it | [operator runbooks](docs/runbooks/README.md) → [backup and restore](docs/backup-restore.md) → [upgrade runbook](docs/upgrade-runbook.md) |
+| Refresh the provider catalog | [catalog refresh (CLI + admin GUI)](docs/catalog-refresh.md) → [provider catalog proposals](docs/provider-catalog-proposals.md) |
 | Brand the admin UI | [operator branding](docs/branding.md) → [SLAIF visual design](docs/visual-design.md) |
 | Review security and accounting | [security model](docs/security-model.md) → [accounting](docs/accounting.md) → [database schema](docs/database-schema.md) |
 | Contribute | [CONTRIBUTING](CONTRIBUTING.md) |
