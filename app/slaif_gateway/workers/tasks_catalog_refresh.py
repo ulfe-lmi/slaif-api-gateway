@@ -24,6 +24,7 @@ import json
 import os
 import re
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -32,6 +33,11 @@ import httpx
 import structlog
 
 from slaif_gateway.config import Settings, get_settings
+from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
+from slaif_gateway.db.session import (
+    create_engine_from_settings,
+    create_sessionmaker_from_engine,
+)
 from slaif_gateway.services.admin_catalog_refresh import (
     CATALOG_JOB_FAMILIES,
     AdminCatalogRefreshError,
@@ -67,6 +73,7 @@ from slaif_gateway.services.catalog_refresh.source_transport import VettedHTTPTr
 from slaif_gateway.services.provider_catalog_proposal import (
     ProviderCatalogProposalSizeError,
     generate_provider_catalog_proposal,
+    make_proposal_fx_capture,
 )
 from slaif_gateway.workers.celery_app import celery_app
 
@@ -696,6 +703,14 @@ async def _run_proposal(
         raise ApplicationUsageError(
             "source_method_invalid", "unknown proposal source method"
         )
+    currency = str(params.get("currency") or "USD")
+    # Non-USD output needs ONE captured, configured direct USD->target FX
+    # rate. The database transaction is closed BEFORE the network/
+    # generation; a missing/expired/invalid rate fails the job with a
+    # fixed safe code and writes NO proposal output (never relabel).
+    fx_capture = None
+    if currency.strip().upper() != "USD":
+        fx_capture = await _capture_proposal_fx(settings, currency)
     # The job's existing cooperative checkpoint is wired through the
     # factory seam: cancel/deadline is honored between acquisitions and
     # between returned raw chunks across the whole source loop (the
@@ -708,7 +723,7 @@ async def _run_proposal(
             endpoint_scopes=_str_list(params.get("endpoint_scopes")),
             include_models=_str_list(params.get("include_models")),
             exclude_models=_str_list(params.get("exclude_models")),
-            currency=str(params.get("currency") or "USD"),
+            currency=currency,
             source_methods=source_methods,  # type: ignore[arg-type]
             max_models=_int_param(
                 params.get("max_models"), _PROPOSAL_MAX_MODELS, 1, _PROPOSAL_MAX_MODELS
@@ -738,6 +753,7 @@ async def _run_proposal(
             ),
             http_client=client,
             max_output_bytes=_PROPOSAL_RESERVATION_BYTES,
+            fx_capture=fx_capture,
         )
         try:
             await generation
@@ -764,7 +780,66 @@ async def _run_proposal(
     except CollectionCanceled:
         remove_proposal_dir(settings, job_id)
         raise
-    return "ready", None, None, "proposal artifacts generated"
+    if fx_capture is not None and fx_capture.target_currency != fx_capture.base_currency:
+        # Truthful, bounded operator-visible fact (safe projections only):
+        # the source prices were converted with this one captured rate,
+        # frozen until the proposal is re-run.
+        progress = (
+            f"proposal artifacts generated (FX {fx_capture.base_currency}→"
+            f"{fx_capture.target_currency} rate={fx_capture.rate} captured "
+            f"{fx_capture.captured_at})"
+        )
+    else:
+        progress = "proposal artifacts generated"
+    return "ready", None, None, progress
+
+
+async def _capture_proposal_fx(settings: Settings, currency: str) -> object:
+    """Capture ONE configured USD->target FX row for a non-USD proposal.
+
+    Fail-closed with fixed safe codes: an unconfigured database or a
+    missing/expired/invalid direct pair refuses the job BEFORE any
+    network/generation (no relabeling, no inferred inverse, no fallback).
+    """
+    target = currency.strip().upper()
+    captured_at = datetime.now(UTC)
+    if not (settings.DATABASE_URL or "").strip():
+        raise ApplicationDataError(
+            "proposal_fx_unavailable",
+            "a non-USD proposal currency requires a configured database "
+            "with an active direct USD->target FX rate",
+        )
+    # Own the capture engine (a per-call engine from the shared
+    # composition) and dispose it in finally: the session closes and the
+    # engine disposes BEFORE any network/generation, so no pool survives
+    # the capture.
+    engine = create_engine_from_settings(settings)
+    try:
+        session_factory = create_sessionmaker_from_engine(engine)
+        async with session_factory() as session:
+            row = await FxRatesRepository(session).find_latest_rate(
+                base_currency="USD",
+                quote_currency=target,
+                at_time=captured_at,
+            )
+        if row is None:
+            raise ApplicationDataError(
+                "proposal_fx_rate_missing",
+                "no active configured direct USD->target FX rate exists; set "
+                "the pair through FX administration and retry the proposal",
+            )
+        # Copy the immutable row facts (id/rate/validity) while the row
+        # is still loaded; the capture is plain string/decimal facts.
+        return make_proposal_fx_capture(
+            target_currency=target,
+            fx_rate_id=row.id,
+            rate=row.rate,
+            valid_from=row.valid_from,
+            valid_until=row.valid_until,
+            captured_at=captured_at,
+        )
+    finally:
+        await engine.dispose()
 
 
 async def _execute_job(*, settings: Settings, job_id: str) -> dict[str, object]:

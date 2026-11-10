@@ -52,6 +52,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 import uvicorn
@@ -70,7 +72,9 @@ from tests.integration.test_admin_catalog_refresh_217_postgres import (
     _apply_audit_rows,
     _count_apps,
     _db_worker,
+    _seed_fx_rate,
     _kill_worker,
+    _wait_new_job,
     _route_count,
     _seed_admins,
     _settings,
@@ -582,6 +586,92 @@ def test_proposal_package_and_import_previews(env217_browser: dict[str, Any], ch
         page.close()
 
 
+# ---------------------------------------------------------------------------
+# 4b. non-USD proposal through the RENDERED form: real configured FX rate
+# ---------------------------------------------------------------------------
+
+
+def test_proposal_non_usd_fx_result_display(env217_browser: dict[str, Any], chromium: object) -> None:
+    """ONE real Chromium currency-select/generate/download/import-preview
+    flow with a real configured FX rate in the REAL owned PG: the rendered
+    EUR select drives a queued proposal whose worker captures the exact
+    seeded USD->EUR row once; the result page shows the applied conversion
+    and the pricing import preview displays the EUR rows."""
+    page = chromium.new_page(viewport=DESKTOP)  # type: ignore[union-attr]
+    try:
+        base = str(env217_browser["base_url"])
+        settings: Settings = env217_browser["settings"]
+        database_url: str = env217_browser["database_url"]
+        _login(page, base, str(env217_browser["admin_email"]))
+        # seed ONE configured direct USD->EUR row in the REAL owned PG
+        # (valid_from = now: always the latest active direct pair)
+        rate = Decimal("1.08")
+        fx_rate_id = _seed_fx_rate(
+            database_url, rate=rate, valid_from=datetime.now(UTC)
+        )
+        known = {
+            row["job_id"]
+            for row in custody.list_jobs(settings, limit=100)
+            if row.get("family") == "proposal"
+        }
+        page.goto(f"{base}{BASE}/proposals")
+        # the shortened adjacent hint + the full-width detail paragraph
+        form_html = page.content()
+        assert "USD keeps the source" in form_html
+        assert "prop-currency-detail-help" in form_html
+        assert 'aria-describedby="prop-currency-help prop-currency-detail-help"' in form_html
+        page.select_option("#prop-provider-scope", "openrouter")  # type: ignore[attr-defined]
+        page.select_option("#prop-currency", "EUR")  # type: ignore[attr-defined]
+        page.check('input[name="endpoint_scope"][value="chat_completions"]')  # type: ignore[attr-defined]
+        page.check('input[name="source_method"][value="docs"]')  # type: ignore[attr-defined]
+        page.fill("#prop-fetch-details", "0")  # type: ignore[attr-defined]
+        page.check('input[name="package_name"][value="openrouter-chat-text"]')  # type: ignore[attr-defined]
+        page.get_by_role("button", name="Generate proposal").click()  # type: ignore[attr-defined]
+        page.wait_for_load_state("networkidle")
+        assert "broker acknowledged" in page.content()
+        row = _wait_new_job(settings, "proposal", known)
+        assert row["status"] == "ready", row
+        # the applied conversion is shown truthfully (exact seeded rate)
+        assert "FX USD→EUR" in row["progress"]
+        assert "rate=1.08" in row["progress"]
+
+        page.goto(f"{base}{BASE}/proposals")
+        html = page.content()
+        assert "FX USD→EUR" in html
+        # visual capture of the result page (lengthened currency hint +
+        # FX progress text) BEFORE navigating to the import preview:
+        # reuse the standing proposals desktop capture path
+        page.screenshot(
+            path=str(SCREENSHOT_DIR / "217a-proposals-desktop.png"),
+            full_page=True,
+        )  # type: ignore[attr-defined]
+        # one 420px capture of the same rendered state (narrow viewport)
+        page.set_viewport_size(NARROW)  # type: ignore[attr-defined]
+        page.goto(f"{base}{BASE}/proposals")
+        page.screenshot(
+            path=str(SCREENSHOT_DIR / "217a-proposals-fx-narrow.png"),
+            full_page=True,
+        )  # type: ignore[attr-defined]
+        page.set_viewport_size(DESKTOP)  # type: ignore[attr-defined]
+        # the generated (converted) pricing artifact is downloadable
+        with page.expect_download() as dl:  # type: ignore[attr-defined]
+            page.locator("a[href$='/artifact/pricing-proposal.tsv']").first.click()
+        tsv = Path(dl.value.path()).read_bytes().decode("utf-8")  # type: ignore[attr-defined]
+        assert "\tEUR\t" in tsv
+        # the row metadata carries the EXACT seeded FX row id
+        assert fx_rate_id in tsv
+        # the package pricing import preview DISPLAYS the EUR rows
+        page.goto(f"{base}{BASE}/proposals")
+        page.click('summary:has-text("openrouter-chat-text")')  # type: ignore[attr-defined]
+        page.click(  # type: ignore[attr-defined]
+            'form[action$="/package/openrouter-chat-text/import-preview/pricing"] button[type="submit"]'
+        )
+        page.wait_for_load_state("networkidle")
+        preview_html = page.content()
+        assert "EUR" in preview_html
+        assert "synth/alpha" in preview_html
+    finally:
+        page.close()
 # ---------------------------------------------------------------------------
 # 5. independent supplied bundle: published under its SUPPLIED run id
 # ---------------------------------------------------------------------------

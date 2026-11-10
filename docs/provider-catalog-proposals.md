@@ -41,6 +41,9 @@ Optional comparison flags:
 - `--exclude-model`
 - `--endpoint-scope chat_completions`
 - `--endpoint-scope responses`
+- `--currency EUR` (output currency; see [Output currency and FX
+  conversion](#output-currency-and-fx-conversion-217-a); default `USD`
+  keeps the native source prices and needs no database)
 - `--save-source-snapshots`
 - `--json`
 - `--allow-zero-prices`
@@ -171,14 +174,66 @@ default-off behind the same `CATALOG_REFRESH_*` operator setup as the
   EXISTING import preview and are UNSEALED proposal artifacts (no
   cryptographic "verified" claim). The GUI displays prices with their
   actual units (token dimensions per 1,000,000 tokens; the request
-  dimension per request). The existing proposal artifacts' dual-currency
-  (USD/EUR) per-million labels are a PRE-EXISTING CLI behavior preserved
-  unchanged — a real FX conversion (or a native-USD-only GUI exception)
-  remains a pending product decision; no conversion is implemented.
+  dimension per request), with the row's ACTUAL currency (the output
+  currency after one captured FX conversion, or native USD by default).
+  Non-USD output uses a real FX conversion as documented in
+  [Output currency and FX conversion](#output-currency-and-fx-conversion-217-a).
 - The job acknowledgement and "Refresh status" navigation bind to the
   EXACT server-created job id (an explicit unknown or foreign-family id is
   refused, never substituted by the newest job), and the result page
   displays the provider scope that was actually generated.
+
+## Output currency and FX conversion (217-a)
+
+The proposal's `--currency` option (CLI) and the Currency select (GUI:
+the closed `USD` / `EUR` / `GBP` / `CHF` choices) set the OUTPUT currency
+of the generated pricing rows. Official source amounts stay NATIVE USD
+through parsing and cross-checking (assisted outputs included) — the
+conversion is a bounded post-extraction step, never an instruction to a
+source or model.
+
+- **USD (default)**: the identity conversion. Native source prices are
+  emitted unchanged, with NO database access — USD output remains
+  offline-capable.
+- **Non-USD**: ONE explicit, currently-active, configured
+  **direct USD→target** rate row (managed through the existing FX
+  administration, e.g. `slaif-gateway fx add`) is captured exactly once,
+  at job start, with a single database transaction that is closed before
+  any network or generation. That one captured rate converts EVERY
+  monetary dimension (per-1M-token prices and the per-request price) of
+  EVERY row with one Decimal conversion following the established
+  price contract (quantum 0.000000001, ROUND_HALF_UP, Numeric(18,9)
+  bound). Missing/zero prices stay missing/zero; a positive price that
+  would underflow to zero or overflow the import bound refuses the whole
+  proposal.
+- The conversion happens BEFORE any artifact is written, so the root
+  JSON/TSV/report and ALL selected package outputs agree. Each converted
+  row keeps the original USD amounts plus the applied FX pair, rate
+  UUID, rate, validity window, and capture time in its metadata; the
+  normalized JSON and source manifest carry the same FX fact, and the
+  report states the applied conversion. The official source unit
+  (e.g. `usd_per_token`) is never relabeled.
+- Refusal semantics (CLI and GUI): no configured database, or a
+  missing/expired/invalid direct pair, refuses the proposal safely
+  BEFORE any output is written (`proposal_fx_unavailable` /
+  `proposal_fx_rate_missing` in the GUI job; a fixed safe CLI error).
+  Prices are NEVER relabeled, and there is no inferred inverse,
+  cross-currency graph, or automatic FX fetch.
+- The captured rate is FROZEN until the proposal is re-run; re-running
+  captures the latest active configured pair at that time. Runtime
+  quota/accounting behavior is unchanged by a proposal's output currency.
+  This proposal-side USD→target conversion is DISTINCT from the UNCHANGED
+  runtime import requirement that published pricing is native→EUR
+  (`find_latest_rate(base_currency=native, quote_currency=EUR)` at import
+  time; EUR rows are identity): the two use independently configured
+  direct pairs, there is no rate graph, no inferred inverse, and no
+  accounting change.
+
+This is an intentional correctness fix: before 217-a, a non-USD
+`--currency` relabeled the native USD amounts (the pre-existing
+dual-currency per-million label behavior). The shared CLI and GUI
+generator now performs the same verified conversion; the default USD
+output is unchanged.
 
 ## Source Methods
 ## Source Methods

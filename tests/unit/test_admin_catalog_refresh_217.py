@@ -43,6 +43,8 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace as _NS
+from contextlib import asynccontextmanager
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -1555,6 +1557,162 @@ def test_account_proposal_output_arithmetic_corrected(custody_root) -> None:
         custody.account_proposal_output(settings, job)
     assert exc.value.code == "proposal_output_capacity"
     assert not outdir.exists()  # partial output retracted
+
+
+# --- 8b. proposal FX capture (non-USD needs ONE configured direct rate) --------
+
+
+def _fake_worker_fx_stack(monkeypatch, *, row):
+    """Route the WORKER module's own FX capture boundary to fakes.
+    Returns (events, lookups); only the worker module's imported names
+    are re-pointed (no network/DB in this suite)."""
+    events: list[str] = []
+    lookups: list[dict[str, object]] = []
+
+    class _FakeEngine:
+        async def dispose(self) -> None:
+            events.append("disposed")
+
+    @asynccontextmanager
+    async def _fake_session():
+        yield _NS()
+
+    def _session_factory(engine):
+        def factory():
+            return _fake_session()
+        return factory
+
+    class _FakeFxRepository:
+        def __init__(self, session) -> None:
+            pass
+
+        async def find_latest_rate(self, *, base_currency, quote_currency, at_time):
+            lookups.append(
+                {"base": base_currency, "quote": quote_currency, "at_time": at_time}
+            )
+            return row
+
+    monkeypatch.setattr(
+        worker, "create_engine_from_settings", lambda settings: _FakeEngine()
+    )
+    monkeypatch.setattr(worker, "create_sessionmaker_from_engine", _session_factory)
+    monkeypatch.setattr(worker, "FxRatesRepository", _FakeFxRepository)
+    return events, lookups
+
+
+def test_worker_proposal_non_usd_missing_rate_fails_before_generation(
+    custody_root, monkeypatch
+) -> None:
+    """A non-USD proposal with NO configured direct rate fails with a
+    fixed safe code BEFORE any network/generation: no output, one
+    direct-pair lookup, capture engine disposed, truthful record."""
+    # a configured (synthetic) DATABASE_URL: the engine/session are faked,
+    # so nothing connects - only the capture boundary under test runs.
+    settings = _settings(
+        custody_root,
+        DATABASE_URL="postgresql+asyncpg://user:pw@localhost:5432/slaif_test",
+    )
+    events, lookups = _fake_worker_fx_stack(monkeypatch, row=None)
+    generated: list[dict[str, object]] = []
+
+    async def fake_generate(**kwargs):
+        generated.append(kwargs)
+        raise AssertionError("generation must not start without a configured rate")
+
+    monkeypatch.setattr(worker, "generate_provider_catalog_proposal", fake_generate)
+    job = custody.create_job(
+        settings, "proposal", {"provider_scope": "openrouter", "currency": "EUR"}
+    )
+    result = asyncio.run(worker._execute_job(settings=settings, job_id=job))
+    assert result["executed"] is True
+    assert result["status"] == "failed"
+    assert result["error_code"] == "proposal_fx_rate_missing"
+    assert generated == []
+    assert len(lookups) == 1
+    assert lookups[0]["base"] == "USD" and lookups[0]["quote"] == "EUR"
+    assert "disposed" in events  # capture DB closed before any generation
+    outdir = custody_root.root / "proposals" / job
+    assert not outdir.exists() or list(outdir.iterdir()) == []
+    assert _read_record(settings, job)["status"] == "failed"
+
+
+def test_worker_proposal_non_usd_captures_one_rate_and_reports_it(
+    custody_root, monkeypatch
+) -> None:
+    """A configured direct USD->EUR row is captured ONCE (engine
+    disposed before generation), handed to the generator together with
+    the requested currency, and the ready progress states the applied
+    conversion truthfully. The same custody then runs a USD proposal
+    that performs NO fx lookup at all (offline path preserved)."""
+    settings = _settings(
+        custody_root,
+        DATABASE_URL="postgresql+asyncpg://user:pw@localhost:5432/slaif_test",
+    )
+    rate_id = uuid.uuid4()
+    row = _NS(
+        id=rate_id,
+        rate=Decimal("1.083"),
+        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
+        valid_until=None,
+    )
+    events, lookups = _fake_worker_fx_stack(monkeypatch, row=row)
+    captured: dict[str, object] = {}
+
+    async def fake_generate(**kwargs):
+        captured.update(kwargs)
+        # writes nothing: an empty output is custody-legal (0 bytes)
+        return None
+
+    monkeypatch.setattr(worker, "generate_provider_catalog_proposal", fake_generate)
+    job = custody.create_job(
+        settings, "proposal", {"provider_scope": "openrouter", "currency": "EUR"}
+    )
+    result = asyncio.run(worker._execute_job(settings=settings, job_id=job))
+    assert result["status"] == "ready", result
+    assert captured["currency"] == "EUR"
+    fx = captured["fx_capture"]
+    assert fx.base_currency == "USD" and fx.target_currency == "EUR"
+    assert fx.rate == "1.083" and fx.fx_rate_id == str(rate_id)
+    assert len(lookups) == 1 and events.count("disposed") == 1
+    record = _read_record(settings, job)
+    assert record["status"] == "ready"
+    assert "FX USD→EUR rate=1.083" in record["progress"]
+
+    # USD on the same custody: NO fx lookup, plain ready progress
+    job_usd = custody.create_job(
+        settings, "proposal", {"provider_scope": "openrouter", "currency": "USD"}
+    )
+    result_usd = asyncio.run(worker._execute_job(settings=settings, job_id=job_usd))
+    assert result_usd["status"] == "ready", result_usd
+    assert captured["fx_capture"] is None  # USD: no capture handed to the generator
+    assert len(lookups) == 1  # unchanged: USD never queries FX
+    record_usd = _read_record(settings, job_usd)
+    assert record_usd["progress"] == "proposal artifacts generated"
+
+
+def test_worker_proposal_non_usd_without_database_refused(custody_root, monkeypatch) -> None:
+    """Without a configured DATABASE_URL the non-USD proposal is refused
+    with a fixed safe code and the capture engine is never built."""
+    settings = _settings(custody_root, DATABASE_URL=None)
+
+    def _no_engine(settings):
+        raise AssertionError("engine must not be built without DATABASE_URL")
+
+    monkeypatch.setattr(worker, "create_engine_from_settings", _no_engine)
+    generated: list[dict[str, object]] = []
+
+    async def fake_generate(**kwargs):
+        generated.append(kwargs)
+        raise AssertionError("generation must not start without a configured rate")
+
+    monkeypatch.setattr(worker, "generate_provider_catalog_proposal", fake_generate)
+    job = custody.create_job(
+        settings, "proposal", {"provider_scope": "openrouter", "currency": "EUR"}
+    )
+    result = asyncio.run(worker._execute_job(settings=settings, job_id=job))
+    assert result["status"] == "failed"
+    assert result["error_code"] == "proposal_fx_unavailable"
+    assert generated == []
 
 
 def _seed_run_dir(custody_root, settings, run_id: str) -> Path:

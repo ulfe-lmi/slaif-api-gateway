@@ -699,6 +699,14 @@ invoice attestations.
 honored for both supported providers after include/exclude filtering (see
 [Provider catalog proposals](provider-catalog-proposals.md)).
 
+`provider-catalog propose --currency` sets the OUTPUT currency of the
+generated pricing rows. `USD` (default) keeps the native source prices
+and needs no database; any other 3-letter code converts every price with
+ONE active, configured direct USD→<CCY> FX rate captured once before
+generation and refuses safely (no database, or no configured/active
+direct pair) — never relabeling. See [Output currency and FX
+conversion](provider-catalog-proposals.md#output-currency-and-fx-conversion-217-a).
+
 ### Provider and route configuration parity (`providers update`, `routes update`, objective 199)
 
 Since objective 199, the CLI administers the remaining provider and route

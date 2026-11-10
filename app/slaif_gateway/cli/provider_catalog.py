@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
 import typer
-
-from slaif_gateway.cli.common import emit_json, handle_cli_error, run_async
+from slaif_gateway.cli.common import (
+    CliDatabaseConfigError,
+    emit_json,
+    handle_cli_error,
+    run_async,
+)
+from slaif_gateway.config import get_settings
+from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
+from slaif_gateway.db.session import (
+    create_engine_from_settings,
+    create_sessionmaker_from_engine,
+)
 from slaif_gateway.services.provider_catalog_proposal import (
     OPENAI_ASSISTED_ACKNOWLEDGEMENT,
     ProviderCatalogProposalResult,
     generate_provider_catalog_proposal,
+    make_proposal_fx_capture,
 )
 
 app = typer.Typer(help="Generate provider catalog proposal files for reviewed import workflows")
@@ -59,7 +71,19 @@ def propose_catalog(
         list[EndpointScopeOption] | None,
         typer.Option("--endpoint-scope", help="chat_completions or responses; repeatable."),
     ] = None,
-    currency: Annotated[str, typer.Option("--currency", help="Currency code for pricing TSV rows.")] = "USD",
+    currency: Annotated[
+        str,
+        typer.Option(
+            "--currency",
+            help=(
+                "Output currency for pricing rows. USD (default) keeps the native "
+                "source prices and needs no database. Any other currency converts "
+                "every price with ONE active, configured direct USD-><CCY> FX rate "
+                "captured once before generation; if no such rate is configured the "
+                "proposal is refused (never relabeled)."
+            ),
+        ),
+    ] = "USD",
     source: Annotated[
         list[SourceMethodOption] | None,
         typer.Option("--source", help="Additional source comparison method; repeatable."),
@@ -152,6 +176,15 @@ def propose_catalog(
 ) -> None:
     """Generate provider catalog proposal files without mutating local metadata."""
     try:
+        normalized_currency = currency.strip().upper()
+        # Validate the currency shape BEFORE any database access and
+        # BEFORE any message can interpolate it: only a validated
+        # 3-letter code may ever be rendered in an error.
+        if len(normalized_currency) != 3 or not normalized_currency.isalpha():
+            raise typer.BadParameter("currency must be a 3-letter ISO code")
+        fx_capture = None
+        if normalized_currency != "USD":
+            fx_capture = run_async(_capture_proposal_fx(normalized_currency))
         result = run_async(
             generate_provider_catalog_proposal(
                 provider_scope=provider.value,
@@ -174,12 +207,78 @@ def propose_catalog(
                 all_packages=all_packages,
                 include_deprecated=include_deprecated,
                 include_ambiguous_capabilities=include_ambiguous_capabilities,
+                fx_capture=fx_capture,
             )
         )
     except Exception as exc:  # noqa: BLE001
         handle_cli_error(exc, json_output=json_output)
         return
     _emit_result(result, json_output=json_output)
+
+
+async def _capture_proposal_fx(target_currency: str):
+    """Capture ONE configured USD->target FX row, closing the database
+    transaction BEFORE any network/generation.
+
+    Non-USD output is refused (safe fixed message) when no direct,
+    currently-active configured rate exists - there is no relabeling,
+    inferred inverse, or silent fallback. The caller's currency has
+    already been shape-validated; the defensive re-check below ensures
+    a direct call can never render an unvalidated value either. The
+    capture engine is owned and disposed (closed session + disposed
+    engine) BEFORE any network/generation.
+    """
+    target = target_currency.strip().upper()
+    if len(target) != 3 or not target.isalpha():
+        raise typer.BadParameter("currency must be a 3-letter ISO code")
+    try:
+        settings = get_settings()
+        if not settings.DATABASE_URL:
+            raise CliDatabaseConfigError(
+                "DATABASE_URL is not configured. Set DATABASE_URL and try again."
+            )
+        captured_at = datetime.now(UTC)
+        engine = create_engine_from_settings(settings)
+        try:
+            session_factory = create_sessionmaker_from_engine(engine)
+            async with session_factory() as session:
+                row = await FxRatesRepository(session).find_latest_rate(
+                    base_currency="USD",
+                    quote_currency=target,
+                    at_time=captured_at,
+                )
+            if row is None:
+                raise typer.BadParameter(
+                    f"no active configured USD->{target} FX rate exists; "
+                    f"configure the direct USD->{target} pair through FX "
+                    "administration and retry (USD output needs no database)"
+                )
+            # Copy the immutable row facts (id/rate/validity) while the
+            # row is still loaded; the capture is plain string/decimal
+            # facts.
+            return make_proposal_fx_capture(
+                target_currency=target,
+                fx_rate_id=row.id,
+                rate=row.rate,
+                valid_from=row.valid_from,
+                valid_until=row.valid_until,
+                captured_at=captured_at,
+            )
+        finally:
+            await engine.dispose()
+    except CliDatabaseConfigError:
+        raise
+    except typer.BadParameter:
+        raise
+    except Exception:
+        # New FX capture boundary: configuration/database/cleanup
+        # faults (which can carry untrusted DSN or environment content)
+        # are wrapped into ONE fixed safe error - never reflected.
+        raise CliDatabaseConfigError(
+            "FX configuration or database is unavailable; check "
+            "DATABASE_URL and the configured USD->target rate, then "
+            "retry (USD output needs no database)"
+        )
 
 
 def _emit_result(result: ProviderCatalogProposalResult, *, json_output: bool) -> None:

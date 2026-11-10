@@ -59,6 +59,8 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
+from datetime import UTC, datetime
+from decimal import ROUND_HALF_UP, Decimal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -1287,6 +1289,151 @@ def test_proposal_queued_default_bridge_to_import_preview(env217: dict[str, Any]
         f"{BASE}/jobs/{job_id}/import-preview/pricing", data={"csrf_token": csrf}
     )
     assert response.status_code == 200
+
+
+def _seed_fx_rate(database_url: str, *, rate: Decimal, valid_from: datetime) -> str:
+    """Seed ONE configured direct FX row in the REAL owned PG; returns
+    the row id (the capture must reference exactly this row)."""
+    from slaif_gateway.db.repositories.fx_rates import FxRatesRepository
+
+    def _coro(session):
+        async def _run() -> str:
+            row = await FxRatesRepository(session).create_fx_rate(
+                base_currency="USD",
+                quote_currency="EUR",
+                rate=rate,
+                valid_from=valid_from,
+                source="217-fx-queue-test",
+            )
+            await session.commit()
+            return str(row.id)
+
+        return _run()
+
+    return _db_worker(database_url, _coro)
+
+
+def test_proposal_queued_non_usd_fx_conversion_real_pg(env217: dict[str, Any]) -> None:
+    """QUEUED non-USD proposal with the REAL owned PG: ONE configured
+    direct USD->EUR row (seeded here) is captured exactly once by the
+    real worker BEFORE generation (source transport stays synthetic),
+    and the published pricing TSV is converted with that rate - source
+    USD facts and the applied FX pair preserved, same fact in the
+    normalized JSON, and the converted rows still bridge to the
+    EXISTING import preview (no import execution)."""
+    from slaif_gateway.services.pricing_import import parse_pricing_import_tsv
+
+    client: TestClient = env217["client"]
+    settings: Settings = env217["settings"]
+    database_url: str = env217["database_url"]
+
+    rate = Decimal("1.08")
+    # valid_from = NOW: the earlier reviewed-apply commit in this module
+    # already created a USD->EUR row with an EARLIER valid_from, and
+    # find_latest_rate orders valid_from desc - so this deliberately
+    # seeded row is the ONE row the capture must pick.
+    seed_time = datetime.now(UTC)
+    fx_rate_id = _seed_fx_rate(
+        database_url,
+        rate=rate,
+        valid_from=seed_time,
+    )
+
+    known = {
+        row["job_id"]
+        for row in custody.list_jobs(settings, limit=100)
+        if row.get("family") == "proposal"
+    }
+    csrf = _page_csrf(client, f"{BASE}/proposals")
+    response = client.post(
+        f"{BASE}/proposals/generate",
+        data={
+            "csrf_token": csrf,
+            "provider_scope": "openrouter",
+            "endpoint_scope": "chat_completions",
+            "source_method": "docs",
+            "max_models": "500",
+            "fetch_details_limit": "0",
+            "max_web_calls": "3",
+            "currency": "EUR",
+            "ordinary_chat_only": "on",
+            "paired_ready_only": "on",
+            "package_name": "openrouter-chat-text",
+        },
+    )
+    assert response.status_code == 200
+    assert "broker acknowledged" in response.text
+    row = _wait_new_job(settings, "proposal", known)
+    assert row["status"] == "ready", row
+    job_id = row["job_id"]
+    # the ready progress states the one applied conversion truthfully
+    assert "FX USD→EUR" in row["progress"]
+    assert "rate=1.08" in row["progress"]
+
+    # the published pricing TSV is converted with the captured rate
+    tsv = client.get(f"{BASE}/jobs/{job_id}/artifact/pricing-proposal.tsv")
+    assert tsv.status_code == 200
+    rows = parse_pricing_import_tsv(tsv.content.decode("utf-8"))
+    data_rows = [r for r in rows if r.get("model")]
+    assert data_rows, "no pricing rows were published"
+    quantum = Decimal("0.000000001")
+
+    for r in data_rows:
+        assert r["currency"] == "EUR"
+        metadata = json.loads(r["pricing_metadata"])
+        assert metadata["source_currency"] == "USD"
+        assert metadata["fx"]["fx_rate_id"] == fx_rate_id
+        assert metadata["fx"]["rate"] == "1.08"
+        source_prices = metadata["source_prices"]
+        for field in (
+            "input_price_per_1m",
+            "cached_input_price_per_1m",
+            "output_price_per_1m",
+            "reasoning_price_per_1m",
+            "request_price",
+        ):
+            original = source_prices[field]
+            if original in (None, ""):
+                assert r[field] == ""
+            else:
+                # exact Decimal equality against the ONE captured rate
+                # (production strips trailing zeros; never floats/tolerance)
+                expected = (Decimal(original) * rate).quantize(
+                    quantum, rounding=ROUND_HALF_UP
+                )
+                # an originally-zero price is legitimate and stays zero;
+                # a POSITIVE price that became zero would be a refusal
+                if Decimal(original) > 0:
+                    assert expected != 0
+                assert Decimal(r[field]) == expected
+    # the normalized JSON artifact carries the same capture fact
+    normalized = client.get(
+        f"{BASE}/jobs/{job_id}/artifact/provider-catalog-normalized.json"
+    )
+    assert normalized.status_code == 200
+    payload = json.loads(normalized.content.decode("utf-8"))
+    assert payload["fx"]["fx_rate_id"] == fx_rate_id
+    assert payload["fx"]["target_currency"] == "EUR"
+
+    # the converted output bridges to the EXISTING pricing import preview
+    csrf = _page_csrf(client, f"{BASE}/proposals")
+    response = client.post(
+        f"{BASE}/jobs/{job_id}/import-preview/pricing", data={"csrf_token": csrf}
+    )
+    assert response.status_code == 200
+    # the preview DISPLAYS the converted rows: exact valid/invalid counts
+    # and the EUR currency on the rows (not merely an HTTP 200)
+    preview_text = response.text
+    valid_match = re.search(
+        r"Valid rows</span>\s*<strong>(\d+)</strong>", preview_text
+    )
+    invalid_match = re.search(
+        r"Invalid rows</span>\s*<strong>(\d+)</strong>", preview_text
+    )
+    assert valid_match and int(valid_match.group(1)) == len(data_rows)
+    assert invalid_match and int(invalid_match.group(1)) == 0
+    assert "EUR" in preview_text
+    assert "synth/alpha" in preview_text
 
 
 # ---------------------------------------------------------------------------

@@ -60,10 +60,13 @@
       </div>
       <div class="field">
         <label for="prop-currency">Currency</label>
-        <select name="currency" id="prop-currency" aria-describedby="prop-currency-help">
+        <select name="currency" id="prop-currency" aria-describedby="prop-currency-help prop-currency-detail-help">
           {% for c in currencies %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
         </select>
-        <p class="help" id="prop-currency-help">Target ISO currency for normalized pricing rows (3-letter code).</p>
+        <p class="help" id="prop-currency-help">
+          Output currency for the generated pricing rows. USD keeps the source
+          prices; other currencies require an active USD-to-target rate in FX.
+        </p>
       </div>
       <div class="field">
         <label for="prop-max-models">Model cap</label>
@@ -81,6 +84,15 @@
         <p class="help" id="prop-max-web-help">Maximum supplementary official web calls per provider (1–10, default 3).</p>
       </div>
     </div>
+    <p class="help" id="prop-currency-detail-help">
+      Currency detail: USD keeps the native source prices and needs no extra FX
+      lookup. EUR, GBP, or CHF converts every price (per-1M token and
+      per-request) with ONE active, configured direct USD-&gt;target FX rate
+      captured once at job start: the original USD amounts and the applied rate
+      stay visible in the output, and the rate is frozen until the proposal is
+      re-run. If no such rate is configured (or it is expired/invalid) the job
+      is refused safely - prices are never relabeled.
+    </p>
     <fieldset>
       <legend>Endpoint scopes</legend>
       {% for scope in endpoint_scopes %}
