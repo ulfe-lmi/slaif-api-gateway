@@ -32,6 +32,9 @@ slaif-gateway provider-catalog propose all \
 
 Optional comparison flags:
 
+- `--max-models N` (finite per-provider cap, honored for BOTH supported
+  providers AFTER include/exclude filtering; models beyond the cap are
+  reported as omitted scope, never silently mixed in)
 - `--source api`
 - `--source assisted`
 - `--include-model`
@@ -136,6 +139,48 @@ Package aliases are also accepted:
 
 `--all-packages` emits every current OpenRouter package preset.
 
+## Admin GUI proposal workspace (217-a)
+
+The same generator is available as a bounded queued job in the admin
+dashboard "Catalog workspace" (`/admin/operations/catalog/proposals`),
+default-off behind the same `CATALOG_REFRESH_*` operator setup as the
+[catalog refresh GUI](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a).
+
+- The form exposes the SAME closed choices as the CLI: provider scope
+  (`openai` / `openrouter` / `all`), the closed endpoint-scope vocabulary
+  (`chat_completions`, `responses`), the closed package presets, currency,
+  and the finite model/detail/web-call caps (the public `max_models` cap is
+  PER PROVIDER and is honored for both providers after include/exclude
+  filtering).
+- Source methods are captured honestly: OpenRouter ALWAYS uses docs + the
+  models API (the selection does not remove either); `api`/`assisted` are
+  OpenAI-only and require the EXISTING `OPENAI_ADMIN_DISCOVERY_API_KEY`
+  deployment secret (never the model-facing key) plus, for `assisted`, the
+  explicit risk acknowledgement. `max_web_calls` is a REQUESTED prompt
+  budget, not proven hard provider call/cost enforcement. Unsupported
+  combinations (e.g. OpenRouter + assisted) are refused before any
+  dispatch or network activity, with a useful fixed refusal rather than a
+  post-fetch failure.
+- The include/exclude model filters are the closed `catalog_upstream`
+  record choice (official upstream IDs, latest ~100 + older search +
+  manual entry; oversized explicit selections are refused, never
+  truncated).
+- The generated route/pricing TSVs (plus normalized JSON, warnings,
+  report, source manifest) are bounded downloads from operator custody,
+  with a CLOSED preset + closed-file package selector; they bridge to the
+  EXISTING import preview and are UNSEALED proposal artifacts (no
+  cryptographic "verified" claim). The GUI displays prices with their
+  actual units (token dimensions per 1,000,000 tokens; the request
+  dimension per request). The existing proposal artifacts' dual-currency
+  (USD/EUR) per-million labels are a PRE-EXISTING CLI behavior preserved
+  unchanged — a real FX conversion (or a native-USD-only GUI exception)
+  remains a pending product decision; no conversion is implemented.
+- The job acknowledgement and "Refresh status" navigation bind to the
+  EXACT server-created job id (an explicit unknown or foreign-family id is
+  refused, never substituted by the newest job), and the result page
+  displays the provider scope that was actually generated.
+
+## Source Methods
 ## Source Methods
 
 OpenRouter:

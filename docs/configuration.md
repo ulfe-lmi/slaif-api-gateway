@@ -1283,8 +1283,58 @@ in, and revoked or expired admin sessions cannot access admin routes. Operators
 should protect every active admin account as highly privileged until future RBAC
 or MFA hardening is implemented and documented.
 
-## Email, Celery, And SMTP
+## Catalog Refresh (Admin GUI, 217-a)
 
+The admin dashboard "Catalog workspace" (`/admin/operations/catalog/`) is
+the G15 GUI for the [catalog refresh workflow](catalog-refresh.md) and the
+[provider catalog proposals](provider-catalog-proposals.md) workflow. It is
+**default-off** and feature-local: an enabled-but-incomplete or unsafe setup
+leaves every ordinary app route usable and fails the catalog surface closed
+with useful setup help (zero dispatch, network, or mutation). The routes
+remain registered while disabled — an authenticated operator gets the
+disabled/setup-help page — but no catalog work (no dispatch, no jobs, no
+apply, no custody changes) is permitted until setup is `ready`.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `CATALOG_REFRESH_GUI_ENABLED` | `false` | enable the GUI catalog workspace |
+| `CATALOG_REFRESH_ROOT` | unset | operator-owned `0700` custody root, OUTSIDE the repository source tree and any local PGDATA; opened only, never created or repaired |
+| `CATALOG_REFRESH_SEAL_KEY` | unset | EXISTING operator-generated `0600` seal key, outside the repository and run tree |
+| `CATALOG_REFRESH_MAX_ACTIVE_JOBS` | `1` | concurrent queued/running catalog jobs (1-16) |
+| `CATALOG_REFRESH_MAX_RETAINED_RUNS` | `20` | retained sealed runs / proposal artifacts (1-500) |
+| `CATALOG_REFRESH_MAX_TOTAL_BYTES` | `1073741824` | total custody bytes including reservations (64 MiB - 1 TiB) |
+| `CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS` | `300` | read-only job time budget (10-3600) |
+
+The `CATALOG_REFRESH_ROOT` and `CATALOG_REFRESH_SEAL_KEY` values must be
+visible to the API service and every worker (the same mounted volume in
+Docker Compose): read-only jobs execute in the worker while the API reads
+the same custody state. After changing any of these settings,
+recreate/restart the API and worker services; a reverse-proxy change (the
+scoped nginx `client_max_body_size` allowance for the bounded 8 MiB bundle
+/ 32 MiB baseline uploads) only affects new proxy connections. Setup,
+mount, and OFFLINE seal-key creation details are in
+[Catalog Refresh: Admin GUI workspace](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a).
+
+Optional bounded research-assisted proposal/collect configuration
+(`CATALOG_REFRESH_RESEARCH_CLI_BIN`, `CATALOG_REFRESH_RESEARCH_ENDPOINT`,
+`CATALOG_REFRESH_RESEARCH_MODEL`, `CATALOG_REFRESH_RESEARCH_AUTH_ENV`,
+`CATALOG_REFRESH_RESEARCH_TIMEOUT_SECONDS`) is feature-local as well: an
+incomplete or unsafe research configuration never takes unrelated
+gateway/GUI or deterministic catalog collection down — the surface reports
+research unavailable with safe setup guidance, and no unsandboxed fallback
+or call happens until the full existing runner configuration is verified
+safe (HTTPS endpoint, credential supplied only as an environment-variable
+NAME, numeric bounds).
+
+Role note: the workspace's mutating apply and custody-cleanup actions
+enforce the EXISTING `superadmin` role (the documented exception to the
+otherwise simple full-operator admin model; see
+[Admin Access And Lockout](runbooks/admin-access.md)); inspection,
+collect, review, verify, export, and proposal generation remain available
+to ordinary signed-in admins.
+
+## Email, Celery, And SMTP
+-
 - `ENABLE_EMAIL_DELIVERY` enables SMTP key delivery workflows.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`,
   `SMTP_USE_TLS`, `SMTP_STARTTLS`, and `SMTP_TIMEOUT_SECONDS` configure SMTP.

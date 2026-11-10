@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Apply Review{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="catalog-apply-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Refresh</p>
+      <h1 id="catalog-apply-heading">
+        {% if review_token %}Review and confirm the signed apply{% else %}Prepare the reviewed apply{% endif %}
+      </h1>
+      <p class="muted">
+        One explicit reviewed confirmation for run <code>{{ detail.run_id }}</code>. The apply
+        executes the SAME authenticated sealed plan in one atomic catalog transaction under a
+        fresh existing-superadmin gate.
+        {% if review_token %}The signed state below is bound to you, this session, the run, its canonical plan, target, and warnings, and expires in {{ ttl_seconds | num }} seconds. The apply uses exactly the signed values; nothing on this page can change them.{% else %}Choose your audit reason and acknowledgements below; they are validated against the sealed facts and sealed into the signed review state before the final confirmation.{% endif %}
+      </p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/catalog/runs/{{ detail.run_id }}/">Back to run</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Sealed facts (server-derived, not editable)</h2>
+      <dl>
+        <dt>Run</dt><dd><code>{{ detail.run_id }}</code></dd>
+        <dt>State</dt><dd>{{ detail.state }} — {{ detail.state_reason }}</dd>
+        <dt>Bundle</dt><dd><code>{{ sealed.bundle_sha256 or 'n/a' }}</code></dd>
+        <dt>Plan</dt><dd>{{ detail.plan_operations | num }} operations — <code>{{ sealed.plan_sha256 or 'n/a' }}</code></dd>
+        <dt>Target</dt><dd>{{ sealed.target_database or 'n/a' }} @ {{ sealed.target_host or 'n/a' }}:{{ sealed.target_port or 'n/a' }} (PostgreSQL {{ sealed.postgres_version or 'n/a' }})</dd>
+        <dt>Baseline</dt><dd><code>{{ sealed.baseline_content_sha256 or 'n/a' }}</code></dd>
+        <dt>Baseline rows (sealed)</dt><dd>
+          {% if sealed.row_counts %}{% for key, value in sealed.row_counts.items() %}{{ key }}: {{ value | num }}{{ ' ' if not loop.last }}{% endfor %}{% else %}none (first install: no database was read; target is the explicit configured deployment database){% endif %}
+        </dd>
+      </dl>
+      {% if sealed.postgres_version == 'unknown' %}
+      <p class="help">No SQL observation exists for this run (bootstrap). The target above is the EXPLICIT configured deployment database; no server version or row facts are invented.</p>
+      {% endif %}
+    </div>
+    {% if review_token %}
+    <div class="dash-group">
+      <h2>Your signed choices (sealed in the review state)</h2>
+      <dl>
+        <dt>Audit reason</dt><dd>{{ signed_reason }}</dd>
+        <dt>Acknowledged sealed warnings</dt><dd>
+          {% if signed_acks %}{% for code in signed_acks %}<code>{{ code }}</code> {{ ' ' if not loop.last }}{% endfor %}{% else %}none (no sealed warnings){% endif %}
+        </dd>
+      </dl>
+    </div>
+    <div class="dash-group">
+      <h2>Final confirmation</h2>
+      <form method="post" action="/admin/operations/catalog/runs/{{ detail.run_id }}/apply" class="action-panel">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="review_token" value="{{ review_token }}">
+        <label class="checkbox-row" for="confirm-apply">
+          <input type="checkbox" name="confirm_apply" value="on" id="confirm-apply" required aria-describedby="confirm-apply-help">
+          I confirm the sealed plan, target, and warning set above and direct this apply to the configured deployment database.
+        </label>
+        <p class="help" id="confirm-apply-help">This is an explicit per-apply confirmation, separate from the signed reason and acknowledgements.</p>
+        <button type="submit">Apply the reviewed run</button>
+      </form>
+      <p class="muted">
+        No rollback is promised: an interrupted apply stays UNCONFIRMED until the authoritative
+        status resolves it. Repeat applies of the same committed bundle return the original result
+        (no duplicate routes/pricing/audit).
+      </p>
+    </div>
+    {% else %}
+    <div class="dash-group">
+      <h2>Operator intent (sealed before the final confirmation)</h2>
+      <form method="post" action="/admin/operations/catalog/runs/{{ detail.run_id }}/apply-preview" class="action-panel">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if warning_codes %}
+        <fieldset class="field">
+          <legend>Acknowledge the sealed warnings (all required)</legend>
+          <p class="muted">Every sealed warning must be explicitly acknowledged before the review can be signed; unacknowledged findings refuse inside the transaction.</p>
+          {% for code in warning_codes %}
+          <label class="checkbox-row" for="ack-{{ loop.index }}">
+            <input type="checkbox" name="ack_warning_code" value="{{ code }}" id="ack-{{ loop.index }}" required aria-describedby="ack-help">
+            <code>{{ code }}</code>
+          </label>
+          {% endfor %}
+          <p class="help" id="ack-help">Tick each sealed warning code you have reviewed and accept. These choices are sealed into the signed review state.</p>
+        </fieldset>
+        {% endif %}
+        <div class="field">
+          <label for="apply-reason">Audit reason (required, at most 500 characters)</label>
+          <input type="text" name="reason" id="apply-reason" maxlength="500" required aria-describedby="apply-reason-help" placeholder="e.g. Monthly official-source refresh, all warnings reviewed">
+          <p class="help" id="apply-reason-help">Stored in the immutable audit trail with your actor identity. Must not match any known incoming authentication value.</p>
+        </div>
+        <button type="submit">Sign the sealed review</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}

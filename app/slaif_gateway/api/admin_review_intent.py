@@ -1685,3 +1685,259 @@ def verify_accounting_review_token(
     if len(_canonical_json(document)) > _ACCOUNTING_REVIEW_DOC_MAX_BYTES:
         raise AdminReviewIntentError(_ACCOUNTING_TOO_LARGE_MESSAGE)
     return document
+
+# ---------------------------------------------------------------------------
+# 217-a (G15): one closed purpose-bound catalog-refresh review intent.
+#
+# The GUI apply decision reviews ONE sealed catalog-refresh run. The signed
+# document is REVIEWED DATA, not identity or authority: it binds the run id
+# and the run's authenticated bindings (bundle/plan content identity, target
+# database identity, postgres version, baseline content identity, row counts,
+# the explicitly acknowledged warning codes) plus a bounded operator reason
+# and a 32-hex nonce. It is bound to the actor, the admin session, and a
+# 15-minute expiry exactly like the other review intents. The WORKER re-
+# verifies the token against the sealed run at apply time and re-checks the
+# signed-in admin; the token itself grants nothing.
+# ---------------------------------------------------------------------------
+
+REVIEW_INTENT_CATALOG_REFRESH_PURPOSE = "admin.catalog-refresh.review.v1"
+
+# Core canonical run leaf names (collect-DATE-TIME-digest, blocked-*
+# leaves, supplied-bundle run ids): the EXACT Core bundle-schema bound,
+# not a UUID-only shape. The sealed run's canonical identity is never
+# rewritten to fit the intent.
+_CATALOG_REFRESH_RUN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+_CATALOG_REFRESH_REVIEW_KEYS = frozenset(
+    {
+        "run_id",
+        "bundle_sha256",
+        "plan_sha256",
+        "target_database",
+        "target_host",
+        "target_port",
+        "postgres_version",
+        "baseline_content_sha256",
+        "row_counts",
+        "ack_warning_codes",
+        "reason",
+        "nonce",
+    }
+)
+_CATALOG_REFRESH_REASON_MAX_CHARS = 500
+_CATALOG_REFRESH_ROW_COUNT_MAX_ENTRIES = 8
+_CATALOG_REFRESH_ACK_CODES_MAX = 32
+# Finite worst-case canonical-JSON byte budget for the CLOSED document
+# (backstop; the strict parser enforces the real bounds): 64-char run id +
+# three 64-hex digests + bounded target identity (256 + 256 + 5 + 32) + up
+# to 8 row-count entries (64-char key + 10-digit count) + up to 32 ack
+# warning codes (64 chars each) + the 500-char Unicode reason (12-byte
+# worst-case expansion per code point) + 32-hex nonce + fixed overhead.
+_CATALOG_REFRESH_REVIEW_DOC_MAX_BYTES = (
+    64
+    + 3 * 64
+    + 256
+    + 256
+    + 5
+    + 32
+    + _CATALOG_REFRESH_ROW_COUNT_MAX_ENTRIES * (64 + 1 + 10 + 2)
+    + _CATALOG_REFRESH_ACK_CODES_MAX * (64 + 2)
+    + 2  # the ack codes list brackets
+    + _CATALOG_REFRESH_REASON_MAX_CHARS * 12
+    + 32
+    + 300  # fixed key / structure overhead
+)
+# The signed payload wraps the document in the closed
+# purpose/actor/session/expiry envelope (same 211-byte exact overhead the
+# other review envelopes use).
+CATALOG_REFRESH_REVIEW_PAYLOAD_MAX_BYTES = (
+    _CATALOG_REFRESH_REVIEW_DOC_MAX_BYTES + 211
+)
+# base64url 4/3 expansion of the bounded payload + separator + 64-hex digest
+# (documented encoding overhead, not a second policy cap).
+MAX_REVIEW_INTENT_CATALOG_REFRESH_TOKEN_CHARS = (
+    4 * ((CATALOG_REFRESH_REVIEW_PAYLOAD_MAX_BYTES + 2) // 3) + 1 + 64
+)
+
+_CATALOG_REFRESH_INVALID_MESSAGE = (
+    "The catalog refresh review state is missing or invalid."
+)
+_CATALOG_REFRESH_NOT_AUTHENTIC_MESSAGE = (
+    "The catalog refresh review state is not valid for this signed-in admin."
+)
+_CATALOG_REFRESH_EXPIRED_MESSAGE = (
+    "The catalog refresh review has expired. Preview the run again."
+)
+_CATALOG_REFRESH_TOO_LARGE_MESSAGE = (
+    "The catalog refresh review exceeds the bounded review size."
+)
+
+
+def _strict_catalog_refresh_review_document(document: object) -> dict[str, Any]:
+    """Closed strict document for one sealed catalog-refresh apply review.
+
+    Every field is closed and typed; the acknowledged warning codes are the
+    operator's explicit per-code choices for the sealed READY_WITH_WARNINGS
+    findings. Every failure is the fixed safe message; no field value is
+    echoed.
+    """
+    if not isinstance(document, dict):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    if set(document) != _CATALOG_REFRESH_REVIEW_KEYS:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    run_id = document.get("run_id")
+    if not isinstance(run_id, str) or not _CATALOG_REFRESH_RUN_ID_RE.fullmatch(run_id):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    for digest_key in ("bundle_sha256", "plan_sha256", "baseline_content_sha256"):
+        value = document.get(digest_key)
+        if not isinstance(value, str) or not _ACCOUNTING_REVIEW_HEX_RE.fullmatch(value):
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    for identity_key in ("target_database", "target_host", "postgres_version"):
+        value = document.get(identity_key)
+        if not isinstance(value, str):
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+        if identity_key != "target_host" and not (1 <= len(value) <= 256):
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+        if identity_key == "postgres_version" and not 1 <= len(value) <= 32:
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+        if identity_key != "target_host" and (
+            "@" in value or "://" in value
+        ):
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+        if identity_key == "target_host" and (
+            len(value) > 256 or "@" in value or "://" in value
+        ):
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    port = document.get("target_port")
+    if port is not None:
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    row_counts = document.get("row_counts")
+    if not isinstance(row_counts, dict) or len(row_counts) > _CATALOG_REFRESH_ROW_COUNT_MAX_ENTRIES:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    for key, value in row_counts.items():
+        if not isinstance(key, str) or not 1 <= len(key) <= 64:
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    ack_codes = document.get("ack_warning_codes")
+    if not isinstance(ack_codes, list) or len(ack_codes) > _CATALOG_REFRESH_ACK_CODES_MAX:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    seen_codes: set[str] = set()
+    for code in ack_codes:
+        if not isinstance(code, str) or not 1 <= len(code) <= 64:
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+        if code.lower() in seen_codes:
+            raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+        seen_codes.add(code.lower())
+    reason = document.get("reason")
+    if (
+        not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > _CATALOG_REFRESH_REASON_MAX_CHARS
+    ):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    nonce = document.get("nonce")
+    if not isinstance(nonce, str) or not _ACCOUNTING_REVIEW_NONCE_RE.fullmatch(nonce):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    return document
+
+
+def build_catalog_refresh_review_token(
+    *,
+    admin_session_secret: str,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    review_document: dict[str, Any],
+    ttl_seconds: int = REVIEW_INTENT_TTL_SECONDS,
+    now: datetime | None = None,
+) -> str:
+    """Bind one sealed catalog-refresh run review to actor/session/expiry.
+
+    ``review_document`` is the strict closed document validated BEFORE
+    canonical serialization; both the document envelope and the token
+    length are bounded before any signing work returns.
+    """
+    _strict_catalog_refresh_review_document(review_document)
+    if len(_canonical_json(review_document)) > _CATALOG_REFRESH_REVIEW_DOC_MAX_BYTES:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_TOO_LARGE_MESSAGE)
+    issued = now or datetime.now(UTC)
+    payload = {
+        "purpose": REVIEW_INTENT_CATALOG_REFRESH_PURPOSE,
+        "admin_user_id": str(admin_user_id),
+        "admin_session_id": str(admin_session_id),
+        "expires_at": (issued + timedelta(seconds=ttl_seconds)).isoformat(),
+        "review": review_document,
+    }
+    encoded = _canonical_json(payload)
+    token = (
+        base64.urlsafe_b64encode(encoded).decode("ascii")
+        + "."
+        + _digest(admin_session_secret, encoded)
+    )
+    if len(token) > MAX_REVIEW_INTENT_CATALOG_REFRESH_TOKEN_CHARS:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_TOO_LARGE_MESSAGE)
+    return token
+
+
+def verify_catalog_refresh_review_token(
+    *,
+    admin_session_secret: str,
+    token: str | None,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Verify, rebind, and strict-reparse one catalog-refresh review token.
+
+    Returns the strict closed review document. The outer payload is CLOSED:
+    exactly the identity/expiry keys plus ``review``. A token for any other
+    purpose is refused (different signed purpose). Every failure path raises
+    :class:`AdminReviewIntentError` with a fixed safe message; the token
+    bytes never appear in an exception, log, or rendered error.
+    """
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > MAX_REVIEW_INTENT_CATALOG_REFRESH_TOKEN_CHARS
+    ):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    body, separator, digest = token.rpartition(".")
+    if not separator or not body or not digest or not _DIGEST_RE.fullmatch(digest):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    try:
+        encoded = base64.urlsafe_b64decode(body.encode("ascii"))
+    except (binascii.Error, UnicodeEncodeError, ValueError):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE) from None
+    if not hmac.compare_digest(_digest(admin_session_secret, encoded), digest):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_NOT_AUTHENTIC_MESSAGE)
+    try:
+        payload = json.loads(
+            encoded.decode("utf-8"), object_pairs_hook=_strict_pairs_hook
+        )
+    except (UnicodeDecodeError, ValueError):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE) from None
+    if not isinstance(payload, dict) or set(payload) != _COMPAT_PAYLOAD_KEYS:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE)
+    if payload.get("purpose") != REVIEW_INTENT_CATALOG_REFRESH_PURPOSE:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_NOT_AUTHENTIC_MESSAGE)
+    if (
+        payload.get("admin_user_id") != str(admin_user_id)
+        or payload.get("admin_session_id") != str(admin_session_id)
+    ):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_NOT_AUTHENTIC_MESSAGE)
+    expires_raw = payload.get("expires_at")
+    try:
+        expires_at = datetime.fromisoformat(expires_raw)
+    except (TypeError, ValueError):
+        raise AdminReviewIntentError(_CATALOG_REFRESH_INVALID_MESSAGE) from None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if (now or datetime.now(UTC)) >= expires_at:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_EXPIRED_MESSAGE)
+    # Strict re-validation BEFORE canonical serialization: a tampered or
+    # edited field yields the fixed safe error, never a serialization fault.
+    document = _strict_catalog_refresh_review_document(payload.get("review"))
+    if len(_canonical_json(document)) > _CATALOG_REFRESH_REVIEW_DOC_MAX_BYTES:
+        raise AdminReviewIntentError(_CATALOG_REFRESH_TOO_LARGE_MESSAGE)
+    return document

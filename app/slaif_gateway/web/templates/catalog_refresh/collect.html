@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Catalog Collect{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="catalog-collect-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Refresh</p>
+      <h1 id="catalog-collect-heading">Collect official sources</h1>
+      <p class="muted">
+        Live official-source collection into one sealed run. The baseline is resolved BEFORE
+        retrieval, and the collector's own request/byte/deadline/cache budgets hold across all
+        phases (cooperative, not an in-library hard deadline).
+      </p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/catalog/">Catalog refresh</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if errors.message %}
+  <div class="admin-flash" role="alert"><strong>Refused:</strong> {{ errors.message }}</div>
+  {% endif %}
+  {% if dispatched is not none %}
+  <div class="admin-flash" role="status">
+    <strong>Queued.</strong> {{ dispatch_note }}
+    {% if last_job %}Job <code>{{ last_job.job_id[:12] }}…</code> status: {{ last_job.status }}.{% endif %}
+    This page does not reload automatically; use the Refresh status link below for the
+    latest job state.
+  </div>
+  {% endif %}
+
+  {% if setup.state != 'ready' %}
+  <div class="admin-flash" role="status">
+    <strong>Unavailable:</strong>
+    {% for line in setup.help_lines %}<p>{{ line }}</p>{% endfor %}
+  </div>
+  {% else %}
+  <form method="post" action="/admin/operations/catalog/collect/submit" enctype="multipart/form-data" id="catalog-collect-form" class="action-panel catalog-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <fieldset>
+      <legend>Mode (choose exactly one)</legend>
+      <label class="checkbox-row" for="collect-mode-bootstrap">
+        <input type="radio" name="mode" value="bootstrap" id="collect-mode-bootstrap" aria-describedby="collect-mode-bootstrap-help" required>
+        Bootstrap (empty catalog)
+      </label>
+      <p class="help" id="collect-mode-bootstrap-help">First import into an empty catalog. The target must be empty; a non-empty target refuses.</p>
+      <label class="checkbox-row" for="collect-mode-refresh">
+        <input type="radio" name="mode" value="refresh" id="collect-mode-refresh" aria-describedby="collect-mode-refresh-help">
+        Refresh (existing catalog)
+      </label>
+      <p class="help" id="collect-mode-refresh-help">Refresh existing route/pricing metadata from the live sources, preserving current rows. Requires the baseline source below.</p>
+    </fieldset>
+    <div class="filter-bar">
+      <div class="field">
+        <label for="collect-providers">Providers</label>
+        <select name="providers" id="collect-providers" multiple size="2" aria-describedby="collect-providers-help">
+          {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+        </select>
+        <p class="help" id="collect-providers-help">Select one or more supported providers (Ctrl/Cmd-click for both). At least one is required.</p>
+      </div>
+      <div class="field">
+        {# 217-a: the record_choice macro renders its own associated
+        label; the outer label was a duplicate. #}
+        {{ record_choice("models", "catalog_upstream", "Models", options=model_options, multi=true, serialize="newline", allow_new=true, placeholder="blank = all eligible", help="Official upstream model IDs to include (searchable, latest ~100 plus older on demand). These are the literal upstream IDs the collector selects; blank = all eligible models of the selected providers.", help_id="collect-models-help", control_id="collect-models", input_id="collect-models") }}
+      </div>
+    </div>
+    <fieldset>
+      <legend>Baseline source</legend>
+      <label class="checkbox-row" for="collect-baseline-file">
+        <input type="file" name="baseline" id="collect-baseline-file" accept="application/json,.json" aria-describedby="collect-baseline-help">
+        Upload an exported baseline document (JSON, at most 32 MiB) — refresh only
+      </label>
+      <p class="help" id="collect-baseline-help">
+        <strong>Bootstrap:</strong> no baseline (the catalog is empty).
+        <strong>Refresh:</strong> either upload a previously exported baseline document, or leave
+        the field empty to use the deployment's configured live read-only database (DATABASE_URL) —
+        shown as {% if live_db_available %}<strong>available</strong>{% else %}<strong>not configured</strong>{% endif %}.
+        The baseline is resolved and captured BEFORE any retrieval.
+      </p>
+    </fieldset>
+    {% if research_available %}
+    <fieldset>
+      <legend>Optional assisted research</legend>
+      <label class="checkbox-row" for="collect-research">
+        <input type="checkbox" name="research" value="on" id="collect-research" aria-describedby="collect-research-help">
+        Enable assisted semantic research
+      </label>
+      <p class="help" id="collect-research-help">
+        Uses the deployment's operator-configured isolated research runner (executable, HTTPS
+        endpoint/model, and credential environment name all come from deployment settings, never
+        from the browser). Opt-in; by default research stays NOT_RUN.
+      </p>
+    </fieldset>
+    {% endif %}
+    <button type="submit">Start collect</button>
+  </form>
+  {% endif %}
+
+  {% if job_refusal %}
+  <div class="admin-flash" role="alert"><strong>Job status unavailable:</strong> {{ job_refusal }} <a href="/admin/operations/catalog/collect">Show the newest collect job</a></div>
+  {% endif %}
+
+  {% if last_job %}
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Last collect job</h2>
+      <p>
+        <code>{{ last_job.job_id }}</code> — {{ last_job.status }}
+        {% if last_job.cancel_requested %}(cancel requested){% endif %}
+        {% if last_job.error_code %} — <code>{{ last_job.error_code }}</code>{% endif %}
+        {% if last_job.run_id %} — run <a href="/admin/operations/catalog/runs/{{ last_job.run_id }}/"><code>{{ last_job.run_id[:32] }}…</code></a>{% endif %}
+      </p>
+      {% if last_job.status in ('queued', 'running') %}
+      <p><a href="/admin/operations/catalog/collect?job={{ last_job.job_id }}">Refresh status</a> — no automatic reload;
+      the job state is server-side and updates as the worker progresses.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

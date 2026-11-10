@@ -320,7 +320,10 @@ def test_every_admin_table_has_structural_ordinal_column() -> None:
     # 216-a: +6 for the accounting operations pages (expired-pending
     # candidates, read-only fences, holds, provider-completed
     # candidates, review reviewed-rows table, review per-row outcomes).
-    assert len(tables) == 46, f"expected 46 sortable admin tables, got {len(tables)}"
+    # 217-a: +7 for the catalog workspace (index background-jobs + sealed
+    # runs; run row-counts, warnings, dispositions, price comparisons, and
+    # the apply-plan projection).
+    assert len(tables) == 53, f"expected 53 sortable admin tables, got {len(tables)}"
     problems: list[str] = []
     for name, tag, block in tables:
         thead = re.search(r"<thead>.*?</thead>", block, flags=re.DOTALL)

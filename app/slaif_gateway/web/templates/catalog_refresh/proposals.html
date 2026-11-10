@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Catalog Proposals{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide catalog-proposals" aria-labelledby="catalog-proposals-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Refresh</p>
+      <h1 id="catalog-proposals-heading">Provider-catalog proposals</h1>
+      <p class="muted">
+        Generate safe route/pricing proposal artifacts (plus normalized JSON and a report) from
+        official sources. Generated TSV files bridge to the existing import previews — there is
+        deliberately NO automatic import.
+      </p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/catalog/">Catalog refresh</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if errors.message %}
+  <div class="admin-flash" role="alert"><strong>Refused:</strong> {{ errors.message }}</div>
+  {% endif %}
+  {% if dispatched is not none %}
+  <div class="admin-flash" role="status">
+    <strong>Queued.</strong> {{ dispatch_note }}
+    {% if last_job %}
+      Job <code>{{ last_job.job_id[:12] }}…</code> status: {{ last_job.status }}.
+      This page does not reload automatically; use the Refresh status link below for the
+      latest job state.
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if setup.state != 'ready' %}
+  <div class="admin-flash" role="status">
+    <strong>Unavailable:</strong>
+    {% for line in setup.help_lines %}<p>{{ line }}</p>{% endfor %}
+  </div>
+  {% else %}
+  <form method="post" action="/admin/operations/catalog/proposals/generate" id="catalog-proposal-form" class="action-panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="filter-bar">
+      <div class="field">
+        <label for="prop-provider-scope">Provider scope</label>
+        <select name="provider_scope" id="prop-provider-scope" aria-describedby="prop-provider-scope-help">
+          <option value="openai">openai</option>
+          <option value="openrouter">openrouter</option>
+          <option value="all">all (openai + openrouter)</option>
+        </select>
+        <p class="help" id="prop-provider-scope-help">Which official provider(s) to propose from. "all" merges both official sources.</p>
+      </div>
+      <div class="field">
+        <label for="prop-currency">Currency</label>
+        <select name="currency" id="prop-currency" aria-describedby="prop-currency-help">
+          {% for c in currencies %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+        </select>
+        <p class="help" id="prop-currency-help">Target ISO currency for normalized pricing rows (3-letter code).</p>
+      </div>
+      <div class="field">
+        <label for="prop-max-models">Model cap</label>
+        <input type="number" name="max_models" id="prop-max-models" value="500" min="1" max="500" aria-describedby="prop-max-models-help">
+        <p class="help" id="prop-max-models-help">Maximum number of models included PER PROVIDER in one proposal (1–500, default 500).</p>
+      </div>
+      <div class="field">
+        <label for="prop-fetch-details">Detail fetch cap</label>
+        <input type="number" name="fetch_details_limit" id="prop-fetch-details" value="50" min="0" max="200" aria-describedby="prop-fetch-details-help">
+        <p class="help" id="prop-fetch-details-help">Maximum per-model detail documents fetched from OpenRouter (0–200, default 50).</p>
+      </div>
+      <div class="field">
+        <label for="prop-max-web">Web-call cap</label>
+        <input type="number" name="max_web_calls" id="prop-max-web" value="3" min="1" max="10" aria-describedby="prop-max-web-help">
+        <p class="help" id="prop-max-web-help">Maximum supplementary official web calls per provider (1–10, default 3).</p>
+      </div>
+    </div>
+    <fieldset>
+      <legend>Endpoint scopes</legend>
+      {% for scope in endpoint_scopes %}
+      <label class="checkbox-row" for="prop-scope-{{ loop.index }}">
+        <input type="checkbox" name="endpoint_scope" value="{{ scope }}" id="prop-scope-{{ loop.index }}" aria-describedby="prop-scope-help" checked>
+        {{ scope }}
+      </label>
+      {% endfor %}
+      <p class="help" id="prop-scope-help">Select the endpoint families to include (at least one). Unselected families produce no rows.</p>
+    </fieldset>
+    <fieldset>
+      <legend>Source choices</legend>
+      <label class="checkbox-row" for="prop-src-docs"><input type="checkbox" name="source_method" value="docs" id="prop-src-docs" aria-describedby="prop-src-help" checked> Official documentation</label>
+      <label class="checkbox-row" for="prop-src-api"><input type="checkbox" name="source_method" value="api" id="prop-src-api" aria-describedby="prop-src-help"> Official models API</label>
+      <label class="checkbox-row" for="prop-src-assisted"><input type="checkbox" name="source_method" value="assisted" id="prop-src-assisted" aria-describedby="prop-src-assisted-help"> Assisted (OpenAI-assisted; requires the existing deployment secret and the risk acknowledgement below)</label>
+      <label class="checkbox-row" for="prop-snapshots"><input type="checkbox" name="save_source_snapshots" value="on" id="prop-snapshots" aria-describedby="prop-snapshots-help"> Store redacted source snapshots in custody (increases retained bytes)</label>
+      <p class="help" id="prop-src-help">OpenRouter proposals always use the official docs AND the models API (both are required; selection cannot remove either). For OpenAI, docs is always used and "API" additionally pulls the OpenAI models listing. Assisted is OpenAI-only.</p>
+      <p class="help" id="prop-src-assisted-help">OpenAI-only. Requires the existing OPENAI_ADMIN_DISCOVERY_API_KEY deployment secret and the risk acknowledgement below; if unconfigured the request is refused before dispatch (not a post-fetch failure).</p>
+      <p class="help" id="prop-snapshots-help">Snapshots are redacted source text retained under the proposal's custody directory; they are bounded by the custody byte cap.</p>
+    </fieldset>
+    <div class="filter-bar">
+      <div class="field">
+        {{ record_choice("include_models", "catalog_upstream", "Include models", options=model_options, multi=true, serialize="newline", allow_new=true, placeholder="blank = all eligible", help="Official upstream model IDs to include (searchable, latest ~100 plus older on demand; blank = all eligible models within the model cap).", help_id="prop-include-models-help", control_id="prop-include-models", input_id="prop-include-models") }}
+      </div>
+      <div class="field">
+        {{ record_choice("exclude_models", "catalog_upstream", "Exclude models", options=model_options, multi=true, serialize="newline", allow_new=true, placeholder="blank = none", help="Official upstream model IDs to exclude (searchable, latest ~100 plus older on demand; blank = none).", help_id="prop-exclude-models-help", control_id="prop-exclude-models", input_id="prop-exclude-models") }}
+      </div>
+    </div>
+    <fieldset>
+      <legend>Safety and completeness choices</legend>
+      <label class="checkbox-row" for="prop-paired"><input type="checkbox" name="paired_ready_only" value="on" id="prop-paired" aria-describedby="prop-paired-help" checked> Paired-ready only (routes need matching pricing)</label>
+      <label class="checkbox-row" for="prop-ordinary"><input type="checkbox" name="ordinary_chat_only" value="on" id="prop-ordinary" aria-describedby="prop-ordinary-help" checked> Ordinary-chat only</label>
+      <label class="checkbox-row" for="prop-zero"><input type="checkbox" name="allow_zero_prices" value="on" id="prop-zero" aria-describedby="prop-zero-help"> Allow zero prices (flagged, not blocked)</label>
+      <label class="checkbox-row" for="prop-deprecated"><input type="checkbox" name="include_deprecated" value="on" id="prop-deprecated" aria-describedby="prop-deprecated-help"> Include deprecated models</label>
+      <label class="checkbox-row" for="prop-ambiguous"><input type="checkbox" name="include_ambiguous_capabilities" value="on" id="prop-ambiguous" aria-describedby="prop-ambiguous-help"> Include ambiguous-capability models</label>
+      <label class="checkbox-row" for="prop-api-models"><input type="checkbox" name="include_api_models" value="on" id="prop-api-models" aria-describedby="prop-api-models-help"> Include API-only models</label>
+      <label class="checkbox-row" for="prop-ack-assisted"><input type="checkbox" name="acknowledge_assisted_proposal_risk" value="on" id="prop-ack-assisted" aria-describedby="prop-ack-assisted-help"> I acknowledge the assisted-proposal risk (required for assisted source)</label>
+      <p class="help" id="prop-paired-help">Refuses rows where route and pricing cannot be paired-ready; safest for import.</p>
+      <p class="help" id="prop-ordinary-help">Restricts the proposal to the standard ordinary Chat Completions surface.</p>
+      <p class="help" id="prop-zero-help">Zero-priced rows are included with an explicit warning instead of being dropped.</p>
+      <p class="help" id="prop-deprecated-help">Deprecated upstream models are otherwise excluded.</p>
+      <p class="help" id="prop-ambiguous-help">Models whose capabilities cannot be confidently determined are otherwise excluded.</p>
+      <p class="help" id="prop-api-models-help">Models that exist only in the API listing (not in docs) are otherwise excluded.</p>
+      <p class="help" id="prop-ack-assisted-help">Explicit acknowledgement recorded with the proposal; required whenever assisted is selected.</p>
+    </fieldset>
+    <fieldset>
+      <legend>OpenRouter packages</legend>
+      {% for pkg in package_presets %}
+      <label class="checkbox-row" for="prop-pkg-{{ loop.index }}">
+        <input type="checkbox" name="package_name" value="{{ pkg }}" id="prop-pkg-{{ loop.index }}" aria-describedby="prop-packages-help"> {{ pkg }}
+      </label>
+      {% endfor %}
+      <label class="checkbox-row" for="prop-all-packages"><input type="checkbox" name="all_packages" value="on" id="prop-all-packages" aria-describedby="prop-all-packages-help"> All packages</label>
+      <p class="help" id="prop-packages-help">Closed set of supported OpenRouter package presets; tick the ones to generate.</p>
+      <p class="help" id="prop-all-packages-help">Generate every supported OpenRouter package preset.</p>
+    </fieldset>
+    <button type="submit">Generate proposal</button>
+  </form>
+  {% endif %}
+
+  {% if job_refusal %}
+  <div class="admin-flash" role="alert"><strong>Job status unavailable:</strong> {{ job_refusal }} <a href="/admin/operations/catalog/proposals">Show the newest proposal job</a></div>
+  {% endif %}
+
+  {% if last_job %}
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Last proposal job</h2>
+      <p>
+        <code>{{ last_job.job_id }}</code> — {{ last_job.status }}
+        {% if last_job.cancel_requested %}(cancel requested){% endif %}
+        {% if last_job.error_code %} — <code>{{ last_job.error_code }}</code>{% endif %}
+        {% if last_job.progress %} — {{ last_job.progress }}{% endif %}
+        {% if last_job_provider_scope %} — provider scope: <code>{{ last_job_provider_scope }}</code>{% endif %}
+      </p>
+      {% if last_job.status in ('queued', 'running') %}
+      <p><a href="/admin/operations/catalog/proposals?job={{ last_job.job_id }}">Refresh status</a> — no automatic reload;
+      the job state is server-side and updates as the worker progresses.</p>
+      {% endif %}
+      {% if last_job.status in ('ready', 'warnings') %}
+      <p class="muted">
+        Generated artifacts (bounded downloads from operator custody). These are
+        UNSEALED proposal outputs: the route/pricing TSVs bridge to the EXISTING
+        import previews below, where the strict import review applies — there is
+        deliberately NO automatic import.
+      </p>
+      <ul>
+        <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/artifact/routes-proposal.tsv">routes-proposal.tsv</a></li>
+        <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/artifact/pricing-proposal.tsv">pricing-proposal.tsv</a></li>
+        <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/artifact/provider-catalog-normalized.json">provider-catalog-normalized.json</a></li>
+        <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/artifact/warnings.json">warnings.json</a></li>
+        <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/artifact/provider-catalog-report.md">provider-catalog-report.md</a></li>
+        <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/artifact/source-manifest.json">source-manifest.json</a></li>
+      </ul>
+      <div class="filter-bar">
+        <div class="field">
+          <form method="post" action="/admin/operations/catalog/jobs/{{ last_job.job_id }}/import-preview/routes" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Route TSV → existing import preview</button>
+          </form>
+          <p class="help" id="prop-bridge-routes-help">Renders the generated route TSV in the existing route import preview. Importing still requires the preview page's own explicit execute step.</p>
+        </div>
+        <div class="field">
+          <form method="post" action="/admin/operations/catalog/jobs/{{ last_job.job_id }}/import-preview/pricing" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Pricing TSV → existing import preview</button>
+          </form>
+          <p class="help" id="prop-bridge-pricing-help">Renders the generated pricing TSV in the existing pricing import preview. Importing still requires the preview page's own explicit execute step.</p>
+        </div>
+      </div>
+      {% if last_job_packages %}
+      <h3>Generated packages</h3>
+      <p class="help">Closed known preset directories actually generated by this job (UNSEALED; the import review remains the strict gate).</p>
+      {% for preset in last_job_packages %}
+      <details class="dash-group">
+        <summary>{{ preset }}</summary>
+        <ul>
+          <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/package/{{ preset }}/routes-proposal.tsv">routes-proposal.tsv</a></li>
+          <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/package/{{ preset }}/pricing-proposal.tsv">pricing-proposal.tsv</a></li>
+          <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/package/{{ preset }}/package-report.md">package-report.md</a></li>
+          <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/package/{{ preset }}/model-review.md">model-review.md</a></li>
+          <li><a href="/admin/operations/catalog/jobs/{{ last_job.job_id }}/package/{{ preset }}/package-manifest.json">package-manifest.json</a></li>
+        </ul>
+        <div class="filter-bar">
+          <div class="field">
+            <form method="post" action="/admin/operations/catalog/jobs/{{ last_job.job_id }}/package/{{ preset }}/import-preview/routes" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit">Route TSV → existing import preview</button>
+            </form>
+          </div>
+          <div class="field">
+            <form method="post" action="/admin/operations/catalog/jobs/{{ last_job.job_id }}/package/{{ preset }}/import-preview/pricing" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit">Pricing TSV → existing import preview</button>
+            </form>
+          </div>
+        </div>
+      </details>
+      {% endfor %}
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

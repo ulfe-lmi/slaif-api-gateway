@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14 (controlled accounting recovery) is delivered by OAP objective 216-a (branch `oap/216-gui-accounting-operations`); see [section 18](#18-delivery-status-objective-216-a). G15 and G17 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14 (controlled accounting recovery) is delivered by OAP objective 216-a (branch `oap/216-gui-accounting-operations`); see [section 18](#18-delivery-status-objective-216-a). G15 (official catalog proposals and the sealed catalog-refresh workflow) is delivered by OAP objective 217-a (branch `oap/217-gui-catalog-refresh`); see [section 19](#19-delivery-status-objective-217-a). Only G17 remains open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -1287,5 +1287,163 @@ dependencies:
 G15 (catalog workflows) and G17 (admin accounts) remain open as
 documented in section 9; nothing in 216-a touches them. The final 219
 installed whole-GUI qualification remains mandatory; 216-a makes no
+installed-qualification, deployment, live-provider, or production
+claim.
+
+## 19. Delivery status (objective 217-a)
+
+Delivered by 217-a (`oap/217-gui-catalog-refresh`, one PR), synthetic
+official-source fixture bytes only at the labeled worker seams (no
+upstream network, no provider inference), no new schema/migrations and
+no new dependencies:
+
+- **G15** (official provider-catalog proposals and the full sealed
+  catalog-refresh workflow, driven entirely through the EXISTING Core
+  collect/review/apply services - the GUI adds orchestration and a
+  bounded admin surface, never a second catalog backend):
+  - **Coherent Operations "Catalog workspace"**: Setup/status,
+    Proposals, Collect, Review supplied bundle, sealed-run
+    detail/verify/apply-status, and Export baseline, with a single
+    shared navigation link. The existing standalone import and
+    OpenAI-assisted pages and their working actions are retained. No
+    shell console or CLI-shaped wall of switches; a guided common path
+    with finite advanced options.
+  - **Proposals**: `generate_provider_catalog_proposal` for supported
+    `openai` and `openrouter`/all, the CLOSED endpoint-scope vocabulary
+    (`chat_completions`, `responses`), the closed package presets, and
+    the source choices (docs / API / OpenAI-only assisted with the
+    existing deployment-secret + risk-ack gates, and optional redacted
+    source-snapshot storage). Safety/completeness toggles, finite
+    model/detail/web-call caps, currency, and zero/deprecated/ambiguous
+    behavior are surfaced honestly; unavailable configuration produces a
+    useful fixed refusal, not a post-fetch failure. The generated
+    route/pricing TSVs bridge to the EXISTING import preview WITHOUT
+    automatic import. Generated packages are exposed through a CLOSED
+    preset + closed-file selector (bounded anchored reads, the enforced
+    32 MiB output ceiling, import-preview bridge); they are UNSEALED
+    proposal artifacts (no cryptographic "verified" claim).
+  - **Collect**: explicit bootstrap vs refresh, the current standard-v1
+    profile, a nonempty supported-provider subset, and all-eligible or
+    EXPLICIT KNOWN upstream-model choices via the NEW `catalog_upstream`
+    record choice (latest ~100 + older search + manual entry). The
+    collector selects LITERAL upstream model IDs (it resolves no public
+    aliases), so the shared alias-unioning `model` picker - which offers
+    requested/alias and usage-history tokens - cannot select the intended
+    official model; the closed `catalog_upstream` projection lists only
+    the route + pricing upstream IDs for the supported official providers
+    (same latest ordering, ILIKE search, selected hydration, and
+    credential-shape guard). Baseline (live read-only DB or an uploaded
+    exported document, retaining the canonical 8 MiB bundle / 32 MiB
+    baseline bounds) is resolved and captured BEFORE retrieval; the
+    collector's own request/byte/deadline/cache budgets hold (cooperative,
+    not an in-library hard deadline).
+  - **Review supplied bundle**: a real standalone capability (not just
+    displaying collected runs). Bounded multipart uploads keep the strict
+    per-file bounds, reject malformed/duplicate/nonfinite/unknown fields,
+    run deterministic validation with offline acquisition labels, and
+    publish under the SUPPLIED run id NEW-ONLY (an independent input
+    bundle, never a rewrite of a user/canonical id in production).
+  - **Sealed-run rendering**: the run page renders the SAME
+    authenticated canonical plan (target/mode with honest bootstrap
+    configured-vs-SQL-observed semantics, readiness, source provenance,
+    changed/unchanged rows, warnings/blockers, price comparisons with
+    explicit missing/new-price rendering and currency + per-million
+    dimensions, and a bounded safe projection of the apply-plan
+    operations) plus the original-generator vs current-verifier identity.
+    No arbitrary artifact HTML is served inline; the existing sealed
+    `REVIEW.html` is a verified attachment for local review. A run is
+    NEVER silently re-signed/re-written to make a new renderer verify.
+  - **Verify / Export baseline**: explicit read-only verify authenticates
+    the artifacts and shows truthful checks; export baseline is a real
+    consistent allowlisted DB export/download (never an empty bootstrap
+    after failed DB contact). Authenticated bounded artifact downloads
+    use closed file names, `Content-Disposition: attachment`,
+    no-store/nosniff, and held verified bytes.
+  - **Apply / Status**: apply is an explicit reviewed confirmation with a
+    bounded nonblank audit reason, the server-derived authenticated admin
+    actor, and a FRESH EXISTING superadmin gate (inspection/collect/review
+    do not grant mutation). It reuses the session-bound HMAC review
+    purpose (<=15 min, exact run/canonical-plan/target/warning-ack
+    binding, current integrity rechecks) and `apply_reviewed_run` under
+    the SAME HELD authenticated run context - one atomic catalog
+    transaction, durable application record, no direct SQL/ORM mutation.
+    Status uses `apply_status` on that held lifecycle-bound context; an
+    exact committed repeat returns `already_committed` with no duplicate
+    routes/pricing/audit, and broker-ack/commit-ack loss is unconfirmed
+    until authoritative status resolves it.
+  - **Operator custody and bounded background work**: default-off with
+    explicit operator enable/root/seal configuration. The operator-owned
+    root and 0600 seal key live OUTSIDE the repository and database under
+    documented restrictive permissions and shared API/worker mounts; the
+    GUI opens an EXISTING properly owned root and key, and
+    missing/unsafe configuration gives useful setup help with NO
+    network/job/mutation (it never creates/repairs a seal key or path,
+    and refuses root/key paths inside the repository or a local PGDATA).
+    One closed Celery task family (no helpers/agents) with IDs-only broker
+    payloads; a small run-specific local metadata/status record under
+    operator custody (no new DB tables or generic job platform). Finite
+    knobs bound active jobs (default 1), retained count (default 20),
+    total bytes (default 1 GiB), and read-only work duration (default
+    300 s), enforced under concurrent requests/workers (full capacity
+    refuses explicitly, never partial output labeled complete). NEW-ONLY
+    publication, identity-checked cleanup, and a truthful
+    queued/running/ready/warnings/blocked/failed/canceled/unavailable/
+    unconfirmed status; canceled queued work cannot later execute on
+    delayed delivery, and late/duplicate delivery must not overwrite
+    published sealed artifacts. Cancellation is read-only work only.
+  - **Bounded UI and ergonomics**: a scoped catalog-workspace layout
+    (index setup/storage summary + full-width jobs and sealed runs; the
+    run review uses full-width tables with actions near the outcome),
+    stable forms (no automatic whole-page reload; explicit "Refresh
+    status" links as the no-JS/common fallback), and desktop/narrow/
+    keyboard/no-JS flows with meaningful guidance.
+  - **Security/privacy**: secret-persistence guards (the existing pure
+    known-incoming-secret and credential-shaped identifier refusal) are
+    applied BEFORE bounded values/uploads are persisted to custody;
+    non-rotating authenticated read contexts for attachments/polls; CSRF
+    on every mutating action; credential-shaped model tokens withheld
+    from the model pickers.
+  - **Run-reference identity**: the GUI reuses the EXACT existing Core
+    run-id grammar (`^[a-z0-9][a-z0-9-]{0,63}$`) directly for run
+    references (bounded to 64 chars), preserving canonical bundle/run
+    bytes and identity; there is no extra browser-UUID mapping/index.
+- No schema migration and no key-policy migration; no new dependency,
+  runtime request-policy, or accounting change. Legacy CLI/API
+  behavior is preserved (the CLI delegates backwards-compatibly to the
+  shared collect/review composition).
+- **Verification (217-a scope, synthetic/owned fixtures, honest labels)**:
+  a focused unit module, an owned-PostgreSQL real-HTTP native module
+  (real broker/PG/auth/CSRF, SYNTHETIC official-source bytes at the
+  labeled worker seams, including a disposable real Celery application
+  worker), and a Playwright module (real Chromium over the real app +
+  owned PG + owned Redis, the reviewed-apply commit + idempotent repeat,
+  download-then-same-page verify, proposal-to-import-preview, and a
+  supplied-bundle review) exercising keyboard/narrow/no-JS flows with
+  desktop+narrow captures. These are NOT installed-qualification,
+  live-provider, or production evidence; the final 219 installed
+  whole-GUI gate remains open. Reuse the accepted unchanged Core/native/
+  unit receipts rather than rerunning unchanged matrices; exact counts,
+  exits, JUnit receipts, and source snapshots: the immutable 217-a
+  report.
+- Documentation:
+  [`catalog-refresh.md`](catalog-refresh.md),
+  [`provider-catalog-proposals.md`](provider-catalog-proposals.md),
+  [`configuration.md`](configuration.md),
+  [`deployment.md`](deployment.md),
+  [`security-model.md`](security-model.md),
+  [`cli-reference.md`](cli-reference.md),
+  [`compatibility-matrix.md`](compatibility-matrix.md),
+  [`rc2-feature-scope.md`](rc2-feature-scope.md),
+  [`admin-usability.md`](admin-usability.md),
+  [`verification/gui-cli-parity.md`](verification/gui-cli-parity.md),
+  [`runbooks/admin-access.md`](runbooks/admin-access.md), and
+  [`README.md`](../README.md); exact scope: the 217-a strategic work
+  order; claims and evidence: the immutable 217-a report.
+
+### Still open
+
+G17 (post-bootstrap admin accounts) remains open as documented in
+section 9; nothing in 217-a touches it. The final 219 installed
+whole-GUI qualification remains mandatory; 217-a makes no
 installed-qualification, deployment, live-provider, or production
 claim.

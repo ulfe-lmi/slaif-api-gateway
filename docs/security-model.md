@@ -1550,6 +1550,54 @@ stale refusal on membership/status/configuration drift, per-key
 `update_key_configuration` audits inside ONE caller-owned transaction,
 and whole-operation rollback on any late failure.
 
+### Admin GUI catalog refresh boundary (G15/217)
+
+The admin "Catalog workspace" is a bounded admin surface over the EXISTING
+Core catalog services; it is default-off, feature-local, and performs no
+schema migration or key-policy migration.
+
+- **Custody is file state, opened never created**: the operator-owned
+  `0700` root and EXISTING `0600` seal key live outside the repository
+  source tree and any local PGDATA (configured paths inside those
+  locations are refused). The GUI never creates/repairs paths or keys;
+  missing/unsafe configuration renders useful setup help with zero
+  dispatch, network, or mutation, and cannot take other app routes down.
+- **Secret persistence**: the existing pure known-incoming-secret and
+  credential-shaped identifier guards run BEFORE bounded form values or
+  uploaded bytes reach custody (the raw params of a job record are
+  checked, not only later projections); a refusal stores nothing.
+  Credential-shaped model tokens are withheld from the model pickers.
+- **Uploads**: bounded multipart parsing keeps the strict 8 MiB bundle /
+  32 MiB baseline per-file caps with finite envelope headroom; session
+  authentication (the established NONROTATING read-auth context) is
+  enforced BEFORE any stream parse or file I/O, and fresh CSRF validation
+  gates every job/custody/dispatch effect.
+- **Mutations are gated**: apply and custody cleanup require the EXISTING
+  `superadmin` role (see [Admin Access And
+  Lockout](runbooks/admin-access.md)); inspection, collect, review,
+  verify, export, and proposal generation remain ordinary-admin actions.
+  Apply reuses the session-bound HMAC review intent (bounded TTL, exact
+  run/canonical-plan/target/warning-ack binding, current integrity
+  rechecks) and the Core one-transaction `apply_reviewed_run`; the GUI
+  never re-signs, rewrites, or republishes existing sealed artifacts
+  (NEW-ONLY publication with byte/inode identity).
+- **Background work**: one closed Celery task family with IDs-only broker
+  payloads; job metadata is small local operator-custody state bounded by
+  finite active/retained/bytes/time knobs enforced under concurrency
+  (full capacity refuses explicitly). The proposal worker path is the
+  fixed official-host/path registry over the existing vetted HTTPS
+  transport with streamed per-body/aggregate budgets and identity-only
+  accept encoding; the assisted seam POSTs only the exact pinned
+  `https://api.openai.com/v1/responses` endpoint behind the existing
+  deployment-secret + risk-ack gates.
+- **Privacy**: artifact downloads and status reads use non-rotating
+  authenticated read contexts (no CSRF token churn on polls), bounded
+  anchored reads with closed file-name whitelists, and the safe
+  projection helpers (no raw params, no inline artifact HTML). The run
+  reference reuses the Core run-id grammar (bounded 64 chars) — no extra
+  index or mapping. Generated proposal artifacts are UNSEALED (the UI
+  makes no cryptographic "verified" claim for them).
+
 ## Admin Web Sessions And CSRF
 
 The admin web foundation exposes `/admin/login`, `/admin/logout`, a placeholder

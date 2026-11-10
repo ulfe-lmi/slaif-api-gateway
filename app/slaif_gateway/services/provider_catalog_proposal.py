@@ -16,6 +16,7 @@ import re
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -110,6 +111,7 @@ SUPPORTED_OUTPUT_FILES = (
 PACKAGE_INDEX_FILENAME = "packages/package-index.json"
 PACKAGE_INDEX_MARKDOWN_FILENAME = "packages/package-index.md"
 PROPOSAL_TSV_VALIDATION_ERROR_CODE = "proposal_tsv_validation_failed"
+PROPOSAL_OUTPUT_SIZE_EXCEEDED_CODE = "proposal_output_size_exceeded"
 SUPPORTED_CHAT_PARAMETERS = {
     "tools",
     "tool_choice",
@@ -342,6 +344,17 @@ class ProviderCatalogProposalValidationError(ValueError):
         super().__init__(f"{PROPOSAL_TSV_VALIDATION_ERROR_CODE}: {message}")
 
 
+class ProviderCatalogProposalSizeError(ValueError):
+    """Raised when generated proposal artifacts exceed the ENFORCED byte
+    ceiling bound to the custody admission reservation. The generator
+    stops mid-generation (before further growth) so the reservation is a
+    real enforced ceiling, not an estimate; the caller retracts the
+    partial output so no over-ceiling artifact is ever left behind."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(f"{PROPOSAL_OUTPUT_SIZE_EXCEEDED_CODE}: {message}")
+
+
 @dataclass(frozen=True, slots=True)
 class _FetchedSource:
     provider: ProviderName
@@ -384,6 +397,57 @@ class _OpenAIModelRecord:
     warnings: tuple[str, ...] = ()
 
 
+class _ProposalOutputBudget:
+    """Small BEFORE-GROWTH write-admission budget for ONE proposal
+    generation. ``cap`` is the enforced ceiling (the custody admission
+    reservation). ``committed`` is a CONSERVATIVE per-generation
+    admission counter: each payload's FULL size is charged BEFORE its
+    file is written, and is NEVER refunded on a partial/failed/overwrite
+    attempt (a source-details helper may catch a write error and continue,
+    so successful-write-only charging would under-count). Admission is
+    O(1) per write (no full-tree rescan): a payload is admitted only if
+    committed + size <= cap, so an over-ceiling payload is refused and
+    never written. The ACTUAL at-rest bytes are measured separately by
+    the custody gate (``account_proposal_output``); this budget only
+    bounds growth before it happens."""
+
+    def __init__(self, cap: int) -> None:
+        self.cap = int(cap)
+        self.committed = 0
+
+    def admit(self, size: int) -> None:
+        if self.committed + int(size) > self.cap:
+            raise ProviderCatalogProposalSizeError(
+                f"provider catalog proposal write of {size} bytes would "
+                f"exceed its enforced byte ceiling (committed {self.committed} "
+                f"+ {size} > {self.cap} bytes)"
+            )
+        self.committed += int(size)  # charge BEFORE the write; no refund
+
+
+# Default-optional injected generation budget (ContextVar, so every write
+# in the current generation task routes through the same O(1) admission
+# without threading the object through every fetch/write signature). The
+# default None leaves CLI behavior unchanged (the CLI composes this
+# directly and reserves no custody bytes).
+_PROPOSAL_OUTPUT_BUDGET: ContextVar[_ProposalOutputBudget | None] = ContextVar(
+    "slaif_proposal_output_budget", default=None
+)
+
+
+def _emit(path: Path, data: bytes) -> None:
+    """Admit-then-write the encoded payload for the active generation
+    budget, THEN write. ``admit`` runs BEFORE any open/truncate/write and
+    charges the full size with NO refund, so an over-ceiling payload is
+    refused and never written, and a caught/partial/failed write still
+    conservatively consumes the budget. A None budget (CLI) writes
+    freely."""
+    budget = _PROPOSAL_OUTPUT_BUDGET.get()
+    if budget is not None:
+        budget.admit(len(data))
+    path.write_bytes(data)
+
+
 async def generate_provider_catalog_proposal(
     *,
     provider_scope: ProviderName | Literal["all"],
@@ -408,6 +472,7 @@ async def generate_provider_catalog_proposal(
     include_ambiguous_capabilities: bool = False,
     http_client: httpx.AsyncClient | None = None,
     now: datetime | None = None,
+    max_output_bytes: int | None = None,
 ) -> ProviderCatalogProposalResult:
     """Generate proposal artifacts without mutating local metadata."""
 
@@ -443,6 +508,12 @@ async def generate_provider_catalog_proposal(
     route_candidates: list[ProviderCatalogRouteCandidate] = []
     comparison_rows: list[ProviderCatalogModelStatus] = []
 
+    budget = (
+        _ProposalOutputBudget(max_output_bytes)
+        if max_output_bytes is not None
+        else None
+    )
+    budget_token = _PROPOSAL_OUTPUT_BUDGET.set(budget)
     try:
         for provider in providers:
             if provider == OPENROUTER_PROVIDER:
@@ -471,6 +542,7 @@ async def generate_provider_catalog_proposal(
                     source_methods=source_method_values,
                     include_api_models=include_api_models,
                     max_web_calls=max_web_calls,
+                    max_models=max_models,
                     save_source_snapshots=save_source_snapshots,
                     source_dir=source_dir,
                     acknowledge_assisted_proposal_risk=acknowledge_assisted_proposal_risk,
@@ -533,7 +605,8 @@ async def generate_provider_catalog_proposal(
         )
         _write_route_tsv(routes_path, exported_route_candidates, ordinary_chat_only=ordinary_chat_only)
         _write_pricing_tsv(pricing_path, exported_pricing_candidates)
-        report_path.write_text(
+        _emit(
+            report_path,
             _render_report(
                 providers=providers,
                 comparison_rows=comparison_rows,
@@ -544,8 +617,7 @@ async def generate_provider_catalog_proposal(
                 exported_pricing_candidates=exported_pricing_candidates,
                 paired_ready_only=paired_ready_only,
                 ordinary_chat_only=ordinary_chat_only,
-            ),
-            encoding="utf-8",
+            ).encode("utf-8"),
         )
         _validate_generated_route_tsv(routes_path, exported_route_candidates)
         _validate_generated_pricing_tsv(pricing_path, exported_pricing_candidates)
@@ -599,6 +671,7 @@ async def generate_provider_catalog_proposal(
             package_names=normalized_package_names,
         )
     finally:
+        _PROPOSAL_OUTPUT_BUDGET.reset(budget_token)
         if owns_client:
             await client.aclose()
 
@@ -869,6 +942,7 @@ async def _propose_openai(
     source_methods: tuple[ProposalSourceMethod, ...],
     include_api_models: bool,
     max_web_calls: int,
+    max_models: int,
     save_source_snapshots: bool,
     source_dir: Path,
     acknowledge_assisted_proposal_risk: bool,
@@ -980,13 +1054,34 @@ async def _propose_openai(
             for model_id in api_model_ids
             if _model_allowed(model_id, include_models=include_models, exclude_models=exclude_models)
         }
+    # Honor the SAME public max_models cap OpenRouter uses: after the
+    # include/exclude filtering, take the first ``max_models`` of the
+    # sorted eligible ids (deterministic). The cap is the operator's
+    # explicit finite choice; the omitted scope is reported honestly in
+    # the warnings (count + which ids were dropped), never silently.
+    eligible_model_ids = sorted(all_model_ids)
+    omitted_model_ids = eligible_model_ids[max_models:]
+    eligible_model_ids = eligible_model_ids[:max_models]
+    if omitted_model_ids:
+        warnings.append(
+            ProviderCatalogWarning(
+                code="model_cap_applied",
+                message=(
+                    f"max_models={max_models} kept {len(eligible_model_ids)} "
+                    f"eligible model(s) and omitted {len(omitted_model_ids)} "
+                    f"more (e.g. {', '.join(omitted_model_ids[:5])}"
+                    f"{'...' if len(omitted_model_ids) > 5 else ''})"
+                ),
+                provider=OPENAI_PROVIDER,
+            )
+        )
     pricing_by_model = _group_openai_pricing_records(pricing_records)
     model_candidates: list[ProviderCatalogModelCandidate] = []
     pricing_candidates: list[ProviderCatalogPricingCandidate] = []
     route_candidates: list[ProviderCatalogRouteCandidate] = []
     comparison_rows: list[ProviderCatalogModelStatus] = []
 
-    for model_id in sorted(all_model_ids):
+    for model_id in eligible_model_ids:
         docs_model = model_records.get(model_id)
         doc_prices = pricing_by_model.get(model_id, ())
         selected_doc_pricing = _select_openai_text_pricing_record(doc_prices)
@@ -1459,7 +1554,7 @@ def _save_source_snapshot(
 ) -> str:
     filename = f"{provider}-{source_type}.{extension}"
     path = source_dir / filename
-    path.write_text(content, encoding="utf-8")
+    _emit(path, content.encode("utf-8"))
     return str(path)
 
 
@@ -2801,7 +2896,8 @@ def _write_openrouter_package(
         "file_input_rows": _count_capability(routes, CHAT_CAPABILITY_FILE_INPUTS),
     }
     _write_json(manifest_path, manifest)
-    review_path.write_text(
+    _emit(
+        review_path,
         _render_package_model_review(
             package_name=package_name,
             endpoint=endpoint,
@@ -2810,10 +2906,10 @@ def _write_openrouter_package(
             model_by_id=model_by_id,
             recommendation=recommendation,
             safety_mode=safety_mode,
-        ),
-        encoding="utf-8",
+        ).encode("utf-8"),
     )
-    report_path.write_text(
+    _emit(
+        report_path,
         _render_package_report(
             package_name=package_name,
             endpoint=endpoint,
@@ -2825,8 +2921,7 @@ def _write_openrouter_package(
             excluded_counts=excluded_counts,
             recommendation=recommendation,
             safety_mode=safety_mode,
-        ),
-        encoding="utf-8",
+        ).encode("utf-8"),
     )
     return ProviderCatalogPackageResult(
         package_name=package_name,
@@ -3153,7 +3248,7 @@ def _write_package_indexes(
                 "",
             ]
         )
-    package_index_markdown_path.write_text("\n".join(lines), encoding="utf-8")
+    _emit(package_index_markdown_path, "\n".join(lines).encode("utf-8"))
 
 
 def _package_capability_badges(route: ProviderCatalogRouteCandidate) -> list[str]:
@@ -3226,8 +3321,8 @@ def _write_route_tsv(
         "capabilities",
         "notes",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+    with StringIO() as buffer:
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
         for row in rows:
             if not row.ready_for_import:
@@ -3251,6 +3346,8 @@ def _write_route_tsv(
                     "notes": row.notes,
                 }
             )
+        data = buffer.getvalue().encode("utf-8")
+    _emit(path, data)
 
 
 def _write_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidate]) -> None:
@@ -3270,8 +3367,8 @@ def _write_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidat
         "pricing_metadata",
         "notes",
     ]
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter="\t")
+    with StringIO() as buffer:
+        writer = csv.DictWriter(buffer, fieldnames=fieldnames, delimiter="\t")
         writer.writeheader()
         for row in rows:
             if not row.ready_for_import:
@@ -3294,6 +3391,8 @@ def _write_pricing_tsv(path: Path, rows: Sequence[ProviderCatalogPricingCandidat
                     "notes": row.notes,
                 }
             )
+        data = buffer.getvalue().encode("utf-8")
+    _emit(path, data)
 
 
 def _validate_generated_route_tsv(
@@ -3536,7 +3635,8 @@ def _render_report(
 
 
 def _write_json(path: Path, payload: Mapping[str, object]) -> None:
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    data = json.dumps(payload, indent=2, sort_keys=True).encode("utf-8")
+    _emit(path, data)
 
 
 def _jsonify_dataclass(value: object) -> object:

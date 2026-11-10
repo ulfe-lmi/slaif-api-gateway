@@ -1770,3 +1770,98 @@ source, dependency, schema, or lockfile change. No mocked/native
 result is presented as installed-qualification: the final 219
 installed whole-GUI gate remains open, and no live-provider or
 production claim is made.
+
+## 217-a GUI official catalog proposals + sealed catalog-refresh workflow (objective 217, new PR, 2026-11-10)
+
+### GUI-to-CLI mapping
+
+- `provider-catalog propose openrouter|openai|all` (closed
+  `chat_completions`/`responses` endpoint scopes, closed package presets,
+  docs/API/OpenAI-only-assisted sources, finite caps) -> **Catalog
+  workspace > Proposals** queued job (same service, IDs-only broker
+  payload, synthetic official-source bytes ONLY at the labeled
+  `VettedHTTPTransport` seam in qualification). The public `max_models`
+  cap is now honored for OpenAI as well (after include/exclude
+  filtering) — the one intentional shared behavior change, disclosed in
+  the CLI and proposal docs.
+- `slaif-catalog-refresh` / `catalog-refresh collect` -> **Collect**
+  (bootstrap vs refresh; closed providers; the NEW closed
+  `catalog_upstream` upstream-ID record choice replaces free text for
+  explicit known models; live read-only DB or uploaded exported
+  baseline). The CLI delegates backwards-compatibly to the same shared
+  composition.
+- `catalog-refresh review <bundle> [...]` -> **Review supplied bundle**
+  (independent supplied RefreshBundle; publishes under its SUPPLIED run
+  id NEW-ONLY; same-id re-review refuses with original bytes/inode
+  unchanged).
+- `catalog-refresh verify` / `status` -> sealed-run detail verify +
+  **apply status** (authoritative `apply_status` records; committed
+  repeat = `already_committed` with no duplicate rows; unconfirmed only
+  until authoritative status resolves).
+- `catalog-refresh export-baseline` -> **Export baseline** queued job.
+- `catalog-refresh apply` -> reviewed **apply**: explicit
+  confirm-and-apply with bounded reason, server-derived actor, FRESH
+  EXISTING superadmin gate, session-bound HMAC review intent, Core
+  one-transaction `apply_reviewed_run`.
+- `catalog-refresh` run root/seal key -> `CATALOG_REFRESH_ROOT` (0700,
+  opened never created) + `CATALOG_REFRESH_SEAL_KEY` (existing 0600),
+  shared api/worker mount; finite knobs (active 1 / retained 20 / 1 GiB /
+  300 s) enforced under concurrency.
+
+### Laws preserved
+
+No schema migration, no key-policy migration, no new dependency, no new
+request-policy/accounting change. Sealed run ids reuse the Core run-id
+grammar (`^[a-z0-9][a-z0-9-]{0,63}$`) — no browser-UUID mapping/index.
+NEW-ONLY publication with byte/inode identity; the GUI never re-signs or
+rewrites existing artifacts. Apply is never a cancelable queued job;
+cancellation is read-only work (queued cancel terminates terminally and
+can never execute on delayed delivery). Job acknowledgements and
+"Refresh status" navigation bind to the EXACT server-created job id; an
+explicit unknown/deleted/invalid/foreign-family id is refused, never
+substituted by the newest job (absent param = newest-job view).
+Credential-shaped values and known-incoming secrets are refused BEFORE
+custody persistence; artifact/status reads are non-rotating
+authenticated contexts.
+
+### Evidence (217-a; scopes stated exactly)
+
+- Focused unit module `tests/unit/test_admin_catalog_refresh_217.py`:
+  70 PASS / 0 fail (junit-217a-unit-binding.xml, 2026-11-10T10:32:57Z)
+  — synthetic custody/tmp, labeled MockTransport seams, NO
+  network/DB/broker; earlier accepted receipts reused unchanged:
+  279 PASS (junit-217a-phase1-8files.xml), 24 PASS (proposal-writers),
+  54 PASS (unit-gui11), 67 PASS (unit-packages), 46 PASS (earlier unit
+  slice), 67/78 PASS (record-choice + catalog unit modules after the
+  `catalog_upstream` kind).
+- Native owned-PostgreSQL real-HTTP module
+  `tests/integration/test_admin_catalog_refresh_217_postgres.py` (real
+  FastAPI/TestClient, real CSRF/session auth, real owned Redis broker,
+  real disposable Celery application worker, SYNTHETIC official-source
+  bytes at the labeled seam, NO upstream network): 18 PASS / 0 fail /
+  0 error / 0 skip, EXIT=0 (junit-217a-int-binding.xml,
+  2026-11-10T10:40:16Z), independently re-verified by root at
+  10:43:15Z (junit-root-int-binding.xml, SHA256
+  0a855d3340736912ebe3b18147be94d94ecf4f951bdbb74c14499be7a8fdf4d8).
+  Covers setup-ready/ordinary-app usability, queued collect/review/
+  proposal/export real-worker smokes, same-id refusal, two-step
+  superadmin apply commit + idempotent repeat with exact durable
+  created-counts and audit-row assertions, missing-confirm/tampered/
+  wrong-session/expired/run-binding refusals, ordinary-admin refusal,
+  download-then-same-page apply, secret canaries (full responses,
+  custody, logs, IDs-only broker), dashboard-off guard, feature-off
+  fail-closed, and the exact-job result-binding case.
+- Playwright module `tests/browser/test_admin_catalog_refresh_217.py`
+  (real Chromium over the real app + owned PG + owned Redis + real
+  worker): 7 PASS / 0 fail (junit-217a-browser10.xml,
+  2026-11-10T10:42:47Z) — login, index ready, collect bootstrap sealed
+  run rendering (canonical state/target/counts/prices/plan projection),
+  reviewed apply commits + status with durable outcome fields,
+  proposal-to-import-preview, no-JS export, 420 px narrow loop over
+  every page. Desktop/narrow screenshots under `/tmp/slaif217/`
+  (root-reviewed; index/run layout frozen).
+- The final 219 installed whole-GUI gate remains open; no
+  live-provider, production, or installed-qualification claim follows
+  from any result above. The USD/EUR per-million dual-label currency
+  decision remains a pending product choice (default USD, no
+  conversion implemented).

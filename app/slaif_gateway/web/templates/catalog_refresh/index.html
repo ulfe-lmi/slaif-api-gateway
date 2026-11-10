@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+
+{% block title %}Catalog Refresh{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide catalog-index" aria-labelledby="catalog-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Operations</p>
+      <h1 id="catalog-heading">Catalog refresh</h1>
+      <p class="muted">
+        Official provider-catalog proposals and the catalog-refresh workflow. Background work is
+        read-only and bounded: review collected changes, then apply explicitly (superadmin).
+      </p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations">Operations</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if action_message %}
+  <div class="admin-flash" role="status" aria-live="polite">
+    <strong>{{ 'Refused:' if action_is_error else 'Done:' }}</strong> {{ action_message }}
+  </div>
+  {% endif %}
+
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Setup status</h2>
+      {% if setup.state == 'ready' %}
+      <p class="dash-group-intro">
+        Operator storage is <strong>ready</strong>. Storage and the seal key live outside the
+        repository and database; the console opens existing material only (never creates or
+        repairs it).
+      </p>
+      <ul>
+        <li><a href="/admin/operations/catalog/proposals">Provider-catalog proposals</a>
+          <p>Generate safe route/pricing/FX proposal artifacts from official sources (no automatic import).</p></li>
+        <li><a href="/admin/operations/catalog/collect">Collect (bootstrap or refresh)</a>
+          <p>Live official-source collection into one sealed run, with a live-DB or uploaded exported baseline.</p></li>
+        <li><a href="/admin/operations/catalog/review">Review supplied bundle</a>
+          <p>Seal and review one operator-supplied bundle (plus optional baseline) offline.</p></li>
+        <li><a href="/admin/operations/catalog/export-baseline">Export baseline</a>
+          <p>Read-only consistent allowlisted baseline document from the deployment database.</p></li>
+      </ul>
+      {% elif setup.state == 'disabled' %}
+      <div class="admin-flash" role="status">
+        <strong>Unavailable:</strong>
+        {% for line in setup.help_lines %}<p>{{ line }}</p>{% endfor %}
+        <p>No catalog work is dispatched in this state (no network, no jobs, no mutation).</p>
+      </div>
+      {% else %}
+      <div class="admin-flash" role="status">
+        <strong>Unavailable:</strong>
+        {% for line in setup.help_lines %}<p>{{ line }}</p>{% endfor %}
+        <p>Catalog actions fail closed until the setup is complete; unrelated app routes stay usable.</p>
+      </div>
+      {% endif %}
+    </div>
+
+    {% if usage %}
+    <div class="dash-group">
+      <h2>Storage</h2>
+      <p class="dash-group-intro">
+        Accounted bytes and reservations (runs, uploads, job records, nested packages).
+        Reservations are held by admitted jobs.
+      </p>
+      <dl>
+        <dt>Retained artifacts</dt><dd>{{ usage.artifacts | num }} / {{ usage.max_retained_runs | num }}</dd>
+        <dt>Job records</dt><dd>{{ usage.records | num }}</dd>
+        <dt>Active jobs</dt><dd>{{ usage.active | num }} / {{ usage.max_active_jobs | num }}</dd>
+        <dt>Storage used (actual + reserved)</dt><dd>{{ (usage.total_bytes + usage.reserved_bytes) | num }} of {{ usage.max_total_bytes | num }}</dd>
+        <dt>Job time budget</dt><dd>{{ usage.read_only_timeout_seconds | num }} seconds per job</dd>
+      </dl>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="dash-group catalog-wide">
+    <h2>Background jobs</h2>
+    <p class="dash-group-intro">
+      Most recent jobs (bounded view — not a completeness claim). Broker acknowledgement is not
+      completion; queued work runs when a worker claims it.
+    </p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Catalog refresh background jobs">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Job</th>
+            <th scope="col">Family</th>
+            <th scope="col">Status</th>
+            <th scope="col" class="nowrap" data-sort-type="datetime">Updated (UTC)</th>
+            <th scope="col">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for job in jobs %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td><code>{{ job.job_id[:12] }}…</code>{% if job.run_id %}<br><a href="/admin/operations/catalog/runs/{{ job.run_id }}/"><code>{{ job.run_id[:24] }}…</code></a>{% endif %}{% if job.artifact_name %}<br><a href="/admin/operations/catalog/jobs/{{ job.job_id }}/artifact/{{ job.artifact_name }}">artifact</a>{% endif %}</td>
+            <td>{{ job.family }}</td>
+            <td>
+              {{ job.status }}{% if job.cancel_requested %} (cancel requested){% endif %}
+              {% if job.error_code %}<br><code class="small">{{ job.error_code }}</code>{% endif %}
+            </td>
+            <td class="nowrap" data-sort-value="{{ job.updated_at }}">{{ job.updated_at }}</td>
+            <td class="nowrap">
+              {% if job.status in ('queued', 'running') %}
+              <form method="post" action="/admin/operations/catalog/jobs/{{ job.job_id }}/cancel" class="inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">Cancel</button>
+              </form>
+              {% endif %}
+              {% if job.status in ('ready', 'warnings', 'blocked', 'failed', 'canceled', 'unavailable', 'unconfirmed') and admin.role == 'superadmin' %}
+              <form method="post" action="/admin/operations/catalog/jobs/{{ job.job_id }}/remove" class="inline-form" onsubmit="return confirm('Remove this finished job record?');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">Remove</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr data-no-sort><td colspan="6" class="empty-state">No background jobs in this bounded view (not a completeness claim).</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="dash-group catalog-wide">
+    <h2>Sealed runs</h2>
+    <p class="dash-group-intro">
+      Published runs (bounded view — not a completeness claim). Open one to review, verify,
+      download artifacts, or prepare a reviewed apply (superadmin).
+    </p>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Sealed catalog refresh runs">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Run</th>
+            <th scope="col">State</th>
+            <th scope="col" class="nowrap" data-sort-type="datetime">Generated (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in runs %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td><a href="/admin/operations/catalog/runs/{{ run.run_id }}/"><code>{{ run.run_id[:40] }}{% if run.run_id | length > 40 %}…{% endif %}</code></a></td>
+            <td>{{ run.state or 'unreadable' }}</td>
+            <td class="nowrap" data-sort-value="{{ run.generated_at or '' }}">{{ run.generated_at or 'n/a' }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort><td colspan="4" class="empty-state">No published runs in this bounded view (not a completeness claim).</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}

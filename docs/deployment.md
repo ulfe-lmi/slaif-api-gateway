@@ -403,8 +403,10 @@ The `scheduler` service runs:
 celery -A slaif_gateway.workers.celery_app:celery_app beat --loglevel=${CELERY_LOG_LEVEL:-INFO}
 ```
 
-The worker handles explicit key email delivery tasks. Celery payloads carry IDs
-only, never plaintext gateway keys or email bodies.
+The worker handles explicit key email delivery tasks and — when the optional
+catalog workspace is enabled — the bounded read-only catalog refresh/proposal
+job family. Celery payloads carry IDs only, never plaintext gateway keys or
+email bodies.
 
 Scheduled reconciliation is disabled by default. Enabling
 `ENABLE_SCHEDULED_RECONCILIATION=true` schedules safe backlog inspection only.
@@ -424,6 +426,38 @@ usage-ledger IDs. Treat the webhook URL as a secret if it contains tokens.
 Operational procedures for stale reservations and provider-completed recovery
 are in [`runbooks/stale-reservation-reconciliation.md`](runbooks/stale-reservation-reconciliation.md)
 and [`runbooks/provider-completed-reconciliation.md`](runbooks/provider-completed-reconciliation.md).
+
+## Catalog Refresh Custody (Optional, Default Off)
+
+The admin GUI catalog workspace (G15, see
+[Catalog Refresh](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a)
+and [Configuration](configuration.md#catalog-refresh-admin-gui-217-a)) stores
+its job records, uploads, and sealed runs in operator custody — files only,
+never PostgreSQL. Enabling it requires:
+
+1. **Shared custody volume**: `docker-compose.yml` already mounts the named
+   volume `catalog-refresh-data` into BOTH the `api` and `worker` services at
+   `/var/slaif/catalog-refresh`, so queued jobs (worker) and page reads (API)
+   see one state tree. The volume contents must be owned by the container
+   service user with mode `0700`. The app opens this root only; it never
+   creates, repairs, or re-chowns it.
+2. **OFFLINE seal key**: the operator generates the 64-hex seal key OUTSIDE
+   the container (or on a host-managed mount) with mode `0600`, owned by the
+   same service user, and points `CATALOG_REFRESH_SEAL_KEY` at it. The GUI
+   never creates or replaces the key.
+3. **Location rule**: the root and key must be OUTSIDE the repository
+   source/package tree and outside any local PostgreSQL data directory;
+   configured paths inside those locations are refused.
+4. **Restart scope**: after changing any `CATALOG_REFRESH_*` value,
+   recreate/restart the `api` and ALL `worker` services (they read the
+   settings at startup). A reverse-proxy change (the scoped nginx
+   `client_max_body_size 48m` for the bounded 8 MiB bundle / 32 MiB baseline
+   uploads) only affects new proxy connections.
+5. **Backup/rollback**: custody files are operator state, not database
+   state. Back them up with your normal file-state procedure if the sealed
+   runs matter to you; removing the volume or disabling
+   `CATALOG_REFRESH_GUI_ENABLED` never touches PostgreSQL, and no schema or
+   key-policy migration is performed by this feature.
 
 ## Backups
 

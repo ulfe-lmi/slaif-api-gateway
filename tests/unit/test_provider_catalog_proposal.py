@@ -896,3 +896,70 @@ def test_provider_catalog_skill_exists_and_is_repo_local() -> None:
     assert skill_path.exists()
     assert skill_path.read_text(encoding="utf-8").lower().count("proposal-only") >= 1
     assert not Path(".codex/skills/provider-catalog-proposal/SKILL.md").exists()
+
+
+OPENAI_TWO_CHAT_MODELS_DOC = """
+## gpt-5.5
+Endpoints: /v1/chat/completions
+Features: streaming
+Context length: 400000
+Max output tokens: 16384
+
+## gpt-5.6
+Endpoints: /v1/chat/completions
+Features: streaming
+Context length: 256000
+Max output tokens: 8192
+"""
+
+
+@pytest.mark.asyncio
+async def test_generate_openai_honors_max_models_cap_with_honest_omission(
+    tmp_path: Path,
+    respx_mock,
+) -> None:
+    """The EXISTING public max_models cap is honored for OpenAI too
+    (same-service argument, applied AFTER the include/exclude filtering):
+    cap 1 of two eligible models keeps the deterministic sorted-first id
+    and reports the omitted scope honestly in the warnings. A within-cap
+    catalog keeps its current default output (no cap warning)."""
+    respx_mock.get(OPENAI_PRICING_DOCS_URL).mock(
+        return_value=httpx.Response(200, text="Pricing\n")
+    )
+    respx_mock.get(OPENAI_MODELS_DOCS_URL).mock(
+        return_value=httpx.Response(200, text=OPENAI_TWO_CHAT_MODELS_DOC)
+    )
+    result = await generate_provider_catalog_proposal(
+        provider_scope="openai",
+        output_dir=tmp_path / "capped",
+        source_methods=("docs",),
+        endpoint_scopes=("chat_completions",),
+        max_models=1,
+    )
+    normalized = json.loads(result.normalized_path.read_text(encoding="utf-8"))
+    kept = {item["model_id"] for item in normalized["models"]}
+    assert kept == {"gpt-5.5"}  # deterministic sorted-first within the cap
+    warnings_payload = json.loads(result.warnings_path.read_text(encoding="utf-8"))
+    cap_warnings = [
+        item for item in warnings_payload["warnings"] if item["code"] == "model_cap_applied"
+    ]
+    assert len(cap_warnings) == 1
+    assert "omitted 1" in cap_warnings[0]["message"]
+    assert "gpt-5.6" in cap_warnings[0]["message"]
+    assert "max_models=1" in cap_warnings[0]["message"]
+
+    # legacy regression: within the cap, the default output is unchanged
+    # (both models, no cap warning).
+    result_full = await generate_provider_catalog_proposal(
+        provider_scope="openai",
+        output_dir=tmp_path / "within",
+        source_methods=("docs",),
+        endpoint_scopes=("chat_completions",),
+    )
+    normalized_full = json.loads(result_full.normalized_path.read_text(encoding="utf-8"))
+    kept_full = {item["model_id"] for item in normalized_full["models"]}
+    assert kept_full == {"gpt-5.5", "gpt-5.6"}
+    warnings_full = json.loads(result_full.warnings_path.read_text(encoding="utf-8"))
+    assert not any(
+        item["code"] == "model_cap_applied" for item in warnings_full["warnings"]
+    )

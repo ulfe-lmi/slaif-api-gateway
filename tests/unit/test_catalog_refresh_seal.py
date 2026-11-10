@@ -379,12 +379,14 @@ def test_malformed_manifest_shape_is_refused(sealed_run: tuple[Path, Path]) -> N
 
 def test_review_failure_leaves_no_partial_run(tmp_path: Path, monkeypatch) -> None:
     """A failure during staging/publish must leave nothing at the final path."""
-    import slaif_gateway.cli.catalog_refresh as cr
+    # 217-a (G15): the sealing step executes inside the shared application
+    # composition after extraction, so the fault seam relocates with it.
+    import slaif_gateway.services.catalog_refresh.application as app_comp
 
     def boom(_run_dir, _key):
         raise CatalogRefreshSealError("simulated seal failure")
 
-    monkeypatch.setattr(cr, "seal_run", boom)
+    monkeypatch.setattr(app_comp, "seal_run", boom)
     result = runner.invoke(
         app,
         [

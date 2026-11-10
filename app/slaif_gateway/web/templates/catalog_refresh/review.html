@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Review Supplied Bundle{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="catalog-review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Catalog Refresh</p>
+      <h1 id="catalog-review-heading">Review a supplied bundle</h1>
+      <p class="muted">
+        Seal and review one operator-supplied bundle offline (acquisition label: offline-supplied).
+        No live retrieval happens; the deterministic validation, readiness, and plan are produced
+        from the supplied bytes plus the baseline you provide.
+      </p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations/catalog/">Catalog refresh</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if errors.message %}
+  <div class="admin-flash" role="alert"><strong>Refused:</strong> {{ errors.message }}</div>
+  {% endif %}
+  {% if dispatched is not none %}
+  <div class="admin-flash" role="status">
+    <strong>Queued.</strong> {{ dispatch_note }}
+    {% if last_job %}Job <code>{{ last_job.job_id[:12] }}…</code> status: {{ last_job.status }}.{% endif %}
+    This page does not reload automatically; use the Refresh status link below for the
+    latest job state.
+  </div>
+  {% endif %}
+
+  {% if setup.state != 'ready' %}
+  <div class="admin-flash" role="status">
+    <strong>Unavailable:</strong>
+    {% for line in setup.help_lines %}<p>{{ line }}</p>{% endfor %}
+  </div>
+  {% else %}
+  <form method="post" action="/admin/operations/catalog/review/submit" enctype="multipart/form-data" id="catalog-review-form" class="action-panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="filter-bar">
+      <div class="field">
+        <label for="review-bundle">Sealed bundle (required, at most 8 MiB)</label>
+        <input type="file" name="bundle" id="review-bundle" accept="application/json,.json" required aria-describedby="review-bundle-help">
+        <p class="help" id="review-bundle-help">The canonical catalog-refresh bundle file. File NAMES from the browser are untrusted data and are ignored; the stored artifact gets a generated server name.</p>
+      </div>
+      <div class="field">
+        <label for="review-baseline">Exported baseline (optional, at most 32 MiB)</label>
+        <input type="file" name="baseline" id="review-baseline" accept="application/json,.json" aria-describedby="review-baseline-help">
+        <p class="help" id="review-baseline-help">Required when the bundle's baseline mode is exported_file; ignored (honestly) for first_install bundles. For db_snapshot bundles the deployment's configured DATABASE_URL is used lazily.</p>
+      </div>
+      <div class="field">
+        <label class="checkbox-row" for="review-first-install">
+          <input type="checkbox" name="first_install" value="on" id="review-first-install" aria-describedby="review-first-install-help">
+          First install (explicit empty baseline)
+        </label>
+        <p class="help" id="review-first-install-help">Asserts the bundle targets a first install into an empty catalog. Must match the bundle's declared baseline mode or the review blocks.</p>
+      </div>
+    </div>
+    <button type="submit">Seal and review</button>
+  </form>
+  {% endif %}
+
+  {% if job_refusal %}
+  <div class="admin-flash" role="alert"><strong>Job status unavailable:</strong> {{ job_refusal }} <a href="/admin/operations/catalog/review">Show the newest review job</a></div>
+  {% endif %}
+
+  {% if last_job %}
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Last review job</h2>
+      <p>
+        <code>{{ last_job.job_id }}</code> — {{ last_job.status }}
+        {% if last_job.cancel_requested %}(cancel requested){% endif %}
+        {% if last_job.error_code %} — <code>{{ last_job.error_code }}</code>{% endif %}
+        {% if last_job.run_id %} — run <a href="/admin/operations/catalog/runs/{{ last_job.run_id }}/"><code>{{ last_job.run_id[:32] }}…</code></a>{% endif %}
+      </p>
+      {% if last_job.status in ('queued', 'running') %}
+      <p><a href="/admin/operations/catalog/review?job={{ last_job.job_id }}">Refresh status</a> — no automatic reload;
+      the job state is server-side and updates as the worker progresses.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

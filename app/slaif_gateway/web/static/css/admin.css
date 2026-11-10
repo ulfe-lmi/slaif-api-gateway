@@ -811,6 +811,60 @@ button.signout:hover {
   margin: 3px 0 0;
 }
 
+/* Catalog workspace index (217-a): the summary row (setup + storage)
+   uses a two-column grid; jobs and sealed runs are FULL-WIDTH sections
+   below it. Scoped to .catalog-index - every other .dash-groups page
+   keeps the legacy three-column layout. */
+.catalog-index .dash-groups {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.catalog-index .catalog-wide {
+  margin: 0 28px 28px;
+  border-left: 0;
+  padding-left: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 26px;
+}
+
+/* Catalog sealed-run detail (217-a): the same full-width-table principle as
+   the index. Result + actions sit side by side near the outcome at the top;
+   target/baseline + counts/sources use a two-column summary row; warnings,
+   dispositions, price comparisons, the apply-plan projection and artifacts
+   are FULL-WIDTH sections below. Scoped to .catalog-run only. */
+.catalog-run .catalog-run-result {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 30px;
+  margin: 28px;
+  border-top: 1px solid var(--border);
+  padding-top: 26px;
+}
+
+.catalog-run .dash-groups {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.catalog-run .catalog-wide {
+  margin: 0 28px 28px;
+  border-left: 0;
+  padding-left: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 26px;
+}
+
+.catalog-run code {
+  overflow-wrap: anywhere;
+}
+
+/* Catalog proposals (217-a): the "Last proposal job" result block carries
+   the generated artifacts, import-preview bridges, and generated packages -
+   it is a SINGLE result section and must be FULL-WIDTH, not one of three
+   empty grid columns. Scoped to .catalog-proposals only. */
+.catalog-proposals .dash-groups {
+  display: block;
+}
+
 .wide {
   width: min(100%, 92.5rem);
 }
@@ -970,6 +1024,26 @@ td a {
   margin: 0 28px 28px;
   border-top: 1px solid var(--border);
   padding-top: 24px;
+}
+
+/* Catalog forms (217-a) must contain their content at narrow viewports:
+   a browser-default file input has a large intrinsic width that, left at
+   width:auto, forces the fieldset's min-content width past a 420px
+   viewport. Scoped to the .catalog-form wrapper (catalog collect/review)
+   ONLY - the legacy .action-panel rules are untouched. Cap the file
+   control to its cell and let the flex row/fieldset shrink. */
+.catalog-form fieldset {
+  min-width: 0;
+}
+
+.catalog-form .checkbox-row {
+  min-width: 0;
+}
+
+.catalog-form .checkbox-row input[type="file"] {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .summary-grid {
@@ -1213,6 +1287,17 @@ dd {
   .dash-groups {
     grid-template-columns: 1fr;
     gap: 24px;
+  }
+
+  .catalog-run .catalog-run-result {
+    grid-template-columns: 1fr;
+  }
+
+  .catalog-run .catalog-run-result .dash-group + .dash-group {
+    border-left: 0;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    padding-top: 24px;
   }
 
   .dash-group + .dash-group {

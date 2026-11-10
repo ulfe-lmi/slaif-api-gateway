@@ -695,6 +695,9 @@ configured upstream `/models` endpoint. Imports and proposal previews are local
 metadata workflows unless their dedicated documentation states otherwise.
 Pricing and FX rows are operator-reviewed local accounting inputs, not provider
 invoice attestations.
+`provider-catalog propose`'s `--max-models` is a finite PER-PROVIDER cap
+honored for both supported providers after include/exclude filtering (see
+[Provider catalog proposals](provider-catalog-proposals.md)).
 
 ### Provider and route configuration parity (`providers update`, `routes update`, objective 199)
 
@@ -1223,6 +1226,16 @@ default. Full semantics, the source registry, policy thresholds, sealing,
 apply ordering, and exit codes live in
 [Catalog refresh (collect, review, and
 verify)](catalog-refresh.md).
+
+The same workflow is also available as the bounded admin GUI "Catalog
+workspace" (217-a, default-off) — see the
+[Admin GUI workspace](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a)
+section. The CLI commands are unchanged and delegate
+backwards-compatibly to the shared collect/review composition the GUI uses;
+the only intentional behavior change shared with the GUI is that
+`provider-catalog propose --max-models` is now honored for the OpenAI
+provider as well (previously only OpenRouter), applied after include/exclude
+filtering.
 
 ```bash
 # ONE refresh, ONE report: the supported administrator entry point.

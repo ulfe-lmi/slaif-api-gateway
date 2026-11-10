@@ -22,6 +22,9 @@ from slaif_gateway.api.admin_record_choices import router as admin_record_choice
 from slaif_gateway.api.admin_accounting_operations import (
     router as admin_accounting_operations_router,
 )
+from slaif_gateway.api.admin_catalog_refresh import (
+    router as admin_catalog_refresh_router,
+)
 from slaif_gateway.api.admin_email_operations import (
     router as admin_email_operations_router,
 )
@@ -104,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # views + dry-run -> signed review -> confirmed apply over the existing
     # Core reconciliation services (one-way helper reuse from admin.py).
     app.include_router(admin_accounting_operations_router)
+    app.include_router(admin_catalog_refresh_router)
     # 208-a: purpose-bound reviewed key-clone routes (one-way helper reuse;
     # admin.py does not import this router).
     app.include_router(admin_key_clone_router)
