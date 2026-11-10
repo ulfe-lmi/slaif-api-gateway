@@ -464,50 +464,53 @@ never PostgreSQL. Enabling it requires:
 
 ### New install / upgrade procedure (copy-ready)
 
-The shipped Docker Compose stack does NOT include an nginx service: the
-reverse proxy is your existing host-level or external Nginx (see
-[Streaming And Nginx](#streaming-and-nginx) for the established
-configuration-test + reload procedure). Steps marked **[manual host]** are
-host/proxy controls you run yourself; they are documented, not automated.
-No new init service, dependency, or production-execution step is
-introduced.
+Two proxy shapes are supported, and the steps distinguish them explicitly:
+the Compose stack ships an OPTIONAL nginx profile (the `nginx` service,
+`profiles: [nginx]`, included in `docker compose up` only when
+`--profile nginx` is passed - it is NOT always-on), while an
+external/host-level Nginx deployment uses your own proxy. Steps marked
+**[manual host]** are host/proxy controls you run yourself; they are
+documented, not automated. No new init service, dependency, or
+production-execution step is introduced.
 
 ```bash
 # 1) [manual host] Dedicated custody ownership + service UID, ONCE before
-#    first use. The api/worker containers run as the non-root `slaif`
-#    user; a fresh named volume is root-owned, so prepare it with a
-#    one-off container that reuses the image's own user (no network):
-docker compose run --rm --entrypoint sh api -c '
-  id &&                                   # note the slaif uid/gid
+#    first use. A fresh named volume is root-owned while the
+#    api/worker/scheduler containers run as the non-root `slaif` user,
+#    so prepare it with a one-off container of the EXISTING api image,
+#    explicitly as root (--user root) and with no dependency services
+#    started (--no-deps); no network is needed. This reports the ACTUAL
+#    service uid/gid from the image (not root's):
+docker compose run --rm --no-deps --user root --entrypoint sh api -c '
+  id -u slaif && id -g slaif &&
   mkdir -p /var/slaif/catalog-refresh &&
-  chown slaif:slaif /var/slaif/catalog-refresh &&
+  chown $(id -u slaif):$(id -g slaif) /var/slaif/catalog-refresh &&
   chmod 0700 /var/slaif/catalog-refresh
 '
 #    If you bind-mount a host directory instead of the named volume in
 #    your own compose override, apply the SAME ownership (the uid/gid
-#    printed above) and mode 0700 to that host path instead.
+#    reported above) and mode 0700 to that host path instead.
 
-# 2) [manual host] The EXISTING 0600 seal key — preserve or create OFFLINE.
-#    PRESERVE an existing key byte-for-byte: it is the identity of every
-#    sealed run, and replacing it makes old runs unverifiable. NEVER print
-#    or paste the key contents. To CREATE one where none exists, either:
-#    a) create it offline with your normal tooling — 64 hex characters
-#       (256 bits), mode 0600, owned by the same uid as the root:
-#         openssl rand -hex 32 > seal.key && chmod 0600 seal.key
-#       (the same contract the shipped CLI's ensure_seal_key implements:
-#       create-if-absent, 0600, never replace), or
-#    b) let the documented CLI bootstrap create it: the first
-#         slaif-catalog-refresh --mode bootstrap --seal-key /var/slaif/catalog-refresh/seal.key
-#       run creates the 0600 key if missing (it then also performs the
-#       live bootstrap collect). The GUI itself NEVER creates, replaces,
-#       or rewrites the key — it only opens the existing one.
-#    Place it under the custody root (or any outside-repo path) and make
-#    it visible to the containers:
-#    named volume:  docker compose run --rm --entrypoint sh api -c '
-#      chown slaif:slaif /var/slaif/catalog-refresh/seal.key &&
-#      chmod 0600 /var/slaif/catalog-refresh/seal.key'
-#    host bind mount: sudo chown <slaif-uid>:<slaif-gid> <host-path>/seal.key
-#                     && sudo chmod 0600 <host-path>/seal.key
+# 2) [manual host] The EXISTING 0600 seal key - preserve or create
+#    OFFLINE. PRESERVE an existing key byte-for-byte: it is the identity
+#    of every sealed run, and replacing it makes old runs unverifiable.
+#    NEVER print or paste the key contents, and never use an
+#    overwrite-style generator (for example `openssl rand -hex 32 >
+#    seal.key`) against a path where a key may already exist. The
+#    OFFLINE create-if-absent step reuses the EXISTING application
+#    function through the same image and the same volume, run as the
+#    service user after step 1: it creates the 0600 key ONLY when
+#    absent, loads and validates an existing key without modifying it
+#    (an invalid existing key is refused, never replaced), prints
+#    nothing, and performs no live collection. The GUI itself NEVER
+#    creates, replaces, or rewrites the key - it only opens the
+#    existing one:
+docker compose run --rm --no-deps --entrypoint sh api -c '
+  python -c "from slaif_gateway.services.catalog_refresh.filesystem import ensure_seal_key; ensure_seal_key(\"/var/slaif/catalog-refresh/seal.key\")"
+'
+#    (If your custody root is a host bind mount, the SAME in-container
+#    command applies; the key ends up 0600, owned by the service uid
+#    reported in step 1.)
 
 # 3) The three GUI settings in .env (see docs/configuration.md):
 #    CATALOG_REFRESH_GUI_ENABLED=true
@@ -519,18 +522,30 @@ docker compose run --rm --entrypoint sh api -c '
 #     CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS keep their defaults unless
 #     you change them deliberately)
 
-# 4) Apply: recreate/restart the API and ALL worker services (settings are
-#    read at startup):
-docker compose up -d --force-recreate api worker
+# 4) Apply: recreate/restart the API and ALL worker services (settings
+#    are read at startup):
+docker compose up -d --force-recreate api worker scheduler
 
 # 5) Proxy (only if your proxy fronts the admin uploads) [manual host]:
-#    update your EXISTING proxy config from deploy/nginx/slaif-api-gateway.conf
-#    (the scoped `location /admin/operations/catalog/ { client_max_body_size
-#    48m; ... }` allowance) — then run the ESTABLISHED procedure from the
-#    Streaming And Nginx section: `nginx -t` and reload (or recreate)
-#    Nginx. Editing the file alone does NOTHING for new connections until
-#    that test + reload/recreate runs; until then uploads still use the
-#    old limit.
+#    a) SHIPPED optional nginx profile (the `nginx` service,
+#       `profiles: [nginx]`, nginx:1.27-alpine, mounting
+#       deploy/nginx/slaif-api-gateway.conf read-only): the scoped
+#       `location /admin/operations/catalog/ { client_max_body_size
+#       48m; ... }` allowance is already in that template. Enable the
+#       profile once with:
+#         docker compose --profile nginx up -d nginx
+#       and, after any template change, config-test + reload (or
+#       recreate) the EXISTING service:
+#         docker compose --profile nginx exec nginx nginx -t \
+#           && docker compose --profile nginx exec nginx nginx -s reload
+#         # or re-read the config from scratch:
+#         docker compose --profile nginx up -d --force-recreate nginx
+#    b) EXTERNAL/host-level Nginx: update your own proxy config from
+#       the same template and run ITS established `nginx -t` +
+#       reload/recreate procedure (see Streaming And Nginx).
+#    Either way, editing the proxy file alone does NOTHING for new
+#    connections until the configuration-test + reload/recreate runs;
+#    until then uploads still use the old limit.
 
 # 6) Verify setup-ready (browser): sign in at /admin and open
 #    Operations -> Catalog workspace. The Setup section must read READY
@@ -539,26 +554,69 @@ docker compose up -d --force-recreate api worker
 #    dispatchable. Optionally queue one read-only Export baseline job and
 #    download the document as an end-to-end check.
 
-# 7) Backup of the SAME seal key + runs (periodic; your normal file-state
-#    procedure) [manual host]:
-tar --sort=name -cf - -C /var/slaif catalog-refresh | gzip \
-  > backup-catalog-refresh-$(date -u +%Y%m%d).tar.gz
-#    The seal key is INSIDE that tree (it is identity, not a recoverable
-#    secret): protect the archive as you protect the key; never print the
-#    key. "Rotating" means generating a NEW key file and re-pointing
-#    CATALOG_REFRESH_SEAL_KEY — old sealed runs remain bound to their
-#    original key.
+# 7) Backup of the SAME seal key + runs (periodic) [manual host]. A named
+#    volume is NOT a host path: /var/slaif exists only inside the
+#    containers, so a host `tar -C /var/slaif ...` cannot reach the
+#    custody - and a `tar | gzip` pipeline can produce an EMPTY archive
+#    that still exits 0. The EXISTING image therefore streams the shared
+#    volume to the host with the stdlib only and NO buffering: the
+#    required inputs are checked first, the archive is written with
+#    tarfile's streaming gzip writer, and any failure exits non-zero.
+#    The key contents are never printed.
+#    For a coherent file-state backup, first quiesce the writers (or use
+#    your established maintenance procedure): `docker compose stop
+#    api worker scheduler` - take the archive - then `docker compose
+#    start api worker scheduler`. Without quiescing, the archive is a
+#    best-effort snapshot, not a transactional backup. The archive
+#    covers the current key + runs tree size (gzip-compressed, so the
+#    file is at most that size).
+#    The archive name is created with mktemp: a NEWLY CREATED private
+#    file (0600), so an earlier backup is never overwritten and the
+#    permissions do not depend on the shell umask:
+archive=$(mktemp "./backup-catalog-refresh-$(date -u +%Y%m%d).tar.gz.XXXXXX") || exit 1
+if docker compose run --rm --no-deps -T --entrypoint sh api -c '
+python - <<PY
+import os, sys, tarfile
+root = "/var/slaif/catalog-refresh"
+seal = os.path.join(root, "seal.key")
+runs = os.path.join(root, "runs")
+if not os.path.isfile(seal):
+    sys.exit("backup refused: seal key missing")
+if os.path.exists(runs) and not os.path.isdir(runs):
+    sys.exit("backup refused: runs path is not a directory")
+with tarfile.open(fileobj=sys.stdout.buffer, mode="w|gz") as t:
+    t.add(seal, arcname="seal.key")
+    if os.path.isdir(runs):
+        t.add(runs, arcname="runs")
+PY
+' > "$archive"; then
+  ls -l "$archive"   # -rw------- (0600) created by mktemp
+else
+  status=$?
+  # Failed run: remove ONLY this owned partial file; never report success.
+  rm -f -- "$archive"
+  exit "$status"
+fi
+#    If your custody root is a host bind mount, you MAY instead archive
+#    that host path directly with your normal file-state tooling - apply
+#    the same checks (non-empty archive containing seal.key + the runs
+#    tree, restrictive archive permissions, non-zero failure
+#    propagation). The seal key is INSIDE that tree (it is identity, not
+#    a recoverable secret): protect the archive as you protect the key;
+#    never print the key. "Rotating" means generating a NEW key file and
+#    re-pointing CATALOG_REFRESH_SEAL_KEY - old sealed runs remain bound
+#    to their original key.
 ```
 
 Upgrade note: upgrading a deployment that predates 217 is an application
 upgrade plus the optional proxy allowance in the SAME maintenance window:
-rebuild/recreate the `api` and ALL `worker` services so the new code and
-settings run, and — only if you proxy admin uploads — add the scoped
-`/admin/operations/catalog/` allowance and run the established
-`nginx -t` + reload procedure from
-[Streaming And Nginx](#streaming-and-nginx). No database migration, no
-schema change, and no key-policy change follow this upgrade; an
-existing-but-disabled deployment gains nothing until step 3/4 above.
+rebuild/recreate `api`, `worker`, and `scheduler` so the new code and
+settings run, and - only if your proxy fronts the admin uploads - add the
+scoped `/admin/operations/catalog/` allowance to the active proxy shape
+and run its established configuration-test + reload/recreate (step 5
+above). No database migration, no schema change, and no key-policy change
+follow this upgrade; an existing-but-disabled deployment gains nothing
+until step 3/4 above.
 
 ## Backups
 
