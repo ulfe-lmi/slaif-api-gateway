@@ -206,28 +206,38 @@ source or model.
   bound). Missing/zero prices stay missing/zero; a positive price that
   would underflow to zero or overflow the import bound refuses the whole
   proposal.
-- The conversion happens BEFORE any artifact is written, so the root
-  JSON/TSV/report and ALL selected package outputs agree. Each converted
-  row keeps the original USD amounts plus the applied FX pair, rate
-  UUID, rate, validity window, and capture time in its metadata; the
-  normalized JSON and source manifest carry the same FX fact, and the
-  report states the applied conversion. The official source unit
+- Each candidate batch (the root output and every selected package) is
+  converted before ITS artifacts are written, and ALL of them use the
+  ONE captured FX fact — so a completed proposal's root JSON/TSV/report
+  and package outputs agree. A failed or partial generation is NOT a
+  complete proposal and must not be imported. Each converted row keeps
+  the original USD amounts plus the applied FX pair, rate UUID, rate,
+  validity window, and capture time in its metadata; the normalized
+  JSON and source manifest carry the same FX fact, and the report
+  states the applied conversion. The official source unit
   (e.g. `usd_per_token`) is never relabeled.
-- Refusal semantics (CLI and GUI): no configured database, or a
-  missing/expired/invalid direct pair, refuses the proposal safely
-  BEFORE any output is written (`proposal_fx_unavailable` /
+- Refusal semantics (CLI and GUI): a missing or not-currently-active
+  configured direct pair (including an unconfigured database) refuses
+  the proposal safely BEFORE generation (`proposal_fx_unavailable` /
   `proposal_fx_rate_missing` in the GUI job; a fixed safe CLI error).
   Prices are NEVER relabeled, and there is no inferred inverse,
-  cross-currency graph, or automatic FX fetch.
+  cross-currency graph, or automatic FX fetch. Other validation or
+  conversion failures (e.g. underflow/overflow) fail the job normally
+  without publishing a complete proposal.
 - The captured rate is FROZEN until the proposal is re-run; re-running
   captures the latest active configured pair at that time. Runtime
   quota/accounting behavior is unchanged by a proposal's output currency.
   This proposal-side USD→target conversion is DISTINCT from the UNCHANGED
-  runtime import requirement that published pricing is native→EUR
-  (`find_latest_rate(base_currency=native, quote_currency=EUR)` at import
-  time; EUR rows are identity): the two use independently configured
-  direct pairs, there is no rate graph, no inferred inverse, and no
-  accounting change.
+  runtime accounting requirement that published pricing resolves to
+  EUR. The existing pricing service captures FX during REQUEST
+  pricing/accounting, not during this proposal import — so: a GBP
+  output needs the configured USD→GBP pair for the proposal
+  conversion, and USING those GBP prices for EUR accounting still needs
+  the configured GBP→EUR pair under the unchanged runtime rules (EUR
+  pricing is identity). Importing prices does not create or infer that
+  second pair. The two surfaces use independently configured direct
+  pairs; there is no rate graph, no inferred inverse, and no accounting
+  change.
 
 This is an intentional correctness fix: before 217-a, a non-USD
 `--currency` relabeled the native USD amounts (the pre-existing
