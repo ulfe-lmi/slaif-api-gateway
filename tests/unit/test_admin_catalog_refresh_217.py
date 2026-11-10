@@ -503,6 +503,48 @@ def test_upload_readback_and_non_served_names(ready_job) -> None:
             custody.read_job_artifact(settings, job_id, bad)
 
 
+def test_job_id_closed_leaf_refuses_caller_shaped_ids(ready_job) -> None:
+    """217-a (CodeQL path-injection fix): the caller job id is a tainted
+    API value. Every custody read/upload/cancel/remove derives the strict
+    single-component leaf BEFORE any open, so path/traversal/foreign ids
+    are refused with job_unknown and valid 32-hex ids keep their exact
+    on-disk name (byte-identical canonical form)."""
+    settings, job_id = ready_job.settings, ready_job.job_id
+    name = custody.store_upload(settings, job_id, "bundle", b"leaf-check")
+    # valid id: the canonical leaf is byte-identical, readback still works
+    assert custody.read_job_artifact(settings, job_id, name) == b"leaf-check"
+    root = Path(settings.CATALOG_REFRESH_ROOT)
+    for bad in ("../jobs", "a" * 33, "A" * 32, job_id + "/..", "../../etc", "x/y"):
+        # read path: refused BEFORE any open
+        with pytest.raises(CustodyJobError) as exc:
+            custody.read_job_artifact(settings, bad, name)
+        assert exc.value.code == "job_unknown"
+        # write path: refused BEFORE any directory/file creation
+        with pytest.raises(CustodyJobError) as exc:
+            custody.store_upload(settings, bad, "bundle", b"p")
+        assert exc.value.code == "job_unknown"
+        # cancel: refused, the real job is untouched
+        with pytest.raises(CustodyJobError) as exc:
+            custody.request_cancel(settings, bad)
+        assert exc.value.code == "job_unknown"
+        # terminal cleanup: refused, custody left in place
+        with pytest.raises(CustodyJobError) as exc:
+            custody.remove_terminal_job(settings, bad)
+        assert exc.value.code == "job_unknown"
+        # existence probe: silent False (no exception)
+        assert custody.upload_exists(settings, bad, name) is False
+        # proposal cleanup: silent no-op (same contract)
+        custody.remove_proposal_dir(settings, bad)
+    # nothing escaped the owned trees: no uploads/jobs dir, and the jobs
+    # tree still holds exactly the one real record; proposals stays empty
+    assert not (root / "uploads" / "jobs").exists()
+    assert {p.name for p in (root / "jobs").iterdir()} == {job_id + ".json"}
+    assert list((root / "proposals").iterdir()) == []
+    # the real job still reads back and is still cancelable
+    assert custody.read_job_artifact(settings, job_id, name) == b"leaf-check"
+    assert custody.request_cancel(settings, job_id) is True
+
+
 # --- 4. admission -------------------------------------------------------------
 
 

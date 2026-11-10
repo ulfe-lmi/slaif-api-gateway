@@ -43,7 +43,9 @@ from slaif_gateway.services.catalog_refresh.validation import (
     validate_bundle,
     validation_json_bytes,
 )
-from slaif_gateway.cli.catalog_refresh import _minimal_blocked_html
+# 217-a: the CLI now delegates to the shared application composition, and
+# the blocked-report renderer lives there (same implementation, new home).
+from slaif_gateway.services.catalog_refresh.application import _minimal_blocked_html
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "catalog_refresh"
 _FIXED_SORT_SCRIPT = (

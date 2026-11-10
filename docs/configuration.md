@@ -1310,10 +1310,21 @@ visible to the API service and every worker (the same mounted volume in
 Docker Compose): read-only jobs execute in the worker while the API reads
 the same custody state. After changing any of these settings,
 recreate/restart the API and worker services; a reverse-proxy change (the
-scoped nginx `client_max_body_size` allowance for the bounded 8 MiB bundle
-/ 32 MiB baseline uploads) only affects new proxy connections. Setup,
-mount, and OFFLINE seal-key creation details are in
-[Catalog Refresh: Admin GUI workspace](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a).
+scoped nginx `client_max_body_size 48m` allowance for the bounded 8 MiB
+bundle / 32 MiB baseline uploads) takes effect for new connections only
+after the established proxy configuration-test + reload/recreate
+procedure ([Deployment: Streaming And
+Nginx](deployment.md#streaming-and-nginx)). Setup, mount, and OFFLINE
+seal-key creation details are in
+[Catalog Refresh: Admin GUI
+workspace](catalog-refresh.md#admin-gui-workspace-g15-delivered-by-217-a).
+
+The copy-ready new-install/upgrade procedure (dedicated volume ownership +
+service UID, preserving or OFFLINE-creating the existing 0600 seal key
+without printing/replacing it, the three GUI settings, API + all-worker
+restart, the established proxy `nginx -t` + reload, setup-ready
+verification, and same-key + runs backup) is in
+[Deployment: Catalog Refresh Custody](deployment.md#catalog-refresh-custody-optional-default-off).
 
 Optional bounded research-assisted proposal/collect configuration
 (`CATALOG_REFRESH_RESEARCH_CLI_BIN`, `CATALOG_REFRESH_RESEARCH_ENDPOINT`,

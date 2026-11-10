@@ -508,7 +508,23 @@ def _open_subdir(root: Path, name: str) -> int:
 def _job_name(job_id: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{32}", job_id):
         raise CustodyJobError("job_unknown", "unknown job id")
-    return f"{job_id}.json"
+    # Canonical single-component leaf (byte-identical for valid ids;
+    # invalid input is rejected above, never normalized into a value).
+    return os.path.basename(job_id) + ".json"
+
+
+def _canonical_job_leaf(job_id: str) -> str:
+    """Strict closed-leaf derivation for one job id (32 lowercase hex).
+
+    Every anchored open in this service receives this DERIVED leaf, never
+    the raw caller value: anything that is not exactly one 32-hex
+    component is refused (same code/message as the job-file helpers), and
+    the standard single-component canonical form is byte-identical for
+    valid ids, so no valid id changes meaning and no invalid input is
+    normalized into an accepted value."""
+    if not isinstance(job_id, str) or not re.fullmatch(r"[0-9a-f]{32}", job_id):
+        raise CustodyJobError("job_unknown", "unknown job id")
+    return os.path.basename(job_id)
 
 
 def _read_job_file(jobs_fd: int, name: str) -> dict[str, Any] | None:
@@ -1198,8 +1214,7 @@ def store_upload(
         raise CustodyJobError("upload_kind_invalid", "unknown upload kind")
     if len(content) > cap:
         raise CustodyJobError("upload_too_large", "uploaded artifact exceeds its bound")
-    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
-        raise CustodyJobError("job_unknown", "unknown job id")
+    leaf = _canonical_job_leaf(job_id)
     setup = inspect_custody_setup(settings)
     if setup.state != "ready" or setup.root is None:
         raise AdminCatalogRefreshError(
@@ -1213,7 +1228,7 @@ def store_upload(
     with _admission_lock(root):
         # The per-job upload directory is created (0700) through the
         # anchored Core walk inside the existing root, then verified.
-        job_handle = open_anchored_handle(root / "uploads" / job_id, create_missing=True)
+        job_handle = open_anchored_handle(root / "uploads" / leaf, create_missing=True)
         uploads_fd = _open_subdir(root, "uploads")
         try:
             st = os.fstat(job_handle.dir_fd)
@@ -1251,7 +1266,9 @@ def upload_exists(settings: Settings, job_id: str, name: str) -> bool:
     name shape, regular file only). Never reads content."""
     if not isinstance(name, str) or not _UPLOAD_NAME_RE.fullmatch(name):
         raise CustodyJobError("artifact_not_served", "artifact is not served")
-    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
+    try:
+        leaf = _canonical_job_leaf(job_id)
+    except CustodyJobError:
         return False
     setup = inspect_custody_setup(settings)
     if setup.state != "ready" or setup.root is None:
@@ -1260,7 +1277,7 @@ def upload_exists(settings: Settings, job_id: str, name: str) -> bool:
     try:
         try:
             job_fd = os.open(
-                job_id, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=uploads_fd
+                leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=uploads_fd
             )
         except OSError:
             return False
@@ -1282,6 +1299,11 @@ def read_job_artifact(
     capped at the EXACT Core bound for the artifact kind."""
     if not isinstance(name, str) or not _JOB_ARTIFACT_NAME_RE.fullmatch(name):
         raise CustodyJobError("artifact_not_served", "artifact is not served")
+    # The job id is a caller value: strict closed-leaf derivation BEFORE
+    # any open (the name is a closed generated shape; its canonical
+    # single-component form is byte-identical).
+    leaf = _canonical_job_leaf(job_id)
+    name_leaf = os.path.basename(name)
     if name.startswith("bundle"):
         cap = MAX_BUNDLE_BYTES
     else:
@@ -1294,13 +1316,13 @@ def read_job_artifact(
     uploads_fd = _open_subdir(setup.root, "uploads")
     try:
         job_fd = os.open(
-            job_id, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=uploads_fd
+            leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=uploads_fd
         )
     except OSError:
         os.close(uploads_fd)
         return None
     try:
-        return anchored_read_fd(job_fd, name, cap)
+        return anchored_read_fd(job_fd, name_leaf, cap)
     except (OSError, CatalogRefreshSealError):
         return None
     finally:
@@ -1345,8 +1367,7 @@ def read_proposal_artifact(
     write admission enforces)."""
     if not isinstance(name, str) or name not in _PROPOSAL_ARTIFACT_NAMES:
         raise CustodyJobError("artifact_not_served", "artifact is not served")
-    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
-        raise CustodyJobError("job_unknown", "unknown job id")
+    leaf = _canonical_job_leaf(job_id)
     setup = inspect_custody_setup(settings)
     if setup.state != "ready" or setup.root is None:
         raise AdminCatalogRefreshError(
@@ -1356,7 +1377,7 @@ def read_proposal_artifact(
     try:
         try:
             job_fd = os.open(
-                job_id, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=proposals_fd
+                leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=proposals_fd
             )
         except OSError:
             return None
@@ -1377,8 +1398,7 @@ def list_proposal_packages(settings: Settings, job_id: str) -> list[str]:
     OPENROUTER_PACKAGE_ORDER and keep only presets whose directory
     exists, each through a held no-follow component open (no general
     directory scan)."""
-    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
-        raise CustodyJobError("job_unknown", "unknown job id")
+    leaf = _canonical_job_leaf(job_id)
     setup = inspect_custody_setup(settings)
     if setup.state != "ready" or setup.root is None:
         raise AdminCatalogRefreshError(
@@ -1388,7 +1408,7 @@ def list_proposal_packages(settings: Settings, job_id: str) -> list[str]:
     try:
         try:
             job_fd = os.open(
-                job_id, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=proposals_fd
+                leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=proposals_fd
             )
         except OSError:
             return []
@@ -1433,8 +1453,7 @@ def read_proposal_package_artifact(
         raise CustodyJobError("artifact_not_served", "artifact is not served")
     if not isinstance(name, str) or name not in _PROPOSAL_PACKAGE_FILE_NAMES:
         raise CustodyJobError("artifact_not_served", "artifact is not served")
-    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
-        raise CustodyJobError("job_unknown", "unknown job id")
+    leaf = _canonical_job_leaf(job_id)
     setup = inspect_custody_setup(settings)
     if setup.state != "ready" or setup.root is None:
         raise AdminCatalogRefreshError(
@@ -1444,7 +1463,7 @@ def read_proposal_package_artifact(
     try:
         try:
             job_fd = os.open(
-                job_id, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=proposals_fd
+                leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=proposals_fd
             )
         except OSError:
             return None
@@ -1496,17 +1515,18 @@ def account_proposal_output(settings: Settings, job_id: str) -> None:
         raise AdminCatalogRefreshError(
             setup.code, "catalog refresh custody is not usable: " + setup.code
         )
+    leaf = _canonical_job_leaf(job_id)
     root = setup.root
     with _admission_lock(root):
         proposals_fd = _open_subdir(root, "proposals")
         try:
             try:
-                _dir_tree_bytes(setup.root / "proposals" / job_id)
+                _dir_tree_bytes(setup.root / "proposals" / leaf)
             except (OSError, CustodyJobError):
                 return  # nothing published: nothing to account
             jobs_fd = _open_subdir(root, "jobs")
             try:
-                record = _read_job_file(jobs_fd, _job_name(job_id))
+                record = _read_job_file(jobs_fd, _job_name(leaf))
             finally:
                 os.close(jobs_fd)
             if record is None:
@@ -1526,7 +1546,7 @@ def account_proposal_output(settings: Settings, job_id: str) -> None:
             # 'total_bytes - reserved + actual' double-counted actual and
             # wrongly subtracted the never-on-disk reservation.
             if total_bytes > settings.CATALOG_REFRESH_MAX_TOTAL_BYTES:
-                remove_proposal_dir(settings, job_id)
+                remove_proposal_dir(settings, leaf)
                 raise CustodyCapacityError(
                     "proposal_output_capacity",
                     "the proposal output would exceed the configured "
@@ -1587,6 +1607,10 @@ def remove_proposal_dir(settings: Settings, job_id: str) -> None:
     held proposals descriptor, permission/ownership re-verified, removed
     recursively through the held descriptors, then the empty directory is
     unlinked. Any refusal leaves custody untouched."""
+    try:
+        leaf = _canonical_job_leaf(job_id)
+    except CustodyJobError:
+        return  # unknown id: nothing owned to clean (same silent contract)
     setup = inspect_custody_setup(settings)
     if setup.state != "ready" or setup.root is None:
         return
@@ -1594,7 +1618,7 @@ def remove_proposal_dir(settings: Settings, job_id: str) -> None:
     try:
         try:
             fd = os.open(
-                job_id, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=proposals_fd
+                leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=proposals_fd
             )
         except OSError:
             return
@@ -1603,9 +1627,9 @@ def remove_proposal_dir(settings: Settings, job_id: str) -> None:
             if (st.st_mode & 0o777) != 0o700 or st.st_uid != os.getuid():
                 return  # refuse: unsafe directory
             _remove_subtree_anchored(
-                setup.root / "proposals" / job_id, fd, 1, [0]
+                setup.root / "proposals" / leaf, fd, 1, [0]
             )
-            os.rmdir(job_id, dir_fd=proposals_fd)
+            os.rmdir(leaf, dir_fd=proposals_fd)
         except (OSError, CustodyJobError):
             return  # refuse: leave custody untouched (best-effort bounded)
         finally:
@@ -1630,13 +1654,12 @@ def remove_terminal_job(settings: Settings, job_id: str) -> None:
         raise AdminCatalogRefreshError(
             setup.code, "catalog refresh custody is not usable: " + setup.code
         )
-    if not re.fullmatch(r"[0-9a-f]{32}", job_id):
-        raise CustodyJobError("job_unknown", "unknown job id")
+    leaf = _canonical_job_leaf(job_id)
     root = setup.root
     with _admission_lock(root):
         jobs_fd = _open_subdir(root, "jobs")
         try:
-            record = _read_job_file(jobs_fd, _job_name(job_id))
+            record = _read_job_file(jobs_fd, _job_name(leaf))
             if record is None:
                 raise CustodyJobError("job_unknown", "unknown job id")
             if record.get("status") not in CATALOG_TERMINAL_STATUSES:
@@ -1647,9 +1670,9 @@ def remove_terminal_job(settings: Settings, job_id: str) -> None:
             # and proposals/<job_id>/) happens BEFORE the record unlink
             # under the same lock: an unsafe/unremovable subtree refuses
             # the whole cleanup and the record stays in place.
-            _remove_job_artifact_subtree(root, "uploads", job_id)
-            _remove_job_artifact_subtree(root, "proposals", job_id)
-            os.unlink(_job_name(job_id), dir_fd=jobs_fd)
+            _remove_job_artifact_subtree(root, "uploads", leaf)
+            _remove_job_artifact_subtree(root, "proposals", leaf)
+            os.unlink(_job_name(leaf), dir_fd=jobs_fd)
         finally:
             os.close(jobs_fd)
 
@@ -1661,11 +1684,12 @@ def _remove_job_artifact_subtree(root: Path, subdir: str, job_id: str) -> None:
     removed recursively through the held descriptors (bounded), then
     unlinked. Absent subtree -> no-op. Any refusal raises (the caller
     leaves custody untouched and the job record in place)."""
+    leaf = _canonical_job_leaf(job_id)
     parent_fd = _open_subdir(root, subdir)
     try:
         try:
             fd = os.open(
-                job_id, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=parent_fd
+                leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY, dir_fd=parent_fd
             )
         except FileNotFoundError:
             return
@@ -1680,9 +1704,9 @@ def _remove_job_artifact_subtree(root: Path, subdir: str, job_id: str) -> None:
                     "job_artifact_unsafe", "the job artifact directory is unsafe"
                 )
             _remove_subtree_anchored(
-                root / subdir / job_id, fd, 1, [0]
+                root / subdir / leaf, fd, 1, [0]
             )
-            os.rmdir(job_id, dir_fd=parent_fd)
+            os.rmdir(leaf, dir_fd=parent_fd)
         finally:
             os.close(fd)
     except OSError as exc:
@@ -1707,13 +1731,14 @@ def open_run_handle(settings: Settings, run_id: str):
     no-follow walk. Raises CustodyJobError for unknown/unsafe runs. The
     caller OWNS the returned lifecycle handle (close it)."""
     _assert_run_id(run_id)
+    leaf = os.path.basename(run_id)
     setup = inspect_custody_setup(settings)
     if setup.state != "ready" or setup.root is None:
         raise AdminCatalogRefreshError(
             setup.code, "catalog refresh custody is not usable: " + setup.code
         )
     try:
-        return open_anchored_handle(setup.root / "runs" / run_id, create_missing=False)
+        return open_anchored_handle(setup.root / "runs" / leaf, create_missing=False)
     except Exception as exc:
         raise CustodyJobError("run_not_found", "unknown run id") from exc
 
@@ -1842,7 +1867,11 @@ def remove_terminal_run(settings: Settings, run_id: str) -> None:
             setup.code, "catalog refresh custody is not usable: " + setup.code
         )
     normalized = _assert_run_id(run_id)
-    run_dir = setup.root / "runs" / normalized
+    # Canonical single-component leaf (byte-identical for valid run ids;
+    # the grammar already excludes path separators; the configured
+    # absolute root is never basenamed).
+    leaf = os.path.basename(normalized)
+    run_dir = setup.root / "runs" / leaf
     handle = open_run_handle(settings, run_id)
     try:
         entries = _dir_entries(run_dir)
@@ -1870,7 +1899,7 @@ def remove_terminal_run(settings: Settings, run_id: str) -> None:
         handle.assert_name_binding(str(run_dir))
         runs_fd = _open_subdir(setup.root, "runs")
         try:
-            os.rmdir(normalized, dir_fd=runs_fd)
+            os.rmdir(leaf, dir_fd=runs_fd)
         finally:
             os.close(runs_fd)
     finally:

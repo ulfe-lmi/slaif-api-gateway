@@ -452,12 +452,113 @@ never PostgreSQL. Enabling it requires:
    recreate/restart the `api` and ALL `worker` services (they read the
    settings at startup). A reverse-proxy change (the scoped nginx
    `client_max_body_size 48m` for the bounded 8 MiB bundle / 32 MiB baseline
-   uploads) only affects new proxy connections.
+   uploads) takes effect for new connections only after the established
+   `nginx -t` + reload/recreate procedure ([Streaming And
+   Nginx](#streaming-and-nginx)); editing the proxy file alone changes
+   nothing.
 5. **Backup/rollback**: custody files are operator state, not database
    state. Back them up with your normal file-state procedure if the sealed
    runs matter to you; removing the volume or disabling
    `CATALOG_REFRESH_GUI_ENABLED` never touches PostgreSQL, and no schema or
    key-policy migration is performed by this feature.
+
+### New install / upgrade procedure (copy-ready)
+
+The shipped Docker Compose stack does NOT include an nginx service: the
+reverse proxy is your existing host-level or external Nginx (see
+[Streaming And Nginx](#streaming-and-nginx) for the established
+configuration-test + reload procedure). Steps marked **[manual host]** are
+host/proxy controls you run yourself; they are documented, not automated.
+No new init service, dependency, or production-execution step is
+introduced.
+
+```bash
+# 1) [manual host] Dedicated custody ownership + service UID, ONCE before
+#    first use. The api/worker containers run as the non-root `slaif`
+#    user; a fresh named volume is root-owned, so prepare it with a
+#    one-off container that reuses the image's own user (no network):
+docker compose run --rm --entrypoint sh api -c '
+  id &&                                   # note the slaif uid/gid
+  mkdir -p /var/slaif/catalog-refresh &&
+  chown slaif:slaif /var/slaif/catalog-refresh &&
+  chmod 0700 /var/slaif/catalog-refresh
+'
+#    If you bind-mount a host directory instead of the named volume in
+#    your own compose override, apply the SAME ownership (the uid/gid
+#    printed above) and mode 0700 to that host path instead.
+
+# 2) [manual host] The EXISTING 0600 seal key — preserve or create OFFLINE.
+#    PRESERVE an existing key byte-for-byte: it is the identity of every
+#    sealed run, and replacing it makes old runs unverifiable. NEVER print
+#    or paste the key contents. To CREATE one where none exists, either:
+#    a) create it offline with your normal tooling — 64 hex characters
+#       (256 bits), mode 0600, owned by the same uid as the root:
+#         openssl rand -hex 32 > seal.key && chmod 0600 seal.key
+#       (the same contract the shipped CLI's ensure_seal_key implements:
+#       create-if-absent, 0600, never replace), or
+#    b) let the documented CLI bootstrap create it: the first
+#         slaif-catalog-refresh --mode bootstrap --seal-key /var/slaif/catalog-refresh/seal.key
+#       run creates the 0600 key if missing (it then also performs the
+#       live bootstrap collect). The GUI itself NEVER creates, replaces,
+#       or rewrites the key — it only opens the existing one.
+#    Place it under the custody root (or any outside-repo path) and make
+#    it visible to the containers:
+#    named volume:  docker compose run --rm --entrypoint sh api -c '
+#      chown slaif:slaif /var/slaif/catalog-refresh/seal.key &&
+#      chmod 0600 /var/slaif/catalog-refresh/seal.key'
+#    host bind mount: sudo chown <slaif-uid>:<slaif-gid> <host-path>/seal.key
+#                     && sudo chmod 0600 <host-path>/seal.key
+
+# 3) The three GUI settings in .env (see docs/configuration.md):
+#    CATALOG_REFRESH_GUI_ENABLED=true
+#    CATALOG_REFRESH_ROOT=/var/slaif/catalog-refresh
+#    CATALOG_REFRESH_SEAL_KEY=/var/slaif/catalog-refresh/seal.key
+#    (both paths OUTSIDE the repository source tree and any local PGDATA;
+#     the finite knobs CATALOG_REFRESH_MAX_ACTIVE_JOBS /
+#     CATALOG_REFRESH_MAX_RETAINED_RUNS / CATALOG_REFRESH_MAX_TOTAL_BYTES /
+#     CATALOG_REFRESH_READ_ONLY_TIMEOUT_SECONDS keep their defaults unless
+#     you change them deliberately)
+
+# 4) Apply: recreate/restart the API and ALL worker services (settings are
+#    read at startup):
+docker compose up -d --force-recreate api worker
+
+# 5) Proxy (only if your proxy fronts the admin uploads) [manual host]:
+#    update your EXISTING proxy config from deploy/nginx/slaif-api-gateway.conf
+#    (the scoped `location /admin/operations/catalog/ { client_max_body_size
+#    48m; ... }` allowance) — then run the ESTABLISHED procedure from the
+#    Streaming And Nginx section: `nginx -t` and reload (or recreate)
+#    Nginx. Editing the file alone does NOTHING for new connections until
+#    that test + reload/recreate runs; until then uploads still use the
+#    old limit.
+
+# 6) Verify setup-ready (browser): sign in at /admin and open
+#    Operations -> Catalog workspace. The Setup section must read READY
+#    (root + seal key verified) with the storage summary; while it is not
+#    ready the page shows fixed setup help and NO catalog action is
+#    dispatchable. Optionally queue one read-only Export baseline job and
+#    download the document as an end-to-end check.
+
+# 7) Backup of the SAME seal key + runs (periodic; your normal file-state
+#    procedure) [manual host]:
+tar --sort=name -cf - -C /var/slaif catalog-refresh | gzip \
+  > backup-catalog-refresh-$(date -u +%Y%m%d).tar.gz
+#    The seal key is INSIDE that tree (it is identity, not a recoverable
+#    secret): protect the archive as you protect the key; never print the
+#    key. "Rotating" means generating a NEW key file and re-pointing
+#    CATALOG_REFRESH_SEAL_KEY — old sealed runs remain bound to their
+#    original key.
+```
+
+Upgrade note: upgrading a deployment that predates 217 is an application
+upgrade plus the optional proxy allowance in the SAME maintenance window:
+rebuild/recreate the `api` and ALL `worker` services so the new code and
+settings run, and — only if you proxy admin uploads — add the scoped
+`/admin/operations/catalog/` allowance and run the established
+`nginx -t` + reload procedure from
+[Streaming And Nginx](#streaming-and-nginx). No database migration, no
+schema change, and no key-policy change follow this upgrade; an
+existing-but-disabled deployment gains nothing until step 3/4 above.
 
 ## Backups
 

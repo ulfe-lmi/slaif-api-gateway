@@ -92,9 +92,13 @@ repairs any path or key:
   execute in the worker while the API page reads the same custody state.
 - After changing any `CATALOG_REFRESH_*` setting, recreate/restart the
   **API service and all worker services** (the Celery app reads them at
-  startup); a reverse-proxy change (the scoped nginx
-  `client_max_body_size` for the bounded 8 MiB bundle / 32 MiB baseline
-  uploads) only affects new proxy connections.
+  startup). A reverse-proxy change (the scoped nginx
+  `client_max_body_size 48m` for the bounded 8 MiB bundle / 32 MiB
+  baseline uploads) takes effect for new connections only after the
+  established proxy configuration-test + reload/recreate procedure (see
+  [Deployment: Streaming And Nginx](deployment.md#streaming-and-nginx));
+  the copy-ready procedure is in
+  [Deployment: Catalog Refresh Custody](deployment.md#catalog-refresh-custody-optional-default-off).
 
 The GUI drives the EXISTING Core services (`collect`, `review`,
 `verify`, `export-baseline`, `apply`, `status`) — it adds orchestration,

@@ -1433,11 +1433,32 @@ def test_collect_refresh_without_any_baseline_source_is_usage_error(
     --refresh with no --db-url, no --baseline-file, and NO configured
     DATABASE_URL is still a usage error, and combining both explicit
     baseline sources is still refused."""
+    import re as _re
     from slaif_gateway.config import get_settings
+    import slaif_gateway.cli.catalog_refresh as _cli_mod
+
+    def _plain(result: object) -> str:
+        # Unstyle the rich/ANSI terminal output (strips SGR escapes and
+        # the error-panel border characters) and fold every whitespace
+        # run to one space: the validation REASON text is then compared
+        # independent of terminal width/panel wrapping, while the
+        # intended reason wording stays asserted verbatim.
+        text = str(result.stdout) + (str(result.stderr) or "")
+        text = _re.sub(r"\x1b\[[0-9;]*[A-Za-z]", " ", text)
+        text = _re.sub(r"[╭╮╰╯│─=]", " ", text)
+        return " ".join(text.split())
 
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.delenv("DATABASE_URL", raising=False)
     get_settings.cache_clear()
+    # Hermetic intended input: pin the EXISTING settings-getter seam to
+    # "no configured DATABASE_URL" so the no-source case does not depend
+    # on ambient env or cached settings state; the CLI preflight reads
+    # exactly these helpers.
+    monkeypatch.setattr(
+        _cli_mod, "_settings_database_url_configured", lambda: False
+    )
+    monkeypatch.setattr(_cli_mod, "_settings_database_url_or_none", lambda: None)
     try:
         result = runner.invoke(
             app,
@@ -1448,7 +1469,7 @@ def test_collect_refresh_without_any_baseline_source_is_usage_error(
              "--json"],
         )
         assert result.exit_code == 2, result.output
-        assert "refresh requires" in (result.stdout + (result.stderr or ""))
+        assert "refresh requires" in _plain(result)
 
         result = runner.invoke(
             app,
@@ -1461,7 +1482,7 @@ def test_collect_refresh_without_any_baseline_source_is_usage_error(
              "--json"],
         )
         assert result.exit_code == 2, result.output
-        assert "not both" in (result.stdout + (result.stderr or ""))
+        assert "not both" in _plain(result)
     finally:
         monkeypatch.undo()
         get_settings.cache_clear()
