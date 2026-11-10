@@ -317,3 +317,32 @@ existing `/admin` exposure. Upgrade is **recreate/restart only**:
 Rollback to the previous image restores the prior email views; the
 append-only audit rows written by 215-a actions are inert historical
 evidence to older binaries.
+
+## Admin GUI upgrade: reviewed accounting recovery (216-a)
+
+The 216-a GUI objective (G14) adds the bounded accounting operations
+area under the existing `/admin` exposure: four read-only candidate
+views (expired pending reservations, external-tool holds,
+provider-completed recovery rows, and read-only external-tool fences)
+plus reviewed dry-run -> signed review -> confirm-and-apply recovery
+actions over the existing reconciliation/hold services. Upgrade is
+**recreate/restart only**:
+
+- **No schema migration**: reservations, ledger rows, fences, and
+  audit records are untouched and read exactly as before; the area
+  adds fresh ordered lock-and-compare reads over the same tables.
+- **No Nginx change**: the new routes sit under the existing `/admin`
+  exposure; streaming/anti-buffering settings are unaffected.
+- **No new environment variables and no new dependencies**.
+- **CLI unchanged**: every `reconcile-*` command keeps identical
+  behavior; the console is an additional reviewed path, not a
+  replacement.
+- One operator note: confirm-and-apply requires the EXISTING
+  `superadmin` role. If your deployment has no superadmin yet, create
+  one explicitly with `slaif-gateway admin create --superadmin`
+  (see [`runbooks/admin-access.md`](runbooks/admin-access.md));
+  nothing is elevated automatically.
+
+Rollback to the previous image removes the accounting operations
+views; the reconciliation/audit rows written by 216-a actions are
+inert historical evidence to older binaries.

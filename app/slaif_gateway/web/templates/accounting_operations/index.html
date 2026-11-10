@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block title %}Accounting Operations{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell" aria-labelledby="acct-ops-heading">
+  <header class="dashboard-header">
+    <div class="brand-copy">
+      <p class="eyebrow">Operations</p>
+      <h1 id="acct-ops-heading">Accounting Operations</h1>
+      <p class="lead">Bounded inspection and reviewed recovery for quota accounting edge states.</p>
+      <p class="muted signed-in">Signed in as <strong>{{ admin.display_name }}</strong></p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/operations">Operations</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="dash-groups">
+    <div class="dash-group">
+      <h2>Accounting recovery</h2>
+      <p class="dash-group-intro">
+        Inspect the candidate views, then preview, review, and apply bounded recovery actions
+        through the existing reconciliation services. Applying requires the superadmin role and
+        re-checks every selected row before mutation.
+      </p>
+      <ul>
+        <li>
+          <a href="/admin/accounting-operations/expired-reservations">Expired pending reservations</a>
+          <p>Review and release one or an explicit bounded selection of expired ordinary pending reservations.</p>
+        </li>
+        <li>
+          <a href="/admin/accounting-operations/external-tool-fences">Unresolved external-tool fences</a>
+          <p>Read-only fence inspection. There is deliberately no operator release/reset/unblock action here.</p>
+        </li>
+        <li>
+          <a href="/admin/accounting-operations/external-tool-holds">External-tool accounting holds</a>
+          <p>Review one held row and finalize it with operator actuals or release it with an explicit no-charge confirmation.</p>
+        </li>
+        <li>
+          <a href="/admin/accounting-operations/provider-completed-recovery">Provider-completed finalization failures</a>
+          <p>Review and finalize one or an explicit bounded selection using only the stored authoritative provider evidence.</p>
+        </li>
+      </ul>
+    </div>
+  </div>
+</section>
+{% endblock %}

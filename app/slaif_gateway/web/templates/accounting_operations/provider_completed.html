@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Provider-Completed Finalization Failures{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="acct-pc-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Accounting Operations</p>
+      <h1 id="acct-pc-heading">Provider-completed finalization failures</h1>
+      <p class="muted">
+        Up to {{ view_limit | num }} rows (oldest first). Rows are only shown when they carry the
+        authoritative stored final usage and positive actual cost; invalid or non-repairable shapes
+        are filtered out of this projection, so a short or empty list does NOT prove no later
+        candidates exist.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/accounting-operations/">Accounting operations</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form class="filter-bar compact" method="get" action="/admin/accounting-operations/provider-completed-recovery" id="acct-pc-filter">
+    {{ record_choice("gateway_key_id", "key", "Gateway key", options=key_options, selected_id=filters.gateway_key_id, allow_new=false, nojs_value=filters.gateway_key_id, help="Narrow to one existing gateway key (latest 100 plus search); blank = any key.", input_id="acct-pc-key", control_id="acct-pc-key-input", help_id="acct-pc-key-help") }}
+    {{ record_choice("provider", "provider", "Provider", options=provider_options, selected_id=filters.provider, allow_new=false, nojs_value=filters.provider, help="Narrow to one existing provider; blank = any provider.", input_id="acct-pc-provider", control_id="acct-pc-provider-input", help_id="acct-pc-provider-help") }}
+    {{ record_choice("model", "model", "Model", options=model_options, selected_id=filters.model, allow_new=false, nojs_value=filters.model, help="Narrow to one known model token (catalog and usage history); blank = any model.", input_id="acct-pc-model", control_id="acct-pc-model-input", help_id="acct-pc-model-help") }}
+    <button type="submit">Narrow</button>
+  </form>
+
+  <form method="post" action="/admin/accounting-operations/provider-completed-recovery/preview" id="acct-pc-preview">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="action-panel">
+    {{ record_choice("exact_ledger_id", "usage_ledger", "Exact usage ledger (existing record)", options=ledger_options, multi=true, multi_value="", allow_new=false, help="Adds exact known usage-ledger rows to the selection - the path for rows beyond the capped candidate list. Newline-separated; latest 100 plus search. Combined with the checkboxes above, at most 200 unique rows per operation.", input_id="acct-pc-exact", control_id="acct-pc-exact-input", help_id="acct-pc-exact-help") }}
+    </div>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Provider-completed finalization failures">
+      <table data-sortable class="table-wide">
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col" aria-label="Select">Select</th>
+            <th scope="col" class="col-key">Usage ledger</th>
+            <th scope="col" class="col-key">Reservation</th>
+            <th scope="col" class="col-key">Key</th>
+            <th scope="col">Provider</th>
+            <th scope="col">Model</th>
+            <th scope="col">Endpoint</th>
+            <th scope="col" class="num" data-sort-type="number">Final tokens</th>
+            <th scope="col" class="num" data-sort-type="money">Actual cost (EUR)</th>
+            <th scope="col" class="nowrap" data-sort-type="datetime">Created (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>
+              <label class="checkbox-row" for="acct-pc-select-{{ loop.index }}">
+                <input
+                  type="checkbox"
+                  name="target_id"
+                  value="{{ row.usage_ledger_id }}"
+                  id="acct-pc-select-{{ loop.index }}"
+                  aria-label="row {{ loop.index | num }}"
+                  aria-describedby="acct-pc-select-help"
+                >
+              </label>
+            </td>
+            <td class="col-key"><code>{{ row.usage_ledger_id }}</code></td>
+            <td class="col-key"><code>{{ row.reservation_id }}</code></td>
+            <td class="col-key"><a href="/admin/keys/{{ row.gateway_key_id }}"><code>{{ row.gateway_key_id }}</code></a></td>
+            <td>{{ row.provider }}</td>
+            <td>{{ row.model }}</td>
+            <td>{{ row.endpoint }}</td>
+            <td class="num" data-sort-value="{{ row.total_tokens }}" title="{{ row.total_tokens | num }} tokens">{{ row.total_tokens | tokm }}M</td>
+            <td class="num" data-sort-value="{{ row.actual_cost_eur | dec if row.actual_cost_eur is not none else '' }}">{{ row.actual_cost_eur | num if row.actual_cost_eur is not none else "n/a" }}</td>
+            <td class="nowrap" data-sort-value="{{ row.created_at.isoformat() if row.created_at else '' }}">{{ row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else "n/a" }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort>
+            <td colspan="12" class="empty-state">No provider-completed recovery rows in this bounded view (this does not prove completeness).</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="action-panel">
+    <p class="field-help" id="acct-pc-select-help">
+      Select one row, or an explicit selection of up to {{ max_targets | num }} rows, for one
+      all-or-nothing reviewed finalization. Only the stored authoritative evidence is used - this
+      path has NO cost override. Newly matching rows are never added at apply time.
+    </p>
+    <label for="acct-pc-reason">
+      Audit reason
+      <input
+        type="text"
+        name="reason"
+        id="acct-pc-reason"
+        maxlength="500"
+        autocomplete="off"
+        aria-describedby="acct-pc-reason-help"
+      >
+    </label>
+    <p class="field-help" id="acct-pc-reason-help">
+      Nonblank, at most 500 characters. Stored and audited exactly as you enter it. Reasons that
+      match a known incoming authentication value are refused.
+    </p>
+    <div class="admin-flash" role="status">
+      Previewing writes nothing: it only computes the proposed finalization per selected row from
+      the stored evidence. Applying re-checks every selected row (including its linked reservation)
+      and refuses the WHOLE selection if any relevant source fact changed after the preview.
+    </div>
+    <button type="submit">Preview selection</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

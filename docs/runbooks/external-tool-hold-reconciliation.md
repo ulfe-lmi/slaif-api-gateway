@@ -71,3 +71,16 @@ facts, while finalize requires all three explicit facts and rejects
 event note. Only the exact held-fence, pending-reservation, single-ledger
 shape is eligible; malformed, missing, or multiply linked ledgers are reported
 for inspection and are never repaired or retried automatically.
+
+## Admin Console (216)
+
+The same hold reconciliation is available in the admin console under
+Operations > Accounting operations > "External-tool accounting holds"
+(holds list) plus the read-only fences view, which has no
+release/reset/unblock surface. "Finalize with actuals" records explicit
+operator assertions with `operator_asserted` provenance; "Release with
+no charge" requires its distinct explicit confirmation and accepts no
+actual values. The console wraps the same dry-run -> review -> explicit
+confirm law, with a stateless session-bound signed review (15-minute
+expiry, sealed source facts, replay-safe) and superadmin-only apply. The CLI commands above are unchanged and remain
+equivalent.

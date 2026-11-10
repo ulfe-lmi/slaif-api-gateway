@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}External-Tool Accounting Holds{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="acct-holds-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Accounting Operations</p>
+      <h1 id="acct-holds-heading">External-tool accounting holds</h1>
+      <p class="muted">
+        Up to {{ view_limit | num }} held rows (invalid or mismatched shapes are filtered out of
+        this projection, so a short or empty list does NOT prove no later candidates exist).
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/accounting-operations/">Accounting operations</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form method="post" action="/admin/accounting-operations/external-tool-holds/preview" id="acct-hold-preview">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="action-panel">
+    {{ record_choice("exact_reservation_id", "quota_reservation", "Exact reservation (existing record)", options=reservation_options, selected_id="", allow_new=false, nojs_value="", help="Alternative to the row picker: name ONE exact known held reservation (latest 100 plus search) when it is beyond the capped candidate list. Use this OR the row radio - not both.", input_id="acct-hold-exact", control_id="acct-hold-exact-input", help_id="acct-hold-exact-help") }}
+    </div>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="External-tool accounting holds">
+      <table data-sortable class="table-wide">
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col" aria-label="Select">Select</th>
+            <th scope="col" class="col-key">Reservation</th>
+            <th scope="col" class="col-key">Key</th>
+            <th scope="col" class="nowrap">Fence state</th>
+            <th scope="col" class="nowrap">Accounting status</th>
+            <th scope="col" class="nowrap">Hold reason</th>
+            <th scope="col" class="nowrap">Evidence quality</th>
+            <th scope="col" class="num" data-sort-type="money">Reserved (EUR)</th>
+            <th scope="col" class="num" data-sort-type="number">Reserved tokens</th>
+            <th scope="col" class="num" data-sort-type="number">Reserved requests</th>
+            <th scope="col" class="num" data-sort-type="number">Partial tokens</th>
+            <th scope="col" class="num" data-sort-type="money">Estimated (EUR)</th>
+            <th scope="col" class="nowrap" data-sort-type="datetime">Held (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>
+              <label class="checkbox-row" for="acct-hold-select-{{ loop.index }}">
+                <input
+                  type="radio"
+                  name="reservation_id"
+                  value="{{ row.reservation_id }}"
+                  id="acct-hold-select-{{ loop.index }}"
+                  aria-label="row {{ loop.index | num }}"
+                  aria-describedby="acct-hold-select-help"
+                >
+              </label>
+            </td>
+            <td class="col-key"><code>{{ row.reservation_id }}</code></td>
+            <td class="col-key"><a href="/admin/keys/{{ row.gateway_key_id }}"><code>{{ row.gateway_key_id }}</code></a></td>
+            <td class="nowrap">{{ row.fence_state }}</td>
+            <td class="nowrap">{{ row.accounting_status }}</td>
+            <td class="nowrap">{{ row.reason_code }}</td>
+            <td class="nowrap">{{ row.evidence_quality }}</td>
+            <td class="num" data-sort-value="{{ row.reserved_cost_eur | dec }}">{{ row.reserved_cost_eur | num }}</td>
+            <td class="num" data-sort-value="{{ row.reserved_tokens }}" title="{{ row.reserved_tokens | num }} tokens">{{ row.reserved_tokens | tokm }}M</td>
+            <td class="num" data-sort-value="{{ row.reserved_requests }}">{{ row.reserved_requests | num }}</td>
+            <td class="num" data-sort-value="{{ row.partial_total_tokens if row.partial_total_tokens is not none else '' }}" {% if row.partial_total_tokens is not none %}title="{{ row.partial_total_tokens | num }} tokens"{% endif %}>{{ row.partial_total_tokens | tokm ~ "M" if row.partial_total_tokens is not none else "unknown" }}</td>
+            <td class="num" data-sort-value="{{ row.estimated_cost_eur | dec if row.estimated_cost_eur is not none else '' }}">{{ row.estimated_cost_eur | num if row.estimated_cost_eur is not none else "unknown" }}</td>
+            <td class="nowrap" data-sort-value="{{ row.held_at.isoformat() if row.held_at else '' }}">{{ row.held_at.strftime("%Y-%m-%d %H:%M:%S") if row.held_at else "n/a" }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort>
+            <td colspan="14" class="empty-state">No held rows in this bounded view (this does not prove completeness).</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="action-panel">
+    <p class="field-help" id="acct-hold-select-help">
+      Select exactly ONE held row. Its stored partial facts are estimates only: unknown final cost
+      stays held until you make an explicit decision below.
+    </p>
+
+    <label for="acct-hold-action">
+      Reconciliation action
+      <select name="hold_action" id="acct-hold-action" aria-describedby="acct-hold-action-help">
+        {% for value, label in hold_actions %}
+        <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p class="field-help" id="acct-hold-action-help">
+      "Finalize with actuals" records your explicit operator assertions (cost, tokens, outcome) as
+      <code>operator_reconciliation / operator_asserted</code> provenance - they are MANUAL
+      authoritative values, never provider-verified evidence. "Release with no charge" discards
+      the reserved counters without charging and accepts NO cost/token/outcome fields.
+    </p>
+
+    <div class="filter-bar compact">
+      <label for="acct-hold-cost">
+        Actual cost (EUR)
+        <input
+          type="text"
+          name="actual_cost_eur"
+          id="acct-hold-cost"
+          inputmode="decimal"
+          autocomplete="off"
+          placeholder="0.000000000"
+          aria-describedby="acct-hold-cost-help"
+        >
+      </label>
+      <label for="acct-hold-tokens">
+        Actual total tokens
+        <input
+          type="text"
+          name="actual_total_tokens"
+          id="acct-hold-tokens"
+          inputmode="numeric"
+          autocomplete="off"
+          placeholder="0"
+          aria-describedby="acct-hold-tokens-help"
+        >
+      </label>
+      <fieldset aria-describedby="acct-hold-outcome-help">
+        <legend>Provider outcome</legend>
+        <label><input type="radio" name="outcome" value="success" id="acct-hold-outcome-success"> Success</label>
+        <label><input type="radio" name="outcome" value="failure" id="acct-hold-outcome-failure"> Failure</label>
+      </fieldset>
+    </div>
+    <p class="field-help" id="acct-hold-cost-help">
+      Required only for "Finalize with actuals": a finite, non-negative decimal in raw EUR (no
+      thousands separators). Refused together with "Release with no charge".
+    </p>
+    <p class="field-help" id="acct-hold-tokens-help">
+      Required only for "Finalize with actuals": a non-negative integer in raw token units.
+      Refused together with "Release with no charge".
+    </p>
+    <p class="field-help" id="acct-hold-outcome-help">
+      Required only for "Finalize with actuals": an explicit provider outcome. Refused together
+      with "Release with no charge". Absent evidence is never defaulted to zero.
+    </p>
+
+    <div class="checkbox-row">
+      <input
+        type="checkbox"
+        id="acct-hold-nocharge"
+        name="confirm_no_charge"
+        value="1"
+        aria-describedby="acct-hold-nocharge-help"
+      >
+      <label for="acct-hold-nocharge">
+        I confirm releasing this held row with NO charge (no cost, tokens, or outcome recorded)
+      </label>
+    </div>
+    <p class="field-help" id="acct-hold-nocharge-help">
+      Required ONLY for "Release with no charge". For "Finalize with actuals" it must stay
+      unchecked (a posted confirmation is refused). Your explicit choice is sealed into the
+      review and re-checked before execution; it is never inferred from the selected action.
+    </p>
+
+    <label for="acct-hold-reason">
+      Audit reason
+      <input
+        type="text"
+        name="reason"
+        id="acct-hold-reason"
+        maxlength="500"
+        autocomplete="off"
+        aria-describedby="acct-hold-reason-help"
+      >
+    </label>
+    <p class="field-help" id="acct-hold-reason-help">
+      Nonblank, at most 500 characters. Stored and audited exactly as you enter it. Reasons that
+      match a known incoming authentication value are refused.
+    </p>
+    <div class="admin-flash" role="status">
+      Previewing writes nothing and shows the CURRENT stored facts plus your proposed assertions
+      separately. Applying re-checks the exact held row and refuses if any relevant fact changed.
+    </div>
+    <button type="submit">Preview hold reconciliation</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

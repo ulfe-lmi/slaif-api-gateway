@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14, G15 and G17 remain open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14 (controlled accounting recovery) is delivered by OAP objective 216-a (branch `oap/216-gui-accounting-operations`); see [section 18](#18-delivery-status-objective-216-a). G15 and G17 remain open.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -1189,5 +1189,103 @@ G14 (controlled accounting recovery), G15 (catalog workflows), and
 G17 (admin accounts) remain open as documented in section 9; nothing in
 215-a touches them. The final 219 installed whole-GUI qualification and
 the remaining objectives stay mandatory; 215-a makes no
+installed-qualification, deployment, live-provider, or production
+claim.
+
+## 18. Delivery status (objective 216-a)
+
+Delivered by 216-a (`oap/216-gui-accounting-operations`, one PR),
+synthetic fixture data only, no new schema/migrations and no new
+dependencies:
+
+- **G14** (controlled accounting recovery through the existing
+  reconciliation services):
+  - **Four bounded read-only candidate views** (all signed-in admins):
+    expired pending reservations, external-tool accounting holds,
+    provider-completed recovery rows, and external-tool fences
+    (fences are a READ-ONLY view with no release/reset/unblock
+    surface). Each table renders an HONEST cap of at most 200 rows
+    with explicit "Up to 200 rows / no completeness claim" help; token
+    quantities use the existing millions-of-tokens readouts with exact
+    raw `data-sort-value` sort keys; unknown/missing facts render
+    "unknown", never zero; credential-shaped values (including model
+    metadata and picker options) are masked or withheld with the
+    existing pure alias guards across the full response.
+  - **Exact known-record selection beyond the capped views**: each
+    ACTIONABLE candidate view exposes the existing searchable
+    record-choice control (latest 100 plus older-value search and
+    selected hydration) and a no-JS exact-identifier fallback; the
+    read-only fences view has no selection controls at all. The bounded selection parser
+    accepts up to 200 canonical unique UUIDs (repeated widget values
+    and newline no-JS input) and refuses 201 predictably; it reuses the
+    alias guards and does not raise the unrelated global list-filter
+    cap (20).
+  - **Reviewed recovery actions** (execution requires the EXISTING
+    superadmin role; a non-superadmin receives the fixed safe
+    "superadmin required" refusal while inspection stays available):
+    dry-run preview (no audit/ledger/counter writes) -> a bounded,
+    escape-budgeted STATELESS signed review token bound to the admin,
+    the session, its 15-minute expiry, and the sealed source facts
+    (no durable consumption store; replay is safe because apply
+    re-verifies the sealed facts under fresh locks and yields only a
+    refusal or a safe already-resolved outcome, never a duplicate
+    settlement) -> explicit confirm-and-apply. Families:
+    release one or a bounded selection of EXPIRED ordinary pending
+    reservations; reconcile ONE external-tool hold as finalize-actual
+    (explicit finite nonnegative cost, nonnegative integer tokens,
+    explicit outcome, sealed manual `operator_asserted` provenance) or
+    release-no-charge (its DISTINCT explicit confirmation, and it
+    refuses any actual values); recover one or a bounded selection of
+    provider-completed rows from STORED authoritative evidence only
+    (no cost override). The mutually exclusive no-charge/finalize
+    intent contract is enforced at the form, re-checked in the signed
+    review, and re-enforced by the shared Core before execution.
+  - **Truthful results and atomicity**: apply re-locks every reviewed
+    row and linked facts under fresh canonical locks (distinct gateway
+    keys in ascending UUID order) and compares fingerprints BEFORE any
+    accounting call; ANY included relevant-source change refuses and
+    rolls back the WHOLE selection (a single already-resolved row is a
+    safe already-resolved outcome, never a duplicate effect); a lost
+    commit acknowledgement is reported as UNCONFIRMED - the commit
+    may have committed or rolled back, and this is explicitly NOT a
+    rollback promise (verify row state and the audit log first). Results distinguish committed,
+    refused, and unconfirmed, and review pages keep CURRENT observed
+    facts separate from the intended action and the if-applied
+    reserved/release quantities.
+  - **Bridge scope**: the new GUI service binds exact reviewed targets
+    to the existing Core reconciliation/hold services with backwards-
+    compatible additions only (fresh ordered FOR UPDATE bulk reads in
+    the quota/usage repositories); Core accounting math, defaults,
+    error taxonomy and the CLI remain unchanged: the 216-a diff contains
+    no `cli/` file changes, so every `reconcile-*` command is
+    byte-for-byte identical to its pre-216 behavior. No generic receipt store, no new lookup platform, no
+    usage-reset equivalence, no schema change.
+  - **Verification (216-a scope, synthetic/owned fixtures)**: focused
+    unit module (43 pass), owned-PostgreSQL real-HTTP native module
+    (20 pass, including commit-fault durability/rollback, waited-lock
+    refusal, cross-key ordering and beyond-200 exact selection), and a
+    Playwright module (8 pass) exercising all four action families
+    through the real forms with no-JS/keyboard paths and desktop+narrow
+    captures. These are NOT installed-qualification, live-provider, or
+    production evidence; the full 219 installed whole-GUI gate remains
+    open. Evidence limitations and exact counts: the immutable 216-a
+    report.
+  - Documentation: [`admin-usability.md`](admin-usability.md),
+    [`accounting.md`](accounting.md), [`cli-reference.md`](cli-reference.md),
+    [`security-model.md`](security-model.md),
+    [`upgrade-runbook.md`](upgrade-runbook.md),
+    [`runbooks/stale-reservation-reconciliation.md`](runbooks/stale-reservation-reconciliation.md),
+    [`runbooks/provider-completed-reconciliation.md`](runbooks/provider-completed-reconciliation.md),
+    [`runbooks/external-tool-hold-reconciliation.md`](runbooks/external-tool-hold-reconciliation.md),
+    [`verification/gui-cli-parity.md`](verification/gui-cli-parity.md), and
+    [`verification/README.md`](verification/README.md); exact scope:
+    the 216-a strategic work order; claims and evidence: the immutable
+    216-a report.
+
+### Still open
+
+G15 (catalog workflows) and G17 (admin accounts) remain open as
+documented in section 9; nothing in 216-a touches them. The final 219
+installed whole-GUI qualification remains mandatory; 216-a makes no
 installed-qualification, deployment, live-provider, or production
 claim.

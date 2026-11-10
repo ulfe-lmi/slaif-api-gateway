@@ -75,6 +75,33 @@ class QuotaReservationsRepository:
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def get_reservations_by_ids_for_update(
+        self,
+        reservation_ids: Sequence[uuid.UUID],
+    ) -> list[QuotaReservation]:
+        """Return the exact selected reservations locked fresh for reviewed recovery.
+
+        216-a bounded exact-target read seam: at most the caller-bounded
+        selected ids, ``FOR UPDATE`` with ``populate_existing`` so the row's
+        columns are re-read from the database even if an object is already in
+        the identity map (a plain ``FOR UPDATE`` query can return a cached
+        identity-map object and therefore cannot prove freshness across a
+        waited lock). Returned in ascending id order for deterministic lock
+        acquisition; ids with no matching row are absent.
+        """
+        if not reservation_ids:
+            return []
+        unique_ids = list(dict.fromkeys(reservation_ids))
+        statement = (
+            select(QuotaReservation)
+            .where(QuotaReservation.id.in_(unique_ids))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+            .order_by(QuotaReservation.id.asc())
+        )
+        result = await self._session.execute(statement)
+        return list(result.scalars().all())
+
     async def get_reservation_by_request_id(self, request_id: str) -> QuotaReservation | None:
         result = await self._session.execute(
             select(QuotaReservation).where(QuotaReservation.request_id == request_id)

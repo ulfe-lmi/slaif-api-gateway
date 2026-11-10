@@ -273,7 +273,12 @@ runtime. Ordinary stale-reservation reconciliation identifies
 external-mode pending reservations as requiring external-tool review and never
 auto-releases them; see the
 [`stale-reservation-reconciliation`](runbooks/stale-reservation-reconciliation.md)
-runbook. Fenced policy cannot be stored without positive finite request,
+runbook. The same recovery (expired-pending release, external-tool hold
+finalize/release, and provider-completed recovery) is also available in the
+admin console accounting operations area (G14/216) as a reviewed dry-run ->
+signed review -> superadmin confirm-and-apply workflow; see
+[`admin-usability.md`](admin-usability.md) and
+[`runbooks/admin-access.md`](runbooks/admin-access.md). Fenced policy cannot be stored without positive finite request,
 token, and EUR limits, and later limit clearing is rejected before mutation or
 audit.
 

@@ -97,3 +97,15 @@ Scheduled reconciliation is disabled by default. With
 Automatic provider-completed mutation requires
 `RECONCILIATION_AUTO_EXECUTE_PROVIDER_COMPLETED=true` and
 `RECONCILIATION_DRY_RUN=false`.
+
+## Admin Console (216)
+
+The same provider-completed recovery is available in the admin console
+under Operations > Accounting operations > "Provider-completed
+recovery rows". Rows are recovered ONLY from stored authoritative
+evidence (no cost override); credential-shaped model metadata is masked
+or withheld in the console output. The console wraps the same dry-run ->
+review -> explicit confirm law, with a stateless session-bound signed
+review (15-minute expiry, sealed source facts, replay-safe) and superadmin-only apply; already-reconciled rows are a safe
+already-resolved outcome and changed rows refuse the whole selection.
+The CLI commands above are unchanged and remain equivalent.

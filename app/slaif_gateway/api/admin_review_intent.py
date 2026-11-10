@@ -28,6 +28,7 @@ import json
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from slaif_gateway.schemas.key_clone import (
@@ -1408,4 +1409,279 @@ def verify_smtp_test_review_token(
     document = _strict_smtp_test_review_document(review)
     if len(_canonical_json(document)) > SMTP_TEST_REVIEW_ENVELOPE_MAX_BYTES:
         raise AdminReviewIntentError(_SMTP_TEST_TOO_LARGE_MESSAGE)
+    return document
+
+
+# ---------------------------------------------------------------------------
+# 216-a: bounded reviewed accounting-operations recovery purpose.
+#
+# A new, separate purpose: an expired / provider-completed / hold recovery
+# token is never valid for a clone / batch / route / compatibility / replay /
+# pricing / smtp-test apply, and vice versa. Same HMAC-SHA256 +
+# administrator-session-secret pattern and the same 15-minute bound as the
+# other purposes. The CLOSED document carries exactly ONE action family, the
+# exact reviewed target ids (<= 200) plus a per-target relevant-source
+# evidence fingerprint, the validated manual hold assertions (finalize-actual
+# only), the bounded safe reason, and a one-use nonce. The token is reviewed
+# data, never authority: apply re-verifies in constant time, rebinds the
+# signed-in actor and session, checks the bound, and the server re-checks
+# every target under canonical locks before mutation.
+# ---------------------------------------------------------------------------
+
+REVIEW_INTENT_ACCOUNTING_PURPOSE = "admin.accounting-operations.review.v1"
+
+# The four reviewed recovery action families (the fence view has no action).
+ACCOUNTING_REVIEW_ACTIONS = frozenset(
+    {"expired", "provider_completed", "hold_finalize_actual", "hold_release_no_charge"}
+)
+# 216-a: the GUI reviewed-selection ceiling (deliberate; the CLI positive
+# limits are unchanged). One action family per operation.
+ACCOUNTING_REVIEW_MAX_TARGETS = 200
+
+_ACCOUNTING_REVIEW_NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
+_ACCOUNTING_REVIEW_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_ACCOUNTING_REVIEW_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+
+_ACCOUNTING_TARGET_KEYS = frozenset({"id", "fingerprint"})
+_ACCOUNTING_ASSERTIONS_KEYS = frozenset({"actual_cost_eur", "actual_total_tokens", "success"})
+_ACCOUNTING_REVIEW_KEYS = frozenset({"action", "targets", "assertions", "reason", "nonce"})
+# 216-a: the explicit operator no-charge choice is sealed for hold actions:
+# release MUST carry True, finalize MUST carry False. It is an operator
+# decision, never inferred from the selected mode.
+_ACCOUNTING_REVIEW_HOLD_KEYS = _ACCOUNTING_REVIEW_KEYS | frozenset({"confirm_no_charge"})
+
+# 216-a: the reviewed recovery reason preserves the existing Core contract -
+# a nonblank bounded reason of at most 500 CHARACTERS (Unicode code points,
+# not bytes) whose original validated value is preserved and audited. This
+# deliberately does NOT inherit the older Codex-compatibility ASCII 8..200
+# policy or the SMTP-test byte limit.
+_ACCOUNTING_REVIEW_REASON_MAX_CHARS = 500
+# Worst-case canonical-JSON expansion of one code point is an astral-plane
+# surrogate-pair escape (12 bytes), so a full 500-character Unicode reason
+# can expand to at most 500 * 12 bytes before signing. This finite
+# worst-case canonical-JSON byte budget for the CLOSED document is used only
+# as a backstop (the strict parser enforces the real bounds): 200 targets x
+# 126 bytes (36-char id + 64-hex fingerprint, never escaped) plus list
+# separators; the 500-char Unicode reason; bounded manual assertions
+# (finalize-actual only); a 32-hex nonce; fixed key / structure overhead.
+# (The sealed hold no-charge key adds at most ~25 bytes and stays inside
+# that fixed overhead margin: hold documents are single-target.)
+_ACCOUNTING_REVIEW_DOC_MAX_BYTES = (
+    ACCOUNTING_REVIEW_MAX_TARGETS * 126
+    + (ACCOUNTING_REVIEW_MAX_TARGETS - 1)
+    + 2  # the targets list brackets
+    + _ACCOUNTING_REVIEW_REASON_MAX_CHARS * 12  # worst-case Unicode reason
+    + 160  # bounded manual assertions (finalize-actual only)
+    + 32  # nonce
+    + 200  # fixed key / structure overhead
+)
+# The signed payload wraps the document in the closed
+# purpose/actor/session/expiry envelope (same 211-byte exact overhead the
+# other review envelopes use).
+ACCOUNTING_REVIEW_PAYLOAD_MAX_BYTES = _ACCOUNTING_REVIEW_DOC_MAX_BYTES + 211
+# base64url 4/3 expansion of the bounded payload + separator + 64-hex digest
+# (documented encoding overhead, not a second policy cap).
+MAX_REVIEW_INTENT_ACCOUNTING_TOKEN_CHARS = (
+    4 * ((ACCOUNTING_REVIEW_PAYLOAD_MAX_BYTES + 2) // 3) + 1 + 64
+)
+
+_ACCOUNTING_INVALID_MESSAGE = (
+    "The accounting recovery review state is missing or invalid."
+)
+_ACCOUNTING_NOT_AUTHENTIC_MESSAGE = (
+    "The accounting recovery review state is not valid for this signed-in admin."
+)
+_ACCOUNTING_EXPIRED_MESSAGE = (
+    "The accounting recovery review has expired. Preview the selection again."
+)
+_ACCOUNTING_TOO_LARGE_MESSAGE = (
+    "The accounting recovery review exceeds the bounded review size."
+)
+
+
+def _parse_accounting_decimal(value: str) -> Decimal:
+    try:
+        parsed = Decimal(value)
+    except (InvalidOperation, ValueError, ArithmeticError):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE) from None
+    if not parsed.is_finite() or parsed < 0:
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    return parsed
+
+
+def _strict_accounting_review_document(document: object) -> dict[str, Any]:
+    """Closed strict document: action/targets/assertions/reason/nonce (+ the
+    sealed hold no-charge choice).
+
+    Every target carries a 36-char reviewed id and a 64-hex relevant-source
+    evidence fingerprint; one action family per operation; at most 200
+    targets; hold actions are single-target. Manual hold assertions are
+    bounded and typed (finite non-negative cost, non-negative integer tokens,
+    explicit boolean outcome) and appear ONLY for finalize-actual; the sealed
+    no-charge choice appears ONLY for hold actions (release True, finalize
+    False). Every failure is the fixed safe message; no field value is
+    echoed.
+    """
+    if not isinstance(document, dict):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    action = document.get("action")
+    if action not in ACCOUNTING_REVIEW_ACTIONS:
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    allowed_keys = (
+        _ACCOUNTING_REVIEW_HOLD_KEYS
+        if action in ("hold_finalize_actual", "hold_release_no_charge")
+        else _ACCOUNTING_REVIEW_KEYS
+    )
+    if set(document) != allowed_keys:
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    if action in ("hold_finalize_actual", "hold_release_no_charge"):
+        if document["confirm_no_charge"] is not (action == "hold_release_no_charge"):
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    targets = document.get("targets")
+    if not isinstance(targets, list) or not 1 <= len(targets) <= ACCOUNTING_REVIEW_MAX_TARGETS:
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    seen: set[str] = set()
+    for target in targets:
+        if not isinstance(target, dict) or set(target) != _ACCOUNTING_TARGET_KEYS:
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+        target_id = target.get("id")
+        fingerprint = target.get("fingerprint")
+        if not isinstance(target_id, str) or not _ACCOUNTING_REVIEW_UUID_RE.fullmatch(target_id):
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+        if not isinstance(fingerprint, str) or not _ACCOUNTING_REVIEW_HEX_RE.fullmatch(fingerprint):
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+        if target_id.lower() in seen:
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+        seen.add(target_id.lower())
+    if action in ("hold_finalize_actual", "hold_release_no_charge") and len(targets) != 1:
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    assertions = document.get("assertions")
+    if action == "hold_finalize_actual":
+        if not isinstance(assertions, dict) or set(assertions) != _ACCOUNTING_ASSERTIONS_KEYS:
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+        cost_raw = assertions.get("actual_cost_eur")
+        tokens = assertions.get("actual_total_tokens")
+        success = assertions.get("success")
+        if not isinstance(cost_raw, str):
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+        _parse_accounting_decimal(cost_raw)
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens < 0:
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+        if not isinstance(success, bool):
+            raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    elif assertions is not None:
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    reason = document.get("reason")
+    if (
+        not isinstance(reason, str)
+        or not reason.strip()
+        or len(reason) > _ACCOUNTING_REVIEW_REASON_MAX_CHARS
+    ):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    nonce = document.get("nonce")
+    if not isinstance(nonce, str) or not _ACCOUNTING_REVIEW_NONCE_RE.fullmatch(nonce):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    return document
+
+
+def build_accounting_review_token(
+    *,
+    admin_session_secret: str,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    review_document: dict[str, Any],
+    ttl_seconds: int = REVIEW_INTENT_TTL_SECONDS,
+    now: datetime | None = None,
+) -> str:
+    """Bind one reviewed accounting recovery intent to actor/session/expiry.
+
+    ``review_document`` is the strict closed document validated BEFORE
+    canonical serialization; both the document envelope and the token length
+    are bounded before any signing work returns.
+    """
+    _strict_accounting_review_document(review_document)
+    if len(_canonical_json(review_document)) > _ACCOUNTING_REVIEW_DOC_MAX_BYTES:
+        raise AdminReviewIntentError(_ACCOUNTING_TOO_LARGE_MESSAGE)
+    issued = now or datetime.now(UTC)
+    payload = {
+        "purpose": REVIEW_INTENT_ACCOUNTING_PURPOSE,
+        "admin_user_id": str(admin_user_id),
+        "admin_session_id": str(admin_session_id),
+        "expires_at": (issued + timedelta(seconds=ttl_seconds)).isoformat(),
+        "review": review_document,
+    }
+    encoded = _canonical_json(payload)
+    token = (
+        base64.urlsafe_b64encode(encoded).decode("ascii")
+        + "."
+        + _digest(admin_session_secret, encoded)
+    )
+    if len(token) > MAX_REVIEW_INTENT_ACCOUNTING_TOKEN_CHARS:
+        raise AdminReviewIntentError(_ACCOUNTING_TOO_LARGE_MESSAGE)
+    return token
+
+
+def verify_accounting_review_token(
+    *,
+    admin_session_secret: str,
+    token: str | None,
+    admin_user_id: uuid.UUID,
+    admin_session_id: uuid.UUID,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Verify, rebind, and strict-reparse one accounting recovery token.
+
+    Returns the strict closed review document. The outer payload is CLOSED:
+    exactly the identity/expiry keys plus ``review``. A token for any other
+    purpose is refused (different signed purpose). Every failure path raises
+    :class:`AdminReviewIntentError` with a fixed safe message; the token
+    bytes never appear in an exception, log, or rendered error.
+    """
+    if (
+        not isinstance(token, str)
+        or not token
+        or len(token) > MAX_REVIEW_INTENT_ACCOUNTING_TOKEN_CHARS
+    ):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    body, separator, digest = token.rpartition(".")
+    if not separator or not body or not digest or not _DIGEST_RE.fullmatch(digest):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    try:
+        encoded = base64.urlsafe_b64decode(body.encode("ascii"))
+    except (binascii.Error, UnicodeEncodeError, ValueError):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE) from None
+    if not hmac.compare_digest(_digest(admin_session_secret, encoded), digest):
+        raise AdminReviewIntentError(_ACCOUNTING_NOT_AUTHENTIC_MESSAGE)
+    try:
+        payload = json.loads(
+            encoded.decode("utf-8"), object_pairs_hook=_strict_pairs_hook
+        )
+    except (UnicodeDecodeError, ValueError):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE) from None
+    if not isinstance(payload, dict) or set(payload) != _COMPAT_PAYLOAD_KEYS:
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE)
+    if payload.get("purpose") != REVIEW_INTENT_ACCOUNTING_PURPOSE:
+        raise AdminReviewIntentError(_ACCOUNTING_NOT_AUTHENTIC_MESSAGE)
+    if (
+        payload.get("admin_user_id") != str(admin_user_id)
+        or payload.get("admin_session_id") != str(admin_session_id)
+    ):
+        raise AdminReviewIntentError(_ACCOUNTING_NOT_AUTHENTIC_MESSAGE)
+    expires_raw = payload.get("expires_at")
+    try:
+        expires_at = datetime.fromisoformat(expires_raw)
+    except (TypeError, ValueError):
+        raise AdminReviewIntentError(_ACCOUNTING_INVALID_MESSAGE) from None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if (now or datetime.now(UTC)) >= expires_at:
+        raise AdminReviewIntentError(_ACCOUNTING_EXPIRED_MESSAGE)
+    # Strict re-validation BEFORE canonical serialization: a tampered or
+    # edited field yields the fixed safe error, never a serialization fault.
+    document = _strict_accounting_review_document(payload.get("review"))
+    if len(_canonical_json(document)) > _ACCOUNTING_REVIEW_DOC_MAX_BYTES:
+        raise AdminReviewIntentError(_ACCOUNTING_TOO_LARGE_MESSAGE)
     return document

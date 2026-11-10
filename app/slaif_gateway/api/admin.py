@@ -8644,6 +8644,11 @@ async def _load_admin_record_choices(
                     # Same operator completion-profile directory as the
                     # record-choices AJAX lookup (210-a).
                     profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+                    # 216-a: withhold credential-shaped model tokens from
+                    # the selectable model identities (shared seam).
+                    accepted_prefixes=(
+                        settings.get_gateway_key_accepted_prefixes()
+                    ),
                 )
     return result
 

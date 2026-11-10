@@ -62,9 +62,11 @@ from slaif_gateway.db.models import (
     Owner,
     PricingRule,
     ProviderConfig,
+    QuotaReservation,
     UsageLedger,
 )
 from slaif_gateway.services.key_policy_validation import IMPLEMENTED_CLIENT_ENDPOINTS
+from slaif_gateway.services.request_diagnostics import is_known_incoming_secret_alias
 
 CHOICE_LIMIT = 100
 QUERY_MAX_LENGTH = 200
@@ -224,6 +226,25 @@ def _provider_choice(row: Any) -> RecordChoice:
     if row.display_name:
         return RecordChoice(id=str(row.provider), label=str(row.provider), sub=_sub(row.display_name, state))
     return RecordChoice(id=str(row.provider), label=str(row.provider), sub=state)
+
+
+# 216-a: exact accounting-record pickers (beyond-cap selection for the
+# reviewed recovery surfaces). Minimal ID/state/time labels only: no raw
+# metadata, prose, or credentials.
+def _quota_reservation_choice(row: Any) -> RecordChoice:
+    return RecordChoice(
+        id=str(row.id),
+        label=str(row.id),
+        sub=_sub(row.status, row.created_at),
+    )
+
+
+def _usage_ledger_choice(row: Any) -> RecordChoice:
+    return RecordChoice(
+        id=str(row.id),
+        label=str(row.id),
+        sub=_sub(row.accounting_status, row.created_at),
+    )
 
 
 def _admin_user_choice(row: Any) -> RecordChoice:
@@ -636,8 +657,15 @@ async def load_choices(
     endpoints: Sequence[str] | None = None,
     target_type: str | Sequence[str] | None = None,
     profile_dir: str = "",
+    accepted_prefixes: Sequence[str] = (),
 ) -> list[RecordChoice]:
     """Return bounded choices for one allowlisted kind.
+
+    ``accepted_prefixes`` (216-a) supplies the normalized accepted
+    gateway-key prefixes so the ``model`` kind can withhold
+    credential-shaped tokens (known incoming secret aliases) from the
+    selectable identities; callers without settings may omit it (the
+    pure guard's credential-shape discovery still applies, fail closed).
 
     ``target_type`` scopes the ``audit_target`` kind to one or more
     entity types (the dependent picker's parent selection; a multi
@@ -967,6 +995,18 @@ async def load_choices(
             ),
         )
         for model, _latest in ordered[:CHOICE_LIMIT]:
+            # 216-a presentation guard: a credential-shaped model token
+            # (accepted gateway-key prefix shape or known incoming secret
+            # alias, per the existing pure fail-closed alias helper) is
+            # never a selectable model identity.  The option is withheld
+            # entirely at this shared seam (initial render AND AJAX
+            # hydration): redacting the LABEL would still leave the raw
+            # secret as the selectable id.  Ordinary model tokens pass
+            # through unchanged.
+            if is_known_incoming_secret_alias(
+                model, scope={}, accepted_prefixes=tuple(accepted_prefixes)
+            ):
+                continue
             choices.append(RecordChoice(id=model, label=model))
 
     elif kind == "policy_model":
@@ -1367,6 +1407,56 @@ async def load_choices(
                 await _fetch_selected(session, sel_stmt, selected, _email_delivery_choice),
             )
 
+    elif kind == "quota_reservation":
+        # 216-a: exact quota-reservation picker for the reviewed
+        # accounting-recovery surfaces (beyond the capped candidate
+        # views): latest 100 + older UUID search + selected hydration,
+        # minimal columns (id/status/created only).
+        stmt = select(
+            QuotaReservation.id, QuotaReservation.status, QuotaReservation.created_at
+        )
+        if query:
+            stmt = stmt.where(_ilike(QuotaReservation.id.cast(String), query))
+        stmt = stmt.order_by(
+            desc(QuotaReservation.created_at), asc(QuotaReservation.id)
+        ).limit(CHOICE_LIMIT)
+        rows = (await session.execute(stmt)).all()
+        choices = [_quota_reservation_choice(row) for row in rows]
+        parsed = _uuids(selected)
+        if parsed:
+            sel_stmt = select(
+                QuotaReservation.id,
+                QuotaReservation.status,
+                QuotaReservation.created_at,
+            ).where(QuotaReservation.id.in_(parsed))
+            choices = _merge_selected_keep_cap(
+                choices,
+                await _fetch_selected(session, sel_stmt, selected, _quota_reservation_choice),
+            )
+
+    elif kind == "usage_ledger":
+        # 216-a: exact usage-ledger picker for the provider-completed
+        # recovery surface (same bounded pattern as quota_reservation).
+        stmt = select(
+            UsageLedger.id, UsageLedger.accounting_status, UsageLedger.created_at
+        )
+        if query:
+            stmt = stmt.where(_ilike(UsageLedger.id.cast(String), query))
+        stmt = stmt.order_by(desc(UsageLedger.created_at), asc(UsageLedger.id)).limit(
+            CHOICE_LIMIT
+        )
+        rows = (await session.execute(stmt)).all()
+        choices = [_usage_ledger_choice(row) for row in rows]
+        parsed = _uuids(selected)
+        if parsed:
+            sel_stmt = select(
+                UsageLedger.id, UsageLedger.accounting_status, UsageLedger.created_at
+            ).where(UsageLedger.id.in_(parsed))
+            choices = _merge_selected_keep_cap(
+                choices,
+                await _fetch_selected(session, sel_stmt, selected, _usage_ledger_choice),
+            )
+
     elif kind == "completion_profile":
         # Installed completion-service data profiles (210-a): enumerate
         # the bounded profile directory with the same file law the
@@ -1395,6 +1485,20 @@ async def load_choices(
             else:
                 plain_selected.append(RecordChoice(id=value, label=value))
         choices = _merge_selected_keep_cap(choices, plain_selected)
+
+    # 216-a presentation guard (MODEL ONLY, after all hydration/merges):
+    # a credential-shaped model token is never a selectable identity,
+    # whatever path produced the option (initial batch, ILIKE search, or
+    # selected plain-value re-hydration above).  Ordinary model tokens
+    # and every other kind are untouched (no id corruption).
+    if kind == "model":
+        choices = [
+            c
+            for c in choices
+            if not is_known_incoming_secret_alias(
+                c.id, scope={}, accepted_prefixes=tuple(accepted_prefixes)
+            )
+        ]
 
     # De-duplicate by id, preserving order.
     seen_ids: set[str] = set()

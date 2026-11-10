@@ -84,6 +84,9 @@ _KINDS: frozenset[str] = frozenset(
         "email_delivery_status",
         "one_time_secret",
         "email_delivery",
+        # 216-a: exact accounting-record pickers (reviewed recovery).
+        "quota_reservation",
+        "usage_ledger",
         "tool_destination",
         "completion_profile",
     }
@@ -267,6 +270,11 @@ async def list_record_choices(
                     endpoints=endpoint_values,
                     target_type=target_type_values,
                     profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+                    # 216-a: withhold credential-shaped model tokens from
+                    # the selectable model identities (shared seam).
+                    accepted_prefixes=(
+                        settings.get_gateway_key_accepted_prefixes()
+                    ),
                 )
     except UnknownChoiceKindError:
         return _bad_request("Unknown record-choices kind.")
