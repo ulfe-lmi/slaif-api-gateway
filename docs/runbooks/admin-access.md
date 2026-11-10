@@ -5,12 +5,43 @@
 
 ## Current Admin Model
 
-Every active admin is a full operator. `superadmin` is metadata/future-proofing
-and is not currently an enforced RBAC boundary. MFA and full RBAC are not
+Legacy admin authority is broad: apart from the enforced G14 apply
+boundary described below, every active admin retains full operator
+authority over the existing admin surfaces. MFA and full RBAC are not
 implemented in the current RC-beta system.
+
+There is exactly one enforced role boundary today: applying reviewed
+accounting recovery operations (the confirm-and-apply step of the admin
+console's accounting operations area, G14/216) requires the authenticated
+user's EXISTING `superadmin` role. All other admin authority, including
+every read-only accounting view, preview, and review step, is unchanged
+for ordinary `admin` accounts; a non-superadmin receives a fixed safe
+refusal at apply only. No automatic elevation exists: an account becomes
+a superadmin only by being created with the explicit flag (below); there
+is no promote command, and the first created admin is not elevated
+automatically.
 
 Protect `/admin` with HTTPS, strong passwords, login rate limiting, and
 preferably VPN, IP allowlisting, or equivalent ingress control.
+
+## Offline Superadmin Setup
+
+To create (or replace) a superadmin without a running console session,
+use the CLI from the server environment, for example:
+
+```bash
+printf '%s\n' '<new-strong-password>' \
+  | docker compose run --rm api slaif-gateway admin create \
+      --email superadmin@example.org \
+      --display-name "Gateway Superadmin" \
+      --superadmin \
+      --password-stdin
+```
+
+Without `--superadmin` the account is a full ordinary `admin`. Verify the
+result with `slaif-gateway admin list` (it reports `is_superadmin`) and
+rotate or disable any account whose password was shared through an unsafe
+channel.
 
 ## Login Rate Limits
 

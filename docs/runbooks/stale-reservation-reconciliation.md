@@ -126,3 +126,17 @@ Ordinary stale reservation reconciliation must skip `external_tool_fenced`
 holds. A held fence is inspection-age information only; it may be cleared only
 after explicit audited manual reconciliation has made ledger, reservation, and
 counters authoritative.
+
+## Admin Console (216)
+
+The same expired-pending recovery is available in the admin console under
+Operations > Accounting operations > "Expired pending reservations". The
+console adds a reviewed workflow on top of this runbook's law: bounded
+candidate view (at most 200 rows, no completeness claim) plus exact
+known-record selection (latest 100 plus search, or an explicit bounded
+selection of up to 200 UUIDs), a dry-run preview that writes nothing, a
+stateless session-bound signed review (15-minute expiry, sealed source facts, replay-safe), and an explicit confirm-and-apply
+that requires the existing superadmin role. Any reviewed row whose
+relevant source facts changed after the preview refuses the WHOLE
+selection; a single already-resolved row is a safe already-resolved
+outcome. The CLI commands above are unchanged and remain equivalent.

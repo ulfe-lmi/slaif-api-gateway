@@ -1694,3 +1694,79 @@ attempts" or "no protected-file reads".
 
 All seeded rows are synthetic; the final 219 installed whole-GUI
 qualification remains required and is NOT claimed.
+
+## 216-a GUI reviewed accounting recovery (objective 216, new PR, 2026-11-10)
+
+### GUI-to-CLI mapping
+
+- `quota list-expired-reservations` -> "Expired pending reservations"
+  view (honest at-most-200 rows, no completeness claim; exact
+  known-record picker plus bounded explicit selection of up to 200
+  canonical UUIDs; 201 refused).
+- `quota reconcile-expired-reservations` / `reconcile-reservation` ->
+  the same view's reviewed release action (dry-run preview writes
+  nothing; stateless session-bound signed review (15-minute expiry,
+  sealed source facts, replay-safe; no durable consumption store);
+  explicit confirm-and-apply; superadmin-only apply).
+- `quota list-external-tool-fences` -> read-only fences view (NO
+  release/reset/unblock surface).
+- `quota list-external-tool-holds` -> holds view.
+- `quota reconcile-external-tool-hold` -> holds reviewed action:
+  finalize-actual (explicit finite nonnegative cost, nonnegative
+  integer tokens, explicit outcome; sealed `operator_asserted`
+  manual provenance) or release-no-charge (distinct explicit
+  confirmation; actual values refused). Mutually exclusive intent
+  enforced at form, signed review, and shared Core.
+- `quota list-provider-completed-recovery` -> provider-completed
+  recovery view.
+- `quota reconcile-provider-completed` -> reviewed recovery from
+  STORED evidence only (no cost override); bounded selection.
+
+### Laws preserved
+
+Core accounting math, defaults, error taxonomy, and CLI behavior are
+unchanged (no `cli/` file changes). The GUI service adds backwards-
+compatible fresh ordered FOR UPDATE bulk reads only. Apply re-locks
+all reviewed rows and distinct gateway keys (ascending UUID) before
+comparing full-precision sealed fingerprints (raw `isoformat()`
+precision retained in the fingerprint; human UTC-to-seconds rendering
+is display-only). ANY included relevant-source change refuses and
+rolls back the WHOLE selection; a single already-resolved row is a
+safe already-resolved outcome; a lost commit acknowledgement is
+reported as UNCONFIRMED (the commit may have committed or rolled
+back; NOT a rollback promise). Dry-run statuses
+are CURRENT observed facts, never post-apply predictions. Unknown
+values stay unknown (never zero); token readouts use millions-of-
+tokens with exact raw sort keys; credential-shaped manual/model
+values are refused or withheld with the existing pure alias guards.
+
+### Evidence (216-a; scopes stated exactly)
+
+216-b (same PR, 2026-11-10): final-head CI unit failures were two
+stale inventory expectations caused by the six G14 tables - the
+admin-table inventory now expects 46 sortable tables (was 40) and the
+labeled-wrapper inventory 44 wrappers (was 38); reaching the existing
+structural assertions exposed three real new-template violations that
+were minimally repaired in
+`templates/accounting_operations/` only (provider-completed empty-
+state colspan 12 -> 11; missing fixed `data-no-sort` empty-state rows
+in BOTH review tables). No coverage was weakened, removed, skipped, or
+converted to `>=`; all other G14 behavior is unchanged.
+
+Recorded in the immutable 216-a report: focused unit module 43 PASS
+(mocked DB/service seams; NOT native proof); six affected
+reconciliation/hold/CLI consumer modules 52 PASS; 20 native
+owned-PostgreSQL real-HTTP cases on a fresh labeled tmpfs PostgreSQL
+16 fixture (synthetic rows; commit-fault durability/rollback,
+waited-lock refusal, cross-key ordering, beyond-200 exact selection;
+controlled fault seams labeled synthetic, not provider-installed
+evidence); 8 actual-Chromium cases on real uvicorn + owned PG
+covering all four action families through the real forms, no-JS/
+keyboard paths, credential canaries in FULL responses, and
+desktop+narrow captures under `/tmp/slaif216` (root-reviewed). One
+rebuilt disposable qualification venv (`/tmp/slaif216-qualification-
+venv`, pyproject `.[dev]`, uv) was used for all local runs; no
+source, dependency, schema, or lockfile change. No mocked/native
+result is presented as installed-qualification: the final 219
+installed whole-GUI gate remains open, and no live-provider or
+production claim is made.

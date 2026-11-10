@@ -885,6 +885,14 @@ Reconciliation commands default to inspection or dry-run where documented.
 Execute modes require explicit confirmation and an audit reason. They use
 PostgreSQL evidence and do not call providers to reconstruct an outcome.
 
+These commands are unchanged by the admin console accounting operations area
+(G14/216): the console wraps the SAME services in a reviewed dry-run ->
+signed review -> explicit confirm workflow (confirm-and-apply requires the
+existing superadmin role), but the CLI remains the equivalent offline path
+with identical laws, evidence requirements, and audit behavior. See
+[`runbooks/admin-access.md`](runbooks/admin-access.md) and
+[`verification/gui-cli-parity.md`](verification/gui-cli-parity.md).
+
 ### Email delivery inspection and safe retries
 
 `email list` and `email show <delivery-uuid>` are READ-ONLY inspection

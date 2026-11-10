@@ -1607,3 +1607,77 @@ change** and **no schema migration**; existing keys, deliveries,
 secrets, and audit history are untouched. No new environment
 variables or dependencies. See
 [`upgrade-runbook.md`](upgrade-runbook.md).
+
+## 17. Accounting operations (G14, 216-a)
+
+- Dashboard -> **Usage and operations** group -> **Operations** ->
+  **Accounting operations** (index links the four views).
+
+### 17.1 Bounded candidate views (all signed-in admins)
+
+- **Expired pending reservations**, **External-tool accounting holds**,
+  **Provider-completed recovery rows**, and a READ-ONLY
+  **External-tool fences** view (no release/reset/unblock controls
+  exist there).
+- Each table shows at most 200 rows with explicit "Up to 200 rows"
+  help: this is an honest cap, not a completeness claim. Token
+  quantities read in millions (e.g. `0.0012M`) while sort values and
+  raw machine units stay exact; unknown/missing facts read
+  "unknown", never zero. Credential-shaped values (including model
+  metadata and picker options) are masked or withheld.
+
+### 17.2 Exact target selection beyond the capped views
+
+- Each actionable view offers the standard searchable known-record
+  picker (latest 100 plus older-value search) and a no-JS
+  exact-identifier fallback field; the read-only fences view has no
+  selection controls. You may preview/apply an exact row even when it
+  is beyond the first 200 database candidates.
+- Bounded explicit selection accepts up to 200 unique canonical UUIDs
+  (repeated picker values or newline-separated IDs without
+  JavaScript); 201 is refused with a fixed safe message. The
+  unrelated general list-filter cap (20) is untouched.
+
+### 17.3 Reviewed recovery actions (confirm-and-apply is superadmin)
+
+- Flow: preview (dry-run; writes nothing) -> signed review bound to
+  your account, session, sealed source facts and a 15-minute
+  expiry (stateless signed token; no durable consumption store - a
+  replay yields only a refusal or a safe already-resolved outcome) ->
+  tick confirm -> apply. The review keeps CURRENT observed facts separate
+  from the intended action and the if-applied quantities: for
+  release/no-charge those are the RESERVED amounts that would be
+  RELEASED (not a new charge or a resulting balance); for finalize
+  they are the operator-asserted actuals that would be booked (manual
+  provenance, never provider-verified).
+- Apply requires the EXISTING `superadmin` role (fixed safe refusal
+  otherwise; views/previews/review stay available to ordinary
+  admins). Apply re-checks every sealed row under fresh database
+  locks: if ANY relevant source fact changed, the WHOLE operation is
+  refused and nothing changes; one already-resolved row is a safe
+  already-resolved outcome; a lost commit acknowledgement is
+  reported as UNCONFIRMED - the commit may have committed or rolled
+  back (NOT a rollback promise; verify row state and the audit log
+  before acting again).
+- Hold actions are mutually exclusive: **finalize with actuals**
+  needs explicit cost/tokens/outcome and rejects a posted no-charge
+  confirmation; **release with no charge** needs its distinct
+  confirmation checkbox and rejects any actual values. Provider-
+  completed recovery uses stored evidence only (no cost override).
+
+### 17.4 Keyboard / no-JS
+
+- Row selection, pickers, and the reason field work with plain
+  keyboard; the exact-ID fallback field is a normal textarea. Missing
+  reason or missing confirmation return a fixed safe error page;
+  re-enter the flow (the form state is not preserved across a
+  refused preview).
+
+### 17.5 Upgrade note (no schema migration)
+
+Recreate/restart the API so the new code runs. There is **no Nginx
+change**, **no schema migration**, and **no new environment variable
+or dependency**; reservations, ledger rows, fences, and audit history
+are untouched. The CLI `reconcile-*` commands are unchanged. See
+[`upgrade-runbook.md`](upgrade-runbook.md) and
+[`runbooks/admin-access.md`](runbooks/admin-access.md).

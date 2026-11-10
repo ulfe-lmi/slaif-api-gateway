@@ -10,6 +10,29 @@ fitness, security, compliance, provider behavior, or scale.
 For current readers, these are the newest qualification and identity records
 on record. They are dated, commit-specific evidence, not certifications.
 
+- [`2026-11-10 Objective 216-a GUI reviewed accounting recovery verification`](gui-cli-parity.md)
+  (recorded 2026-11-10, same living record file) - admin GUI G14 of
+  `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared
+  reconciliation/hold services the CLI uses: four bounded read-only
+  candidate views (honest at-most-200 rows, no completeness claim;
+  exact known-record picker plus bounded selection of up to 200
+  canonical UUIDs on the actionable views), and reviewed dry-run ->
+  stateless session-bound signed review (replay-safe, no durable
+  consumption store) -> superadmin confirm-and-apply actions (expired-
+  pending release, hold finalize-actual with sealed `operator_
+  asserted` manual provenance, hold release-no-charge with its
+  distinct confirmation, provider-completed recovery from stored
+  evidence only); whole-selection refusal on any reviewed source
+  change, safe already-resolved outcome, UNCONFIRMED commit outcome
+  (may have committed or rolled back; never a rollback promise),
+  credential-shape refusal/withholding,
+  read-only fences (no release/reset/unblock), CLI byte-for-byte
+  unchanged; no schema/migration/dependency change. Evidence: 43
+  focused unit, 52 affected consumer modules, 20 native owned-PG,
+  and 8 actual-Chromium receipts (synthetic fixtures, rebuilt
+  disposable qualification venv; NOT installed-qualification;
+  final 219 installed gate still required).
+
 - [`2026-11-01 Objective 215-a GUI email inspection, retry and SMTP test verification`](gui-cli-parity.md)
   (recorded 2026-11-01, same living record file) - admin GUI G12 of
   `docs/MISSING_GUI_FUNCTIONALITY.md` reusing the SAME shared email

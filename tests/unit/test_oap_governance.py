@@ -47,7 +47,10 @@ def test_active_identifier_resolves_exactly_one_matching_order() -> None:
 
 
 _NEW_PR_DECLARATION_RE = re.compile(
-    r"^PR mode: (?:CREATE_NEW_PR|`CREATE_NEW_PR`)$",
+    # The root-authored orders vary only in the header punctuation (the
+    # 216 order is compact: "PR mode:CREATE_NEW_PR"); the declaration VALUE
+    # is what the gate validates, not the whitespace after the colon.
+    r"^PR mode: ?(?:CREATE_NEW_PR|`CREATE_NEW_PR`)$",
     re.MULTILINE,
 )
 
@@ -77,6 +80,14 @@ def test_new_pr_declaration_accepts_both_forms_and_rejects_informal_text() -> No
         """Base: main at 0123456789abcdef0123456789abcdef01234567
 PR mode: CREATE_NEW_PR
 Branch: oap/185-lazy-throttling
+"""
+    )
+    # The compact root-order punctuation (no space after the colon) is the
+    # same explicit declaration.
+    assert _declares_new_pr_mode(
+        """Identifier:216-a
+Numeric objective:216
+PR mode:CREATE_NEW_PR
 """
     )
     assert _declares_new_pr_mode(

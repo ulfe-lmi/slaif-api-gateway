@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}Accounting Recovery Review{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="acct-review-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Accounting Operations</p>
+      <h1 id="acct-review-heading">{{ action_label }}</h1>
+      {% if reason %}
+      <p class="muted">Audit reason: <strong>{{ reason }}</strong> <span class="small">(exactly as you entered it)</span></p>
+      {% endif %}
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/accounting-operations/">Accounting operations</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ error }}</div>
+  {% endif %}
+
+  {% if previews %}
+  <section class="action-panel" aria-labelledby="acct-review-rows-heading">
+    <h2 id="acct-review-rows-heading">What you are reviewing (current observed facts)</h2>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Reviewed rows">
+      <table data-sortable class="table-wide">
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col" class="col-key">Target</th>
+            <th scope="col" class="nowrap">Proposal</th>
+            <th scope="col">Intended action</th>
+            <th scope="col" class="num" data-sort-type="number">Tokens (observed)</th>
+            <th scope="col" class="num" data-sort-type="number">Requests (observed)</th>
+            <th scope="col" class="num" data-sort-type="money">Cost (EUR, observed)</th>
+            <th scope="col" class="num" data-sort-type="number">Tokens (if applied)</th>
+            <th scope="col" class="num" data-sort-type="number">Requests (if applied)</th>
+            <th scope="col" class="num" data-sort-type="money">Cost (EUR, if applied)</th>
+            <th scope="col" style="min-width:18rem">Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in previews %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td class="col-key"><code>{{ row.id }}</code></td>
+            <td class="nowrap">{% if row.proposal == "eligible" %}Eligible{% elif row.proposal == "already_resolved" %}Already resolved{% else %}Refused{% if row.safe_detail %} <span class="muted small">({{ row.safe_detail }})</span>{% endif %}{% endif %}</td>
+            <td>{{ row.action_label }}</td>
+            <td class="num"{% if row.observed_tokens is not none %} data-sort-value="{{ row.observed_tokens }}" title="{{ row.observed_tokens | num }} tokens"{% endif %}>{% if row.observed_tokens is not none %}{{ row.observed_tokens | tokm }}M{% else %}—{% endif %}</td>
+            <td class="num"{% if row.observed_requests is not none %} data-sort-value="{{ row.observed_requests }}" title="{{ row.observed_requests | num }} requests"{% endif %}>{% if row.observed_requests is not none %}{{ row.observed_requests | num }}{% else %}—{% endif %}</td>
+            <td class="num"{% if row.observed_cost_eur is not none %} data-sort-value="{{ row.observed_cost_eur | dec }}" title="{{ row.observed_cost_eur | num }} EUR"{% endif %}>{% if row.observed_cost_eur is not none %}{{ row.observed_cost_eur | num }}{% else %}—{% endif %}</td>
+            <td class="num"{% if row.proposed_tokens is not none %} data-sort-value="{{ row.proposed_tokens }}" title="{{ row.proposed_tokens | num }} tokens"{% endif %}>{% if row.proposed_tokens is not none %}{{ row.proposed_tokens | tokm }}M{% else %}—{% endif %}</td>
+            <td class="num"{% if row.proposed_requests is not none %} data-sort-value="{{ row.proposed_requests }}" title="{{ row.proposed_requests | num }} requests"{% endif %}>{% if row.proposed_requests is not none %}{{ row.proposed_requests | num }}{% else %}—{% endif %}</td>
+            <td class="num"{% if row.proposed_cost_eur is not none %} data-sort-value="{{ row.proposed_cost_eur | dec }}" title="{{ row.proposed_cost_eur | num }} EUR"{% endif %}>{% if row.proposed_cost_eur is not none %}{{ row.proposed_cost_eur | num }}{% else %}—{% endif %}</td>
+            <td style="min-width:18rem">{% if row.details %}{% for label, value in row.details %}<span class="muted small">{{ label }}:</span> {{ value }}<br>{% endfor %}{% else %}—{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort>
+            <td colspan="11" class="empty-state">No reviewed rows.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if assertions %}
+    <h3 class="muted">Manual operator assertions (finalize with actuals)</h3>
+    <dl>
+      <dt>Actual cost</dt>
+      <dd>{{ assertions.actual_cost_eur }} EUR <span class="muted small">(operator_asserted, never provider-verified)</span></dd>
+      <dt>Actual total tokens</dt>
+      <dd title="{{ assertions.actual_total_tokens | num }} tokens">{{ assertions.actual_total_tokens | tokm }}M <span class="muted small">(operator_asserted; raw machine units are sealed)</span></dd>
+      <dt>Provider outcome</dt>
+      <dd>{{ "success" if assertions.success else "failure" }} <span class="muted small">(operator_asserted)</span></dd>
+    </dl>
+    {% endif %}
+    {% if confirm_no_charge is not none %}
+    <dl>
+      <dt>No-charge confirmation</dt>
+      <dd>{{ "sealed: explicitly confirmed" if confirm_no_charge else "sealed: not confirmed" }} <span class="muted small">(operator decision, re-checked before execution)</span></dd>
+    </dl>
+    {% endif %}
+    <div class="admin-flash" role="status">
+      The "observed" columns are the CURRENT stored state - the dry-run reports it unchanged, so
+      a pending or estimated status here is the row's state NOW, not a predicted result. For
+      release / no-charge operations the "if applied" quantities are the RESERVED amounts that
+      would be RELEASED from the key - they are not a new usage charge and not the resulting key
+      balances. For finalize with actuals they are the operator-asserted actual amounts that
+      WOULD be booked (manual provenance, never provider-verified). Unknown values stay unknown
+      - never zero. Nothing has changed yet. This review is bound to your signed-in session for
+      15 minutes and seals each row's current relevant source facts.
+    </div>
+  </section>
+  {% elif doc_targets %}
+  <section class="action-panel" aria-labelledby="acct-review-targets-heading">
+    <h2 id="acct-review-targets-heading">Reviewed targets</h2>
+    <p class="muted small">{{ doc_targets | length }} target(s) in this sealed review:</p>
+    <p>{% for target in doc_targets %}<code>{{ target }}</code><br>{% endfor %}</p>
+    {% if assertions %}
+    <dl>
+      <dt>Actual cost</dt>
+      <dd>{{ assertions.actual_cost_eur }} EUR <span class="muted small">(operator_asserted)</span></dd>
+      <dt>Actual total tokens</dt>
+      <dd title="{{ assertions.actual_total_tokens | num }} tokens">{{ assertions.actual_total_tokens | tokm }}M <span class="muted small">(operator_asserted; raw machine units are sealed)</span></dd>
+      <dt>Provider outcome</dt>
+      <dd>{{ "success" if assertions.success else "failure" }} <span class="muted small">(operator_asserted)</span></dd>
+    </dl>
+    {% endif %}
+    {% if confirm_no_charge is not none %}
+    <dl>
+      <dt>No-charge confirmation</dt>
+      <dd>{{ "sealed: explicitly confirmed" if confirm_no_charge else "sealed: not confirmed" }}</dd>
+    </dl>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% if result %}
+  <section class="action-panel" aria-labelledby="acct-review-result-heading">
+    <h2 id="acct-review-result-heading">Outcome</h2>
+    <div class="admin-flash {{ 'admin-flash-error' if result.state != 'committed' else '' }}" role="status">{{ result.message }}</div>
+    {% if result.outcomes %}
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Per-row outcomes">
+      <table data-sortable>
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col">Target</th>
+            <th scope="col">Outcome</th>
+            <th scope="col">Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for outcome in result.outcomes %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td><code>{{ outcome.id }}</code></td>
+            <td>{{ outcome.status }}</td>
+            <td>{{ outcome.detail }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort>
+            <td colspan="4" class="empty-state">No per-row outcomes.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    <p class="muted small">
+      Verify the current state in the matching candidate view and the <a href="/admin/audit">audit log</a>.
+      A safe already-resolved outcome changes nothing and creates no duplicate effect.
+    </p>
+  </section>
+  {% endif %}
+
+  {% if review_token and not error and not result %}
+  <section class="action-panel" aria-labelledby="acct-review-apply-heading">
+    <h2 id="acct-review-apply-heading">Confirm and apply</h2>
+    <div class="admin-flash" role="status">
+      Nothing has changed yet. When you apply, the system re-checks every sealed row under database
+      locks first: if ANY relevant source fact changed after this preview, the WHOLE operation is
+      refused and NOTHING changes. Rows that are unchanged but already resolved are reported as
+      already resolved without any duplicate effect.
+    </div>
+    <details open aria-labelledby="acct-review-apply-summary">
+      <summary id="acct-review-apply-summary">Apply this reviewed operation</summary>
+      <form class="create-form" method="post" action="{{ apply_url }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="review_token" value="{{ review_token }}">
+        <div class="checkbox-row">
+          <input type="checkbox" id="acct-confirm-apply" name="confirm_apply" value="1" aria-describedby="acct-confirm-apply-help">
+          <label for="acct-confirm-apply">I confirm applying exactly this reviewed accounting operation</label>
+        </div>
+        <p class="field-help" id="acct-confirm-apply-help">
+          You can only apply what you reviewed above: the same rows, the same assertions, the same
+          reason. Applying requires your existing superadmin role.
+        </p>
+        <button type="submit">Apply accounting recovery</button>
+      </form>
+    </details>
+  </section>
+  {% endif %}
+</section>
+{% endblock %}

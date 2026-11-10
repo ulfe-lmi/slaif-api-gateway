@@ -1875,3 +1875,45 @@ never accepted from client, CLI, admin JSON, HTML, logs, or audit metadata.
 Generic HTTP requires explicit audited acknowledgement because credentials and
 content cross the LAN unencrypted. Redirects are disabled, and the generic
 runtime gains no hosted-tool or OpenRouter cost authority.
+
+## Reviewed accounting recovery (admin console, 216)
+
+The admin console accounting operations area (G14) exposes four bounded
+read-only candidate views and reviewed recovery actions over the existing
+reconciliation/hold services. Its security boundary:
+
+- Views and previews are available to every signed-in admin and write
+  nothing (dry-run previews create no audit/ledger/counter rows). The
+  confirm-and-apply step requires the authenticated user's EXISTING
+  `superadmin` role - the only enforced role boundary in the current
+  system; there is no automatic elevation and no promote command, so a
+  superadmin is created explicitly through the CLI
+  (`admin create --superadmin`). See
+  [`runbooks/admin-access.md`](runbooks/admin-access.md).
+- Every state-changing form is CSRF-protected. The preview signs a
+  bounded, escape-budgeted STATELESS signed review token bound to
+  the admin, the session, its 15-minute expiry, and the sealed source
+  facts (there is no durable consumption store); apply verifies the
+  signed facts, so posted
+  values confer nothing, and re-locks all reviewed rows and linked
+  gateway keys under fresh canonical locks before comparing the sealed
+  full-precision source fingerprints. Any included relevant-source
+  change refuses and rolls back the WHOLE selection; a single
+  already-resolved row is a safe already-resolved outcome with no
+  duplicate effect.
+- A lost commit acknowledgement is reported as UNCONFIRMED: the
+  commit may have committed or rolled back, and this is explicitly
+  NOT a rollback promise; the operator must verify row state and
+  audit before acting again (a controlled ack-loss test proves the
+  durable-committed case, but not every fault commits).
+- Unknown final cost stays held and fenced; no usage reset, generic
+  release, or unblock primitive is exposed (the fences view is
+  read-only). Manual finalize values carry `operator_asserted`
+  provenance and are never presented as provider-verified evidence.
+- Credential-shaped values (manual fields, model metadata, picker
+  options) are refused or withheld with the existing pure alias guards
+  before seal, render, or audit; raw machine units remain the source of
+  truth for fingerprints and sort keys.
+
+No schema migration, no new RBAC model, and no change to the CLI
+`reconcile-*` commands accompany this surface.

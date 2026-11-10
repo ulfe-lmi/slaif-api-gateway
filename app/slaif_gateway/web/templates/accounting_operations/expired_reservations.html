@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% from "_record_choice.html" import record_choice %}
+
+{% block title %}Expired Pending Reservations{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="acct-expired-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Accounting Operations</p>
+      <h1 id="acct-expired-heading">Expired pending reservations</h1>
+      <p class="muted">
+        Up to {{ view_limit | num }} expired pending reservations (oldest expiry first). This is a
+        bounded projection: a short or empty list does NOT prove the database is complete. Use the
+        key detail and usage pages for exact lookup.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/accounting-operations/">Accounting operations</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <form method="post" action="/admin/accounting-operations/expired-reservations/preview" id="acct-expired-preview">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="action-panel">
+  {{ record_choice("exact_reservation_id", "quota_reservation", "Exact reservation (existing record)", options=reservation_options, multi=true, multi_value="", allow_new=false, help="Adds exact known reservations to the selection - the path for rows beyond the capped candidate list. Newline-separated; latest 100 plus search. Combined with the checkboxes above, at most 200 unique rows per operation.", input_id="acct-expired-exact", control_id="acct-expired-exact-input", help_id="acct-expired-exact-help") }}
+    </div>
+    <div class="table-wrap" tabindex="0" role="region" aria-label="Expired pending reservations">
+      <table data-sortable class="table-wide">
+        <thead>
+          <tr>
+            <th data-ordinal aria-hidden="true">#</th>
+            <th scope="col" aria-label="Select">Select</th>
+            <th scope="col" class="col-key">Reservation</th>
+            <th scope="col" class="col-key">Key</th>
+            <th scope="col">Request</th>
+            <th scope="col" class="num" data-sort-type="money">Reserved (EUR)</th>
+            <th scope="col" class="num" data-sort-type="number">Reserved tokens</th>
+            <th scope="col" class="num" data-sort-type="number">Reserved requests</th>
+            <th scope="col" class="nowrap">Quota mode</th>
+            <th scope="col" class="nowrap" data-sort-type="datetime">Expired (UTC)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr>
+            <td class="row-ordinal">{{ loop.index }}</td>
+            <td>
+              <label class="checkbox-row" for="acct-expired-select-{{ loop.index }}">
+                <input
+                  type="checkbox"
+                  name="target_id"
+                  value="{{ row.reservation_id }}"
+                  id="acct-expired-select-{{ loop.index }}"
+                  aria-label="row {{ loop.index | num }}"
+                  aria-describedby="acct-expired-select-help"
+                >
+              </label>
+            </td>
+            <td class="col-key"><code>{{ row.reservation_id }}</code></td>
+            <td class="col-key"><a href="/admin/keys/{{ row.gateway_key_id }}"><code>{{ row.gateway_key_id }}</code></a></td>
+            <td><code class="small">{{ row.request_id[:24] }}…</code></td>
+            <td class="num" data-sort-value="{{ row.reserved_cost_eur | dec }}">{{ row.reserved_cost_eur | num }}</td>
+            <td class="num" data-sort-value="{{ row.reserved_tokens }}" title="{{ row.reserved_tokens | num }} tokens">{{ row.reserved_tokens | tokm }}M</td>
+            <td class="num" data-sort-value="{{ row.reserved_requests }}">{{ row.reserved_requests | num }}</td>
+            <td class="nowrap">
+              {{ row.status }}{% if row.requires_external_tool_review %}
+              <span class="muted small"> (external-tool fenced: ordinary release is refused; the hold view owns it)</span>
+              {% endif %}
+            </td>
+            <td class="nowrap" data-sort-value="{{ row.expires_at.isoformat() if row.expires_at else '' }}">{{ row.expires_at.strftime("%Y-%m-%d %H:%M:%S") if row.expires_at else "n/a" }}</td>
+          </tr>
+          {% else %}
+          <tr data-no-sort>
+            <td colspan="10" class="empty-state">No expired pending reservations in this bounded view (this does not prove completeness).</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="action-panel">
+    <p class="field-help" id="acct-expired-select-help">
+      Select one row, or an explicit selection of up to {{ max_targets | num }} rows, for one
+      all-or-nothing reviewed release. Each selected row's reservation ID and current relevant
+      facts are sealed into the review; newly matching rows are never added at apply time.
+    </p>
+    <label for="acct-expired-reason">
+      Audit reason
+      <input
+        type="text"
+        name="reason"
+        id="acct-expired-reason"
+        maxlength="500"
+        autocomplete="off"
+        aria-describedby="acct-expired-reason-help"
+      >
+    </label>
+    <p class="field-help" id="acct-expired-reason-help">
+      Nonblank, at most 500 characters. Stored and audited exactly as you enter it. Reasons that
+      match a known incoming authentication value are refused.
+    </p>
+    <div class="admin-flash" role="status">
+      Previewing writes nothing: it only computes the proposed release per selected row. Applying
+      re-checks every selected row and refuses the WHOLE selection if any relevant source fact
+      changed after the preview.
+    </div>
+    <button type="submit">Preview selection</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
