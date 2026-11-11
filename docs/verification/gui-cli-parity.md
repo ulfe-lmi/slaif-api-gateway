@@ -2142,6 +2142,35 @@ completion, and installed legacy outcomes (objective 219, SAME PR #376,
   keyboard external-tool submit wait (waits on the actual target POST
   response and the resulting navigation/flash; keyboard Enter and the
   persisted audit outcome preserved).
+- **Rendered all-field guidance completion**: root's isolated real-Jinja/
+  CSS/JS audit of the ACTUAL rendered pages found 11 visible entry
+  controls without a resolving description in each rendered state (create
+  guided 57 controls; standard AND trusted detail 75 each): the two
+  unnamed older-provider/model search inputs, the six
+  `{create,detail}-policy-{providers,endpoints,models}-{available,selected}`
+  dual selects, and the dynamic `{create,detail}-chat-streaming-live-burn-*`
+  enabled/cost-margin/token-margin fields. The shared
+  `keys/_policy_selector.html` partial now associates every one of its
+  controls with the existing caption help via stable prefixed IDs (no new
+  copy, no visual churn, no new component), and the dynamic live-burn
+  controls in BOTH the create and detail templates reference their
+  existing hint help. The source-structure inventory no longer skips
+  unnamed or Jinja-named controls (and filters hidden/readonly/submit,
+  matching the rendered definition), a new rendered whole-field audit in
+  the existing 219 unit module requires EVERY visible editable/choice
+  control on the real rendered create page (guided AND document policy
+  source states) and on both standard and trusted detail pages to resolve
+  its description to a defined non-empty element, and the 219 browser
+  module now runs the same whole-control sweep in the real DOM with
+  computed-CSS visibility (details disclosures opened) on create (both
+  states) and both detail pages. Field names, values, layout, and Core
+  semantics are unchanged. Root's independent re-audit of the corrected
+  markup passes: 57/75/75 controls, ZERO missing resolving descriptions,
+  ZERO duplicate IDs in all three rendered states (scoped
+  fake-authorized-ASGI + isolated real-Chromium evidence, no DB/server/
+  network). The current guides' false assertion that the 218 account
+  prose was shortened is corrected: the account templates were unchanged
+  by 219; their purpose/consequence guidance is retained and revalidated.
 - **Installed workflow legacy outcomes and fixture corrections**: G11
   distinct `prompt_tokens`/`completion_tokens` export columns, exact
   raw-HTML group/FX oracles, the honest G10 non-rotation probe (pre-
@@ -2170,6 +2199,33 @@ completion, and installed legacy outcomes (objective 219, SAME PR #376,
   (/tmp/slaif219/junit-unit-batch-219b-final.xml).
 - Scoped Ruff over ALL 14 PR-changed Python files: RUFF_EXIT=0 (log
   SHA256 a6f0dbc8994bde1c14490ce37df741b06dc0b7012b391cfc3d1044eea877577f).
+- Focused unit batch after the rendered all-field correction (219, 209,
+  214, 207, create-templates, actions-templates, 212, table-rows,
+  inventory, keys-routes, key-create-routes): 325/325 passed, 0 failed,
+  0 skipped, PYTEST_EXIT=0 (2026-11-11 15:01 UTC); log SHA256
+  60e261e73aaab08d190ed462883327434911d5ffa65bd306ecd42c25c01e1042,
+  JUnit SHA256
+  c057162d7dc35c246ef6b6869cea6a721197692c4a747f64644d3f3dd3534ac5
+  (/tmp/slaif219/junit-unit-batch-219b-2.xml). The actions-templates
+  disabled-live-burn oracle was adapted to the actual DOM (the dynamic
+  margin inputs now carry their stable ids and the linked live-burn
+  help), preserving the value/inputmode/disabled guarantees.
+- Docs checks (asof, contract-drift, inventory, logo, product-scope,
+  rc2-feature-scope) after the guide corrections: 59/59 PYTEST_EXIT=0
+  (log SHA256 856d14a0981a4d175901614671ebd3910ed7eb34748e6e56ceb35def6097427e).
+- Scoped Ruff over ALL 15 PR-changed Python files at the final head:
+  RUFF_EXIT=0 (log SHA256
+  a6f0dbc8994bde1c14490ce37df741b06dc0b7012b391cfc3d1044eea877577f).
+- Real-Chromium DIRECT-EXIT receipts at the rendered-correction head
+  (219 create whole-field sweep in both policy-source states, 219
+  trusted AND standard detail whole-field sweeps, 207
+  `test_create_form_help_and_provider_tri_state`, 207
+  `test_create_document_mode_persists_canonical_policy`): 4/4 passed, 0
+  failed, 0 skipped, PYTEST_EXIT=0, 22.129 s (2026-11-11 15:03 UTC);
+  log SHA256 42cca89486381255232af0426b555460d1b5a8fc344022b07a7c2ac360ded352,
+  JUnit SHA256
+  25fd7105fd687d81b54715f342c2492d00feb5e37f200b5a03dacf477172328a
+  (/tmp/slaif219/junit-browser-render-219b.xml).
 - Real-Chromium affected consumers at 2ee9cf06 (207
   `test_create_form_help_and_provider_tri_state`, 207
   `test_create_document_mode_persists_canonical_policy`, 219
@@ -2191,37 +2247,57 @@ completion, and installed legacy outcomes (objective 219, SAME PR #376,
   backend surfaces, 207-218 unit/browser/installed receipts, and the good
   219-a outcomes): cited in the immutable 219-b report, not repeated.
 
-### ONE final installed whole-GUI workflow (the 219 gate, 219-b)
+-### Installed whole-GUI workflow receipts (the 219 gate, 219-b)
 
-Run ONCE after product stabilization, exact command per the order:
+Exact command per the order (the final run used the
+`junit-installed-workflow-219b-final2.xml` receipt path):
 
 ```bash
 env -u DATABASE_URL -u TEST_DATABASE_URL -u TEST_REDIS_URL \
   RUN_GUI_PARITY_INSTALLED_WORKFLOW=1 \
   /tmp/slaif216-qualification-venv/bin/python -m pytest \
   tests/integration/test_gui_parity_installed_workflow.py \
-  -q -p no:cacheprovider --junit-xml=/tmp/slaif219/junit-installed-workflow-219b.xml
+  -q -p no:cacheprovider --junit-xml=/tmp/slaif219/junit-installed-workflow-219b*.xml
 ```
 
+**Intermediate receipt (superseded for product scope).** Before the
+rendered all-field guidance correction, the same workflow passed once at
+product head 2ee9cf06: 19/19 tests, 0 skipped/failed/errors,
+PYTEST_EXIT=0, suite 42.998 s (2026-11-11 14:19 UTC), run HEAD
+b327e359d04ea96a64e78bd83dc394074be4a051 (docs/fixture-only on top of the
+product head; `git diff 2ee9cf06 b327e359 -- app/` empty), wheel
+`slaif_api_gateway-0.1.0-py3-none-any.whl` SHA256
+a0657a78feee5bb13bc6ab3b313fc9228d70508c55249177e86f73c4ee3e7356 (built
+from the pristine product head during focused debugging and reused under
+the workflow's payload byte checks). Log SHA256
+458276376847b45c351023eac171146fa5ccb0d31fc1357849e76a8da976d19e, JUnit
+SHA256 8d226ad7e54c38649aa030ec5c9c7fe5f620776718ced355abf4ee1893abfcf2.
+This is valid PARTIAL evidence for that code: the rendered whole-field
+description requirement was not yet covered by its tests.
+
+**FINAL receipt (the 219-b gate).** The demonstrated rendered-audit
+defect justified exactly one more complete installed run against the
+actually updated final payload:
+
 - Result: 19/19 tests passed, 0 skipped, 0 failed, 0 errors,
-  PYTEST_EXIT=0, suite 42.998 s (2026-11-11 14:19 UTC). Log SHA256
-  458276376847b45c351023eac171146fa5ccb0d31fc1357849e76a8da976d19e,
-  JUnit SHA256 8d226ad7e54c38649aa030ec5c9c7fe5f620776718ced355abf4ee1893abfcf2.
+  PYTEST_EXIT=0, suite 69.832 s (2026-11-11 15:05 UTC; the longer time
+  includes the justified wheel rebuild for the changed product bytes).
+  Log SHA256
+  9dc7f8010a6aa459985ecad8ba07ac94c1ee0ca0b1f0230c3ae464bc5019cd64,
+  JUnit SHA256
+  a5dcb7bb8de0ad0b9eadd28f2bf119d8ea5fb354e0b36fa7fd877985c35a6cef
+  (/tmp/slaif219/junit-installed-workflow-219b-final2.xml).
 - Source identity at the run: commit
-  b327e359d04ea96a64e78bd83dc394074be4a051, tree
-  cf5fb1b9b55cf64fea7c9a7683c67f6f16d1d5fd (this commit is docs/fixture-
-  only on top of the product head). Product head:
-  2ee9cf068d69ae730d4e7d05441ef4bb59029d31; byte-equality proof:
-  `git diff 2ee9cf06 b327e359 -- app/` is empty, and the workflow's own
-  wheel-payload byte check verified the selected wheel against the
-  pristine archive of the run HEAD before reuse.
+  34cbf03078a47ebee5a52faf5bd00a1188ec1216, tree
+  ca720571bc7ddd26e5fc7bda345b3f44ddc30b7b - the FINAL product head
+  (rendered all-field guidance correction; no product change after it).
 - Wheel: `slaif_api_gateway-0.1.0-py3-none-any.whl` (version 0.1.0),
-  SHA256 a0657a78feee5bb13bc6ab3b313fc9228d70508c55249177e86f73c4ee3e7356,
-  REUSED by the final run (built earlier from the pristine product head
-  during focused debugging; the pre-fix fixture's wrong import-name
-  candidate had caused needless rebuilds in those debug runs - the
-  corrected distribution-name candidate now hits, gated by the unchanged
-  source/wheel/installed payload byte checks).
+  REBUILT by the run from the pristine final head (product bytes changed
+  since the intermediate wheel - a justified build, not a receipt-only
+  rerun), SHA256
+  8a364a97ee70610c3ccfa569246b01bbe93ce50588141d63b1f8cda42e6e8e06
+  (2,325,829 bytes); the workflow's own source/wheel/installed payload
+  byte checks verified it before use.
 - Installed origins: API and worker import from
   /tmp/slaif219/installed-workflow/venv/lib/python3.12/site-packages/
   (`slaif_gateway/__init__.py`, `slaif_gateway/workers/celery_app.py`),
