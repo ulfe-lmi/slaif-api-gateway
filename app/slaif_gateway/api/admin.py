@@ -8,7 +8,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -1888,6 +1888,67 @@ async def preview_admin_key_calibration(
             "proposal": result.proposal,
             "form": form,
         },
+    )
+    _set_no_store_headers(response)
+    return response
+
+
+@router.get("/keys/{gateway_key_id}/calibration/summary.json")
+async def download_admin_key_calibration_summary(
+    request: Request,
+    gateway_key_id: str,
+    start_at: str = Query(""),
+    end_at: str = Query(""),
+    multiplier: str = Query("3"),
+) -> Response:
+    """Download the typed calibration summary/proposal as safe JSON.
+
+    The SAME service and input validation as the preview form, re-run at
+    download time: the payload is CURRENT data for the same selected
+    inputs, not a frozen earlier rendered preview. The projection is the
+    CLI's machine shape (dataclasses.asdict of the preview result) with
+    the same value law as the CLI json_default via
+    _admin_configuration_json_default: Decimal as exact text, datetimes
+    as ISO-8601, UUIDs as text. No key material, provider content, or
+    replay identifiers are included. Served as a private no-store
+    attachment through the NON-ROTATING attachment context so the
+    still-displayed preview page (and its template-creation form token)
+    is left untouched.
+    """
+    settings = _settings(request)
+    if not settings.ENABLE_ADMIN_DASHBOARD:
+        return _admin_not_found(request)
+
+    parsed_key_id = _parse_gateway_key_id(gateway_key_id)
+    if parsed_key_id is None:
+        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+
+    attachment_context = await _admin_attachment_context(request)
+    if isinstance(attachment_context, Response):
+        return attachment_context
+
+    try:
+        parsed_start_at = _parse_admin_datetime(start_at)
+        parsed_end_at = _parse_admin_datetime(end_at)
+        parsed_multiplier = _parse_required_admin_decimal(multiplier, field_name="multiplier")
+        async with _calibration_summary_service_scope(request) as service:
+            result = await service.summarize_calibration_key_usage(
+                gateway_key_id=parsed_key_id,
+                start_at=parsed_start_at,
+                end_at=parsed_end_at,
+                multiplier=parsed_multiplier,
+            )
+    except (CalibrationSummaryError, ValueError) as exc:
+        return _admin_error_page(request, status_code=400, message=str(exc))
+
+    payload = asdict(result)
+    content = (
+        json.dumps(payload, indent=2, sort_keys=True, default=_admin_configuration_json_default)
+        + "\n"
+    )
+    response = Response(content=content, media_type="application/json")
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="slaif-calibration-summary-{parsed_key_id}.json"'
     )
     _set_no_store_headers(response)
     return response

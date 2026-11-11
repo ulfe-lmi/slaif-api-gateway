@@ -23,10 +23,10 @@
   </header>
 
   <form class="filter-bar compact" method="get" action="/admin/providers" id="providers-filter">
-    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value", input_id="providers-filter") }}
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="providers-filter", help_id="providers-help-provider") }}
     <label>
       Enabled
-      <select name="enabled">
+      <select name="enabled" aria-describedby="providers-help-filter">
         <option value="" {% if filters.enabled == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.enabled == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.enabled == "false" %}selected{% endif %}>No</option>
@@ -34,11 +34,12 @@
     </label>
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="providers-help-filter">Filters narrow the provider config list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Enabled is the provider's routing eligibility.</p>
 
   <div class="table-toolbar" aria-label="Provider configs rows">
     <span class="rows-shown" id="providers-rows-shown">{{ providers|length }} rows shown</span>
     <label>Rows
-      <select name="limit" id="providers-limit" form="providers-filter">
+      <select name="limit" id="providers-limit" form="providers-filter" aria-describedby="providers-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -48,6 +49,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="providers-help-rows">Rows per page for the provider config table (10 to 200).</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Provider configs">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>

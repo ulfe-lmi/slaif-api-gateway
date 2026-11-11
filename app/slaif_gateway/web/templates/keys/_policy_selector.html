@@ -79,9 +79,14 @@
       <p class="muted small">Keep catalog listing endpoints separate from model-backed generation endpoints.</p>
     </div>
     <label class="checkbox-row">
-      <input type="checkbox" name="allow_all_endpoints" value="true" {% if policy_form_state.allow_all_endpoints %}checked{% endif %} data-policy-toggle="endpoints">
+      <input type="checkbox" name="allow_all_endpoints" value="true" {% if policy_form_state.allow_all_endpoints %}checked{% endif %} data-policy-toggle="endpoints" aria-describedby="{{ selector_id_prefix }}-endpoint-mode-help">
       Allow all implemented endpoints
     </label>
+    <p class="field-help" id="{{ selector_id_prefix }}-endpoint-mode-help">
+      Checked, the key may use every implemented <code>/v1</code> endpoint and the endpoint selection below is ignored.
+      Unchecked, the explicit endpoint allow-list decides; <code>{{ models_endpoint }}</code> may be allowed alone, but
+      model-backed endpoints still require explicit models unless "Allow all models" is checked.
+    </p>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_endpoints %} policy-selector-disabled{% endif %}" data-policy-selector-group="endpoints">
       <div class="policy-selector-pane">
         <label>
@@ -129,9 +134,14 @@
       <p class="muted small">Selecting a route candidate adds its requested model token to the key policy. Duplicate model tokens are collapsed automatically.</p>
     </div>
     <label class="checkbox-row">
-      <input type="checkbox" name="allow_all_models" value="true" {% if policy_form_state.allow_all_models %}checked{% endif %} data-policy-toggle="models">
+      <input type="checkbox" name="allow_all_models" value="true" {% if policy_form_state.allow_all_models %}checked{% endif %} data-policy-toggle="models" aria-describedby="{{ selector_id_prefix }}-model-mode-help">
       Allow all models backed by enabled routes
     </label>
+    <p class="field-help" id="{{ selector_id_prefix }}-model-mode-help">
+      Checked, every model backed by an enabled route is allowed and the model selection below is ignored.
+      Unchecked, only the selected model tokens are allowed; selecting a route candidate adds its requested model token,
+      and duplicates are collapsed.
+    </p>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_models %} policy-selector-disabled{% endif %}" data-policy-selector-group="models">
       <div class="policy-selector-pane">
         <label class="policy-model-search">
@@ -203,20 +213,20 @@
 
   <details class="policy-manual-details">
     <summary>Advanced manual policy strings (fallback)</summary>
-    <p class="muted small">This is a fallback for no-JavaScript or direct manual edits. The selector above remains the primary workflow. Use newline or comma-separated values.</p>
+    <p class="muted small" id="{{ selector_id_prefix }}-manual-help">This is a fallback for no-JavaScript or direct manual edits. The selector above remains the primary workflow. Use newline or comma-separated values; blank means the list is empty for that dimension (mode checkboxes still apply).</p>
     <p class="muted small">When JavaScript is enabled, the selectors above keep these fields synchronized.</p>
     <div class="form-grid">
       <label>
         Allowed providers
-        <textarea name="allowed_providers" rows="3" autocomplete="off" data-policy-manual="providers">{{ form.allowed_providers }}</textarea>
+        <textarea name="allowed_providers" rows="3" autocomplete="off" data-policy-manual="providers" aria-describedby="{{ selector_id_prefix }}-manual-help">{{ form.allowed_providers }}</textarea>
       </label>
       <label>
         Allowed endpoints
-        <textarea name="allowed_endpoints" rows="4" autocomplete="off" data-policy-manual="endpoints">{{ form.allowed_endpoints }}</textarea>
+        <textarea name="allowed_endpoints" rows="4" autocomplete="off" data-policy-manual="endpoints" aria-describedby="{{ selector_id_prefix }}-manual-help">{{ form.allowed_endpoints }}</textarea>
       </label>
       <label>
         Allowed models
-        <textarea name="allowed_models" rows="4" autocomplete="off" data-policy-manual="models">{{ form.allowed_models }}</textarea>
+        <textarea name="allowed_models" rows="4" autocomplete="off" data-policy-manual="models" aria-describedby="{{ selector_id_prefix }}-manual-help">{{ form.allowed_models }}</textarea>
       </label>
     </div>
   </details>

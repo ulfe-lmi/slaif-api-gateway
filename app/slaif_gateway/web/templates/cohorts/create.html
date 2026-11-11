@@ -28,22 +28,24 @@
 
     <section class="action-panel" aria-labelledby="cohort-fields-heading">
       <h2 id="cohort-fields-heading">Metadata</h2>
-      <label>Name<input name="name" value="{{ form.name }}" autocomplete="off" required></label>
-      <label>Description<textarea name="description" rows="4">{{ form.description }}</textarea></label>
-      <p class="muted small">Description must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
+      <label>Name<input name="name" value="{{ form.name }}" autocomplete="off" required aria-describedby="cohort-create-metadata-help"></label>
+      <label>Description<textarea name="description" rows="4" aria-describedby="cohort-create-metadata-help">{{ form.description }}</textarea></label>
+      <p class="muted small" id="cohort-create-metadata-help">Name is the cohort's display name. Description is operator metadata and must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="cohort-window-heading">
       <h2 id="cohort-window-heading">Window</h2>
       <div class="form-grid">
-        <label>Starts at<input name="starts_at" value="{{ form.starts_at }}" placeholder="2026-01-01T00:00:00+00:00" autocomplete="off"></label>
-        <label>Ends at<input name="ends_at" value="{{ form.ends_at }}" placeholder="Optional ISO datetime" autocomplete="off"></label>
+        <label>Starts at<input name="starts_at" value="{{ form.starts_at }}" placeholder="2026-01-01T00:00:00+00:00" autocomplete="off" aria-describedby="cohort-create-window-help"></label>
+        <label>Ends at<input name="ends_at" value="{{ form.ends_at }}" placeholder="Optional ISO datetime" autocomplete="off" aria-describedby="cohort-create-window-help"></label>
       </div>
+      <p class="muted small" id="cohort-create-window-help">Times are UTC ISO datetimes. Leave "Ends at" blank for an open-ended cohort.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="cohort-audit-heading">
       <h2 id="cohort-audit-heading">Audit</h2>
-      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <label>Reason<textarea name="reason" rows="3" required aria-describedby="cohort-create-audit-help">{{ form.reason }}</textarea></label>
+      <p class="muted small" id="cohort-create-audit-help">Required audit reason recording why this cohort was created.</p>
       <button type="submit">Create cohort</button>
       <a class="button-link secondary" href="/admin/cohorts">Cancel</a>
     </section>

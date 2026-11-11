@@ -68,6 +68,7 @@
             clear_label="Select owner",
             placeholder="Search owners",
             help="Existing owner UUID (required). Without JavaScript, type or paste the owner UUID.",
+            help_id="clone-owner-help",
         ) }}
         {{ record_choice(
             "target_cohort_id", "cohort", "Target cohort (optional)",
@@ -79,6 +80,7 @@
             clear_label="No cohort",
             placeholder="Search cohorts",
             help="Existing cohort UUID, or leave blank for no cohort. Without JavaScript, type or paste the cohort UUID (blank = no cohort).",
+            help_id="clone-cohort-help",
         ) }}
       </div>
     </section>

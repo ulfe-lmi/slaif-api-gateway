@@ -27,16 +27,17 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/owners" id="owners-filter">
-    {{ record_choice("email", "owner_email", "Email", options=choices.email, multi=true, multi_value=filters.email|join("\n"), allow_new=true, help="Matches any selected value", input_id="owners-email") }}
-    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, multi=true, multi_value=filters.institution_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="owners-institution") }}
-    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id, multi=true, multi_value=filters.cohort_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="owners-cohort") }}
+    {{ record_choice("email", "owner_email", "Email", options=choices.email, multi=true, multi_value=filters.email|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="owners-email", help_id="owners-help-email") }}
+    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, multi=true, multi_value=filters.institution_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="owners-institution", help_id="owners-help-institution") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id, multi=true, multi_value=filters.cohort_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="owners-cohort", help_id="owners-help-cohort") }}
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="owners-help-filter">Filters narrow the owner list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted.</p>
 
   <div class="table-toolbar" aria-label="Owners rows">
     <span class="rows-shown" id="owners-rows-shown">{{ owners|length }} rows shown</span>
     <label>Rows
-      <select name="limit" id="owners-limit" form="owners-filter">
+      <select name="limit" id="owners-limit" form="owners-filter" aria-describedby="owners-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -46,6 +47,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="owners-help-rows">Rows per page for the owner table (10 to 200).</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Owners">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>

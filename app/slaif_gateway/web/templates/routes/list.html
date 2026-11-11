@@ -28,11 +28,11 @@
   {% endif %}
 
   <form class="filter-bar" method="get" action="/admin/routes" id="routes-filter">
-    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value", input_id="routes-provider") }}
-    {{ record_choice("requested_model", "model", "Requested model", options=choices.model, multi=true, multi_value=filters.requested_model|join("\n"), allow_new=true, help="Matches any selected value", input_id="routes-model") }}
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="routes-provider", help_id="routes-help-provider") }}
+    {{ record_choice("requested_model", "model", "Requested model", options=choices.model, multi=true, multi_value=filters.requested_model|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="routes-model", help_id="routes-help-model") }}
     <label>
       Match type
-      <select name="match_type">
+      <select name="match_type" aria-describedby="routes-help-filter">
         <option value="" {% if filters.match_type == "" %}selected{% endif %}>Any</option>
         <option value="exact" {% if filters.match_type == "exact" %}selected{% endif %}>Exact</option>
         <option value="prefix" {% if filters.match_type == "prefix" %}selected{% endif %}>Prefix</option>
@@ -41,7 +41,7 @@
     </label>
     <label>
       Enabled
-      <select name="enabled">
+      <select name="enabled" aria-describedby="routes-help-filter">
         <option value="" {% if filters.enabled == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.enabled == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.enabled == "false" %}selected{% endif %}>No</option>
@@ -49,7 +49,7 @@
     </label>
     <label>
       Visible
-      <select name="visible">
+      <select name="visible" aria-describedby="routes-help-filter">
         <option value="" {% if filters.visible == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.visible == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.visible == "false" %}selected{% endif %}>No</option>
@@ -57,11 +57,12 @@
     </label>
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="routes-help-filter">Filters narrow the model route list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Match type is how the route matches requested models (exact, prefix, or glob); Enabled is routing eligibility and Visible controls listing in <code>/v1/models</code>.</p>
 
   <div class="table-toolbar" aria-label="Model routes rows">
     <span class="rows-shown" id="routes-rows-shown">{{ routes|length }} rows shown</span>
     <label>Rows
-      <select name="limit" id="routes-limit" form="routes-filter">
+      <select name="limit" id="routes-limit" form="routes-filter" aria-describedby="routes-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -71,6 +72,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="routes-help-rows">Rows per page for the model route table (10 to 200).</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Model routes">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>

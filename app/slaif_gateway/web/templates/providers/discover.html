@@ -21,9 +21,10 @@
   <form class="create-form" method="post" action="/admin/providers/{{ provider.id }}/discover/preview">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label class="checkbox-row">
-      <input type="checkbox" name="confirm_discovery" value="true" required>
+      <input type="checkbox" name="confirm_discovery" value="true" required aria-describedby="discover-confirm-help">
       <span>I understand this is an explicit network preview and not automatic catalog mutation.</span>
     </label>
+    <p class="field-help" id="discover-confirm-help">Required: the preview issues a bounded network probe of the provider's public model catalog. It does not mutate provider configuration, routes, or pricing, and enables nothing.</p>
     <button type="submit">Preview available models</button>
   </form>
 </section>

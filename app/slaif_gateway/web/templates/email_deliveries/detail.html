@@ -83,7 +83,7 @@
 
     <section class="detail-panel">
       <h2>Send Key Email</h2>
-      <p class="muted small">
+      <p class="muted small" id="email-detail-send-help">
         Delivery uses the linked one-time secret. The plaintext gateway key will not be shown in the browser.
         Expired or consumed secrets cannot be resent; lost keys must be rotated.
         In-progress or ambiguous deliveries must not be retried automatically.
@@ -93,10 +93,10 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
           Audit note
-          <textarea name="reason" rows="2" autocomplete="off" placeholder="Optional safe note"></textarea>
+          <textarea name="reason" rows="2" autocomplete="off" placeholder="Optional safe note" aria-describedby="email-detail-send-help"></textarea>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="confirm_send" value="true">
+          <input type="checkbox" name="confirm_send" value="true" aria-describedby="email-detail-send-help">
           Send this key email now through the configured SMTP service.
         </label>
         <button type="submit">Send now</button>
@@ -109,7 +109,7 @@
 
     <section class="detail-panel">
       <h2>Enqueue Key Email</h2>
-      <p class="muted small">
+      <p class="muted small" id="email-detail-enqueue-help">
         Queued delivery sends only record IDs to Celery. The task payload never contains plaintext keys,
         email bodies, or one-time-secret material. Ambiguous delivery state requires operator review and key rotation
         if receipt cannot be confirmed.
@@ -119,10 +119,10 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
           Audit note
-          <textarea name="reason" rows="2" autocomplete="off" placeholder="Optional safe note"></textarea>
+          <textarea name="reason" rows="2" autocomplete="off" placeholder="Optional safe note" aria-describedby="email-detail-enqueue-help"></textarea>
         </label>
         <label class="checkbox-row">
-          <input type="checkbox" name="confirm_enqueue" value="true">
+          <input type="checkbox" name="confirm_enqueue" value="true" aria-describedby="email-detail-enqueue-help">
           Enqueue this delivery with one-time-secret and email-delivery IDs only.
         </label>
         <button type="submit">Enqueue delivery</button>

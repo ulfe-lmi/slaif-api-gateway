@@ -22,7 +22,7 @@
 
   <section class="action-panel" aria-labelledby="proposal-warning-heading">
     <h2 id="proposal-warning-heading">Review Required</h2>
-    <p class="warning-text">This proposal is advisory and preview-only. It does not create key templates, participant keys, or key policy changes. Templates and recommendation execution are future work.</p>
+    <p class="warning-text">This proposal is advisory and preview-only. Viewing it creates nothing; the only mutation available on this page is the reviewed "Create Key Template" form below. It never creates participant keys or changes key policies, and bulk participant key creation remains future work.</p>
     <p class="warning-text">Cost limits are SLAIF local accounting assumptions, not invoice-grade provider guarantees. Admins must review every allowed endpoint, model, provider, and capability before using these values later.</p>
   </section>
 
@@ -154,6 +154,10 @@
     <h2 id="create-template-heading">Create Key Template From This Proposal</h2>
     <p class="warning-text">This creates a durable template and immutable revision only. It does not create participant keys, apply policies to existing keys, or enable hosted capabilities for normal keys.</p>
     <p class="muted">The server recomputes this calibration proposal before creating the template. Hidden form values identify only the source key, time window, and multiplier.</p>
+    <p>
+      <a class="button-link secondary" href="/admin/keys/{{ summary.gateway_key_id }}/calibration/summary.json?start_at={{ form.start_at | urlencode }}&amp;end_at={{ form.end_at | urlencode }}&amp;multiplier={{ form.multiplier | urlencode }}">Download this preview's JSON</a>
+      <span class="muted small">Safe JSON of the typed summary and proposal (CLI-compatible machine units). The download recomputes CURRENT data for these same selected inputs at download time; it is not a frozen copy of this rendered preview.</span>
+    </p>
     {% if result.is_empty %}
     <p class="warning-text">Template creation is disabled because this calibration proposal has no usage data.</p>
     {% else %}
@@ -164,32 +168,33 @@
       <input type="hidden" name="multiplier" value="{{ form.multiplier }}">
       <label>
         Template name
-        <input name="template_name" required autocomplete="off" placeholder="Workshop participant policy">
+        <input name="template_name" required autocomplete="off" placeholder="Workshop participant policy" aria-describedby="calibration-template-help">
       </label>
       <label>
         Description
-        <textarea name="template_description" rows="3" autocomplete="off" placeholder="Optional safe description"></textarea>
+        <textarea name="template_description" rows="3" autocomplete="off" placeholder="Optional safe description" aria-describedby="calibration-template-help"></textarea>
       </label>
       <label>
         Default validity days for future keys
-        <input name="validity_days_default" type="number" min="1" step="1" autocomplete="off">
+        <input name="validity_days_default" type="number" min="1" step="1" autocomplete="off" aria-describedby="calibration-template-help">
       </label>
       <label>
         Default email delivery mode
-        <select name="email_delivery_mode_default">
+        <select name="email_delivery_mode_default" aria-describedby="calibration-template-help">
           <option value="">No default</option>
           <option value="none">none</option>
           <option value="pending">pending</option>
         </select>
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_create_template" value="true" required>
+        <input type="checkbox" name="confirm_create_template" value="true" required aria-describedby="calibration-template-help">
         I reviewed this calibration proposal and understand bulk participant key creation is future work.
       </label>
       <label>
         Audit reason
-        <input name="reason" required autocomplete="off" placeholder="Required reason">
+        <input name="reason" required autocomplete="off" placeholder="Required reason" aria-describedby="calibration-template-help">
       </label>
+      <p class="field-help" id="calibration-template-help">The server recomputes the proposal from the hidden source key, time window, and multiplier before creating the template. Template name is required; the description is optional safe text. Default validity days is a positive whole number applied to future keys issued from this template; the delivery default is "none", "pending", or no default. The confirmation and the audit reason are required.</p>
       <p class="warning-text">Hosted capabilities observed during calibration are stored as review-required warnings, not silently allowed participant capabilities. External MCP/connectors remain denied.</p>
       <button type="submit">Create key template</button>
     </form>

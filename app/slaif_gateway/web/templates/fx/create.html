@@ -39,6 +39,7 @@
             allow_new=true,
             nojs_value=form.base_currency,
             help="ISO 4217 code; new codes stay editable.",
+            help_id="fx-create-base-help",
         ) }}
         {{ record_choice(
             "quote_currency", "currency", "Quote currency",
@@ -48,19 +49,20 @@
             allow_new=true,
             nojs_value=form.quote_currency,
             help="ISO 4217 code; new codes stay editable.",
+            help_id="fx-create-quote-help",
         ) }}
-        <label>Rate<input name="rate" value="{{ form.rate }}" inputmode="decimal" autocomplete="off" required></label>
+        <label>Rate<input name="rate" value="{{ form.rate }}" inputmode="decimal" autocomplete="off" required aria-describedby="fx-create-pair-help"></label>
       </div>
-      <p class="muted small">Rates affect future EUR conversion, quota reservation, and accounting. Unknown FX conversion still fails closed for cost-limited keys.</p>
+      <p class="muted small" id="fx-create-pair-help">Base/quote are ISO 4217 codes and the rate is quote-per-base. Rates affect future EUR conversion, quota reservation, and accounting; unknown FX conversion still fails closed for cost-limited keys.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="fx-validity-heading">
       <h2 id="fx-validity-heading">Validity</h2>
       <div class="form-grid">
-        <label>Valid from<input name="valid_from" value="{{ form.valid_from }}" placeholder="2026-01-01T00:00:00+00:00" autocomplete="off"></label>
-        <label>Valid until<input name="valid_until" value="{{ form.valid_until }}" placeholder="Optional ISO datetime" autocomplete="off"></label>
+        <label>Valid from<input name="valid_from" value="{{ form.valid_from }}" placeholder="2026-01-01T00:00:00+00:00" autocomplete="off" aria-describedby="fx-create-validity-help"></label>
+        <label>Valid until<input name="valid_until" value="{{ form.valid_until }}" placeholder="Optional ISO datetime" autocomplete="off" aria-describedby="fx-create-validity-help"></label>
       </div>
-      <p class="muted small">FX rates have no enable/disable flag. Active status is controlled by the validity window.</p>
+      <p class="muted small" id="fx-create-validity-help">UTC ISO datetimes; blank "Valid until" means open-ended. FX rates have no enable/disable flag, so active status is controlled by the validity window.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="fx-audit-heading">
@@ -73,8 +75,10 @@
           allow_new=true,
           nojs_value=form.source,
           help="FX source label; new values stay editable.",
+            help_id="fx-create-source-help",
       ) }}
-      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <label>Reason<textarea name="reason" rows="3" required aria-describedby="fx-create-audit-help">{{ form.reason }}</textarea></label>
+      <p class="muted small" id="fx-create-audit-help">Required audit reason recording why this FX rate was created.</p>
       <button type="submit">Create FX rate</button>
       <a class="button-link secondary" href="/admin/fx">Cancel</a>
     </section>

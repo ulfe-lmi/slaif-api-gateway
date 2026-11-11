@@ -23,34 +23,34 @@
   </header>
 
   <form class="filter-bar compact" method="get" action="/admin/usage" id="usage-filter">
-    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value", input_id="usage-provider") }}
-    {{ record_choice("model", "model", "Model", options=choices.model, multi=true, multi_value=filters.model|join("\n"), allow_new=true, help="Matches any selected value", input_id="usage-model") }}
-    {{ record_choice("endpoint", "endpoint", "Endpoint", options=choices.endpoint, multi=true, multi_value=filters.endpoint|join("\n"), allow_new=false, help="Matches any selected value", input_id="usage-endpoint") }}
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="usage-provider", help_id="usage-help-provider") }}
+    {{ record_choice("model", "model", "Model", options=choices.model, multi=true, multi_value=filters.model|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="usage-model", help_id="usage-help-model") }}
+    {{ record_choice("endpoint", "endpoint", "Endpoint", options=choices.endpoint, multi=true, multi_value=filters.endpoint|join("\n"), allow_new=false, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="usage-endpoint", help_id="usage-help-endpoint") }}
     <label>
       Status
-      <select name="status">
+      <select name="status" aria-describedby="usage-help-filter">
         <option value="" {% if filters.status == "" %}selected{% endif %}>Any</option>
         {% for status in status_options %}
         <option value="{{ status }}" {% if filters.status == status %}selected{% endif %}>{{ status }}</option>
         {% endfor %}
       </select>
     </label>
-    {{ record_choice("request_id", "request_id", "Request ID", options=choices.request_id, multi=true, multi_value=filters.request_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="usage-request-id") }}
-    {{ record_choice("gateway_key_id", "key", "Key ID", options=choices.gateway_key_id, multi=true, multi_value=filters.gateway_key_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="usage-key") }}
-    {{ record_choice("owner_id", "owner", "Owner ID", options=choices.owner_id, multi=true, multi_value=filters.owner_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="usage-owner") }}
-    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, multi=true, multi_value=filters.institution_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="usage-institution") }}
-    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id, multi=true, multi_value=filters.cohort_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="usage-cohort") }}
+    {{ record_choice("request_id", "request_id", "Request ID", options=choices.request_id, multi=true, multi_value=filters.request_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="usage-request-id", help_id="usage-help-request-id") }}
+    {{ record_choice("gateway_key_id", "key", "Key ID", options=choices.gateway_key_id, multi=true, multi_value=filters.gateway_key_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="usage-key", help_id="usage-help-key") }}
+    {{ record_choice("owner_id", "owner", "Owner ID", options=choices.owner_id, multi=true, multi_value=filters.owner_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="usage-owner", help_id="usage-help-owner") }}
+    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, multi=true, multi_value=filters.institution_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="usage-institution", help_id="usage-help-institution") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort_id, multi=true, multi_value=filters.cohort_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="usage-cohort", help_id="usage-help-cohort") }}
     <label>
       Start
-      <input name="start_at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z">
+      <input name="start_at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z" aria-describedby="usage-help-filter">
     </label>
     <label>
       End
-      <input name="end_at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z">
+      <input name="end_at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z" aria-describedby="usage-help-filter">
     </label>
     <label>
       Streaming
-      <select name="streaming">
+      <select name="streaming" aria-describedby="usage-help-filter">
         <option value="" {% if filters.streaming == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.streaming == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.streaming == "false" %}selected{% endif %}>No</option>
@@ -58,6 +58,7 @@
     </label>
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="usage-help-filter">Filters narrow the usage ledger: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Start and End are UTC ISO timestamps bounding when the ledger row was recorded; blank means no bound on that side.</p>
 
   <section class="action-panel" aria-labelledby="usage-export-heading">
     <h2 id="usage-export-heading">CSV export</h2>
@@ -80,16 +81,17 @@
       <input type="hidden" name="end_at" value="{{ filters.end_at }}">
       <label>
         Row limit
-        <input name="limit" value="{{ export_max_rows }}" inputmode="numeric">
+        <input name="limit" value="{{ export_max_rows }}" inputmode="numeric" aria-describedby="usage-help-export">
       </label>
       <label>
         Audit reason
-        <input name="reason" required autocomplete="off" placeholder="Reason for this export">
+        <input name="reason" required autocomplete="off" placeholder="Reason for this export" aria-describedby="usage-help-export">
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_export" value="true" required>
+        <input type="checkbox" name="confirm_export" value="true" required aria-describedby="usage-help-export">
         I understand this export is audited and contains usage metadata only.
       </label>
+      <p class="field-help" id="usage-help-export">The row limit caps this export (maximum {{ export_max_rows | num }} rows). The audit reason is required and recorded with the action; the confirmation acknowledges the audited, usage-metadata-only CSV.</p>
       <p class="warning-text">Do not share exported metadata outside approved operational channels.</p>
       <button type="submit">Export usage CSV</button>
     </form>
@@ -98,7 +100,7 @@
   <div class="table-toolbar" aria-label="Usage ledger rows rows">
     <span class="rows-shown" id="usage-rows-shown">{{ usage_rows|length }} rows shown</span>
     <label>Rows
-      <select name="limit" id="usage-limit" form="usage-filter">
+      <select name="limit" id="usage-limit" form="usage-filter" aria-describedby="usage-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -108,6 +110,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="usage-help-rows">Rows per page for the ledger table (10 to 200). This paging choice never changes the CSV export row limit.</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Usage ledger rows">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>

@@ -666,3 +666,223 @@ def test_no_unclassified_raw_existing_record_fields() -> None:
         raw = set(_raw_field_names((TEMPLATES / rel).read_text(encoding="utf-8")))
         for name in names:
             assert name in raw, f"{rel}: stale exception for {name!r} (no longer raw)"
+
+# ---------------------------------------------------------------------------
+# 219-a: WHOLE-GUI field guidance audit (extends this SAME module).
+#
+# The 111-field EXPECTED_FIELDS above classifies the known-reference /
+# finite-choice controls. This section accounts for EVERY visible entry field
+# across all registered admin templates -- plain text, email, number,
+# password, date/time, url, tel, search, checkbox, radio, file, textarea,
+# select, and the enhanced record_choice comboboxes (including filters) -- and
+# requires each to carry a readable label plus concise, adjacent help linked
+# to the ACTUAL visible control:
+#   - record_choice -> the macro's help= + help_id= pair (the enhancement
+#     preserves aria-describedby on the live control);
+#   - native control -> aria-describedby referencing an id that EXISTS in the
+#     template, wrapped in a <label> or referenced by <label for=...>.
+#
+# Not entry fields (out of scope): hidden CSRF/integrity values,
+# submit/button/image/reset controls, and table-header sort links.
+#
+# This is a source-structure audit (no DB/server), keeping the module's
+# character. Rendered association / uniqueness / error / no-JS verification
+# for representative pages lives in tests/unit/test_admin_gui_completion_219.py.
+# ---------------------------------------------------------------------------
+
+# Structural partials/macros whose controls are caller-driven (help is wired
+# at the call site) or which carry no entry fields; excluded from the
+# per-template entry-field scan. Every ROUTE template is covered.
+_GUIDANCE_EXCLUDED_TEMPLATES = frozenset({
+    "base.html",
+    "_brand.html",
+    "_record_choice.html",           # macro: controls are caller-driven
+    "partials/pagination.html",      # structural, no entry fields
+    "error.html",
+    "replay_maintenance/error.html",
+    "reports/error.html",
+})
+
+_NON_ENTRY_INPUT_TYPES = frozenset({"hidden", "submit", "button", "image", "reset"})
+
+# Documented entry fields that intentionally carry no adjacent help. Kept
+# honest exactly like _RAW_FIELD_EXCEPTIONS; the goal is an empty set.
+_NO_HELP_GUIDANCE_EXCEPTIONS: dict[str, dict[str, str]] = {}
+
+
+def _rc_call_region(src: str, call_start: int) -> str:
+    """Full `record_choice(...)` argument region: from the call start to the
+    next `}}` (macro call sites never nest `{{ }}` inside the args)."""
+    end = src.find("}}", call_start)
+    return src[call_start:end if end != -1 else len(src)]
+
+
+def _template_ids(src: str) -> set[str]:
+    return set(re.findall(r"""\bid=["']([A-Za-z0-9_:-]+)["']""", src))
+
+
+def _label_for_ids(src: str) -> set[str]:
+    return set(re.findall(r"""<label\b[^>]*\bfor=["']([A-Za-z0-9_:-]+)["']""", src))
+
+
+_LABEL_CONTROL_RE = re.compile(
+    r"<label\b[^>]*?/?>"                   # label open (or self-closing)
+    r"|</label\s*>"                        # label close
+    r"|<fieldset\b[^>]*>"                  # fieldset open
+    r"|</fieldset\s*>"                     # fieldset close
+    r"|<(input|select|textarea)\b[^>]*?/?>",  # native control open
+)
+
+
+def _native_entry_controls(src: str):
+    """Yield (tagname, name, wrapped_in_label, has_aria_label, describedby,
+    control_id) for every native entry control. The enclosing <label> depth
+    and the innermost <fieldset aria-describedby=...> are tracked in a single
+    pass; a radio/checkbox group may carry its help on the fieldset (the
+    accessible grouping pattern) instead of each control."""
+    depth = 0
+    fieldset_desc: list[str] = []
+    for m in _LABEL_CONTROL_RE.finditer(src):
+        tok = m.group(0)
+        if tok.startswith("</label"):
+            depth -= 1
+        elif tok.startswith("<label"):
+            if not tok.endswith("/>"):
+                depth += 1
+            continue
+        elif tok.startswith("</fieldset"):
+            if fieldset_desc:
+                fieldset_desc.pop()
+            continue
+        elif tok.startswith("<fieldset"):
+            fd = re.search(r"""aria-describedby=["']([^"']+)["']""", tok)
+            fieldset_desc.append(fd.group(1) if fd else "")
+            continue
+        else:
+            tagname = m.group(1)
+            gt = tok.rfind(">")
+            attrs = tok[len(tagname):gt]
+            name_m = re.search(r"""name=["']([a-z0-9_]+)["']""", attrs)
+            if not name_m:
+                continue
+            if re.search(r"(?<![A-Za-z0-9_-])hidden(?![A-Za-z0-9_-])", attrs):
+                # A control carrying the `hidden` attribute is invisible and
+                # unfocusable (e.g. the openai-assisted import-bridge
+                # payload textarea); visible-entry accounting does not apply.
+                continue
+            if tagname == "input":
+                type_m = re.search(r"""type=["']([a-z-]+)["']""", attrs)
+                itype = type_m.group(1) if type_m else "text"
+                if itype in _NON_ENTRY_INPUT_TYPES:
+                    continue
+            id_m = re.search(r"""id=["']([A-Za-z0-9_:-]+)["']""", attrs)
+            desc_m = re.search(r"""aria-describedby=["']([^"']+)["']""", attrs)
+            describedby = desc_m.group(1) if desc_m else ""
+            if not describedby and tagname == "input" and itype in ("checkbox", "radio") and fieldset_desc:
+                describedby = fieldset_desc[-1]
+            yield (
+                tagname,
+                name_m.group(1),
+                depth > 0,
+                "aria-label=" in attrs,
+                describedby,
+                id_m.group(1) if id_m else "",
+            )
+
+
+def _entry_fields(template: str):
+    """Yield (kind, name, help_ok, label_ok, help_ids) for every visible entry
+    control in a template. record_choice fields are caller-driven (help via
+    help_id); native fields via aria-describedby + an existing help id."""
+    if template in _GUIDANCE_EXCLUDED_TEMPLATES:
+        return
+    src = _template_source(template)
+    ids = _template_ids(src)
+    label_for = _label_for_ids(src)
+    for m in re.finditer(r"record_choice\(\s*[\"']([a-z0-9_]+)[\"']", src):
+        region = _rc_call_region(src, m.start())
+        help_id_m = re.search(r'help_id="([^"]+)"', region)
+        help_m = re.search(r'help="([^"]+)"', region)
+        help_ok = bool(help_id_m and help_m)
+        yield (
+            "record_choice",
+            m.group(1),
+            help_ok,
+            True,  # macro guarantees the rc-name label
+            (help_id_m.group(1),) if help_id_m else (),
+        )
+    for (tagname, name, wrapped, aria_label, describedby, control_id) in (
+        _native_entry_controls(src)
+    ):
+        help_ok = False
+        help_ids: tuple[str, ...] = ()
+        if describedby:
+            if "{{" in describedby:
+                # Jinja-generated association (e.g. the policy selector's
+                # per-dimension help id); wired in-template and not
+                # statically resolvable, so treat it as associated.
+                help_ok = True
+            else:
+                help_ids = tuple(x for x in describedby.split() if x)
+                help_ok = bool(help_ids) and all(h in ids for h in help_ids)
+        label_ok = wrapped or aria_label or (bool(control_id) and control_id in label_for)
+        yield (tagname, name, help_ok, label_ok, help_ids)
+
+
+def test_every_visible_entry_field_has_linked_guidance() -> None:
+    """219-a: every visible entry field across all admin route templates has
+    a readable label and help linked to the actual control (aria-describedby
+    -> an existing id, or the record_choice help/help_id pair)."""
+    problems: list[str] = []
+    for path in sorted(TEMPLATES.rglob("*.html")):
+        rel = str(path.relative_to(TEMPLATES))
+        for kind, name, help_ok, label_ok, _help_ids in _entry_fields(rel):
+            except_reason = _NO_HELP_GUIDANCE_EXCEPTIONS.get(rel, {}).get(name)
+            if not help_ok and except_reason is None:
+                problems.append(
+                    f"{rel}: {kind} field {name!r} has no linked guidance "
+                    "(add aria-describedby -> an existing help id, or for "
+                    "record_choice pass help= and a unique help_id=)"
+                )
+            if not label_ok:
+                problems.append(
+                    f"{rel}: {kind} field {name!r} has no readable label "
+                    "(wrap in <label>, add <label for=id>, or aria-label)"
+                )
+    assert problems == [], "\n".join(problems)
+
+
+def test_guidance_help_ids_are_unique_per_page() -> None:
+    """219-a: each guidance help id must name EXACTLY ONE help element on the
+    page. A single section help element may be referenced by many controls via
+    aria-describedby (intended); what must stay unique is the DEFINITION --
+    the literal id= attribute or the record_choice macro's rendered
+    id="{{ help_id }}". Two elements sharing a help id would make the
+    association ambiguous, so each help id value must be defined once."""
+    problems: list[str] = []
+    for path in sorted(TEMPLATES.rglob("*.html")):
+        rel = str(path.relative_to(TEMPLATES))
+        if rel in _GUIDANCE_EXCLUDED_TEMPLATES:
+            continue
+        src = _template_source(rel)
+        literal_defs: dict[str, int] = {}
+        for value in re.findall(r"""[\s>]id=["']([^"']+)["']""", src):
+            literal_defs[value] = literal_defs.get(value, 0) + 1
+        rc_defs: dict[str, int] = {}
+        help_ids: set[str] = set()
+        for m in re.finditer(r"record_choice\(\s*[\"']([a-z0-9_]+)[\"']", src):
+            region = _rc_call_region(src, m.start())
+            hid = re.search(r'help_id="([^"]+)"', region)
+            if hid:
+                rc_defs[hid.group(1)] = rc_defs.get(hid.group(1), 0) + 1
+                help_ids.add(hid.group(1))
+        for _kind, _name, _help_ok, _label_ok, ids in _entry_fields(rel):
+            help_ids.update(ids)
+        for hid in sorted(help_ids):
+            total = literal_defs.get(hid, 0) + rc_defs.get(hid, 0)
+            if total != 1:
+                problems.append(
+                    f"{rel}: guidance help id {hid!r} defined {total}x "
+                    "(each help id must define exactly one element)"
+                )
+    assert problems == [], "\n".join(problems)

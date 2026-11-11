@@ -27,10 +27,10 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/cohorts" id="cohorts-filter">
-    {{ record_choice("name", "cohort_name", "Name", options=choices.name, multi=true, multi_value=filters.name|join("\n"), allow_new=true, placeholder="Cohort name", help="Matches any selected value", input_id="cohorts-name-filter") }}
+    {{ record_choice("name", "cohort_name", "Name", options=choices.name, multi=true, multi_value=filters.name|join("\n"), allow_new=true, placeholder="Cohort name", help="Matches any selected value (OR within the field; fields combine with AND).", input_id="cohorts-name-filter", help_id="cohorts-help-name") }}
     <label>
       Active
-      <select name="active">
+      <select name="active" aria-describedby="cohorts-help-filter">
         <option value="" {% if filters.active == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.active == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.active == "false" %}selected{% endif %}>No</option>
@@ -38,11 +38,12 @@
     </label>
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="cohorts-help-filter">Filters narrow the cohort list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Active is the cohort's lifecycle state.</p>
 
   <div class="table-toolbar" aria-label="Cohorts rows">
     <span class="rows-shown" id="cohorts-rows-shown">{{ cohorts|length }} rows shown</span>
     <label>Rows
-      <select name="limit" id="cohorts-limit" form="cohorts-filter">
+      <select name="limit" id="cohorts-limit" form="cohorts-filter" aria-describedby="cohorts-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -52,6 +53,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="cohorts-help-rows">Rows per page for the cohort table (10 to 200).</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Cohorts">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>

@@ -46,6 +46,8 @@
             nojs_value=form.owner_id,
             clear_label="Select owner",
             placeholder="Search owners",
+            help="Existing owners only: search by name or email and select one. This form never creates a new owner.",
+            help_id="create-owner-help",
         ) }}
         {{ record_choice(
             "cohort_id", "cohort", "Cohort",
@@ -56,6 +58,8 @@
             nojs_value=form.cohort_id,
             clear_label="No cohort",
             placeholder="Search cohorts",
+            help="Optional existing cohort used for grouping; choose No cohort to leave the key ungrouped. This form never creates a new cohort.",
+            help_id="create-cohort-help",
         ) }}
       </div>
     </section>
@@ -104,12 +108,6 @@
       </p>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-policy-heading">
-      <h2 id="create-policy-heading">Request Policy</h2>
-      {% set selector_id_prefix = "create-policy" %}
-      {% include "keys/_policy_selector.html" %}
-    </section>
-
     <section class="action-panel" aria-labelledby="create-policy-source-heading">
       <h2 id="create-policy-source-heading">Policy Source</h2>
       <p class="muted">Choose where this key's POLICY fields come from: the guided controls on this page, or one advanced version-1 configuration document. Identity fields (owner, cohort, validity, delivery, reason) are always guided.</p>
@@ -134,18 +132,24 @@
       <p class="muted small">Required only when policy source is "Advanced configuration document". The document defines policy only; it never carries identity, secrets, owner/cohort, validity, or server settings.</p>
     </section>
 
+    <section class="action-panel" aria-labelledby="create-policy-heading">
+      <h2 id="create-policy-heading">Request Policy</h2>
+      {% set selector_id_prefix = "create-policy" %}
+      {% include "keys/_policy_selector.html" %}
+    </section>
+
     <section class="action-panel" aria-labelledby="create-codex-pilot-heading">
       <h2 id="create-codex-pilot-heading">Codex Protocol Pilot</h2>
       <p class="warning-text">This creates a standard, finite pilot key only after the selected route pair and current pricing qualify for Codex 0.147.0 with <code>gpt-5.6-sol</code>. This is local protocol qualification; real-provider E2E has not run.</p>
       <label class="checkbox-row">
-        <input type="checkbox" name="codex_protocol_pilot" value="true" {% if form.codex_protocol_pilot %}checked{% endif %}>
+        <input type="checkbox" name="codex_protocol_pilot" value="true" {% if form.codex_protocol_pilot %}checked{% endif %} aria-describedby="create-codex-pilot-help">
         Apply the bounded Codex protocol-pilot policy
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_codex_protocol_pilot" value="true" {% if form.confirm_codex_protocol_pilot %}checked{% endif %}>
+        <input type="checkbox" name="confirm_codex_protocol_pilot" value="true" {% if form.confirm_codex_protocol_pilot %}checked{% endif %} aria-describedby="create-codex-pilot-help">
         I confirm this standard key is for the bounded Codex protocol pilot
       </label>
-      <p class="muted small">Select exactly one qualified provider, model <code>gpt-5.6-sol</code>, and endpoints <code>/v1/models</code>, <code>/v1/responses</code>, and <code>/v1/responses/compact</code>. Do not select any allow-all option. Positive finite request, token, and EUR cost limits plus an audit reason are required.</p>
+      <p class="muted small" id="create-codex-pilot-help">Select exactly one qualified provider, model <code>gpt-5.6-sol</code>, and endpoints <code>/v1/models</code>, <code>/v1/responses</code>, and <code>/v1/responses/compact</code>. Do not select any allow-all option. Positive finite request, token, and EUR cost limits plus an audit reason are required.</p>
       <p class="muted small">The preset enables only the five canonical Codex Responses capabilities and local <code>function</code>/<code>custom</code> tools. It does not enable hosted tools, MCP, background work, provider state, or trusted-calibration behavior.</p>
     </section>
 
@@ -153,14 +157,14 @@
       <h2 id="create-qwen-codex-heading">Qwen Codex 0.162</h2>
       <p class="muted">For routes already qualified against the installed Codex 0.162 module. Select explicit Qwen models and their providers above, plus exactly <code>/v1/models</code> and <code>/v1/responses</code>. This grants only the Codex capabilities required by those selected profiles; image input is included only for profiles that declare it.</p>
       <label class="checkbox-row">
-        <input type="checkbox" name="qwen_codex" value="true" {% if form.qwen_codex %}checked{% endif %}>
+        <input type="checkbox" name="qwen_codex" value="true" {% if form.qwen_codex %}checked{% endif %} aria-describedby="create-qwen-codex-help">
         Enable Codex for the selected Qwen models
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_qwen_codex" value="true" {% if form.confirm_qwen_codex %}checked{% endif %}>
+        <input type="checkbox" name="confirm_qwen_codex" value="true" {% if form.confirm_qwen_codex %}checked{% endif %} aria-describedby="create-qwen-codex-help">
         I confirm that these models and providers are intended for Codex access
       </label>
-      <p class="muted small">Do not select the older Codex Protocol Pilot above. Ordinary key validity and quota settings still apply. The server checks route qualification again before issuing the key.</p>
+      <p class="muted small" id="create-qwen-codex-help">Do not select the older Codex Protocol Pilot above. Ordinary key validity and quota settings still apply. The server checks route qualification again before issuing the key.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="create-external-tools-heading">
@@ -168,12 +172,12 @@
       <p class="warning-text">Runtime permits only exact OpenAI Responses <code>web_search</code> when fenced key and route policy match. Remote MCP/connectors, provider URL authority, unknown authority, and every other hosted family remain denied.</p>
       <label>
         Mode
-        <select name="external_tool_mode">
+        <select name="external_tool_mode" aria-describedby="create-ext-tool-help">
           <option value="strict_bounded" {% if form.external_tool_mode != "external_tool_fenced" %}selected{% endif %}>Strict bounded (default deny)</option>
           <option value="external_tool_fenced" {% if form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (web search only at runtime)</option>
         </select>
       </label>
-      <fieldset>
+      <fieldset aria-describedby="create-ext-tool-help">
         <legend>Reviewed capability IDs</legend>
         {% for capability in external_tool_capabilities %}
         <label class="checkbox-row">
@@ -191,21 +195,22 @@
           allow_new=true,
           placeholder="connector:reviewed_id or remote_mcp:reviewed_id, one per line",
           help="Destination IDs are key-local reviewed identifiers; type them directly (no global registry lookup).",
+          help_id="create-ext-tool-dest-help",
       ) }}
       <label>
         Maximum provider tool calls per request
-        <input name="external_tool_max_calls" value="{{ form.external_tool_max_calls or '0' }}" inputmode="numeric" autocomplete="off">
+        <input name="external_tool_max_calls" value="{{ form.external_tool_max_calls or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-ext-tool-help">
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if form.external_tool_overrun_acknowledged %}checked{% endif %}>
+        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if form.external_tool_overrun_acknowledged %}checked{% endif %} aria-describedby="create-ext-tool-help">
         I acknowledge that one admitted fenced web-search request may overrun its remaining quota.
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_external_tool_fenced" value="true" {% if form.confirm_external_tool_fenced %}checked{% endif %}>
+        <input type="checkbox" name="confirm_external_tool_fenced" value="true" {% if form.confirm_external_tool_fenced %}checked{% endif %} aria-describedby="create-ext-tool-help">
         I separately confirm fenced external-tool policy for this standard key.
       </label>
       <p class="warning-text">For the implemented web-search contract, concurrent requests are fenced, later exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite request, token, and EUR limits, an acknowledgement, this second confirmation, and the audit reason below.</p>
-      <p class="muted small">Installation ceilings: {{ external_tool_ceilings.max_distinct_capabilities | num }} capabilities, {{ external_tool_ceilings.max_approved_destinations | num }} destinations, and {{ external_tool_ceilings.max_provider_tool_calls_per_request | num }} provider calls per request. No wildcard, URL, credential, inline authorization, or allow-all option exists.</p>
+      <p class="muted small" id="create-ext-tool-help">Installation ceilings: {{ external_tool_ceilings.max_distinct_capabilities | num }} capabilities, {{ external_tool_ceilings.max_approved_destinations | num }} destinations, and {{ external_tool_ceilings.max_provider_tool_calls_per_request | num }} provider calls per request. No wildcard, URL, credential, inline authorization, or allow-all option exists. Strict bounded is the default; fenced mode additionally needs the two confirmations above.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="create-rate-limit-heading">
@@ -239,25 +244,25 @@
         <p class="muted">Optional lazy (waiting) throttling for this key. Waiting precedes provider execution; queue full or deadline returns 429, and disconnected requests are canceled. Hard quota, security, and hosted-tool fence refusals remain immediate, and streaming starts only after admission.</p>
         <div class="form-grid">
           <label class="checkbox-row">
-            <input type="radio" name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode {% if form.lazy_throttling_mode != "wait" %}checked{% endif %}>
+            <input type="radio" name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode aria-describedby="create-lazy-help" {% if form.lazy_throttling_mode != "wait" %}checked{% endif %}>
             Reject immediately (default)
           </label>
           <label class="checkbox-row">
-            <input type="radio" name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode {% if form.lazy_throttling_mode == "wait" %}checked{% endif %}>
+            <input type="radio" name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode aria-describedby="create-lazy-help" {% if form.lazy_throttling_mode == "wait" %}checked{% endif %}>
             Wait for capacity (lazy throttling)
           </label>
         </div>
         <div class="form-grid" data-lazy-throttling-field-group>
           <label>
             Maximum waiting time (seconds)
-            <input name="lazy_throttling_max_wait_seconds" value="{{ form.lazy_throttling_max_wait_seconds or lazy_throttling_defaults.max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field>
+            <input name="lazy_throttling_max_wait_seconds" value="{{ form.lazy_throttling_max_wait_seconds or lazy_throttling_defaults.max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-lazy-help">
           </label>
           <label>
             Maximum waiting requests per key
-            <input name="lazy_throttling_max_waiting_requests" value="{{ form.lazy_throttling_max_waiting_requests or lazy_throttling_defaults.max_waiting_per_key }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field>
+            <input name="lazy_throttling_max_waiting_requests" value="{{ form.lazy_throttling_max_waiting_requests or lazy_throttling_defaults.max_waiting_per_key }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="create-lazy-help">
           </label>
         </div>
-        <p class="muted small">Applies to Chat Completions and Responses. Operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key.</p>
+        <p class="muted small" id="create-lazy-help">Applies to Chat Completions and Responses. In wait mode both bounds are positive whole numbers (blank uses the shown defaults) and may not exceed the operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key.</p>
         {% if not redis_rate_limits_enabled %}
         <p class="warning-text">Redis rate limiting is currently disabled (ENABLE_REDIS_RATE_LIMITS=false), so operational throttling is inactive: saving a wait policy does not enforce waiting until the operator enables it.</p>
         {% endif %}
@@ -303,14 +308,14 @@
         <dd>{{ "Allowed" if trusted_calibration_settings.allow_external_authority else "Denied by default" }}</dd>
       </dl>
       <label class="checkbox-row">
-        <input type="checkbox" name="trusted_calibration" value="true" {% if form.trusted_calibration %}checked{% endif %}>
+        <input type="checkbox" name="trusted_calibration" value="true" {% if form.trusted_calibration %}checked{% endif %} aria-describedby="create-calibration-help">
         Create as trusted calibration key
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_trusted_calibration" value="true" {% if form.confirm_trusted_calibration %}checked{% endif %}>
+        <input type="checkbox" name="confirm_trusted_calibration" value="true" {% if form.confirm_trusted_calibration %}checked{% endif %} aria-describedby="create-calibration-help">
         I understand this is for trusted calibration discovery only
       </label>
-      <p class="muted small">The service enforces short validity, a configured request-limit maximum, and standard provider-secret isolation. Trusted calibration keys are real gateway keys, not templates or participant keys.</p>
+      <p class="muted small" id="create-calibration-help">Both boxes are required together when creating a calibration key. The service enforces short validity, a configured request-limit maximum, and standard provider-secret isolation. Trusted calibration keys are real gateway keys, not templates or participant keys, and must not be issued to participants.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="create-submit-heading">
@@ -318,14 +323,14 @@
       <p class="warning-text">The selected mode controls the only plaintext destination. Old keys cannot be resent; lost keys must be rotated.</p>
       <label>
         Email delivery mode
-        <select name="email_delivery_mode">
+        <select name="email_delivery_mode" aria-describedby="create-delivery-help">
           <option value="none" {% if form.email_delivery_mode == "none" or not form.email_delivery_mode %}selected{% endif %}>None - show key once in browser</option>
           <option value="pending" {% if form.email_delivery_mode == "pending" %}selected{% endif %}>Pending - create delivery row and show key once</option>
           <option value="send-now" {% if form.email_delivery_mode == "send-now" %}selected{% endif %}>Send now - email is the delivery channel</option>
           <option value="enqueue" {% if form.email_delivery_mode == "enqueue" %}selected{% endif %}>Enqueue - Celery email delivery</option>
         </select>
       </label>
-      <p class="muted small">Send-now and enqueue suppress browser plaintext display. Pending creates a delivery record but still shows the key once. Celery payloads contain IDs only, and provider keys are never involved.</p>
+      <p class="muted small" id="create-delivery-help">The selected mode is the only plaintext destination for the new key. Send-now and enqueue suppress browser plaintext display. Pending creates a delivery record but still shows the key once. Celery payloads contain IDs only, and provider keys are never involved.</p>
       <label>
         Audit reason
         <input name="reason" value="{{ form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="create-reason-help">
