@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 TARGET_REVISION_0004 = "0004_email_secrets_and_background_jobs"
 TARGET_HEAD_0005 = "0005_fix_gateway_key_prefix_default"
-CURRENT_HEAD = "0026_request_diagnostics"
+CURRENT_HEAD = "0027_demo_admin_accounts"
 SAFE_TEST_DATABASE_NAME = re.compile(
     r"^(?:restore_test|restore_local_[a-z0-9]+|test_slaif_gateway|slaif_gateway_test|slaif_test)$"
 )
@@ -52,15 +52,40 @@ def _upgrade_to_revision(database_url: str, revision: str) -> None:
     command.upgrade(_alembic_config(database_url), revision)
 
 
-async def _reset_public_schema(database_url: str) -> None:
+async def _reset_application_schemas(database_url: str) -> None:
+    """Reset both application-owned schemas on the disposable test database.
+
+    Migration 0027 creates the isolated ``demo_control`` schema strictly
+    (``CREATE SCHEMA demo_control``, no IF NOT EXISTS), so the historical
+    0004 -> 0005 -> head validation must start from a database where NEITHER
+    ``public`` nor ``demo_control`` exists, and the finally recovery
+    re-upgrade must likewise create both schemas from a clean state.
+    """
     engine = create_async_engine(database_url, future=True)
     try:
         async with engine.begin() as connection:
+            await connection.execute(text("DROP SCHEMA IF EXISTS demo_control CASCADE"))
             await connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
             await connection.execute(text("CREATE SCHEMA public"))
             await connection.execute(text("GRANT ALL ON SCHEMA public TO public"))
     finally:
         await engine.dispose()
+
+
+async def _assert_application_schemas_restored(database_url: str) -> None:
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.connect() as connection:
+            public_ok = await connection.scalar(
+                text("SELECT to_regclass('public.alembic_version') IS NOT NULL")
+            )
+            demo_ok = await connection.scalar(
+                text("SELECT to_regclass('demo_control.fake_admin_accounts') IS NOT NULL")
+            )
+    finally:
+        await engine.dispose()
+    assert public_ok, "public.alembic_version must exist after the finally recovery upgrade"
+    assert demo_ok, "demo_control.fake_admin_accounts must exist after the finally recovery upgrade"
 
 
 async def _seed_prefix_rows_and_get_hashes(database_url: str) -> dict[str, str]:
@@ -195,7 +220,7 @@ def test_migration_0005_normalizes_gateway_key_prefix_and_default() -> None:
     database_url = _safe_test_database_url_from_env()
 
     try:
-        asyncio.run(_reset_public_schema(database_url))
+        asyncio.run(_reset_application_schemas(database_url))
         _upgrade_to_revision(database_url, TARGET_REVISION_0004)
         before_token_hashes = asyncio.run(_seed_prefix_rows_and_get_hashes(database_url))
         _upgrade_to_revision(database_url, "head")
@@ -206,5 +231,6 @@ def test_migration_0005_normalizes_gateway_key_prefix_and_default() -> None:
         assert TARGET_HEAD_0005 in {revision.revision for revision in script.walk_revisions()}
         assert heads == [CURRENT_HEAD]
     finally:
-        asyncio.run(_reset_public_schema(database_url))
+        asyncio.run(_reset_application_schemas(database_url))
         _upgrade_to_revision(database_url, "head")
+        asyncio.run(_assert_application_schemas_restored(database_url))
