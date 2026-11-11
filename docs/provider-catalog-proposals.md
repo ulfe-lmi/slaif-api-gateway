@@ -417,7 +417,9 @@ The requested model cap and model filters further narrow that scope. API model
 listing remains identity/availability evidence and cannot grant endpoint support.
 A page must declare the exact requested model ID, text modalities, and supported
 endpoint rows. Page retrieval, format, and identity failures remain report-only.
-The per-model page URL is retained in proposal provenance.
+The per-model page URL is retained in proposal provenance. Canonical IDs in
+published flat Standard pricing are fetched even when absent from the featured
+models index; the page must still confirm the exact identity.
 
 Only explicit flat **Standard** prices enter this TSV family. Batch prices,
 context-dependent prices, and cache-write price tables are not flattened into
@@ -427,8 +429,24 @@ remain report-only. With ordinary-chat-only enabled, current vision-capable
 models may be projected to text-only routes; image and hosted-tool permissions
 are not granted. Existing legacy block behavior is preserved.
 
-Responses scope in this proposal family remains report-only; this repair does
-not introduce Responses route/pricing import support. Verify actual row counts
-and warnings instead of interpreting a completed artifact job as an import-ready
-catalog. Provider records must exist before route import. Provider creation and
-enabling remain explicit administrator actions, separate from proposals.
+Selected endpoint scopes control both route and pricing exports. A
+Responses-only selection cannot emit Chat Completions rows. For OpenAI the
+explicit model-page endpoint table is the authority; for OpenRouter the
+per-model `endpoints` API array is the authority. Absence of that array preserves
+legacy Chat behavior but does not grant Responses support. A model may support
+Responses without supporting Chat Completions. Each endpoint is evaluated
+independently and paired only with pricing for that exact endpoint.
+
+Responses proposals contain the bounded stateless text subset: text and
+stateless create, documented streaming and local function/structured-output
+features when supported. Storage, previous-response references, images, custom
+tools, Codex privileges and provider-hosted tools are not granted. The
+ordinary-chat filter applies to Chat Completions candidates; it cannot suppress
+a valid text Responses projection of a model that also supports vision.
+`openrouter-responses-text` now exports evidenced Responses pairs as its own
+endpoint family. Missing endpoint evidence remains report-only.
+
+Verify actual row counts and warnings instead of interpreting a completed
+artifact job as an import-ready catalog. Provider records must exist before
+route import. Provider creation and enabling remain explicit administrator
+actions, separate from proposals.
