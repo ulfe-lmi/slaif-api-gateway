@@ -7,6 +7,7 @@ existing route/pricing import preview workflows.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import fnmatch
 import hashlib
@@ -1149,6 +1150,134 @@ async def _propose_openrouter(
     )
 
 
+
+async def _openai_markdown_documents(
+    *, client: httpx.AsyncClient, fetched_sources: list[_FetchedSource],
+    warnings: list[ProviderCatalogWarning], include_models: Sequence[str],
+    exclude_models: Sequence[str], max_models: int, ordinary_chat_only: bool,
+    save_source_snapshots: bool, source_dir: Path, now: datetime | None,
+) -> tuple[_FetchedSource, tuple[_OpenAIPricingRecord, ...], dict[str, _OpenAIModelRecord], dict[str, str]]:
+    """Bounded official page-backed fallback; API identity never grants endpoints.
+
+    Reuse the existing strict per-model snapshot parser. Fetch only models
+    with flat Standard pricing and a literal official-index identity, at
+    most 64 pages / four concurrent requests. No aliases or prices are guessed.
+    """
+    from slaif_gateway.services.catalog_refresh.source_evidence import (
+        SnapshotFormatError, parse_openai_model_doc_snapshot,
+        parse_openai_models_docs_snapshot,
+    )
+
+    async def fetch(url: str, kind: str) -> _FetchedSource:
+        source = await _fetch_text_source(
+            client=client, provider=OPENAI_PROVIDER, source_type=kind,
+            url=url, save_snapshot=save_source_snapshots,
+            source_dir=source_dir, now=now,
+        )
+        fetched_sources.append(source)
+        return source
+
+    pricing = await fetch(OPENAI_PRICING_DOCS_URL + ".md", "docs_pricing_markdown")
+    index = await fetch(OPENAI_MODELS_DOCS_URL + ".md", "docs_models_markdown")
+    prices = _parse_openai_pricing_docs(
+        text=pricing.raw_text or "", source_url=pricing.url,
+        source_retrieved_at=pricing.retrieved_at,
+    )
+    # Do not flatten the newer cache-write/context-tier table into token
+    # prices. This flat TSV family cannot represent those dimensions.
+    if re.search(r"\|[^\n]*Short context input", pricing.raw_text or "", re.IGNORECASE):
+        warnings.append(ProviderCatalogWarning(
+            code="contextual_pricing_report_only", provider=OPENAI_PROVIDER,
+            message="Context-dependent/cache-write price tables are outside this flat-price proposal format; only explicit flat Standard rows are eligible.",
+        ))
+    identities = {row.model for row in parse_openai_models_docs_snapshot(
+        (index.raw_text or "").encode("utf-8")
+    )}
+    candidates = sorted({row.model_id for row in prices} & identities)
+    candidates = [m for m in candidates if _model_allowed(
+        m, include_models=include_models, exclude_models=exclude_models
+    )]
+    cap = min(max_models, 64)
+    if len(candidates) > cap:
+        warnings.append(ProviderCatalogWarning(
+            code="model_page_cap_applied", provider=OPENAI_PROVIDER,
+            message=f"Official model-page cap {cap} omitted {len(candidates)-cap} candidates.",
+        ))
+    semaphore = asyncio.Semaphore(4)
+
+    async def page(model_id: str) -> tuple[str, _OpenAIModelRecord | None, str | None]:
+        async with semaphore:
+            try:
+                source = await fetch(
+                    OPENAI_MODELS_DOCS_URL + "/" + model_id + ".md",
+                    "docs_model_" + model_id,
+                )
+                parsed = parse_openai_model_doc_snapshot((source.raw_text or "").encode("utf-8"))[0]
+            except (httpx.HTTPError, SnapshotFormatError):
+                return model_id, None, None
+            if parsed.model != model_id or parsed.text_modality is not True:
+                return model_id, None, None
+            # A text-only projection of a vision-capable model does not grant
+            # image or hosted-tool authority. Explicit multimodal proposals
+            # retain image input behind the existing route capability gates.
+            text = source.raw_text or ""
+            section = ""
+            flags = set()
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    section = stripped.lstrip("#").strip().lower()
+                elif section == "supported features" and stripped.startswith("- "):
+                    feature = stripped[2:].strip()
+                    translated = {"streaming":"streaming", "function_calling":"function calling",
+                                  "structured_outputs":"structured outputs", "logprobs":"logprobs",
+                                  "reasoning":"reasoning"}.get(feature)
+                    if translated:
+                        flags.add(translated)
+                if not ordinary_chat_only and stripped.startswith("- Input modalities:"):
+                    if "image" in {m.strip() for m in stripped.partition(":")[2].split(",")}:
+                        flags.add("image input")
+            endpoint_set = set()
+            section = ""
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    section = stripped.lstrip("#").strip().lower()
+                if section != "endpoints" or not stripped.startswith("|"):
+                    continue
+                cells = [c.strip().strip("`") for c in stripped.strip("|").split("|")]
+                if len(cells) == 3 and cells[2] == "Supported":
+                    endpoint = "/" + cells[1].lstrip("/")
+                    if endpoint in (CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT):
+                        endpoint_set.add(endpoint)
+            if not endpoint_set:
+                return model_id, None, None
+            row_warnings = ("deprecated_or_expiring",) if re.search(
+                r"^Status: Deprecated\s*$", text, flags=re.MULTILINE
+            ) else ()
+            record = _OpenAIModelRecord(
+                model_id=model_id, display_name=model_id, description=None,
+                endpoints=tuple(sorted(endpoint_set)), features=tuple(sorted(flags)),
+                context_length=parsed.context_length, max_output_tokens=parsed.max_output_tokens,
+                knowledge_cutoff=None, warnings=row_warnings,
+            )
+            return model_id, record, source.url
+
+    results = await asyncio.gather(*(page(m) for m in candidates[:cap]))
+    records = {}
+    urls = {}
+    for model_id, record, url in results:
+        if record is not None:
+            records[model_id] = record
+            urls[model_id] = url
+        else:
+            warnings.append(ProviderCatalogWarning(
+                code="model_page_unusable", provider=OPENAI_PROVIDER, model_id=model_id,
+                message="Official model page failed retrieval, identity, format, or text-contract checks.",
+            ))
+    return pricing, prices, records, urls
+
+
 async def _propose_openai(
     *,
     client: httpx.AsyncClient,
@@ -1199,6 +1328,19 @@ async def _propose_openai(
         text=_text_from_source(models_source),
         source_url=models_source.url,
     )
+    model_source_urls: dict[str, str] = {}
+    # The current index is navigation, not an endpoint contract. Its
+    # HTML rendering no longer contains the legacy inline model blocks.
+    if not model_records and "<html" in (models_source.raw_text or "").lower():
+        pricing_source, pricing_records, model_records, model_source_urls = (
+            await _openai_markdown_documents(
+                client=client, fetched_sources=fetched_sources, warnings=warnings,
+                include_models=include_models, exclude_models=exclude_models,
+                max_models=max_models, ordinary_chat_only=ordinary_chat_only,
+                save_source_snapshots=save_source_snapshots, source_dir=source_dir, now=now,
+            )
+        )
+
     api_model_ids: set[str] = set()
     if include_api_models or "api" in source_methods:
         api_source = await _fetch_openai_models_api(
@@ -1300,6 +1442,7 @@ async def _propose_openai(
 
     for model_id in eligible_model_ids:
         docs_model = model_records.get(model_id)
+        model_source_url = model_source_urls.get(model_id, models_source.url)
         doc_prices = pricing_by_model.get(model_id, ())
         selected_doc_pricing = _select_openai_text_pricing_record(doc_prices)
         row_warnings = _openai_model_comparison_warnings(
@@ -1342,7 +1485,7 @@ async def _propose_openai(
                     source_evidence=tuple(
                         value
                         for value in (
-                            models_source.url,
+                            model_source_url,
                             OPENAI_MODELS_API_URL if model_id in api_model_ids else None,
                         )
                         if value is not None
@@ -1372,6 +1515,7 @@ async def _propose_openai(
                     "search_specific_model" not in route_row_warnings
                     and "unsupported_modality" not in route_row_warnings
                     and "hosted_tool_only" not in route_row_warnings
+                    and "deprecated_or_expiring" not in route_row_warnings
                 )
                 route_status = "ready" if route_ready else "report-only"
                 route_candidates.append(
@@ -1401,7 +1545,7 @@ async def _propose_openai(
                             source_urls=tuple(
                                 value
                                 for value in (
-                                    models_source.url,
+                                    model_source_url,
                                     OPENAI_MODELS_API_URL if model_id in api_model_ids else None,
                                 )
                                 if value is not None
@@ -1424,7 +1568,7 @@ async def _propose_openai(
                         provider=OPENAI_PROVIDER,
                         model_id=model_id,
                         endpoint=RESPONSES_ENDPOINT,
-                        sources=(models_source.url,),
+                        sources=(model_source_url,),
                     )
                 )
 
@@ -1437,7 +1581,7 @@ async def _propose_openai(
             endpoint_scopes=endpoint_scopes,
             model_record=docs_model,
             assisted_pricing_rows=assisted_pricing_rows,
-            sources=(pricing_source.url, models_source.url),
+            sources=(pricing_source.url, model_source_url),
             allow_zero_prices=allow_zero_prices,
         )
         if openai_pricing_candidates:
@@ -1481,7 +1625,7 @@ async def _propose_openai(
                         value
                         for value in (
                             pricing_source.url if doc_prices else None,
-                            models_source.url if docs_model else None,
+                            model_source_url if docs_model else None,
                             OPENAI_MODELS_API_URL if model_id in api_model_ids else None,
                         )
                         if value is not None
@@ -2010,6 +2154,12 @@ def _parse_openai_pricing_docs(
     source_url: str,
     source_retrieved_at: str,
 ) -> tuple[_OpenAIPricingRecord, ...]:
+    standard = re.search(
+        r"^### Standard pricing data[ \t]*$\n(.*?)(?=^### (?:Batch|Flex|Fast) pricing data|\Z)",
+        text, flags=re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    )
+    if standard is not None:
+        text = standard.group(1)
     tables = _extract_tabular_blocks(text)
     records: list[_OpenAIPricingRecord] = []
     for table in tables:
@@ -2231,6 +2381,7 @@ def _openai_pricing_candidates(
             "unsupported_modality",
             "unsupported_endpoint",
             "hosted_tool_only",
+            "deprecated_or_expiring",
         } & warning_codes
         if zero_price_detected and not allow_zero_prices:
             ready = False

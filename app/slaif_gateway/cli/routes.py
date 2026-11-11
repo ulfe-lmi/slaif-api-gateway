@@ -236,7 +236,7 @@ async def _preview_route_import(
         )
         valid_rows = [row for row in preview.rows if row.status == "valid"]
         if not valid_rows:
-            return route_import_preview_to_dict(preview)
+            return preview
 
         route_repository = ModelRoutesRepository(session)
         existing_by_row: dict[int, list[object]] = {}

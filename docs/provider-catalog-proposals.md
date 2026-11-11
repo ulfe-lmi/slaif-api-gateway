@@ -406,3 +406,29 @@ eventual audited import execution.
   sessions, or logs
 - no hosted tools, MCP/connectors, file search, code interpreter, computer
   use, web search, or image generation enablement through this workflow
+
+
+### Current OpenAI linked documentation
+
+When the HTML index has no legacy endpoint blocks, proposals retrieve the
+canonical Markdown pricing/index documents and at most 64 individual official
+model pages (four requests at a time, within the existing GUI byte/time budgets).
+The requested model cap and model filters further narrow that scope. API model
+listing remains identity/availability evidence and cannot grant endpoint support.
+A page must declare the exact requested model ID, text modalities, and supported
+endpoint rows. Page retrieval, format, and identity failures remain report-only.
+The per-model page URL is retained in proposal provenance.
+
+Only explicit flat **Standard** prices enter this TSV family. Batch prices,
+context-dependent prices, and cache-write price tables are not flattened into
+ordinary input/output prices. Such pricing requires a separately representable
+pricing contract; the generated report flags the limitation. Deprecated pages
+remain report-only. With ordinary-chat-only enabled, current vision-capable
+models may be projected to text-only routes; image and hosted-tool permissions
+are not granted. Existing legacy block behavior is preserved.
+
+Responses scope in this proposal family remains report-only; this repair does
+not introduce Responses route/pricing import support. Verify actual row counts
+and warnings instead of interpreting a completed artifact job as an import-ready
+catalog. Provider records must exist before route import. Provider creation and
+enabling remain explicit administrator actions, separate from proposals.
