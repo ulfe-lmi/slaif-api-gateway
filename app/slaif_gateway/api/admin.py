@@ -1893,6 +1893,68 @@ async def preview_admin_key_calibration(
     return response
 
 
+# 219-b: finite local ceiling for the calibration summary/proposal JSON
+# attachment (1 MiB). Reused as-is for the whole serialized artifact.
+_CALIBRATION_SUMMARY_JSON_MAX_BYTES = 1024 * 1024
+
+
+def _calibration_payload_has_known_secret_alias(
+    payload: object,
+    *,
+    scope: dict[str, object],
+    accepted_prefixes: Sequence[str],
+) -> bool:
+    """219-b: pure recursive known-alias scan over the canonical payload.
+
+    Walks every nested dict/list/str of the asdict projection and applies
+    the SAME pure request-aware classifier the GUI lookup/search guards use
+    (``is_known_incoming_secret_alias``): accepted gateway-key prefixes,
+    the credential-shaped ``redact_text`` discovery, and the bounded
+    incoming Authorization/proxy-authorization/cookie/X-API-Key/query
+    masker. Fail closed: any nested canonical string that IS or EMBEDS a
+    known incoming authentication alias or recognized complete credential
+    material marks the whole artifact refused. No I/O, no mutation.
+    """
+    if isinstance(payload, str):
+        return is_known_incoming_secret_alias(
+            payload,
+            scope=scope,  # type: ignore[arg-type]
+            accepted_prefixes=accepted_prefixes,
+        )
+    if isinstance(payload, dict):
+        return any(
+            _calibration_payload_has_known_secret_alias(
+                value, scope=scope, accepted_prefixes=accepted_prefixes
+            )
+            for value in payload.values()
+        )
+    if isinstance(payload, (list, tuple)):
+        return any(
+            _calibration_payload_has_known_secret_alias(
+                value, scope=scope, accepted_prefixes=accepted_prefixes
+            )
+            for value in payload
+        )
+    return False
+
+
+def _calibration_summary_json_refusal(
+    request: Request, *, status_code: int, message: str
+) -> Response:
+    """219-b: this route's refusal surface.
+
+    The shared branded error page plus the same private no-store/no-cache
+    and nosniff law as the successful attachment, so a refusal is never
+    cacheable or MIME-sniffable either. The fixed message never echoes a
+    refused value.
+    """
+    response = _admin_error_page(request, status_code=status_code, message=message)
+    response.headers["Cache-Control"] = "private, no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
+
 @router.get("/keys/{gateway_key_id}/calibration/summary.json")
 async def download_admin_key_calibration_summary(
     request: Request,
@@ -1914,6 +1976,17 @@ async def download_admin_key_calibration_summary(
     attachment through the NON-ROTATING attachment context so the
     still-displayed preview page (and its template-creation form token)
     is left untouched.
+
+    219-b boundary: the typed projection copies owner/record names
+    verbatim, so the projection alone does not establish secret exclusion.
+    The WHOLE artifact is refused (fixed safe 400, no field deletion, no
+    echo of the refused value, unchanged CLI-compatible shape) when ANY
+    nested canonical string is a known incoming authentication alias or
+    recognized complete credential material, using the same pure
+    request-aware classifier as the GUI lookup/search guards. A finite
+    1 MiB local output ceiling refuses oversize output explicitly (no
+    truncation); the operator narrows the time window. Success and
+    refusal responses are private no-store/no-cache and nosniff.
     """
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
@@ -1939,18 +2012,51 @@ async def download_admin_key_calibration_summary(
                 multiplier=parsed_multiplier,
             )
     except (CalibrationSummaryError, ValueError) as exc:
-        return _admin_error_page(request, status_code=400, message=str(exc))
+        return _calibration_summary_json_refusal(request, status_code=400, message=str(exc))
 
     payload = asdict(result)
+    # 219-b export boundary: the typed projection copies owner/record names
+    # verbatim, so the projection alone does not establish secret exclusion.
+    # Refuse the WHOLE artifact (fixed safe error, no field deletion, no
+    # changed CLI-compatible shape) when ANY nested canonical string is a
+    # known incoming authentication alias or recognized credential material.
+    if _calibration_payload_has_known_secret_alias(
+        payload,
+        scope=request.scope,
+        accepted_prefixes=settings.get_gateway_key_accepted_prefixes(),
+    ):
+        return _calibration_summary_json_refusal(
+            request,
+            status_code=400,
+            message=(
+                "The calibration summary contains a value matching a known "
+                "incoming authentication value. The download was refused; "
+                "review the affected record and its history before exporting."
+            ),
+        )
     content = (
         json.dumps(payload, indent=2, sort_keys=True, default=_admin_configuration_json_default)
         + "\n"
     )
+    # 219-b export boundary: finite local attachment ceiling. Refuse
+    # oversize output explicitly (never truncate and label it complete);
+    # the operator narrows the time window instead.
+    if len(content.encode("utf-8")) > _CALIBRATION_SUMMARY_JSON_MAX_BYTES:
+        return _calibration_summary_json_refusal(
+            request,
+            status_code=400,
+            message=(
+                "The calibration summary exceeds the 1 MiB export limit. "
+                "Narrow the time window (start/end) and try again."
+            ),
+        )
     response = Response(content=content, media_type="application/json")
     response.headers["Content-Disposition"] = (
         f'attachment; filename="slaif-calibration-summary-{parsed_key_id}.json"'
     )
-    _set_no_store_headers(response)
+    response.headers["Cache-Control"] = "private, no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["X-Content-Type-Options"] = "nosniff"
     return response
 
 
@@ -9797,6 +9903,14 @@ async def _render_key_detail(
         if destination.strip()
     ]
     policy_inspection = await _load_key_policy_inspection(request, key.id)
+    # 219-b: the explain-model picker reuses the shared searchable known-model
+    # control; the initial latest-100 option list is the SAME grouped policy
+    # catalog, flattened once here (Jinja has no list comprehensions).
+    explain_model_options = [
+        {"id": choice.token, "label": choice.label}
+        for choices in policy_catalog.get("model_choices_by_group", {}).values()
+        for choice in choices
+    ]
     return templates.TemplateResponse(
         request,
         "keys/detail.html",
@@ -9819,6 +9933,7 @@ async def _render_key_detail(
             ),
             "explain_report": explain_report,
             "explain_form": explain_form or {"endpoint": "", "model": ""},
+            "explain_model_options": explain_model_options,
             "configuration_form": configuration_form
             or {
                 "configuration_json": "",

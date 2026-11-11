@@ -103,31 +103,37 @@
                {% if form.validity_mode == "absolute" %}checked{% endif %} aria-describedby="clone-absolute-help">
         Exact absolute window (UTC)
       </label>
-      <div class="form-grid">
-        <label data-clone-duration>
-          Duration value
-          <input name="duration_value" value="{{ form.duration_value }}" inputmode="numeric" autocomplete="off"
-                 placeholder="e.g. 72" aria-describedby="clone-duration-help">
-        </label>
-        <label data-clone-duration>
-          Duration unit
-          <select name="duration_unit" aria-describedby="clone-duration-help">
-            <option value="seconds" {% if form.duration_unit == "seconds" %}selected{% endif %}>Seconds</option>
-            <option value="minutes" {% if form.duration_unit == "minutes" %}selected{% endif %}>Minutes</option>
-            <option value="hours" {% if not form.duration_unit or form.duration_unit == "hours" %}selected{% endif %}>Hours</option>
-            <option value="days" {% if form.duration_unit == "days" %}selected{% endif %}>Days</option>
-          </select>
-        </label>
-        <label>
-          Absolute valid from (UTC)
-          <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60"
-                 autocomplete="off" aria-describedby="clone-absolute-help">
-        </label>
-        <label>
-          Absolute valid until (UTC)
-          <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60"
-                 autocomplete="off" aria-describedby="clone-absolute-help">
-        </label>
+      <div class="clone-validity-groups">
+        <div class="clone-mode-group" data-clone-duration-group>
+          <span class="muted small">Duration mode fields</span>
+          <label data-clone-duration>
+            Duration value
+            <input name="duration_value" value="{{ form.duration_value }}" inputmode="numeric" autocomplete="off"
+                   placeholder="e.g. 72" aria-describedby="clone-duration-help">
+          </label>
+          <label data-clone-duration>
+            Duration unit
+            <select name="duration_unit" aria-describedby="clone-duration-help">
+              <option value="seconds" {% if form.duration_unit == "seconds" %}selected{% endif %}>Seconds</option>
+              <option value="minutes" {% if form.duration_unit == "minutes" %}selected{% endif %}>Minutes</option>
+              <option value="hours" {% if not form.duration_unit or form.duration_unit == "hours" %}selected{% endif %}>Hours</option>
+              <option value="days" {% if form.duration_unit == "days" %}selected{% endif %}>Days</option>
+            </select>
+          </label>
+        </div>
+        <div class="clone-mode-group" data-clone-absolute-group>
+          <span class="muted small">Absolute mode fields (UTC)</span>
+          <label>
+            Absolute valid from (UTC)
+            <input type="datetime-local" name="valid_from" value="{{ form.valid_from|utc_datetime_local }}" step="60"
+                   autocomplete="off" aria-describedby="clone-absolute-help">
+          </label>
+          <label>
+            Absolute valid until (UTC)
+            <input type="datetime-local" name="valid_until" value="{{ form.valid_until|utc_datetime_local }}" step="60"
+                   autocomplete="off" aria-describedby="clone-absolute-help">
+          </label>
+        </div>
       </div>
       <p class="field-help" id="clone-duration-help">
         Duration mode: a positive whole number of seconds, minutes, hours, or days (stored as exact seconds; maximum {{ max_duration_seconds | num }} seconds, about 1,000 years). The window starts at EXECUTION time, so the preview shown on the review page is an estimate, not a promise.

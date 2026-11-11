@@ -23,12 +23,13 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
-
 from slaif_gateway.services.admin_session_service import (
     AdminSessionContext,
 )
@@ -379,3 +380,272 @@ def test_key_create_policy_source_precedes_guided_selector(monkeypatch) -> None:
     for help_id in ("create-owner-help", "create-cohort-help"):
         assert f'id="{help_id}"' in html_text
         assert f'aria-describedby="{help_id}"' in html_text
+
+
+# ---------------------------------------------------------------------------
+# 219-b: calibration JSON export boundary canaries (nested known-auth
+# alias refusal, credential shapes, safe-value retention, finite ceiling,
+# refusal headers, no token rotation).
+# ---------------------------------------------------------------------------
+
+
+def _summary_with(key_id: uuid.UUID, **overrides) -> object:
+    base = _calibration_preview(key_id)
+    return replace(base.summary, **overrides)
+
+
+def _preview_with_summary(key_id: uuid.UUID, summary: object) -> object:
+    base = _calibration_preview(key_id)
+    return replace(base, summary=summary)
+
+
+class _RecordingLogger:
+    """Bounded log canary: records every event emitted through the module
+    logger during a test so a refused value can be proven absent from logs."""
+
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def _record(self, event: object, **kwargs: object) -> None:
+        rendered = {str(k): v for k, v in kwargs.items()}
+        rendered["event"] = str(event)
+        self.events.append((str(event), rendered))
+
+    def warning(self, event: object, **kwargs: object) -> None:
+        self._record(event, **kwargs)
+
+    def error(self, event: object, **kwargs: object) -> None:
+        self._record(event, **kwargs)
+
+    def info(self, event: object, **kwargs: object) -> None:
+        self._record(event, **kwargs)
+
+    def debug(self, event: object, **kwargs: object) -> None:
+        self._record(event, **kwargs)
+
+    def exception(self, event: object, **kwargs: object) -> None:
+        self._record(event, **kwargs)
+
+    def all_text(self) -> str:
+        return json.dumps([name + " " + str(payload) for name, payload in self.events])
+
+
+def test_calibration_json_download_refuses_nested_known_auth_alias(
+    monkeypatch,
+) -> None:
+    """The incoming admin session cookie value nested in a summary string
+    field refuses the WHOLE artifact with a fixed no-echo safe error."""
+    key = _trusted_detail()
+    cookie_alias = "session-plaintext"  # the exact incoming cookie value
+    log = _RecordingLogger()
+
+    async def summarize_calibration_key_usage(self, **kwargs):
+        return _preview_with_summary(
+            key.id, _summary_with(key.id, owner_display_name=cookie_alias)
+        )
+
+    monkeypatch.setattr(_SUMMARY_PATH, summarize_calibration_key_usage)
+    _patch_get_detail(monkeypatch, key)
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin.logger", log, raising=False
+    )
+
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(
+        f"/admin/keys/{key.id}/calibration/summary.json",
+        params={"multiplier": "2"},
+    )
+
+    # Fixed useful safe refusal: 400, whole artifact refused, no echo.
+    assert response.status_code == 400
+    assert "matching a known incoming authentication value" in response.text
+    assert "refused" in response.text
+    assert cookie_alias not in response.text
+    # Refusal surface carries the same private no-store/no-cache + nosniff.
+    assert "no-store" in response.headers["cache-control"]
+    assert "no-cache" in response.headers["cache-control"]
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    # Read-only: no session/cookie re-issue and no token rotation.
+    assert "set-cookie" not in {k.lower() for k in response.headers}
+    # No log line may carry the refused value.
+    assert cookie_alias not in log.all_text()
+
+
+def test_calibration_json_download_refuses_nested_credential_shapes(
+    monkeypatch,
+) -> None:
+    """Recognized complete credential material nested in summary/proposal
+    tuples is refused with the same fixed no-echo surface."""
+    key = _trusted_detail()
+    bearer_shape = "Bearer abcdef12345678"
+    provider_key_shape = "sk-or-abcdefghijklmnop"
+    gateway_shape = "sk-slaif-canary0000000001"
+    for secret in (bearer_shape, provider_key_shape, gateway_shape):
+
+        async def summarize_calibration_key_usage(self, _s=secret, **kwargs):
+            return _preview_with_summary(
+                key.id,
+                _summary_with(
+                    key.id,
+                    warnings=(f"note: {_s}",),
+                    cohort_name="Quarterly research cohort",
+                ),
+            )
+
+        monkeypatch.setattr(_SUMMARY_PATH, summarize_calibration_key_usage)
+        _patch_get_detail(monkeypatch, key)
+
+        client = TestClient(_app())
+        _login(monkeypatch, client)
+        response = client.get(
+            f"/admin/keys/{key.id}/calibration/summary.json",
+            params={"multiplier": "2"},
+        )
+        assert response.status_code == 400, secret
+        assert "matching a known incoming authentication value" in response.text
+        assert secret not in response.text
+        assert "no-store" in response.headers["cache-control"]
+        assert response.headers["x-content-type-options"] == "nosniff"
+        # The filename never echoes a refused value: only the key UUID.
+        assert "content-disposition" not in {k.lower() for k in response.headers}
+
+
+def test_calibration_json_download_keeps_safe_public_and_ordinary_values(
+    monkeypatch,
+) -> None:
+    """Legitimate public IDs, ordinary owner names, and exact protocol
+    values remain intact in a 200 body with the success header law."""
+    key = _trusted_detail()
+
+    async def summarize_calibration_key_usage(self, **kwargs):
+        return _calibration_preview(key.id)
+
+    monkeypatch.setattr(_SUMMARY_PATH, summarize_calibration_key_usage)
+    _patch_get_detail(monkeypatch, key)
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(
+        f"/admin/keys/{key.id}/calibration/summary.json",
+        params={"multiplier": "2"},
+    )
+    assert response.status_code == 200
+    # Complete-body canary: safe values survive verbatim.
+    assert '"owner_display_name": "Ada Lovelace"' in response.text
+    assert '"public_key_id": "public-calibration"' in response.text
+    # indent=2 serialization: array members sit on their own indented lines.
+    assert (
+        '"observed_endpoints": [\n      "/v1/chat/completions"\n    ],'
+        in response.text
+    )
+    assert '"cost_currencies": [\n      "EUR"\n    ],' in response.text
+    assert "session-plaintext" not in response.text
+    # Success surface: private no-store/no-cache + nosniff.
+    assert "private" in response.headers["cache-control"]
+    assert "no-store" in response.headers["cache-control"]
+    assert "no-cache" in response.headers["cache-control"]
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "set-cookie" not in {k.lower() for k in response.headers}
+
+
+def test_calibration_json_download_refuses_oversize_without_truncation(
+    monkeypatch,
+) -> None:
+    """A payload above the finite 1 MiB local ceiling is refused explicitly
+    (no truncation, no partial artifact); the safe advice is narrowing the
+    time window."""
+    key = _trusted_detail()
+    oversized = "safe-ordinary-word " * 120000  # ~2.4 MiB of safe text
+
+    async def summarize_calibration_key_usage(self, **kwargs):
+        return _preview_with_summary(
+            key.id, _summary_with(key.id, cohort_name=oversized)
+        )
+
+    monkeypatch.setattr(_SUMMARY_PATH, summarize_calibration_key_usage)
+    _patch_get_detail(monkeypatch, key)
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+
+    response = client.get(
+        f"/admin/keys/{key.id}/calibration/summary.json",
+        params={"multiplier": "2"},
+    )
+    assert response.status_code == 400
+    assert "exceeds the 1 MiB export limit" in response.text
+    assert "Narrow the time window" in response.text
+    # No truncated/labeled-complete artifact is ever emitted.
+    assert response.headers["content-type"].startswith("text/html")
+    assert "no-store" in response.headers["cache-control"]
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "set-cookie" not in {k.lower() for k in response.headers}
+
+
+# ---------------------------------------------------------------------------
+# 219-b: compatibility readiness help - focused invalid PUBLIC_BASE_URL case
+# ---------------------------------------------------------------------------
+
+
+def test_compatibility_readiness_help_for_invalid_public_base_url(
+    monkeypatch,
+) -> None:
+    """A ready row whose artifacts cannot render (invalid configured
+    PUBLIC_BASE_URL) shows FIXED setup direction instead of an unexplained
+    None placeholder, drops the artifact links, and never echoes the
+    configured URL or the validator's exception text."""
+    from slaif_gateway.services.codex_qualification import (
+        CodexQualificationResult,
+    )
+    from tests.unit.test_admin_keys_routes import _settings
+
+    invalid_url = "https://example.com"  # canonical failure: path must end /v1
+    route_id = uuid.uuid4()
+
+    result = CodexQualificationResult(
+        state="protocol_qualified",
+        requested_model="qwen38-27b-v1",
+        provider="openai",
+        endpoint="/v1/responses",
+        route_id=route_id,
+        paired_route_id=None,
+        reason_codes=(),
+        profile_id="qwen38-27b-codex-0.162-v1",
+        metadata_version=2,
+    )
+
+    @asynccontextmanager
+    async def _fake_compat_session(request):
+        yield None
+
+    async def inspect(self, *, now=None):
+        return [result]
+
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin_compatibility._compat_session",
+        _fake_compat_session,
+    )
+    monkeypatch.setattr(
+        "slaif_gateway.services.codex_qualification.CodexQualificationService.inspect",
+        inspect,
+    )
+    client = TestClient(_app(_settings(PUBLIC_BASE_URL=invalid_url)))
+    _login(monkeypatch, client)
+
+    response = client.get("/admin/operations/compatibility/")
+    assert response.status_code == 200, response.text[:400]
+    body = response.text
+    # Fixed, useful direction replaces the unexplained placeholder.
+    assert "Unavailable: PUBLIC_BASE_URL is not a renderable" in body
+    assert "HTTPS public URL ending in /v1" in body
+    assert "numeric-loopback" in body
+    # The configured URL and the validator's raw text are never echoed.
+    assert invalid_url not in body
+    assert "path must end exactly /v1" not in body
+    # The artifact links for this route are withheld, not just the text.
+    assert f"/admin/routes/{route_id}/codex-profile/" not in body
+    # Empty reasons render the fixed "No blocking reasons" copy.
+    assert "No blocking reasons" in body

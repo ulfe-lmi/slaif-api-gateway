@@ -54,7 +54,7 @@
           help_id="owner-create-institution-help",
       ) }}
       <label class="checkbox-row"><input type="checkbox" name="is_active" value="true" {% if form.is_active in ["true", "1", "on", "yes"] %}checked{% endif %} aria-describedby="owner-create-active-help"> Active owner</label>
-      <p class="muted small" id="owner-create-active-help">Active owners can hold keys; unactive owners are retained but excluded from new keys. Owners do not link directly to cohorts in the current schema; cohorts are assigned through keys.</p>
+      <p class="muted small" id="owner-create-active-help">Active owners can hold keys; unactive owners are retained but excluded from new keys. Cohorts are assigned through keys, not directly to owners.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="owner-notes-heading">

@@ -602,14 +602,6 @@ _RAW_FIELD_EXCEPTIONS: dict[str, dict[str, str]] = {
             "not a reference to another record"
         ),
     },
-    "keys/detail.html": {
-        "model": (
-            "explain-route query input: an operator may ask about a model "
-            "that is NOT currently routed (to learn why it is blocked), so "
-            "a finite picker cannot cover it; suggestions come from a "
-            "read-only datalist"
-        ),
-    },
 }
 
 
@@ -886,3 +878,50 @@ def test_guidance_help_ids_are_unique_per_page() -> None:
                     "(each help id must define exactly one element)"
                 )
     assert problems == [], "\n".join(problems)
+
+
+# 219-b: the enhanced record-choice picker has an UNNAMED visible control
+# (the .rc-search box inside the open menu). The per-template audit is
+# caller-driven (help_id), so the SHARED MACRO itself must wire the
+# association onto EVERY actual visible entry control it renders: the
+# single-value input, the multi-value textarea, and the menu search box.
+_RC_HELP_WIRING = '{% if help_id %}aria-describedby="{{ help_id }}"{% endif %}'
+
+
+def test_record_choice_macro_wires_help_to_all_visible_controls() -> None:
+    src = _template_source("_record_choice.html")
+
+    # Single-value visible input.
+    single_input = re.search(
+        r'<input type="text" class="rc-input".*?>', src, re.S
+    )
+    assert single_input, "macro lost its single-value visible input"
+    assert _RC_HELP_WIRING in single_input.group(0)
+
+    # Multi-value visible textarea.
+    textarea = re.search(r"<textarea class=\"rc-input\".*?</textarea>", src, re.S)
+    assert textarea, "macro lost its multi-value visible textarea"
+    assert _RC_HELP_WIRING in textarea.group(0)
+
+    # The UNNAMED enhanced menu-search control (visible whenever the
+    # picker menu opens).
+    search_input = re.search(r'<input type="search" class="rc-search".*?>', src, re.S)
+    assert search_input, "macro lost its enhanced menu-search control"
+    assert _RC_HELP_WIRING in search_input.group(0)
+
+
+def test_whole_field_audit_accounts_for_more_than_the_baseline() -> None:
+    """219-b: the whole-field audit and the 111-field KNOWN-REFERENCE
+    baseline are different populations and must never be equated. The
+    audit (every visible entry control) is strictly larger than the
+    baseline (classified reference/finite-choice fields)."""
+    audited = 0
+    for path in sorted(TEMPLATES.rglob("*.html")):
+        rel = str(path.relative_to(TEMPLATES))
+        audited += sum(1 for _ in _entry_fields(rel))
+    baseline = sum(len(fields) for fields in EXPECTED_FIELDS.values())
+    assert baseline == 111, "known-reference baseline drifted"
+    assert audited > baseline, (
+        f"whole-field audit ({audited}) no longer exceeds the "
+        f"{baseline}-field baseline: the two populations were conflated"
+    )

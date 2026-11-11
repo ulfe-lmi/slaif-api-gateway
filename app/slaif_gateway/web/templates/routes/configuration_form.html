@@ -228,7 +228,7 @@
       </fieldset>
 
       <fieldset id="cfg-guided-group">
-        <p class="field-help" id="route-config-guided-help">Each leaf keeps current unless its action says Set; a guided change needs at least one explicit leaf. Token leaves are raw token counts (not M-token display) and video frames is a raw frame count; values are positive whole numbers validated against the shared route ceilings, which are configuration limits and not physical provider or client context limits.</p>
+        <p class="field-help" id="route-config-guided-help">Each leaf keeps current unless its action says Set; a guided change needs at least one explicit leaf. Token leaves are raw token counts (not M-token display) and video frames is a raw frame count. The media leaves (Image tokens, Video tokens, Video frames) are per-typed-part ADMISSION/RESERVATION estimates only: when a request carries typed media parts, each part is estimated at the configured budget while the gateway reserves capacity at admission, and the estimate never changes FINAL usage — provider-reported final usage stays authoritative for quota and cost. Image and Video tokens accept positive whole numbers from 1 to 1,050,000; Video frames accepts 1 to 32. All values are configuration limits validated against the shared route ceilings, which are not physical provider or client context limits.</p>
         <div class="form-grid">
           {% for action_field, value_field, leaf, label in codex_leaf_fields + media_leaf_fields %}
           <div class="field">

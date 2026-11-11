@@ -287,6 +287,41 @@
   </div>
   {% endif %}
 
+
+  <section class="action-panel" aria-labelledby="key-advanced-configuration-heading">
+    <h2 id="key-advanced-configuration-heading">Advanced Configuration (versioned JSON)</h2>
+    <p class="muted">The SAME strict version-1 document the CLI uses: download the key's current allowlisted projection, edit it, and apply a presence-aware partial update. Omitted fields preserve the current state; explicit <code>null</code> and <code>[]</code> keep their distinct meanings. Key material, status, owner/cohort, validity, usage counters, and reservations are never touched. Bound client-module changes remain blocked and must use the reviewed migration path, not this editor.</p>
+    <p>
+      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>
+    </p>
+    <form method="post" action="/admin/keys/{{ key.id }}/configuration">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        Configuration document
+        <textarea name="configuration_json" rows="10" class="config-json" spellcheck="false" autocomplete="off" aria-describedby="key-advanced-config-help">{% if configuration_form.configuration_json %}{{ configuration_form.configuration_json }}{% endif %}</textarea>
+      </label>
+      <p class="muted small">
+        Minimal sample:
+        <pre class="config-sample">{{ configuration_sample }}</pre>
+      </p>
+      <p class="field-help" id="key-advanced-config-help">
+        Semantics: an omitted field leaves the key's current value untouched; <code>null</code> <code>allowed_providers</code> is unrestricted and
+        <code>[]</code> denies all providers; null quotas are unlimited; null rate members inherit the deployment; null lazy policy means reject.
+        Unknown or duplicate fields are rejected; the document must not exceed 64 KB. A rejected document is never redisplayed.
+      </p>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_configuration_update" value="true" {% if configuration_form.confirm_configuration_update %}checked{% endif %} aria-describedby="key-advanced-config-help">
+        I confirm this advanced configuration update
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" value="{{ configuration_form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="key-config-reason-help">
+      </label>
+      <p class="field-help" id="key-config-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
+      <button type="submit">Apply configuration update</button>
+    </form>
+  </section>
+
   <section class="action-panel" aria-labelledby="key-request-policy-heading">
     <h2 id="key-request-policy-heading">Update Request Policy</h2>
     <p class="muted">Edit provider, endpoint, and model allow-lists without changing quotas, validity, key material, owner metadata, usage counters, or live-burn policy.</p>
@@ -408,21 +443,20 @@
             {% endfor %}
           </select>
         </label>
-        <label>
-          Requested model
-          <input name="model" list="explain-model-options" value="{{ explain_form.model }}" autocomplete="off" aria-describedby="key-explain-route-help" placeholder="e.g. gpt-5.6-sol">
-          <datalist id="explain-model-options">
-            {% for group_label, choices in policy_catalog.model_choices_by_group.items() %}
-            {% for choice in choices %}
-            <option value="{{ choice.token }}">{{ choice.label }}</option>
-            {% endfor %}
-            {% endfor %}
-          </datalist>
-        </label>
+        {{ record_choice(
+            "model", "policy_model", "Requested model",
+            options=explain_model_options or none,
+            allow_new=true,
+            selected_id=explain_form.model,
+            nojs_value=explain_form.model,
+            placeholder="e.g. gpt-5.6-sol (searches ALL enabled route models)",
+            help="Suggestions are the latest 100 enabled route models; typing searches OLDER enabled route models server-side. Any model token can be typed — an unknown model is itself a reportable result.",
+            help_id="key-explain-model-help",
+            input_id="key-explain-model",
+        ) }}
       </div>
       <p class="field-help" id="key-explain-route-help">
-        Model suggestions are the latest 100 enabled route models; any model token can be typed — an unknown model is itself a
-        reportable result. The result repeats here verbatim from the shared configuration-only explanation, including its
+        The result repeats here verbatim from the shared configuration-only explanation, including its
         blockers, ambiguity handling, and not-evaluated states.
       </p>
       <button type="submit">Explain access</button>
@@ -513,7 +547,7 @@
           <input name="lazy_throttling_max_waiting_requests" value="{{ lazy_form.lazy_throttling_max_waiting_requests }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="key-lazy-help">
         </label>
       </div>
-      <p class="field-help" id="key-lazy-help">Reject is the default and stores no waiting policy. In wait mode both bounds are positive whole numbers (blank uses the built-in defaults of 30 seconds and 2 waiting requests) and may not exceed the operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key. An audit reason is required; credential-shaped values are masked before storage.</p>
+      <p class="field-help" id="key-lazy-help">Reject is the default and stores no waiting policy. In wait mode both bounds are positive whole numbers (a blank bound falls back to the built-in default of 30 seconds or 2 waiting requests, clamped to the deployment ceilings shown in the inputs) and may not exceed the operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key. An audit reason is required; credential-shaped values are masked before storage.</p>
       <label>
         Audit reason
         <input name="reason" value="{{ lazy_form.reason }}" required autocomplete="off" placeholder="Required reason" aria-describedby="key-lazy-help">
@@ -711,40 +745,6 @@
         </form>
       </div>
     </div>
-  </section>
-
-  <section class="action-panel" aria-labelledby="key-advanced-configuration-heading">
-    <h2 id="key-advanced-configuration-heading">Advanced Configuration (versioned JSON)</h2>
-    <p class="muted">The SAME strict version-1 document the CLI uses: download the key's current allowlisted projection, edit it, and apply a presence-aware partial update. Omitted fields preserve the current state; explicit <code>null</code> and <code>[]</code> keep their distinct meanings. Key material, status, owner/cohort, validity, usage counters, and reservations are never touched. Bound client-module changes remain blocked and must use the reviewed migration path, not this editor.</p>
-    <p>
-      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>
-    </p>
-    <form method="post" action="/admin/keys/{{ key.id }}/configuration">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>
-        Configuration document
-        <textarea name="configuration_json" rows="10" class="config-json" spellcheck="false" autocomplete="off" aria-describedby="key-advanced-config-help">{% if configuration_form.configuration_json %}{{ configuration_form.configuration_json }}{% endif %}</textarea>
-      </label>
-      <p class="muted small">
-        Minimal sample:
-        <pre class="config-sample">{{ configuration_sample }}</pre>
-      </p>
-      <p class="field-help" id="key-advanced-config-help">
-        Semantics: an omitted field leaves the key's current value untouched; <code>null</code> <code>allowed_providers</code> is unrestricted and
-        <code>[]</code> denies all providers; null quotas are unlimited; null rate members inherit the deployment; null lazy policy means reject.
-        Unknown or duplicate fields are rejected; the document must not exceed 64 KB. A rejected document is never redisplayed.
-      </p>
-      <label class="checkbox-row">
-        <input type="checkbox" name="confirm_configuration_update" value="true" {% if configuration_form.confirm_configuration_update %}checked{% endif %} aria-describedby="key-advanced-config-help">
-        I confirm this advanced configuration update
-      </label>
-      <label>
-        Audit reason
-        <input name="reason" value="{{ configuration_form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="key-config-reason-help">
-      </label>
-      <p class="field-help" id="key-config-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
-      <button type="submit">Apply configuration update</button>
-    </form>
   </section>
 
   <section class="action-panel" aria-labelledby="key-usage-reset-heading">

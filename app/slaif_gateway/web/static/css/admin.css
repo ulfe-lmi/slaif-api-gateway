@@ -1125,6 +1125,37 @@ td a {
   color: var(--muted);
 }
 
+/* 219-b: clone validity mode groups. The duration and absolute fields read
+   as two coherent groups (no orphaned end-date cell in an arbitrary grid);
+   key-clone.js mutes the group whose mode is not selected. */
+.clone-validity-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.clone-mode-group {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: var(--surface, #fbfcfb);
+  transition: opacity 120ms ease;
+}
+
+.clone-mode-group-inactive {
+  opacity: 0.55;
+}
+
+.clone-mode-group-inactive input,
+.clone-mode-group-inactive select {
+  cursor: not-allowed;
+  background: #edf1ee;
+  color: var(--muted);
+}
+
 .action-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -1331,7 +1362,8 @@ dd {
     .summary-grid,
     .action-grid,
   .management-grid,
-  .form-grid {
+  .form-grid,
+  .clone-validity-groups {
     grid-template-columns: 1fr;
   }
 

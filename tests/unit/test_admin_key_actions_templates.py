@@ -404,14 +404,19 @@ def test_key_detail_renders_lazy_throttling_wait_values_and_usable_inputs(monkey
 
     assert "Mode: wait; max wait: 45s; max waiting per key: 3" in html
     assert f'action="/admin/keys/{key.id}/lazy-throttling"' in html
-    assert 'name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode checked' in html
-    assert 'value="reject" data-lazy-throttling-mode checked' not in html
+    assert (
+        'name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode '
+        'aria-describedby="key-lazy-help" checked'
+    ) in html
+    assert (
+        'value="reject" data-lazy-throttling-mode aria-describedby="key-lazy-help" checked'
+    ) not in html
     assert 'name="lazy_throttling_max_wait_seconds" value="45"' in html
     assert 'name="lazy_throttling_max_waiting_requests" value="3"' in html
     # Server-rendered inputs stay usable with JS disabled (no disabled attr).
     assert "data-lazy-throttling-field disabled" not in html
     assert "data-lazy-throttling-field disabled>" not in html
-    assert "data-lazy-throttling-field>" in html
+    assert 'data-lazy-throttling-field aria-describedby="key-lazy-help">' in html
     assert 'name="reason" value="" required' in html
     assert "Redis rate limiting is currently disabled" not in html
 
@@ -426,8 +431,13 @@ def test_key_detail_renders_lazy_throttling_reject_defaults_and_inactive_warning
     html = client.get(f"/admin/keys/{key.id}").text
 
     assert "Mode: reject (immediate 429); no waiting configured" in html
-    assert 'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode checked' in html
-    assert 'value="wait" data-lazy-throttling-mode checked' not in html
+    assert (
+        'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode '
+        'aria-describedby="key-lazy-help" checked'
+    ) in html
+    assert (
+        'value="wait" data-lazy-throttling-mode aria-describedby="key-lazy-help" checked'
+    ) not in html
     assert 'name="lazy_throttling_max_wait_seconds" value="30"' in html
     assert 'name="lazy_throttling_max_waiting_requests" value="2"' in html
     # Default settings leave Redis rate limiting off: state that honestly.

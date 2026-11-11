@@ -86,8 +86,10 @@
       </p>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-limits-heading">
+    <section class="action-panel" aria-labelledby="create-limits-heading" data-guided-policy-section>
       <h2 id="create-limits-heading">Hard Quota Limits</h2>
+      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines these limits. The guided inputs are submitted at their blank (unlimited) defaults.</p>
+      <div data-guided-policy-body>
       <p class="muted">These are PostgreSQL-backed lifetime limits. Leave fields blank for no limit.</p>
       <div class="form-grid">
         <label>
@@ -106,6 +108,7 @@
       <p class="field-help" id="create-limits-help">
         Blank means UNLIMITED for that lifetime quota (stored null, never zero). In a configuration document the same null/omission law applies.
       </p>
+      </div>
     </section>
 
     <section class="action-panel" aria-labelledby="create-policy-source-heading">
@@ -125,21 +128,28 @@
         In document mode, guided policy controls must be left at defaults: uncheck allow-all providers/models/endpoints,
         deny-all, live-burn and external-tool fences, and leave their numbers blank.
       </p>
-      <label>
-        Advanced configuration document
-        <textarea name="configuration_json" rows="8" class="config-json" spellcheck="false" autocomplete="off" data-create-configuration-document aria-describedby="create-policy-source-help">{% if form.configuration_json %}{{ form.configuration_json }}{% endif %}</textarea>
-      </label>
-      <p class="muted small">Required only when policy source is "Advanced configuration document". The document defines policy only; it never carries identity, secrets, owner/cohort, validity, or server settings.</p>
+      <div data-create-configuration-document-group>
+        <label>
+          Advanced configuration document
+          <textarea name="configuration_json" rows="8" class="config-json" spellcheck="false" autocomplete="off" data-create-configuration-document aria-describedby="create-policy-source-help">{% if form.configuration_json %}{{ form.configuration_json }}{% endif %}</textarea>
+        </label>
+        <p class="muted small">Required only when policy source is "Advanced configuration document". The document defines policy only; it never carries identity, secrets, owner/cohort, validity, or server settings.</p>
+      </div>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-policy-heading">
+    <section class="action-panel" aria-labelledby="create-policy-heading" data-guided-policy-section>
       <h2 id="create-policy-heading">Request Policy</h2>
+      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's request policy. The guided selector is submitted at its defaults.</p>
       {% set selector_id_prefix = "create-policy" %}
+      <div data-guided-policy-body>
       {% include "keys/_policy_selector.html" %}
+      </div>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-codex-pilot-heading">
+    <section class="action-panel" aria-labelledby="create-codex-pilot-heading" data-guided-policy-section>
       <h2 id="create-codex-pilot-heading">Codex Protocol Pilot</h2>
+      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's Codex policy. The guided checkboxes are submitted unchecked.</p>
+      <div data-guided-policy-body>
       <p class="warning-text">This creates a standard, finite pilot key only after the selected route pair and current pricing qualify for Codex 0.147.0 with <code>gpt-5.6-sol</code>. This is local protocol qualification; real-provider E2E has not run.</p>
       <label class="checkbox-row">
         <input type="checkbox" name="codex_protocol_pilot" value="true" {% if form.codex_protocol_pilot %}checked{% endif %} aria-describedby="create-codex-pilot-help">
@@ -151,10 +161,13 @@
       </label>
       <p class="muted small" id="create-codex-pilot-help">Select exactly one qualified provider, model <code>gpt-5.6-sol</code>, and endpoints <code>/v1/models</code>, <code>/v1/responses</code>, and <code>/v1/responses/compact</code>. Do not select any allow-all option. Positive finite request, token, and EUR cost limits plus an audit reason are required.</p>
       <p class="muted small">The preset enables only the five canonical Codex Responses capabilities and local <code>function</code>/<code>custom</code> tools. It does not enable hosted tools, MCP, background work, provider state, or trusted-calibration behavior.</p>
+      </div>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-qwen-codex-heading">
+    <section class="action-panel" aria-labelledby="create-qwen-codex-heading" data-guided-policy-section>
       <h2 id="create-qwen-codex-heading">Qwen Codex 0.162</h2>
+      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's Qwen Codex policy. The guided checkboxes are submitted unchecked.</p>
+      <div data-guided-policy-body>
       <p class="muted">For routes already qualified against the installed Codex 0.162 module. Select explicit Qwen models and their providers above, plus exactly <code>/v1/models</code> and <code>/v1/responses</code>. This grants only the Codex capabilities required by those selected profiles; image input is included only for profiles that declare it.</p>
       <label class="checkbox-row">
         <input type="checkbox" name="qwen_codex" value="true" {% if form.qwen_codex %}checked{% endif %} aria-describedby="create-qwen-codex-help">
@@ -165,10 +178,13 @@
         I confirm that these models and providers are intended for Codex access
       </label>
       <p class="muted small" id="create-qwen-codex-help">Do not select the older Codex Protocol Pilot above. Ordinary key validity and quota settings still apply. The server checks route qualification again before issuing the key.</p>
+      </div>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-external-tools-heading">
+    <section class="action-panel" aria-labelledby="create-external-tools-heading" data-guided-policy-section>
       <h2 id="create-external-tools-heading">External-tool Policy</h2>
+      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's external-tool policy. The guided controls are submitted at their strict-bounded defaults.</p>
+      <div data-guided-policy-body>
       <p class="warning-text">Runtime permits only exact OpenAI Responses <code>web_search</code> when fenced key and route policy match. Remote MCP/connectors, provider URL authority, unknown authority, and every other hosted family remain denied.</p>
       <label>
         Mode
@@ -211,10 +227,13 @@
       </label>
       <p class="warning-text">For the implemented web-search contract, concurrent requests are fenced, later exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite request, token, and EUR limits, an acknowledgement, this second confirmation, and the audit reason below.</p>
       <p class="muted small" id="create-ext-tool-help">Installation ceilings: {{ external_tool_ceilings.max_distinct_capabilities | num }} capabilities, {{ external_tool_ceilings.max_approved_destinations | num }} destinations, and {{ external_tool_ceilings.max_provider_tool_calls_per_request | num }} provider calls per request. No wildcard, URL, credential, inline authorization, or allow-all option exists. Strict bounded is the default; fenced mode additionally needs the two confirmations above.</p>
+      </div>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-rate-limit-heading">
+    <section class="action-panel" aria-labelledby="create-rate-limit-heading" data-guided-policy-section>
       <h2 id="create-rate-limit-heading">Redis Operational Rate Limits</h2>
+      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's rate and lazy-throttling policy. The guided inputs are submitted blank (deployment defaults).</p>
+      <div data-guided-policy-body>
       <p class="muted">These optional Redis counters are separate from PostgreSQL hard quota limits. Leave fields blank for default behavior.</p>
       <div class="form-grid">
         <label>
@@ -267,10 +286,13 @@
         <p class="warning-text">Redis rate limiting is currently disabled (ENABLE_REDIS_RATE_LIMITS=false), so operational throttling is inactive: saving a wait policy does not enforce waiting until the operator enables it.</p>
         {% endif %}
       </fieldset>
+      </div>
     </section>
 
-    <section class="action-panel" aria-labelledby="create-chat-streaming-live-burn-heading" data-streaming-live-burn-surface>
+    <section class="action-panel" aria-labelledby="create-chat-streaming-live-burn-heading" data-streaming-live-burn-surface data-guided-policy-section>
       <h2 id="create-chat-streaming-live-burn-heading">{{ chat_live_burn_surface.display_title }}</h2>
+      <p class="muted small" data-guided-compact-note hidden>Inactive in document mode: the configuration document defines this key's streaming live-burn policy. The guided controls are submitted disabled.</p>
+      <div data-guided-policy-body>
       <p class="muted">Applies only to <code>{{ chat_live_burn_surface.endpoint_label }}</code> with <code>stream=true</code>. Final provider usage/cost remains authoritative.</p>
       <label class="checkbox-row">
         <input id="create-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true %}checked{% endif %} data-streaming-live-burn-enabled>
@@ -290,6 +312,7 @@
         {% for line in chat_live_burn_surface.help_text %}{{ line }} {% endfor %}
         Margins are ignored while monitoring is off.
       </p>
+      </div>
     </section>
 
     <section class="action-panel" aria-labelledby="create-calibration-heading">
@@ -346,12 +369,15 @@
 <script>
 (() => {
   // Policy-source switch (G01 advanced document mode): in document mode the
-  // guided POLICY checkboxes default to "off" (the server still enforces the
-  // single-source law; identity checkboxes such as trusted calibration are
-  // untouched and rejected server-side in document mode).
+  // guided POLICY checkboxes default to "off", the document label/editor/help
+  // group is disclosed together, and the inactive guided policy sections are
+  // compacted to a one-line note (the server still enforces the single-source
+  // law; identity checkboxes such as trusted calibration are untouched and
+  // rejected server-side in document mode).
   const source = document.querySelector('select[name="policy_source"]');
-  const doc = document.querySelector('[data-create-configuration-document]');
-  if (!source || !doc) return;
+  const docGroup = document.querySelector('[data-create-configuration-document-group]');
+  if (!source || !docGroup) return;
+  const guidedPolicySections = document.querySelectorAll('[data-guided-policy-section]');
   const guidedPolicyControls = [
     'input[name="allow_all_providers"]',
     'input[name="provider_deny_all"]',
@@ -360,6 +386,15 @@
     'input[name="chat_streaming_live_burn_enabled"]',
     'input[name="confirm_external_tool_fenced"]',
   ];
+  const setDocumentMode = (on) => {
+    docGroup.hidden = on;
+    for (const section of guidedPolicySections) {
+      const body = section.querySelector('[data-guided-policy-body]');
+      const note = section.querySelector('[data-guided-compact-note]');
+      if (body) body.hidden = on;
+      if (note) note.hidden = !on;
+    }
+  };
   const syncPolicySource = () => {
     const documentMode = source.value === "configuration";
     // Only DOCUMENT mode resets the guided policy controls; guided mode
@@ -374,7 +409,7 @@
         }
       }
     }
-    doc.hidden = !documentMode;
+    setDocumentMode(documentMode);
   };
   source.addEventListener("change", syncPolicySource);
   syncPolicySource();

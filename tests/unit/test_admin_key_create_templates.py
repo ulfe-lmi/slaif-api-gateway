@@ -391,16 +391,22 @@ def test_create_form_renders_lazy_throttling_defaults_ceilings_and_inactive_note
 
     # Default selection is immediate rejection with usable wait inputs.
     assert (
-        'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode checked'
+        'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode '
+        'aria-describedby="create-lazy-help" checked'
         in html
     )
-    assert 'value="wait" data-lazy-throttling-mode checked' not in html
+    assert (
+        'value="wait" data-lazy-throttling-mode aria-describedby="create-lazy-help" checked'
+        not in html
+    )
     assert 'name="lazy_throttling_max_wait_seconds" value="30"' in html
     assert 'name="lazy_throttling_max_waiting_requests" value="2"' in html
     assert "data-lazy-throttling-field-group" in html
     assert "data-lazy-throttling-field disabled" not in html
     # Operator ceilings and plain queue/deadline/disconnect help.
-    assert "Operator ceilings: 120s maximum wait, 16 waiting per key" in html
+    # Linked help explains the actual rendered defaults and ceilings.
+    assert "may not exceed the operator ceilings: 120s maximum wait, 16 waiting per key" in html
+    assert "blank uses the shown defaults" in html
     assert (
         "queue full or deadline returns 429, and disconnected requests are canceled"
         in html
@@ -424,4 +430,5 @@ def test_create_form_lazy_defaults_fit_lowered_operator_ceilings(monkeypatch) ->
 
     assert 'name="lazy_throttling_max_wait_seconds" value="20"' in html
     assert 'name="lazy_throttling_max_waiting_requests" value="1"' in html
-    assert "Operator ceilings: 20s maximum wait, 1 waiting per key" in html
+    assert "may not exceed the operator ceilings: 20s maximum wait, 1 waiting per key" in html
+    assert "blank uses the shown defaults" in html

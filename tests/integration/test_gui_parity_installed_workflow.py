@@ -39,10 +39,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import http.server
 import httpx
 import json
 import os
 import re
+import socket
 import shutil
 import subprocess
 import tarfile
@@ -51,6 +53,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
@@ -431,6 +434,11 @@ from slaif_gateway.db.models import (
 )
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.utils.passwords import hash_admin_password
+from slaif_gateway.services.codex_profile_registry import (
+    QWEN38_CODEX_PROFILE_ID,
+    build_codex_profile_declaration,
+    get_codex_profile,
+)
 
 async def main() -> int:
     database_url = sys.argv[1]
@@ -574,6 +582,85 @@ async def main() -> int:
                         enabled=True,
                     )
                 )
+            await session.flush()
+
+            # G10 credential-free route profile/config/catalog artifacts:
+            # ONE stored ready Codex route on the registered qwen38 0.162
+            # profile (single /v1/responses endpoint, client-local
+            # compaction, self-contained artifacts plus model catalog).
+            # Synthetic provider/route/pricing only - no provider HTTP and
+            # no requalification (212 browser fixture pattern).
+            codex_provider = ProviderConfig(
+                provider=f"syn219c-{suffix}",
+                display_name="Synthetic 219 Codex Provider",
+                kind="openai_compatible",
+                base_url="https://syn219c.example/v1",
+                api_key_env_var="GUI219C_SYN219_KEY",
+                enabled=True,
+                timeout_seconds=300,
+                max_retries=0,
+                notes=None,
+            )
+            session.add(codex_provider)
+            await session.flush()
+            codex_profile = get_codex_profile(QWEN38_CODEX_PROFILE_ID)
+            assert codex_profile is not None
+            codex_route = ModelRoute(
+                requested_model=codex_profile.public_model,
+                provider=codex_provider.provider,
+                upstream_model=codex_profile.upstream_model,
+                match_type="exact",
+                endpoint="/v1/responses",
+                priority=1,
+                enabled=True,
+                visible_in_models=True,
+                supports_streaming=True,
+                capabilities={
+                    "responses": {
+                        "text": True,
+                        "stateless": True,
+                        "streaming": True,
+                        "codex_request_envelope": True,
+                        "codex_client_tools": True,
+                        "codex_streaming_tool_events": True,
+                        "codex_encrypted_reasoning_replay": True,
+                    },
+                    "codex_limits": {
+                        "context_window_tokens": codex_profile.context_window_tokens,
+                        "default_max_output_tokens": codex_profile.default_max_output_tokens,
+                        "max_output_tokens": codex_profile.max_output_tokens,
+                    },
+                    "codex_profile": build_codex_profile_declaration(
+                        QWEN38_CODEX_PROFILE_ID
+                    ),
+                },
+                notes="219 installed codex responses route",
+            )
+            session.add(codex_route)
+            await session.flush()
+            session.add(
+                PricingRule(
+                    provider=codex_provider.provider,
+                    upstream_model=codex_profile.upstream_model,
+                    endpoint="/v1/responses",
+                    input_price_per_1m=Decimal("1.000000000"),
+                    cached_input_price_per_1m=Decimal("0.250000000"),
+                    output_price_per_1m=Decimal("1.000000000"),
+                    reasoning_price_per_1m=Decimal("2.000000000"),
+                    request_price=Decimal("0.000000000"),
+                    currency="EUR",
+                    valid_from=now - timedelta(days=1),
+                    enabled=True,
+                    pricing_metadata={
+                        "codex_accounting": {
+                            "long_context_threshold_tokens": 98304,
+                            "long_context_input_multiplier": "2",
+                            "long_context_output_multiplier": "2",
+                            "cache_write_input_multiplier": "1",
+                        }
+                    },
+                )
+            )
             await session.flush()
 
             session.add_all([
@@ -845,6 +932,44 @@ async def main() -> int:
             session.add(pcr)
             await session.flush()
 
+            # G11 live-burn report: ONE K1 Chat streaming row with live-burn
+            # telemetry (the report aggregates only streaming rows that
+            # carry telemetry). Cost estimate is deliberately NOT
+            # invoice-grade; the final provider usage IS available, so the
+            # provenance counts stay exact and honest.
+            burn = UsageLedger(
+                request_id=f"219iw-burn-{suffix}",
+                gateway_key_id=k1.id,
+                owner_id=k1.owner_id,
+                cohort_id=k1.cohort_id,
+                endpoint="/v1/chat/completions",
+                provider="openai",
+                requested_model="gpt-4.1-mini",
+                resolved_model="gpt-4.1-mini",
+                streaming=True,
+                success=True,
+                accounting_status="finalized",
+                started_at=now - timedelta(minutes=10),
+                finished_at=now - timedelta(minutes=9),
+                input_tokens=1100,
+                output_tokens=200,
+                total_tokens=1300,
+                actual_cost_eur=Decimal("0.000120000"),
+                response_metadata={
+                    "streaming_live_burn_enabled": True,
+                    "streaming_live_burn_triggered": True,
+                    "streaming_live_burn_stop_reason": "cost",
+                    "estimated_tokens_at_stop": 1234,
+                    "estimated_cost_eur_at_stop": Decimal("0.000123456"),
+                    "cost_margin_eur": Decimal("0.000050000"),
+                    "token_margin": 100,
+                    "final_provider_usage_available": True,
+                    "estimate_is_invoice_grade": False,
+                },
+            )
+            session.add(burn)
+            await session.flush()
+
             # G09: one eligible same-key codex replay reference on K1.
             first = (
                 await session.execute(
@@ -882,6 +1007,8 @@ async def main() -> int:
                 "provider": str(provider.id),
                 "route_mini": str(routes[0].id),
                 "route_nano": str(routes[1].id),
+                "provider_codex": str(codex_provider.id),
+                "route_codex": str(codex_route.id),
                 "k1": str(k1.id),
                 "k2": str(k2.id),
                 "k3": str(k3.id),
@@ -898,6 +1025,7 @@ async def main() -> int:
                 "hold_reservation": str(hold_resv.id),
                 "pcr_ledger": str(pcr.id),
                 "pcr_reservation": str(pcr_resv.id),
+                "burn_ledger": str(burn.id),
                 "diag_request_id": diag_id,
                 "suffix": suffix,
             }
@@ -914,6 +1042,69 @@ sys.exit(asyncio.run(main()))
 # ---------------------------------------------------------------------------
 # Part 2: owned environment + the ONE installed GUI workflow (G01-G18)
 # ---------------------------------------------------------------------------
+
+class _ModelsServer:
+    """Owned loopback GET /v1/models endpoint for the GUI discovery
+    scenario (documented IO substitution; fixed synthetic model IDs)."""
+
+    def __init__(self, models: tuple[str, ...]) -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            self.port = probe.getsockname()[1]
+        body = json.dumps({"data": [{"id": m, "object": "model"} for m in models]})
+
+        class _Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args: object) -> None:
+                pass
+
+            def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
+                if self.path.rstrip("/") == "/v1/models":
+                    payload = body.encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                else:
+                    self.send_error(404)
+
+        self._httpd = http.server.ThreadingHTTPServer(
+            ("127.0.0.1", self.port), _Handler
+        )
+        threading.Thread(target=self._httpd.serve_forever, daemon=True).start()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}/v1"
+
+    def stop(self) -> None:
+        try:
+            self._httpd.shutdown()
+            self._httpd.server_close()
+        except OSError:
+            pass
+
+
+class _LoggedGateway(GatewayServer):
+    """The installed gateway with its app log RETAINED on disk: the final
+    secret scan must check complete app/worker logs, not only response
+    bodies. Captures output only; changes no product behavior."""
+
+    def __init__(self, venv_py: Path, env: dict[str, str], cwd: Path) -> None:
+        self.app_log_path = WORKFLOW_DIR / "gateway-app.log"
+        if self.app_log_path.exists():
+            self.app_log_path.unlink()
+        super().__init__(venv_py, env, cwd)
+
+    def _drain(self) -> None:
+        assert self.proc.stdout is not None
+        with open(self.app_log_path, "ab", buffering=0) as fh:
+            while True:
+                chunk = self.proc.stdout.read(65536)
+                if not chunk:
+                    return
+                fh.write(chunk)
+
 
 REASON = "219 installed GUI workflow operation"
 LOGIN_ACTION = 'form[action="/admin/login"]'
@@ -1000,6 +1191,15 @@ def _gateway_env(
         "SMTP_FROM": "219-installed@example.invalid",
         "OPENAI_UPSTREAM_API_KEY": "sk-provider-secret-placeholder-219",
         "OPENROUTER_API_KEY": "sk-or-provider-secret-placeholder-219",
+        # Valid configured public gateway URL (HTTP numeric-loopback dev
+        # form ending in /v1): the credential-free codex-profile artifact
+        # renderer accepts exactly this shape; the non-numeric "localhost"
+        # HTTP default is deliberately NOT renderable.
+        "PUBLIC_BASE_URL": "http://127.0.0.1:8000/v1",
+        # Synthetic discovery key material for the GUI discovery scenario:
+        # the provider config references the ENV VAR NAME; the value is a
+        # documented synthetic placeholder, never a real credential.
+        "GUI219D_SYN219_KEY": "syn-219-discovery-placeholder",
         "CATALOG_REFRESH_GUI_ENABLED": "true",
         "CATALOG_REFRESH_ROOT": str(custody_root),
         "CATALOG_REFRESH_SEAL_KEY": str(seal_key),
@@ -1116,6 +1316,7 @@ def env219(owned_pg_url: str, owned_redis_url: str) -> Iterator[dict[str, Any]]:
 
     sink = SmtpSink()
     provider = ProviderMock()
+    models = _ModelsServer(("syn-219-model-a", "syn-219-model-b"))
     manifest = _seed_via_venv(artifacts, orm_url, provider.base_url)
 
     custody_root = WORKFLOW_DIR / "custody"
@@ -1156,7 +1357,7 @@ def env219(owned_pg_url: str, owned_redis_url: str) -> Iterator[dict[str, Any]]:
 
     app_dir = WORKFLOW_DIR / "app-run"
     app_dir.mkdir(exist_ok=True)
-    gateway = GatewayServer(artifacts.venv_py, env, app_dir)
+    gateway = _LoggedGateway(artifacts.venv_py, env, app_dir)
 
     origin_report = WORKFLOW_DIR / "worker-origin.json"
     if origin_report.exists():
@@ -1196,6 +1397,7 @@ def env219(owned_pg_url: str, owned_redis_url: str) -> Iterator[dict[str, Any]]:
         "sink": sink,
         "provider": provider,
         "gateway": gateway,
+        "models": models,
         "base_url": gateway.url,
         "app_dir": app_dir,
         "custody_root": custody_root,
@@ -1222,6 +1424,7 @@ def env219(owned_pg_url: str, owned_redis_url: str) -> Iterator[dict[str, Any]]:
         gateway.stop()
         provider.stop()
         sink.stop()
+        models.stop()
 
 
 @pytest.fixture(scope="module")
@@ -1443,6 +1646,10 @@ def test_02_g01_key_policy_configuration_round_trip(env219: dict[str, Any]) -> N
     assert "sk-provider-secret-placeholder-219" not in resp.text
     assert "sk-or-provider-secret-placeholder-219" not in resp.text
     assert "argon2" not in resp.text
+    # Captured for the final log/audit secret scan: this ONE-TIME display
+    # value must never appear anywhere else (logs, audit metadata, other
+    # pages).
+    env["g01_key_plaintext"] = shown.group(1)
 
     keys = _gateway_keys(env)
     new_ids = set(keys) - before_ids
@@ -1503,6 +1710,10 @@ def test_02_g01_key_policy_configuration_round_trip(env219: dict[str, Any]) -> N
     assert doc2.get("rate_limit_policy") is None
 
     # Tri-state through the policy form: deny-all, then unrestricted.
+    # None and [] are DELIBERATELY different canonical states: deny-all is
+    # stored as an explicit empty list, unrestricted is stored as an
+    # ABSENT field (the export renders it as an explicit null). No
+    # truthiness shortcut may equate them.
     detail = state.get(f"/admin/keys/{new_id}")
     resp = state.post(
         f"/admin/keys/{new_id}/policy",
@@ -1515,7 +1726,12 @@ def test_02_g01_key_policy_configuration_round_trip(env219: dict[str, Any]) -> N
         },
     )
     assert resp.status_code == 303, (resp.status_code, resp.text[:300])
-    assert _gateway_keys(env)[new_id]["metadata_json"].get("allowed_providers") == []
+    denied_meta = _gateway_keys(env)[new_id]["metadata_json"]
+    denied_value = denied_meta.get("allowed_providers")
+    assert isinstance(denied_value, list) and denied_value == []
+    # The export renders the SAME canonical deny-all state (explicit []).
+    denied_doc = state.get(f"/admin/keys/{new_id}/configuration.json").json()
+    assert denied_doc.get("allowed_providers") == []
 
     detail = state.get(f"/admin/keys/{new_id}")
     resp = state.post(
@@ -1529,8 +1745,13 @@ def test_02_g01_key_policy_configuration_round_trip(env219: dict[str, Any]) -> N
         },
     )
     assert resp.status_code == 303, (resp.status_code, resp.text[:300])
-    final = _gateway_keys(env)[new_id]["metadata_json"].get("allowed_providers")
-    assert final in (None, [])
+    final_meta = _gateway_keys(env)[new_id]["metadata_json"]
+    assert "allowed_providers" not in final_meta, (
+        "unrestricted must be the ABSENT field, not an empty list"
+    )
+    # The export renders the SAME canonical unrestricted state (null).
+    final_doc = state.get(f"/admin/keys/{new_id}/configuration.json").json()
+    assert "allowed_providers" in final_doc and final_doc["allowed_providers"] is None
     # Identity fields preserved through every policy mutation.
     assert _gateway_keys(env)[new_id]["owner_id"] == manifest["owner_std"]
 
@@ -1782,6 +2003,28 @@ def _route_plan_fields(csrf: str, **extra: Any) -> dict[str, str]:
     return fields
 
 
+def _route_plan_and_apply(
+    state: _LoginState, route_id: str, **extra: Any
+) -> tuple[int, str]:
+    """One reviewed route plan + apply; returns (apply status, plan text)."""
+    page = state.get(f"/admin/routes/{route_id}/configuration")
+    plan = state.post(
+        f"/admin/routes/{route_id}/configuration/plan",
+        _route_plan_fields(_csrf(page.text), **extra),
+    )
+    assert plan.status_code == 200, plan.text[:400]
+    resp = state.post(
+        f"/admin/routes/{route_id}/configuration/apply",
+        {
+            "csrf_token": _csrf(state.get(f"/admin/routes/{route_id}/configuration").text),
+            "route_config_review_intent": _token(plan.text, ROUTE_TOKEN_RE),
+            "confirm_apply": "true",
+            "reason": REASON,
+        },
+    )
+    return resp.status_code, plan.text
+
+
 def test_06_g06_g07_route_and_provider(env219: dict[str, Any]) -> None:
     env = env219
     state: _LoginState = env["superadmin"]
@@ -1789,7 +2032,7 @@ def test_06_g06_g07_route_and_provider(env219: dict[str, Any]) -> None:
     route_mini = manifest["route_mini"]
     route_nano = manifest["route_nano"]
 
-    from slaif_gateway.db.models import ModelRoute
+    from slaif_gateway.db.models import ModelRoute, ProviderConfig
 
     async def _route(session, route_id: str):
         row = await session.get(ModelRoute, uuid.UUID(route_id))
@@ -1798,42 +2041,227 @@ def test_06_g06_g07_route_and_provider(env219: dict[str, Any]) -> None:
             "priority": row.priority,
             "enabled": row.enabled,
             "upstream_model": row.upstream_model,
+            "match_type": row.match_type,
+            "endpoint": row.endpoint,
+            "provider": row.provider,
             "notes": row.notes,
+            "capabilities": dict(row.capabilities or {}),
         }
 
     before_nano = _db(env["database_url"], lambda s: _route(s, route_nano))
 
-    page = state.get(f"/admin/routes/{route_mini}/configuration")
-    resp = state.post(
+    def _plan_and_apply(overrides: dict[str, str]) -> httpx.Response:
+        page = state.get(f"/admin/routes/{route_mini}/configuration")
+        plan = state.post(
+            f"/admin/routes/{route_mini}/configuration/plan",
+            _route_plan_fields(_csrf(page.text), **overrides),
+        )
+        assert plan.status_code == 200, plan.text[:400]
+        return state.post(
+            f"/admin/routes/{route_mini}/configuration/apply",
+            {
+                "csrf_token": _csrf(state.get(f"/admin/routes/{route_mini}/configuration").text),
+                "route_config_review_intent": _token(plan.text, ROUTE_TOKEN_RE),
+                "confirm_apply": "true",
+                "reason": REASON,
+            },
+        )
+
+    # G06 setup: ONE reviewed plan that moves priority AND sets the rich
+    # capability leaves (codex limits + media estimates) on route_mini.
+    plan_a_page = state.get(f"/admin/routes/{route_mini}/configuration")
+    plan_a = state.post(
         f"/admin/routes/{route_mini}/configuration/plan",
-        _route_plan_fields(_csrf(page.text), priority_action="set", priority="5"),
+        _route_plan_fields(
+            _csrf(plan_a_page.text),
+            priority_action="set",
+            priority="5",
+            media_image_action="set",
+            media_image_value="1000000",
+            media_video_tokens_action="set",
+            media_video_tokens_value="500000",
+            media_video_frames_action="set",
+            media_video_frames_value="16",
+            codex_context_action="set",
+            codex_context_value="1000000",
+            codex_default_output_action="set",
+            codex_default_output_value="8192",
+            codex_max_output_action="set",
+            codex_max_output_value="32768",
+        ),
     )
-    assert resp.status_code == 200, resp.text[:400]
-    token = _token(resp.text, ROUTE_TOKEN_RE)
+    assert plan_a.status_code == 200, plan_a.text[:400]
+    # The reviewed plan names the actual changed leaves (leaf-level diff).
+    assert "Media video frames" in plan_a.text
+    assert "Codex context window" in plan_a.text
     resp = state.post(
         f"/admin/routes/{route_mini}/configuration/apply",
         {
             "csrf_token": _csrf(state.get(f"/admin/routes/{route_mini}/configuration").text),
-            "route_config_review_intent": token,
+            "route_config_review_intent": _token(plan_a.text, ROUTE_TOKEN_RE),
             "confirm_apply": "true",
             "reason": REASON,
         },
     )
     assert resp.status_code in (200, 303), (resp.status_code, resp.text[:300])
-    after_mini = _db(env["database_url"], lambda s: _route(s, route_mini))
-    assert after_mini["priority"] == 5
-    # Deep siblings retained: the untouched route is byte-identical in the
-    # asserted dimensions.
+    after_a = _db(env["database_url"], lambda s: _route(s, route_mini))
+    assert after_a["priority"] == 5
+    assert after_a["capabilities"]["codex_limits"] == {
+        "context_window_tokens": 1000000,
+        "default_max_output_tokens": 8192,
+        "max_output_tokens": 32768,
+    }
+    assert after_a["capabilities"]["media_input_estimation"] == {
+        "version": 1,
+        "image_tokens": 1000000,
+        "video_tokens": 500000,
+        "video_frames": 16,
+    }
+
+    # G06 THE requirement: an actual reviewed partial capability LEAF
+    # change (video frames 16 -> 24, nothing else) on THE SAME route, then
+    # the untouched deep siblings on that same route must be retained.
+    apply_b = _plan_and_apply(
+        media_video_frames_action="set", media_video_frames_value="24"
+    )
+    assert apply_b.status_code in (200, 303), (apply_b.status_code, apply_b.text[:300])
+    after_b = _db(env["database_url"], lambda s: _route(s, route_mini))
+    media = after_b["capabilities"]["media_input_estimation"]
+    assert media["video_frames"] == 24, "changed leaf must persist"
+    # Deep siblings on the SAME route are retained, byte-exact.
+    assert media["image_tokens"] == 1000000
+    assert media["video_tokens"] == 500000
+    assert after_b["capabilities"]["codex_limits"] == {
+        "context_window_tokens": 1000000,
+        "default_max_output_tokens": 8192,
+        "max_output_tokens": 32768,
+    }
+    # Non-capability route columns survive the leaf change untouched.
+    assert after_b["priority"] == 5
+    assert after_b["upstream_model"] == "gpt-4.1-mini"
+    assert after_b["enabled"] is True
+    assert after_b["match_type"] == "exact"
+    assert after_b["endpoint"] == "/v1/chat/completions"
+    assert after_b["provider"] == "openai"
+    # Cross-route isolation (retained old evidence): the other route is
+    # unchanged in every asserted dimension.
     after_nano = _db(env["database_url"], lambda s: _route(s, route_nano))
     assert after_nano == before_nano
 
-    # G07: provider detail reflects the seeded openai_compatible provider;
-    # the detail surface is the preparation/activation control point.
+    # Two reviewed applies, two audited updates, exact actor/note.
+    audits = _audits(env, "model_route_updated", route_mini)
+    assert len(audits) == 2, len(audits)
+    for audit in audits:
+        assert audit["actor"] == manifest["superadmin"]
+        assert audit["note"] == REASON
+
+    # G07: provider PREPARATION (create with notes, disabled), an UPDATE
+    # that clears the existing notes, then EXPLICIT activation - three
+    # distinct persisted mutations with separated preparation/activation
+    # audits. (The seeded provider pages remain accepted read evidence.)
     providers = state.get("/admin/providers")
     assert "Synthetic OpenAI" in providers.text
     provider_page = state.get(f"/admin/providers/{manifest['provider']}")
     assert "openai" in provider_page.text
     _canary_free(env, provider_page.text)
+
+    def _provider_row(provider_id: str) -> dict[str, Any]:
+        async def _query(session):
+            row = await session.get(ProviderConfig, uuid.UUID(provider_id))
+            assert row is not None
+            return {
+                "provider": row.provider,
+                "display_name": row.display_name,
+                "enabled": row.enabled,
+                "notes": row.notes,
+                "timeout_seconds": row.timeout_seconds,
+                "max_retries": row.max_retries,
+            }
+
+        return _db(env["database_url"], _query)
+
+    create_page = state.get("/admin/providers/new")
+    resp = state.post(
+        "/admin/providers/new",
+        {
+            "csrf_token": _csrf(create_page.text),
+            "provider": "syn219g",
+            "display_name": "219 G07 Synthetic Provider",
+            "kind": "openai_compatible",
+            "base_url": "https://syn219g.example/v1",
+            "api_key_env_var": "GUI219G_SYN219_KEY",
+            "enabled": "",
+            "timeout_seconds": "300",
+            "max_retries": "0",
+            "notes": "219 G07 prepared provider notes",
+            "notes_intent": "replace",
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code in (302, 303), (resp.status_code, resp.text[:300])
+    g07_id = re.search(r"/admin/providers/([0-9a-f-]{36})", resp.headers["location"]).group(1)
+    prepared = _provider_row(g07_id)
+    # Prepared but NOT activated: the enabled state is persisted False.
+    assert prepared["enabled"] is False
+    assert prepared["notes"] == "219 G07 prepared provider notes"
+    assert prepared["timeout_seconds"] == 300
+    created_audits = _audits(env, "provider_config_created", g07_id)
+    assert len(created_audits) == 1
+    assert created_audits[0]["actor"] == manifest["superadmin"]
+    assert created_audits[0]["note"] == REASON
+
+    edit_page = state.get(f"/admin/providers/{g07_id}/edit")
+    resp = state.post(
+        f"/admin/providers/{g07_id}/edit",
+        {
+            "csrf_token": _csrf(edit_page.text),
+            "provider": "syn219g",
+            "display_name": "219 G07 Synthetic Provider",
+            "kind": "openai_compatible",
+            "base_url": "https://syn219g.example/v1",
+            "api_key_env_var": "GUI219G_SYN219_KEY",
+            "enabled": "",
+            "timeout_seconds": "320",
+            "max_retries": "0",
+            "notes": "",
+            "notes_intent": "clear",
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code in (302, 303), (resp.status_code, resp.text[:300])
+    updated = _provider_row(g07_id)
+    # The update actually cleared the existing notes and changed a value;
+    # the provider is still prepared, not activated.
+    assert updated["notes"] is None
+    assert updated["timeout_seconds"] == 320
+    assert updated["enabled"] is False
+    updated_audits = _audits(env, "provider_config_updated", g07_id)
+    assert len(updated_audits) == 1
+    assert updated_audits[0]["actor"] == manifest["superadmin"]
+    assert updated_audits[0]["note"] == REASON
+
+    detail_page = state.get(f"/admin/providers/{g07_id}")
+    resp = state.post(
+        f"/admin/providers/{g07_id}/enable",
+        {"csrf_token": _csrf(detail_page.text), "reason": REASON},
+    )
+    assert resp.status_code in (302, 303), (resp.status_code, resp.text[:300])
+    assert "provider_config_enabled" in resp.headers["location"]
+    activated = _provider_row(g07_id)
+    assert activated["enabled"] is True
+    enabled_audits = _audits(env, "provider_config_enabled", g07_id)
+    assert len(enabled_audits) == 1
+    assert enabled_audits[0]["actor"] == manifest["superadmin"]
+    assert enabled_audits[0]["note"] == REASON
+
+    # Separation of preparation from activation: the three mutations are
+    # three distinct audit rows in chronological order.
+    all_three = (created_audits + updated_audits + enabled_audits)
+    assert [a["action"] for a in all_three] == [
+        "provider_config_created",
+        "provider_config_updated",
+        "provider_config_enabled",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -2061,8 +2489,67 @@ def test_09_g10_compatibility(env219: dict[str, Any]) -> None:
     )
     assert resp.status_code in (200, 303), (resp.status_code, resp.text[:300])
     assert len(_audits(env, "codex_key_profile_migrated", k6)) == 1
-    # The pin moved OFF the frozen 0162-v1 tuple (active profile identity).
-    assert _pin(k6) != dict(MIGRATION_PIN)
+    # The pin moved to the EXACT expected ACTIVE snapshot identity (not
+    # merely off the old pin): the same resolution the apply worker used.
+    from slaif_gateway.modules.clients.codex_0162 import (
+        CODEX_0162_CLIENT_MODULE_ID,
+    )
+    from slaif_gateway.modules.clients.registry import get_client_module
+
+    active = get_client_module(CODEX_0162_CLIENT_MODULE_ID)
+    assert _pin(k6) == {
+        "id": CODEX_0162_CLIENT_MODULE_ID,
+        "version": active.module_version,
+        "fixture_sha256": active.fixture_sha256,
+    }
+
+    # G10 credential-free route profile/config/catalog artifacts: the
+    # stored ready codex route serves byte-exact artifacts rendered from
+    # the VALID configured public gateway URL (HTTP numeric-loopback
+    # /v1). The no-key law: the artifacts carry env-var NAMES, never
+    # values; the attachment context is non-rotating (the still-displayed
+    # origin page's form token survives the download).
+    from slaif_gateway.services.codex_profile_registry import (
+        QWEN38_CODEX_PROFILE_ID,
+    )
+    from slaif_gateway.services.codex_qualification import render_codex_profile
+
+    public_base_url = "http://127.0.0.1:8000/v1"  # the fixture's PUBLIC_BASE_URL
+    expected = render_codex_profile(public_base_url, QWEN38_CODEX_PROFILE_ID)
+    route_codex = manifest["route_codex"]
+    origin_page = state.get(f"/admin/routes/{route_codex}")
+    origin_csrf = _csrf(origin_page.text)
+
+    base = state.get(f"/admin/routes/{route_codex}/codex-profile/base")
+    assert base.headers["content-disposition"] == (
+        'attachment; filename="codex-provider.config.toml"'
+    )
+    assert "no-store" in base.headers["cache-control"].lower()
+    assert base.text == expected.base_config_toml
+
+    profile = state.get(f"/admin/routes/{route_codex}/codex-profile/profile")
+    assert "no-store" in profile.headers["cache-control"].lower()
+    assert profile.text == expected.profile_config_toml
+
+    catalog = state.get(f"/admin/routes/{route_codex}/codex-profile/catalog")
+    assert "no-store" in catalog.headers["cache-control"].lower()
+    assert expected.model_catalog_json is not None
+    assert json.loads(catalog.text) == json.loads(expected.model_catalog_json)
+
+    # No-key law: no credential material or env-var VALUES in any artifact.
+    for artifact in (base, profile, catalog):
+        assert "sk-" not in artifact.text
+        assert "GUI219C_SYN219_KEY=" not in artifact.text
+        assert "sk-provider-secret-placeholder-219" not in artifact.text
+    # The base fragment references the env-var NAME only.
+    assert 'env_key = "OPENAI_API_KEY"' in base.text
+    # Non-rotating attachment context: the still-displayed origin page's
+    # form token is unchanged after the downloads.
+    origin_after = state.get(f"/admin/routes/{route_codex}")
+    assert _csrf(origin_after.text) == origin_csrf
+    # The compatibility index offers the same ready route's artifact links.
+    index = state.get(f"{COMPAT_BASE}/")
+    assert f"/admin/routes/{route_codex}/codex-profile/profile" in index.text
 
 
 # ---------------------------------------------------------------------------
@@ -2075,17 +2562,59 @@ def test_10_g11_g13_g18_usage_export_pricing_fx(env219: dict[str, Any]) -> None:
     state: _LoginState = env["superadmin"]
     k1 = env["manifest"]["k1"]
 
-    # Grouped usage: 60 seeded rows on K1 -> 50 + 10 at the 50-row page bound.
+    # Ledger paging: 61 seeded K1 rows (60 observed + 1 live-burn) ->
+    # 50 + 11 at the 50-row page bound (legacy retained evidence).
     page1 = state.get("/admin/usage", params={"gateway_key_id": k1, "limit": 50, "offset": 0})
     rows1 = re.findall(r"/admin/usage/[0-9a-f-]{36}", page1.text)
     assert len(set(rows1)) == 50, len(set(rows1))
     page2 = state.get("/admin/usage", params={"gateway_key_id": k1, "limit": 50, "offset": 50})
     rows2 = re.findall(r"/admin/usage/[0-9a-f-]{36}", page2.text)
-    assert len(set(rows2)) == 10
+    assert len(set(rows2)) == 11
     assert not (set(rows1) & set(rows2)), "pages overlap"
     # Filter-preserving paging: the next-page link keeps the key filter.
     flat1 = page1.text.replace("&amp;", "&").replace("\n", "")
     assert "gateway_key_id=" + k1 in flat1 and "offset=50" in flat1
+
+    # G11 grouped usage report: the EXACT K1 scope aggregates into one
+    # provider/model group with exact counts and honest cost availability
+    # (estimated cost is KNOWN-MISSING on every seeded row; actual cost is
+    # fully known). The scope flash states the exact accepted row count.
+    summary = state.get(
+        "/admin/reports/",
+        params={"group_by": "provider_model", "gateway_key_id": k1},
+    )
+    assert "61 ledger rows" in summary.text
+    assert "1 groups (provider_model)" in summary.text
+    assert "openai / gpt-4.1-mini" in summary.text
+    # Exact group counts: 61 requests, all successful, 10,300 tokens.
+    assert 'data-sort-value="61"' in summary.text
+    assert 'data-sort-value="10300"' in summary.text
+    # Known-missing honesty: estimated cost renders unavailable (no rows
+    # carried an estimated cost), actual cost is exact and complete.
+    assert "unavailable" in summary.text
+    assert "0.00912 EUR" in summary.text
+    _canary_free(env, summary.text)
+
+    # G11 live-burn report: the exact K1 scope aggregates the ONE seeded
+    # streaming live-burn stop with exact stop-reason and provenance
+    # counts (final provider usage available, estimate not final).
+    burn = state.get(
+        "/admin/reports/live-burn", params={"gateway_key_id": k1}
+    )
+    assert "1" in burn.text
+    assert 'data-sort-value="1234"' in burn.text
+    assert "0.000123456 EUR" in burn.text
+    # Interrupted/estimated rows are counted, never backfilled: the
+    # provenance missing counter is exactly 0 for this scope.
+    assert "Final provider usage missing" in burn.text
+    _canary_free(env, burn.text)
+
+    # The usage detail page renders the sanitized live-burn section for
+    # the seeded streaming row.
+    detail = state.get(f"/admin/usage/{env['manifest']['burn_ledger']}")
+    assert "Chat streaming live-burn" in detail.text
+    assert "cost" in detail.text
+    _canary_free(env, detail.text)
 
     # Safe machine export (explicit confirmation + reason).
     export = state.post(
@@ -2142,6 +2671,79 @@ def test_10_g11_g13_g18_usage_export_pricing_fx(env219: dict[str, Any]) -> None:
     rule = _db(env["database_url"], _rule)
     assert rule["enabled"] is False, "pricing rule not disabled"
 
+    # G11 safe JSON report export: the SAME exact K1 scope through the
+    # confirmed strict-JSON attachment. Exact raw machine units, exact
+    # scope/provenance metadata, no-store, and an audit row carrying the
+    # scope - then an OVERBOUND scope is refused with exact counts and
+    # no partial export and no audit.
+    audits_before = len(_audits(env, "admin_usage_export_json"))
+    export_page = state.get("/admin/reports/export")
+    jexport = state.post(
+        "/admin/reports/export",
+        {
+            "csrf_token": _csrf(export_page.text),
+            "confirm_export": "1",
+            "reason": REASON,
+            "gateway_key_id": k1,
+        },
+    )
+    assert jexport.status_code == 200, jexport.status_code
+    assert "application/json" in jexport.headers["content-type"]
+    assert "attachment" in jexport.headers["content-disposition"]
+    assert "no-store" in jexport.headers["cache-control"].lower()
+    payload = jexport.json()
+    assert set(payload) == {"generated_at", "scope", "rows"}
+    # Provenance: exact submitted scope + default limit + exact row count.
+    assert payload["scope"]["filters"]["gateway_key_id"] == k1
+    assert payload["scope"]["limit"] == 10000
+    assert payload["scope"]["row_count"] == 61
+    assert len(payload["rows"]) == 61
+    # generated_at is a parseable instant (provenance timestamp).
+    datetime.fromisoformat(payload["generated_at"])
+    # Exact raw machine units on an observed row (Decimal as exact text).
+    by_request = {row["request_id"]: row for row in payload["rows"]}
+    first_req = "219iw-req-"
+    observed = next(row for rid, row in by_request.items() if rid.startswith(first_req))
+    assert observed["prompt_tokens"] == 100
+    assert observed["completion_tokens"] == 50
+    assert observed["total_tokens"] == 150
+    assert observed["actual_cost_eur"] == "0.000150000"
+    assert observed["estimated_cost_eur"] is None
+    # The live-burn row's safe telemetry is exported, its estimate never
+    # labelled invoice-grade.
+    burn_row = next(
+        row for row in payload["rows"] if row["request_id"] == "219iw-burn-" + env["manifest"]["suffix"]
+    )
+    assert burn_row["streaming"] is True
+    assert burn_row["chat_live_burn_triggered"] is True
+    assert burn_row["chat_live_burn_stop_reason"] == "cost"
+    assert burn_row["chat_live_burn_estimated_tokens_at_stop"] == 1234
+    assert burn_row["chat_live_burn_final_provider_usage_available"] is True
+    _canary_free(env, jexport.text)
+    # The export audit row carries the exact scope and the server actor.
+    jaudits = _audits(env, "admin_usage_export_json")
+    assert len(jaudits) == audits_before + 1
+    jaudit = jaudits[-1]
+    assert jaudit["actor"] == env["manifest"]["superadmin"]
+    assert jaudit["note"] == REASON
+    assert jaudit["new"]["row_count"] == 61
+    assert jaudit["new"]["filters"]["gateway_key_id"] == k1
+    # Overbound scope: exact-count refusal, no partial artifact, no audit.
+    overbound = state.post(
+        "/admin/reports/export",
+        {
+            "csrf_token": _csrf(state.get("/admin/reports/export").text),
+            "confirm_export": "1",
+            "reason": REASON,
+            "gateway_key_id": k1,
+            "limit": "10",
+        },
+    )
+    assert overbound.status_code == 400, overbound.status_code
+    assert "11 or more" in overbound.text
+    assert "No partial export was produced" in overbound.text
+    assert len(_audits(env, "admin_usage_export_json")) == audits_before + 1
+
     # G18: effective FX lookup (seeded USD->EUR 0.92) and honest missing.
     fx = state.get(
         "/admin/reports/fx-lookup",
@@ -2153,6 +2755,11 @@ def test_10_g11_g13_g18_usage_export_pricing_fx(env219: dict[str, Any]) -> None:
         params={"base_currency": "EUR", "quote_currency": "GBP"},
     )
     assert missing.status_code == 200  # honest unavailable, not a 500
+    # Honest unavailable wording, not merely HTTP 200: the missing pair
+    # (EUR->GBP is not seeded; only GBP->EUR and USD->EUR exist) renders
+    # the fixed no-rate direction with no inferred conversion.
+    assert "No FX rate is effective for EUR / GBP" in missing.text
+    assert "no rate is inferred" in missing.text
 
 
 # ---------------------------------------------------------------------------
@@ -2893,11 +3500,439 @@ def test_15_calibration_json_download_and_template(env219: dict[str, Any], chrom
 
 
 # ---------------------------------------------------------------------------
+# 15b. Representative legacy outcomes on a dedicated owner + key (the
+# original 219 scope: record/key creation, lifecycle/rotation, quotas,
+# lazy waiting, discovery/import, template issue, audit/export, logout).
+# All operations are EXISTING GUI surfaces; no new feature or permission.
+# ---------------------------------------------------------------------------
+
+
+def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
+    env = env219
+    state: _LoginState = env["superadmin"]
+    manifest = env["manifest"]
+    suffix = manifest["suffix"]
+
+    # 1) Legacy OWNER (record) creation through the GUI.
+    owners_page = state.get("/owners/new")
+    resp = state.post(
+        "/owners/new",
+        {
+            "csrf_token": _csrf(owners_page.text),
+            "name": "Legacy",
+            "surname": f"Seed-{suffix}",
+            "email": f"legacy-{suffix}@example.org",
+            "institution_id": manifest["institution"],
+            "external_id": "",
+            "notes": "",
+            "is_active": "true",
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code in (302, 303), (resp.status_code, resp.text[:300])
+    from slaif_gateway.db.models import Owner
+
+    async def _find_owner(session):
+        rows = (
+            await session.execute(
+                select(Owner).where(Owner.email == f"legacy-{suffix}@example.org")
+            )
+        ).scalars().all()
+        assert len(rows) == 1
+        return str(rows[0].id)
+
+    legacy_owner = _db(env["database_url"], _find_owner)
+    owner_audits = _audits(env, "owner_created", legacy_owner)
+    assert len(owner_audits) == 1
+    assert owner_audits[0]["actor"] == manifest["superadmin"]
+    assert owner_audits[0]["note"] == REASON
+
+    # 2) Legacy STANDARD key creation for the new owner (none delivery:
+    # the result page is the ONLY plaintext display).
+    create_page = state.get("/admin/keys/create")
+    resp = state.post(
+        "/admin/keys/create",
+        {
+            "csrf_token": _csrf(create_page.text),
+            "owner_id": legacy_owner,
+            "cohort_id": manifest["cohort"],
+            "valid_days": "30",
+            "email_delivery_mode": "none",
+            "allowed_providers": "openai",
+            "allowed_models": "gpt-4.1-mini",
+            "allow_all_endpoints": "true",
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code == 200, resp.status_code
+    shown = re.search(
+        r'class="secret-display"[^>]*>\s*<code>(sk-slaif-[A-Za-z0-9._\-]+)</code>',
+        resp.text,
+    )
+    assert shown, "none-delivery legacy create must display the key once"
+    assert resp.text.count(shown.group(1)) == 1
+    legacy_key_plaintext = shown.group(1)
+    env["legacy_key_plaintext"] = legacy_key_plaintext
+
+    before_ids = set(_gateway_keys(env))
+    legacy_key = next(iter(set(_gateway_keys(env)) - before_ids))
+    env["legacy_key"] = legacy_key
+    legacy_before = _gateway_keys(env)[legacy_key]
+    assert legacy_before["owner_id"] == legacy_owner
+    assert legacy_before["allowed_models"] == ["gpt-4.1-mini"]
+
+    # 2b) One REAL proxied chat completion with the fresh key: the owned
+    # ProviderMock is the upstream (documented IO substitution), so the
+    # counters below are non-zero evidence that the later edits must not
+    # reset.
+    from datetime import UTC, timedelta
+
+    proxy = httpx.Client(base_url=env["base_url"], timeout=30)
+    chat = proxy.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {legacy_key_plaintext}"},
+        json={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "219"}]},
+    )
+    proxy.close()
+    assert chat.status_code == 200, chat.text[:400]
+    assert chat.json()["choices"][0]["message"]["content"] == "fixture completion"
+    legacy_used = _gateway_keys(env)[legacy_key]
+    assert legacy_used["requests_used_total"] == 1
+    assert legacy_used["tokens_used_total"] == 2
+    assert legacy_used["cost_used_eur"] > 0
+    from slaif_gateway.db.models import GatewayKey
+
+    async def _validity_before(session):
+        row = await session.get(GatewayKey, uuid.UUID(legacy_key))
+        assert row is not None
+        return row.valid_until
+
+    original_until = _db(env["database_url"], _validity_before)
+
+    # 3) Validity edit (extended absolute window) WITHOUT any usage reset.
+    detail = state.get(f"/admin/keys/{legacy_key}")
+    extended_until = (datetime.now(UTC) + timedelta(days=60)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    resp = state.post(
+        f"/admin/keys/{legacy_key}/validity",
+        {
+            "csrf_token": _csrf(detail.text),
+            "valid_from": "",
+            "valid_until": extended_until,
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code in (200, 303), (resp.status_code, resp.text[:300])
+    persisted_until = _db(env["database_url"], _validity_before)
+    assert persisted_until != original_until
+    assert persisted_until is not None and persisted_until.year >= datetime.now(UTC).year
+    legacy_after_validity = _gateway_keys(env)[legacy_key]
+    for field in (
+        "cost_used_eur",
+        "tokens_used_total",
+        "requests_used_total",
+        "cost_reserved_eur",
+        "tokens_reserved_total",
+        "requests_reserved_total",
+    ):
+        assert legacy_after_validity[field] == legacy_used[field], field
+
+    # 4) Hard quota edit (token limit) WITHOUT a usage reset.
+    detail = state.get(f"/admin/keys/{legacy_key}")
+    resp = state.post(
+        f"/admin/keys/{legacy_key}/limits",
+        {
+            "csrf_token": _csrf(detail.text),
+            "cost_limit_eur": "",
+            "token_limit": "777777",
+            "request_limit": "",
+            "clear_cost_limit": "",
+            "clear_token_limit": "",
+            "clear_request_limit": "",
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code in (200, 303), (resp.status_code, resp.text[:300])
+    legacy_after_limits = _gateway_keys(env)[legacy_key]
+    assert legacy_after_limits["token_limit_total"] == 777777
+    for field in ("cost_used_eur", "tokens_used_total", "requests_used_total"):
+        assert legacy_after_limits[field] == legacy_used[field], field
+
+    # 5) Lazy waiting configuration (bounded wait mode, exact policy).
+    detail = state.get(f"/admin/keys/{legacy_key}")
+    resp = state.post(
+        f"/admin/keys/{legacy_key}/lazy-throttling",
+        {
+            "csrf_token": _csrf(detail.text),
+            "lazy_throttling_mode": "wait",
+            "lazy_throttling_max_wait_seconds": "30",
+            "lazy_throttling_max_waiting_requests": "2",
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code in (200, 303), (resp.status_code, resp.text[:300])
+    lazy_meta = _gateway_keys(env)[legacy_key]["metadata_json"]
+    assert lazy_meta.get("lazy_throttling_policy") == {
+        "mode": "wait",
+        "max_wait_seconds": 30,
+        "max_waiting_requests": 2,
+    }
+    assert _audits(env, "update_key_lazy_throttling", legacy_key)
+
+    # 6) Suspend then activate: persisted status transitions + audits.
+    detail = state.get(f"/admin/keys/{legacy_key}")
+    resp = state.post(
+        f"/admin/keys/{legacy_key}/suspend",
+        {"csrf_token": _csrf(detail.text), "reason": REASON},
+    )
+    assert resp.status_code in (200, 303), (resp.status_code, resp.text[:300])
+    assert _gateway_keys(env)[legacy_key]["status"] == "suspended"
+    assert _audits(env, "suspend_key", legacy_key)
+    detail = state.get(f"/admin/keys/{legacy_key}")
+    resp = state.post(
+        f"/admin/keys/{legacy_key}/activate",
+        {"csrf_token": _csrf(detail.text), "reason": REASON},
+    )
+    assert resp.status_code in (200, 303), (resp.status_code, resp.text[:300])
+    assert _gateway_keys(env)[legacy_key]["status"] == "active"
+    assert _audits(env, "activate_key", legacy_key)
+
+    # 7) Rotation with the old material INVALIDATED: one-time replacement
+    # plaintext, old key revoked, no email row (none delivery), audits.
+    detail = state.get(f"/admin/keys/{legacy_key}")
+    resp = state.post(
+        f"/admin/keys/{legacy_key}/rotate",
+        {
+            "csrf_token": _csrf(detail.text),
+            "confirm_rotate": "true",
+            "keep_old_active": "",
+            "email_delivery_mode": "none",
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code == 200, resp.status_code
+    assert "Replacement Key Created" in resp.text
+    new_shown = re.search(
+        r'class="secret-display"[^>]*>\s*<code>(sk-slaif-[A-Za-z0-9._\-]+)</code>',
+        resp.text,
+    )
+    assert new_shown, "rotation result must display the replacement once"
+    assert resp.text.count(new_shown.group(1)) == 1
+    assert new_shown.group(1) != legacy_key_plaintext
+    env["rotated_key_plaintext"] = new_shown.group(1)
+    assert "Old key revoked" in resp.text
+    assert "Yes" in resp.text
+    old_key = _gateway_keys(env)[legacy_key]
+    assert old_key["status"] == "revoked"
+    rotated_id = next(iter(set(_gateway_keys(env)) - before_ids - {legacy_key}))
+    rotated_key = _gateway_keys(env)[rotated_id]
+    assert rotated_key["status"] == "active"
+    assert rotated_key["token_hash"] != old_key["token_hash"]
+    assert _audits(env, "rotate_key")
+    # The replacement plaintext is NEVER re-displayed on any other surface.
+    assert new_shown.group(1) not in state.get(f"/admin/keys/{rotated_id}").text
+    # Correct one-time destination: none delivery creates no email row.
+    from slaif_gateway.db.models import EmailDelivery
+
+    async def _no_emails(session):
+        rows = (
+            await session.execute(
+                select(EmailDelivery).where(
+                    EmailDelivery.gateway_key_id.in_([legacy_key, rotated_id])
+                )
+            )
+        ).scalars().all()
+        return len(rows)
+
+    assert _db(env["database_url"], _no_emails) == 0
+
+    # 8) Provider discovery/import review/application against the OWNED
+    # synthetic models endpoint (create provider -> bounded discovery ->
+    # reviewed setup apply -> persisted route + local-zero pricing).
+    models: _ModelsServer = env["models"]
+    create_page = state.get("/admin/providers/new")
+    resp = state.post(
+        "/admin/providers/new",
+        {
+            "csrf_token": _csrf(create_page.text),
+            "provider": "syn219d",
+            "display_name": "219 Discovery Synthetic Provider",
+            "kind": "openai_compatible",
+            "base_url": models.base_url,
+            "api_key_env_var": "GUI219D_SYN219_KEY",
+            "enabled": "true",
+            "timeout_seconds": "30",
+            "max_retries": "0",
+            "notes": "",
+            "notes_intent": "replace",
+            "reason": REASON,
+        },
+    )
+    assert resp.status_code in (302, 303), (resp.status_code, resp.text[:300])
+    disc_id = re.search(r"/admin/providers/([0-9a-f-]{36})", resp.headers["location"]).group(1)
+    discover_page = state.get(f"/admin/providers/{disc_id}/discover")
+    preview = state.post(
+        f"/admin/providers/{disc_id}/discover/preview",
+        {
+            "csrf_token": _csrf(discover_page.text),
+            "confirm_discovery": "true",
+        },
+    )
+    assert preview.status_code == 200, preview.text[:400]
+    assert "syn-219-model-a" in preview.text
+    assert "syn-219-model-b" in preview.text
+    exec_resp = state.post(
+        f"/admin/providers/{disc_id}/discover/execute",
+        {
+            "csrf_token": _csrf(preview.text),
+            "selected_models": "syn-219-model-a",
+            "preset": "chat_text_v1",
+            "pricing_mode": "local_zero",
+            "confirm_local_zero": "true",
+            "priority": "100",
+            "visible_in_models": "true",
+            "streaming": "true",
+            "local_function_tools": "",
+            "confirm_enable_unqualified": "",
+            "confirm_execute": "true",
+            "reason": REASON,
+        },
+    )
+    assert exec_resp.status_code in (302, 303), (exec_resp.status_code, exec_resp.text[:300])
+    assert "openai_compatible_setup_executed" in exec_resp.headers["location"]
+    from slaif_gateway.db.models import ModelRoute, PricingRule
+
+    async def _discovery_applied(session):
+        routes = (
+            await session.execute(
+                select(ModelRoute).where(
+                    ModelRoute.provider == "syn219d",
+                    ModelRoute.requested_model == "syn-219-model-a",
+                )
+            )
+        ).scalars().all()
+        assert len(routes) == 1, "exactly one discovered route"
+        pricing = (
+            await session.execute(
+                select(PricingRule).where(
+                    PricingRule.provider == "syn219d",
+                    PricingRule.upstream_model == "syn-219-model-a",
+                )
+            )
+        ).scalars().all()
+        assert len(pricing) == 1, "exactly one local-zero pricing rule"
+        return {
+            "enabled": routes[0].enabled,
+            "priority": routes[0].priority,
+            "input_price": pricing[0].input_price_per_1m,
+        }
+
+    applied = _db(env["database_url"], _discovery_applied)
+    assert applied["enabled"] is True
+    assert applied["priority"] == 100
+    assert applied["input_price"] == 0
+
+    # 9) Template ISSUE from the calibration-created revision (test_15):
+    # one-time plaintext, persisted key, provenance, audit.
+    from slaif_gateway.db.models import KeyTemplate
+
+    async def _find_template(session):
+        row = (
+            await session.execute(
+                select(KeyTemplate).where(
+                    KeyTemplate.name == "219 installed calibration template"
+                )
+            )
+        ).scalars().one()
+        return str(row.id)
+
+    template_id = _db(env["database_url"], _find_template)
+    template_page = state.get(f"/admin/templates/{template_id}")
+    issue_match = re.search(
+        r"/admin/templates/([0-9a-f-]{36})/revisions/([0-9a-f-]{36})/create-key",
+        template_page.text,
+    )
+    assert issue_match, "template detail must offer the current-revision issue form"
+    issue_action = f"/admin/templates/{issue_match.group(1)}/revisions/{issue_match.group(2)}/create-key"
+    issue_resp = state.post(
+        issue_action,
+        {
+            "csrf_token": _csrf(template_page.text),
+            "owner_id": legacy_owner,
+            "cohort_id": manifest["cohort"],
+            "valid_days": "30",
+            "email_delivery_mode": "none",
+            "confirm_create_key_from_template": "true",
+            "reason": REASON,
+        },
+    )
+    assert issue_resp.status_code == 200, issue_resp.text[:400]
+    issued_shown = re.search(
+        r'class="secret-display"[^>]*>\s*<code>(sk-slaif-[A-Za-z0-9._\-]+)</code>',
+        issue_resp.text,
+    )
+    assert issued_shown, "template issue must display the plaintext once"
+    assert issue_resp.text.count(issued_shown.group(1)) == 1
+    issued_id = next(iter(set(_gateway_keys(env)) - before_ids - {legacy_key, rotated_id}))
+    env["issued_key_plaintext"] = issued_shown.group(1)
+    issued_key = _gateway_keys(env)[issued_id]
+    assert issued_key["owner_id"] == legacy_owner
+    assert issued_key["status"] == "active"
+
+    # 10) GUI audit inspection + the existing safe audit export.
+    audit_page = state.get("/admin/audit")
+    assert "audit" in audit_page.text.lower()
+    export = state.post(
+        "/admin/audit/export.csv",
+        {
+            "csrf_token": _csrf(audit_page.text),
+            "confirm_export": "1",
+            "reason": REASON,
+        },
+    )
+    assert export.status_code == 200, export.status_code
+    assert "text/csv" in export.headers["content-type"]
+    assert "attachment" in export.headers["content-disposition"]
+    assert "provider_config_enabled" in export.text
+    _canary_free(env, export.text)
+
+    # 11) Logout: the session is invalidated; a fresh login works again
+    # (restored for the following tests).
+    any_page = state.get("/admin/audit")
+    resp = state.post(
+        "/admin/logout", {"csrf_token": _csrf(any_page.text)},
+    )
+    assert resp.status_code in (302, 303), (resp.status_code, resp.text[:300])
+    assert "/admin/login" in resp.headers["location"]
+    bounced = state.get("/admin")
+    assert bounced.status_code in (302, 303)
+    assert "/admin/login" in bounced.headers["location"]
+    state.login(SUPERADMIN_EMAIL, ADMIN_PASSWORD)
+    assert state.get("/admin").status_code == 200
+
+
+# ---------------------------------------------------------------------------
 # 16. Representative negatives: auth, CSRF, tampered review, recovery, secrets
 # ---------------------------------------------------------------------------
 
 
 def test_16_negatives(env219: dict[str, Any]) -> None:
+    """Representative FINAL negative matrix, stated exactly.
+
+    THIS test proves (against the installed code): anonymous bounce, wrong
+    CSRF refusal with zero writes, validation recovery preservation, a
+    tampered batch review intent refused with zero writes, a WRONG-SESSION
+    route review apply refused (purpose-bound signed token), and a STALE
+    route review apply refused after a newer change (fingerprint law).
+    It does NOT itself prove wrong-actor/session or expired-review cases
+    across every surface, nor the all-logs/audit claim: those are covered
+    by the accepted unchanged component evidence (207/212/213 browser and
+    unit modules) and by test_18_final_secret_scan's complete app/worker
+    log + audit-metadata sweep. A refusal here is evidence the requested
+    ordinary happy path does NOT work in that variant - never evidence
+    that the happy path works.
+    """
     env = env219
     base_url: str = env["base_url"]
 
@@ -2978,7 +4013,160 @@ def test_16_negatives(env219: dict[str, Any]) -> None:
     assert _gateway_keys(env)[k2]["token_limit_total"] == limits_before[k2]
     assert _gateway_keys(env)[k3]["token_limit_total"] == limits_before[k3]
 
+    # Wrong-SESSION route review apply: the purpose-bound signed route
+    # review token is bound to the superadmin's admin user AND session.
+    # A DIFFERENT authenticated session (the seeded non-superadmin) must
+    # be refused with zero writes even though it is a valid login.
+    from slaif_gateway.db.models import ModelRoute
+
+    async def _route_priority(session, route_id: str):
+        row = await session.get(ModelRoute, uuid.UUID(route_id))
+        return row.priority
+
+    route_nano = manifest["route_nano"]
+    nano_before = _db(env["database_url"], lambda s: _route_priority(s, route_nano))
+    # Superadmin plans a change (creates the bound token) but does not apply.
+    nano_page = state.get(f"/admin/routes/{route_nano}/configuration")
+    nano_plan = state.post(
+        f"/admin/routes/{route_nano}/configuration/plan",
+        _route_plan_fields(_csrf(nano_page.text), priority_action="set", priority="55"),
+    )
+    assert nano_plan.status_code == 200, nano_plan.text[:400]
+    nano_token = _token(nano_plan.text, ROUTE_TOKEN_RE)
+    # A second, DIFFERENT valid session attempts to apply that token.
+    other = _LoginState(base_url)
+    other.login(ADMIN_EMAIL, ADMIN_PASSWORD)
+    other_page = other.get(f"/admin/routes/{route_nano}/configuration")
+    cross = other.post(
+        f"/admin/routes/{route_nano}/configuration/apply",
+        {
+            "csrf_token": _csrf(other_page.text),
+            "route_config_review_intent": nano_token,
+            "confirm_apply": "true",
+            "reason": REASON,
+        },
+    )
+    assert cross.status_code in (400, 403), (cross.status_code, cross.text[:300])
+    # Zero writes: the route still carries its original priority.
+    assert _db(env["database_url"], lambda s: _route_priority(s, route_nano)) == nano_before
+    other.client.close()
+
+    # STALE route review apply: a reviewed plan whose expected pre-state
+    # fingerprint no longer matches (a newer change landed first) must be
+    # refused stale with zero writes.
+    # Plan a change (creates the bound token) but do NOT apply it yet.
+    nano_cfg = state.get(f"/admin/routes/{route_nano}/configuration")
+    stale_plan = state.post(
+        f"/admin/routes/{route_nano}/configuration/plan",
+        _route_plan_fields(_csrf(nano_cfg.text), priority_action="set", priority="77"),
+    )
+    assert stale_plan.status_code == 200, stale_plan.text[:400]
+    stale_token = _token(stale_plan.text, ROUTE_TOKEN_RE)
+    # Land a DIFFERENT newer change first so the reviewed pre-state is stale.
+    newer_status, _ = _route_plan_and_apply(state, route_nano, priority_action="set", priority="78")
+    assert newer_status in (200, 303)
+    # Now apply the older reviewed plan: it must be refused STALE.
+    stale_resp = state.post(
+        f"/admin/routes/{route_nano}/configuration/apply",
+        {
+            "csrf_token": _csrf(state.get(f"/admin/routes/{route_nano}/configuration").text),
+            "route_config_review_intent": stale_token,
+            "confirm_apply": "true",
+            "reason": REASON,
+        },
+    )
+    assert stale_resp.status_code == 400, (stale_resp.status_code, stale_resp.text[:300])
+    # Zero writes: the route keeps the NEWER priority, not the stale one.
+    assert _db(env["database_url"], lambda s: _route_priority(s, route_nano)) == 78
+
     # Secret canary sweep across the surfaces this workflow exercised.
     for path in ("/admin", "/admin/keys", "/admin/providers", "/admin/usage",
                  "/admin/operations/process-configuration", f"/admin/keys/{manifest['k1']}"):
         _canary_free(env, state.get(path).text)
+
+
+# ---------------------------------------------------------------------------
+# 17. FINAL complete app/worker log + audit-metadata secret scan
+# ---------------------------------------------------------------------------
+
+
+def test_17_final_secret_scan(env219: dict[str, Any]) -> None:
+    """Complete-body/log/audit secret canary over the final changed
+    surfaces.
+
+    Checks the RETAINED app log, the worker log, and EVERY audit row's
+    persisted metadata (note + old/new values) for the known synthetic
+    secrets, admin password, one-time plaintext key values, and session
+    cookie aliases. Public key NAMES (prefix + public id, no secret half)
+    and the intentional one-time result-page displays are functional
+    exceptions and are NOT part of this scan. No real credentials or
+    private contents are present anywhere by construction.
+    """
+    env = env219
+    canaries: list[str] = [
+        "sk-provider-secret-placeholder-219",
+        "sk-or-provider-secret-placeholder-219",
+        ADMIN_PASSWORD,
+    ]
+    for key in (
+        "g01_key_plaintext",
+        "legacy_key_plaintext",
+        "rotated_key_plaintext",
+        "issued_key_plaintext",
+    ):
+        value = env.get(key)
+        if value:
+            canaries.append(str(value))
+    # Session aliases: every session cookie value the workflow used.
+    for client in (env["superadmin"].client,):
+        for cookie_value in client.cookies.values():
+            if cookie_value:
+                canaries.append(str(cookie_value))
+
+    # 1) Complete app log + worker log sweep.
+    gateway = env["gateway"]
+    app_log = gateway.app_log_path.read_text(encoding="utf-8", errors="replace")
+    worker_log = (WORKFLOW_DIR / "worker.log")
+    worker_text = (
+        worker_log.read_text(encoding="utf-8", errors="replace")
+        if worker_log.exists()
+        else ""
+    )
+    for name, text_ in (("app log", app_log), ("worker log", worker_text)):
+        for canary in canaries:
+            assert canary not in text_, (
+                f"known secret material found in {name}: {canary[:16]}..."
+            )
+
+    # 2) EVERY audit row's persisted metadata (note + old/new values).
+    from slaif_gateway.db.models import AuditLog
+
+    async def _all_audit_metadata(session):
+        rows = (await session.execute(select(AuditLog))).scalars().all()
+        return [
+            {
+                "action": r.action,
+                "note": r.note,
+                "old_values": r.old_values,
+                "new_values": r.new_values,
+            }
+            for r in rows
+        ]
+
+    audit_rows = _db(env["database_url"], _all_audit_metadata)
+    assert audit_rows, "audit table must not be empty after this workflow"
+    for row in audit_rows:
+        rendered = json.dumps(
+            {
+                "action": row["action"],
+                "note": row["note"],
+                "old_values": row["old_values"],
+                "new_values": row["new_values"],
+            },
+            default=str,
+        )
+        for canary in canaries:
+            assert canary not in rendered, (
+                f"known secret material found in audit metadata "
+                f"({row['action']}): {canary[:16]}..."
+            )

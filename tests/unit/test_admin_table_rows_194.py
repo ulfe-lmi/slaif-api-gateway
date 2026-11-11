@@ -205,7 +205,10 @@ def test_keys_list_rows_selector_binds_to_filter_form(monkeypatch) -> None:
 
     html = client.get("/admin/keys").text
     # Visible Rows selector: presets, bound to the GET filter form.
-    assert '<select name="limit" id="keys-limit" form="keys-filter">' in html
+    assert (
+        '<select name="limit" id="keys-limit" form="keys-filter" '
+        'aria-describedby="keys-help-rows">'
+    ) in html
     for preset in ("10", "25", "50", "100", "200"):
         assert f'<option value="{preset}"' in html
     assert '<option value="50" selected>50</option>' in html

@@ -331,17 +331,61 @@ def _login(page: object, base_url: str, email: str, password: str) -> None:
 
 def _assert_help_links(page: object, help_ids: tuple[str, ...]) -> None:
     """Every named help element EXISTS, is non-empty, and is REFERENCED
-    by at least one real control's aria-describedby (real DOM check)."""
+    by at least one ACTUAL visible entry control's aria-describedby
+    (real DOM check; 219-b: the referencing element must itself be an
+    entry control — input/textarea/select — not any arbitrary element,
+    and hidden inputs never count)."""
     for help_id in help_ids:
         ok = page.evaluate(  # type: ignore[attr-defined]
             """(id) => {
                 const help = document.getElementById(id);
                 if (!help || !help.textContent.trim()) return false;
-                return !!document.querySelector('[aria-describedby~="help_id"]'.replace("help_id", id));
+                const refs = document.querySelectorAll('[aria-describedby~="help_id"]'.replace("help_id", id));
+                for (const ref of refs) {
+                    const tag = ref.tagName.toLowerCase();
+                    if (tag === "input" || tag === "textarea" || tag === "select") {
+                        if (tag === "input" && ref.type === "hidden") continue;
+                        return true;
+                    }
+                }
+                return false;
             }""",
             help_id,
         )
-        assert ok, f"help link not resolved: {help_id}"
+        assert ok, f"help not resolved by an actual entry control: {help_id}"
+
+
+def _assert_enhanced_picker_search_help(page: object, help_id: str) -> None:
+    """219-b: the enhanced picker's ACTUAL visible entry controls — the
+    main input AND the unnamed menu-search box rendered by the shared
+    macro — both reference the control's help id, which resolves to
+    non-empty text in the real DOM."""
+    result = page.evaluate(  # type: ignore[attr-defined]
+        """(helpId) => {
+            const help = document.getElementById(helpId);
+            if (!help) return { found: false };
+            const rc = help.closest("label") ? help.closest("label").querySelector("[data-rc]") : null;
+            if (!rc) return { found: false };
+            const firstRef = (el) =>
+                (el.getAttribute("aria-describedby") || "").trim().split(/\\s+/)[0] || null;
+            const main = rc.querySelector(".rc-input");
+            const mainId = main ? firstRef(main) : null;
+            const mainOk = !!(mainId && mainId === helpId && help.textContent.trim());
+            const search = rc.querySelector(".rc-search");
+            const searchId = search ? firstRef(search) : null;
+            const searchOk = search
+                ? !!(searchId && searchId === helpId && help.textContent.trim())
+                : null;
+            return { found: true, main: mainOk, search: searchOk };
+        }""",
+        help_id,
+    )
+    assert result["found"], f"enhanced picker for help {help_id} not found"
+    assert result["main"], f"main picker input not associated with {help_id}"
+    if result["search"] is not None:
+        assert result["search"], (
+            f"unnamed menu-search box not associated with {help_id}"
+        )
 
 
 def _db(database_url: str, coro_factory):
@@ -410,6 +454,11 @@ def test_create_page_visual_order_linked_help_and_narrow(
 
     # The new record-choice help resolves in the real DOM.
     _assert_help_links(page, ("create-owner-help", "create-cohort-help"))
+    # 219-b: the ACTUAL visible enhanced controls (main input + the
+    # unnamed menu-search box) carry the association, not just SOME
+    # element somewhere on the page.
+    _assert_enhanced_picker_search_help(page, "create-owner-help")
+    _assert_enhanced_picker_search_help(page, "create-cohort-help")
     _assert_no_key_material(page)
     page.screenshot(
         path=str(SCREENSHOT_DIR / "219-create-policy-source-desktop.png"),
@@ -464,6 +513,7 @@ def test_key_detail_linked_help_and_keyboard_ext_tool_update(
             "key-policy-reason-help",
             "key-rate-limits-help",
             "key-explain-route-help",
+            "key-explain-model-help",
             "key-lazy-help",
             "key-ext-tool-help",
             "key-ext-tool-dest-help",
@@ -471,6 +521,10 @@ def test_key_detail_linked_help_and_keyboard_ext_tool_update(
             "key-limits-help",
         ),
     )
+    # 219-b: the explain-model picker is the shared searchable known-model
+    # picker: its main input AND the unnamed menu-search box reference the
+    # control's own help in the real DOM.
+    _assert_enhanced_picker_search_help(page, "key-explain-model-help")
     rc_help = page.locator('span.rc-help#key-ext-tool-dest-help')  # type: ignore[attr-defined]
     assert rc_help.count() == 1
     assert rc_help.inner_text().strip()

@@ -405,7 +405,10 @@ def test_admin_lazy_throttling_wait_create_update_and_reject(owned_pg_url: str) 
             # --- create with wait + NON-DEFAULT bounds (JS active) ---
             page.goto("/admin/keys/create")
             create_html = page.content()
-            assert "Operator ceilings: 120s maximum wait, 16 waiting per key" in create_html
+            assert (
+                "may not exceed the operator ceilings: 120s maximum wait, "
+                "16 waiting per key" in create_html
+            )
             assert "Redis rate limiting is currently disabled" in create_html
             assert page.locator(
                 f'{CREATE_FORM} input[name="lazy_throttling_mode"][value="reject"]'

@@ -1050,7 +1050,7 @@ def test_explain_route_read_only(chromium, keypolicy_env) -> None:
             form.locator('select[name="endpoint"] option').count() > 1
         )
         form.locator('select[name="endpoint"]').select_option("/v1/chat/completions")  # type: ignore[attr-defined]
-        form.locator('input[name="model"]').fill("gpt-test")  # type: ignore[attr-defined]
+        form.locator('[data-rc-id="key-explain-model"] .rc-input').fill("gpt-test")  # type: ignore[attr-defined]
         status = _submit_form(page, form, f"/admin/keys/{key_id}/explain-route")
         assert status == 200  # read-only re-render
         report = page.locator("div[data-explain-report]")
@@ -1070,7 +1070,7 @@ def test_explain_route_read_only(chromium, keypolicy_env) -> None:
         # --- unknown model: reportable blocked result
         form = page.locator("form[action$='/explain-route']")
         form.locator('select[name="endpoint"]').select_option("/v1/chat/completions")  # type: ignore[attr-defined]
-        form.locator('input[name="model"]').fill("gpt-no-such-model")  # type: ignore[attr-defined]
+        form.locator('[data-rc-id="key-explain-model"] .rc-input').fill("gpt-no-such-model")  # type: ignore[attr-defined]
         status = _submit_form(page, form, f"/admin/keys/{key_id}/explain-route")
         assert status == 200
         report = page.locator("div[data-explain-report]")
@@ -1080,7 +1080,7 @@ def test_explain_route_read_only(chromium, keypolicy_env) -> None:
         # --- model outside the key's provider allow-list
         form = page.locator("form[action$='/explain-route']")
         form.locator('select[name="endpoint"]').select_option("/v1/chat/completions")  # type: ignore[attr-defined]
-        form.locator('input[name="model"]').fill("gpt-other")  # type: ignore[attr-defined]
+        form.locator('[data-rc-id="key-explain-model"] .rc-input').fill("gpt-other")  # type: ignore[attr-defined]
         status = _submit_form(page, form, f"/admin/keys/{key_id}/explain-route")
         assert status == 200
         report = page.locator("div[data-explain-report]")

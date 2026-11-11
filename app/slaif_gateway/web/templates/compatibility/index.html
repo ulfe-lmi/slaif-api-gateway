@@ -62,7 +62,7 @@
             <td>
               {% if row.artifacts %}
               {% if row.artifacts.base %}<a href="/admin/routes/{{ row.route_id }}/codex-profile/base">Base fragment</a> · {% endif %}<a href="/admin/routes/{{ row.route_id }}/codex-profile/profile">Codex config</a>{% if row.artifacts.catalog %} · <a href="/admin/routes/{{ row.route_id }}/codex-profile/catalog">Model catalog</a>{% endif %}
-              {% else %}None{% endif %}
+              {% else %}<span class="muted">{{ row.artifacts_note }}</span>{% endif %}
             </td>
           </tr>
           {% endfor %}
@@ -119,7 +119,7 @@
               {% if preset.inspect_href %}
               <a href="{{ preset.inspect_href }}">Inspect</a>
               · <a href="{{ preset.download_href }}">Download JSON</a>
-              {% else %}None{% endif %}
+              {% else %}<span class="muted">{{ preset.actions_note }}</span>{% endif %}
             </td>
           </tr>
           {% endfor %}

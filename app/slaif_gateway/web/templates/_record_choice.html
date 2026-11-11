@@ -127,7 +127,8 @@
       {% if not multi %}
       <input type="search" class="rc-search" autocomplete="off"
              placeholder="Search all records"
-             aria-label="Search {{ label_text }} choices">
+             aria-label="Search {{ label_text }} choices"
+             {% if help_id %}aria-describedby="{{ help_id }}"{% endif %}>
       {% endif %}
       <ul class="rc-list" role="listbox"
           aria-multiselectable="{{ 'true' if multi else 'false' }}"></ul>
