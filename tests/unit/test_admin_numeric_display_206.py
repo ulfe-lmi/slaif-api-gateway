@@ -441,12 +441,18 @@ def _usage_page(monkeypatch, usage: AdminUsageDetail) -> str:
 
 
 def test_usage_detail_actual_zero_cost_in_preference_to_estimate(monkeypatch) -> None:
-    usage = _usage()
+    fixed_time = datetime(2026, 11, 11, 22, 51, 17, 751590, tzinfo=UTC)
+    usage = _usage(created_at=fixed_time, completed_at=fixed_time)
     page = _usage_page(monkeypatch, usage)
 
     # A present actual zero is displayed (not the estimate, not n/a).
-    assert re.search(r"Cost EUR</dt><dd>0</dd>", page)
-    assert "7.75" not in page
+    # Cost is asserted on the cost field itself: exactly one such field,
+    # value exactly 0, so the estimate can never masquerade as the cost.
+    assert re.findall(r"<dt>Cost EUR</dt><dd>([^<]*)</dd>", page) == ["0"]
+    # The deterministic timestamp fragment below contains the estimate's
+    # digit sequence, so the old page-wide `assert "7.75" not in page`
+    # oracle would have failed on this very page.
+    assert "22:51:17.751590" in page
     # Token readouts in M with the exact grouped count in the title.
     assert 'title="937,826,734 tokens"' in page
     assert "937.827M" in page
