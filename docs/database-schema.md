@@ -1,7 +1,7 @@
 # Database Schema for `slaif-api-gateway`
 
 > **Authority:** Current SQLAlchemy/Alembic schema contract
-> **Migration head:** `0026_request_diagnostics`
+> **Migration head:** `0027_demo_admin_accounts`
 
 This reference describes the schema at the named Alembic head. The runtime
 stack is:
@@ -2484,6 +2484,116 @@ the bounded prune on writes).
 
 ---
 
+## 5.26 `demo_control.fake_admin_accounts`
+
+Objective 220 foundation (CLI-managed demo fake-admin accounts). A
+dedicated `demo_control` PostgreSQL schema that is fully separate from
+`admin_users`, `admin_sessions`, and all business tables. A row here can
+NEVER authenticate through the normal `/admin/login` path, which reads
+`admin_users` only. Only the trusted operator CLI path
+(`slaif-gateway demo-admin ...`) creates or mutates these rows; no HTTP
+route, worker, or normal-admin path touches this table at this stage.
+
+Columns:
+
+```text
+id UUID primary key
+username citext(64) not null              -- case-insensitive unique; 3..64 chars, letter start
+password_hash text not null                -- salted Argon2id hash ONLY; plaintext never stored
+is_enabled boolean not null default true
+credential_generation bigint not null default 0   -- monotonic; +1 on reset/disable/enable
+created_at timestamptz not null
+updated_at timestamptz not null
+```
+
+Constraints/indexes:
+
+```text
+uq_demo_fake_admin_accounts_username UNIQUE (username)
+demo_fake_admin_accounts_username_length CHECK char_length(username) between 3 and 64
+demo_fake_admin_accounts_username_shape CHECK username ~ '^[A-Za-z][A-Za-z0-9_-]{2,63}$'
+demo_fake_admin_accounts_generation_nonnegative CHECK credential_generation >= 0
+ix_demo_fake_admin_accounts_is_enabled (is_enabled)
+```
+
+`credential_generation` is the later session-invalidation fence: the
+future demo session layer (a later objective) invalidates sessions whose
+recorded generation lags this value. No session platform exists yet.
+Disabling the last enabled account makes the database-side
+`count(*) ... WHERE is_enabled = true` return zero in the same committed
+state; the later demo login layer uses exactly that fact to 404.
+
+## 5.27 `demo_control.fake_admin_account_events`
+
+Objective 220 foundation: safe append-only demo account events. One
+bounded, safe event per real account change (create / enable / disable /
+password reset). Stores only the finite action vocabulary, the bounded
+operator reason, and the resulting credential generation. Never stores a
+password hash, plaintext credential, token, or any other secret.
+
+Columns:
+
+```text
+id UUID primary key
+account_id uuid not null                   -- FK to demo_control.fake_admin_accounts.id (ON DELETE RESTRICT)
+action text not null                       -- 'created' | 'enabled' | 'disabled' | 'password_reset'
+reason text null                           -- bounded operator reason; credential-shaped input refused upstream
+credential_generation bigint not null default 0   -- generation AFTER this change
+created_at timestamptz not null
+```
+
+Constraints/indexes:
+
+```text
+demo_fake_admin_account_events_action_allowed CHECK action in ('created','enabled','disabled','password_reset')
+demo_fake_admin_account_events_reason_bounded CHECK reason is null or char_length(reason) <= 512
+demo_fake_admin_account_events_generation_nonnegative CHECK credential_generation >= 0
+ix_demo_fake_admin_account_events_account_created (account_id, created_at)
+```
+
+Append-only law: the operator CLI path only ever INSERTs (one event per
+state change; repeat enable/disable is a defined idempotent no-op with NO
+event and NO generation bump). The account state change and its event are
+written in ONE owned PostgreSQL transaction, so a failed late event/write
+rolls back the account change as well.
+
+### Least-privilege future demo-web role
+
+The migration creates NO roles and grants NOTHING. When the later demo
+web application lands, the operator creates a dedicated role and grants
+ONLY:
+
+```text
+USAGE on schema demo_control
+SELECT on demo_control.fake_admin_accounts
+```
+
+No INSERT/UPDATE/DELETE on the account or event rows, NO
+SELECT/DML on any business table, and NO source-provider credentials.
+Narrow future session/job-table grants may be added by the later
+objectives only after those tables exist. This is the mechanism that
+keeps a compromised fake-admin browser away from production business
+state. Bootstrap instructions must never print a live DSN.
+
+### Migration / rollback behavior (0027)
+
+`0027_demo_admin_accounts` succeeds `0026_request_diagnostics`. Upgrade
+creates the `demo_control` schema and both tables. Downgrade drops both
+tables and `DROP SCHEMA demo_control`.
+
+**Downgrade is destructive for CLI-created demo state.** Once the
+operator has created fake-admin accounts, the downgrade permanently
+deletes those accounts' salted password hashes AND their append-only
+account-event history. Back up the `demo_control` schema (or take a
+full database dump) and review the intended data loss BEFORE running
+`alembic downgrade` past `0027`. Only the ordinary gateway business
+tables (and their data) are unaffected by this migration in either
+direction: no existing table, column, permission, quota/accounting law,
+provider/Codex module, or inference route is changed by upgrade or
+downgrade.
+
+---
+
 ## 6. Quota reservation algorithm
 
 Before forwarding an upstream request:
@@ -2604,7 +2714,7 @@ keys.
 
 ## 10. Current table inventory
 
-Migration head `0026_request_diagnostics` contains 33 tables.
+Migration head `0027_demo_admin_accounts` contains 35 tables.
 
 Current Gateway and operator-path tables:
 
@@ -2631,11 +2741,18 @@ teams                         projects
 team_members                  oidc_identities
 budget_periods                policy_bundles
 policy_bundle_revisions       approved_catalog_entries
+demo_control.fake_admin_accounts
+demo_control.fake_admin_account_events
 ```
 
 Presence in this inventory proves migration/model existence only. Consult the
 product and compatibility contracts before treating a foundation table as an
 implemented authentication, tenancy, budget, policy, or job workflow.
+
+The `demo_control` tables (objective 220 foundation) are an isolated
+schema: CLI-managed demo fake-admin identities with no HTTP route and no
+normal-admin wiring at this stage. See
+[demo-admin.md](demo-admin.md) and sections 5.26/5.27.
 
 ---
 

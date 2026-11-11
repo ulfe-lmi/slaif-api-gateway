@@ -48,6 +48,9 @@ and do not override current contracts or merged code.
   searchable record-choice fields, and the bounded read-only lookup
   contract for the operator dashboard.
 - [CLI reference](cli-reference.md) — the operator command index.
+- [Demo fake-admin accounts](demo-admin.md) — objective 220 foundation:
+  CLI-managed demo identities in the isolated `demo_control` schema
+  (foundation/disabled until later objectives).
 - [GUI–CLI parity analysis](MISSING_GUI_FUNCTIONALITY.md) — current control
   coverage, missing GUI workflows, priorities, and operator-only exceptions.
 

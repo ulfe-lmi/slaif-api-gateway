@@ -40,10 +40,20 @@ def _alembic_config(database_url: str) -> Config:
     return config
 
 
-async def _reset_public_schema(database_url: str) -> None:
+async def _reset_application_schemas(database_url: str) -> None:
+    """Reset both application-owned schemas on the disposable test database.
+
+    Migration 0027 creates the isolated ``demo_control`` schema strictly
+    (``CREATE SCHEMA demo_control``, no IF NOT EXISTS), so a bare fresh
+    upgrade must start from a database where NEITHER ``public`` nor
+    ``demo_control`` exists. Earlier migrated integration tests leave
+    ``demo_control`` behind in the shared session database; dropping only
+    ``public`` here made the fresh upgrade fail with DuplicateSchemaError.
+    """
     engine = create_async_engine(database_url, future=True)
     try:
         async with engine.begin() as connection:
+            await connection.execute(text("DROP SCHEMA IF EXISTS demo_control CASCADE"))
             await connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
             await connection.execute(text("CREATE SCHEMA public"))
             await connection.execute(text("GRANT ALL ON SCHEMA public TO public"))
@@ -82,12 +92,27 @@ async def _assert_fresh_upgrade_state(database_url: str, head_revision: str) -> 
                 )
             )
             tables = {row[0] for row in result}
+            demo_result = await connection.execute(
+                text(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'demo_control'
+                    """
+                )
+            )
+            demo_tables = {row[0] for row in demo_result}
 
     finally:
         await engine.dispose()
 
     missing = EXPECTED_APPLICATION_TABLES - tables
     assert not missing, f"Missing expected tables after fresh migration: {sorted(missing)}"
+    expected_demo_control_tables = {"fake_admin_accounts", "fake_admin_account_events"}
+    missing_demo = expected_demo_control_tables - demo_tables
+    assert not missing_demo, (
+        f"Missing expected demo_control tables after fresh migration: {sorted(missing_demo)}"
+    )
 
 
 def test_bare_fresh_alembic_upgrade_head_creates_wide_version_table(
@@ -99,9 +124,9 @@ def test_bare_fresh_alembic_upgrade_head_creates_wide_version_table(
     assert head_revision is not None
 
     try:
-        asyncio.run(_reset_public_schema(postgres_test_url))
+        asyncio.run(_reset_application_schemas(postgres_test_url))
         command.upgrade(config, "head")
         asyncio.run(_assert_fresh_upgrade_state(postgres_test_url, head_revision))
     finally:
-        asyncio.run(_reset_public_schema(postgres_test_url))
+        asyncio.run(_reset_application_schemas(postgres_test_url))
         command.upgrade(config, "head")

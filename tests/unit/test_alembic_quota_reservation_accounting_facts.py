@@ -10,7 +10,8 @@ from alembic.script import ScriptDirectory
 MIGRATION = Path("migrations/versions/0024_quota_reservation_accounting_facts.py")
 REVISION = "0024_quota_reservation_accounting_facts"
 DOWN_REVISION = "0023_module_provider_foundation"
-HEAD = "0026_request_diagnostics"
+# Objective 220: 0027_demo_admin_accounts is the single successor head.
+HEAD = "0027_demo_admin_accounts"
 
 
 def test_quota_reservation_accounting_facts_is_a_single_nullable_upgrade() -> None:

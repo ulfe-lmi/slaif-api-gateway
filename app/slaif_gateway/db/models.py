@@ -1784,3 +1784,106 @@ class RequestDiagnostic(Base):
         Index("ix_request_diagnostics_client_request_id", "client_request_id"),
         Index("ix_request_diagnostics_occurred_at", "occurred_at"),
     )
+
+
+class FakeAdminAccount(Base):
+    """Objective 220 foundation: CLI-managed demo fake-admin account.
+
+    Lives in the dedicated ``demo_control`` PostgreSQL schema, fully
+    separate from ``admin_users``/``admin_sessions`` and gateway keys.
+    A row here can NEVER authenticate through the normal ``/admin/login``
+    path (which reads ``admin_users`` only). Only the trusted operator
+    CLI path (``slaif-gateway demo-admin ...``) creates or mutates rows;
+    no HTTP route touches this table at this stage.
+
+    Security law: ``password_hash`` is a salted Argon2id hash (existing
+    password primitive); plaintext passwords are never persisted, listed,
+    logged, or displayed. ``credential_generation`` is monotonically
+    increasing across reset/disable/enable and is the later session-
+    invalidation fence (no session platform exists yet).
+    """
+
+    __tablename__ = "fake_admin_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # Case-insensitively unique operator-supplied identity (CITEXT).
+    username: Mapped[str] = mapped_column(CITEXT(length=64), nullable=False, unique=True)
+    # Salted Argon2id hash only; never plaintext.
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
+    # Monotonic credential generation: 0 at creation; +1 on every
+    # password reset / disable / enable. The later demo session layer
+    # invalidates sessions whose recorded generation lags this value.
+    credential_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "char_length(username) >= 3 and char_length(username) <= 64",
+            name="demo_fake_admin_accounts_username_length",
+        ),
+        CheckConstraint(
+            r"username ~ '^[A-Za-z][A-Za-z0-9_-]{2,63}$'",
+            name="demo_fake_admin_accounts_username_shape",
+        ),
+        CheckConstraint(
+            "credential_generation >= 0",
+            name="demo_fake_admin_accounts_generation_nonnegative",
+        ),
+        Index("ix_demo_fake_admin_accounts_is_enabled", "is_enabled"),
+        {"schema": "demo_control"},
+    )
+
+
+class FakeAdminAccountEvent(Base):
+    """Objective 220 foundation: safe append-only demo account event.
+
+    One bounded, safe event per account change (create/enable/disable/
+    password reset). Stores the action vocabulary, the bounded reason,
+    and the resulting credential generation only. Never stores a
+    password hash, plaintext credential, token, or any other secret.
+    Append-only: the operator CLI path only ever INSERTs; the future
+    least-privilege demo-web role receives SELECT only (no
+    INSERT/UPDATE/DELETE on account or event rows).
+    """
+
+    __tablename__ = "fake_admin_account_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("demo_control.fake_admin_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    # Finite action vocabulary; the service boundary only emits these.
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    # Bounded operator reason; safe free text (credential-shaped input
+    # is refused before it can reach the table).
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The credential_generation value AFTER this change (safe integer).
+    credential_generation: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint(
+            "action in ('created', 'enabled', 'disabled', 'password_reset')",
+            name="demo_fake_admin_account_events_action_allowed",
+        ),
+        CheckConstraint(
+            "reason is null or char_length(reason) <= 512",
+            name="demo_fake_admin_account_events_reason_bounded",
+        ),
+        CheckConstraint(
+            "credential_generation >= 0",
+            name="demo_fake_admin_account_events_generation_nonnegative",
+        ),
+        Index("ix_demo_fake_admin_account_events_account_created", "account_id", "created_at"),
+        {"schema": "demo_control"},
+    )
