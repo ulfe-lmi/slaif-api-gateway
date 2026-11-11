@@ -31,11 +31,12 @@
     <section class="action-panel" aria-labelledby="owner-identity-heading">
       <h2 id="owner-identity-heading">Identity</h2>
       <div class="form-grid">
-        <label>Name<input name="name" value="{{ form.name }}" autocomplete="given-name" required></label>
-        <label>Surname<input name="surname" value="{{ form.surname }}" autocomplete="family-name" required></label>
-        <label>Email<input name="email" value="{{ form.email }}" autocomplete="email" required></label>
-        <label>External ID<input name="external_id" value="{{ form.external_id }}" autocomplete="off"></label>
+        <label>Name<input name="name" value="{{ form.name }}" autocomplete="given-name" required aria-describedby="owner-create-identity-help"></label>
+        <label>Surname<input name="surname" value="{{ form.surname }}" autocomplete="family-name" required aria-describedby="owner-create-identity-help"></label>
+        <label>Email<input name="email" value="{{ form.email }}" autocomplete="email" required aria-describedby="owner-create-identity-help"></label>
+        <label>External ID<input name="external_id" value="{{ form.external_id }}" autocomplete="off" aria-describedby="owner-create-identity-help"></label>
       </div>
+      <p class="muted small" id="owner-create-identity-help">Name and surname are the owner's identity; email is the unique contact/login address. External ID is a free-form identifier from an EXTERNAL system, not a reference to a SLAIF record.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="owner-institution-heading">
@@ -49,20 +50,23 @@
           nojs_value=form.institution_id,
           clear_label="Not set",
           placeholder="Search institutions",
+          help="The existing institution this owner belongs to.",
+          help_id="owner-create-institution-help",
       ) }}
-      <label class="checkbox-row"><input type="checkbox" name="is_active" value="true" {% if form.is_active in ["true", "1", "on", "yes"] %}checked{% endif %}> Active owner</label>
-      <p class="muted small">Owners do not link directly to cohorts in the current schema; cohorts are assigned through keys.</p>
+      <label class="checkbox-row"><input type="checkbox" name="is_active" value="true" {% if form.is_active in ["true", "1", "on", "yes"] %}checked{% endif %} aria-describedby="owner-create-active-help"> Active owner</label>
+      <p class="muted small" id="owner-create-active-help">Active owners can hold keys; unactive owners are retained but excluded from new keys. Cohorts are assigned through keys, not directly to owners.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="owner-notes-heading">
       <h2 id="owner-notes-heading">Notes</h2>
-      <label>Notes<textarea name="notes" rows="4">{{ form.notes }}</textarea></label>
-      <p class="muted small">Notes must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
+      <label>Notes<textarea name="notes" rows="4" aria-describedby="owner-create-notes-help">{{ form.notes }}</textarea></label>
+      <p class="muted small" id="owner-create-notes-help">Notes must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="owner-audit-heading">
       <h2 id="owner-audit-heading">Audit</h2>
-      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <label>Reason<textarea name="reason" rows="3" required aria-describedby="owner-create-audit-help">{{ form.reason }}</textarea></label>
+      <p class="muted small" id="owner-create-audit-help">Required audit reason recording why this owner was created.</p>
       <button type="submit">Create owner</button>
       <a class="button-link secondary" href="/admin/owners">Cancel</a>
     </section>

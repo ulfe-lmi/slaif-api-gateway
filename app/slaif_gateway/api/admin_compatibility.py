@@ -283,6 +283,7 @@ async def compatibility_index(request: Request) -> Response:
             # profile render: reuse the SAME renderer for the link decision
             # so the index never offers an artifact the handler would 404.
             artifacts = None
+            artifacts_note = "Unavailable until the route is ready (see Reasons)."
             if result.ready and result.profile_id:
                 try:
                     artifacts = render_codex_profile(
@@ -290,18 +291,35 @@ async def compatibility_index(request: Request) -> Response:
                     )
                 except ValueError:
                     artifacts = None
+                    # Fixed setup direction only; the exception text is
+                    # never echoed (it may carry the configured URL).
+                    artifacts_note = (
+                        "Unavailable: PUBLIC_BASE_URL is not a renderable "
+                        "gateway base URL. Set it to an HTTPS public URL "
+                        "ending in /v1, or an HTTP numeric-loopback "
+                        "development URL ending in /v1, then reload this "
+                        "page."
+                    )
+                if artifacts is not None:
+                    artifacts_note = ""
             row_route_id = str(result.route_id)
             # Route hrefs (including the canonical artifact links) must
             # never carry a known incoming alias: withhold the display
             # value and drop the links, not just the text.
             route_alias = _is_known_alias(request, row_route_id)
+            if route_alias:
+                # A withheld route ID drops the links; the fixed note says
+                # why instead of an unexplained placeholder.
+                artifacts_note = "Withheld: route ID matches a known credential value."
             module_text = (
                 f"{result.client_module_id} v{result.client_module_version}"
                 if result.client_module_id
                 else "—"
             )
             reasons_text = (
-                ", ".join(result.reason_codes) if result.reason_codes else "None"
+                ", ".join(result.reason_codes)
+                if result.reason_codes
+                else "No blocking reasons"
             )
             badge = _safe_display(request, result.badge)
             # State column: a short label for ready rows (the full
@@ -334,6 +352,7 @@ async def compatibility_index(request: Request) -> Response:
                         if artifacts is not None and not route_alias
                         else None
                     ),
+                    "artifacts_note": _safe_display(request, artifacts_note),
                     "module": _safe_display(request, module_text),
                     "reasons": _safe_display(request, reasons_text),
                     "state_label": state_label,
@@ -374,6 +393,11 @@ async def compatibility_index(request: Request) -> Response:
                         None
                         if name_alias
                         else f"/admin/operations/compatibility/preset/{name}/download"
+                    ),
+                    "actions_note": (
+                        "Withheld: preset name matches a known credential value."
+                        if name_alias
+                        else ""
                     ),
                 }
             )

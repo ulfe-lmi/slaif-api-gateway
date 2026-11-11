@@ -35,7 +35,7 @@
       <div class="form-grid">
         <label>
           Format
-          <select name="import_format">
+          <select name="import_format" aria-describedby="bulk-import-preview-help">
             <option value="auto" {% if form.format == "auto" %}selected{% endif %}>Auto</option>
             <option value="csv" {% if form.format == "csv" %}selected{% endif %}>CSV</option>
             <option value="json" {% if form.format == "json" %}selected{% endif %}>JSON</option>
@@ -43,18 +43,18 @@
         </label>
         <label>
           Source label
-          <input name="source_label" value="{{ form.source_label }}" autocomplete="off" placeholder="Optional safe label">
+          <input name="source_label" value="{{ form.source_label }}" autocomplete="off" placeholder="Optional safe label" aria-describedby="bulk-import-preview-help">
         </label>
       </div>
       <label>
         Upload CSV/JSON
-        <input type="file" name="import_file" accept=".csv,.json,text/csv,application/json">
+        <input type="file" name="import_file" accept=".csv,.json,text/csv,application/json" aria-describedby="bulk-import-preview-help">
       </label>
       <label>
         Or paste CSV/JSON
-        <textarea name="import_text" rows="14" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,allowed_endpoints,allowed_models&#10;ada@example.org,30,10.00,/v1/chat/completions,gpt-5.2">{{ form.import_text }}</textarea>
+        <textarea name="import_text" rows="14" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,allowed_endpoints,allowed_models&#10;ada@example.org,30,10.00,/v1/chat/completions,gpt-5.2" aria-describedby="bulk-import-preview-help">{{ form.import_text }}</textarea>
       </label>
-      <p class="muted small">Use either upload or paste, not both. Secret-looking values, gateway keys, provider keys, encrypted secret material, password credentials, session credentials, prompts, and completions are rejected or excluded.</p>
+      <p class="muted small" id="bulk-import-preview-help">Format is Auto (detects CSV or JSON) or explicit. The source label is an optional safe label tagging the batch. Use either the uploaded file or the pasted content, not both. Secret-looking values, gateway keys, provider keys, encrypted secret material, password credentials, session credentials, prompts, and completions are rejected or excluded.</p>
       <p class="muted small">Optional Chat Completions streaming live-burn columns: <code>chat_streaming_live_burn_enabled</code>, <code>chat_streaming_live_burn_cost_margin_eur</code>, and <code>chat_streaming_live_burn_token_margin</code>. Omitted columns default to enabled with zero margins.</p>
       <button type="submit">Preview import</button>
     </section>

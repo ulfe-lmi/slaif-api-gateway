@@ -34,7 +34,7 @@
       <div class="form-grid">
         <label>
           Format
-          <select name="import_format">
+          <select name="import_format" aria-describedby="route-import-preview-help">
             <option value="auto" {% if form.format == "auto" %}selected{% endif %}>Auto</option>
             <option value="csv" {% if form.format == "csv" %}selected{% endif %}>CSV</option>
             <option value="json" {% if form.format == "json" %}selected{% endif %}>JSON</option>
@@ -43,17 +43,18 @@
         </label>
         <label>
           Source label
-          <input name="source_label" value="{{ form.source_label }}" autocomplete="off" placeholder="optional local note">
+          <input name="source_label" value="{{ form.source_label }}" autocomplete="off" placeholder="optional local note" aria-describedby="route-import-preview-help">
         </label>
         <label>
           Upload file
-          <input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values">
+          <input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values" aria-describedby="route-import-preview-help">
         </label>
       </div>
       <label>
         Paste CSV, JSON, or TSV
-        <textarea name="import_text" spellcheck="false" placeholder="requested_model,match_type,provider,upstream_model">{{ form.import_text }}</textarea>
+        <textarea name="import_text" spellcheck="false" placeholder="requested_model,match_type,provider,upstream_model" aria-describedby="route-import-preview-help">{{ form.import_text }}</textarea>
       </label>
+      <p class="field-help" id="route-import-preview-help">Format is Auto (detects CSV, JSON, or TSV) or an explicit choice. The source label is an optional local note tagging the batch. Use either the uploaded file or the pasted content, not both; the preview validates in memory and stores nothing.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="route-import-fields-heading">
@@ -73,7 +74,7 @@
       <div class="form-grid">
         <label>
           Format
-          <select name="import_format">
+          <select name="import_format" aria-describedby="route-import-execute-help">
             <option value="auto" {% if form.format == "auto" %}selected{% endif %}>Auto</option>
             <option value="csv" {% if form.format == "csv" %}selected{% endif %}>CSV</option>
             <option value="json" {% if form.format == "json" %}selected{% endif %}>JSON</option>
@@ -82,25 +83,26 @@
         </label>
         <label>
           Source label
-          <input name="source_label" value="{{ form.source_label }}" autocomplete="off" placeholder="optional local note">
+          <input name="source_label" value="{{ form.source_label }}" autocomplete="off" placeholder="optional local note" aria-describedby="route-import-execute-help">
         </label>
         <label>
           Upload file
-          <input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values">
+          <input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values" aria-describedby="route-import-execute-help">
         </label>
       </div>
       <label>
         Paste CSV, JSON, or TSV
-        <textarea name="import_text" spellcheck="false" placeholder="requested_model,match_type,provider,upstream_model">{{ form.import_text }}</textarea>
+        <textarea name="import_text" spellcheck="false" placeholder="requested_model,match_type,provider,upstream_model" aria-describedby="route-import-execute-help">{{ form.import_text }}</textarea>
       </label>
       <label>
         Audit reason
-        <input name="reason" value="{{ form.reason }}" required autocomplete="off" placeholder="required reason for route import">
+        <input name="reason" value="{{ form.reason }}" required autocomplete="off" placeholder="required reason for route import" aria-describedby="route-import-execute-help">
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_import" value="true">
+        <input type="checkbox" name="confirm_import" value="true" aria-describedby="route-import-execute-help">
         I understand this will create model route rows if every row validates.
       </label>
+      <p class="field-help" id="route-import-execute-help">The server re-parses and re-validates the same input: preview HTML and client-side normalized rows are not trusted. Use either the file or the pasted content, not both. The import is create-only and all-or-nothing; the audit reason and confirmation are required.</p>
       <button type="submit">Execute route import</button>
     </section>
   </form>

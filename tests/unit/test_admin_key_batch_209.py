@@ -940,8 +940,8 @@ def test_form_page_renders(batch_client) -> None:
     # The max_keys label is evaluated, not a literal template fragment.
     assert "{{ max_keys" not in text
     assert "1,000" in text
-    # Each batch picker links its visible field to its OWN help span:
-    # the id resolves exactly once and is referenced exactly once.
+    # Each batch picker links its visible field to its OWN help span, and
+    # every help definition resolves exactly once on the page.
     for help_id in (
         "batch-help-cohort",
         "batch-help-keys",
@@ -950,6 +950,20 @@ def test_form_page_renders(batch_client) -> None:
         "batch-help-endpoints",
     ):
         assert text.count(f'id="{help_id}"') == 1, f"help span {help_id} missing"
+    # The single-value cohort picker is the only picker on this page that
+    # also renders the menu search input, so BOTH of its actual controls
+    # (visible main field + menu search) reference the same help span:
+    # exactly two references, both resolving to the one definition.
+    assert text.count('aria-describedby="batch-help-cohort"') == 2
+    assert text.count('class="rc-search"') == 1
+    # The four multi-value pickers have no menu search: exactly one
+    # reference each, from their visible field.
+    for help_id in (
+        "batch-help-keys",
+        "batch-help-providers",
+        "batch-help-models",
+        "batch-help-endpoints",
+    ):
         assert text.count(f'aria-describedby="{help_id}"') == 1, (
             f"help {help_id} not linked from the visible field"
         )

@@ -30,8 +30,8 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
     <section class="action-panel" aria-labelledby="pricing-identity-heading">
-      <h2>Identity</h2>
-      <p class="warning-text">Provider choices show the provider slug and display name, never provider key values.</p>
+      <h2 id="pricing-identity-heading">Identity</h2>
+      <p class="warning-text" id="pricing-edit-identity-help">Provider choices show the provider slug and display name, never provider key values. These pick which provider/model/endpoint/currency the row prices.</p>
       <div class="form-grid">
         {{ record_choice(
             "provider", "provider", "Provider",
@@ -43,6 +43,8 @@
             clear_label="Select provider",
             placeholder="Search providers",
             input_id="pricing-provider",
+            help="Destination provider config by slug; only enabled pricing rows actually price requests.",
+            help_id="pricing-edit-provider-help",
         ) }}
         {{ record_choice(
             "upstream_model", "model", "Model",
@@ -53,6 +55,7 @@
             nojs_value=form.upstream_model,
             depends_on="pricing-provider",
             help="New upstream model values stay editable.",
+            help_id="pricing-edit-model-help",
         ) }}
         {{ record_choice(
             "endpoint", "endpoint", "Endpoint",
@@ -61,6 +64,8 @@
             selected_label=choice_labels.endpoint,
             allow_new=false,
             nojs_value=form.endpoint,
+            help="The gateway /v1 endpoint this pricing row applies to.",
+            help_id="pricing-edit-endpoint-help",
         ) }}
         {{ record_choice(
             "currency", "currency", "Currency",
@@ -70,41 +75,43 @@
             allow_new=true,
             nojs_value=form.currency,
             help="ISO 4217 code; new codes stay editable.",
+            help_id="pricing-edit-currency-help",
         ) }}
         <label class="checkbox-row">
-          <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %}>
+          <input type="checkbox" name="enabled" value="true" {% if form.enabled %}checked{% endif %} aria-describedby="pricing-edit-identity-help">
           <span>Enabled</span>
         </label>
       </div>
     </section>
 
     <section class="action-panel" aria-labelledby="pricing-prices-heading">
-      <h2>Prices</h2>
+      <h2 id="pricing-prices-heading">Prices</h2>
       <div class="form-grid">
-        <label>Input / 1M<input name="input_price_per_1m" value="{{ form.input_price_per_1m }}" required inputmode="decimal" autocomplete="off"></label>
-        <label>Cached input / 1M<input name="cached_input_price_per_1m" value="{{ form.cached_input_price_per_1m }}" inputmode="decimal" autocomplete="off"></label>
-        <label>Output / 1M<input name="output_price_per_1m" value="{{ form.output_price_per_1m }}" required inputmode="decimal" autocomplete="off"></label>
-        <label>Reasoning / 1M<input name="reasoning_price_per_1m" value="{{ form.reasoning_price_per_1m }}" inputmode="decimal" autocomplete="off"></label>
-        <label>Request price<input name="request_price" value="{{ form.request_price }}" inputmode="decimal" autocomplete="off"></label>
+        <label>Input / 1M<input name="input_price_per_1m" value="{{ form.input_price_per_1m }}" required inputmode="decimal" autocomplete="off" aria-describedby="pricing-edit-prices-help"></label>
+        <label>Cached input / 1M<input name="cached_input_price_per_1m" value="{{ form.cached_input_price_per_1m }}" inputmode="decimal" autocomplete="off" aria-describedby="pricing-edit-prices-help"></label>
+        <label>Output / 1M<input name="output_price_per_1m" value="{{ form.output_price_per_1m }}" required inputmode="decimal" autocomplete="off" aria-describedby="pricing-edit-prices-help"></label>
+        <label>Reasoning / 1M<input name="reasoning_price_per_1m" value="{{ form.reasoning_price_per_1m }}" inputmode="decimal" autocomplete="off" aria-describedby="pricing-edit-prices-help"></label>
+        <label>Request price<input name="request_price" value="{{ form.request_price }}" inputmode="decimal" autocomplete="off" aria-describedby="pricing-edit-prices-help"></label>
       </div>
-      <p class="muted small">Decimal strings are parsed without floats. Prices must be non-negative.</p>
+      <p class="muted small" id="pricing-edit-prices-help">Prices are in the rule's currency: per 1,000,000 tokens for input/cached/output/reasoning, plus a flat per-request price. Decimal strings are parsed without floats and must be non-negative; a blank dimension is unpriced.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="pricing-validity-heading">
-      <h2>Validity</h2>
+      <h2 id="pricing-validity-heading">Validity</h2>
       <div class="form-grid">
-        <label>Valid from<input name="valid_from" value="{{ form.valid_from }}" autocomplete="off"></label>
-        <label>Valid until<input name="valid_until" value="{{ form.valid_until }}" autocomplete="off"></label>
-        <label>Source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off"></label>
+        <label>Valid from<input name="valid_from" value="{{ form.valid_from }}" autocomplete="off" aria-describedby="pricing-edit-validity-help"></label>
+        <label>Valid until<input name="valid_until" value="{{ form.valid_until }}" autocomplete="off" aria-describedby="pricing-edit-validity-help"></label>
+        <label>Source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off" aria-describedby="pricing-edit-validity-help"></label>
       </div>
-      <label>Metadata JSON<textarea name="pricing_metadata" rows="5">{{ form.pricing_metadata }}</textarea></label>
+      <label>Metadata JSON<textarea name="pricing_metadata" rows="5" aria-describedby="pricing-edit-validity-help">{{ form.pricing_metadata }}</textarea></label>
+      <p class="muted small" id="pricing-edit-validity-help">Valid from/until are UTC ISO datetimes; blank "Valid until" means open-ended. Source URL records the pricing source for provenance. Metadata JSON is operator metadata about the pricing entry.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="pricing-audit-heading">
-      <h2>Audit</h2>
-      <label>Notes<textarea name="notes" rows="4">{{ form.notes }}</textarea></label>
-      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
-      <p class="muted small">Provider API key values are never entered here. Provider configs reference environment variable names only.</p>
+      <h2 id="pricing-audit-heading">Audit</h2>
+      <label>Notes<textarea name="notes" rows="4" aria-describedby="pricing-edit-audit-help">{{ form.notes }}</textarea></label>
+      <label>Reason<textarea name="reason" rows="3" required aria-describedby="pricing-edit-audit-help">{{ form.reason }}</textarea></label>
+      <p class="muted small" id="pricing-edit-audit-help">Notes are operator metadata; Reason is the required audit reason. Provider API key values are never entered here; provider configs reference environment variable names only.</p>
       <button type="submit">Update pricing rule</button>
     </section>
   </form>

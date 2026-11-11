@@ -18,18 +18,19 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <fieldset>
       <legend>Select models (maximum 100)</legend>
+      <p class="field-help" id="preview-help-models">Check the model routes to import from this preview (maximum 100). Each selected route also gets a public model ID, shown as <code>provider/slug</code>; edit it to remap the public name (maximum 255 characters). Unchecked rows are not created.</p>
       {% for model in models %}
       <div class="checkbox-row">
-        <label><input type="checkbox" name="model_choice" value="{{ model }}"><code>{{ model }}</code></label>
+        <label><input type="checkbox" name="model_choice" value="{{ model }}" aria-describedby="preview-help-models"><code>{{ model }}</code></label>
         <label>Public model ID
-          <input name="public_model_mapping" value="{{ model }}={{ provider.provider }}/{{ model }}" maxlength="255" autocomplete="off">
+          <input name="public_model_mapping" value="{{ model }}={{ provider.provider }}/{{ model }}" maxlength="255" autocomplete="off" aria-describedby="preview-help-models">
         </label>
       </div>
       {% endfor %}
     </fieldset>
     <input type="hidden" id="selected-models" name="selected_models" value="">
     <label>Preset
-      <select name="preset">
+      <select name="preset" aria-describedby="preview-help-routes">
         <option value="chat_text_v1">chat_text_v1</option>
         <option value="responses_text_v1">responses_text_v1</option>
         <option value="chat_and_responses_text_v1">chat_and_responses_text_v1</option>
@@ -37,22 +38,26 @@
       </select>
     </label>
     <label>Pricing
-      <select name="pricing_mode">
+      <select name="pricing_mode" aria-describedby="preview-help-pricing">
         <option value="" selected disabled>Choose pricing mode</option>
         <option value="local_zero">local_zero (operator-confirmed zero)</option>
         <option value="explicit">explicit EUR per 1M tokens</option>
       </select>
     </label>
-    <label class="checkbox-row"><input type="checkbox" name="confirm_local_zero" value="true"><span>I explicitly confirm zero is local operator pricing, not provider invoice truth.</span></label>
-    <label>Input EUR / 1M <input name="input_price_per_1m" inputmode="decimal"></label>
-    <label>Output EUR / 1M <input name="output_price_per_1m" inputmode="decimal"></label>
-    <label>Priority <input name="priority" value="100" inputmode="numeric"></label>
-    <label class="checkbox-row"><input type="checkbox" name="visible_in_models" value="true" checked><span>Show in /v1/models</span></label>
-    <label class="checkbox-row"><input type="checkbox" name="streaming" value="true"><span>Enable typed streaming</span></label>
-    <label class="checkbox-row"><input type="checkbox" name="local_function_tools" value="true"><span>Enable local function tools only</span></label>
-    <label class="checkbox-row"><input type="checkbox" name="confirm_enable_unqualified" value="true"><span>Enable routes before Objective 020 qualification (explicitly audited)</span></label>
-    <label>Audit reason <input name="reason" required autocomplete="off"></label>
-    <label class="checkbox-row"><input type="checkbox" name="confirm_execute" value="true" required><span>I understand this is configuration, not endpoint/model qualification; Objective 020 is mocked conformance only and Objectives 022–023 own named live targets.</span></label>
+    <label class="checkbox-row"><input type="checkbox" name="confirm_local_zero" value="true" aria-describedby="preview-help-pricing"><span>I explicitly confirm zero is local operator pricing, not provider invoice truth.</span></label>
+    <label>Input EUR / 1M <input name="input_price_per_1m" inputmode="decimal" aria-describedby="preview-help-pricing"></label>
+    <label>Output EUR / 1M <input name="output_price_per_1m" inputmode="decimal" aria-describedby="preview-help-pricing"></label>
+    <p class="field-help" id="preview-help-pricing">Choose <code>local_zero</code> to store a confirmed zero EUR price (local operator pricing, never provider invoice truth), or <code>explicit</code> to enter EUR per 1M input and per 1M output tokens. These are gateway charging prices; they do not promise provider billing or endpoint qualification.</p>
+    <label>Priority <input name="priority" value="100" inputmode="numeric" aria-describedby="preview-help-priority"></label>
+    <p class="field-help" id="preview-help-priority">Routing priority for the created routes: a LOWER number is preferred when several routes match the same request. 100 is the default.</p>
+    <label class="checkbox-row"><input type="checkbox" name="visible_in_models" value="true" checked aria-describedby="preview-help-routes"><span>Show in /v1/models</span></label>
+    <label class="checkbox-row"><input type="checkbox" name="streaming" value="true" aria-describedby="preview-help-routes"><span>Enable typed streaming</span></label>
+    <label class="checkbox-row"><input type="checkbox" name="local_function_tools" value="true" aria-describedby="preview-help-routes"><span>Enable local function tools only</span></label>
+    <p class="field-help" id="preview-help-routes">The preset selects which route family the selected models get. A route appears in <code>/v1/models</code> only when "Show in /v1/models" is checked; typed streaming and local function tools are per-route capabilities independent of provider qualification.</p>
+    <label class="checkbox-row"><input type="checkbox" name="confirm_enable_unqualified" value="true" aria-describedby="preview-help-confirm"><span>Enable routes before Objective 020 qualification (explicitly audited)</span></label>
+    <p class="field-help" id="preview-help-confirm">Enabling routes before Objective 020 qualification is a separate explicit acknowledgement and is audited; it is not a conformance claim. The audit reason and the execution confirmation are required.</p>
+    <label>Audit reason <input name="reason" required autocomplete="off" aria-describedby="preview-help-confirm"></label>
+    <label class="checkbox-row"><input type="checkbox" name="confirm_execute" value="true" required aria-describedby="preview-help-confirm"><span>I understand this is configuration, not endpoint/model qualification; Objective 020 is mocked conformance only and Objectives 022–023 own named live targets.</span></label>
     <button type="submit">Re-probe and create setup</button>
   </form>
   <script>

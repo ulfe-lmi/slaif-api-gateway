@@ -29,13 +29,13 @@
   {% endif %}
 
   <form class="filter-bar" method="get" action="/admin/pricing" id="pricing-filter">
-    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value", input_id="pricing-provider") }}
-    {{ record_choice("model", "model", "Model", options=choices.model, multi=true, multi_value=filters.model|join("\n"), allow_new=true, help="Matches any selected value", input_id="pricing-model") }}
-    {{ record_choice("endpoint", "endpoint", "Endpoint", options=choices.endpoint, multi=true, multi_value=filters.endpoint|join("\n"), allow_new=false, help="Matches any selected value", input_id="pricing-endpoint") }}
-    {{ record_choice("currency", "currency", "Currency", options=choices.currency, multi=true, multi_value=filters.currency|join("\n"), allow_new=true, help="Matches any selected value", input_id="pricing-currency") }}
+    {{ record_choice("provider", "provider", "Provider", options=choices.provider, multi=true, multi_value=filters.provider|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="pricing-provider", help_id="pricing-help-provider") }}
+    {{ record_choice("model", "model", "Model", options=choices.model, multi=true, multi_value=filters.model|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="pricing-model", help_id="pricing-help-model") }}
+    {{ record_choice("endpoint", "endpoint", "Endpoint", options=choices.endpoint, multi=true, multi_value=filters.endpoint|join("\n"), allow_new=false, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="pricing-endpoint", help_id="pricing-help-endpoint") }}
+    {{ record_choice("currency", "currency", "Currency", options=choices.currency, multi=true, multi_value=filters.currency|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="pricing-currency", help_id="pricing-help-currency") }}
     <label>
       Enabled
-      <select name="enabled">
+      <select name="enabled" aria-describedby="pricing-help-filter">
         <option value="" {% if filters.enabled == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.enabled == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.enabled == "false" %}selected{% endif %}>No</option>
@@ -43,7 +43,7 @@
     </label>
     <label>
       Active
-      <select name="active">
+      <select name="active" aria-describedby="pricing-help-filter">
         <option value="" {% if filters.active == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.active == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.active == "false" %}selected{% endif %}>No</option>
@@ -51,11 +51,12 @@
     </label>
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="pricing-help-filter">Filters narrow the pricing rule list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Enabled and Active narrow the rule's lifecycle state.</p>
 
   <div class="table-toolbar" aria-label="Pricing rules rows">
     <span class="rows-shown" id="pricing-rows-shown">{{ pricing_rules|length }} rows shown</span>
     <label>Rows
-      <select name="limit" id="pricing-limit" form="pricing-filter">
+      <select name="limit" id="pricing-limit" form="pricing-filter" aria-describedby="pricing-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -65,6 +66,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="pricing-help-rows">Rows per page for the pricing rule table (10 to 200).</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Pricing rules">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>

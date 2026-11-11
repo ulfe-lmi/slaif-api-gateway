@@ -120,14 +120,98 @@ def main() -> int:
     socket.socket.connect = _guarded_connect
     socket.socket.connect_ex = _guarded_connect_ex
 
+    # 219-a test-only seam: the installed worker venv deliberately has no
+    # pytest. The synthetic ``World`` fixture is imported FROM SOURCE (test
+    # fixtures may be source; product imports stay installed) and needs only
+    # pytest's IMPORT-time decorator surface (fixture/parametrize). Provide
+    # that minimal stub ONLY when the real pytest is absent; no test runs in
+    # this process and no product behavior changes.
+    try:
+        import pytest  # noqa: F401
+    except ModuleNotFoundError:
+        import types
+
+        def _decorator_identity(*args, **kwargs):
+            if len(args) == 1 and callable(args[0]) and not kwargs:
+                return args[0]
+
+            def _keep(func):
+                return func
+
+            return _keep
+
+        _pytest_stub = types.ModuleType("pytest")
+        _pytest_stub.fixture = _decorator_identity
+        _pytest_stub.mark = types.SimpleNamespace(parametrize=_decorator_identity)
+        sys.modules["pytest"] = _pytest_stub
+
     from tests.unit.test_catalog_refresh_collection import World
     from slaif_gateway.services.catalog_refresh import collection as coll
     from slaif_gateway.services.catalog_refresh import sources as src
     from slaif_gateway.workers import tasks_catalog_refresh as worker
     from slaif_gateway.workers.celery_app import create_celery_app
 
+    # 219-a test-only seam (env-gated, driver-level, no product behavior
+    # change): report where the PRODUCT imports actually resolve so the
+    # installed workflow can prove API+worker origins are the installed
+    # wheel, not the source checkout.
+    _origin_report = os.environ.get("SLAIF219_WORKER_ORIGIN_REPORT", "").strip()
+    if _origin_report:
+        import json as _json
+        import slaif_gateway as _sl
+        Path(_origin_report).write_text(
+            _json.dumps(
+                {
+                    "package": _sl.__file__,
+                    "worker_module": worker.__file__,
+                }
+            )
+        )
+
     world = World()
     worker._collect_client_factory = lambda: world.client()
+
+    # 219-a test-only seam (env-gated, no product behavior change): the
+    # product task wrapper classifies unhandled execution exceptions as the
+    # fixed ``internal_error`` code and never logs raw text. When the
+    # workflow parent sets SLAIF219_WORKER_ERROR_REPORT, record the
+    # exception class/message/traceback of the collect/export execution to
+    # that file for failure diagnosis (the parent owns the file; nothing
+    # is printed to the worker stdout).
+    _error_report = os.environ.get("SLAIF219_WORKER_ERROR_REPORT", "").strip()
+    if _error_report:
+        import traceback as _traceback
+
+        def _report_execution_error(stage: str, exc: BaseException) -> None:
+            try:
+                with open(_error_report, "a", encoding="utf-8") as _fh:
+                    _fh.write(f"STAGE={stage} {type(exc).__name__}: {exc}\n")
+                    _fh.write("".join(_traceback.format_exception(exc))[:8000])
+                    _fh.write("\n")
+            except Exception:  # noqa: BLE001 - diagnostics never mask the fault
+                pass
+
+        _orig_run_collect = worker._run_collect
+
+        async def _run_collect_reported(*args, **kwargs):
+            try:
+                return await _orig_run_collect(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - record, then re-raise
+                _report_execution_error("collect", exc)
+                raise
+
+        worker._run_collect = _run_collect_reported
+
+        _orig_run_export = worker._run_export
+
+        async def _run_export_reported(*args, **kwargs):
+            try:
+                return await _orig_run_export(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - record, then re-raise
+                _report_execution_error("export", exc)
+                raise
+
+        worker._run_export = _run_export_reported
 
     # Labeled synthetic proposal transport seam (queued proposal job):
     # only the transport is replaced; the real factory/registry/bridge
@@ -167,6 +251,11 @@ def main() -> int:
         raise SystemExit("driver: effective Celery broker is not the exact owned Redis")
     if app.conf.result_backend:
         raise SystemExit("driver: the result backend must stay unset (optional behavior)")
+
+    # 219-a test-only seam: readiness line BEFORE the blocking worker loop
+    # so an installed-workflow parent can drain it and then wait on the
+    # sealed job results (the 217 flow polls custody and needs no line).
+    print("WORKER_READY", flush=True)
 
     app.worker_main(
         [

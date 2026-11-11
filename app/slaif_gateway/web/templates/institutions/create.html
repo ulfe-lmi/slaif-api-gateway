@@ -29,16 +29,17 @@
     <section class="action-panel" aria-labelledby="institution-fields-heading">
       <h2 id="institution-fields-heading">Metadata</h2>
       <div class="form-grid">
-        <label>Name<input name="name" value="{{ form.name }}" autocomplete="organization" required></label>
-        <label>Country<input name="country" value="{{ form.country }}" autocomplete="country-name"></label>
+        <label>Name<input name="name" value="{{ form.name }}" autocomplete="organization" required aria-describedby="institution-create-metadata-help"></label>
+        <label>Country<input name="country" value="{{ form.country }}" autocomplete="country-name" aria-describedby="institution-create-metadata-help"></label>
       </div>
-      <label>Notes<textarea name="notes" rows="4">{{ form.notes }}</textarea></label>
-      <p class="muted small">Notes must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
+      <label>Notes<textarea name="notes" rows="4" aria-describedby="institution-create-metadata-help">{{ form.notes }}</textarea></label>
+      <p class="muted small" id="institution-create-metadata-help">Name is the institution's display name; country is a free-text country name for reporting. Notes are operator metadata and must not contain provider keys, gateway keys, tokens, passwords, or other secrets.</p>
     </section>
 
     <section class="action-panel" aria-labelledby="institution-audit-heading">
       <h2 id="institution-audit-heading">Audit</h2>
-      <label>Reason<textarea name="reason" rows="3" required>{{ form.reason }}</textarea></label>
+      <label>Reason<textarea name="reason" rows="3" required aria-describedby="institution-create-audit-help">{{ form.reason }}</textarea></label>
+      <p class="muted small" id="institution-create-audit-help">Required audit reason recording why this institution was created.</p>
       <button type="submit">Create institution</button>
       <a class="button-link secondary" href="/admin/institutions">Cancel</a>
     </section>

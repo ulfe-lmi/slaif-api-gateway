@@ -53,7 +53,7 @@
       <div class="form-grid">
         <label>
           Format
-          <select name="import_format">
+          <select name="import_format" aria-describedby="bulk-execute-help">
             <option value="auto" {% if import_format == "auto" %}selected{% endif %}>Auto</option>
             <option value="csv" {% if import_format == "csv" %}selected{% endif %}>CSV</option>
             <option value="json" {% if import_format == "json" %}selected{% endif %}>JSON</option>
@@ -61,31 +61,32 @@
         </label>
         <label>
           Source label
-          <input name="source_label" value="{{ source_label }}" autocomplete="off" placeholder="Optional safe label">
+          <input name="source_label" value="{{ source_label }}" autocomplete="off" placeholder="Optional safe label" aria-describedby="bulk-execute-help">
         </label>
       </div>
       <label>
         Upload CSV/JSON
-        <input type="file" name="import_file" accept=".csv,.json,text/csv,application/json">
+        <input type="file" name="import_file" accept=".csv,.json,text/csv,application/json" aria-describedby="bulk-execute-help">
       </label>
       <label>
         Or paste CSV/JSON
-        <textarea name="import_text" rows="10" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,allowed_endpoints,allowed_models&#10;ada@example.org,30,10.00,/v1/chat/completions,gpt-5.2"></textarea>
+        <textarea name="import_text" rows="10" autocomplete="off" placeholder="owner_email,valid_days,cost_limit_eur,allowed_endpoints,allowed_models&#10;ada@example.org,30,10.00,/v1/chat/completions,gpt-5.2" aria-describedby="bulk-execute-help"></textarea>
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_import" value="true">
+        <input type="checkbox" name="confirm_import" value="true" aria-describedby="bulk-execute-help">
         <span>I confirm this import should create gateway keys for every valid row.</span>
       </label>
       {% if preview.plaintext_display_required %}
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_plaintext_display" value="true">
+        <input type="checkbox" name="confirm_plaintext_display" value="true" aria-describedby="bulk-execute-help">
         <span>I understand newly generated plaintext keys for <code>none</code> and <code>pending</code> rows will be shown once on the no-cache result page.</span>
       </label>
       {% endif %}
       <label>
         Audit reason
-        <input name="reason" autocomplete="off" required placeholder="Required reason for bulk key creation">
+        <input name="reason" autocomplete="off" required placeholder="Required reason for bulk key creation" aria-describedby="bulk-execute-help">
       </label>
+      <p class="field-help" id="bulk-execute-help">The server re-parses and re-validates the re-submitted CSV/JSON before any rows are written; the preview table itself is not trusted. Use either the file or the pasted content, not both. The confirmation, the optional plaintext-display acknowledgement, and the audit reason are all required for execution.</p>
       <p class="muted small">Bulk execution supports email delivery modes <code>none</code>, <code>pending</code>, and <code>enqueue</code>. It does not send SMTP in the admin request. <code>send-now</code> is rejected before mutation.</p>
       <button type="submit">Execute import</button>
     </form>

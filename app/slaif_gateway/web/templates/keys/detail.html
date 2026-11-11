@@ -287,6 +287,41 @@
   </div>
   {% endif %}
 
+
+  <section class="action-panel" aria-labelledby="key-advanced-configuration-heading">
+    <h2 id="key-advanced-configuration-heading">Advanced Configuration (versioned JSON)</h2>
+    <p class="muted">The SAME strict version-1 document the CLI uses: download the key's current allowlisted projection, edit it, and apply a presence-aware partial update. Omitted fields preserve the current state; explicit <code>null</code> and <code>[]</code> keep their distinct meanings. Key material, status, owner/cohort, validity, usage counters, and reservations are never touched. Bound client-module changes remain blocked and must use the reviewed migration path, not this editor.</p>
+    <p>
+      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>
+    </p>
+    <form method="post" action="/admin/keys/{{ key.id }}/configuration">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        Configuration document
+        <textarea name="configuration_json" rows="10" class="config-json" spellcheck="false" autocomplete="off" aria-describedby="key-advanced-config-help">{% if configuration_form.configuration_json %}{{ configuration_form.configuration_json }}{% endif %}</textarea>
+      </label>
+      <p class="muted small">
+        Minimal sample:
+        <pre class="config-sample">{{ configuration_sample }}</pre>
+      </p>
+      <p class="field-help" id="key-advanced-config-help">
+        Semantics: an omitted field leaves the key's current value untouched; <code>null</code> <code>allowed_providers</code> is unrestricted and
+        <code>[]</code> denies all providers; null quotas are unlimited; null rate members inherit the deployment; null lazy policy means reject.
+        Unknown or duplicate fields are rejected; the document must not exceed 64 KB. A rejected document is never redisplayed.
+      </p>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_configuration_update" value="true" {% if configuration_form.confirm_configuration_update %}checked{% endif %} aria-describedby="key-advanced-config-help">
+        I confirm this advanced configuration update
+      </label>
+      <label>
+        Audit reason
+        <input name="reason" value="{{ configuration_form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="key-config-reason-help">
+      </label>
+      <p class="field-help" id="key-config-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
+      <button type="submit">Apply configuration update</button>
+    </form>
+  </section>
+
   <section class="action-panel" aria-labelledby="key-request-policy-heading">
     <h2 id="key-request-policy-heading">Update Request Policy</h2>
     <p class="muted">Edit provider, endpoint, and model allow-lists without changing quotas, validity, key material, owner metadata, usage counters, or live-burn policy.</p>
@@ -408,21 +443,20 @@
             {% endfor %}
           </select>
         </label>
-        <label>
-          Requested model
-          <input name="model" list="explain-model-options" value="{{ explain_form.model }}" autocomplete="off" aria-describedby="key-explain-route-help" placeholder="e.g. gpt-5.6-sol">
-          <datalist id="explain-model-options">
-            {% for group_label, choices in policy_catalog.model_choices_by_group.items() %}
-            {% for choice in choices %}
-            <option value="{{ choice.token }}">{{ choice.label }}</option>
-            {% endfor %}
-            {% endfor %}
-          </datalist>
-        </label>
+        {{ record_choice(
+            "model", "policy_model", "Requested model",
+            options=explain_model_options or none,
+            allow_new=true,
+            selected_id=explain_form.model,
+            nojs_value=explain_form.model,
+            placeholder="e.g. gpt-5.6-sol (searches ALL enabled route models)",
+            help="Suggestions are the latest 100 enabled route models; typing searches OLDER enabled route models server-side. Any model token can be typed — an unknown model is itself a reportable result.",
+            help_id="key-explain-model-help",
+            input_id="key-explain-model",
+        ) }}
       </div>
       <p class="field-help" id="key-explain-route-help">
-        Model suggestions are the latest 100 enabled route models; any model token can be typed — an unknown model is itself a
-        reportable result. The result repeats here verbatim from the shared configuration-only explanation, including its
+        The result repeats here verbatim from the shared configuration-only explanation, including its
         blockers, ambiguity handling, and not-evaluated states.
       </p>
       <button type="submit">Explain access</button>
@@ -495,28 +529,28 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="form-grid">
         <label class="checkbox-row">
-          <input type="radio" name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode {% if lazy_form.lazy_throttling_mode != "wait" %}checked{% endif %}>
+          <input type="radio" name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode aria-describedby="key-lazy-help" {% if lazy_form.lazy_throttling_mode != "wait" %}checked{% endif %}>
           Reject immediately (default)
         </label>
         <label class="checkbox-row">
-          <input type="radio" name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode {% if lazy_form.lazy_throttling_mode == "wait" %}checked{% endif %}>
+          <input type="radio" name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode aria-describedby="key-lazy-help" {% if lazy_form.lazy_throttling_mode == "wait" %}checked{% endif %}>
           Wait for capacity (lazy throttling)
         </label>
       </div>
       <div class="form-grid" data-lazy-throttling-field-group>
         <label>
           Maximum waiting time (seconds)
-          <input name="lazy_throttling_max_wait_seconds" value="{{ lazy_form.lazy_throttling_max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field>
+          <input name="lazy_throttling_max_wait_seconds" value="{{ lazy_form.lazy_throttling_max_wait_seconds }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="key-lazy-help">
         </label>
         <label>
           Maximum waiting requests per key
-          <input name="lazy_throttling_max_waiting_requests" value="{{ lazy_form.lazy_throttling_max_waiting_requests }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field>
+          <input name="lazy_throttling_max_waiting_requests" value="{{ lazy_form.lazy_throttling_max_waiting_requests }}" inputmode="numeric" autocomplete="off" data-lazy-throttling-field aria-describedby="key-lazy-help">
         </label>
       </div>
-      <p class="muted small">Operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key. Waiting applies before provider execution on Chat Completions and Responses.</p>
+      <p class="field-help" id="key-lazy-help">Reject is the default and stores no waiting policy. In wait mode both bounds are positive whole numbers (a blank bound falls back to the built-in default of 30 seconds or 2 waiting requests, clamped to the deployment ceilings shown in the inputs) and may not exceed the operator ceilings: {{ lazy_throttling_ceilings.max_wait_seconds | num }}s maximum wait, {{ lazy_throttling_ceilings.max_waiting_per_key | num }} waiting per key. An audit reason is required; credential-shaped values are masked before storage.</p>
       <label>
         Audit reason
-        <input name="reason" value="{{ lazy_form.reason }}" required autocomplete="off" placeholder="Required reason">
+        <input name="reason" value="{{ lazy_form.reason }}" required autocomplete="off" placeholder="Required reason" aria-describedby="key-lazy-help">
       </label>
       <button type="submit">Update lazy throttling</button>
     </form>
@@ -539,12 +573,12 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>
         Mode
-        <select name="external_tool_mode">
+        <select name="external_tool_mode" aria-describedby="key-ext-tool-help">
           <option value="strict_bounded" {% if external_policy_form.external_tool_mode != "external_tool_fenced" %}selected{% endif %}>Strict bounded (default deny)</option>
           <option value="external_tool_fenced" {% if external_policy_form.external_tool_mode == "external_tool_fenced" %}selected{% endif %}>External-tool fenced (web search only at runtime)</option>
         </select>
       </label>
-      <fieldset>
+      <fieldset aria-describedby="key-ext-tool-help">
         <legend>Reviewed capability IDs</legend>
         {% for capability in external_tool_capabilities %}
         <label class="checkbox-row">
@@ -562,20 +596,22 @@
           allow_new=true,
           placeholder="connector:reviewed_id or remote_mcp:reviewed_id, one per line",
           help="Destination IDs are key-local reviewed identifiers; type new reviewed values directly (no global registry lookup).",
+          help_id="key-ext-tool-dest-help",
       ) }}
       <label>
         Maximum provider tool calls per request
-        <input name="external_tool_max_calls" value="{{ external_policy_form.external_tool_max_calls }}" inputmode="numeric" autocomplete="off">
+        <input name="external_tool_max_calls" value="{{ external_policy_form.external_tool_max_calls }}" inputmode="numeric" autocomplete="off" aria-describedby="key-ext-tool-help">
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" {% if external_policy_form.external_tool_overrun_acknowledged %}checked{% endif %}>
+        <input type="checkbox" name="external_tool_overrun_acknowledged" value="true" aria-describedby="key-ext-tool-help" {% if external_policy_form.external_tool_overrun_acknowledged %}checked{% endif %}>
         I acknowledge the single-request overrun and final-cost hold behavior.
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_external_tool_fenced" value="true">
+        <input type="checkbox" name="confirm_external_tool_fenced" value="true" aria-describedby="key-ext-tool-help">
         I separately confirm fenced external-tool policy.
       </label>
-      <label>Audit reason <input name="reason" value="{{ external_policy_form.reason }}" required autocomplete="off"></label>
+      <label>Audit reason <input name="reason" value="{{ external_policy_form.reason }}" required autocomplete="off" aria-describedby="key-ext-tool-help"></label>
+      <p class="field-help" id="key-ext-tool-help">Strict bounded (default) denies every hosted tool family. External-tool fenced may allow the reviewed Responses web_search configuration only, at runtime, and then requires the overrun acknowledgement, the fenced confirmation, positive finite hard quotas, and an audit reason. Capabilities and destination IDs must be reviewed identifiers; the max-calls bound is a non-negative integer counting provider tool calls per admitted request (0 means none).</p>
       <p class="warning-text">One admitted web-search request may overrun; concurrent requests are fenced, following exhausted requests are blocked, and missing or ambiguous final cost is held. Fenced mode requires positive finite hard quotas. Strict reset still requires an audit reason.</p>
       <button type="submit">Update external-tool policy</button>
     </form>
@@ -602,22 +638,22 @@
         <form method="post" action="/admin/keys/{{ key.id }}{{ chat_live_burn_surface.update_route_path }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label class="checkbox-row">
-            <input id="detail-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if key.chat_streaming_live_burn_policy.enabled %}checked{% endif %} data-streaming-live-burn-enabled>
+            <input id="detail-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if key.chat_streaming_live_burn_policy.enabled %}checked{% endif %} data-streaming-live-burn-enabled aria-describedby="detail-chat-streaming-live-burn-hint">
             Enable live-burn monitoring for Chat Completions streaming
           </label>
           <div id="detail-chat-streaming-live-burn-fields" class="form-grid{% if not key.chat_streaming_live_burn_policy.enabled %} live-burn-fields-disabled{% endif %}" data-streaming-live-burn-margin-fields>
             <label>
               Cost margin (EUR)
-              <input name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur | inputnum }}" inputmode="decimal" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
+              <input id="detail-chat-streaming-live-burn-cost-margin" name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur | inputnum }}" inputmode="decimal" autocomplete="off" aria-describedby="detail-chat-streaming-live-burn-hint"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
             <label>
               Output token margin (tokens)
-              <input name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
+              <input id="detail-chat-streaming-live-burn-token-margin" name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off" aria-describedby="detail-chat-streaming-live-burn-hint"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
           </div>
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off" placeholder="Required reason">
+            <input name="reason" required autocomplete="off" placeholder="Required reason" aria-describedby="detail-chat-streaming-live-burn-hint">
           </label>
           <p id="detail-chat-streaming-live-burn-hint" class="muted small">
             {% for line in chat_live_burn_surface.help_text %}{{ line }} {% endfor %}
@@ -646,15 +682,16 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Valid from (UTC)
-            <input type="datetime-local" name="valid_from" step="60" autocomplete="off">
+            <input type="datetime-local" name="valid_from" step="60" autocomplete="off" aria-describedby="key-validity-help">
           </label>
           <label>
             Valid until (UTC)
-            <input type="datetime-local" name="valid_until" step="60" autocomplete="off">
+            <input type="datetime-local" name="valid_until" step="60" autocomplete="off" aria-describedby="key-validity-help">
           </label>
+          <p class="field-help" id="key-validity-help">Both fields are UTC datetimes at minute resolution. A blank field keeps its current value; a submitted window must be valid (until after from). The audit reason is required.</p>
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off" placeholder="Required reason">
+            <input name="reason" required autocomplete="off" placeholder="Required reason" aria-describedby="key-validity-help">
           </label>
           <p class="warning-text">Invalid windows are rejected; `valid_until` must be after `valid_from`.</p>
           <button type="submit">Update validity</button>
@@ -676,71 +713,38 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Cost limit EUR
-            <input name="cost_limit_eur" inputmode="decimal" autocomplete="off" placeholder="{{ key.cost_limit_eur if key.cost_limit_eur is not none else 'No limit' }}">
+            <input name="cost_limit_eur" inputmode="decimal" autocomplete="off" aria-describedby="key-limits-help" placeholder="{{ key.cost_limit_eur if key.cost_limit_eur is not none else 'No limit' }}">
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="clear_cost_limit" value="true">
+            <input type="checkbox" name="clear_cost_limit" value="true" aria-describedby="key-limits-help">
             Clear cost limit
           </label>
           <label>
             Token limit
-            <input name="token_limit" inputmode="numeric" autocomplete="off" placeholder="{{ key.token_limit_total if key.token_limit_total is not none else 'No limit' }}">
+            <input name="token_limit" inputmode="numeric" autocomplete="off" aria-describedby="key-limits-help" placeholder="{{ key.token_limit_total if key.token_limit_total is not none else 'No limit' }}">
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="clear_token_limit" value="true">
+            <input type="checkbox" name="clear_token_limit" value="true" aria-describedby="key-limits-help">
             Clear token limit
           </label>
           <label>
             Request limit
-            <input name="request_limit" inputmode="numeric" autocomplete="off" placeholder="{{ key.request_limit_total if key.request_limit_total is not none else 'No limit' }}">
+            <input name="request_limit" inputmode="numeric" autocomplete="off" aria-describedby="key-limits-help" placeholder="{{ key.request_limit_total if key.request_limit_total is not none else 'No limit' }}">
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="clear_request_limit" value="true">
+            <input type="checkbox" name="clear_request_limit" value="true" aria-describedby="key-limits-help">
             Clear request limit
           </label>
+          <p class="field-help" id="key-limits-help">A filled box sets that lifetime limit; a blank box keeps the current value. Check the matching Clear box to remove the limit entirely (unlimited) — do not fill a box and check its Clear box together. The audit reason is required.</p>
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off" placeholder="Required reason">
+            <input name="reason" required autocomplete="off" placeholder="Required reason" aria-describedby="key-limits-help">
           </label>
           <p class="warning-text">Lowering a hard quota can make future reservations fail. Used and reserved counters are not reset.</p>
           <button type="submit">Update hard quota limits</button>
         </form>
       </div>
     </div>
-  </section>
-
-  <section class="action-panel" aria-labelledby="key-advanced-configuration-heading">
-    <h2 id="key-advanced-configuration-heading">Advanced Configuration (versioned JSON)</h2>
-    <p class="muted">The SAME strict version-1 document the CLI uses: download the key's current allowlisted projection, edit it, and apply a presence-aware partial update. Omitted fields preserve the current state; explicit <code>null</code> and <code>[]</code> keep their distinct meanings. Key material, status, owner/cohort, validity, usage counters, and reservations are never touched. Bound client-module changes remain blocked and must use the reviewed migration path, not this editor.</p>
-    <p>
-      <a class="button-link secondary" href="/admin/keys/{{ key.id }}/configuration.json">Download current configuration (JSON)</a>
-    </p>
-    <form method="post" action="/admin/keys/{{ key.id }}/configuration">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>
-        Configuration document
-        <textarea name="configuration_json" rows="10" class="config-json" spellcheck="false" autocomplete="off" aria-describedby="key-advanced-config-help">{% if configuration_form.configuration_json %}{{ configuration_form.configuration_json }}{% endif %}</textarea>
-      </label>
-      <p class="muted small">
-        Minimal sample:
-        <pre class="config-sample">{{ configuration_sample }}</pre>
-      </p>
-      <p class="field-help" id="key-advanced-config-help">
-        Semantics: an omitted field leaves the key's current value untouched; <code>null</code> <code>allowed_providers</code> is unrestricted and
-        <code>[]</code> denies all providers; null quotas are unlimited; null rate members inherit the deployment; null lazy policy means reject.
-        Unknown or duplicate fields are rejected; the document must not exceed 64 KB. A rejected document is never redisplayed.
-      </p>
-      <label class="checkbox-row">
-        <input type="checkbox" name="confirm_configuration_update" value="true" {% if configuration_form.confirm_configuration_update %}checked{% endif %} aria-describedby="key-advanced-config-help">
-        I confirm this advanced configuration update
-      </label>
-      <label>
-        Audit reason
-        <input name="reason" value="{{ configuration_form.reason }}" required maxlength="512" autocomplete="off" placeholder="Required reason" aria-describedby="key-config-reason-help">
-      </label>
-      <p class="field-help" id="key-config-reason-help">Required, at most 512 characters. Credential-shaped values are masked before storage.</p>
-      <button type="submit">Apply configuration update</button>
-    </form>
   </section>
 
   <section class="action-panel" aria-labelledby="key-usage-reset-heading">
@@ -772,18 +776,19 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off" placeholder="Required reason">
+            <input name="reason" required autocomplete="off" placeholder="Required reason" aria-describedby="key-reset-usage-help">
           </label>
+          <p class="field-help" id="key-reset-usage-help">The audit reason and the used-counters confirmation are required. The optional reserved-counter reset and its confirmation are an admin repair action for stale in-flight reservations, normally left unchecked.</p>
           <label class="checkbox-row">
-            <input type="checkbox" name="confirm_reset_usage" value="true" required>
+            <input type="checkbox" name="confirm_reset_usage" value="true" required aria-describedby="key-reset-usage-help">
             I understand this resets used usage counters and preserves usage ledger rows.
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="reset_reserved" value="true">
+            <input type="checkbox" name="reset_reserved" value="true" aria-describedby="key-reset-usage-help">
             Also reset reserved counters.
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="confirm_reset_reserved" value="true">
+            <input type="checkbox" name="confirm_reset_reserved" value="true" aria-describedby="key-reset-usage-help">
             I understand reserved-counter reset is an admin repair action for stale in-flight reservations.
           </label>
           <p class="warning-text">Hard quota limits remain unchanged. Usage ledger rows remain historical. Redis rate-limit counters are not reset by this action.</p>
@@ -810,25 +815,26 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off" placeholder="Required reason">
+            <input name="reason" required autocomplete="off" placeholder="Required reason" aria-describedby="key-rotate-help">
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="confirm_rotate" value="true" required>
+            <input type="checkbox" name="confirm_rotate" value="true" required aria-describedby="key-rotate-help">
             I understand the replacement plaintext key will be shown once.
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="keep_old_active" value="true">
+            <input type="checkbox" name="keep_old_active" value="true" aria-describedby="key-rotate-help">
             Keep the old key active after rotation.
           </label>
           <label>
             Email delivery mode
-            <select name="email_delivery_mode">
+            <select name="email_delivery_mode" aria-describedby="key-rotate-help">
               <option value="none" selected>None - show replacement once in browser</option>
               <option value="pending">Pending - create delivery row and show replacement once</option>
               <option value="send-now">Send now - email is the delivery channel</option>
               <option value="enqueue">Enqueue - Celery email delivery</option>
             </select>
           </label>
+          <p class="field-help" id="key-rotate-help">The audit reason and rotation confirmation are required. The replacement plaintext key is shown once on the next page. Keeping the old key active temporarily allows both keys to authenticate until an admin revokes the old one. None and pending delivery still show the replacement in the browser; send-now and enqueue deliver it by email instead.</p>
           <p class="warning-text">Do not select keep-old-active unless you need a temporary overlap. Send-now and enqueue suppress browser plaintext display; pending still shows the replacement once. Old plaintext keys are never resent.</p>
           <button type="submit" class="danger">Rotate key</button>
         </form>
@@ -852,8 +858,9 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit note
-            <input name="reason" autocomplete="off" placeholder="Optional note">
+            <input name="reason" autocomplete="off" placeholder="Optional note" aria-describedby="key-suspend-help">
           </label>
+          <p class="field-help" id="key-suspend-help">The audit note is optional but is recorded with the action; the suspend itself takes effect immediately.</p>
           <p class="warning-text">This immediately disables API access for the key.</p>
           <button type="submit">Suspend key</button>
         </form>
@@ -871,8 +878,9 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit note
-            <input name="reason" autocomplete="off" placeholder="Optional note">
+            <input name="reason" autocomplete="off" placeholder="Optional note" aria-describedby="key-activate-help">
           </label>
+          <p class="field-help" id="key-activate-help">The audit note is optional but is recorded with the action; activation restores access only if the key's validity and policy checks still pass.</p>
           <p class="warning-text">This allows API access again if validity and policy checks pass.</p>
           <button type="submit">Activate key</button>
         </form>
@@ -890,12 +898,13 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off" placeholder="Required reason">
+            <input name="reason" required autocomplete="off" placeholder="Required reason" aria-describedby="key-revoke-help">
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="confirm_revoke" value="true" required>
+            <input type="checkbox" name="confirm_revoke" value="true" required aria-describedby="key-revoke-help">
             I understand revocation is permanent.
           </label>
+          <p class="field-help" id="key-revoke-help">The audit reason and the permanence confirmation are both required; revocation cannot be undone from the dashboard.</p>
           <p class="warning-text">This cannot be undone from the dashboard.</p>
           <button type="submit" class="danger">Revoke key</button>
         </form>

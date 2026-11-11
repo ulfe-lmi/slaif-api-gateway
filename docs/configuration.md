@@ -790,6 +790,21 @@ then create exactly one normal key from a selected immutable revision with
 `slaif-gateway keys create-from-template` or the template detail page. Bulk
 template-based participant key creation remains future work.
 
+The GUI calibration preview additionally offers a bounded, no-store JSON
+download of that same typed summary/proposal (the CLI-compatible projection
+with exact machine units). The download re-validates the same
+trusted-calibration key/time/multiplier/auth/CSRF gates and input validation
+at download time, is recomputed from the CURRENT data for the same chosen
+inputs (not a frozen earlier result), rotates no displayed form token, and
+writes nothing to disk, logs, or audit. The export boundary is fail-closed:
+the WHOLE artifact is refused (fixed safe 400, no echo of the refused
+value, unchanged CLI-compatible shape) when ANY nested canonical string is
+a known incoming authentication alias or recognized complete credential
+material, and oversize output is refused at the finite 1 MiB local output
+ceiling (explicit refusal, never truncation). Success and refusal responses
+- including the malformed-key early 404 - are private no-store/no-cache and
+nosniff.
+
 ## Responses API Configuration
 
 The current Responses API foundation is text-output only. It supports

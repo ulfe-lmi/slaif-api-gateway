@@ -259,8 +259,31 @@ def test_key_detail_renders_disabled_chat_live_burn_fields(monkeypatch) -> None:
 
     assert 'name="chat_streaming_live_burn_enabled" value="true" checked' not in html
     assert "live-burn-fields-disabled" in html
-    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="-0.250000000" inputmode="decimal" autocomplete="off" disabled' in html
-    assert 'name="chat_streaming_live_burn_token_margin" value="-250" inputmode="numeric" autocomplete="off" disabled' in html
+    # Adapted to the actual DOM: the dynamic margin inputs carry their
+    # stable ids and the linked live-burn help association (219-b), so
+    # assert the real attribute set on the actual control tags.
+    cost = re.search(
+        r'<input[^>]*name="chat_streaming_live_burn_cost_margin_eur"[^>]*>',
+        html,
+    )
+    token = re.search(
+        r'<input[^>]*name="chat_streaming_live_burn_token_margin"[^>]*>',
+        html,
+    )
+    assert cost, "cost margin input missing"
+    assert token, "token margin input missing"
+    assert 'value="-0.250000000"' in cost.group(0)
+    assert 'inputmode="decimal"' in cost.group(0)
+    assert "disabled" in cost.group(0)
+    assert 'value="-250"' in token.group(0)
+    assert 'inputmode="numeric"' in token.group(0)
+    assert "disabled" in token.group(0)
+    assert (
+        'aria-describedby="detail-chat-streaming-live-burn-hint"' in cost.group(0)
+    )
+    assert (
+        'aria-describedby="detail-chat-streaming-live-burn-hint"' in token.group(0)
+    )
 
 
 def test_key_detail_renders_usage_reset_form(monkeypatch) -> None:
@@ -404,14 +427,19 @@ def test_key_detail_renders_lazy_throttling_wait_values_and_usable_inputs(monkey
 
     assert "Mode: wait; max wait: 45s; max waiting per key: 3" in html
     assert f'action="/admin/keys/{key.id}/lazy-throttling"' in html
-    assert 'name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode checked' in html
-    assert 'value="reject" data-lazy-throttling-mode checked' not in html
+    assert (
+        'name="lazy_throttling_mode" value="wait" data-lazy-throttling-mode '
+        'aria-describedby="key-lazy-help" checked'
+    ) in html
+    assert (
+        'value="reject" data-lazy-throttling-mode aria-describedby="key-lazy-help" checked'
+    ) not in html
     assert 'name="lazy_throttling_max_wait_seconds" value="45"' in html
     assert 'name="lazy_throttling_max_waiting_requests" value="3"' in html
     # Server-rendered inputs stay usable with JS disabled (no disabled attr).
     assert "data-lazy-throttling-field disabled" not in html
     assert "data-lazy-throttling-field disabled>" not in html
-    assert "data-lazy-throttling-field>" in html
+    assert 'data-lazy-throttling-field aria-describedby="key-lazy-help">' in html
     assert 'name="reason" value="" required' in html
     assert "Redis rate limiting is currently disabled" not in html
 
@@ -426,8 +454,13 @@ def test_key_detail_renders_lazy_throttling_reject_defaults_and_inactive_warning
     html = client.get(f"/admin/keys/{key.id}").text
 
     assert "Mode: reject (immediate 429); no waiting configured" in html
-    assert 'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode checked' in html
-    assert 'value="wait" data-lazy-throttling-mode checked' not in html
+    assert (
+        'name="lazy_throttling_mode" value="reject" data-lazy-throttling-mode '
+        'aria-describedby="key-lazy-help" checked'
+    ) in html
+    assert (
+        'value="wait" data-lazy-throttling-mode aria-describedby="key-lazy-help" checked'
+    ) not in html
     assert 'name="lazy_throttling_max_wait_seconds" value="30"' in html
     assert 'name="lazy_throttling_max_waiting_requests" value="2"' in html
     # Default settings leave Redis rate limiting off: state that honestly.

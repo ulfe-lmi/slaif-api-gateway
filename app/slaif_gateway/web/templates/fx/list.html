@@ -29,12 +29,12 @@
   {% endif %}
 
   <form class="filter-bar compact" method="get" action="/admin/fx" id="fx-filter">
-    {{ record_choice("base_currency", "currency", "Base currency", options=choices.base_currency, multi=true, multi_value=filters.base_currency|join("\n"), allow_new=true, help="Matches any selected value", input_id="fx-base") }}
-    {{ record_choice("quote_currency", "currency", "Quote currency", options=choices.quote_currency, multi=true, multi_value=filters.quote_currency|join("\n"), allow_new=true, help="Matches any selected value", input_id="fx-quote") }}
-    {{ record_choice("source", "fx_source", "Source", options=choices.source, multi=true, multi_value=filters.source|join("\n"), allow_new=true, help="Matches any selected value", input_id="fx-source") }}
+    {{ record_choice("base_currency", "currency", "Base currency", options=choices.base_currency, multi=true, multi_value=filters.base_currency|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="fx-base", help_id="fx-help-base") }}
+    {{ record_choice("quote_currency", "currency", "Quote currency", options=choices.quote_currency, multi=true, multi_value=filters.quote_currency|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="fx-quote", help_id="fx-help-quote") }}
+    {{ record_choice("source", "fx_source", "Source", options=choices.source, multi=true, multi_value=filters.source|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="fx-source", help_id="fx-help-source") }}
     <label>
       Active
-      <select name="active">
+      <select name="active" aria-describedby="fx-help-filter">
         <option value="" {% if filters.active == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.active == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.active == "false" %}selected{% endif %}>No</option>
@@ -42,11 +42,12 @@
     </label>
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="fx-help-filter">Filters narrow the FX rate list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Active is the rate's availability state for conversion lookups.</p>
 
   <div class="table-toolbar" aria-label="FX rates rows">
     <span class="rows-shown" id="fx-rows-shown">{{ fx_rates|length }} rows shown</span>
     <label>Rows
-      <select name="limit" id="fx-limit" form="fx-filter">
+      <select name="limit" id="fx-limit" form="fx-filter" aria-describedby="fx-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -56,6 +57,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="fx-help-rows">Rows per page for the FX rate table (10 to 200).</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="FX rates">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>

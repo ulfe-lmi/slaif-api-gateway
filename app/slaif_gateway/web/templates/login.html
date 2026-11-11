@@ -19,10 +19,12 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
     <label for="email">Email</label>
-    <input id="email" name="email" type="email" autocomplete="username" required autofocus>
+    <input id="email" name="email" type="email" autocomplete="username" required autofocus aria-describedby="login-email-help">
+    <p class="muted small" id="login-email-help">Operator email for the admin session.</p>
 
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <input id="password" name="password" type="password" autocomplete="current-password" required aria-describedby="login-password-help">
+    <p class="muted small" id="login-password-help">Your admin password. It is never redisplayed on this page.</p>
 
     <button type="submit">Sign in</button>
   </form>

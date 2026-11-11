@@ -93,7 +93,7 @@
 
   <section class="action-panel" aria-labelledby="route-actions-heading">
     <h2 id="route-actions-heading">Route Status Actions</h2>
-    <p class="muted">These actions update local route metadata only. They do not call upstream providers, change adapters, pricing, or FX data.</p>
+    <p class="muted" id="route-detail-actions-help">These actions update local route metadata only. They do not call upstream providers, change adapters, pricing, or FX data. The audit reason records why you enabled or disabled this route.</p>
     <div class="action-grid">
       <div class="action-card">
         <h3>Enable</h3>
@@ -102,7 +102,7 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off">
+            <input name="reason" required autocomplete="off" aria-describedby="route-detail-actions-help">
           </label>
           <button type="submit">Enable route</button>
         </form>
@@ -118,10 +118,10 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off">
+            <input name="reason" required autocomplete="off" aria-describedby="route-detail-actions-help">
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="confirm_disable" value="true" required>
+            <input type="checkbox" name="confirm_disable" value="true" required aria-describedby="route-detail-actions-help">
             <span>I understand matching requests may stop resolving.</span>
           </label>
           <p class="warning-text">Disabling this route can make matching /v1 model requests fail until another enabled route matches.</p>

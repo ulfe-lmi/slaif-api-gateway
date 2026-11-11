@@ -1971,3 +1971,401 @@ defaults, outputs, and honest offline actor/reason provenance unchanged.
 The final 219 installed whole-GUI gate remains open; no
 installed-qualification, live-provider, or production claim follows from
 any result above.
+
+## 219-a GUI completion gate: whole-GUI field guidance, calibration output,
+and the final installed workflow (objective 219, new PR, 2026-11-11)
+
+### What 219-a completes
+
+219-a is the final approved stage of the 207–219 GUI parity and field-
+guidance round. It adds NO new product endpoints, schema, migration,
+dependency, model/client/provider adapter, accounting, permissions, or
+content-retention behavior. It completes:
+
+- **Whole-GUI field guidance**: every visible editable/choice control in the
+  registered admin templates (plain text, number, password, textarea, file,
+  checkbox, date and filter controls, the enhanced record-choice pickers and
+  their no-JS fallback, conditional groups, advanced forms, and login) now
+  carries a readable label plus concise adjacent help linked through a unique
+  ID and `aria-describedby` to the ACTUAL visible control after enhancement.
+  Hidden CSRF/integrity values, submit controls, and table-header sort links
+  are excluded. The durable accounting lives in the existing usability
+  inventory module (extended in place; its strict known-reference selector,
+  table, and wrapper baseline guards are preserved).
+- **Calibration JSON output convenience**: the calibration preview page now
+  serves a private, bounded, no-store/no-sniff download of the EXISTING typed
+  CalibrationSummaryService summary/proposal with CLI-compatible semantics
+  and exact machine units. The download re-runs the same
+  key/time/multiplier/auth/CSRF gates and input validation, exposes no key
+  material, content, replay identifier, or provider credential, and rotates
+  no displayed form token, and writes nothing.
+- **Bounded interaction/visual consolidation**: key policy source before the
+  long guided groups (complete document disclosed together, inactive guided
+  controls compacted, strict single-source submission and no-JS path
+  unchanged); model explanation via the known-model picker AND manual unknown
+  model entry; coherent clone validity groups (exact seconds, UTC); full
+  reviewed batch membership in a keyboard/no-JS disclosure; fixed useful
+  setup help for an invalid public gateway URL/readiness prerequisite;
+  routing priority direction and media-estimation ceilings explained with
+  current bounds; the accepted 217 catalog layout retained; and the 218
+  account forms retained unchanged by 219 and revalidated at the current
+  head (exact nonempty/128-char bounds, all confirmations; the
+  twelve-character recommendation remains advice, not a password policy).
+
+### ONE final installed whole-GUI workflow (the 219 gate)
+
+The gate is a single opt-in integration workflow
+(`tests/integration/test_gui_parity_installed_workflow.py`, run only under
+`RUN_GUI_PARITY_INSTALLED_WORKFLOW=1`) that proves the FINAL installed code,
+not an editable checkout:
+
+- The selected wheel's complete application payload is proven identical to
+  the final source; the API AND the application Celery worker run from the
+  owned venv's INSTALLED package in an owned directory outside the checkout
+  with PYTHONPATH unset (module origins asserted to the installed site-
+  packages, never the source tree); the product import origins for both API
+  and worker are verified installed, while test fixtures may import from
+  source.
+- One NEW owned, labeled, loopback-bound, tmpfs-backed PostgreSQL 16 and one
+  NEW owned labeled loopback Redis 7 (reused from the accepted
+  `owned_pg_url`/`owned_redis_url` fixtures) are verified BEFORE use.
+- Strictly SYNTHETIC provider (a loopback mock upstream) and SMTP (a local
+  sink) fixtures are used; no real provider, provider secret, or live email
+  recipient is contacted. A fictional pre-existing state is seeded as SETUP
+  only; an operation result is never seeded and claimed as browser-produced.
+- Real authenticated HTTP plus real Chromium drive every G01–G18 row and the
+  calibration row to a persisted/audit outcome (redirect destination plus
+  the stored/audited effect, not just a 200/303 or a visible link): G01
+  provider unrestricted/list/deny-all plus configuration create/update/
+  export round trip; G02–G03 existing-key rate change and effective/source/
+  model explanation (no inference, no counter reset); G04 reviewed clone to
+  an independent new key; G05 reviewed batch with safe repeat; G06–G07
+  reviewed partial route config and provider clear/prepare/activate; G08/G16
+  content-free diagnostics and safe config/profile/version identity; G09
+  eligible same-key replay inspect/extend; G10 reviewed module upgrade,
+  module rollback, AND data-profile migration with exact before/after pins;
+  G11/G13/G18 grouped usage/live-burn, safe export, filter-preserving
+  paging/sort/ordinals, reviewed pricing disable, effective FX lookup; G12
+  email delivery lifecycle, explicit eligible failed retry, and bounded SMTP
+  test to the owned sink; G14 the four accounting candidate/recovery
+  families through the reviewed UI with authoritative stored outcomes; G15
+  the sealed catalog-refresh workflow through the REAL application worker
+  (proposal generation with configured non-USD FX and exact converted
+  amounts, strict import preview, collect → review → verify/export baseline →
+  reviewed atomic apply → authoritative status/safe repeat); G17 superadmin
+  account list/create/reset with persisted actor/reason/session
+  consequences; and the calibration JSON download plus same-page confirmed
+  template creation.
+- Representative retained legacy record/key creation, lifecycle/rotation,
+  quotas/lazy waiting/external tools, discovery/import, calibration/template
+  issue, audit/export, and login/logout are exercised; representative
+  unauthorized, wrong-CSRF/session/actor, tampered/expired/stale review,
+  validation-recovery, and secret-canary negatives are asserted and
+  distinguished from real success.
+
+### Focused test evidence (owned fixtures, honest labels)
+
+- Focused unit module
+  `tests/unit/test_admin_gui_completion_219.py` (NEW): the changed
+  calibration/rendering/guidance seams - the exact-unit calibration JSON
+  projection/serialization law, the safe no-store/non-rotating download
+  gates and credential/content-alias refusal, the whole-field linked-help
+  render audit (real rendered associations, uniqueness, validation recovery,
+  no-JS), and the visual-consolidation render contexts. Executed
+  2026-11-11 09:00 UTC as part of the exact unit-list command below:
+  6/6 tests of this module passed with actual pytest exit 0 (JUnit
+  /tmp/slaif219/junit-unitlist-219-final.xml).
+- The order's exact changed-component unit list (219 module + the existing
+  usability inventory and SLAIF design guards + record-choices + calibration
+  summary service + CLI calibration + OAP governance): 240/240 tests
+  passed, actual pytest exit 0, 2026-11-11 09:00 UTC (per-module: 219
+  module 6, usability inventory 124, SLAIF design 12, record-choices 78,
+  calibration summary 6, CLI calibration 5, OAP governance 9); JUnit
+  /tmp/slaif219/junit-unitlist-219-final.xml.
+- Real-Chromium Playwright module
+  `tests/browser/test_admin_gui_completion_219.py` (NEW; real uvicorn +
+  owned PG; no Redis/Celery): focused real-browser conditional help,
+  keyboard-only, no-JS, and desktop/narrow (about 420 px) rendered states
+  for the guidance, calibration download, and consolidation surfaces.
+  5/5 tests passed, 0 skipped, actual pytest exit 0, 2026-11-11 08:06 UTC
+  (real Chromium against the final product code committed 2026-11-11
+  03:03 UTC); JUnit /tmp/slaif219/junit-browser-219.xml.
+- The ONE final installed workflow (the 219 gate) under
+  `RUN_GUI_PARITY_INSTALLED_WORKFLOW=1`, run ONCE against FINAL installed
+  code with zero skipped/missing outcomes: 17/17 tests passed,
+  0 skipped, actual pytest exit 0 (2026-11-11 09:31 UTC; real uvicorn +
+  real solo Celery worker in the wheel's own venv, owned PG16/Redis7,
+  synthetic provider/SMTP only); JUnit
+  /tmp/slaif219/junit-installed-workflow.xml.
+  (actual wheel hash, source commit/tree, package version, and the API/worker
+  module origins are named in the immutable 219-a report).
+
+These are final-code installed-qualification evidence for the local gate, not
+release, deployment, production, live-provider, or live-mail claims; the
+operator-only exceptions remain explicit. The final 219 installed whole-GUI
+gate is closed by the 219-a final installed qualification; no universal-
+compatibility or release-readiness claim follows from any result above.
+
+## 219-b GUI completion repair: calibration export boundary, guidance
+completion, and installed legacy outcomes (objective 219, SAME PR #376,
+2026-11-11)
+
+### What 219-b repairs on the same PR (no new scope, no 220+ deferral)
+
+- **Calibration JSON export boundary**: the download refuses the WHOLE
+  artifact (fixed safe 400, no echo, unchanged CLI-compatible shape) when
+  any nested canonical string is a known incoming authentication alias or
+  recognized complete credential material, and refuses oversize output at
+  the finite 1 MiB local ceiling (explicit refusal, never truncation).
+  Success and refusal responses - including the malformed-key early 404 -
+  are private no-store/no-cache and nosniff. Auth/status/non-rotation and
+  the same-page confirmed template creation are unchanged.
+- **Guidance/interaction completion**: the shared record-choice macro
+  links the control's own help from the unnamed menu-search input as well
+  as the visible main field (single-value pickers); the explain-model
+  control is the shared searchable known-model picker with its own linked
+  help; the key-create document-mode disclosure is corrected (the document
+  group is shown in document mode, hidden in guided mode, with the
+  inactive guided sections compacted); the compatibility readiness
+  surface renders fixed useful setup direction (invalid
+  `PUBLIC_BASE_URL` included, no exception echo) while the canonical URL
+  gates are preserved.
+- **Usage JSON export audit scope projection**: a key-scoped export's
+  audit row records the exact scoped record UUID as top-level
+  `scope_gateway_uuid`; the shared sanitizer's removal of the nested
+  `filters.gateway_key_id` (key-named fields are sensitive and never
+  exempted) is intentional and unchanged - no global sanitization,
+  AuditRepository, schema, accounting, permission, or refusal change.
+- **Demonstrated CI consumer repairs**: the 209 batch form-page oracle
+  (main + menu-search control associations, unique help definition), the
+  two 207 create document-mode consumers (product toggle), and the 219
+  keyboard external-tool submit wait (waits on the actual target POST
+  response and the resulting navigation/flash; keyboard Enter and the
+  persisted audit outcome preserved).
+- **Rendered all-field guidance completion**: root's isolated real-Jinja/
+  CSS/JS audit of the ACTUAL rendered pages found 11 visible entry
+  controls without a resolving description in each rendered state (create
+  guided 57 controls; standard AND trusted detail 75 each): the two
+  unnamed older-provider/model search inputs, the six
+  `{create,detail}-policy-{providers,endpoints,models}-{available,selected}`
+  dual selects, and the dynamic `{create,detail}-chat-streaming-live-burn-*`
+  enabled/cost-margin/token-margin fields. The shared
+  `keys/_policy_selector.html` partial now associates every one of its
+  controls with the existing caption help via stable prefixed IDs (no new
+  copy, no visual churn, no new component), and the dynamic live-burn
+  controls in BOTH the create and detail templates reference their
+  existing hint help. The source-structure inventory no longer skips
+  unnamed or Jinja-named controls (and filters hidden/readonly/submit,
+  matching the rendered definition), a new rendered whole-field audit in
+  the existing 219 unit module requires EVERY visible editable/choice
+  control on the real rendered create page (guided AND document policy
+  source states) and on both standard and trusted detail pages to resolve
+  its description to a defined non-empty element, and the 219 browser
+  module now runs the same whole-control sweep in the real DOM with
+  computed-CSS visibility (details disclosures opened) on create (both
+  states) and both detail pages. Field names, values, layout, and Core
+  semantics are unchanged. Root's independent re-audit of the corrected
+  markup passes: 57/75/75 controls, ZERO missing resolving descriptions,
+  ZERO duplicate IDs in all three rendered states (scoped
+  fake-authorized-ASGI + isolated real-Chromium evidence, no DB/server/
+  network). The current guides' false assertion that the 218 account
+  prose was shortened is corrected: the account templates were unchanged
+  by 219; their purpose/consequence guidance is retained and revalidated.
+- **Installed workflow legacy outcomes and fixture corrections**: G11
+  distinct `prompt_tokens`/`completion_tokens` export columns, exact
+  raw-HTML group/FX oracles, the honest G10 non-rotation probe (pre-
+  download token accepted by the action gate after the artifact downloads,
+  read-only plain-route plan, no Codex-route configuration parity claim),
+  the legacy lifecycle scenario on the independent still-priced nano
+  model (the G18 disabled gpt-4.1-mini rule state is kept), real rotation
+  material invalidation (old bearer accepted before, refused with 403
+  permission_error after; replacement bearer accepted - local
+  /v1/models, no provider call), the legacy provider discovery with
+  explicit insecure-HTTP confirmation, the enable acknowledgement, and the
+  default `provider/upstream` public-model naming, the pre-operation
+  exactly-one-new-key baselines, the raw-client logout bounce, the fence-
+  free administrable batch plan target, and the fixture's wheel-name
+  correction (the distribution-name stem, PEP 503 normalized) so the
+  default artifact candidate can actually match while the mandatory
+  source/wheel/installed payload byte checks gate every reuse.
+
+### Focused evidence (owned fixtures, honest labels)
+
+- Focused unit batch (219, 209, 214, 207, create-templates,
+  actions-templates, 212): 265/265 passed, 0 failed, 0 skipped,
+  PYTEST_EXIT=0, 89.421 s (2026-11-11 14:24 UTC); log SHA256
+  99f2b4a7cdafe75ac1d99d5261cff264a675b3ac6d76447f6ea8a0c164143d39,
+  JUnit SHA256 2bb3bae919fe09e7e70cdc5a8f54fb8875727dfacdc1427909c9e6b63e5fab6d
+  (/tmp/slaif219/junit-unit-batch-219b-final.xml).
+- Scoped Ruff over ALL 14 PR-changed Python files: RUFF_EXIT=0 (log
+  SHA256 a6f0dbc8994bde1c14490ce37df741b06dc0b7012b391cfc3d1044eea877577f).
+- Focused unit batch after the rendered all-field correction (219, 209,
+  214, 207, create-templates, actions-templates, 212, table-rows,
+  inventory, keys-routes, key-create-routes): 461/461 passed, 0 failed,
+  0 skipped, PYTEST_EXIT=0, 112.598 s (2026-11-11 15:00 UTC); log SHA256
+  60e261e73aaab08d190ed462883327434911d5ffa65bd306ecd42c25c01e1042,
+  JUnit SHA256
+  c057162d7dc35c246ef6b6869cea6a721197692c4a747f64644d3f3dd3534ac5
+  (/tmp/slaif219/junit-unit-batch-219b-2.xml). The actions-templates
+  disabled-live-burn oracle was adapted to the actual DOM (the dynamic
+  margin inputs now carry their stable ids and the linked live-burn
+  help), preserving the value/inputmode/disabled guarantees.
+- Docs checks (asof, contract-drift, inventory, logo, product-scope,
+  rc2-feature-scope) after the guide corrections: 59/59 PYTEST_EXIT=0
+  (log SHA256 856d14a0981a4d175901614671ebd3910ed7eb34748e6e56ceb35def6097427e).
+- Scoped Ruff over ALL 15 PR-changed Python files at the final head:
+  RUFF_EXIT=0 (log SHA256
+  a6f0dbc8994bde1c14490ce37df741b06dc0b7012b391cfc3d1044eea877577f).
+- Real-Chromium DIRECT-EXIT receipts at the rendered-correction head
+  (219 create whole-field sweep in both policy-source states, 219
+  trusted AND standard detail whole-field sweeps, 207
+  `test_create_form_help_and_provider_tri_state`, 207
+  `test_create_document_mode_persists_canonical_policy`): 4/4 passed, 0
+  failed, 0 skipped, PYTEST_EXIT=0, 22.129 s (2026-11-11 15:03 UTC);
+  log SHA256 42cca89486381255232af0426b555460d1b5a8fc344022b07a7c2ac360ded352,
+  JUnit SHA256
+  25fd7105fd687d81b54715f342c2492d00feb5e37f200b5a03dacf477172328a
+  (/tmp/slaif219/junit-browser-render-219b.xml).
+- Real-Chromium affected consumers at 2ee9cf06 (207
+  `test_create_form_help_and_provider_tri_state`, 207
+  `test_create_document_mode_persists_canonical_policy`, 219
+  `test_key_detail_linked_help_and_keyboard_ext_tool_update`): observed
+  completion with passing dots and no failures in the local runs
+  (2026-11-11 13:46-13:47 UTC). These local receipts were `pytest | tail`
+  sessions without a captured pytest status file: they are observed
+  completion, not a direct-exit receipt; the final-head CI browser job
+  (retried after an InstallChromium infrastructure failure) provides the
+  authoritative direct qualification.
+- Focused installed debug selections (product head 2ee9cf06): batch
+  00/01/02/06/09/10 6/6 PYTEST_EXIT=0 (2026-11-11 13:49 UTC, JUnit
+  /tmp/slaif219/junit-installed-batch1-219b.xml) and batch
+  01/06/10/15/15b/16/17 7/7 PYTEST_EXIT=0 (2026-11-11 14:16 UTC, JUnit
+  /tmp/slaif219/junit-dbg-b6-219b.xml). Intermediate debug iterations
+  (fixture/oracle corrections, all test-only) are recorded in the debug
+  logs and are not repeated.
+- Reused accepted component evidence at its exact scope (unchanged
+  backend surfaces, 207-218 unit/browser/installed receipts, and the good
+  219-a outcomes): cited in the immutable 219-b report, not repeated.
+
+-### Installed whole-GUI workflow receipts (the 219 gate, 219-b)
+
+Exact command per the order (the final run used the
+`junit-installed-workflow-219b-final2.xml` receipt path):
+
+```bash
+env -u DATABASE_URL -u TEST_DATABASE_URL -u TEST_REDIS_URL \
+  RUN_GUI_PARITY_INSTALLED_WORKFLOW=1 \
+  /tmp/slaif216-qualification-venv/bin/python -m pytest \
+  tests/integration/test_gui_parity_installed_workflow.py \
+  -q -p no:cacheprovider --junit-xml=/tmp/slaif219/junit-installed-workflow-219b*.xml
+```
+
+**Intermediate receipt (superseded for product scope).** Before the
+rendered all-field guidance correction, the same workflow passed once at
+product head 2ee9cf06: 19/19 tests, 0 skipped/failed/errors,
+PYTEST_EXIT=0, suite 42.998 s (2026-11-11 14:19 UTC), run HEAD
+b327e359d04ea96a64e78bd83dc394074be4a051 (docs/fixture-only on top of the
+product head; `git diff 2ee9cf06 b327e359 -- app/` empty), wheel
+`slaif_api_gateway-0.1.0-py3-none-any.whl` SHA256
+a0657a78feee5bb13bc6ab3b313fc9228d70508c55249177e86f73c4ee3e7356 (built
+from the pristine product head during focused debugging and reused under
+the workflow's payload byte checks). Log SHA256
+458276376847b45c351023eac171146fa5ccb0d31fc1357849e76a8da976d19e, JUnit
+SHA256 8d226ad7e54c38649aa030ec5c9c7fe5f620776718ced355abf4ee1893abfcf2.
+This is valid PARTIAL evidence for that code: the rendered whole-field
+description requirement was not yet covered by its tests.
+
+**FINAL receipt (the 219-b gate).** The demonstrated rendered-audit
+defect justified exactly one more complete installed run against the
+actually updated final payload:
+
+- Result: 19/19 tests passed, 0 skipped, 0 failed, 0 errors,
+  PYTEST_EXIT=0, suite 69.832 s (2026-11-11 15:05 UTC; the longer time
+  includes the justified wheel rebuild for the changed product bytes).
+  Log SHA256
+  9dc7f8010a6aa459985ecad8ba07ac94c1ee0ca0b1f0230c3ae464bc5019cd64,
+  JUnit SHA256
+  a5dcb7bb8de0ad0b9eadd28f2bf119d8ea5fb354e0b36fa7fd877985c35a6cef
+  (/tmp/slaif219/junit-installed-workflow-219b-final2.xml).
+- Source identity at the run: commit
+  34cbf03078a47ebee5a52faf5bd00a1188ec1216, tree
+  ca720571bc7ddd26e5fc7bda345b3f44ddc30b7b - the FINAL product head
+  (rendered all-field guidance correction; no product change after it).
+- Wheel: `slaif_api_gateway-0.1.0-py3-none-any.whl` (version 0.1.0),
+  REBUILT by the run from the pristine final head (product bytes changed
+  since the intermediate wheel - a justified build, not a receipt-only
+  rerun), SHA256
+  8a364a97ee70610c3ccfa569246b01bbe93ce50588141d63b1f8cda42e6e8e06
+  (2,325,829 bytes); the workflow's own source/wheel/installed payload
+  byte checks verified it before use.
+- Installed origins: API and worker import from
+  /tmp/slaif219/installed-workflow/venv/lib/python3.12/site-packages/
+  (`slaif_gateway/__init__.py`, `slaif_gateway/workers/celery_app.py`),
+  outside the checkout, PYTHONPATH unset; packaged templates/assets match
+  the selected installed payload (asserted by the workflow). Honest test-
+  environment extra: `packaging` 26.3 installed in the owned venv for the
+  real Celery worker's kombu Redis transport soft-import (not part of the
+  wheel's hard dependency closure).
+- Owned labeled loopback PostgreSQL 16 (tmpfs) and Redis 7; strictly
+  synthetic provider (loopback mock) and SMTP (local sink) fixtures;
+  every G01-G18 row, the calibration row, the legacy lifecycle outcomes,
+  and the negative matrix run to persisted/audit outcomes.
+
+These are final-code installed-qualification evidence for the local gate,
+not release, deployment, production, live-provider, or live-mail claims;
+the operator-only exceptions remain explicit. The 219 installed whole-GUI
+gate is closed by this 219-b final installed qualification (superseding
+the 219-a final-head claim, whose build-source provenance is corrected in
+the immutable 219-b report).
+
+
+## 219-c Chromium installation repair (same PR #376, 2026-11-11)
+
+The final 219-b head's other nine checks passed. Three hosted browser jobs
+failed **before tests** in `playwright install --with-deps chromium`: apt
+could not resolve Ubuntu archive/security hosts while fetching nine extra
+font/Xfont packages. The logs show all 26 queried runtime packages already
+installed; Chromium had not yet been downloaded. Those jobs do not qualify
+the browser suite. The earlier conclusion that delivery required waiting
+for external recovery was premature: browser-only installation had not been
+tried.
+
+At the human's explicit request, root executes this bounded OAP continuation
+directly. The browser job now runs `python -m playwright install chromium`,
+then launches the actual downloaded browser and renders/asserts a minimal
+page before the unchanged full `python -m pytest tests/browser -m playwright`.
+Normal Playwright host validation remains enabled. Missing runtime libraries,
+installation errors, launch errors, and test failures still fail CI. No
+runner/image replacement, DNS rewrite, dependency change, test skip, or error
+suppression was introduced. The job uses the hosted image's existing runtime
+libraries instead of requiring extra font bundles before downloading Chromium.
+
+Local installation proof: a fresh owned browser cache at
+`/tmp/slaif219/root-chromium-install`, Playwright 1.65.0, Chromium
+158.0.8127.18/build 1254, FFmpeg 1013 and matching headless shell downloaded
+successfully (exit 0); real headless launch and title/content assertions
+returned `CHROMIUM_INSTALL_OK 158.0.8127.18` (exit 0) on Ubuntu 26.04.1. This
+is local installation/rendering proof; the hosted-runner full browser check
+remains a required final-head gate and is not claimed passed here.
+
+Application bytes are unchanged from qualified product `34cbf030`; accepted
+461 focused unit cases, four native Chromium cases, the final 19-case installed
+workflow and earlier component evidence retain their exact scope. No app
+rebuild or repeated installed workflow is needed for this CI-only repair.
+Ordinary application upgrade instructions remain unchanged: restart/recreate
+application/assets, no schema or existing-key migration. No release or
+production-deployment approval follows. The immutable 219-c report records
+publication and the exact focused verification receipts; root records final
+GitHub CI, guarded merge and actual-main results separately.
+
+Focused 219-c publication checks: the exact extracted CI installation/preflight
+script passed locally (`PREFLIGHT_EXIT=0`); system PyYAML parsed the workflow,
+and structural comparison confirmed that only the browser installation step
+changed and the complete browser test command is identical. OAP governance
+plus the affected documentation checks passed **53/53**, zero failures, errors
+or skips, direct `PYTEST_EXIT=0` (receipt
+`/tmp/slaif219/root-219c-focused.xml`). `git diff --check` passed. Protected
+local file hashes and all prior immutable 219-a/219-b order/report hashes
+were rechecked unchanged. The first YAML probe used the qualification venv,
+which lacks PyYAML; it performed no validation. Validation then succeeded
+using the existing system PyYAML 6.0.3, without installing dependencies.

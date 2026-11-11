@@ -22,21 +22,22 @@
   </header>
 
   <form class="filter-bar compact" method="get" action="/admin/audit" id="audit-filter">
-    {{ record_choice("action", "audit_action", "Action", options=choices.action, multi=true, multi_value=filters.action|join("\n"), allow_new=true, help="Matches any selected value", input_id="audit-action") }}
-    {{ record_choice("target_type", "audit_target_type", "Target type", options=choices.target_type, multi=true, multi_value=filters.target_type|join("\n"), allow_new=true, help="Matches any selected value", input_id="audit-target-type") }}
-    {{ record_choice("target_id", "audit_target", "Target ID", options=choices.target_id, multi=true, multi_value=filters.target_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="audit-target-id", depends_on="audit-target-type", depends_param="target_type") }}
-    {{ record_choice("request_id", "request_id", "Request ID", options=choices.request_id, multi=true, multi_value=filters.request_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="audit-request-id") }}
-    {{ record_choice("actor_admin_id", "audit_actor", "Actor admin ID", options=choices.actor_admin_id, multi=true, multi_value=filters.actor_admin_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="audit-actor") }}
+    {{ record_choice("action", "audit_action", "Action", options=choices.action, multi=true, multi_value=filters.action|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="audit-action", help_id="audit-help-action") }}
+    {{ record_choice("target_type", "audit_target_type", "Target type", options=choices.target_type, multi=true, multi_value=filters.target_type|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="audit-target-type", help_id="audit-help-target-type") }}
+    {{ record_choice("target_id", "audit_target", "Target ID", options=choices.target_id, multi=true, multi_value=filters.target_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND). Choices follow the selected target type.", input_id="audit-target-id", depends_on="audit-target-type", depends_param="target_type", help_id="audit-help-target-id") }}
+    {{ record_choice("request_id", "request_id", "Request ID", options=choices.request_id, multi=true, multi_value=filters.request_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="audit-request-id", help_id="audit-help-request-id") }}
+    {{ record_choice("actor_admin_id", "audit_actor", "Actor admin ID", options=choices.actor_admin_id, multi=true, multi_value=filters.actor_admin_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="audit-actor", help_id="audit-help-actor") }}
     <label>
       Start
-      <input name="start_at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z">
+      <input name="start_at" value="{{ filters.start_at }}" autocomplete="off" placeholder="2026-01-01T00:00:00Z" aria-describedby="audit-help-filter">
     </label>
     <label>
       End
-      <input name="end_at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z">
+      <input name="end_at" value="{{ filters.end_at }}" autocomplete="off" placeholder="2026-01-31T23:59:59Z" aria-describedby="audit-help-filter">
     </label>
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="audit-help-filter">Filters narrow the audit log: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Start and End are UTC ISO timestamps bounding when the audit row was created; blank means no bound on that side.</p>
 
   <section class="action-panel" aria-labelledby="audit-export-heading">
     <h2 id="audit-export-heading">CSV export</h2>
@@ -54,16 +55,17 @@
       <input type="hidden" name="end_at" value="{{ filters.end_at }}">
       <label>
         Row limit
-        <input name="limit" value="{{ export_max_rows }}" inputmode="numeric">
+        <input name="limit" value="{{ export_max_rows }}" inputmode="numeric" aria-describedby="audit-help-export">
       </label>
       <label>
         Audit reason
-        <input name="reason" required autocomplete="off" placeholder="Reason for this export">
+        <input name="reason" required autocomplete="off" placeholder="Reason for this export" aria-describedby="audit-help-export">
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" name="confirm_export" value="true" required>
+        <input type="checkbox" name="confirm_export" value="true" required aria-describedby="audit-help-export">
         I understand this export is audited and contains audit metadata only.
       </label>
+      <p class="field-help" id="audit-help-export">The row limit caps this export (maximum {{ export_max_rows | num }} rows). The audit reason is required and recorded with the action; the confirmation acknowledges the audited, audit-metadata-only CSV.</p>
       <p class="warning-text">Review exported metadata handling before sharing it outside the operator group.</p>
       <button type="submit">Export audit CSV</button>
     </form>
@@ -72,7 +74,7 @@
   <div class="table-toolbar" aria-label="Audit log rows rows">
     <span class="rows-shown" id="audit-rows-shown">{{ audit_logs|length }} rows shown</span>
     <label>Rows
-      <select name="limit" id="audit-limit" form="audit-filter">
+      <select name="limit" id="audit-limit" form="audit-filter" aria-describedby="audit-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -82,6 +84,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="audit-help-rows">Rows per page for the audit table (10 to 200). This paging choice never changes the CSV export row limit.</p>
   <div class="table-wrap" tabindex="0" role="region" aria-label="Audit log rows">
     <table data-sortable data-ordinal-offset="{{ page.offset }}">
       <thead>

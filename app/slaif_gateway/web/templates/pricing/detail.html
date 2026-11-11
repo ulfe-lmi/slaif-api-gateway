@@ -67,14 +67,14 @@
 
   <section class="action-panel" aria-labelledby="pricing-actions-heading">
     <h2 id="pricing-actions-heading">Pricing Actions</h2>
-    <p class="warning-text">Pricing changes affect future quota reservation and accounting. If no alternate rule applies, disabled pricing can make matching future requests fail closed.</p>
+    <p class="warning-text" id="pricing-detail-actions-help">Pricing changes affect future quota reservation and accounting. If no alternate rule applies, disabled pricing can make matching future requests fail closed. The audit reason records why you enabled or disabled this rule.</p>
     <div class="management-grid">
       {% if not pricing_rule.enabled %}
       <div class="action-card">
         <h3>Enable pricing rule</h3>
         <form method="post" action="/admin/pricing/{{ pricing_rule.id }}/enable">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label>Audit reason<input name="reason" required autocomplete="off"></label>
+          <label>Audit reason<input name="reason" required autocomplete="off" aria-describedby="pricing-detail-actions-help"></label>
           <button type="submit">Enable</button>
         </form>
       </div>
@@ -90,9 +90,9 @@
         <h3>Disable pricing rule</h3>
         <form method="post" action="/admin/pricing/{{ pricing_rule.id }}/disable">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label>Audit reason<input name="reason" required autocomplete="off"></label>
+          <label>Audit reason<input name="reason" required autocomplete="off" aria-describedby="pricing-detail-actions-help"></label>
           <label class="checkbox-row">
-            <input type="checkbox" name="confirm_disable" value="true" required>
+            <input type="checkbox" name="confirm_disable" value="true" required aria-describedby="pricing-detail-actions-help">
             <span>I understand matching future requests may fail closed if no alternate pricing rule applies.</span>
           </label>
           <button type="submit" class="danger">Disable</button>

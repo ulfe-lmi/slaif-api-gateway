@@ -38,7 +38,7 @@
     <section class="action-panel" aria-labelledby="openai-assisted-routes-source-heading">
       <h2 id="openai-assisted-routes-source-heading">Sources And Scope</h2>
       <div class="form-grid">
-        <label>Models source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off"></label>
+        <label>Models source URL<input name="source_url" value="{{ form.source_url }}" autocomplete="off" aria-describedby="oa-routes-help-source"></label>
         {{ record_choice(
             "proposal_model", "model", "Proposal model",
             options=choices.proposal_model or none,
@@ -47,14 +47,17 @@
             allow_new=true,
             nojs_value=form.proposal_model,
             help="Upstream model used for the proposal; new values stay editable.",
+            help_id="oa-routes-help-proposal",
         ) }}
         <label>
           Endpoint scope
-          <select name="endpoint_scope">
+          <select name="endpoint_scope" aria-describedby="oa-routes-help-scope">
             <option value="chat_completions" {% if form.endpoint_scope == "chat_completions" %}selected{% endif %}>Implemented Chat Completions only</option>
           </select>
         </label>
       </div>
+      <p class="field-help" id="oa-routes-help-source">Public page fetched during proposal generation. Only the configured visible sources below are accepted; model choices may also come from local routes, pricing, and usage history.</p>
+      <p class="field-help" id="oa-routes-help-scope">Endpoint scope limits which endpoint family the route proposal covers; implemented Chat Completions is the only current scope.</p>
       <p class="muted small">Visible sources: {% for source_url in source_urls %}<span>{{ source_url }}</span>{% if not loop.last %}, {% endif %}{% endfor %}</p>
     </section>
 
@@ -69,6 +72,7 @@
           allow_new=true,
           placeholder="e.g. gpt-* or gpt-4o",
           help="Known models from routes, pricing and usage history; typed globs/new values stay editable.",
+          help_id="oa-routes-help-include",
       ) }}
       {{ record_choice(
           "exclude_models", "model", "Exclude model IDs or globs",
@@ -79,11 +83,13 @@
           allow_new=true,
           placeholder="e.g. *-preview",
           help="Known models from routes, pricing and usage history; typed globs/new values stay editable.",
+          help_id="oa-routes-help-exclude",
       ) }}
       <label class="checkbox-label">
-        <input type="checkbox" name="acknowledge_proposal" value="true">
+        <input type="checkbox" name="acknowledge_proposal" value="true" aria-describedby="oa-routes-help-ack">
         I understand this is a proposal, not authoritative pricing or route truth.
       </label>
+      <p class="field-help" id="oa-routes-help-ack">Required. The generated proposal is a starting point for review, not authoritative pricing or route truth; nothing is applied until you review it and run the deterministic import preview.</p>
       <p class="muted small">Responses-only, embeddings-only, image-only, audio-only, moderation-only, realtime-only, batch-only, /v1/responses, and /v1/completions rows are excluded.</p>
       <button type="submit">Generate route proposal</button>
     </section>

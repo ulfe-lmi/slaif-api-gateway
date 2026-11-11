@@ -58,16 +58,17 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label>
           Start at (UTC)
-          <input type="datetime-local" name="start_at" value="{{ form.start_at|utc_datetime_local }}" step="60" autocomplete="off">
+          <input type="datetime-local" name="start_at" value="{{ form.start_at|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="calibration-inputs-help">
         </label>
         <label>
           End at (UTC)
-          <input type="datetime-local" name="end_at" value="{{ form.end_at|utc_datetime_local }}" step="60" autocomplete="off">
+          <input type="datetime-local" name="end_at" value="{{ form.end_at|utc_datetime_local }}" step="60" autocomplete="off" aria-describedby="calibration-inputs-help">
         </label>
         <label>
           Multiplier
-          <input name="multiplier" required value="{{ form.multiplier or '3' }}" autocomplete="off">
+          <input name="multiplier" required value="{{ form.multiplier or '3' }}" autocomplete="off" aria-describedby="calibration-inputs-help">
         </label>
+        <p class="field-help" id="calibration-inputs-help">Start and end are UTC datetimes (minute resolution) bounding the observed usage window of the calibration key. The multiplier (1.0 to 10.0) scales the observed maxima into the proposed strict participant limits.</p>
         <p class="warning-text">Multiplier must be between 1.0 and 10.0. Importantly, this is still a preview and creates no templates or participant keys.</p>
         <button type="submit">Preview strict participant policy</button>
       </form>

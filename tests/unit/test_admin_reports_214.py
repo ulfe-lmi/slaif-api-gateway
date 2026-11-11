@@ -91,6 +91,7 @@ from slaif_gateway.utils.admin_pagination import (
     build_page,
     page_params,
 )
+from slaif_gateway.utils.sanitization import sanitize_metadata_mapping
 from tests.unit.test_admin_key_actions_routes import _app, _settings
 
 GUI_USAGE_REPORT_SOURCE_MAX_ROWS = admin_reports.GUI_USAGE_REPORT_SOURCE_MAX_ROWS
@@ -1540,6 +1541,108 @@ def test_export_reason_alias_refused_no_echo(client, monkeypatch) -> None:
     )
     assert r.status_code == 400
     assert PREFIX_CANARY not in r.text
+
+
+def test_export_json_key_scope_audit_projection_sanitization_law(
+    client, monkeypatch
+) -> None:
+    """219-b: a key-scoped export records the exact scoped record UUID.
+
+    The shared audit sanitizer (drop_content_keys=True) intentionally
+    removes the nested ``filters.gateway_key_id`` because
+    ``is_sensitive_key("gateway_key_id")`` is True (key-named fields are
+    never exempted). The route therefore ALSO records the
+    already-parsed/validated UUID as a separate top-level
+    ``scope_gateway_uuid`` - a non-credential key the sanitizer
+    preserves - instead of silently dropping the scope proof. The raw
+    form value is never recorded; payload/alias/actor/count law is
+    unchanged.
+    """
+    key_id = uuid.UUID(int=11)
+    _patch_export(monkeypatch, [_export_row()])
+    audit = _FakeAuditCapture()
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin_reports.AuditRepository", lambda *a, **k: audit
+    )
+    r = client.post(
+        "/admin/reports/export",
+        data={
+            "csrf_token": CSRF,
+            "confirm_export": "1",
+            "reason": "  key-scoped review  ",
+            "gateway_key_id": str(key_id),
+            "limit": "5",
+        },
+    )
+    assert r.status_code == 200
+    # Canonical JSON payload/filter shape unchanged.
+    payload = r.json()
+    assert set(payload) == {"generated_at", "scope", "rows"}
+    assert payload["scope"]["filters"]["gateway_key_id"] == str(key_id)
+    assert len(audit.entries) == 1
+    entry = audit.entries[0]
+    raw = entry["new_values"]
+    # Route-level projection: only the parsed/validated UUID, verbatim.
+    assert raw["scope_gateway_uuid"] == str(key_id)
+    # Pre-sanitization filter metadata is the canonical shape (still
+    # carries the key-named field).
+    assert raw["filters"]["gateway_key_id"] == str(key_id)
+    # Persisted law: the SAME sanitizer AuditRepository applies removes
+    # the key-named nested field but preserves the non-credential
+    # projection, the actor, and the counts.
+    persisted = sanitize_metadata_mapping(raw, drop_content_keys=True)
+    assert "gateway_key_id" not in persisted["filters"]
+    assert persisted["scope_gateway_uuid"] == str(key_id)
+    assert persisted["row_count"] == 1
+    assert persisted["limit"] == 5
+    assert entry["admin_user_id"] == ADMIN_ID
+    assert entry["note"] == "key-scoped review"
+
+
+def test_export_json_unscoped_has_no_key_projection(client, monkeypatch) -> None:
+    _patch_export(monkeypatch, [_export_row()])
+    audit = _FakeAuditCapture()
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin_reports.AuditRepository", lambda *a, **k: audit
+    )
+    r = client.post(
+        "/admin/reports/export",
+        data={
+            "csrf_token": CSRF,
+            "confirm_export": "1",
+            "reason": "unscoped review",
+            "limit": "5",
+        },
+    )
+    assert r.status_code == 200
+    entry = audit.entries[0]
+    assert "scope_gateway_uuid" not in entry["new_values"]
+
+
+def test_export_json_key_scope_alias_refused_no_write(client, monkeypatch) -> None:
+    # Continuing alias-refusal/no-write law: a key-scope value that IS a
+    # valid UUID but matches a known incoming credential (cookie value)
+    # is refused before any output or persistence, with a fixed no-echo
+    # message. (A non-UUID value would instead trip the parse 400.)
+    _patch_export(monkeypatch, [_export_row()])
+    audit = _FakeAuditCapture()
+    monkeypatch.setattr(
+        "slaif_gateway.api.admin_reports.AuditRepository", lambda *a, **k: audit
+    )
+    cookie_value = str(uuid.UUID(int=42))
+    client.cookies.set("slaif_admin_session", cookie_value)
+    r = client.post(
+        "/admin/reports/export",
+        data={
+            "csrf_token": CSRF,
+            "confirm_export": "1",
+            "reason": "key-scoped review",
+            "gateway_key_id": cookie_value,
+        },
+    )
+    assert r.status_code == 400
+    assert cookie_value not in r.text
+    assert audit.entries == []
 
 
 # ----------------------------------------------------------------------

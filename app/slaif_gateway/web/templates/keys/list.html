@@ -27,20 +27,20 @@
   <form id="keys-filter" class="filter-bar keys-filters" method="get" action="/admin/keys">
     <label>
       Status
-      <select name="status">
+      <select name="status" aria-describedby="keys-help-filter">
         <option value="" {% if not filters.status %}selected{% endif %}>Any</option>
         <option value="active" {% if filters.status == "active" %}selected{% endif %}>Active</option>
         <option value="suspended" {% if filters.status == "suspended" %}selected{% endif %}>Suspended</option>
         <option value="revoked" {% if filters.status == "revoked" %}selected{% endif %}>Revoked</option>
       </select>
     </label>
-    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, multi=true, multi_value=filters.owner_email|join("\n"), allow_new=true, help="Matches any selected value", input_id="keys-owner-email") }}
-    {{ record_choice("public_key_id", "key_public_id", "Public key ID", options=choices.key_public_id, multi=true, multi_value=filters.public_key_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="keys-public-key-id") }}
-    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort, multi=true, multi_value=filters.cohort_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="keys-cohort") }}
-    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, multi=true, multi_value=filters.institution_id|join("\n"), allow_new=true, help="Matches any selected value", input_id="keys-institution") }}
+    {{ record_choice("owner_email", "owner_email", "Owner email", options=choices.owner_email, multi=true, multi_value=filters.owner_email|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="keys-owner-email", help_id="keys-help-owner-email") }}
+    {{ record_choice("public_key_id", "key_public_id", "Public key ID", options=choices.key_public_id, multi=true, multi_value=filters.public_key_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="keys-public-key-id", help_id="keys-help-public-key-id") }}
+    {{ record_choice("cohort_id", "cohort", "Cohort ID", options=choices.cohort, multi=true, multi_value=filters.cohort_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="keys-cohort", help_id="keys-help-cohort") }}
+    {{ record_choice("institution_id", "institution", "Institution ID", options=choices.institution_id, multi=true, multi_value=filters.institution_id|join("\n"), allow_new=true, help="Matches any selected value (OR within the field; fields combine with AND).", input_id="keys-institution", help_id="keys-help-institution") }}
     <label>
       Expired
-      <select name="expired">
+      <select name="expired" aria-describedby="keys-help-filter">
         <option value="" {% if filters.expired == "" %}selected{% endif %}>Any</option>
         <option value="true" {% if filters.expired == "true" %}selected{% endif %}>Yes</option>
         <option value="false" {% if filters.expired == "false" %}selected{% endif %}>No</option>
@@ -48,6 +48,7 @@
     </label>
     <button type="submit">Filter</button>
   </form>
+  <p class="field-help" id="keys-help-filter">Filters narrow the key list: within one field, rows match any selected value (OR); different fields combine with AND. Blank fields are unrestricted. Status is the key lifecycle state; Expired marks keys whose validity window has already passed.</p>
 
   {# 194-a R6: toolbar between filters and table. The visible Rows selector is
      form-associated with the GET filter form above (Filter applies it); a
@@ -56,7 +57,7 @@
   <div class="table-toolbar" aria-label="Key table rows">
     <span class="rows-shown" id="keys-rows-shown">{{ keys|length }} rows shown{% if filters.status or filters.owner_email or filters.public_key_id or filters.cohort_id or filters.institution_id or filters.expired %} &middot; <a href="/admin/keys?limit={{ filters.limit }}">Clear filters</a>{% endif %}</span>
     <label>Rows
-      <select name="limit" id="keys-limit" form="keys-filter">
+      <select name="limit" id="keys-limit" form="keys-filter" aria-describedby="keys-help-rows">
         {% for n in (10, 25, 50, 100, 200) %}
         <option value="{{ n }}" {% if filters.limit == n %}selected{% endif %}>{{ n }}</option>
         {% endfor %}
@@ -66,6 +67,7 @@
       </select>
     </label>
   </div>
+  <p class="field-help" id="keys-help-rows">Rows per page for the key table (10 to 200).</p>
 
   <div class="table-wrap" tabindex="0" role="region" aria-label="Gateway keys">
     <table data-sortable class="table-wide" data-ordinal-offset="{{ page.offset }}">

@@ -34,18 +34,18 @@
       <div class="form-grid">
         <label>
           Format
-          <select name="import_format">
+          <select name="import_format" aria-describedby="pricing-import-preview-help">
             <option value="auto" {% if form['format'] == "auto" %}selected{% endif %}>Auto</option>
             <option value="csv" {% if form['format'] == "csv" %}selected{% endif %}>CSV</option>
             <option value="json" {% if form['format'] == "json" %}selected{% endif %}>JSON</option>
             <option value="tsv" {% if form['format'] == "tsv" %}selected{% endif %}>TSV</option>
           </select>
         </label>
-        <label>Source label<input name="source_label" value="{{ form['source_label'] }}" autocomplete="off"></label>
-        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values"></label>
+        <label>Source label<input name="source_label" value="{{ form['source_label'] }}" autocomplete="off" aria-describedby="pricing-import-preview-help"></label>
+        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values" aria-describedby="pricing-import-preview-help"></label>
       </div>
-      <label>Paste CSV, JSON, or TSV<textarea name="import_text" rows="14" spellcheck="false">{{ form['import_text'] }}</textarea></label>
-      <p class="muted small">Use either upload or pasted content. Maximum {{ settings.PRICING_IMPORT_MAX_BYTES }} bytes and {{ settings.PRICING_IMPORT_MAX_ROWS }} rows. Money fields must be decimal strings.</p>
+      <label>Paste CSV, JSON, or TSV<textarea name="import_text" rows="14" spellcheck="false" aria-describedby="pricing-import-preview-help">{{ form['import_text'] }}</textarea></label>
+      <p class="muted small" id="pricing-import-preview-help">Format is Auto (detects CSV, JSON, or TSV) or an explicit choice. The source label tags the batch. Use either the uploaded file or the pasted content, not both; the preview validates in memory and stores nothing. Maximum {{ settings.PRICING_IMPORT_MAX_BYTES }} bytes and {{ settings.PRICING_IMPORT_MAX_ROWS }} rows. Money fields must be decimal strings.</p>
       <button type="submit">Preview import</button>
     </section>
   </form>
@@ -59,23 +59,23 @@
       <div class="form-grid">
         <label>
           Format
-          <select name="import_format">
+          <select name="import_format" aria-describedby="pricing-import-execute-help">
             <option value="auto" {% if form['format'] == "auto" %}selected{% endif %}>Auto</option>
             <option value="csv" {% if form['format'] == "csv" %}selected{% endif %}>CSV</option>
             <option value="json" {% if form['format'] == "json" %}selected{% endif %}>JSON</option>
             <option value="tsv" {% if form['format'] == "tsv" %}selected{% endif %}>TSV</option>
           </select>
         </label>
-        <label>Source label<input name="source_label" value="{{ form['source_label'] }}" autocomplete="off"></label>
-        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values"></label>
+        <label>Source label<input name="source_label" value="{{ form['source_label'] }}" autocomplete="off" aria-describedby="pricing-import-execute-help"></label>
+        <label>Upload file<input type="file" name="import_file" accept=".csv,.json,.tsv,text/csv,application/json,text/tab-separated-values" aria-describedby="pricing-import-execute-help"></label>
       </div>
-      <label>Paste CSV, JSON, or TSV<textarea name="import_text" rows="14" spellcheck="false">{{ form['import_text'] }}</textarea></label>
-      <label>Audit reason<input name="reason" value="{{ form.get('reason', '') }}" required autocomplete="off"></label>
+      <label>Paste CSV, JSON, or TSV<textarea name="import_text" rows="14" spellcheck="false" aria-describedby="pricing-import-execute-help">{{ form['import_text'] }}</textarea></label>
+      <label>Audit reason<input name="reason" value="{{ form.get('reason', '') }}" required autocomplete="off" aria-describedby="pricing-import-execute-help"></label>
       <label class="checkbox-label">
-        <input type="checkbox" name="confirm_import" value="true">
+        <input type="checkbox" name="confirm_import" value="true" aria-describedby="pricing-import-execute-help">
         I understand this will create pricing rows if every row validates.
       </label>
-      <p class="muted small">Execution re-parses this uploaded or pasted content server-side. Preview results, hidden normalized rows, and client-side classification are not trusted.</p>
+      <p class="muted small" id="pricing-import-execute-help">The server re-parses this uploaded or pasted content; preview results, hidden normalized rows, and client-side classification are not trusted. The source label tags the batch. The import is all-or-nothing: the audit reason and confirmation are required.</p>
       <button type="submit">Execute import</button>
     </section>
   </form>

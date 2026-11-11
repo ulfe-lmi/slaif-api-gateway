@@ -31,13 +31,14 @@
         <label class="policy-model-search">
           <span class="rc-name">Search older providers (server-side)</span>
           <input type="search" data-policy-provider-search autocomplete="off"
-                 placeholder="Type a provider slug or name to search ALL enabled providers">
+                 placeholder="Type a provider slug or name to search ALL enabled providers"
+                 aria-describedby="{{ selector_id_prefix }}-providers-available-help">
           <ul data-policy-provider-search-results role="listbox" hidden></ul>
         </label>
         <label>
           Available enabled providers
-          <span class="policy-selector-caption">Latest 100 enabled providers, newest first; older enabled providers are reachable through the search above.</span>
-          <select id="{{ selector_id_prefix }}-providers-available" multiple size="8" data-policy-available="providers">
+          <span class="policy-selector-caption" id="{{ selector_id_prefix }}-providers-available-help">Latest 100 enabled providers, newest first; older enabled providers are reachable through the search above.</span>
+          <select id="{{ selector_id_prefix }}-providers-available" multiple size="8" data-policy-available="providers" aria-describedby="{{ selector_id_prefix }}-providers-available-help">
             {% for choice in policy_catalog.provider_choices %}
             {% if choice.value not in policy_form_state.selected_provider_values %}
             <option value="{{ choice.value }}">{{ choice.label }}</option>
@@ -59,8 +60,8 @@
       <div class="policy-selector-pane">
         <label>
           Selected allowed providers
-          <span class="policy-selector-caption">Used only when both provider mode checkboxes are off. Stored providers that are disabled or older remain listed as <code>slug | manual entry</code>.</span>
-          <select id="{{ selector_id_prefix }}-providers-selected" multiple size="8" data-policy-selected="providers">
+          <span class="policy-selector-caption" id="{{ selector_id_prefix }}-providers-selected-help">Used only when both provider mode checkboxes are off. Stored providers that are disabled or older remain listed as <code>slug | manual entry</code>.</span>
+          <select id="{{ selector_id_prefix }}-providers-selected" multiple size="8" data-policy-selected="providers" aria-describedby="{{ selector_id_prefix }}-providers-selected-help">
             {% for option in policy_form_state.selected_provider_options %}
             <option value="{{ option.value }}">{{ option.label }}</option>
             {% endfor %}
@@ -79,15 +80,20 @@
       <p class="muted small">Keep catalog listing endpoints separate from model-backed generation endpoints.</p>
     </div>
     <label class="checkbox-row">
-      <input type="checkbox" name="allow_all_endpoints" value="true" {% if policy_form_state.allow_all_endpoints %}checked{% endif %} data-policy-toggle="endpoints">
+      <input type="checkbox" name="allow_all_endpoints" value="true" {% if policy_form_state.allow_all_endpoints %}checked{% endif %} data-policy-toggle="endpoints" aria-describedby="{{ selector_id_prefix }}-endpoint-mode-help">
       Allow all implemented endpoints
     </label>
+    <p class="field-help" id="{{ selector_id_prefix }}-endpoint-mode-help">
+      Checked, the key may use every implemented <code>/v1</code> endpoint and the endpoint selection below is ignored.
+      Unchecked, the explicit endpoint allow-list decides; <code>{{ models_endpoint }}</code> may be allowed alone, but
+      model-backed endpoints still require explicit models unless "Allow all models" is checked.
+    </p>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_endpoints %} policy-selector-disabled{% endif %}" data-policy-selector-group="endpoints">
       <div class="policy-selector-pane">
         <label>
           Available implemented endpoints
-          <span class="policy-selector-caption">Rendered from the locally implemented endpoint set.</span>
-          <select id="{{ selector_id_prefix }}-endpoints-available" multiple size="10" data-policy-available="endpoints">
+          <span class="policy-selector-caption" id="{{ selector_id_prefix }}-endpoints-available-help">Rendered from the locally implemented endpoint set.</span>
+          <select id="{{ selector_id_prefix }}-endpoints-available" multiple size="10" data-policy-available="endpoints" aria-describedby="{{ selector_id_prefix }}-endpoints-available-help">
             {% for choice in policy_catalog.endpoint_choices %}
             {% if choice.value not in policy_form_state.selected_endpoint_values %}
             <option value="{{ choice.value }}" data-model-backed="{{ 'true' if choice.is_model_backed else 'false' }}">{{ choice.label }}</option>
@@ -106,8 +112,8 @@
       <div class="policy-selector-pane">
         <label>
           Selected allowed endpoints
-          <span class="policy-selector-caption">Catalog-only endpoints and model-backed endpoints are kept separate here on purpose.</span>
-          <select id="{{ selector_id_prefix }}-endpoints-selected" multiple size="10" data-policy-selected="endpoints">
+          <span class="policy-selector-caption" id="{{ selector_id_prefix }}-endpoints-selected-help">Catalog-only endpoints and model-backed endpoints are kept separate here on purpose.</span>
+          <select id="{{ selector_id_prefix }}-endpoints-selected" multiple size="10" data-policy-selected="endpoints" aria-describedby="{{ selector_id_prefix }}-endpoints-selected-help">
             {% for option in policy_form_state.selected_endpoint_options %}
             <option value="{{ option.value }}">{{ option.label }}</option>
             {% endfor %}
@@ -129,21 +135,27 @@
       <p class="muted small">Selecting a route candidate adds its requested model token to the key policy. Duplicate model tokens are collapsed automatically.</p>
     </div>
     <label class="checkbox-row">
-      <input type="checkbox" name="allow_all_models" value="true" {% if policy_form_state.allow_all_models %}checked{% endif %} data-policy-toggle="models">
+      <input type="checkbox" name="allow_all_models" value="true" {% if policy_form_state.allow_all_models %}checked{% endif %} data-policy-toggle="models" aria-describedby="{{ selector_id_prefix }}-model-mode-help">
       Allow all models backed by enabled routes
     </label>
+    <p class="field-help" id="{{ selector_id_prefix }}-model-mode-help">
+      Checked, every model backed by an enabled route is allowed and the model selection below is ignored.
+      Unchecked, only the selected model tokens are allowed; selecting a route candidate adds its requested model token,
+      and duplicates are collapsed.
+    </p>
     <div class="policy-selector-grid{% if policy_form_state.allow_all_models %} policy-selector-disabled{% endif %}" data-policy-selector-group="models">
       <div class="policy-selector-pane">
         <label class="policy-model-search">
           <span class="rc-name">Search older models (server-side)</span>
           <input type="search" data-policy-model-search autocomplete="off"
-                 placeholder="Type a model token to search ALL enabled route models">
+                 placeholder="Type a model token to search ALL enabled route models"
+                 aria-describedby="{{ selector_id_prefix }}-models-available-help">
           <ul data-policy-model-search-results role="listbox" hidden></ul>
         </label>
         <label>
           Available route-backed model candidates
-          <span class="policy-selector-caption">Latest 100 enabled routes; older routes are reachable through the search above. Filtered by the current provider and model-backed endpoint selection when JavaScript is enabled.</span>
-          <select id="{{ selector_id_prefix }}-models-available" multiple size="14" data-policy-available="models">
+          <span class="policy-selector-caption" id="{{ selector_id_prefix }}-models-available-help">Latest 100 enabled routes; older routes are reachable through the search above. Filtered by the current provider and model-backed endpoint selection when JavaScript is enabled.</span>
+          <select id="{{ selector_id_prefix }}-models-available" multiple size="14" data-policy-available="models" aria-describedby="{{ selector_id_prefix }}-models-available-help">
             {% for group_label, choices in policy_catalog.model_choices_by_group.items() %}
             <optgroup label="{{ group_label }}">
               {% for choice in choices %}
@@ -179,8 +191,8 @@
       <div class="policy-selector-pane">
         <label>
           Selected allowed model tokens
-          <span class="policy-selector-caption">The selected list stores requested model tokens, not route IDs.</span>
-          <select id="{{ selector_id_prefix }}-models-selected" multiple size="14" data-policy-selected="models">
+          <span class="policy-selector-caption" id="{{ selector_id_prefix }}-models-selected-help">The selected list stores requested model tokens, not route IDs.</span>
+          <select id="{{ selector_id_prefix }}-models-selected" multiple size="14" data-policy-selected="models" aria-describedby="{{ selector_id_prefix }}-models-selected-help">
             {% for option in policy_form_state.selected_model_options %}
             <option value="{{ option.value }}">{{ option.label }}</option>
             {% endfor %}
@@ -203,20 +215,20 @@
 
   <details class="policy-manual-details">
     <summary>Advanced manual policy strings (fallback)</summary>
-    <p class="muted small">This is a fallback for no-JavaScript or direct manual edits. The selector above remains the primary workflow. Use newline or comma-separated values.</p>
+    <p class="muted small" id="{{ selector_id_prefix }}-manual-help">This is a fallback for no-JavaScript or direct manual edits. The selector above remains the primary workflow. Use newline or comma-separated values; blank means the list is empty for that dimension (mode checkboxes still apply).</p>
     <p class="muted small">When JavaScript is enabled, the selectors above keep these fields synchronized.</p>
     <div class="form-grid">
       <label>
         Allowed providers
-        <textarea name="allowed_providers" rows="3" autocomplete="off" data-policy-manual="providers">{{ form.allowed_providers }}</textarea>
+        <textarea name="allowed_providers" rows="3" autocomplete="off" data-policy-manual="providers" aria-describedby="{{ selector_id_prefix }}-manual-help">{{ form.allowed_providers }}</textarea>
       </label>
       <label>
         Allowed endpoints
-        <textarea name="allowed_endpoints" rows="4" autocomplete="off" data-policy-manual="endpoints">{{ form.allowed_endpoints }}</textarea>
+        <textarea name="allowed_endpoints" rows="4" autocomplete="off" data-policy-manual="endpoints" aria-describedby="{{ selector_id_prefix }}-manual-help">{{ form.allowed_endpoints }}</textarea>
       </label>
       <label>
         Allowed models
-        <textarea name="allowed_models" rows="4" autocomplete="off" data-policy-manual="models">{{ form.allowed_models }}</textarea>
+        <textarea name="allowed_models" rows="4" autocomplete="off" data-policy-manual="models" aria-describedby="{{ selector_id_prefix }}-manual-help">{{ form.allowed_models }}</textarea>
       </label>
     </div>
   </details>

@@ -47,7 +47,7 @@
 
   <section class="action-panel" aria-labelledby="provider-actions-heading">
     <h2 id="provider-actions-heading">Provider Status Actions</h2>
-    <p class="muted">These actions update provider metadata only. They do not call upstream providers or change route, pricing, or FX records.</p>
+    <p class="muted" id="provider-detail-actions-help">These actions update provider metadata only. They do not call upstream providers or change route, pricing, or FX records. The audit reason records why you enabled or disabled this provider config.</p>
     <div class="action-grid">
       <div class="action-card">
         <h3>Enable</h3>
@@ -56,7 +56,7 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off">
+            <input name="reason" required autocomplete="off" aria-describedby="provider-detail-actions-help">
           </label>
           <button type="submit">Enable provider config</button>
         </form>
@@ -72,10 +72,10 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label>
             Audit reason
-            <input name="reason" required autocomplete="off">
+            <input name="reason" required autocomplete="off" aria-describedby="provider-detail-actions-help">
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" name="confirm_disable" value="true" required>
+            <input type="checkbox" name="confirm_disable" value="true" required aria-describedby="provider-detail-actions-help">
             <span>I understand routes using this provider may stop resolving.</span>
           </label>
           <p class="warning-text">Disabling provider metadata can make dependent routes unavailable until another enabled provider route is configured.</p>
