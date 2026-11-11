@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.exc import IntegrityError
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from slaif_gateway.cli.demo_admin import app as demo_admin_app
@@ -142,14 +143,30 @@ def test_root_cli_registers_demo_admin_group() -> None:
 
 
 def test_no_literal_password_argv_option_anywhere() -> None:
-    for args in (["create", "--help"], ["reset-password", "--help"]):
-        result = RUNNER.invoke(demo_admin_app, args)
-        assert result.exit_code == 0
-        assert "--password-stdin" in result.output
-        # No literal `--password` argv option (only `--password-stdin`).
-        for line in result.output.splitlines():
-            stripped = line.strip()
-            assert not stripped.startswith("--password "), stripped
+    # Assert against the Click command metadata — the exact argv surface —
+    # instead of Rich-rendered help text, which wraps or styles the option
+    # string differently per terminal width, locale, and runner env.
+    command = get_command(demo_admin_app)
+    for name, subcommand in command.commands.items():
+        password_opts = {
+            opt
+            for param in subcommand.params
+            for opt in param.opts
+            if "password" in opt
+        }
+        if name in ("create", "reset-password"):
+            assert password_opts == {"--password-stdin"}, (name, password_opts)
+        else:
+            assert password_opts == set(), (name, password_opts)
+    all_opts = {
+        opt
+        for sub in command.commands.values()
+        for param in sub.params
+        for opt in param.opts
+    }
+    # No literal `--password` argv option anywhere: credentials must never
+    # appear in argv, process listings, or shell history.
+    assert "--password" not in all_opts, all_opts
 
 
 # --- validator law ----------------------------------------------------------
