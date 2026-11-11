@@ -40,7 +40,9 @@ def test_request_diagnostics_down_revision_points_to_0025() -> None:
 def test_alembic_has_exactly_one_head_after_request_diagnostics() -> None:
     config = Config("alembic.ini")
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["0026_request_diagnostics"]
+    # Objective 220 added 0027_demo_admin_accounts as the single successor
+    # of the 0026 request-diagnostics head (same chain, one head).
+    assert script.get_heads() == ["0027_demo_admin_accounts"]
 
 
 def test_request_diagnostics_downgrade_drops_table_and_constraints() -> None:

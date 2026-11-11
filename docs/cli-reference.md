@@ -1421,6 +1421,53 @@ all-eligible selection blocks; explicit subset exclusions are named in the
 report. Full contract:
 [Catalog refresh (offline review)](catalog-refresh.md#source-evidence-binding-offline-replay).
 
+## Demo fake-admin control (objective 220 foundation)
+
+`demo-admin` is the ONLY writable path for the isolated `demo_control`
+fake-admin tables (see [demo-admin.md](demo-admin.md) and the
+[database schema](database-schema.md), sections 5.26/5.27). This is a
+foundation stage: the default live gateway has NO fake-admin login route,
+`/fakeadmin/login` remains 404, and no HTTP endpoint can create, reset,
+enable, disable, or list fake-admin credentials. The full demonstration
+feature (fresh source snapshots, wait page, identity masking, silent
+no-op actions, logout/expiry cleanup) is a later objective.
+
+```text
+slaif-gateway demo-admin create <username> --reason <1..512 chars>
+                         [--password-stdin] [--json]
+slaif-gateway demo-admin list [--limit 1..100 (default 50)]
+                         [--offset 0..1000000] [--json]
+slaif-gateway demo-admin enable <username> --reason <1..512 chars> [--json]
+slaif-gateway demo-admin disable <username> --reason <1..512 chars> [--json]
+slaif-gateway demo-admin reset-password <username> --reason <1..512 chars>
+                         [--password-stdin] [--json]
+```
+
+- Usernames: 3..64 normalized ASCII letters/digits/underscore/hyphen,
+  starting with a letter, case-insensitively unique. Credential-shaped
+  usernames are refused with a fixed safe message (never echoed).
+- Passwords: hidden confirmation prompt (twice) or `--password-stdin`
+  (exactly one bounded line of at most 128 characters; extra lines or
+  trailing data are refused). There is deliberately NO `--password` argv
+  option, so credentials never appear in argv or process listings.
+  Documented strong minimum for publicly reachable demo accounts:
+  16..128 characters. Only a salted Argon2id hash persists; plaintext is
+  never stored, listed, logged, or displayed.
+- `list` reveals only safe username, UUID, enabled state, timestamps,
+  and account generation — never a hash or credential.
+- Every change is ONE owned PostgreSQL transaction: account state + one
+  safe append-only event (bounded reason, no secret) commit or roll back
+  together. Repeat enable/disable is a defined idempotent no-op (no
+  event, no generation bump, no fake success audit). A password reset
+  NEVER re-enables a disabled account.
+- `credential_generation` is monotonically increasing (reset/disable/
+  enable) and is the later session-invalidation fence. Disabling the
+  last active account makes the active count zero immediately; the later
+  demo login uses that fact for 404.
+- CLI failures (DB unavailable, duplicate, invalid parameters, late
+  write fault) produce fixed safe errors; no raw DB URL, password, hash,
+  or user-supplied secret is ever emitted to stdout/stderr/JSON.
+
 ## Related documentation
 
 - [CLI key-configuration field administration](cli-field-administration.md)
@@ -1466,6 +1513,11 @@ slaif-gateway db check-config
 slaif-gateway db show-url
 slaif-gateway db upgrade
 slaif-gateway db current
+slaif-gateway demo-admin create
+slaif-gateway demo-admin list
+slaif-gateway demo-admin enable
+slaif-gateway demo-admin disable
+slaif-gateway demo-admin reset-password
 slaif-gateway diagnostics status
 slaif-gateway diagnostics request show
 slaif-gateway diagnostics cleanup

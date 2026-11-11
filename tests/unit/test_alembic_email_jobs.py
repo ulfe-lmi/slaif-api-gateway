@@ -37,4 +37,6 @@ def test_alembic_has_exactly_one_head_revision_after_fourth_migration() -> None:
 
     heads = script.get_heads()
 
-    assert heads == ["0026_request_diagnostics"]
+    # Objective 220: 0027_demo_admin_accounts is the single successor
+    # head of the chain (still exactly one head).
+    assert heads == ["0027_demo_admin_accounts"]
