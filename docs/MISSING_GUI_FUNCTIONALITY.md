@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14 (controlled accounting recovery) is delivered by OAP objective 216-a (branch `oap/216-gui-accounting-operations`); see [section 18](#18-delivery-status-objective-216-a). G15 (official catalog proposals and the sealed catalog-refresh workflow) is delivered by OAP objective 217-a (branch `oap/217-gui-catalog-refresh`); see [section 19](#19-delivery-status-objective-217-a). G17 (post-bootstrap admin accounts) is delivered by OAP objective 218-a (branch `oap/218-gui-admin-accounts`); see [section 20](#20-delivery-status-objective-218-a). No section 4 backlog item remains open as GUI work; the final 219 installed whole-GUI qualification remains outstanding.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14 (controlled accounting recovery) is delivered by OAP objective 216-a (branch `oap/216-gui-accounting-operations`); see [section 18](#18-delivery-status-objective-216-a). G15 (official catalog proposals and the sealed catalog-refresh workflow) is delivered by OAP objective 217-a (branch `oap/217-gui-catalog-refresh`); see [section 19](#19-delivery-status-objective-217-a). G17 (post-bootstrap admin accounts) is delivered by OAP objective 218-a (branch `oap/218-gui-admin-accounts`); see [section 20](#20-delivery-status-objective-218-a). The final stage, 219-a (branch `oap/219-gui-completion-gate`), delivered the whole-GUI field guidance, the calibration JSON preview download, the bounded visual/interaction consolidation, and ONE complete final installed whole-GUI workflow covering every G01–G18 row and the unnumbered calibration row; see [section 21](#21-delivery-status-objective-219-a). No section 4 backlog item remains open as GUI work, and the 219 installed whole-GUI gate was closed by the 219-a final installed qualification.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -57,7 +57,7 @@ The HTTP-handler and CLI-command counts are inventory counts, not a parity score
 | Routes | `routes add/list/show/update/enable/disable/import` | Create/edit/status/list/detail and import preview/execute; capabilities JSON textarea | Editing exists; the CLI's reviewed partial updates, complete-document replacement, and associated validation are mirrored by the reviewed configuration workflow delivered in 210-a (G06, section 12). |
 | Pricing | `pricing add/list/show/import/disable-model` | Create/edit/list/detail, per-row enable/disable, reviewed import | Broad coverage; GUI is richer for individual editing. CLI matching-model disable is a separate bulk convenience (G18). |
 | FX | `fx add/list/latest` | List/detail/create/edit/import preview/execute | Broad coverage and GUI-only edits/imports. Explicit effective/latest-pair lookup remains a small parity/discoverability task (G18). |
-| Calibration | `calibration summarize` | Trusted-calibration key preview with time range and multiplier | Existing summary/proposal workflow. A JSON preview download would cover CLI output-file convenience without running inference. |
+| Calibration | `calibration summarize` | Trusted-calibration key preview with time range and multiplier | Existing summary/proposal workflow. The 219-a safe exact-unit JSON preview download and same-page confirmed template creation cover the CLI output-file convenience without running inference (section 21). |
 | Templates | `templates create-from-calibration`; `keys create-from-template` | Calibration-to-template confirmation, template list/detail, issue key from the current revision | Existing lifecycle. No generic template editor is implied by the CLI; unlimited-quota templates remain a separate product limitation. |
 | Usage | `usage export` | Filtered usage ledger/detail and bounded, confirmed CSV export | Partial: no grouped summary or live-burn aggregate page; JSON export and filter contracts also differ (G11). |
 | Email | `email list/show/send-pending-key` | Delivery list/detail, secret lifecycle status, send-now and enqueue confirmations | Partial: newer inspection projection, explicit failed-retry intent/audit, and SMTP test are not fully mirrored (G12). |
@@ -1565,3 +1565,115 @@ no new schema/migrations and no new dependencies:
 No section 4 backlog GUI item remains open: G17 is delivered by 218-a. The
 final 219 installed whole-GUI qualification remains mandatory; 218-a makes no
 installed-qualification, deployment, live-provider, or production claim.
+
+## 21. Delivery status (objective 219-a)
+
+Delivered by 219-a (`oap/219-gui-completion-gate`, one PR, 2026-11-11) as the
+final approved GUI completion stage for the 207–219 round, reusing the
+existing template/macro/service seams without any schema, migration,
+dependency, model/client/provider-adapter, accounting, permissions or
+content-retention change:
+
+- **Whole-GUI field guidance**: every visible editable/choice control in the
+  registered existing and new admin templates - plain text, number, password,
+  textarea, file, checkbox, date and filter controls, enhanced record-choice
+  pickers (including the search-enhanced picker and its no-JS fallback),
+  conditional groups, advanced forms and the login page - now carries a
+  readable label plus concise, accurate adjacent help linked through unique
+  IDs and `aria-describedby` to the ACTUAL visible control after enhancement.
+  Hidden CSRF/integrity values, submit controls and table-header links are not
+  entry fields and are excluded from the accounting. The help explains the
+  operator's decision and the applicable semantics rather than repeating
+  schema vocabulary: preserve-versus-clear, blank/inherit/unlimited,
+  valid-zero-versus-missing, unrestricted/list/deny, OR within one filter and
+  AND across filters, UTC/time boundaries, raw counts versus M-token display,
+  request versus token dimensions, requests per selected window, positive and
+  negative streaming margins, preparation versus activation, lower routing
+  priority preferred, physical/model versus operator ceilings, native/
+  converted pricing and per-request/per-million units, preview versus execute,
+  and retention/eligibility/scope. Passwords and secrets receive
+  purpose/consequence help with no redisplay on success or failure; reasons
+  describe the bounded action without credentials or private prompts;
+  read-only facts distinguish missing/unavailable/unknown instead of rendering
+  None or inventing zero. The existing usability inventory module is the
+  durable field-accounting location: it was extended in place for whole-field
+  guidance (visible-entry accounting plus help-ID uniqueness), preserving the
+  strict 111/36 known-reference selector and 54-table/51-wrapper baseline
+  guards.
+- **Calibration JSON output convenience**: the calibration preview page now
+  offers a private, bounded, no-store/no-sniff download of the EXISTING typed
+  CalibrationSummaryService summary/proposal, matching CLI JSON semantics and
+  exact machine units (the CLI-compatible projection serialized with the same
+  typed value law: Decimal as exact text, datetimes ISO, UUIDs as text). The
+  download re-runs the same trusted-calibration key/time/multiplier/auth/CSRF
+  gates and the same service input validation at download time; it exposes no
+  raw key, content, replay identifier or provider credential, rotates no
+  already displayed template-creation CSRF token, and writes nothing to disk,
+  logs or audit. The preview copy now states honestly that the download is
+  CURRENT data recomputed for the same chosen inputs, not a frozen earlier
+  result, and that confirmed template creation is supported on the same page.
+- **Bounded interaction and visual consolidation**: the key policy source
+  section now precedes the long guided groups with the complete document
+  label/editor/help disclosed together and inactive guided controls compacted
+  without changing the strict single-source submission or the no-JS path;
+  model explanation uses the existing known-model picker AND manual unknown
+  model entry (an unknown-model explanation is a useful legitimate outcome);
+  clone validity uses coherent mode-specific groups with exact seconds and
+  UTC; the full reviewed batch membership remains available in a keyboard/no-
+  JS disclosure so large selections do not bury review and confirmation;
+  invalid public gateway URL/readiness prerequisites receive fixed useful
+  setup help while preserving the canonical URL gates; routing priority
+  direction and media-estimation ceilings are explained with current bounds
+  (estimates are not final billed usage and no general client compatibility is
+  inferred); the accepted 217 catalog layout is retained; and the 218 account
+  forms keep the exact nonempty/128-character GUI bounds and all
+  confirmations, with the repeated technical secret-handling prose shortened
+  to plain purpose/consequence language (the twelve-character recommendation
+  remains advice, not a password policy).
+- **Boundaries preserved**: field names, submitted values, routes, review
+  ownership, confirmations and CSRF contracts are unchanged; no-JS paths,
+  shared table sorting, row ordinals, pagination and exact numeric display are
+  retained; the local SLAIF shell/palette/fonts and local CSS/JS are preserved
+  (no CDN, no new design system, no new JS framework). The ordinary operator-
+  only exceptions from section 6 remain explicit: first-admin/break-glass,
+  secret generation/mounts, migrations, deployment, arbitrary profile files
+  and research executables stay operator controls, and no literal parity with
+  those exceptions is claimed.
+- **Verification (219-a scope, owned fixtures, honest labels)**: a focused new
+  unit module for the changed calibration/rendering/guidance seams plus the
+  order's exact changed-component unit list (the existing usability inventory
+  and SLAIF design guards included); a real-Chromium Playwright module for
+  conditional help/keyboard/no-JS and desktop/narrow rendered states; and ONE
+  complete final installed workflow run under the test-only
+  `RUN_GUI_PARITY_INSTALLED_WORKFLOW=1` flag: the selected wheel's complete
+  application payload proven identical to the final source, the API AND the
+  application Celery worker running from the owned venv's installed package
+  outside the checkout with PYTHONPATH unset, owned labeled PostgreSQL 16 and
+  Redis, and real authenticated HTTP plus Chromium exercising every G01–G18
+  row and the calibration row through persisted/audit outcomes, with strictly
+  synthetic provider and SMTP fixtures and representative unauthorized/
+  wrong-CSRF/tampered/stale/validation-recovery/secret-canary negatives.
+  These are final-code installed-qualification evidence for the local gate,
+  not release, deployment, production, live-provider or live-mail claims;
+  operator-only exceptions remain. Exact counts, exits, JUnit receipts and
+  source/wheel identities: the immutable 219-a report.
+- Documentation:
+  [`MISSING_GUI_FUNCTIONALITY.md`](MISSING_GUI_FUNCTIONALITY.md) (this
+  section), [`admin-usability.md`](admin-usability.md),
+  [`verification/gui-cli-parity.md`](verification/gui-cli-parity.md), and
+  [`deployment.md`](deployment.md), [`configuration.md`](configuration.md),
+  [`runbooks/admin-access.md`](runbooks/admin-access.md),
+  [`security-model.md`](security-model.md), [`README.md`](../README.md) where
+  the 219 behavior affects their claims; exact scope: the 219-a strategic work
+  order; claims and evidence: the immutable 219-a report.
+
+### Still open
+
+No section 4 backlog item and no unnumbered calibration obligation of the
+207–219 GUI round remains open as implementation work. The full incoming-
+capture, first-admin/break-glass, secret, migration, deployment and arbitrary-
+profile exceptions remain deliberately operator-controlled (section 6).
+219-a makes no release, tag, deployment, production-certification, universal-
+compatibility or invoice-replacement claim; the RC2 current-main verification
+and release decision remain governed by the repository constitution and the
+strategic model.

@@ -1971,3 +1971,136 @@ defaults, outputs, and honest offline actor/reason provenance unchanged.
 The final 219 installed whole-GUI gate remains open; no
 installed-qualification, live-provider, or production claim follows from
 any result above.
+
+## 219-a GUI completion gate: whole-GUI field guidance, calibration output,
+and the final installed workflow (objective 219, new PR, 2026-11-11)
+
+### What 219-a completes
+
+219-a is the final approved stage of the 207–219 GUI parity and field-
+guidance round. It adds NO new product endpoints, schema, migration,
+dependency, model/client/provider adapter, accounting, permissions, or
+content-retention behavior. It completes:
+
+- **Whole-GUI field guidance**: every visible editable/choice control in the
+  registered admin templates (plain text, number, password, textarea, file,
+  checkbox, date and filter controls, the enhanced record-choice pickers and
+  their no-JS fallback, conditional groups, advanced forms, and login) now
+  carries a readable label plus concise adjacent help linked through a unique
+  ID and `aria-describedby` to the ACTUAL visible control after enhancement.
+  Hidden CSRF/integrity values, submit controls, and table-header sort links
+  are excluded. The durable accounting lives in the existing usability
+  inventory module (extended in place; its strict known-reference selector,
+  table, and wrapper baseline guards are preserved).
+- **Calibration JSON output convenience**: the calibration preview page now
+  serves a private, bounded, no-store/no-sniff download of the EXISTING typed
+  CalibrationSummaryService summary/proposal with CLI-compatible semantics
+  and exact machine units. The download re-runs the same
+  key/time/multiplier/auth/CSRF gates and input validation, exposes no key
+  material, content, replay identifier, or provider credential, and rotates
+  no displayed form token, and writes nothing.
+- **Bounded interaction/visual consolidation**: key policy source before the
+  long guided groups (complete document disclosed together, inactive guided
+  controls compacted, strict single-source submission and no-JS path
+  unchanged); model explanation via the known-model picker AND manual unknown
+  model entry; coherent clone validity groups (exact seconds, UTC); full
+  reviewed batch membership in a keyboard/no-JS disclosure; fixed useful
+  setup help for an invalid public gateway URL/readiness prerequisite;
+  routing priority direction and media-estimation ceilings explained with
+  current bounds; the accepted 217 catalog layout retained; and the 218
+  account forms keep exact nonempty/128-char bounds and all confirmations
+  with the repeated secret-handling prose shortened to plain language.
+
+### ONE final installed whole-GUI workflow (the 219 gate)
+
+The gate is a single opt-in integration workflow
+(`tests/integration/test_gui_parity_installed_workflow.py`, run only under
+`RUN_GUI_PARITY_INSTALLED_WORKFLOW=1`) that proves the FINAL installed code,
+not an editable checkout:
+
+- The selected wheel's complete application payload is proven identical to
+  the final source; the API AND the application Celery worker run from the
+  owned venv's INSTALLED package in an owned directory outside the checkout
+  with PYTHONPATH unset (module origins asserted to the installed site-
+  packages, never the source tree); the product import origins for both API
+  and worker are verified installed, while test fixtures may import from
+  source.
+- One NEW owned, labeled, loopback-bound, tmpfs-backed PostgreSQL 16 and one
+  NEW owned labeled loopback Redis 7 (reused from the accepted
+  `owned_pg_url`/`owned_redis_url` fixtures) are verified BEFORE use.
+- Strictly SYNTHETIC provider (a loopback mock upstream) and SMTP (a local
+  sink) fixtures are used; no real provider, provider secret, or live email
+  recipient is contacted. A fictional pre-existing state is seeded as SETUP
+  only; an operation result is never seeded and claimed as browser-produced.
+- Real authenticated HTTP plus real Chromium drive every G01–G18 row and the
+  calibration row to a persisted/audit outcome (redirect destination plus
+  the stored/audited effect, not just a 200/303 or a visible link): G01
+  provider unrestricted/list/deny-all plus configuration create/update/
+  export round trip; G02–G03 existing-key rate change and effective/source/
+  model explanation (no inference, no counter reset); G04 reviewed clone to
+  an independent new key; G05 reviewed batch with safe repeat; G06–G07
+  reviewed partial route config and provider clear/prepare/activate; G08/G16
+  content-free diagnostics and safe config/profile/version identity; G09
+  eligible same-key replay inspect/extend; G10 reviewed module upgrade,
+  module rollback, AND data-profile migration with exact before/after pins;
+  G11/G13/G18 grouped usage/live-burn, safe export, filter-preserving
+  paging/sort/ordinals, reviewed pricing disable, effective FX lookup; G12
+  email delivery lifecycle, explicit eligible failed retry, and bounded SMTP
+  test to the owned sink; G14 the four accounting candidate/recovery
+  families through the reviewed UI with authoritative stored outcomes; G15
+  the sealed catalog-refresh workflow through the REAL application worker
+  (proposal generation with configured non-USD FX and exact converted
+  amounts, strict import preview, collect → review → verify/export baseline →
+  reviewed atomic apply → authoritative status/safe repeat); G17 superadmin
+  account list/create/reset with persisted actor/reason/session
+  consequences; and the calibration JSON download plus same-page confirmed
+  template creation.
+- Representative retained legacy record/key creation, lifecycle/rotation,
+  quotas/lazy waiting/external tools, discovery/import, calibration/template
+  issue, audit/export, and login/logout are exercised; representative
+  unauthorized, wrong-CSRF/session/actor, tampered/expired/stale review,
+  validation-recovery, and secret-canary negatives are asserted and
+  distinguished from real success.
+
+### Focused test evidence (owned fixtures, honest labels)
+
+- Focused unit module
+  `tests/unit/test_admin_gui_completion_219.py` (NEW): the changed
+  calibration/rendering/guidance seams - the exact-unit calibration JSON
+  projection/serialization law, the safe no-store/non-rotating download
+  gates and credential/content-alias refusal, the whole-field linked-help
+  render audit (real rendered associations, uniqueness, validation recovery,
+  no-JS), and the visual-consolidation render contexts. Executed
+  2026-11-11 09:00 UTC as part of the exact unit-list command below:
+  6/6 tests of this module passed with actual pytest exit 0 (JUnit
+  /tmp/slaif219/junit-unitlist-219-final.xml).
+- The order's exact changed-component unit list (219 module + the existing
+  usability inventory and SLAIF design guards + record-choices + calibration
+  summary service + CLI calibration + OAP governance): 240/240 tests
+  passed, actual pytest exit 0, 2026-11-11 09:00 UTC (per-module: 219
+  module 6, usability inventory 124, SLAIF design 12, record-choices 78,
+  calibration summary 6, CLI calibration 5, OAP governance 9); JUnit
+  /tmp/slaif219/junit-unitlist-219-final.xml.
+- Real-Chromium Playwright module
+  `tests/browser/test_admin_gui_completion_219.py` (NEW; real uvicorn +
+  owned PG; no Redis/Celery): focused real-browser conditional help,
+  keyboard-only, no-JS, and desktop/narrow (about 420 px) rendered states
+  for the guidance, calibration download, and consolidation surfaces.
+  5/5 tests passed, 0 skipped, actual pytest exit 0, 2026-11-11 08:06 UTC
+  (real Chromium against the final product code committed 2026-11-11
+  03:03 UTC); JUnit /tmp/slaif219/junit-browser-219.xml.
+- The ONE final installed workflow (the 219 gate) under
+  `RUN_GUI_PARITY_INSTALLED_WORKFLOW=1`, run ONCE against FINAL installed
+  code with zero skipped/missing outcomes: 17/17 tests passed,
+  0 skipped, actual pytest exit 0 (2026-11-11 09:31 UTC; real uvicorn +
+  real solo Celery worker in the wheel's own venv, owned PG16/Redis7,
+  synthetic provider/SMTP only); JUnit
+  /tmp/slaif219/junit-installed-workflow.xml.
+  (actual wheel hash, source commit/tree, package version, and the API/worker
+  module origins are named in the immutable 219-a report).
+
+These are final-code installed-qualification evidence for the local gate, not
+release, deployment, production, live-provider, or live-mail claims; the
+operator-only exceptions remain explicit. The final 219 installed whole-GUI
+gate is closed by the 219-a final installed qualification; no universal-
+compatibility or release-readiness claim follows from any result above.

@@ -790,6 +790,14 @@ then create exactly one normal key from a selected immutable revision with
 `slaif-gateway keys create-from-template` or the template detail page. Bulk
 template-based participant key creation remains future work.
 
+The GUI calibration preview additionally offers a bounded, no-store JSON
+download of that same typed summary/proposal (the CLI-compatible projection
+with exact machine units). The download re-validates the same
+trusted-calibration key/time/multiplier/auth/CSRF gates and input validation
+at download time, is recomputed from the CURRENT data for the same chosen
+inputs (not a frozen earlier result), rotates no displayed form token, and
+writes nothing to disk, logs, or audit.
+
 ## Responses API Configuration
 
 The current Responses API foundation is text-output only. It supports

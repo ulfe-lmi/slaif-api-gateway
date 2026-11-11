@@ -1849,3 +1849,96 @@ session-revocation behavior through the same shared service. Upgraded
 deployments whose only existing account is an ordinary `admin` create a
 superadmin through the CLI (`admin create --superadmin`) - never a
 silent auto-elevation or a browser bootstrap.
+
+## 20. Whole-GUI field guidance, calibration output, and visual consolidation (219-a)
+
+### 20.1 Field guidance on every visible entry/choice control
+
+219-a completed the field-guidance round: every visible editable/choice
+control in the registered admin templates - plain text, number, password,
+textarea, file, checkbox, date and filter controls, the enhanced record-
+choice pickers (latest-100 list plus older-search) and their no-JS fallback,
+conditional groups, advanced forms, and the login page - now has a readable
+label and concise adjacent help linked through a unique ID and
+`aria-describedby` to the ACTUAL visible control after enhancement. Hidden
+CSRF/integrity values, submit buttons, and table-header sort links are not
+entry fields and are intentionally excluded.
+
+The help text explains the operator's decision, units, bounds, and absence
+semantics instead of repeating schema vocabulary. Representative semantics
+now explained in place: preserve-versus-clear and blank/inherit/unlimited;
+valid-zero-versus-missing; unrestricted/list/deny provider policy; OR within
+one filter and AND across filters; UTC/time boundaries; raw counts versus
+M-token display; request versus token dimensions; requests per selected
+window; positive/negative streaming margins; preparation versus activation;
+lower routing priority preferred; physical/model versus operator ceilings;
+native/converted pricing and per-request/per-million units; preview versus
+execute; and retention/eligibility/scope. Passwords and secrets get
+purpose/consequence help and are never redisplayed on success or failure.
+Optional advanced detail stays separate from the ordinary hint; no tooltip
+framework or DOM-wide help overlay was introduced.
+
+The durable field accounting lives in the existing usability inventory test
+module, extended in place for whole-field guidance (visible-entry coverage
+plus help-ID uniqueness) while preserving its strict known-reference
+selector, table, and wrapper baseline guards.
+
+### 20.2 Calibration preview: JSON download
+
+The calibration preview page now offers **Download this preview's JSON**
+(`GET /admin/keys/<id>/calibration/summary.json` with the same
+start/end/multiplier the preview used). It is a private, bounded, no-store/
+no-sniff attachment of the existing typed summary/proposal with CLI
+compatible semantics and exact machine units. The download re-validates the
+same trusted-calibration key/time/multiplier/auth/CSRF gates at download
+time, exposes no key material, content, replay identifier, or provider
+credential, rotates no already displayed form token, and writes nothing.
+The page states plainly that the download is CURRENT data recomputed for the
+same chosen inputs (not a frozen earlier result) and that confirmed template
+creation is supported on the same page, below the preview.
+
+### 20.3 Visual and interaction consolidation
+
+- **Key policy source first**: on the key detail/create policy surface the
+  raw policy source section now precedes the long guided groups, with the
+  complete document label, editor, and help disclosed together; inactive
+  guided controls are compacted without changing the strict single-source
+  submission or the no-JS path.
+- **Model explanation**: the explain-route form uses the existing known-
+  model picker AND manual unknown-model entry; explaining an unknown model
+  is a useful legitimate outcome, not an error state.
+- **Clone validity**: mode-specific groups with exact seconds and UTC,
+  without an orphaned end-date field in an arbitrary column layout.
+- **Batch review**: the full reviewed membership (all key UUIDs) remains
+  available in a keyboard/no-JS disclosure so large selections do not bury
+  the review and confirmation; the apply section sits above the per-key
+  diff.
+- **Readiness setup help**: an invalid public gateway URL or unmet
+  readiness prerequisite now shows fixed, useful setup direction instead of
+  an unexplained missing artifact, while the canonical URL gates are
+  preserved.
+- **Routing priority and media ceilings**: help states that LOWER priority
+  numbers are preferred and that media-estimation ceilings are estimates,
+  not final billed usage.
+- **Account forms**: the 218 account forms keep their exact bounds and
+  confirmations with the repeated technical secret-handling prose shortened
+  to plain purpose/consequence language; the twelve-character password
+  recommendation remains advice, not a policy.
+
+### 20.4 No-JS, keyboard, and narrow behavior
+
+All guidance is server-rendered: no JavaScript is required for any label,
+help, disclosure, or form path; the record-choice pickers keep their no-JS
+fallback; shared table sorting, row ordinals, pagination, and exact numeric
+display are unchanged. Desktop and narrow (about 420 px) rendered states,
+keyboard focus, and validation recovery were re-qualified in the 219-a
+browser and installed workflows; the local SLAIF shell, palette, and local
+fonts/CSS/JS are preserved (no CDN, no new design system).
+
+### 20.5 Upgrade note
+
+There is **no schema migration**, **no key-policy migration**, and **no new
+dependency**: the change is application templates plus the shared
+record-choice macro/JS and the calibration preview endpoint, deployed by an
+application restart/recreate. Field names, submitted values, routes, review
+ownership, confirmations, and CSRF contracts are unchanged.
