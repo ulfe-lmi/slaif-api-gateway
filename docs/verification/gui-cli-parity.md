@@ -2104,3 +2104,139 @@ release, deployment, production, live-provider, or live-mail claims; the
 operator-only exceptions remain explicit. The final 219 installed whole-GUI
 gate is closed by the 219-a final installed qualification; no universal-
 compatibility or release-readiness claim follows from any result above.
+
+## 219-b GUI completion repair: calibration export boundary, guidance
+completion, and installed legacy outcomes (objective 219, SAME PR #376,
+2026-11-11)
+
+### What 219-b repairs on the same PR (no new scope, no 220+ deferral)
+
+- **Calibration JSON export boundary**: the download refuses the WHOLE
+  artifact (fixed safe 400, no echo, unchanged CLI-compatible shape) when
+  any nested canonical string is a known incoming authentication alias or
+  recognized complete credential material, and refuses oversize output at
+  the finite 1 MiB local ceiling (explicit refusal, never truncation).
+  Success and refusal responses - including the malformed-key early 404 -
+  are private no-store/no-cache and nosniff. Auth/status/non-rotation and
+  the same-page confirmed template creation are unchanged.
+- **Guidance/interaction completion**: the shared record-choice macro
+  links the control's own help from the unnamed menu-search input as well
+  as the visible main field (single-value pickers); the explain-model
+  control is the shared searchable known-model picker with its own linked
+  help; the key-create document-mode disclosure is corrected (the document
+  group is shown in document mode, hidden in guided mode, with the
+  inactive guided sections compacted); the compatibility readiness
+  surface renders fixed useful setup direction (invalid
+  `PUBLIC_BASE_URL` included, no exception echo) while the canonical URL
+  gates are preserved.
+- **Usage JSON export audit scope projection**: a key-scoped export's
+  audit row records the exact scoped record UUID as top-level
+  `scope_gateway_uuid`; the shared sanitizer's removal of the nested
+  `filters.gateway_key_id` (key-named fields are sensitive and never
+  exempted) is intentional and unchanged - no global sanitization,
+  AuditRepository, schema, accounting, permission, or refusal change.
+- **Demonstrated CI consumer repairs**: the 209 batch form-page oracle
+  (main + menu-search control associations, unique help definition), the
+  two 207 create document-mode consumers (product toggle), and the 219
+  keyboard external-tool submit wait (waits on the actual target POST
+  response and the resulting navigation/flash; keyboard Enter and the
+  persisted audit outcome preserved).
+- **Installed workflow legacy outcomes and fixture corrections**: G11
+  distinct `prompt_tokens`/`completion_tokens` export columns, exact
+  raw-HTML group/FX oracles, the honest G10 non-rotation probe (pre-
+  download token accepted by the action gate after the artifact downloads,
+  read-only plain-route plan, no Codex-route configuration parity claim),
+  the legacy lifecycle scenario on the independent still-priced nano
+  model (the G18 disabled gpt-4.1-mini rule state is kept), real rotation
+  material invalidation (old bearer accepted before, refused with 403
+  permission_error after; replacement bearer accepted - local
+  /v1/models, no provider call), the legacy provider discovery with
+  explicit insecure-HTTP confirmation, the enable acknowledgement, and the
+  default `provider/upstream` public-model naming, the pre-operation
+  exactly-one-new-key baselines, the raw-client logout bounce, the fence-
+  free administrable batch plan target, and the fixture's wheel-name
+  correction (the distribution-name stem, PEP 503 normalized) so the
+  default artifact candidate can actually match while the mandatory
+  source/wheel/installed payload byte checks gate every reuse.
+
+### Focused evidence (owned fixtures, honest labels)
+
+- Focused unit batch (219, 209, 214, 207, create-templates,
+  actions-templates, 212): 265/265 passed, 0 failed, 0 skipped,
+  PYTEST_EXIT=0, 89.421 s (2026-11-11 14:24 UTC); log SHA256
+  99f2b4a7cdafe75ac1d99d5261cff264a675b3ac6d76447f6ea8a0c164143d39,
+  JUnit SHA256 2bb3bae919fe09e7e70cdc5a8f54fb8875727dfacdc1427909c9e6b63e5fab6d
+  (/tmp/slaif219/junit-unit-batch-219b-final.xml).
+- Scoped Ruff over ALL 14 PR-changed Python files: RUFF_EXIT=0 (log
+  SHA256 a6f0dbc8994bde1c14490ce37df741b06dc0b7012b391cfc3d1044eea877577f).
+- Real-Chromium affected consumers at 2ee9cf06 (207
+  `test_create_form_help_and_provider_tri_state`, 207
+  `test_create_document_mode_persists_canonical_policy`, 219
+  `test_key_detail_linked_help_and_keyboard_ext_tool_update`): observed
+  completion with passing dots and no failures in the local runs
+  (2026-11-11 13:46-13:47 UTC). These local receipts were `pytest | tail`
+  sessions without a captured pytest status file: they are observed
+  completion, not a direct-exit receipt; the final-head CI browser job
+  (retried after an InstallChromium infrastructure failure) provides the
+  authoritative direct qualification.
+- Focused installed debug selections (product head 2ee9cf06): batch
+  00/01/02/06/09/10 6/6 PYTEST_EXIT=0 (2026-11-11 13:49 UTC, JUnit
+  /tmp/slaif219/junit-installed-batch1-219b.xml) and batch
+  01/06/10/15/15b/16/17 7/7 PYTEST_EXIT=0 (2026-11-11 14:16 UTC, JUnit
+  /tmp/slaif219/junit-dbg-b6-219b.xml). Intermediate debug iterations
+  (fixture/oracle corrections, all test-only) are recorded in the debug
+  logs and are not repeated.
+- Reused accepted component evidence at its exact scope (unchanged
+  backend surfaces, 207-218 unit/browser/installed receipts, and the good
+  219-a outcomes): cited in the immutable 219-b report, not repeated.
+
+### ONE final installed whole-GUI workflow (the 219 gate, 219-b)
+
+Run ONCE after product stabilization, exact command per the order:
+
+```bash
+env -u DATABASE_URL -u TEST_DATABASE_URL -u TEST_REDIS_URL \
+  RUN_GUI_PARITY_INSTALLED_WORKFLOW=1 \
+  /tmp/slaif216-qualification-venv/bin/python -m pytest \
+  tests/integration/test_gui_parity_installed_workflow.py \
+  -q -p no:cacheprovider --junit-xml=/tmp/slaif219/junit-installed-workflow-219b.xml
+```
+
+- Result: 19/19 tests passed, 0 skipped, 0 failed, 0 errors,
+  PYTEST_EXIT=0, suite 42.998 s (2026-11-11 14:19 UTC). Log SHA256
+  458276376847b45c351023eac171146fa5ccb0d31fc1357849e76a8da976d19e,
+  JUnit SHA256 8d226ad7e54c38649aa030ec5c9c7fe5f620776718ced355abf4ee1893abfcf2.
+- Source identity at the run: commit
+  b327e359d04ea96a64e78bd83dc394074be4a051, tree
+  cf5fb1b9b55cf64fea7c9a7683c67f6f16d1d5fd (this commit is docs/fixture-
+  only on top of the product head). Product head:
+  2ee9cf068d69ae730d4e7d05441ef4bb59029d31; byte-equality proof:
+  `git diff 2ee9cf06 b327e359 -- app/` is empty, and the workflow's own
+  wheel-payload byte check verified the selected wheel against the
+  pristine archive of the run HEAD before reuse.
+- Wheel: `slaif_api_gateway-0.1.0-py3-none-any.whl` (version 0.1.0),
+  SHA256 a0657a78feee5bb13bc6ab3b313fc9228d70508c55249177e86f73c4ee3e7356,
+  REUSED by the final run (built earlier from the pristine product head
+  during focused debugging; the pre-fix fixture's wrong import-name
+  candidate had caused needless rebuilds in those debug runs - the
+  corrected distribution-name candidate now hits, gated by the unchanged
+  source/wheel/installed payload byte checks).
+- Installed origins: API and worker import from
+  /tmp/slaif219/installed-workflow/venv/lib/python3.12/site-packages/
+  (`slaif_gateway/__init__.py`, `slaif_gateway/workers/celery_app.py`),
+  outside the checkout, PYTHONPATH unset; packaged templates/assets match
+  the selected installed payload (asserted by the workflow). Honest test-
+  environment extra: `packaging` 26.3 installed in the owned venv for the
+  real Celery worker's kombu Redis transport soft-import (not part of the
+  wheel's hard dependency closure).
+- Owned labeled loopback PostgreSQL 16 (tmpfs) and Redis 7; strictly
+  synthetic provider (loopback mock) and SMTP (local sink) fixtures;
+  every G01-G18 row, the calibration row, the legacy lifecycle outcomes,
+  and the negative matrix run to persisted/audit outcomes.
+
+These are final-code installed-qualification evidence for the local gate,
+not release, deployment, production, live-provider, or live-mail claims;
+the operator-only exceptions remain explicit. The 219 installed whole-GUI
+gate is closed by this 219-b final installed qualification (superseding
+the 219-a final-head claim, whose build-source provenance is corrected in
+the immutable 219-b report).
