@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+
+{% block title %}Reset Administrator Password{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="account-reset-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Administrator Accounts</p>
+      <h1 id="account-reset-heading">Reset administrator password</h1>
+      <p class="muted">
+        Sets a new password for the account below and signs out ALL of its existing console sessions immediately.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/accounts">Accounts</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if form_error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ form_error }}</div>
+  {% endif %}
+
+  <section class="action-panel" aria-labelledby="reset-target-heading">
+    <h2 id="reset-target-heading">Account (from the server)</h2>
+    {% if target %}
+    <dl>
+      <dt>Name</dt><dd>{{ target.display_name }}</dd>
+      <dt>Email</dt><dd><code>{{ target.email }}</code></dd>
+      <dt>Role</dt><dd>{{ target.role }}{% if target.role == "superadmin" %} <span class="muted small">(privileged)</span>{% endif %}</dd>
+      <dt>State</dt><dd>{% if target.is_active %}Active{% else %}Inactive{% endif %}</dd>
+    </dl>
+    {% else %}
+    <p class="muted">No account is selected. Return to the accounts list and choose an account.</p>
+    {% endif %}
+    {% if is_self_reset %}
+    <div class="admin-flash admin-flash-error" role="alert">
+      This is <strong>your own account</strong>. Confirming will sign you out of this console
+      immediately (your session is revoked together with the password change) and you will
+      have to sign in again with the new password.
+    </div>
+    {% endif %}
+    <p class="field-help" id="reset-target-help">
+      The password change, the revocation of this account's existing sessions, and the audit
+      entry (you, this account, and your reason) are committed together as one transaction, so
+      a fault before commit changes nothing. If the request fails at the commit or connection
+      stage, this page cannot confirm the outcome: verify the account's current state (a
+      sign-in attempt with the new password, or the audit log) before retrying. Sessions that
+      are already running a request are not recalled; new requests with the old sessions are
+      refused from the moment the reset is committed.
+    </p>
+  </section>
+
+  {% if target %}
+  <form class="create-form" method="post" action="/admin/accounts/reset?admin_id={{ admin_id }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="admin_id" value="{{ admin_id }}">
+
+    <section class="action-panel" aria-labelledby="reset-password-heading">
+      <h2 id="reset-password-heading">New password</h2>
+      <div class="form-grid">
+        <label>
+          New password
+          <input name="password" type="password" autocomplete="new-password"
+                 aria-describedby="reset-password-help" required>
+        </label>
+        <label>
+          Confirm new password
+          <input name="password_confirmation" type="password" autocomplete="new-password"
+                 aria-describedby="reset-password-confirmation-help" required>
+        </label>
+      </div>
+      <p class="field-help" id="reset-password-help">
+        Choose a strong, long, unique password (at least 12 characters recommended). The exact
+        characters you enter are used: nothing is trimmed or normalized; nonempty, at most
+        128 characters. The password is never shown again, never stored in plain text, and
+        never appears in the audit log, URLs, or page content — only its Argon2id hash is kept.
+        After the reset, the new password signs in and the old password is refused.
+      </p>
+      <p class="field-help" id="reset-password-confirmation-help">
+        Re-enter the same password; the two entries must match exactly, character for character.
+        Neither value is ever re-displayed after you leave this page.
+      </p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="reset-confirm-heading">
+      <h2 id="reset-confirm-heading">Confirm and audit</h2>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_reset" value="1" aria-describedby="reset-confirm-help" required>
+        I understand that this resets the password and signs out ALL of the account's existing
+        console sessions immediately.
+      </label>
+      <p class="field-help" id="reset-confirm-help">
+        Required before the reset runs: it records that you understand the session consequence
+        (every existing session of this account is signed out, including this one if it is your
+        own account).
+      </p>
+      <label>
+        Reason
+        <input name="reason" value="{{ form.get('reason', '') }}" maxlength="500" autocomplete="off"
+               aria-describedby="reset-reason-help" required>
+      </label>
+      <p class="field-help" id="reset-reason-help">
+        Nonblank, at most 500 characters. Stored and audited with the acting administrator,
+        the target account, and the session-revocation outcome exactly as entered; values
+        that match a known incoming authentication value are refused and never stored.
+      </p>
+      <button type="submit">Reset password and sign out existing sessions</button>
+      <a class="button-link secondary" href="/admin/accounts">Cancel</a>
+    </section>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

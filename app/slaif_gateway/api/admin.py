@@ -672,6 +672,16 @@ _ADMIN_STATUS_MESSAGES: dict[str, tuple[str, str]] = {
     "gateway_key_create_failed": ("error", "Gateway key creation failed."),
     "invalid_email_delivery_mode": ("error", "Select a valid key email delivery mode."),
     "email_delivery_sent": ("success", "Key email delivery sent."),
+    # 218-a: bounded administrator account management (G17) outcomes.
+    "admin_account_created": ("success", "Administrator account created."),
+    "admin_password_reset": (
+        "success",
+        "Administrator password reset completed; the account's previous sessions were signed out.",
+    ),
+    "admin_password_reset_self": (
+        "success",
+        "Your password was reset. All of your admin sessions were signed out; sign in again with the new password.",
+    ),
     "email_delivery_queued": ("success", "Key email delivery queued."),
     "email_delivery_send_failed": ("error", "Key email delivery failed safely."),
     "email_delivery_ambiguous": (
@@ -9152,6 +9162,10 @@ def _render_login(
         {
             "csrf_token": csrf_token,
             "error": error,
+            # 218-a: the self-reset flow redirects to the safe login
+            # page with a secret-free outcome message; the shared
+            # status helper (fixed allowlist, no echo) renders it.
+            "admin_status_message": _admin_status_message(request),
         },
         status_code=status_code,
     )
@@ -13583,6 +13597,10 @@ def _admin_error_page(request: Request, *, status_code: int, message: str) -> Re
     """
     status_text = {
         400: "Bad request",
+        # 218-a: the privileged account-management gate answers 403 to a
+        # signed-in non-superadmin (the shared error surface gains its
+        # standard status label; no other behavior changes).
+        403: "Forbidden",
         404: "Not found",
         503: "Service unavailable",
     }

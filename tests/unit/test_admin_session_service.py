@@ -29,6 +29,16 @@ class _AdminUsersRepo:
             return self.admin_user
         return None
 
+    async def get_admin_user_for_update(self, admin_user_id: uuid.UUID) -> AdminUser | None:
+        # 218-a: the login path now takes this row-lock seam BEFORE
+        # password verification; the unit fake holds a single live row
+        # (no stale snapshot), so it returns the same instance. The
+        # fresh-read-under-lock ordering itself is proven natively in
+        # the 218 PostgreSQL integration tests.
+        if self.admin_user is not None and self.admin_user.id == admin_user_id:
+            return self.admin_user
+        return None
+
     async def set_last_login_at(self, admin_user_id: uuid.UUID, last_login_at: datetime) -> bool:
         self.last_login_at = last_login_at
         if self.admin_user is not None and self.admin_user.id == admin_user_id:
@@ -154,6 +164,42 @@ async def test_wrong_password_fails_safely() -> None:
         await service.authenticate_admin(email="admin@example.org", password="wrong")
 
     assert audit.rows[-1]["action"] == "admin_login_failed"
+
+
+@pytest.mark.asyncio
+async def test_auth_denied_when_locked_read_absent_ignores_cached_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """218-a regression: the locked read is AUTHORITATIVE, including None.
+
+    The by-email lookup returned an existing (possibly cached) account, but
+    the fresh locked read finds no row (deleted in between). Login must
+    fall through to the generic failed-login path: no verification of the
+    cached hash, no success, no session row.
+    """
+    admin_user = _admin_user()
+    service, sessions, audit = _service(admin_user)
+
+    async def locked_absent(admin_user_id: uuid.UUID) -> None:
+        assert admin_user_id == admin_user.id
+        return None
+
+    service._admin_users.get_admin_user_for_update = locked_absent  # type: ignore[method-assign]
+
+    def fail_if_called(password: str, password_hash: str) -> bool:
+        raise AssertionError("cached hash must not be verified for an absent locked row")
+
+    monkeypatch.setattr(
+        "slaif_gateway.services.admin_session_service.verify_admin_password",
+        fail_if_called,
+    )
+
+    with pytest.raises(AdminAuthenticationError):
+        await service.authenticate_admin(email="admin@example.org", password="correct horse")
+
+    assert audit.rows[-1]["action"] == "admin_login_failed"
+    assert all(row["action"] != "admin_login_succeeded" for row in audit.rows)
+    assert sessions.admin_session is None
 
 
 @pytest.mark.asyncio

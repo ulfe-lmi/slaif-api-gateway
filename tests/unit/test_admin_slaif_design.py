@@ -319,7 +319,8 @@ def test_table_wrappers_are_labeled_and_focusable() -> None:
     # 217-a: +6 for the catalog workspace scroll regions (index background
     # jobs + sealed runs; run warnings, dispositions, price comparisons,
     # and the apply-plan projection).
-    assert wrappers == 50
+    # 218-a: +1 for the administrator accounts list scroll region (G17).
+    assert wrappers == 51
 
 
 def test_templates_css_and_js_reference_no_external_assets() -> None:

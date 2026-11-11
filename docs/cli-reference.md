@@ -65,6 +65,17 @@ slaif-gateway admin list
 the password in shell history. Database URL output is redacted/safe by contract;
 review command help before using it in shared terminals.
 
+`admin reset-password` shares the same transactional session-revocation
+behavior as the console's accounts area: the new password hash, the
+revocation of ALL of the target account's existing console sessions, and the
+actor/reason audit entry commit together in one transaction (the committed
+audit carries the sanitizer-safe revocation count). This is the same shared
+service the console uses - there is no second weaker CLI reset. `admin
+create` and `admin list` are unchanged; `admin create` remains the offline
+path for the first superadmin and break-glass access (the console's
+create-account form can also create a superadmin, with an explicit
+privileged-role acknowledgement).
+
 ## Organization records
 
 ```text

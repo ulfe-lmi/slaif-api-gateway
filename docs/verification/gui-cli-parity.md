@@ -1865,3 +1865,77 @@ authenticated contexts.
   from any result above. The USD/EUR per-million dual-label currency
   decision remains a pending product choice (default USD, no
   conversion implemented).
+
+## 218-a GUI admin accounts (objective 218, new PR, 2026-11-11)
+
+### Single shared G17 parity proof
+
+G17 (post-bootstrap admin accounts) closes the last open section 4
+backlog item with ONE shared implementation: the console's accounts area
+(list / create / password-reset) and the CLI `admin create`, `admin
+reset-password`, and `admin list` commands all call the same shared
+`AdminService` / `AdminSessionService` / `AdminUsersRepository` /
+admin-session repository seams. The shared transaction commits the fresh
+locked target's new Argon2id hash, the revocation of ALL of that target's
+existing console sessions, and the actor/target/reason audit entry
+together (an audit failure rolls everything back). The CLI reset command
+therefore shares the console's session-revocation behavior by construction
+- there is no second weaker reset, and the CLI keeps its commands,
+defaults, outputs, and honest offline actor/reason provenance unchanged.
+
+### Focused test evidence (owned fixtures, honest labels)
+
+- Focused unit module
+  `tests/unit/test_admin_accounts_218.py` (NEW): 40 PASS / 0 fail
+  (junit-218-unit.xml, 2026-11-10T22:32:23Z, EXIT=0) - list/create/reset
+  routes over real Jinja rendering with preauthorized seams, superadmin
+  gating on every surface, explicit-confirmation law (ordinary +
+  privileged), URL-bound reset target + conflicting-hidden-target
+  refusal, exact password bytes / nonempty-law / 128 cap / never-redisplay,
+  full-response/log/audit canaries across ALL collected bodies (including
+  400 error re-renders), alias no-echo guards, masked reset-audit
+  User-Agent, honest outcome-unconfirmed fault wording, and the
+  locked-read-None authentication regression.
+- The order's exact shared-consumer unit list (218 module + admin
+  session/login-rate-limit/CLI/password-utils + usability inventory +
+  SLAIF design guards + OAP governance): 205 PASS / 0 fail / 0 skip
+  (junit-218-final-unit.xml, 2026-11-11T00:00:36Z, EXIT=0), including the
+  final-template field/table inventories.
+- Reused accepted unchanged receipts: the 19-test shared
+  service/session module (junit-shared-unit.xml,
+  2026-11-10T21:05:26Z, EXIT=0; independently verified by root) rather
+  than rerunning unchanged matrices.
+- Native owned-PostgreSQL real-HTTP module
+  `tests/integration/test_admin_accounts_218_postgres.py` (NEW; reuses the
+  qualified owned-PG fixture, one NEW labeled loopback tmpfs PostgreSQL
+  16): 8 PASS / 0 fail / 0 skip (junit-218-integration.xml,
+  2026-11-10T23:07:57Z, EXIT=0) - real list/create/reset over HTTP,
+  hashes-only persistence, exact actor/target/reason audit, EXACT password
+  bytes (trailing space included), the KNOWN duplicate-email 409, the
+  duplicate-commit race (uncommitted unique index entry observed through
+  `pg_stat_activity`), BOTH login-vs-reset race orderings with
+  deterministic lock-wait synchronization (a login based on the superseded
+  password cannot escape session revocation; a reset after a committed
+  login revokes that session), and a pre-commit audit fault with full
+  rollback (hash unchanged, sessions not revoked, no audit row).
+- Real-Chromium Playwright module
+  `tests/browser/test_admin_accounts_218.py` (NEW; real uvicorn + owned
+  PG; no Redis/Celery): 6 PASS / 0 fail (junit-218-browser.xml,
+  2026-11-10T23:58:24Z, EXIT=0) - safe list rendering with server-derived
+  UUID reset links (desktop capture), create with every visible control's
+  resolved linked field help + native confirmation refusal + persisted
+  outcome + duplicate 409, the list-link-bound reset flow with its
+  persisted consequences (new password signs in, old refused), self-reset
+  logout + secret-free safe-login flash + revoked session, server-side
+  ordinary-admin 403 on every account surface, and narrow (420 px)
+  no-overflow + keyboard-only real create + no-JS real reset.
+- Existing native CLI consumer case
+  `tests/integration/test_cli_admin_owner_records_postgres.py::test_admin_cli_create_reset_and_list_persist_safe_password_data`:
+  1 PASS (junit-218-cli-consumer.xml, 2026-11-11T00:00:22Z, EXIT=0)
+  against ONE NEW owned labeled PostgreSQL 16 (the legacy module reads
+  `TEST_DATABASE_URL` at collection, so the driver pointed it at an owned
+  container and removed exactly the created ID afterwards).
+
+The final 219 installed whole-GUI gate remains open; no
+installed-qualification, live-provider, or production claim follows from
+any result above.

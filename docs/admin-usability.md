@@ -1759,3 +1759,93 @@ Recreate/restart the API and worker services after changing
 migration**, **no key-policy migration**, and **no new dependency**;
 disabling the feature leaves custody contents untouched and the CLI
 unaffected.
+
+## 19. Administrator accounts (G17, 218-a)
+
+- Dashboard -> **Administrator accounts** (`/admin/accounts`): the
+  account **list**, **Create** (`/admin/accounts/create`), and the
+  per-row **Reset password** link
+  (`/admin/accounts/reset?admin_id=<server-derived UUID>`). Every view
+  and action requires the EXISTING `superadmin` role (server-side, on
+  every request); an ordinary `admin` receives a fixed 403 page.
+
+### 19.1 Layout and list table
+
+- The list renders ONE sortable table inside the accessible scroll
+  wrapper with the shared contract: first ordinal (`data-ordinal` +
+  `data-ordinal-offset` for the bounded page), shared hyperlink sorting
+  with the neutral marker, and typed raw sort values
+  (`data-sort-type="boolean"` for Active, `data-sort-type="datetime"`
+  with ISO `data-sort-value` for Created/Last login, plain text for the
+  rest). Columns: Name, Email, Role, Active, Created (UTC), Last login
+  (UTC) ("Never" when absent), and Actions (the reset link).
+- Bounded pagination through the existing list helper (page size
+  bounded; older accounts reachable; a short page is never implied to be
+  complete). No hashes, session tokens, or secrets are rendered (the
+  table is safe metadata only).
+
+### 19.2 Field help (real linked associations)
+
+Every visible entry/choice control carries a meaningful linked field
+help via `aria-describedby` to a unique, non-empty help element (no
+tooltip framework; the association is verified on the real rendered DOM):
+
+- **Create** (8 controls): `create-email-help`,
+  `create-display-name-help`, `create-password-help`,
+  `create-password-confirmation-help`, `create-role-help`,
+  `create-confirm-help`, `create-superadmin-confirm-help`,
+  `create-reason-help`.
+- **Reset** (4 controls): `reset-password-help`,
+  `reset-password-confirmation-help`, `reset-confirm-help`,
+  `reset-reason-help`, plus the static `reset-target-help` explaining
+  the one-transaction semantics and the outcome-unconfirmed fault law.
+
+### 19.3 Form semantics
+
+- **Create**: email, display name, password + confirmation, a NATIVE
+  `role` select with exactly the two choices ("Admin (ordinary)"
+  default, "Superadmin (privileged)"), an explicit `confirm_create`
+  checkbox REQUIRED for every create, an additional explicit
+  privileged-role acknowledgement (`confirm_superadmin`) when the
+  superadmin role is selected, and a bounded nonblank reason. Bounded
+  inputs are validated before hashing; the exact password bytes are
+  used (nonempty, at most 128 characters, no trimming/normalization, no
+  minimum, no strength policy); passwords are never redisplayed on
+  success or failure, and only the known duplicate-email condition
+  yields the fixed "already exists" 409 (other faults give the honest
+  fixed outcome, never raw SQL/exception text).
+- **Reset**: the form action is bound to its displayed fixed canonical
+  target by URL (the hidden `admin_id` must agree; the target identity
+  is server-derived and re-fetched on validation recovery). The
+  all-session consequence is explained BEFORE the required
+  `confirm_reset` checkbox. The self-reset case (target is the signed-in
+  account) shows an explicit own-account warning and, after a
+  successful reset, clears the revoked cookie and returns to safe login
+  with a secret-free flash.
+- Free-text inputs matching a known incoming authentication value are
+  refused before persistence and withheld (no echo) on every error
+  re-render; the reset-audit User-Agent is masked by the existing pure
+  masker composition.
+
+### 19.4 No-JS, keyboard, and narrow behavior
+
+- No JavaScript required: the list (plain table + links), create, and
+  reset are plain server-rendered forms with native controls (the
+  role select is a native `<select>`; confirmations are native
+  checkboxes with `required`). Validation-recovery re-renders preserve
+  safe nonsecret fields (reason, role) and never redisplay secrets.
+- Keyboard-only create and no-JS real reset are covered by the browser
+  qualification; the 420 px narrow layout has no horizontal overflow
+  (desktop + narrow captures under `/tmp/slaif218/`).
+
+### 19.5 Upgrade note
+
+There is **no schema migration**, **no key-policy migration**, and
+**no new dependency**; deploying the change is an application
+restart/recreate. The CLI `admin create` / `admin reset-password` /
+`admin list` keep their commands, defaults, and outputs;
+`reset-password` now shares the console's transactional
+session-revocation behavior through the same shared service. Upgraded
+deployments whose only existing account is an ordinary `admin` create a
+superadmin through the CLI (`admin create --superadmin`) - never a
+silent auto-elevation or a browser bootstrap.

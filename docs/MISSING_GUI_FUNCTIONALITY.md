@@ -3,7 +3,7 @@
 **Date:** 2026-10-30  
 **Source baseline:** canonical `main` at `67604ad6970ff8486e0a9905fdb87ffd37060bd2` (merged PR #362).  
 **Status:** analysis and implementation backlog only; no application behavior changed.  
-**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14 (controlled accounting recovery) is delivered by OAP objective 216-a (branch `oap/216-gui-accounting-operations`); see [section 18](#18-delivery-status-objective-216-a). G15 (official catalog proposals and the sealed catalog-refresh workflow) is delivered by OAP objective 217-a (branch `oap/217-gui-catalog-refresh`); see [section 19](#19-delivery-status-objective-217-a). Only G17 remains open.
+**Delivery update (2026-11-01):** G01-G03 of the section 4 backlog are delivered by OAP objective 207-a (branch `oap/207-gui-key-policy`), and 207-b on the same branch/PR repaired the demonstrated privacy, same-page download, and reason-bound gaps in those surfaces; see [section 9](#9-delivery-status-objective-207-a). G04 (faithful standard-key cloning) is delivered by OAP objective 208-a (branch `oap/208-gui-key-clone`); see [section 10](#10-delivery-status-objective-208-a). 208-b on the same branch/PR qualified the demonstrated final-head CI failures with test-only changes plus removal of one unused tuple; no product behavior change. G05 (reviewed changes to existing key sets) is delivered by OAP objective 209-a (branch `oap/209-gui-key-batch`); see [section 11](#11-delivery-status-objective-209-a). G06 (reviewed route-capability changes) and G07 (provider preparation and explicit clearing) are delivered by OAP objective 210-a (branch `oap/210-gui-provider-route`); see [section 12](#12-delivery-status-objective-210-a). G08 (content-free request diagnostics) and G16 (safe configuration, profile and version inspection) are delivered by OAP objective 211-a (branch `oap/211-gui-diagnostics-config`); see [section 13](#13-delivery-status-objective-211-a). G10 (Codex policy-data inspection and existing-key migration) is delivered by OAP objective 212-a (branch `oap/212-gui-codex-compatibility`); see [section 14](#14-delivery-status-objective-212-a). G09 (replay-reference inspection and extension) is delivered by OAP objective 213-a (branch `oap/213-gui-replay-maintenance`); see [section 15](#15-delivery-status-objective-213-a). G11 (grouped usage and live-burn reporting with safe JSON export), G13 (complete filter-preserving list navigation and the safe provider lookup), and G18 (reviewed matching-model pricing disable and effective FX lookup) are delivered by OAP objective 214-a (branch `oap/214-gui-reports-pagination`); see [section 16](#16-delivery-status-objective-214-a). G12 (complete email delivery inspection, explicit failed retry and bounded SMTP test) is delivered by OAP objective 215-a (branch `oap/215-gui-email-parity`); see [section 17](#17-delivery-status-objective-215-a). G14 (controlled accounting recovery) is delivered by OAP objective 216-a (branch `oap/216-gui-accounting-operations`); see [section 18](#18-delivery-status-objective-216-a). G15 (official catalog proposals and the sealed catalog-refresh workflow) is delivered by OAP objective 217-a (branch `oap/217-gui-catalog-refresh`); see [section 19](#19-delivery-status-objective-217-a). G17 (post-bootstrap admin accounts) is delivered by OAP objective 218-a (branch `oap/218-gui-admin-accounts`); see [section 20](#20-delivery-status-objective-218-a). No section 4 backlog item remains open as GUI work; the final 219 installed whole-GUI qualification remains outstanding.
 **Authoring:** independent strategic-model inspection, without the coding agent or helper agents.
 
 ## 1. Findings and scope
@@ -1447,3 +1447,121 @@ section 9; nothing in 217-a touches it. The final 219 installed
 whole-GUI qualification remains mandatory; 217-a makes no
 installed-qualification, deployment, live-provider, or production
 claim.
+
+## 20. Delivery status (objective 218-a)
+
+Delivered by 218-a (`oap/218-gui-admin-accounts`, one PR) by extending the
+smallest compatible seams of the EXISTING shared `AdminService`,
+`AdminSessionService`, `AdminUsersRepository`, and admin-session repository -
+no new schema/migrations and no new dependencies:
+
+- **G17** (post-bootstrap admin accounts: authenticated list, create, and
+  password-reset workflows corresponding to the three CLI commands; first-admin
+  creation and break-glass remain CLI/offline):
+  - **Account list**: server-derived identity (name, email, exact stored role,
+    active state, safe timestamps) with NO hashes/session tokens/secrets in the
+    rendered HTML (including attributes). Bounded pagination through the
+    existing list helper - a short page is never implied to be complete - plus
+    the first ordinal, the shared hyperlink sorting with its neutral marker,
+    and the accessible scroll wrapper. Each row exposes a fixed-UUID
+    reset-password link derived by the server; there is no editable account
+    UUID in the GUI and therefore no new record-choice kind for it.
+  - **Server-side authority**: every account view and action first passes the
+    existing authenticated page/action context and then requires the current
+    persisted superadmin role. Hiding the link is not the gate: an ordinary
+    admin is denied (fixed 403) on every account view and action. The existing
+    dashboard-off gate, CSRF, and session behavior are preserved.
+  - **Create**: an ordinary admin by default; only the admin-versus-superadmin
+    native choices; explicit confirmation is REQUIRED for every create, with an
+    additional explicit privileged-role acknowledgement for superadmin; a
+    bounded nonblank reason. Bounded inputs are validated BEFORE the expensive
+    Argon2id hashing. Email is normalized and deduplicated through the shared
+    service; a concurrent duplicate submission gets the fixed 409 known
+    condition with no raw SQL/exception text, and no password or hash is ever
+    redisplayed.
+  - **Reset**: an exact existing target, displayed with its server-derived
+    identity; the form is bound to its displayed fixed canonical target by URL
+    (a conflicting hidden target is refused, and the server-refetched identity
+    re-renders on validation recovery). Matching new password and
+    confirmation, explicit confirmation, bounded reason. The explained
+    consequence - ALL of the account's existing console sessions are signed out
+    immediately - is shown BEFORE the confirmation control. Exact password
+    bytes are preserved (nothing trimmed or normalized); the shared password
+    law is nonempty with a finite GUI upper bound of 128 characters and NO
+    minimum length. Passwords are never redisplayed on success OR failure, put
+    in a URL/audit/log, or returned as hashes; only the Argon2id hash persists.
+  - **Shared transaction**: a fresh locked target row, the new hash, the
+    revocation of ALL of that target's existing sessions, and the
+    actor/target/reason audit commit together in ONE transaction (an audit
+    failure rolls everything back; the committed audit carries the
+    sanitizer-safe revocation count). Unrelated users and sessions remain
+    unchanged. Login obtains the fresh locked row before password verification
+    and uses fresh ORM values, so a login based on the superseded password
+    cannot escape session revocation (both transaction orderings qualified
+    with deterministic native-PG synchronization). Self-reset deliberately
+    revokes the actor's own session, clears its cookie, and returns to safe
+    login with a secret-free outcome. Sessions already running a request are
+    NOT recalled; new requests with revoked sessions are refused from the
+    moment the reset is committed.
+  - **Alias/secret guards**: free-text reason/name/email inputs matching a
+    known incoming authentication value are refused before persistence and
+    never redisplayed (tainted values are withheld on every error re-render);
+    the reset-audit User-Agent is masked with the existing pure masker
+    composition; fault paths use fixed secret-free outcomes (no raw
+    exception/SQL/hash traceback text, no false success, and a generic
+    commit/connection fault never claims a rollback it cannot establish).
+  - **CLI compatibility**: `admin create`, `admin reset-password`, and
+    `admin list` keep their commands, defaults, and outputs. The reset command
+    now shares the same transactional session-revocation behavior through the
+    shared service (one implementation, no second weaker reset); the CLI
+    composition supplies the same session-bound repository, and the honest
+    offline CLI actor/reason provenance is preserved.
+  - **No browser bootstrap**: no browser-based first-admin creation, no silent
+    auto-elevation, and no promotion path. Upgraded deployments whose only
+    existing account is an ordinary admin get documented setup direction
+    (create a superadmin through the CLI); the offline/break-glass CLI path
+    is retained.
+  - **Bounded UI and ergonomics**: every visible entry/choice control carries
+    meaningful linked field help (unique IDs, real DOM associations, no-JS);
+    the cream/teal/lime shell and local fonts are retained; usable
+    desktop/narrow/keyboard/no-JS flows with safe actionable error recovery.
+- No schema migration and no key-policy migration; no new dependency, runtime
+  request-policy, or accounting change. Key material, policy, quotas, usage,
+  and replay behavior are preserved, as are the existing exceptions.
+- **Verification (218-a scope, owned fixtures, honest labels)**: a focused
+  unit module plus the order's exact shared-consumer unit list (inventory and
+  design guards included), an owned-PostgreSQL real-HTTP native module
+  (real list/create/reset over HTTP, hashes-only persistence, exact
+  actor/target/reason audit, both login-vs-reset race orderings with
+  deterministic lock-wait synchronization, the duplicate-commit race, and a
+  pre-commit audit fault with full rollback), a real-Chromium Playwright
+  module (safe list rendering, create with linked help + confirmation refusal
+  + persisted outcome + duplicate 409, the list-link-bound reset flow with its
+  persisted consequences, self-reset logout + safe-login flash, server-side
+  ordinary-admin 403 on every surface, and narrow/keyboard/no-JS real
+  flows), and the one existing native CLI consumer case against an owned
+  PostgreSQL. These are NOT installed-qualification, live-provider, or
+  production evidence; the final 219 installed whole-GUI gate remains open.
+  Reuse the accepted unchanged shared session/password/secret/CLI receipts
+  rather than rerunning unchanged matrices; exact counts, exits, JUnit
+  receipts, and source snapshots: the immutable 218-a report.
+- Documentation:
+  [`MISSING_GUI_FUNCTIONALITY.md`](MISSING_GUI_FUNCTIONALITY.md) (this
+  section), [`admin-usability.md`](admin-usability.md),
+  [`verification/gui-cli-parity.md`](verification/gui-cli-parity.md),
+  [`runbooks/admin-access.md`](runbooks/admin-access.md),
+  [`security-model.md`](security-model.md),
+  [`database-schema.md`](database-schema.md),
+  [`cli-reference.md`](cli-reference.md),
+  [`compatibility-matrix.md`](compatibility-matrix.md),
+  [`rc2-feature-scope.md`](rc2-feature-scope.md),
+  [`configuration.md`](configuration.md),
+  [`deployment.md`](deployment.md), and
+  [`README.md`](../README.md); exact scope: the 218-a strategic work order;
+  claims and evidence: the immutable 218-a report.
+
+### Still open
+
+No section 4 backlog GUI item remains open: G17 is delivered by 218-a. The
+final 219 installed whole-GUI qualification remains mandatory; 218-a makes no
+installed-qualification, deployment, live-provider, or production claim.

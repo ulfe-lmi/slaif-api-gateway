@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}Administrator Accounts{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="accounts-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Administrator Accounts</p>
+      <h1 id="accounts-heading">Administrator accounts</h1>
+      <p class="muted">
+        Safe metadata only: names, emails, exact stored roles, and account state. Password
+        hashes, session tokens, and other secrets are never displayed on this page.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link" href="/admin/accounts/create">Create account</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  <div class="table-wrap" tabindex="0" role="region" aria-label="Administrator accounts">
+    <table data-sortable class="table-wide" data-ordinal-offset="{{ page.offset }}">
+      <thead>
+        <tr>
+          <th data-ordinal scope="col" aria-label="Row number">#</th>
+          <th scope="col">Name</th>
+          <th scope="col">Email</th>
+          <th scope="col">Role</th>
+          <th data-sort-type="boolean" scope="col">Active</th>
+          <th data-sort-type="datetime" scope="col">Created (UTC)</th>
+          <th data-sort-type="datetime" scope="col">Last login (UTC)</th>
+          <th scope="col">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in accounts %}
+        <tr>
+          <td class="row-ordinal">{{ page.first_ordinal + loop.index0 }}</td>
+          <td>{{ row.display_name }}</td>
+          <td class="col-key"><code>{{ row.email }}</code></td>
+          <td class="nowrap">{{ row.role }}{% if row.role == "superadmin" %}<span class="muted small"> (privileged)</span>{% endif %}</td>
+          <td class="nowrap" data-sort-value="{{ 'true' if row.is_active else 'false' }}">{% if row.is_active %}Active{% else %}Inactive{% endif %}</td>
+          <td class="nowrap" data-sort-value="{{ row.created_at.isoformat() }}" title="{{ row.created_at.isoformat() }}">{{ row.created_at | utc_date_display }}</td>
+          <td class="nowrap" data-sort-value="{{ row.last_login_at.isoformat() if row.last_login_at else '' }}" title="{{ row.last_login_at.isoformat() if row.last_login_at else '' }}">{{ row.last_login_at | utc_date_display if row.last_login_at else "Never" }}</td>
+          <td class="nowrap"><a href="/admin/accounts/reset?admin_id={{ row.id }}">Reset password</a></td>
+        </tr>
+        {% else %}
+        <tr data-no-sort>
+          <td colspan="8" class="empty-state">No administrator accounts found on this page.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "partials/pagination.html" %}
+</section>
+{% endblock %}
