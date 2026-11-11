@@ -166,10 +166,19 @@ def test_readyz_production_checks_enabled_provider_config_env_vars(
         asyncio.run(_delete_provider_config(migrated_postgres_url))
 
 
-async def _reset_public_schema(database_url: str) -> None:
+async def _reset_application_schemas(database_url: str) -> None:
+    """Reset both application-owned schemas on the disposable test database.
+
+    Migration 0027 creates the isolated ``demo_control`` schema strictly
+    (``CREATE SCHEMA demo_control``, no IF NOT EXISTS), so the fresh
+    missing-schema probe must start from a database where NEITHER ``public``
+    nor ``demo_control`` exists, and the finally recovery re-upgrade must
+    likewise create both schemas from a clean state.
+    """
     engine = create_async_engine(database_url, future=True)
     try:
         async with engine.begin() as connection:
+            await connection.execute(text("DROP SCHEMA IF EXISTS demo_control CASCADE"))
             await connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
             await connection.execute(text("CREATE SCHEMA public"))
             await connection.execute(text("GRANT ALL ON SCHEMA public TO public"))
@@ -177,9 +186,38 @@ async def _reset_public_schema(database_url: str) -> None:
         await engine.dispose()
 
 
+async def _assert_demo_control_absent(database_url: str) -> None:
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.connect() as connection:
+            present = await connection.scalar(
+                text("SELECT to_regclass('demo_control.fake_admin_accounts') IS NOT NULL")
+            )
+    finally:
+        await engine.dispose()
+    assert not present, "demo_control must be absent during the fresh missing-schema probe"
+
+
+async def _assert_application_schemas_restored(database_url: str) -> None:
+    engine = create_async_engine(database_url, future=True)
+    try:
+        async with engine.connect() as connection:
+            public_ok = await connection.scalar(
+                text("SELECT to_regclass('public.alembic_version') IS NOT NULL")
+            )
+            demo_ok = await connection.scalar(
+                text("SELECT to_regclass('demo_control.fake_admin_accounts') IS NOT NULL")
+            )
+    finally:
+        await engine.dispose()
+    assert public_ok, "public.alembic_version must exist after the finally recovery upgrade"
+    assert demo_ok, "demo_control.fake_admin_accounts must exist after the finally recovery upgrade"
+
+
 def test_readyz_reports_missing_schema_on_fresh_database(postgres_test_url: str) -> None:
     try:
-        asyncio.run(_reset_public_schema(postgres_test_url))
+        asyncio.run(_reset_application_schemas(postgres_test_url))
+        asyncio.run(_assert_demo_control_absent(postgres_test_url))
         app = create_app(Settings(DATABASE_URL=postgres_test_url))
 
         with TestClient(app) as client:
@@ -194,5 +232,6 @@ def test_readyz_reports_missing_schema_on_fresh_database(postgres_test_url: str)
         assert body["alembic_head"]
         assert body["redis"] == "not_required"
     finally:
-        asyncio.run(_reset_public_schema(postgres_test_url))
+        asyncio.run(_reset_application_schemas(postgres_test_url))
         run_alembic_upgrade_head(postgres_test_url)
+        asyncio.run(_assert_application_schemas_restored(postgres_test_url))
