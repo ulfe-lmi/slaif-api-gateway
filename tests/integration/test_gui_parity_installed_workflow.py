@@ -173,7 +173,17 @@ def _wheel_name(pristine: Path) -> str:
         r'__version__\s*=\s*["\']([^"\']+)["\']', init.read_text(encoding="utf-8")
     )
     version = match.group(1) if match else "0.1.0"
-    return f"slaif_gateway-{version}-py3-none-any.whl"
+    # The wheel stem is the DISTRIBUTION name from pyproject `name`, PEP 503
+    # normalized (e.g. slaif-api-gateway -> slaif_api_gateway), not the
+    # import name: the old hard-coded import name never matched the built
+    # artifact, so the default candidate always missed and the wheel was
+    # needlessly rebuilt. The mandatory source/wheel/installed payload
+    # byte checks are unchanged and still gate any reuse.
+    pyproject = (pristine / "pyproject.toml").read_text(encoding="utf-8")
+    name_match = re.search(r'^name\s*=\s*["\']([^"\']+)["\']', pyproject, re.M)
+    dist = name_match.group(1) if name_match else "slaif-api-gateway"
+    stem = re.sub(r"[-_.]+", "_", dist).lower()
+    return f"{stem}-{version}-py3-none-any.whl"
 
 
 def _ensure_venv_broker_transport_deps(venv_root: Path) -> None:
@@ -3618,6 +3628,7 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
 
     # 2) Legacy STANDARD key creation for the new owner (none delivery:
     # the result page is the ONLY plaintext display).
+    before_ids = set(_gateway_keys(env))
     create_page = state.get("/admin/keys/create")
     resp = state.post(
         "/admin/keys/create",
@@ -3628,7 +3639,7 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
             "valid_days": "30",
             "email_delivery_mode": "none",
             "allowed_providers": "openai",
-            "allowed_models": "gpt-4.1-mini",
+            "allowed_models": "gpt-4.1-nano",
             "allow_all_endpoints": "true",
             "reason": REASON,
         },
@@ -3643,24 +3654,33 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
     legacy_key_plaintext = shown.group(1)
     env["legacy_key_plaintext"] = legacy_key_plaintext
 
-    before_ids = set(_gateway_keys(env))
-    legacy_key = next(iter(set(_gateway_keys(env)) - before_ids))
+    new_ids = set(_gateway_keys(env)) - before_ids
+    assert len(new_ids) == 1, f"exactly one new key expected: {sorted(new_ids)}"
+    legacy_key = next(iter(new_ids))
     env["legacy_key"] = legacy_key
     legacy_before = _gateway_keys(env)[legacy_key]
     assert legacy_before["owner_id"] == legacy_owner
-    assert legacy_before["allowed_models"] == ["gpt-4.1-mini"]
+    assert legacy_before["allowed_models"] == ["gpt-4.1-nano"]
 
     # 2b) One REAL proxied chat completion with the fresh key: the owned
     # ProviderMock is the upstream (documented IO substitution), so the
     # counters below are non-zero evidence that the later edits must not
-    # reset.
+    # reset. The scenario uses the INDEPENDENT still-priced nano model:
+    # test_10's G18 pricing disable (which runs earlier in the module)
+    # disables the gpt-4.1-mini rule, and that disabled state is kept.
     from datetime import UTC, timedelta
 
     proxy = httpx.Client(base_url=env["base_url"], timeout=30)
+    # BEFORE authentication success on the current material (local
+    # /v1/models: no provider call is made for this surface).
+    pre_models = proxy.get(
+        "/v1/models", headers={"Authorization": f"Bearer {legacy_key_plaintext}"}
+    )
+    assert pre_models.status_code == 200, pre_models.status_code
     chat = proxy.post(
         "/v1/chat/completions",
         headers={"Authorization": f"Bearer {legacy_key_plaintext}"},
-        json={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "219"}]},
+        json={"model": "gpt-4.1-nano", "messages": [{"role": "user", "content": "219"}]},
     )
     proxy.close()
     assert chat.status_code == 200, chat.text[:400]
@@ -3769,6 +3789,7 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
 
     # 7) Rotation with the old material INVALIDATED: one-time replacement
     # plaintext, old key revoked, no email row (none delivery), audits.
+    before_rotate_ids = set(_gateway_keys(env))
     detail = state.get(f"/admin/keys/{legacy_key}")
     resp = state.post(
         f"/admin/keys/{legacy_key}/rotate",
@@ -3794,11 +3815,31 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
     assert "Yes" in resp.text
     old_key = _gateway_keys(env)[legacy_key]
     assert old_key["status"] == "revoked"
-    rotated_id = next(iter(set(_gateway_keys(env)) - before_ids - {legacy_key}))
+    rotated_new_ids = set(_gateway_keys(env)) - before_rotate_ids
+    assert len(rotated_new_ids) == 1, (
+        f"exactly one replacement key expected: {sorted(rotated_new_ids)}"
+    )
+    rotated_id = next(iter(rotated_new_ids))
     rotated_key = _gateway_keys(env)[rotated_id]
     assert rotated_key["status"] == "active"
     assert rotated_key["token_hash"] != old_key["token_hash"]
     assert _audits(env, "rotate_key")
+    # REAL material invalidation, not only DB facts: the old bearer was
+    # accepted BEFORE the rotation (step 2b) and is now refused, while
+    # the replacement bearer is accepted - on local /v1/models (no
+    # provider call). The DB revoked/hash facts above remain asserted.
+    verify = httpx.Client(base_url=env["base_url"], timeout=30)
+    old_after = verify.get(
+        "/v1/models", headers={"Authorization": f"Bearer {legacy_key_plaintext}"}
+    )
+    # The auth law refuses a revoked key with 403 permission_error
+    # (GatewayKeyRevokedError), not 401.
+    assert old_after.status_code == 403, old_after.status_code
+    new_ok = verify.get(
+        "/v1/models", headers={"Authorization": f"Bearer {new_shown.group(1)}"}
+    )
+    assert new_ok.status_code == 200, new_ok.status_code
+    verify.close()
     # The replacement plaintext is NEVER re-displayed on any other surface.
     assert new_shown.group(1) not in state.get(f"/admin/keys/{rotated_id}").text
     # Correct one-time destination: none delivery creates no email row.
@@ -3835,6 +3876,10 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
             "max_retries": "0",
             "notes": "",
             "notes_intent": "replace",
+            # The owned models server is loopback HTTP; the generic
+            # insecure-HTTP backend confirmation law is unchanged, so the
+            # confirmation is submitted explicitly.
+            "confirm_insecure_http": "true",
             "reason": REASON,
         },
     )
@@ -3863,7 +3908,10 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
             "visible_in_models": "true",
             "streaming": "true",
             "local_function_tools": "",
-            "confirm_enable_unqualified": "",
+            # The SetupService sets the discovered route enabled EXACTLY
+            # from this acknowledgement; the intended case is enabled, so
+            # the acknowledgement is submitted explicitly.
+            "confirm_enable_unqualified": "true",
             "confirm_execute": "true",
             "reason": REASON,
         },
@@ -3877,7 +3925,11 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
             await session.execute(
                 select(ModelRoute).where(
                     ModelRoute.provider == "syn219d",
-                    ModelRoute.requested_model == "syn-219-model-a",
+                    # No explicit public-model mapping is submitted: the
+                    # setup default maps the requested model to
+                    # provider/upstream. The pricing rule below keeps the
+                    # original upstream model name.
+                    ModelRoute.requested_model == "syn219d/syn-219-model-a",
                 )
             )
         ).scalars().all()
@@ -3924,6 +3976,7 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
     )
     assert issue_match, "template detail must offer the current-revision issue form"
     issue_action = f"/admin/templates/{issue_match.group(1)}/revisions/{issue_match.group(2)}/create-key"
+    before_issue_ids = set(_gateway_keys(env))
     issue_resp = state.post(
         issue_action,
         {
@@ -3943,7 +3996,11 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
     )
     assert issued_shown, "template issue must display the plaintext once"
     assert issue_resp.text.count(issued_shown.group(1)) == 1
-    issued_id = next(iter(set(_gateway_keys(env)) - before_ids - {legacy_key, rotated_id}))
+    new_issued_ids = set(_gateway_keys(env)) - before_issue_ids
+    assert len(new_issued_ids) == 1, (
+        f"exactly one issued key expected: {sorted(new_issued_ids)}"
+    )
+    issued_id = next(iter(new_issued_ids))
     env["issued_key_plaintext"] = issued_shown.group(1)
     issued_key = _gateway_keys(env)[issued_id]
     assert issued_key["owner_id"] == legacy_owner
@@ -3974,7 +4031,9 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
     )
     assert resp.status_code in (302, 303), (resp.status_code, resp.text[:300])
     assert "/admin/login" in resp.headers["location"]
-    bounced = state.get("/admin")
+    # Raw client: the bounced request is the INTENDED refusal (303 to
+    # login), while _LoginState.get asserts 200 internally.
+    bounced = state.client.get("/admin")
     assert bounced.status_code in (302, 303)
     assert "/admin/login" in bounced.headers["location"]
     state.login(SUPERADMIN_EMAIL, ADMIN_PASSWORD)
@@ -4016,10 +4075,16 @@ def test_16_negatives(env219: dict[str, Any]) -> None:
 
     state: _LoginState = env["superadmin"]
     manifest = env["manifest"]
-    k2, k3 = manifest["k2"], manifest["k3"]
-    limits_before = {
-        k: _gateway_keys(env)[k]["token_limit_total"] for k in (k2, k3)
-    }
+    # k2 is the clean ordinary, unfenced, valid-policy seeded key: k3
+    # (held) and k5 (active) carry external-tool fences that lawfully
+    # block configuration updates, k6 deliberately carries frozen
+    # Codex-specific response metadata for migration (the generic export
+    # lawfully refuses to administer it), and k1/k4 are trusted-
+    # calibration purpose. The tampered-intent negative needs only ONE
+    # planned key, and the unchanged-state oracles bind to the ACTUAL
+    # selected key.
+    k2 = manifest["k2"]
+    limits_before = {k2: _gateway_keys(env)[k2]["token_limit_total"]}
 
     # Wrong CSRF: fixed 400 refusal, zero writes.
     bad = state.post(
@@ -4058,12 +4123,19 @@ def test_16_negatives(env219: dict[str, Any]) -> None:
     assert "219 recovery canary reason" in recovery.text, "submitted input not preserved"
     assert len(_gateway_keys(env)) == before_count, "validation recovery wrote a key"
 
-    # Tampered batch review intent: refused with zero writes.
+    # Tampered batch review intent: refused with zero writes (the valid
+    # plan above targets the clean ordinary key k2).
     plan = state.post(
         "/admin/key-batch/plan",
-        _batch_plan_fields(_csrf(state.get("/admin/key-batch").text), manifest),
+        _batch_plan_fields(
+            _csrf(state.get("/admin/key-batch").text),
+            manifest,
+            key_ids=manifest["k2"],
+        ),
     )
-    assert plan.status_code == 200
+    assert plan.status_code == 200, (
+        f"batch plan refused: {plan.status_code} {_flash_error(plan.text)}"
+    )
     token = _token(plan.text, BATCH_TOKEN_RE)
     tampered = token[:-1] + ("0" if token[-1] != "0" else "1")
     tampered_resp = state.post(
@@ -4080,7 +4152,6 @@ def test_16_negatives(env219: dict[str, Any]) -> None:
     if tampered_resp.status_code == 200:
         assert "applied" not in tampered_resp.text.lower() or "refused" in tampered_resp.text.lower()
     assert _gateway_keys(env)[k2]["token_limit_total"] == limits_before[k2]
-    assert _gateway_keys(env)[k3]["token_limit_total"] == limits_before[k3]
 
     # Wrong-SESSION route review apply: the purpose-bound signed route
     # review token is bound to the superadmin's admin user AND session.

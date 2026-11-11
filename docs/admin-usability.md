@@ -1942,3 +1942,48 @@ dependency**: the change is application templates plus the shared
 record-choice macro/JS and the calibration preview endpoint, deployed by an
 application restart/recreate. Field names, submitted values, routes, review
 ownership, confirmations, and CSRF contracts are unchanged.
+
+### 20.6 219-b corrections (same PR)
+
+219-b completed the concrete guidance/interaction gaps root demonstrated
+in the 219-a final head:
+
+- **Picker help on the ACTUAL visible controls**: the shared
+  record-choice macro now links the control's own help span from the
+  unnamed menu-search input as well as the visible main field for
+  single-value pickers. The batch cohort picker therefore renders main
+  plus menu-search references to one unique help definition, and the
+  batch 209 form-page oracle asserts each actual control association
+  and the unique help definition (the search help is retained).
+- **Explain-model picker**: the key-detail explain-model control is the
+  shared searchable known-model picker; its main input and the
+  menu-search box both reference the control's own
+  `key-explain-model-help` span, verified in the real Chromium DOM by
+  the 219 browser oracle.
+- **Create document-mode disclosure**: on the key-create policy surface
+  the document label/editor/help group is disclosed when the policy
+  source is the advanced configuration document and hidden in guided
+  mode; the inactive guided policy sections are compacted to their
+  one-line note. The 219-a toggle was inverted and is corrected; the
+  207 visible-editor and canonical-policy persistence consumers keep
+  their assertions.
+- **Calibration JSON download boundary**: the download refuses the WHOLE
+  artifact (fixed safe 400, no echo) when any nested canonical string is
+  a known incoming authentication alias or recognized complete
+  credential material, and refuses oversize output at the finite 1 MiB
+  local ceiling (explicit refusal, never truncation). Success and
+  refusal responses - including the malformed-key early 404 - are
+  private no-store/no-cache and nosniff. The confirmed template
+  creation on the same page is unchanged.
+- **Compatibility readiness direction**: an invalid public gateway URL
+  or unmet readiness prerequisite renders fixed useful setup direction
+  (including the invalid `PUBLIC_BASE_URL` case, no exception echo)
+  while the canonical URL gates are preserved.
+- **Usage JSON export audit scope**: a key-scoped export's audit row
+  records the exact scoped record UUID as top-level
+  `scope_gateway_uuid`. The shared audit sanitizer intentionally removes
+  the nested `filters.gateway_key_id` (key-named fields are sensitive
+  and never exempted); the route records the already-parsed/validated
+  UUID under the non-credential key instead of silently dropping the
+  scope. The canonical JSON payload/filter shape, the alias checks, and
+  the actor/count facts are unchanged.
