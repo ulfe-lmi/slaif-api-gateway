@@ -960,8 +960,10 @@ async def main() -> int:
                     "streaming_live_burn_triggered": True,
                     "streaming_live_burn_stop_reason": "cost",
                     "estimated_tokens_at_stop": 1234,
-                    "estimated_cost_eur_at_stop": Decimal("0.000123456"),
-                    "cost_margin_eur": Decimal("0.000050000"),
+                    # Canonical JSONB form: exact decimal TEXT (the production
+                    # writer serializes via _format_eur); JSONB cannot hold Decimal.
+                    "estimated_cost_eur_at_stop": "0.000123456",
+                    "cost_margin_eur": "0.000050000",
                     "token_margin": 100,
                     "final_provider_usage_available": True,
                     "estimate_is_invoice_grade": False,
