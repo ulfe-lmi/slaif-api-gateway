@@ -2201,8 +2201,8 @@ completion, and installed legacy outcomes (objective 219, SAME PR #376,
   SHA256 a6f0dbc8994bde1c14490ce37df741b06dc0b7012b391cfc3d1044eea877577f).
 - Focused unit batch after the rendered all-field correction (219, 209,
   214, 207, create-templates, actions-templates, 212, table-rows,
-  inventory, keys-routes, key-create-routes): 325/325 passed, 0 failed,
-  0 skipped, PYTEST_EXIT=0 (2026-11-11 15:01 UTC); log SHA256
+  inventory, keys-routes, key-create-routes): 461/461 passed, 0 failed,
+  0 skipped, PYTEST_EXIT=0, 112.598 s (2026-11-11 15:00 UTC); log SHA256
   60e261e73aaab08d190ed462883327434911d5ffa65bd306ecd42c25c01e1042,
   JUnit SHA256
   c057162d7dc35c246ef6b6869cea6a721197692c4a747f64644d3f3dd3534ac5
