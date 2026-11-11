@@ -2008,8 +2008,9 @@ content-retention behavior. It completes:
   setup help for an invalid public gateway URL/readiness prerequisite;
   routing priority direction and media-estimation ceilings explained with
   current bounds; the accepted 217 catalog layout retained; and the 218
-  account forms keep exact nonempty/128-char bounds and all confirmations
-  with the repeated secret-handling prose shortened to plain language.
+  account forms retained unchanged by 219 and revalidated at the current
+  head (exact nonempty/128-char bounds, all confirmations; the
+  twelve-character recommendation remains advice, not a password policy).
 
 ### ONE final installed whole-GUI workflow (the 219 gate)
 

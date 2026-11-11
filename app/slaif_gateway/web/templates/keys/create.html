@@ -295,17 +295,17 @@
       <div data-guided-policy-body>
       <p class="muted">Applies only to <code>{{ chat_live_burn_surface.endpoint_label }}</code> with <code>stream=true</code>. Final provider usage/cost remains authoritative.</p>
       <label class="checkbox-row">
-        <input id="create-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true %}checked{% endif %} data-streaming-live-burn-enabled>
+        <input id="create-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true %}checked{% endif %} data-streaming-live-burn-enabled aria-describedby="create-chat-streaming-live-burn-hint">
         Enable live-burn monitoring for Chat Completions streaming
       </label>
       <div id="create-chat-streaming-live-burn-fields" class="form-grid{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} live-burn-fields-disabled{% endif %}" data-streaming-live-burn-margin-fields>
         <label>
           Cost margin (EUR)
-          <input name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ form.chat_streaming_live_burn_cost_margin_eur or '0' }}" inputmode="decimal" autocomplete="off"{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
+          <input id="create-chat-streaming-live-burn-cost-margin" name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ form.chat_streaming_live_burn_cost_margin_eur or '0' }}" inputmode="decimal" autocomplete="off" aria-describedby="create-chat-streaming-live-burn-hint"{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
         </label>
         <label>
           Output token margin
-          <input name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ form.chat_streaming_live_burn_token_margin or '0' }}" inputmode="numeric" autocomplete="off"{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
+          <input id="create-chat-streaming-live-burn-token-margin" name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ form.chat_streaming_live_burn_token_margin or '0' }}" inputmode="numeric" autocomplete="off" aria-describedby="create-chat-streaming-live-burn-hint"{% if not (form.chat_streaming_live_burn_enabled == "true" or form.chat_streaming_live_burn_enabled is sameas true) %} disabled{% endif %}>
         </label>
       </div>
       <p id="create-chat-streaming-live-burn-hint" class="muted small">

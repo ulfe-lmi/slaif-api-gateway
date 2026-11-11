@@ -1626,10 +1626,10 @@ content-retention change:
   direction and media-estimation ceilings are explained with current bounds
   (estimates are not final billed usage and no general client compatibility is
   inferred); the accepted 217 catalog layout is retained; and the 218 account
-  forms keep the exact nonempty/128-character GUI bounds and all
-  confirmations, with the repeated technical secret-handling prose shortened
-  to plain purpose/consequence language (the twelve-character recommendation
-  remains advice, not a password policy).
+  forms and their purpose/consequence guidance are retained unchanged by 219
+  and revalidated at the current head (exact nonempty/128-character GUI
+  bounds, all session/role consequences and confirmations; the
+  twelve-character recommendation remains advice, not a password policy).
 - **Boundaries preserved**: field names, submitted values, routes, review
   ownership, confirmations and CSRF contracts are unchanged; no-JS paths,
   shared table sorting, row ordinals, pagination and exact numeric display are

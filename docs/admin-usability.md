@@ -1920,9 +1920,10 @@ creation is supported on the same page, below the preview.
 - **Routing priority and media ceilings**: help states that LOWER priority
   numbers are preferred and that media-estimation ceilings are estimates,
   not final billed usage.
-- **Account forms**: the 218 account forms keep their exact bounds and
-  confirmations with the repeated technical secret-handling prose shortened
-  to plain purpose/consequence language; the twelve-character password
+- **Account forms**: the 218 account forms and their purpose/consequence
+  guidance are RETAINED unchanged by 219 and revalidated at the current
+  head: exact nonempty/128-character password bounds, all session/role
+  consequences and confirmations; the twelve-character password
   recommendation remains advice, not a policy.
 
 ### 20.4 No-JS, keyboard, and narrow behavior

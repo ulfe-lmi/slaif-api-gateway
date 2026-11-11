@@ -714,7 +714,10 @@ def _template_ids(src: str) -> set[str]:
 
 
 def _label_for_ids(src: str) -> set[str]:
-    return set(re.findall(r"""<label\b[^>]*\bfor=["']([A-Za-z0-9_:-]+)["']""", src))
+    # 219-b: the for= value is captured verbatim, so a Jinja-templated
+    # for="{{ ... }}" matches the control's identically templated id
+    # (same literal -> same rendered association).
+    return set(re.findall(r"""<label\b[^>]*\bfor=["']([^"']+)["']""", src))
 
 
 _LABEL_CONTROL_RE = re.compile(
@@ -731,7 +734,11 @@ def _native_entry_controls(src: str):
     control_id) for every native entry control. The enclosing <label> depth
     and the innermost <fieldset aria-describedby=...> are tracked in a single
     pass; a radio/checkbox group may carry its help on the fieldset (the
-    accessible grouping pattern) instead of each control."""
+    accessible grouping pattern) instead of each control. 219-b: UNNAMED
+    visible controls (Jinja-driven search boxes) and Jinja-named controls
+    (name="{{ ... }}", resolved to literals at render time) are part of the
+    population -- they are no longer skipped, so every rendered visible entry
+    control is accounted for at source level too."""
     depth = 0
     fieldset_desc: list[str] = []
     for m in _LABEL_CONTROL_RE.finditer(src):
@@ -754,27 +761,37 @@ def _native_entry_controls(src: str):
             tagname = m.group(1)
             gt = tok.rfind(">")
             attrs = tok[len(tagname):gt]
-            name_m = re.search(r"""name=["']([a-z0-9_]+)["']""", attrs)
-            if not name_m:
-                continue
+            # 219-b: capture the name verbatim. A blank name (unnamed
+            # JS-driven control) or a Jinja expression name
+            # (name="{{ ... }}") is still a visible entry control.
+            name_m = re.search(r"""name=["']([^"']*)["']""", attrs)
+            name = name_m.group(1) if name_m else ""
             if re.search(r"(?<![A-Za-z0-9_-])hidden(?![A-Za-z0-9_-])", attrs):
                 # A control carrying the `hidden` attribute is invisible and
                 # unfocusable (e.g. the openai-assisted import-bridge
                 # payload textarea); visible-entry accounting does not apply.
+                continue
+            if re.search(r"(?<![A-Za-z0-9_-])readonly(?![A-Za-z0-9_-])", attrs):
+                # A read-only control is not an entry field (e.g. the
+                # openai-assisted generated-TSV review box); it is rendered
+                # for review, not for operator input.
                 continue
             if tagname == "input":
                 type_m = re.search(r"""type=["']([a-z-]+)["']""", attrs)
                 itype = type_m.group(1) if type_m else "text"
                 if itype in _NON_ENTRY_INPUT_TYPES:
                     continue
-            id_m = re.search(r"""id=["']([A-Za-z0-9_:-]+)["']""", attrs)
+            # 219-b: the id= value is captured verbatim (Jinja-templated ids
+            # included) so the label association check compares like with
+            # like against _label_for_ids.
+            id_m = re.search(r"""\bid=["']([^"']+)["']""", attrs)
             desc_m = re.search(r"""aria-describedby=["']([^"']+)["']""", attrs)
             describedby = desc_m.group(1) if desc_m else ""
             if not describedby and tagname == "input" and itype in ("checkbox", "radio") and fieldset_desc:
                 describedby = fieldset_desc[-1]
             yield (
                 tagname,
-                name_m.group(1),
+                name,
                 depth > 0,
                 "aria-label=" in attrs,
                 describedby,
@@ -812,7 +829,11 @@ def _entry_fields(template: str):
             if "{{" in describedby:
                 # Jinja-generated association (e.g. the policy selector's
                 # per-dimension help id); wired in-template and not
-                # statically resolvable, so treat it as associated.
+                # statically resolvable, so treat it as associated. 219-b:
+                # track the templated id too, so the per-page uniqueness
+                # audit still proves the association target is defined
+                # exactly once in this template.
+                help_ids = (describedby,)
                 help_ok = True
             else:
                 help_ids = tuple(x for x in describedby.split() if x)

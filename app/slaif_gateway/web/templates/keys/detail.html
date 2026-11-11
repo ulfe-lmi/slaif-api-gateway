@@ -638,17 +638,17 @@
         <form method="post" action="/admin/keys/{{ key.id }}{{ chat_live_burn_surface.update_route_path }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label class="checkbox-row">
-            <input id="detail-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if key.chat_streaming_live_burn_policy.enabled %}checked{% endif %} data-streaming-live-burn-enabled>
+            <input id="detail-chat-streaming-live-burn-enabled" type="checkbox" name="{{ chat_live_burn_surface.enabled_field_name }}" value="true" {% if key.chat_streaming_live_burn_policy.enabled %}checked{% endif %} data-streaming-live-burn-enabled aria-describedby="detail-chat-streaming-live-burn-hint">
             Enable live-burn monitoring for Chat Completions streaming
           </label>
           <div id="detail-chat-streaming-live-burn-fields" class="form-grid{% if not key.chat_streaming_live_burn_policy.enabled %} live-burn-fields-disabled{% endif %}" data-streaming-live-burn-margin-fields>
             <label>
               Cost margin (EUR)
-              <input name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur | inputnum }}" inputmode="decimal" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
+              <input id="detail-chat-streaming-live-burn-cost-margin" name="{{ chat_live_burn_surface.cost_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.cost_margin_eur | inputnum }}" inputmode="decimal" autocomplete="off" aria-describedby="detail-chat-streaming-live-burn-hint"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
             <label>
               Output token margin (tokens)
-              <input name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
+              <input id="detail-chat-streaming-live-burn-token-margin" name="{{ chat_live_burn_surface.token_margin_field_name }}" value="{{ key.chat_streaming_live_burn_policy.token_margin }}" inputmode="numeric" autocomplete="off" aria-describedby="detail-chat-streaming-live-burn-hint"{% if not key.chat_streaming_live_burn_policy.enabled %} disabled{% endif %}>
             </label>
           </div>
           <label>

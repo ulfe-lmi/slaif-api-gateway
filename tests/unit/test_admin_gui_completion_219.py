@@ -42,6 +42,7 @@ from tests.unit.test_admin_keys_routes import (
     _admin_user,
     _app,
     _calibration_preview,
+    _detail,
     _login,
     _trusted_detail,
 )
@@ -656,3 +657,215 @@ def test_compatibility_readiness_help_for_invalid_public_base_url(
     assert f"/admin/routes/{route_id}/codex-profile/" not in body
     # Empty reasons render the fixed "No blocking reasons" copy.
     assert "No blocking reasons" in body
+
+
+# ---------------------------------------------------------------------------
+# 219-b: rendered whole-field guidance audit (real Jinja render through the
+# fake-authorized ASGI fixture; no DB, network, or browser).
+#
+# The source-structure inventory (tests/unit/test_admin_usability_inventory.py)
+# cannot see which controls are VISIBLE in an actual rendered state: hidden
+# attributes, mode-dependent bodies, and <details> disclosures only exist
+# after rendering. This audit renders the real key-create and key-detail
+# pages and requires EVERY visible editable/choice control -- unnamed
+# JS-driven search inputs, Jinja-named dynamic fields, and
+# disabled-but-displayed policy lists included; hidden, readonly, and
+# submit-type controls excluded -- to carry a RESOLVING description: its own
+# aria-describedby (checkbox/radio: the innermost fieldset's) pointing at a
+# defined element with non-empty text. Create is audited in BOTH
+# policy-source states (the page's own document-mode JS rules emulated on the
+# rendered tree); detail is audited with all <details> disclosures treated as
+# open, matching the native rendered probe.
+# ---------------------------------------------------------------------------
+
+_VOID_TAGS = frozenset(
+    {
+        "area", "base", "br", "col", "embed", "hr", "img", "input",
+        "link", "meta", "param", "source", "track", "wbr",
+    }
+)
+_NON_ENTRY_INPUT_TYPES = frozenset(
+    {"hidden", "submit", "button", "image", "reset"}
+)
+
+
+class _RenderNode:
+    __slots__ = ("tag", "attrs", "parent", "children", "text")
+
+    def __init__(self, tag, attrs, parent) -> None:
+        self.tag = tag
+        self.attrs = dict(attrs)
+        self.parent = parent
+        self.children = []
+        self.text = []
+
+
+def _parse_rendered(html_text: str) -> _RenderNode:
+    from html.parser import HTMLParser
+
+    root = _RenderNode("#root", (), None)
+    stack = [root]
+
+    class _Parser(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            node = _RenderNode(tag, attrs, stack[-1])
+            stack[-1].children.append(node)
+            if tag not in _VOID_TAGS:
+                stack.append(node)
+
+        def handle_startendtag(self, tag, attrs):
+            stack[-1].children.append(_RenderNode(tag, attrs, stack[-1]))
+
+        def handle_endtag(self, tag):
+            for i in range(len(stack) - 1, 0, -1):
+                if stack[i].tag == tag:
+                    del stack[i:]
+                    break
+
+        def handle_data(self, data):
+            stack[-1].text.append(data)
+
+    _Parser().feed(html_text)
+    return root
+
+
+def _iter_render_nodes(root: _RenderNode):
+    stack = list(root.children)
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(node.children)
+
+
+def _render_text(node: _RenderNode) -> str:
+    parts = list(node.text)
+    for child in node.children:
+        parts.append(_render_text(child))
+    return "".join(parts)
+
+
+def _hidden_attr(node: _RenderNode) -> bool:
+    cur = node
+    while cur is not None:
+        if "hidden" in cur.attrs:
+            return True
+        cur = cur.parent
+    return False
+
+
+def _apply_create_policy_source_state(root: _RenderNode, state: str) -> None:
+    """Emulate the create page's own document-mode JS on the rendered tree:
+    guided -> the configuration-document group is hidden; document -> each
+    guided policy body is hidden and its one-line compact note disclosed.
+    This is exactly the page's documented setDocumentMode(on) behavior."""
+    for node in _iter_render_nodes(root):
+        if state == "guided":
+            if "data-create-configuration-document-group" in node.attrs:
+                node.attrs["hidden"] = None
+        elif state == "document":
+            if "data-guided-policy-body" in node.attrs:
+                node.attrs["hidden"] = None
+            elif "data-guided-compact-note" in node.attrs:
+                node.attrs.pop("hidden", None)
+
+
+def _rendered_visible_control_problems(
+    html_text: str, *, state: str | None = None
+) -> tuple[int, list[str]]:
+    root = _parse_rendered(html_text)
+    if state is not None:
+        _apply_create_policy_source_state(root, state)
+    defined: dict[str, _RenderNode] = {}
+    for node in _iter_render_nodes(root):
+        node_id = node.attrs.get("id")
+        if node_id and node_id not in defined:
+            defined[node_id] = node
+    problems: list[str] = []
+    audited = 0
+    for node in _iter_render_nodes(root):
+        tag = node.tag
+        itype = ""
+        if tag == "input":
+            itype = (node.attrs.get("type") or "text").lower()
+            if itype in _NON_ENTRY_INPUT_TYPES:
+                continue
+        elif tag not in ("select", "textarea"):
+            continue
+        if "readonly" in node.attrs:
+            continue
+        if _hidden_attr(node):
+            continue
+        audited += 1
+        id_part = f" id={node.attrs['id']}" if node.attrs.get("id") else ""
+        where = f"{tag}[name={node.attrs.get('name')!r}{id_part}]"
+        tokens = (node.attrs.get("aria-describedby") or "").split()
+        if not tokens and itype in ("checkbox", "radio"):
+            fieldset = node.parent
+            while fieldset is not None and fieldset.tag != "fieldset":
+                fieldset = fieldset.parent
+            if fieldset is not None:
+                tokens = (fieldset.attrs.get("aria-describedby") or "").split()
+        if not tokens:
+            problems.append(f"{where}: no aria-describedby (own or fieldset)")
+            continue
+        for token in tokens:
+            target = defined.get(token)
+            if target is None:
+                problems.append(f"{where}: references undefined id {token!r}")
+            elif not _render_text(target).strip():
+                problems.append(f"{where}: references empty help id {token!r}")
+    return audited, problems
+
+
+def test_rendered_create_all_visible_controls_resolve_descriptions(
+    monkeypatch,
+) -> None:
+    """219-b: on the REAL rendered create page, every visible editable/choice
+    control -- in BOTH policy-source states -- resolves its description to a
+    defined, non-empty help element. Unnamed older-provider/model search
+    inputs, the six dual policy selects, and the dynamic live-burn fields are
+    part of the population; no control may be excluded or counted as help
+    elements."""
+    _patch_options(monkeypatch)
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+    response = client.get("/admin/keys/create")
+    assert response.status_code == 200
+    counts: dict[str, int] = {}
+    for state in ("guided", "document"):
+        audited, problems = _rendered_visible_control_problems(
+            response.text, state=state
+        )
+        counts[state] = audited
+        assert problems == [], f"create[{state}]:\n" + "\n".join(problems)
+    # The full guided form is audited, and document mode actually hides the
+    # guided policy bodies (the remaining visible controls -- owner/cohort,
+    # validity, policy source, the configuration document, delivery and
+    # reason -- are still every one of them audited).
+    assert counts["guided"] > 20, f"implausible guided population: {counts}"
+    assert counts["document"] > 5, f"implausible document population: {counts}"
+    assert counts["document"] < counts["guided"], (
+        f"document mode did not compact the guided bodies: {counts}"
+    )
+
+
+def test_rendered_key_detail_all_visible_controls_resolve_descriptions(
+    monkeypatch,
+) -> None:
+    """219-b: on the REAL rendered key-detail page (standard AND trusted),
+    every visible editable/choice control resolves its description to a
+    defined, non-empty help element, with all <details> disclosures treated
+    as open (matching the native rendered probe's population)."""
+    client = TestClient(_app())
+    _login(monkeypatch, client)
+    for key in (_detail(), _trusted_detail()):
+        _patch_get_detail(monkeypatch, key)
+        response = client.get(f"/admin/keys/{key.id}")
+        assert response.status_code == 200
+        audited, problems = _rendered_visible_control_problems(response.text)
+        assert (
+            audited > 20
+        ), f"implausible audited population for {key.key_purpose}: {audited}"
+        assert problems == [], (
+            f"detail[{key.key_purpose}]:\n" + "\n".join(problems)
+        )

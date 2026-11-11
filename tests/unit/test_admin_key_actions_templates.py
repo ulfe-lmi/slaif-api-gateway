@@ -259,8 +259,31 @@ def test_key_detail_renders_disabled_chat_live_burn_fields(monkeypatch) -> None:
 
     assert 'name="chat_streaming_live_burn_enabled" value="true" checked' not in html
     assert "live-burn-fields-disabled" in html
-    assert 'name="chat_streaming_live_burn_cost_margin_eur" value="-0.250000000" inputmode="decimal" autocomplete="off" disabled' in html
-    assert 'name="chat_streaming_live_burn_token_margin" value="-250" inputmode="numeric" autocomplete="off" disabled' in html
+    # Adapted to the actual DOM: the dynamic margin inputs carry their
+    # stable ids and the linked live-burn help association (219-b), so
+    # assert the real attribute set on the actual control tags.
+    cost = re.search(
+        r'<input[^>]*name="chat_streaming_live_burn_cost_margin_eur"[^>]*>',
+        html,
+    )
+    token = re.search(
+        r'<input[^>]*name="chat_streaming_live_burn_token_margin"[^>]*>',
+        html,
+    )
+    assert cost, "cost margin input missing"
+    assert token, "token margin input missing"
+    assert 'value="-0.250000000"' in cost.group(0)
+    assert 'inputmode="decimal"' in cost.group(0)
+    assert "disabled" in cost.group(0)
+    assert 'value="-250"' in token.group(0)
+    assert 'inputmode="numeric"' in token.group(0)
+    assert "disabled" in token.group(0)
+    assert (
+        'aria-describedby="detail-chat-streaming-live-burn-hint"' in cost.group(0)
+    )
+    assert (
+        'aria-describedby="detail-chat-streaming-live-burn-hint"' in token.group(0)
+    )
 
 
 def test_key_detail_renders_usage_reset_form(monkeypatch) -> None:

@@ -388,6 +388,84 @@ def _assert_enhanced_picker_search_help(page: object, help_id: str) -> None:
         )
 
 
+def _open_all_details(page: object) -> None:
+    """219-b: match the native rendered probe's population: all existing
+    <details> disclosures open before the whole-field sweep."""
+    page.evaluate(  # type: ignore[attr-defined]
+        "document.querySelectorAll('details').forEach((d) => { d.open = true; })"
+    )
+
+
+def _assert_all_visible_entry_controls_described(page: object) -> int:
+    """219-b: EVERY visible editable/choice control on the real page --
+    unnamed JS-driven inputs, dynamically named inputs, and
+    disabled-but-displayed lists included; hidden (computed CSS), readonly,
+    and submit-type controls excluded -- carries a RESOLVING description:
+    its own aria-describedby, or for checkbox/radio the innermost fieldset's,
+    pointing at a defined, non-empty element. Real DOM + computed CSS;
+    returns the audited control count."""
+    result = page.evaluate(  # type: ignore[attr-defined]
+        """() => {
+            const problems = [];
+            let count = 0;
+            const isVisible = (el) => {
+                let cur = el;
+                while (cur && cur.nodeType === 1) {
+                    const style = getComputedStyle(cur);
+                    if (style.display === "none" || style.visibility === "hidden") {
+                        return false;
+                    }
+                    cur = cur.parentElement;
+                }
+                return true;
+            };
+            const els = document.querySelectorAll("input, select, textarea");
+            for (const el of els) {
+                if (el.tagName === "INPUT") {
+                    const t = (el.type || "text").toLowerCase();
+                    if (["hidden", "submit", "button", "image", "reset"].includes(t)) {
+                        continue;
+                    }
+                }
+                if (el.hasAttribute("readonly")) continue;
+                if (!isVisible(el)) continue;
+                count++;
+                const where = el.tagName.toLowerCase()
+                    + (el.name ? "[name=" + el.name + "]" : " [unnamed]")
+                    + (el.id ? "#" + el.id : "");
+                let tokens = (el.getAttribute("aria-describedby") || "")
+                    .trim().split(/\\s+/).filter(Boolean);
+                if (!tokens.length && el.tagName === "INPUT"
+                        && ["checkbox", "radio"].includes(el.type)) {
+                    let cur = el.parentElement;
+                    while (cur && cur.tagName !== "FIELDSET") cur = cur.parentElement;
+                    if (cur) {
+                        tokens = (cur.getAttribute("aria-describedby") || "")
+                            .trim().split(/\\s+/).filter(Boolean);
+                    }
+                }
+                if (!tokens.length) {
+                    problems.push(where + ": no aria-describedby");
+                    continue;
+                }
+                for (const id of tokens) {
+                    const target = document.getElementById(id);
+                    if (!target) {
+                        problems.push(where + ": undefined help id " + id);
+                    } else if (!target.textContent.trim()) {
+                        problems.push(where + ": empty help id " + id);
+                    }
+                }
+            }
+            return { count: count, problems: problems };
+        }"""
+    )
+    assert result["problems"] == [], (
+        "unresolved visible-control descriptions: " + "; ".join(result["problems"])
+    )
+    return result["count"]
+
+
 def _db(database_url: str, coro_factory):
     box: dict[str, Any] = {}
 
@@ -459,6 +537,26 @@ def test_create_page_visual_order_linked_help_and_narrow(
     # element somewhere on the page.
     _assert_enhanced_picker_search_help(page, "create-owner-help")
     _assert_enhanced_picker_search_help(page, "create-cohort-help")
+    # 219-b: whole-field native audit -- EVERY visible editable/choice
+    # control (unnamed search inputs, dynamically named fields, and
+    # disabled-but-displayed policy lists included) resolves a real
+    # description element in the real DOM, in BOTH policy-source states.
+    _open_all_details(page)
+    guided_count = _assert_all_visible_entry_controls_described(page)
+    assert guided_count >= 50, (
+        f"guided create sweep population implausible: {guided_count}"
+    )
+    page.select_option('select[name="policy_source"]', "configuration")
+    page.wait_for_selector(  # type: ignore[attr-defined]
+        "[data-create-configuration-document-group]", state="visible"
+    )
+    document_count = _assert_all_visible_entry_controls_described(page)
+    assert document_count < guided_count, (
+        "document mode did not hide the guided policy bodies"
+    )
+    assert document_count >= 5, (
+        f"document create sweep population implausible: {document_count}"
+    )
     _assert_no_key_material(page)
     page.screenshot(
         path=str(SCREENSHOT_DIR / "219-create-policy-source-desktop.png"),
@@ -535,6 +633,23 @@ def test_key_detail_linked_help_and_keyboard_ext_tool_update(
         'select[name="external_tool_mode"]',
         "el => el.value",
     ) == "strict_bounded"
+    # 219-b: whole-field native audit -- the trusted detail page (all
+    # existing disclosures open) AND a standard detail page must each
+    # resolve every visible control's description in the real DOM.
+    _open_all_details(page)
+    assert _assert_all_visible_entry_controls_described(page) >= 50, (
+        "trusted detail sweep population implausible"
+    )
+    standard_id: str = seed["control_key_id"]
+    page.goto(f"{base_url}/admin/keys/{standard_id}")  # type: ignore[attr-defined]
+    page.wait_for_selector('form[action="/admin/keys/' + standard_id + '/policy"]')  # type: ignore[attr-defined]
+    _open_all_details(page)
+    assert _assert_all_visible_entry_controls_described(page) >= 50, (
+        "standard detail sweep population implausible"
+    )
+    # Return to the trusted key for the keyboard-only operation below.
+    page.goto(f"{base_url}/admin/keys/{trusted_id}")  # type: ignore[attr-defined]
+    page.wait_for_selector('form[action="/admin/keys/' + trusted_id + '/external-tool-policy"]')  # type: ignore[attr-defined]
     _assert_no_key_material(page)
     page.screenshot(
         path=str(SCREENSHOT_DIR / "219-key-detail-ext-tool-desktop.png"),
