@@ -584,6 +584,22 @@ async def main() -> int:
                 )
             await session.flush()
 
+            # G06 setup state: the mini route starts from a minimal valid
+            # capabilities document carrying the version-1 media envelope
+            # the guided media leaves REFINE. The strict config validator
+            # refuses a NEW media block without the version envelope, so
+            # the envelope is pre-existing setup state - the reviewed
+            # leaves under review are the numeric values.
+            routes[0].capabilities = {
+                "media_input_estimation": {
+                    "version": 1,
+                    "image_tokens": 1,
+                    "video_tokens": 1,
+                    "video_frames": 1,
+                }
+            }
+            await session.flush()
+
             # G10 credential-free route profile/config/catalog artifacts:
             # ONE stored ready Codex route on the registered qwen38 0.162
             # profile (single /v1/responses endpoint, client-local
@@ -696,6 +712,12 @@ async def main() -> int:
                     input_tokens=100,
                     output_tokens=50,
                     total_tokens=150,
+                    # The DISTINCT prompt/completion columns are set
+                    # explicitly (they default 0 and the canonical JSON
+                    # export reports them honestly - no fallback/remap):
+                    # a consistent fictional Chat row.
+                    prompt_tokens=100,
+                    completion_tokens=50,
                     actual_cost_eur=Decimal("0.000150000"),
                 )
                 session.add(ledger)
@@ -1133,6 +1155,12 @@ def _token(html: str, pattern: re.Pattern[str]) -> str:
     match = pattern.search(html)
     assert match is not None, "review token missing from rendered page"
     return match.group(1)
+
+
+def _flash_error(html: str) -> str:
+    """Extract the rendered admin flash error text (debug aid)."""
+    m = re.search(r'admin-flash[^>]*>(.*?)</div>', html, re.S)
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip() if m else "(no flash)"
 
 
 class _LoginState:
@@ -2052,11 +2080,13 @@ def test_06_g06_g07_route_and_provider(env219: dict[str, Any]) -> None:
 
     before_nano = _db(env["database_url"], lambda s: _route(s, route_nano))
 
-    def _plan_and_apply(overrides: dict[str, str]) -> httpx.Response:
+    def _plan_and_apply(**overrides: str) -> httpx.Response:
         page = state.get(f"/admin/routes/{route_mini}/configuration")
         plan = state.post(
             f"/admin/routes/{route_mini}/configuration/plan",
-            _route_plan_fields(_csrf(page.text), **overrides),
+            _route_plan_fields(
+                _csrf(page.text), capabilities_source="guided", **overrides
+            ),
         )
         assert plan.status_code == 200, plan.text[:400]
         return state.post(
@@ -2078,6 +2108,7 @@ def test_06_g06_g07_route_and_provider(env219: dict[str, Any]) -> None:
             _csrf(plan_a_page.text),
             priority_action="set",
             priority="5",
+            capabilities_source="guided",
             media_image_action="set",
             media_image_value="1000000",
             media_video_tokens_action="set",
@@ -2092,7 +2123,9 @@ def test_06_g06_g07_route_and_provider(env219: dict[str, Any]) -> None:
             codex_max_output_value="32768",
         ),
     )
-    assert plan_a.status_code == 200, plan_a.text[:400]
+    assert plan_a.status_code == 200, (
+        f"plan A refused: {plan_a.status_code} {_flash_error(plan_a.text)}"
+    )
     # The reviewed plan names the actual changed leaves (leaf-level diff).
     assert "Media video frames" in plan_a.text
     assert "Codex context window" in plan_a.text
@@ -2546,9 +2579,34 @@ def test_09_g10_compatibility(env219: dict[str, Any]) -> None:
     # The base fragment references the env-var NAME only.
     assert 'env_key = "OPENAI_API_KEY"' in base.text
     # Non-rotating attachment context: the still-displayed origin page's
-    # form token is unchanged after the downloads.
-    origin_after = state.get(f"/admin/routes/{route_codex}")
-    assert _csrf(origin_after.text) == origin_csrf
+    # form token (captured BEFORE the downloads) must still be ACCEPTED by
+    # the purpose-bound action gate after the downloads. A fresh page
+    # render rotates the displayed token by the page-render CSRF law, so
+    # token equality across renders is not the law - the download itself
+    # must not invalidate the token already on screen. Proven with a
+    # READ-ONLY route plan (zero writes, zero audits).
+    # Scope stated exactly: this proves the SESSION CSRF token captured
+    # before the artifact GETs survives them (the attachment context did
+    # not rotate it). The probe itself is a read-only plan on the PLAIN
+    # chat route with an intervening NO page render; it claims no Codex-
+    # route configuration parity - the codex route's route-owned profile
+    # declaration group is outside the guided plan validator's known-
+    # group vocabulary (pre-existing strict-validator boundary, unchanged
+    # by this order).
+    survived = state.post(
+        f"/admin/routes/{manifest['route_mini']}/configuration/plan",
+        _route_plan_fields(
+            origin_csrf,
+            priority_action="set",
+            priority="900",
+            capabilities_source="unchanged",
+        ),
+    )
+    assert survived.status_code == 200, (
+        "pre-download origin token was invalidated by the artifact "
+        f"downloads (non-rotating attachment law broken): "
+        f"{survived.status_code} {_flash_error(survived.text)}"
+    )
     # The compatibility index offers the same ready route's artifact links.
     index = state.get(f"{COMPAT_BASE}/")
     assert f"/admin/routes/{route_codex}/codex-profile/profile" in index.text
@@ -2585,8 +2643,9 @@ def test_10_g11_g13_g18_usage_export_pricing_fx(env219: dict[str, Any]) -> None:
         "/admin/reports/",
         params={"group_by": "provider_model", "gateway_key_id": k1},
     )
-    assert "61 ledger rows" in summary.text
-    assert "1 groups (provider_model)" in summary.text
+    # Raw-HTML oracles: the template wraps the bold counts in <strong>.
+    assert "<strong>61</strong> ledger rows" in summary.text
+    assert "<strong>1</strong> groups (provider_model)" in summary.text
     assert "openai / gpt-4.1-mini" in summary.text
     # Exact group counts: 61 requests, all successful, 10,300 tokens.
     assert 'data-sort-value="61"' in summary.text
@@ -2723,13 +2782,21 @@ def test_10_g11_g13_g18_usage_export_pricing_fx(env219: dict[str, Any]) -> None:
     assert burn_row["chat_live_burn_final_provider_usage_available"] is True
     _canary_free(env, jexport.text)
     # The export audit row carries the exact scope and the server actor.
+    # 219-b: the persisted scope proof is the top-level
+    # scope_gateway_uuid. The shared audit sanitizer
+    # (drop_content_keys=True) intentionally removes the nested
+    # filters.gateway_key_id - is_sensitive_key("gateway_key_id") is
+    # True and key-named fields are never exempted - so the route
+    # records the already-parsed/validated record UUID under a
+    # non-credential key instead of silently dropping the scope.
     jaudits = _audits(env, "admin_usage_export_json")
     assert len(jaudits) == audits_before + 1
     jaudit = jaudits[-1]
     assert jaudit["actor"] == env["manifest"]["superadmin"]
     assert jaudit["note"] == REASON
     assert jaudit["new"]["row_count"] == 61
-    assert jaudit["new"]["filters"]["gateway_key_id"] == k1
+    assert jaudit["new"]["scope_gateway_uuid"] == k1
+    assert "gateway_key_id" not in jaudit["new"]["filters"]
     # Overbound scope: exact-count refusal, no partial artifact, no audit.
     overbound = state.post(
         "/admin/reports/export",
@@ -2760,7 +2827,7 @@ def test_10_g11_g13_g18_usage_export_pricing_fx(env219: dict[str, Any]) -> None:
     # Honest unavailable wording, not merely HTTP 200: the missing pair
     # (EUR->GBP is not seeded; only GBP->EUR and USD->EUR exist) renders
     # the fixed no-rate direction with no inferred conversion.
-    assert "No FX rate is effective for EUR / GBP" in missing.text
+    assert "No FX rate is effective for <strong>EUR / GBP</strong>" in missing.text
     assert "no rate is inferred" in missing.text
 
 
@@ -3516,9 +3583,9 @@ def test_15b_legacy_lifecycle_outcomes(env219: dict[str, Any]) -> None:
     suffix = manifest["suffix"]
 
     # 1) Legacy OWNER (record) creation through the GUI.
-    owners_page = state.get("/owners/new")
+    owners_page = state.get("/admin/owners/new")
     resp = state.post(
-        "/owners/new",
+        "/admin/owners/new",
         {
             "csrf_token": _csrf(owners_page.text),
             "name": "Legacy",
@@ -3930,7 +3997,7 @@ def test_16_negatives(env219: dict[str, Any]) -> None:
     It does NOT itself prove wrong-actor/session or expired-review cases
     across every surface, nor the all-logs/audit claim: those are covered
     by the accepted unchanged component evidence (207/212/213 browser and
-    unit modules) and by test_18_final_secret_scan's complete app/worker
+    unit modules) and by test_17_final_secret_scan's complete app/worker
     log + audit-metadata sweep. A refusal here is evidence the requested
     ordinary happy path does NOT work in that variant - never evidence
     that the happy path works.

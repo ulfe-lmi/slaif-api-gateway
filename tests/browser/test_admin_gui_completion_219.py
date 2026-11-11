@@ -549,8 +549,21 @@ def test_key_detail_linked_help_and_keyboard_ext_tool_update(
     )  # type: ignore[attr-defined]
     reason_input.focus()
     page.keyboard.type(EXT_TOOL_REASON)  # type: ignore[attr-defined]
-    page.keyboard.press("Enter")  # type: ignore[attr-defined]
-    page.wait_for_url(f"{base_url}/admin/keys/{trusted_id}")  # type: ignore[attr-defined]
+    # Enter submits the form; wait on the ACTUAL target POST response (the
+    # 207 _submit_form expect_response pattern), not on a URL the page
+    # already has, which can resolve before the submission completes.
+    with page.expect_response(  # type: ignore[attr-defined]
+        lambda r: r.request.method == "POST"
+        and r.url.endswith(f"/admin/keys/{trusted_id}/external-tool-policy")
+    ) as post_info:
+        page.keyboard.press("Enter")  # type: ignore[attr-defined]
+    assert int(post_info.value.status) == 303, "external-tool POST did not succeed"
+    # Resulting navigation: the 303 lands back on the key detail with the
+    # success message, and the flash is only rendered after that GET.
+    page.wait_for_url(  # type: ignore[attr-defined]
+        f"{base_url}/admin/keys/{trusted_id}?message=key_external_tool_policy_updated"
+    )
+    page.wait_for_selector(".admin-flash", state="visible", timeout=15000)  # type: ignore[attr-defined]
     flash_count = page.locator(".admin-flash").count()  # type: ignore[attr-defined]
     flash_text = (
         page.locator(".admin-flash").first.inner_text()  # type: ignore[attr-defined]

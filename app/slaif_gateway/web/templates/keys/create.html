@@ -387,7 +387,7 @@
     'input[name="confirm_external_tool_fenced"]',
   ];
   const setDocumentMode = (on) => {
-    docGroup.hidden = on;
+    docGroup.hidden = !on;
     for (const section of guidedPolicySections) {
       const body = section.querySelector('[data-guided-policy-body]');
       const note = section.querySelector('[data-guided-compact-note]');

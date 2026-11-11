@@ -164,6 +164,13 @@ def test_calibration_summary_json_download_gate_and_error_paths(monkeypatch) -> 
     response = client.get("/admin/keys/not-a-uuid/calibration/summary.json")
     assert response.status_code == 404
     assert calls == []
+    # The route's refusal header law covers its early 404 as well: the
+    # shared error page is not cacheable or MIME-sniffable here.
+    assert "private" in response.headers["cache-control"]
+    assert "no-store" in response.headers["cache-control"]
+    assert "no-cache" in response.headers["cache-control"]
+    assert response.headers["pragma"] == "no-cache"
+    assert response.headers["x-content-type-options"] == "nosniff"
 
     # Unparseable multiplier: fixed 400.
     response = client.get(f"/admin/keys/{key.id}/calibration/summary.json", params={"multiplier": "abc"})

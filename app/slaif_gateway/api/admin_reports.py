@@ -925,16 +925,27 @@ async def usage_export_json(
             sort_keys=True,
             default=_json_default,
         ).encode("utf-8")
+        audit_new_values: dict[str, object] = {
+            "row_count": len(rows),
+            "limit": parsed_limit,
+            "filters": _report_filter_metadata(filters),
+        }
+        # 219-b scope accountability: the shared audit sanitizer
+        # (drop_content_keys=True) intentionally removes the nested
+        # filters.gateway_key_id - is_sensitive_key("gateway_key_id") is
+        # True and key-named fields are never exempted. The exact scoped
+        # record is therefore recorded as top-level metadata under a
+        # non-credential key the sanitizer preserves: only the
+        # already-parsed/validated UUID (never the raw form value) is
+        # stored, without any accounting, permission, or refusal change.
+        if filters.gateway_key_id is not None:
+            audit_new_values["scope_gateway_uuid"] = str(filters.gateway_key_id)
         await audit_repository.add_audit_log(
             admin_user_id=action_context.admin_user.id,
             action="admin_usage_export_json",
             entity_type="usage_ledger_export",
             old_values=None,
-            new_values={
-                "row_count": len(rows),
-                "limit": parsed_limit,
-                "filters": _report_filter_metadata(filters),
-            },
+            new_values=audit_new_values,
             ip_address=_client_host(request),
             user_agent=request.headers.get("user-agent"),
             request_id=request.headers.get(settings.REQUEST_ID_HEADER),

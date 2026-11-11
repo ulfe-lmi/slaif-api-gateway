@@ -1994,7 +1994,12 @@ async def download_admin_key_calibration_summary(
 
     parsed_key_id = _parse_gateway_key_id(gateway_key_id)
     if parsed_key_id is None:
-        return _admin_error_page(request, status_code=404, message="Gateway key not found.")
+        # 219-b: this route's refusal header law applies to its early 404
+        # as well: the shared error page is not cacheable or MIME-sniffable
+        # here (auth/status/non-rotating behavior unchanged).
+        return _calibration_summary_json_refusal(
+            request, status_code=404, message="Gateway key not found."
+        )
 
     attachment_context = await _admin_attachment_context(request)
     if isinstance(attachment_context, Response):
