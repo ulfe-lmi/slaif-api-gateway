@@ -229,13 +229,16 @@ def test_login_and_accounts_list_safe_rendering(
     assert page.locator('[role="region"][aria-label="Administrator accounts"]').count() == 1
     assert page.locator("th[data-sort-type]").count() >= 2
     assert page.locator("td.row-ordinal").first.inner_text() == "1"
+    # 218-b: capture the actual loaded accounts table BEFORE leaving it,
+    # so the evidence file depicts the accounts list (not the Operations
+    # page reached by the next navigation).
+    page.screenshot(path=str(SCREENSHOT_DIR / "218-accounts-list-desktop.png"))
     # The operations index navigation carries the bounded account group.
     page.goto(f"{base_url}/admin/operations/")  # type: ignore[attr-defined]
     body = page.content()
     assert 'href="/admin/accounts"' in body
     assert "Administrator accounts" in body
 
-    page.screenshot(path=str(SCREENSHOT_DIR / "218-accounts-list-desktop.png"))
     context.close()
 
 
