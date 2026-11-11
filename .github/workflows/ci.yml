@@ -186,8 +186,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
 
-      - name: Install Chromium
-        run: python -m playwright install --with-deps chromium
+      - name: Install and verify Chromium
+        # The hosted image supplies the runtime libraries. Verify them by
+        # launching the downloaded browser instead of reinstalling optional
+        # font bundles through apt before the browser can even be downloaded.
+        run: |
+          python -m playwright install chromium
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+
+          with sync_playwright() as playwright:
+              browser = playwright.chromium.launch()
+              page = browser.new_page()
+              page.set_content("<title>Chromium CI preflight</title>")
+              assert page.title() == "Chromium CI preflight"
+              print(f"Chromium launch OK: {browser.version}")
+              browser.close()
+          PY
 
       - name: Run browser smoke tests
         run: python -m pytest tests/browser -m playwright

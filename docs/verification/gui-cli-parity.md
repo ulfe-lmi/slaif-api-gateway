@@ -2317,3 +2317,55 @@ the operator-only exceptions remain explicit. The 219 installed whole-GUI
 gate is closed by this 219-b final installed qualification (superseding
 the 219-a final-head claim, whose build-source provenance is corrected in
 the immutable 219-b report).
+
+
+## 219-c Chromium installation repair (same PR #376, 2026-11-11)
+
+The final 219-b head's other nine checks passed. Three hosted browser jobs
+failed **before tests** in `playwright install --with-deps chromium`: apt
+could not resolve Ubuntu archive/security hosts while fetching nine extra
+font/Xfont packages. The logs show all 26 queried runtime packages already
+installed; Chromium had not yet been downloaded. Those jobs do not qualify
+the browser suite. The earlier conclusion that delivery required waiting
+for external recovery was premature: browser-only installation had not been
+tried.
+
+At the human's explicit request, root executes this bounded OAP continuation
+directly. The browser job now runs `python -m playwright install chromium`,
+then launches the actual downloaded browser and renders/asserts a minimal
+page before the unchanged full `python -m pytest tests/browser -m playwright`.
+Normal Playwright host validation remains enabled. Missing runtime libraries,
+installation errors, launch errors, and test failures still fail CI. No
+runner/image replacement, DNS rewrite, dependency change, test skip, or error
+suppression was introduced. The job uses the hosted image's existing runtime
+libraries instead of requiring extra font bundles before downloading Chromium.
+
+Local installation proof: a fresh owned browser cache at
+`/tmp/slaif219/root-chromium-install`, Playwright 1.65.0, Chromium
+158.0.8127.18/build 1254, FFmpeg 1013 and matching headless shell downloaded
+successfully (exit 0); real headless launch and title/content assertions
+returned `CHROMIUM_INSTALL_OK 158.0.8127.18` (exit 0) on Ubuntu 26.04.1. This
+is local installation/rendering proof; the hosted-runner full browser check
+remains a required final-head gate and is not claimed passed here.
+
+Application bytes are unchanged from qualified product `34cbf030`; accepted
+461 focused unit cases, four native Chromium cases, the final 19-case installed
+workflow and earlier component evidence retain their exact scope. No app
+rebuild or repeated installed workflow is needed for this CI-only repair.
+Ordinary application upgrade instructions remain unchanged: restart/recreate
+application/assets, no schema or existing-key migration. No release or
+production-deployment approval follows. The immutable 219-c report records
+publication and the exact focused verification receipts; root records final
+GitHub CI, guarded merge and actual-main results separately.
+
+Focused 219-c publication checks: the exact extracted CI installation/preflight
+script passed locally (`PREFLIGHT_EXIT=0`); system PyYAML parsed the workflow,
+and structural comparison confirmed that only the browser installation step
+changed and the complete browser test command is identical. OAP governance
+plus the affected documentation checks passed **53/53**, zero failures, errors
+or skips, direct `PYTEST_EXIT=0` (receipt
+`/tmp/slaif219/root-219c-focused.xml`). `git diff --check` passed. Protected
+local file hashes and all prior immutable 219-a/219-b order/report hashes
+were rechecked unchanged. The first YAML probe used the qualification venv,
+which lacks PyYAML; it performed no validation. Validation then succeeded
+using the existing system PyYAML 6.0.3, without installing dependencies.
