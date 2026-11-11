@@ -2228,3 +2228,25 @@ def test_job_provider_scope_closed_access(custody_root) -> None:
     # values outside the closed scope vocabulary are withheld
     job_bad = custody.create_job(settings, "proposal", {"provider_scope": "anthropic"})
     assert custody.job_provider_scope(settings, job_bad) is None
+
+
+def test_dispatch_ack_preserves_worker_progress_and_terminal_status(custody_root):
+    settings=_settings(custody_root)
+    job=custody.create_job(settings,'proposal',{})
+    assert custody.begin_job(settings,job) is not None
+    assert custody.note_dispatch(settings,job,dispatched=True,detail='broker acknowledged')
+    assert custody.get_job(settings,job)['progress']=='running'
+    assert custody.finish_job(settings,job,'failed',error_code='internal_error')
+    result=custody.get_job(settings,job)
+    assert result['status']=='failed'
+    assert result['progress']=='failed'
+
+
+def test_openai_only_packages_refused_before_dispatch():
+    from starlette.datastructures import FormData
+    params,field=router_mod._proposal_params(FormData([
+        ('provider_scope','openai'),('endpoint_scope','responses'),
+        ('source_method','docs'),('all_packages','on'),
+    ]))
+    assert field=='package_names'
+    assert not params

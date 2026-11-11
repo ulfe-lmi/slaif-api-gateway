@@ -450,3 +450,11 @@ Verify actual row counts and warnings instead of interpreting a completed
 artifact job as an import-ready catalog. Provider records must exist before
 route import. Provider creation and enabling remain explicit administrator
 actions, separate from proposals.
+
+
+OpenRouter package presets can be combined with provider scope `openrouter` or
+`all`: combined root proposals include both providers, while every named package
+contains only OpenRouter rows. OpenAI-only scope with OpenRouter packages is
+refused before GUI dispatch with an actionable field error. Broker acknowledgement
+cannot overwrite progress already recorded by a running worker, and terminal
+outcomes clear stale queued/running progress when no explicit progress is given.

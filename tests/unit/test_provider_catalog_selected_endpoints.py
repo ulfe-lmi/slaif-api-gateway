@@ -167,3 +167,22 @@ Model ID: `codex-test-plain`
     )
     assert {(r['requested_model'],r['endpoint']) for r in rows(result.routes_proposal_path)} == {('codex-test-plain',RESP)}
     assert {(r['model'],r['endpoint']) for r in rows(result.pricing_proposal_path)} == {('codex-test-plain',RESP)}
+
+
+@pytest.mark.asyncio
+async def test_both_providers_with_all_packages_keep_packages_openrouter_only(tmp_path,respx_mock):
+    mock_sources(respx_mock,'openai')
+    mock_sources(respx_mock,'openrouter')
+    result=await generate_provider_catalog_proposal(
+        provider_scope='all',output_dir=tmp_path,endpoint_scopes=('chat_completions','responses'),
+        paired_ready_only=True,fetch_details_limit=0,all_packages=True,
+    )
+    assert {r['provider'] for r in rows(result.routes_proposal_path)} == {'openai','openrouter'}
+    from slaif_gateway.services.provider_catalog_proposal import OPENROUTER_PACKAGE_ORDER
+    for package in OPENROUTER_PACKAGE_ORDER:
+        root=tmp_path/'packages'/package
+        route_rows=rows(root/'routes-proposal.tsv')
+        price_rows=rows(root/'pricing-proposal.tsv')
+        assert route_rows and price_rows
+        assert {r['provider'] for r in route_rows+price_rows} == {'openrouter'}
+        assert {(r['requested_model'],r['endpoint']) for r in route_rows} == {(r['model'],r['endpoint']) for r in price_rows}

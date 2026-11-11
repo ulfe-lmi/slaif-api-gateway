@@ -973,6 +973,8 @@ def finish_job(
                 record["run_id"] = run_id
             if progress is not None:
                 record["progress"] = progress
+            elif status in CATALOG_TERMINAL_STATUSES:
+                record["progress"] = status
             if artifact_name is not None:
                 record["artifact_name"] = artifact_name
             record["error_code"] = error_code
@@ -1063,7 +1065,11 @@ def note_dispatch(
             if record.get("status") in CATALOG_TERMINAL_STATUSES:
                 return False
             record["dispatch"] = "confirmed" if dispatched else "unconfirmed"
-            if dispatched:
+            if record.get("status") != "queued":
+                # A fast worker may claim the job before broker acknowledgement
+                # is recorded; retain its proven execution progress.
+                pass
+            elif dispatched:
                 record["progress"] = (
                     "queued (broker acknowledged; a running worker is "
                     "not yet proven)"

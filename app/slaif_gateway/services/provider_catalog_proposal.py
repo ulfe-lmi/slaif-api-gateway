@@ -1664,8 +1664,8 @@ def _normalize_openrouter_package_names(
         requested = list(OPENROUTER_PACKAGE_ORDER)
     if not requested:
         return ()
-    if provider_scope != OPENROUTER_PROVIDER:
-        raise ValueError("provider catalog package presets are implemented only for openrouter")
+    if provider_scope not in (OPENROUTER_PROVIDER, "all"):
+        raise ValueError("OpenRouter packages require provider scope openrouter or all")
     normalized: list[str] = []
     for value in requested:
         canonical = OPENROUTER_PACKAGE_ALIASES.get(value, value)
