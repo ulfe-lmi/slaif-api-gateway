@@ -52,6 +52,11 @@ TEMPLATES = REPO / "app" / "slaif_gateway" / "web" / "templates"
 #                    record choices that submit the NAME, with free typing)
 # ---------------------------------------------------------------------------
 EXPECTED_FIELDS: dict[str, dict[str, str]] = {
+    # 218-a: privileged administrator account management (G17): the
+    # finite role choice is a native select over the canonical
+    # admin/superadmin vocabulary; the reset target is the URL-bound
+    # fixed UUID (no editable reference field, hence no picker here).
+    "admin_accounts/create.html": {"role": "select"},
     "audit/list.html": {
         "action": "record_choice",
         "target_type": "record_choice",
@@ -245,10 +250,12 @@ def _field_marker(template: str, field: str, kind: str) -> bool:
     raise ValueError(f"unknown control kind {kind!r}")
 
 
-def test_expected_field_inventory_is_the_110_field_baseline() -> None:
+def test_expected_field_inventory_is_the_111_field_baseline() -> None:
+    # 218-a: +1 for the admin_accounts/create.html finite role select
+    # (G17 privileged account management).
     total = sum(len(fields) for fields in EXPECTED_FIELDS.values())
-    assert total == 110, f"inventory drifted from the 110-field baseline: {total}"
-    assert len(EXPECTED_FIELDS) == 35
+    assert total == 111, f"inventory drifted from the 111-field baseline: {total}"
+    assert len(EXPECTED_FIELDS) == 36
 
 
 @pytest.mark.parametrize(
@@ -323,7 +330,8 @@ def test_every_admin_table_has_structural_ordinal_column() -> None:
     # 217-a: +7 for the catalog workspace (index background-jobs + sealed
     # runs; run row-counts, warnings, dispositions, price comparisons, and
     # the apply-plan projection).
-    assert len(tables) == 53, f"expected 53 sortable admin tables, got {len(tables)}"
+    # 218-a: +1 for the administrator accounts list (G17).
+    assert len(tables) == 54, f"expected 54 sortable admin tables, got {len(tables)}"
     problems: list[str] = []
     for name, tag, block in tables:
         thead = re.search(r"<thead>.*?</thead>", block, flags=re.DOTALL)

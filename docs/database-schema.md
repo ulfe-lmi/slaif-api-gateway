@@ -518,13 +518,25 @@ never log password hashes
 Current implementation role semantics:
 
 ```text
-All active admin users are full operators for now.
-The role values are metadata/future-proofing, not an enforced RBAC boundary.
-Inactive admin accounts cannot log in.
+All active admin users are full operators except for three targeted,
+server-enforced superadmin boundaries (see security-model.md):
+1. the ENTIRE admin accounts area - every account view and action
+   (G17/218, gated on every request; ordinary admins get a fixed 403);
+2. the confirm-and-apply step of the accounting operations area
+   (G14/216);
+3. the catalog workspace's reviewed catalog-refresh apply and custody
+   cleanup actions (G15/217).
+These are targeted exceptions, not a general RBAC model: every other
+dashboard and CLI surface remains available to all active admin roles.
+There is no automatic elevation: a superadmin is created explicitly
+(CLI `admin create --superadmin` or the console create-account form with
+its explicit privileged-role acknowledgement). Inactive admin accounts
+cannot log in.
 ```
 
-Future RBAC may define viewer/operator/admin/superadmin permissions, but the
-current dashboard and admin CLI do not enforce per-role authorization checks.
+Future RBAC may define viewer/operator/admin/superadmin permissions
+generally; the current dashboard and admin CLI enforce only the targeted
+exceptions listed above.
 
 ---
 
@@ -560,6 +572,9 @@ Rules:
 
 - Store only hashes of session and CSRF tokens.
 - Admin logout should set `revoked_at`.
+- A password reset (console or CLI) sets `revoked_at` on ALL of the target
+  account's sessions in the same transaction as the new password hash and
+  the actor/target/reason audit entry (G17/218).
 - Expired sessions should be cleaned by scheduled jobs.
 
 ---

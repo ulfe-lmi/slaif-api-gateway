@@ -10,6 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from slaif_gateway import metrics as metrics_module
 from slaif_gateway.api.admin import router as admin_router
+from slaif_gateway.api.admin_accounts import router as admin_accounts_router
 from slaif_gateway.api.admin_compatibility import (
     router as admin_compatibility_router,
 )
@@ -107,6 +108,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # views + dry-run -> signed review -> confirmed apply over the existing
     # Core reconciliation services (one-way helper reuse from admin.py).
     app.include_router(admin_accounting_operations_router)
+    # 218-a: privileged administrator account management (G17): bounded
+    # list/create/password-reset over the shared AdminService (one-way
+    # helper reuse from admin.py; admin.py does not import this router).
+    app.include_router(admin_accounts_router)
     app.include_router(admin_catalog_refresh_router)
     # 208-a: purpose-bound reviewed key-clone routes (one-way helper reuse;
     # admin.py does not import this router).

@@ -40,17 +40,27 @@ class AdminUsersRepository:
     async def get_admin_user_for_update(
         self, admin_user_id: uuid.UUID
     ) -> AdminUser | None:
-        """215-a: existing-row lock seam for the bounded SMTP test guard.
+        """215-a: existing-row lock seam for the bounded SMTP test guard;
+        218-a: fresh ORM read under that same lock.
 
         SELECT ... FOR UPDATE on the actor row so concurrent one-use
         claims by the same actor across API workers serialize. Used ONLY
         by the bounded SMTP test claim path; normal authentication and
         session behavior is unchanged.
+
+        218-a: the locked read also populates existing ORM instances, so
+        a caller that already holds a (possibly stale) AdminUser from an
+        earlier read in the same transaction receives the current
+        committed column values while holding the row lock. This is the
+        same statement and lock as the 215-a seam (a same-transaction
+        claim observes identical values), extended only so the shared
+        password-reset/login ordering can verify against fresh data.
         """
         statement = (
             select(AdminUser)
             .where(AdminUser.id == admin_user_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()

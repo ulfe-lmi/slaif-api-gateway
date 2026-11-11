@@ -10,13 +10,17 @@ existing-`superadmin` boundaries described below, every active admin
 retains full operator authority over the existing admin surfaces. MFA and
 full RBAC are not implemented in the current RC-beta system.
 
-There are two enforced role boundaries today, both at the mutating
-confirm-and-apply / custody-cleanup step only:
+There are three enforced role boundaries today:
 
-1. Applying reviewed accounting recovery operations (the confirm-and-apply
+1. The ENTIRE admin accounts area (G17/218) - every account view and
+   action (list, create, password reset) - requires the authenticated
+   user's EXISTING `superadmin` role. This is a per-request server-side
+   gate, not a hidden link: an ordinary `admin` receives a fixed safe
+   403 refusal on every account surface.
+2. Applying reviewed accounting recovery operations (the confirm-and-apply
    step of the admin console's accounting operations area, G14/216)
-   requires the authenticated user's EXISTING `superadmin` role.
-2. The admin catalog workspace's reviewed catalog-refresh apply and its
+   requires the same EXISTING `superadmin` role.
+3. The admin catalog workspace's reviewed catalog-refresh apply and its
    custody cleanup actions (G15/217) require the same EXISTING
    `superadmin` role.
 
@@ -25,9 +29,10 @@ collection, proposal, export, and inspection step, including every catalog
 workspace surface other than apply/cleanup — is unchanged for ordinary
 `admin` accounts; a non-superadmin receives a fixed safe refusal at those
 mutating steps only. No automatic elevation exists: an account becomes a
-superadmin only by being created with the explicit flag (below); there is
-no promote command, and the first created admin is not elevated
-automatically.
+superadmin only by being created with the explicit flag (CLI) or through
+the console's create-account form with its explicit privileged-role
+acknowledgement (both below); there is no promote command, and the first
+created admin is not elevated automatically.
 
 Protect `/admin` with HTTPS, strong passwords, login rate limiting, and
 preferably VPN, IP allowlisting, or equivalent ingress control.
@@ -51,6 +56,50 @@ result with `slaif-gateway admin list` (it reports `is_superadmin`) and
 rotate or disable any account whose password was shared through an unsafe
 channel.
 
+A superadmin can also be created from the console's accounts area (see
+[Console Account Administration](#console-account-administration)), where
+choosing the privileged role requires an explicit additional
+acknowledgement. An upgraded deployment whose only existing account is an
+ordinary `admin` cannot manage accounts from the console until a
+superadmin exists; use the CLI `admin create --superadmin` path above for
+that setup. This is intentional: there is never a silent auto-elevation or
+a browser bootstrap of the first superadmin.
+
+## Console Account Administration
+
+The admin console's accounts area (visible to superadmins) lists existing
+admin identities - name, email, exact stored role, active state, and safe
+timestamps - and supports creating an account and resetting an account's
+password. It exposes no hashes, session tokens, or secrets.
+
+- **Create** an ordinary `admin` by default. Choosing the `superadmin`
+  role requires an explicit additional privileged-role acknowledgement,
+  and every create requires an explicit confirmation plus a bounded
+  nonblank reason (audited with the acting admin).
+- **Reset password** is entered from a list row link bound to its
+  server-derived target. Before confirmation the form shows the target's
+  server-derived identity and explains the consequence: the account's
+  previous sessions are all signed out immediately. The new password must
+  match its confirmation exactly; exact entered bytes are used (nonempty,
+  at most 128 characters; no trimming or normalization), and the password
+  is never shown again or stored in plain text.
+- **Session consequences**: the password change, the revocation of ALL of
+  the target's existing console sessions, and the actor/target/reason
+  audit entry are committed together as one transaction, so a fault before
+  commit changes nothing. If a reset request fails at the commit or
+  connection stage, the console cannot confirm the outcome: verify the
+  account's current state (a sign-in attempt with the new password, or the
+  audit log) before retrying. Sessions that are already running a request
+  are not recalled; new requests with the old sessions are refused from
+  the moment the reset is committed.
+- **Self-reset** (resetting your own account) deliberately signs YOU out:
+  your own session is revoked together with the password change and your
+  cookie is cleared. You then sign in again with the new password.
+- The CLI `admin create`, `admin reset-password`, and `admin list`
+  commands remain available and preserve their behavior; `reset-password`
+  shares the same transactional session-revocation behavior as the console
+  (one shared service, not a second weaker reset).
+
 ## Login Rate Limits
 
 Admin login attempts are rate-limited through PostgreSQL/audit state by
@@ -71,7 +120,9 @@ admin session cookie settings documented in configuration.
 
 ## Lost Password
 
-Reset the password through the CLI:
+Reset the password through the console's accounts area (a superadmin
+action; see [Console Account Administration](#console-account-administration))
+or through the CLI:
 
 ```bash
 printf '%s\n' '<new-strong-password>' \
@@ -80,8 +131,11 @@ printf '%s\n' '<new-strong-password>' \
       --password-stdin
 ```
 
-Use a real secure secret channel for the new password. Do not put personal
-emails or real passwords in documentation, tickets, or command history examples.
+Both paths share the same transactional behavior: the new hash, the
+revocation of ALL of the account's existing console sessions, and the
+audit entry commit together. Use a real secure secret channel for the new
+password. Do not put personal emails or real passwords in documentation,
+tickets, or command history examples.
 
 ## Lost All Admin Access
 

@@ -46,6 +46,13 @@ class _AdminUsersRepo:
             return self.admin_user
         return None
 
+    async def get_admin_user_for_update(self, admin_user_id: uuid.UUID) -> AdminUser | None:
+        # 218-b: supplies the 218-a required authoritative locked read with
+        # this fake's existing ID lookup semantics (same row or None).
+        if self.admin_user.id == admin_user_id:
+            return self.admin_user
+        return None
+
     async def set_last_login_at(self, admin_user_id: uuid.UUID, last_login_at: datetime) -> bool:
         if self.admin_user.id != admin_user_id:
             return False

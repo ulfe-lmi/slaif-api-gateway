@@ -100,6 +100,27 @@ class AdminSessionService:
             raise AdminLoginRateLimitedError("Too many failed login attempts")
 
         admin_user = await self._admin_users.get_admin_user_by_email(normalized_email)
+        if admin_user is not None:
+            # 218-a: take the SAME admin-row lock the shared password
+            # reset takes BEFORE verifying the password, with fresh ORM
+            # values under the lock. A concurrent reset then serializes
+            # on this row in either ordering:
+            # - reset commits first -> this fresh locked read verifies
+            #   against the NEW hash, so a superseded password cannot
+            #   authenticate;
+            # - this login started first -> it holds the row lock until
+            #   its session row is flushed and the transaction commits,
+            #   so the reset's target-session revocation (which runs
+            #   after it acquires the lock) revokes the session this
+            #   login creates.
+            # The locked result is AUTHORITATIVE, including None: the
+            # row may be deleted between the email lookup and the lock
+            # read, and a deleted account must fall through to the
+            # existing generic failed-login path - never verify the
+            # cached hash, never record success, never create a
+            # session. The existing rate-limit, failed-login, and
+            # audit behavior below is unchanged.
+            admin_user = await self._admin_users.get_admin_user_for_update(admin_user.id)
         password_matches = False
         if admin_user is not None and password:
             password_matches = verify_admin_password(password, admin_user.password_hash)

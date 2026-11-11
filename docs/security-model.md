@@ -1686,7 +1686,11 @@ workflow and is not reachable through the lookup endpoint.
 Admin session cookies are `HttpOnly`, `SameSite=Lax` by default, and `Secure`
 by default in production. Session validation rejects missing, revoked, expired,
 or inactive-admin sessions. Logout revokes the server-side session row and
-clears the browser cookie.
+clears the browser cookie. A password reset (console or CLI) revokes ALL of
+the target account's existing server-side sessions in the same transaction as
+the new hash and the audit entry; sessions already running a request are not
+recalled, and new requests with revoked sessions are refused from the moment
+the reset is committed.
 
 Admin login is protected by DB/audit-backed failed-attempt rate limiting. The
 gateway counts recent failed `/admin/login` attempts by normalized email and
@@ -1696,14 +1700,23 @@ lockout messages are generic, do not reveal whether an account exists, and do
 not expose exact attempt counts. Redis is not required for this admin control.
 Plaintext passwords are never stored, logged, or written to audit metadata.
 
-Current v1 admin authorization treats all active admin users as full operators.
-`role=admin` and `role=superadmin` can use the implemented dashboard/operator
-actions; `superadmin` is metadata/future-proofing rather than an enforced RBAC
-boundary. Inactive admin accounts cannot log in, and revoked or expired
-server-side sessions cannot access admin routes. Operators should treat every
-active admin account as highly privileged. Future RBAC, superadmin-only
-permissions, and MFA may be added later, but they are not implemented in the
-current admin surface.
+Current v1 admin authorization treats all active admin users as full
+operators except for three targeted, server-enforced `superadmin`
+boundaries: the ENTIRE admin accounts area (every account view and action,
+G17/218, gated on every request), the confirm-and-apply step of the
+accounting operations area (G14/216), and the catalog workspace's reviewed
+catalog-refresh apply and custody cleanup actions (G15/217). These are
+narrow targeted exceptions, not a general RBAC model: every other dashboard
+/operator action remains available to `role=admin` and `role=superadmin`
+alike, and ordinary admins receive a fixed safe refusal only at those
+targeted surfaces. There is no automatic elevation and no promote command:
+a superadmin is created explicitly, either through the CLI
+(`admin create --superadmin`) or through the console's create-account form
+with its explicit privileged-role acknowledgement. Inactive admin accounts
+cannot log in, and revoked or expired server-side sessions cannot access
+admin routes. Operators should treat every active admin account as highly
+privileged. Full RBAC and MFA may be added later, but they are not
+implemented in the current admin surface.
 
 Login and logout forms use CSRF tokens. Login CSRF tokens are signed and paired
 with a temporary cookie. Authenticated form CSRF tokens are HMAC-hashed in the
@@ -1933,10 +1946,12 @@ reconciliation/hold services. Its security boundary:
 - Views and previews are available to every signed-in admin and write
   nothing (dry-run previews create no audit/ledger/counter rows). The
   confirm-and-apply step requires the authenticated user's EXISTING
-  `superadmin` role - the only enforced role boundary in the current
-  system; there is no automatic elevation and no promote command, so a
-  superadmin is created explicitly through the CLI
-  (`admin create --superadmin`). See
+  `superadmin` role - one of the targeted role boundaries in the current
+  system (see "Admin Web Sessions And CSRF" above); there is no automatic
+  elevation and no promote command, so a superadmin is created explicitly,
+  either through the CLI (`admin create --superadmin`) or through the
+  console's create-account form with its explicit privileged-role
+  acknowledgement. See
   [`runbooks/admin-access.md`](runbooks/admin-access.md).
 - Every state-changing form is CSRF-protected. The preview signs a
   bounded, escape-budgeted STATELESS signed review token bound to
@@ -1965,3 +1980,56 @@ reconciliation/hold services. Its security boundary:
 
 No schema migration, no new RBAC model, and no change to the CLI
 `reconcile-*` commands accompany this surface.
+
+## Administrator account management (admin console, 218)
+
+The admin console accounts area (G17) exposes authenticated list,
+create, and password-reset workflows over the shared `AdminService`. Its
+security boundary:
+
+- Every account view and action first passes the existing authenticated
+  page/action context and then requires the authenticated user's EXISTING
+  `superadmin` role - a per-request server-side gate (an ordinary `admin`
+  receives a fixed 403 on every account surface; hiding the link is not
+  the gate). The existing dashboard-off gate, login rate limiting, and
+  CSRF protection apply unchanged.
+- Create defaults to an ordinary `admin`; only the admin-versus-superadmin
+  role choices exist. Explicit confirmation is required for EVERY create,
+  with an additional explicit privileged-role acknowledgement for
+  superadmin. No browser bootstrap, no silent auto-elevation, and no
+  promotion path: the first superadmin of a deployment (and offline
+  break-glass access) remains the CLI's.
+- Reset acts on an exact existing target entered from a list row link that
+  is bound to its server-derived fixed UUID; a conflicting browser-supplied
+  target is refused, the target identity is server-derived and re-fetched
+  on validation recovery, and the explained all-session consequence is
+  shown before confirmation. Exact password bytes are used (nonempty, at
+  most 128 characters, no trimming/normalization, no minimum length, no
+  strength policy); passwords are never redisplayed on success or failure,
+  put in URLs/audit/logs, or returned as hashes; only the Argon2id hash
+  persists.
+- One shared transaction commits the fresh locked target's new hash, the
+  revocation of ALL of that target's existing sessions, and the
+  actor/target/reason audit entry (an audit failure rolls everything back;
+  a generic commit/connection fault is an honest outcome-unconfirmed
+  state, not a rollback promise). Login obtains the fresh locked row before
+  password verification and uses fresh ORM values, so a login based on the
+  superseded password cannot escape session revocation after reset.
+  Self-reset deliberately revokes the actor's own session, clears the
+  cookie, and returns to safe login with a secret-free outcome. Sessions
+  already running a request are NOT recalled.
+- Free-text inputs (reason/name/email) matching a known incoming
+  authentication value are refused before persistence and withheld on
+  every error re-render (no echo); the reset-audit User-Agent is masked
+  with the existing pure masker composition. Fault paths use fixed
+  secret-free outcomes: no raw exception/SQL parameter/hash traceback text
+  is logged or rendered, and only the known duplicate-email condition may
+  claim "email already exists".
+- The CLI `admin create`, `admin reset-password`, and `admin list` keep
+  their commands, defaults, and outputs; `reset-password` shares the same
+  transactional session-revocation behavior through the same shared
+  service (one implementation, no second weaker reset) and preserves its
+  honest offline actor/reason provenance.
+
+No schema migration, no key-policy migration, no new RBAC model, and no
+dependency or accounting change accompany this surface.

@@ -1275,13 +1275,20 @@ through PostgreSQL audit rows by normalized email and client IP; Redis is not
 required for this admin protection. Login failure and lockout messages remain
 generic and do not reveal whether an account exists or how many attempts remain.
 
-Current v1 admin role semantics are intentionally simple: every active admin
-user is a full operator. The `admin_users.role` field, including `admin` and
-`superadmin`, is metadata/future-proofing and is not currently an authorization
-boundary for dashboard or admin CLI actions. Inactive admin accounts cannot log
-in, and revoked or expired admin sessions cannot access admin routes. Operators
-should protect every active admin account as highly privileged until future RBAC
-or MFA hardening is implemented and documented.
+Current v1 admin role semantics are intentionally simple except for three
+targeted, server-enforced `superadmin` boundaries: the ENTIRE admin
+accounts area (every account view and action, G17/218), the
+confirm-and-apply step of the accounting operations area (G14/216), and the
+catalog workspace's reviewed catalog-refresh apply and custody cleanup
+actions (G15/217). Every other dashboard or admin CLI action remains
+available to all active admin roles; ordinary admins receive a fixed safe
+refusal only at those targeted surfaces. There is no automatic elevation: a
+superadmin is created explicitly (CLI `admin create --superadmin` or the
+console create-account form with its explicit privileged-role
+acknowledgement). Inactive admin accounts cannot log in, and revoked or
+expired admin sessions cannot access admin routes. Operators should protect
+every active admin account as highly privileged until future RBAC or MFA
+hardening is implemented and documented.
 
 ## Catalog Refresh (Admin GUI, 217-a)
 

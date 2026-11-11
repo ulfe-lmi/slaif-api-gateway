@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Create Administrator Account{% endblock %}
+
+{% block body %}
+<section class="dashboard-shell wide" aria-labelledby="account-create-heading">
+  <header class="dashboard-header">
+    <div>
+      <p class="eyebrow">Administrator Accounts</p>
+      <h1 id="account-create-heading">Create administrator account</h1>
+      <p class="muted">
+        Creates one console account. New accounts can sign in to <code>/admin</code> immediately;
+        first-admin bootstrap and break-glass recovery stay on the offline CLI.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a class="button-link secondary" href="/admin/accounts">Accounts</a>
+      <a class="button-link secondary" href="/admin">Dashboard</a>
+      <form method="post" action="/admin/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="signout">Sign out</button>
+      </form>
+    </div>
+  </header>
+
+  {% if form_error %}
+  <div class="admin-flash admin-flash-error" role="alert">{{ form_error }}</div>
+  {% endif %}
+
+  <form class="create-form" method="post" action="/admin/accounts/create">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <section class="action-panel" aria-labelledby="account-identity-heading">
+      <h2 id="account-identity-heading">Identity</h2>
+      <div class="form-grid">
+        <label>
+          Email
+          <input name="email" type="email" value="{{ form.get('email', '') }}" autocomplete="off"
+                 aria-describedby="create-email-help" required>
+        </label>
+        <label>
+          Display name
+          <input name="display_name" value="{{ form.get('display_name', '') }}" autocomplete="off"
+                 aria-describedby="create-display-name-help" required>
+        </label>
+      </div>
+      <p class="field-help" id="create-email-help">
+        Email is the account's unique sign-in identifier (lowercased; stored exactly once per
+        account; at most 320 characters with a dot in the domain). A value that matches a known
+        incoming authentication value is refused and never stored.
+      </p>
+      <p class="field-help" id="create-display-name-help">
+        Display name is shown to other administrators (1 to 200 characters after trimming). A
+        value that matches a known incoming authentication value is refused and never stored.
+      </p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="account-password-heading">
+      <h2 id="account-password-heading">Password</h2>
+      <div class="form-grid">
+        <label>
+          New password
+          <input name="password" type="password" autocomplete="new-password"
+                 aria-describedby="create-password-help" required>
+        </label>
+        <label>
+          Confirm new password
+          <input name="password_confirmation" type="password" autocomplete="new-password"
+                 aria-describedby="create-password-confirmation-help" required>
+        </label>
+      </div>
+      <p class="field-help" id="create-password-help">
+        Choose a strong, long, unique password (at least 12 characters recommended). The exact
+        characters you enter are used: nothing is trimmed or normalized; nonempty, at most
+        128 characters. The password is never shown again, never stored in plain text, and
+        never appears in the audit log, URLs, or page content — only its Argon2id hash is kept.
+      </p>
+      <p class="field-help" id="create-password-confirmation-help">
+        Re-enter the same password; the two entries must match exactly, character for character.
+        Neither value is ever re-displayed after you leave this page.
+      </p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="account-role-heading">
+      <h2 id="account-role-heading">Role</h2>
+      <label>
+        Role
+        <select name="role" aria-describedby="create-role-help">
+          <option value="admin" {% if form.get('role') == 'admin' or not form %}selected{% endif %}>Admin (ordinary)</option>
+          <option value="superadmin" {% if form.get('role') == 'superadmin' %}selected{% endif %}>Superadmin (privileged)</option>
+        </select>
+      </label>
+      <p class="field-help" id="create-role-help">
+        An ordinary <strong>admin</strong> manages keys, owners, routes, pricing, reports and the
+        day-to-day console. A <strong>superadmin</strong> additionally manages administrator
+        accounts and privileged recovery surfaces — creating one is a durable privilege
+        escalation, so it requires the explicit acknowledgement below. First-admin and
+        break-glass access remain on the offline CLI; nothing is elevated silently.
+      </p>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_create" value="1" aria-describedby="create-confirm-help" required>
+        I confirm I am creating this administrator account for this deployment.
+      </label>
+      <p class="field-help" id="create-confirm-help">
+        Required for every account creation: an explicit acknowledgement that you intend to
+        create this console account.
+      </p>
+      <label class="checkbox-row">
+        <input type="checkbox" name="confirm_superadmin" value="1" aria-describedby="create-superadmin-confirm-help">
+        I understand this account will be a privileged superadmin and I confirm that choice.
+      </label>
+      <p class="field-help" id="create-superadmin-confirm-help">
+        Required only when the role above is superadmin: it records that you understand the
+        durable privilege being granted. Leaving it unticked while selecting superadmin is
+        refused.
+      </p>
+    </section>
+
+    <section class="action-panel" aria-labelledby="account-audit-heading">
+      <h2 id="account-audit-heading">Audit</h2>
+      <label>
+        Reason
+        <input name="reason" value="{{ form.get('reason', '') }}" maxlength="500" autocomplete="off"
+               aria-describedby="create-reason-help" required>
+      </label>
+      <p class="field-help" id="create-reason-help">
+        Nonblank, at most 500 characters. Stored and audited with the acting administrator and
+        the new account exactly as entered; values that match a known incoming authentication
+        value are refused and never stored.
+      </p>
+      <button type="submit">Create account</button>
+      <a class="button-link secondary" href="/admin/accounts">Cancel</a>
+    </section>
+  </form>
+</section>
+{% endblock %}

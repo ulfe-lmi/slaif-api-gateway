@@ -9,6 +9,7 @@ import typer
 
 from slaif_gateway.cli.common import cli_db_session, echo_kv, emit_json, handle_cli_error, run_async
 from slaif_gateway.db.models import AdminUser
+from slaif_gateway.db.repositories.admin_sessions import AdminSessionsRepository
 from slaif_gateway.db.repositories.admin_users import AdminUsersRepository
 from slaif_gateway.db.repositories.audit import AuditRepository
 from slaif_gateway.services.admin_service import AdminService
@@ -41,6 +42,11 @@ async def _create_admin(
         service = AdminService(
             admin_users_repository=AdminUsersRepository(session),
             audit_repository=AuditRepository(session),
+            # 218-a: the shared service now always revokes target
+            # sessions on reset; the CLI supplies the repository bound
+            # to this same session/transaction. Constructing it for
+            # create/list issues no query.
+            admin_sessions_repository=AdminSessionsRepository(session),
         )
         return await service.create_admin_user(
             email=email,
@@ -55,7 +61,14 @@ async def _reset_password(admin_user_id_or_email: str, password_hash: str) -> Ad
         service = AdminService(
             admin_users_repository=AdminUsersRepository(session),
             audit_repository=AuditRepository(session),
+            admin_sessions_repository=AdminSessionsRepository(session),
         )
+        # 218-a: shared behavior correction - the offline CLI reset now
+        # performs the SAME shared transaction as the GUI: new hash,
+        # revocation of ALL existing target sessions, and the
+        # actor/reason audit (the offline CLI has no authenticated
+        # actor, so the audit row honestly records none). The command,
+        # safe secret input, and output shapes are unchanged.
         return await service.reset_admin_password(
             admin_user_id_or_email=admin_user_id_or_email,
             password_hash=password_hash,
@@ -67,6 +80,7 @@ async def _list_admins(*, limit: int) -> list[AdminUser]:
         service = AdminService(
             admin_users_repository=AdminUsersRepository(session),
             audit_repository=AuditRepository(session),
+            admin_sessions_repository=AdminSessionsRepository(session),
         )
         return await service.list_admin_users(limit=limit)
 
