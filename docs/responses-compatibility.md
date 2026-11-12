@@ -1161,3 +1161,11 @@ the text. Independent key/route capabilities remain required; only A100 is
 selected for the scoped live check. See
 [the preset contract](client-compatibility-presets.md#codex-01640-declaration-compatibility)
 and [the bounded verification record](verification/2026-10-23-codex-0164.md).
+
+The separately versioned Codex 0.167.0 revision-15 preset retains revision 14
+and adds the exact `mcp__codex_tui` built-in namespace. All capability, replay,
+transport, admission and accounting boundaries remain unchanged. External-file
+promotion requires restart and audited active-key pin migration, without key
+rotation or quota changes. See the
+[preset contract](client-compatibility-presets.md#codex-01670-declaration-compatibility)
+and [bounded verification](verification/2026-11-10-codex-0167.md).

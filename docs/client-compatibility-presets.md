@@ -21,6 +21,7 @@ no silent fallback or per-request file reload.
 | `codex-0.162.1` | `rust-v0.162.1` | 10 | schema 2 |
 | `codex-0.163.0` | `rust-v0.163.0` | 12 | schema 2 |
 | `codex-0.164.0` | `rust-v0.164.0` | 14 | schema 2 |
+| `codex-0.167.0` | `rust-v0.167.0` | 15 | schema 2 |
 
 The existing static module ID `codex-0.162-responses-v1` names the decoder
 generation. Its active version and fixture digest come from the selected data
@@ -270,3 +271,21 @@ unapproved custom types remain rejected. A profile-pin migration changes no
 credentials, quotas, routing permissions, or throttling.
 
 See the [bounded 0.164 verification record](verification/2026-10-23-codex-0164.md).
+
+## Codex 0.167.0 declaration compatibility
+
+Revision 15 retains revision 14 and adds only the exact `mcp__codex_tui`
+built-in namespace used by the 0.167.0 TUI. Revision 14 rejects it with
+`responses_codex_client_tools_invalid` and `namespace_name_unapproved`.
+The pinned upstream source is `rust-v0.167.0`, commit
+`086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a`. The source-derived worktree
+schemas are ordinary functions; their transport already exists in the codec.
+No gateway application-code change or image rebuild is required for an external
+preset deployment. Restart the API and explicitly migrate affected active key
+pins through the audited service; do not serve mixed profile snapshots.
+
+Connector prefixes, tool-name grammar, custom-tool types, capability gates,
+replay ownership, rate limits and quotas are unchanged. Existing keys do not
+need rotation. This corrects a declaration-admission failure; it does not
+qualify arbitrary historical conversations or malformed backend tool output.
+See the [bounded verification record](verification/2026-11-10-codex-0167.md).
