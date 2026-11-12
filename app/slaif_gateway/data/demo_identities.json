@@ -187,5 +187,7 @@
   "provider_host": "provider.demo.invalid",
   "provider_display_name": "Demo Provider",
   "job_type_value": "demo_background_job",
-  "fictional_tool_name": "demo_tool"
+  "fictional_tool_name": "demo_tool",
+  "fictional_tool_namespace": "demo.tools",
+  "demo_key_prefix": "sk-demo-"
 }

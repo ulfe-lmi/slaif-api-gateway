@@ -316,6 +316,17 @@ MFA, one-time secrets and provider authority are invalidated, and the
 verifier refuses any PUBLIC CONNECT grant (including the NULL/default
 ACL case).
 
+Two operator/client identifier fields are fictionalized rather than
+preserved (222-c repair): `gateway_keys.key_prefix` (a configurable
+source prefix that may carry an organization slug and renders verbatim
+in the admin key list/detail and owner/institution/cohort key links) is
+replaced with the fixed fictional demo prefix, and
+`codex_replay_references.tool_namespace` (client/organization free text)
+is replaced with a fixed fictional namespace — non-NULL for
+function/custom tool rows and NULL for reasoning/compaction rows,
+matching the `kind_shape` CHECK. The independent verifier re-proves both
+values per row in addition to the whole-copy canary scan.
+
 ### Privacy limitation of the masked copy (explicitly accepted)
 
 Masking is NOT irreversible anonymity. Usage quantities, timestamps,

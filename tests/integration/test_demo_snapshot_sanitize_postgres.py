@@ -47,6 +47,14 @@ _CANARY_WEB_PW = "canary-web-pw-222-d35b6e"
 # false-fail this run).
 _RUN_TAG = uuid.uuid4().hex[:8]
 CN = f"222CNX-{_RUN_TAG}"
+# Valid configured-style gateway key prefix (sk-...- lowercase body)
+# carrying a DISTINCT lowercase organization canary: the uppercase CN
+# run token cannot appear in a valid prefix, so prefix leakage is proven
+# by this separate token, not by the full-copy CN scan.
+_CANARY_PREFIX = f"sk-canary-{_RUN_TAG}-"
+# Arbitrary client tool namespace carrying the run canary (the full-copy
+# CN scan must catch a leaked namespace).
+_CANARY_NAMESPACE = f"ns-{CN}"
 
 READER_ROLE = f"demo_san_reader_{_RUN_TAG}"
 WEB_ROLE = f"demo_san_web_{_RUN_TAG}"
@@ -230,12 +238,12 @@ async def _seed_canaries(source: dict[str, object]) -> dict[str, uuid.UUID]:
             )
             await conn.execute(
                 "INSERT INTO gateway_keys (id, public_key_id, key_prefix, key_hint, token_hash, hash_algorithm, hmac_key_version, owner_id, cohort_id, status, valid_from, valid_until, cost_limit_eur, token_limit_total, request_limit_total, cost_used_eur, tokens_used_total, requests_used_total, cost_reserved_eur, tokens_reserved_total, requests_reserved_total, rate_limit_requests_per_minute, rate_limit_tokens_per_minute, max_concurrent_requests, allow_all_models, allowed_models, allow_all_endpoints, allowed_endpoints, metadata, last_used_at, last_quota_reset_at, quota_reset_count, created_by_admin_user_id, created_at, updated_at, key_purpose, capability_policy_mode, calibration_metadata, template_id, external_tool_fence_state, service_owner_id, max_validity_days) "
-                "VALUES ($1, $2, 'sk-slaif-', $3, $4, 'sha256', 1, $5, $6, 'active', $7, $8, 100, 1000000, 1000, 12.34, 1234, 5, 0, 0, 0, 60, 100000, 4, false, $9, false, $10, $11, $12, $12, 1, $13, $12, $12, 'standard', 'standard', '{}', $14, 'none', $5, 90)",
+                "VALUES ($1, $2, $15, $3, $4, 'sha256', 1, $5, $6, 'active', $7, $8, 100, 1000000, 1000, 12.34, 1234, 5, 0, 0, 0, 60, 100000, 4, false, $9, false, $10, $11, $12, $12, 1, $13, $12, $12, 'standard', 'standard', '{}', $14, 'none', $5, 90)",
                 ids["key"], f"pub_canary_{CN}", f"canary-hint-{CN}",
                 f"canary-hash-{CN}", ids["owner"], ids["cohort"], _T0, _T4,
                 json.dumps([MODEL_REQ]), json.dumps([ENDPOINT]),
                 json.dumps({"owner": f"canary-keymeta-{CN}"}),
-                _T1, ids["admin"], ids["tpl"],
+                _T1, ids["admin"], ids["tpl"], _CANARY_PREFIX,
             )
             await conn.execute(
                 "INSERT INTO key_template_revisions (id, template_id, revision_number, created_by_admin_id, created_at, source_type, source_calibration_gateway_key_id, source_time_window_start, source_time_window_end, source_multiplier, allowed_endpoints, allowed_models, allowed_providers, allowed_hosted_capabilities, hosted_capabilities_requiring_review, request_limit_total, token_limit_total, rate_limit_policy, template_snapshot) "
@@ -330,10 +338,10 @@ async def _seed_canaries(source: dict[str, object]) -> dict[str, uuid.UUID]:
             )
             await conn.execute(
                 "INSERT INTO codex_replay_references (id, gateway_key_id, usage_ledger_id, source_request_id, provider, route_id, upstream_model, item_kind, item_id_hmac, call_id_hmac, hmac_key_version, tool_namespace, tool_name, created_at, expires_at) "
-                "VALUES ($1, $2, $3, $4, $5, $6, $7, 'function_call', $8, $9, 1, 'functions.exec', $10, $11, $12)",
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, 'function_call', $8, $9, 1, $13, $10, $11, $12)",
                 ids["replay"], ids["key"], ids["usage"],
                 f"canary-replayreq-{CN}", PROVIDER, ids["route"], MODEL_UP,
-                hex64, hex64, f"canary-tool-{CN}", _T1, _T3,
+                hex64, hex64, f"canary-tool-{CN}", _T1, _T3, _CANARY_NAMESPACE,
             )
             await conn.execute(
                 "INSERT INTO request_diagnostics (id, gateway_request_id, method, occurred_at, stream_outcome, recorded_at, client_id_unavailable_reason, endpoint_template, http_status, source, reason_code, error_code, error_param, positions, counts, limits, gateway_key_id, route_id, route_pattern, deployment_revision, estimated_input_tokens, output_allowance_tokens, context_window_tokens, replay_error_code) "
@@ -911,6 +919,12 @@ def test_full_chain_promotes_sanitized_copy(san_env: _Env, custody: Path) -> Non
                 n = await _copy_scan(conn, table, env.absence_tokens)
                 assert n == 0, f"canary survived in {table}: {n}"
 
+            # The lowercase source prefix cannot be caught by the
+            # uppercase CN scan: assert its exact absence separately.
+            for table in tables:
+                n = await _copy_scan(conn, table, (_CANARY_PREFIX,))
+                assert n == 0, f"source key prefix survived in {table}: {n}"
+
             # Source identity UUIDs are gone (remapped), links preserved.
             ids = env.ids
             owner_row = await conn.fetchrow("SELECT * FROM owners")
@@ -966,6 +980,10 @@ def test_full_chain_promotes_sanitized_copy(san_env: _Env, custody: Path) -> Non
             key_row = await conn.fetchrow("SELECT * FROM gateway_keys")
             assert re.fullmatch(r"demo[0-9a-f]{60}", str(key_row["public_key_id"]))
             assert re.fullmatch(r"demo[0-9a-f]{60}", str(key_row["token_hash"]))
+            # Configurable source prefix fictionalized to the fixed demo
+            # prefix (the admin key pages render it verbatim).
+            assert key_row["key_prefix"] == data["demo_key_prefix"]
+            assert str(key_row["key_prefix"]) != _CANARY_PREFIX
             replay = await conn.fetchrow("SELECT * FROM codex_replay_references")
             assert replay is not None
             # The replay HMAC columns are CHECK-constrained to bare
@@ -987,6 +1005,10 @@ def test_full_chain_promotes_sanitized_copy(san_env: _Env, custody: Path) -> Non
             # NOT NULL for function_call rows, so the fixed fictional value
             # (never the raw canary) is the only compliant mask.
             assert replay["tool_name"] == data["fictional_tool_name"]
+            # Client namespace fictionalized (FN row condition: the
+            # kind_shape CHECK requires it NOT NULL for function_call).
+            assert replay["tool_namespace"] == data["fictional_tool_namespace"]
+            assert replay["tool_namespace"] != _CANARY_NAMESPACE
             assert key_row["key_hint"] == data["dummy_key_hint"]
             assert key_row["cost_limit_eur"] == 100
             assert key_row["rate_limit_requests_per_minute"] == 60

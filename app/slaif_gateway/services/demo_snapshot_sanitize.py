@@ -180,6 +180,11 @@ _FTN_DATA_KEY = "fictional_tool_name"
 _FTN_KIND_COLUMN = "item_kind"
 _FTN_NULL_KINDS = frozenset({"reasoning", "compaction"})
 _FTN_FIXED_KINDS = frozenset({"function_call", "custom_tool_call"})
+# FN (fixed tool namespace) shares the FTN row condition: the same
+# reviewed kind_shape CHECK requires tool_namespace NULL for
+# reasoning/compaction rows and NOT NULL for function_call /
+# custom_tool_call rows.
+_FN_DATA_KEY = "fictional_tool_namespace"
 
 
 def _slugify(name: str) -> str:
@@ -319,6 +324,7 @@ def build_identity_maps(
 #        to ^[0-9a-f]{64}$; the column name is the per-column salt)
 #   FTN  fixed fictional client tool name; NULL only for the item kinds
 #        whose reviewed kind_shape CHECK requires NULL
+#   FN   fixed fictional client tool namespace (same row condition as FTN)
 #   N    set NULL (free text that may leak; column must be nullable)
 #   F:<k>  fixed fictional value from demo_identities.json key <k>
 #   FC:<k> fixed credential-invalidation dummy from the data file
@@ -336,6 +342,7 @@ U = "U"
 S = "S"
 H = "H"
 FTN = "FTN"
+FN = "FN"
 N = "N"
 J0 = "J0"
 JA = "JA"
@@ -471,7 +478,9 @@ TABLE_POLICY: dict[str, dict[str, str]] = {
     "gateway_keys": {
         "id": U,
         "public_key_id": S,
-        "key_prefix": P,
+        # Configurable operator prefix may carry an organization slug and
+        # renders verbatim in admin key pages: fixed fictional demo prefix.
+        "key_prefix": F + "demo_key_prefix",
         "key_hint": FC + "dummy_key_hint",
         "token_hash": S,
         "hash_algorithm": P,
@@ -668,7 +677,10 @@ TABLE_POLICY: dict[str, dict[str, str]] = {
         "item_id_hmac": H,
         "call_id_hmac": H,
         "hmac_key_version": P,
-        "tool_namespace": P,
+        # Client/organization-specific copied free text potentially
+        # visible through demo data access: fixed fictional namespace
+        # (see FN).
+        "tool_namespace": FN,
         # Free-text client tool name: one fixed fictional value, NULL only
         # where the kind_shape CHECK requires NULL (see FTN).
         "tool_name": FTN,
@@ -1832,6 +1844,7 @@ def _require_data_keys(data: dict[str, object]) -> None:
         "cohorts", "organizations", "teams", "projects", "budget_names",
         "template_names", "admin_display_names", "fictional_ips",
         "user_agents", _FTN_DATA_KEY,
+        _FN_DATA_KEY,
     })
     if any(not data.get(key) for key in needed):
         raise ds.DemoSnapshotError(
@@ -2263,7 +2276,7 @@ def _build_plan(
             ref = _E_BINDINGS[(table, c)][1]
             if ref not in fetch:
                 fetch.append(ref)
-        elif action == FTN and _FTN_KIND_COLUMN in columns:
+        elif action in (FTN, FN) and _FTN_KIND_COLUMN in columns:
             if _FTN_KIND_COLUMN not in fetch:
                 fetch.append(_FTN_KIND_COLUMN)
     return _TablePlan(table, tuple(pk_cols), tuple(set_cols), tuple(fetch))
@@ -2362,13 +2375,13 @@ def _convert_value(
         if not isinstance(value, str) or not _HEX64_RE.fullmatch(value):
             raise _unsupported_shape()
         return remap_hex64(seed, column.encode("utf-8"), value)
-    if action == FTN:
+    if action in (FTN, FN):
         item_kind = row[_FTN_KIND_COLUMN]
         if item_kind in _FTN_NULL_KINDS:
             return None
         if item_kind not in _FTN_FIXED_KINDS:
             raise _unsupported_shape()
-        return data[_FTN_DATA_KEY]
+        return data[_FTN_DATA_KEY if action == FTN else _FN_DATA_KEY]
     if action == N:
         return None
     if action == J0:
@@ -2566,8 +2579,8 @@ async def _column_violations(
                 _HEX64_PATTERN,
             )
         )
-    if action == FTN:
-        value = str(data[_FTN_DATA_KEY])
+    if action in (FTN, FN):
+        value = str(data[_FTN_DATA_KEY if action == FTN else _FN_DATA_KEY])
         return int(
             await conn.fetchval(
                 f"SELECT count(*) FROM {tbl} WHERE "

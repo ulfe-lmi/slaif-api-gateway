@@ -1573,6 +1573,86 @@ def test_column_violations_ftn_row_conditional() -> None:
     assert len(conn.calls) == 1
 
 
+def test_fn_action_only_reviewed_tool_namespace_column() -> None:
+    fn_cols = sorted(
+        f"{table}.{col}"
+        for table, cols in dsan.TABLE_POLICY.items()
+        for col, action in cols.items()
+        if action == dsan.FN
+    )
+    assert fn_cols == ["codex_replay_references.tool_namespace"]
+
+
+def test_key_prefix_policy_is_fixed_fictional_prefix() -> None:
+    # A configurable source prefix may carry an organization slug and
+    # renders verbatim in admin key pages; the copy must use the fixed
+    # fictional prefix instead, and it must satisfy the configured
+    # gateway key prefix shape (sk-...- lowercase alnum/hyphen body).
+    action = dsan.TABLE_POLICY["gateway_keys"]["key_prefix"]
+    assert action == dsan.F + "demo_key_prefix"
+    data = _identity_data()
+    value = str(data["demo_key_prefix"])
+    assert re.fullmatch(r"sk-[a-z0-9-]+-", value)
+    seed = b"snap-a"
+    maps = dsan.build_identity_maps(
+        seed, data, owner_ids=[], institution_ids=[], cohort_ids=[],
+        org_ids=[], team_ids=[], project_ids=[], budget_ids=[],
+        template_ids=[], admin_ids=[],
+    )
+    row = _Row()
+    got = dsan._convert_value(action, "sk-canary-source-org-slug-", seed=seed,
+                              data=data, maps=maps, table="gateway_keys",
+                              column="key_prefix", row=row, row_index=0)
+    assert got == value
+    assert "canary" not in str(got)
+
+
+def test_convert_value_fn_row_conditional() -> None:
+    data = _identity_data()
+    seed = b"snap-a"
+    maps = dsan.build_identity_maps(
+        seed, data, owner_ids=[], institution_ids=[], cohort_ids=[],
+        org_ids=[], team_ids=[], project_ids=[], budget_ids=[],
+        template_ids=[], admin_ids=[],
+    )
+    fixed = data["fictional_tool_namespace"]
+    for kind in ("function_call", "custom_tool_call"):
+        got = dsan._convert_value(dsan.FN, "raw-client-namespace", seed=seed,
+                                  data=data, maps=maps,
+                                  table="codex_replay_references",
+                                  column="tool_namespace",
+                                  row=_Row(item_kind=kind), row_index=0)
+        assert got == fixed
+    for kind in ("reasoning", "compaction"):
+        assert dsan._convert_value(dsan.FN, None, seed=seed, data=data,
+                                   maps=maps, table="codex_replay_references",
+                                   column="tool_namespace",
+                                   row=_Row(item_kind=kind), row_index=0) is None
+    with pytest.raises(ds.DemoSnapshotError):
+        dsan._convert_value(dsan.FN, None, seed=seed, data=data, maps=maps,
+                            table="codex_replay_references", column="tool_namespace",
+                            row=_Row(item_kind="unknown_kind"), row_index=0)
+
+
+def test_column_violations_fn_row_conditional() -> None:
+    # Same row-conditional law as FTN: fixed kinds must equal the fixed
+    # fictional namespace; null kinds must be NULL.
+    async def run(bad: int) -> int:
+        conn = _FakeConn(fetchval_results=[bad])
+        return await dsan._column_violations(
+            conn, "codex_replay_references", "tool_namespace", dsan.FN,
+            _identity_data(),
+        )
+
+    assert asyncio.run(run(1)) == 1
+    assert asyncio.run(run(0)) == 0
+    conn = _FakeConn(fetchval_results=[0])
+    asyncio.run(dsan._column_violations(
+        conn, "codex_replay_references", "tool_namespace", dsan.FN, _identity_data()
+    ))
+    assert len(conn.calls) == 1
+
+
 def test_column_violations_ip_typed_inet_comparison() -> None:
     # Regression: the inet columns render host addresses with an explicit
     # /32 suffix (inet::text), which never string-matches the bare
