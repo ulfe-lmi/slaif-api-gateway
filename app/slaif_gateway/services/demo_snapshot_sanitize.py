@@ -156,9 +156,14 @@ def _h_column_digest(seed: bytes, column: str, values: list[str]) -> str:
     the verifier passes the STORED values directly. Both sides therefore
     digest the same post-rewrite value space, and equality proves the
     stored multiset is exactly the expected per-copy remap multiset (an
-    un-remapped raw value or any other change breaks equality). This is
-    a multiset proof only: it says nothing about row-level placement,
-    which stays with the unchanged composite UNIQUE constraints.
+    un-remapped raw value or any other change breaks equality). Limit:
+    this is a per-column multiset proof only — it does NOT prove a
+    specific HMAC stayed on its original row. A swap of two remapped
+    values between rows with different (gateway_key_id, item_kind)
+    tuples preserves the multiset; the composite UNIQUE constraints
+    prevent duplicate tuples but prove no placement. Both swapped
+    values are still per-copy keyed digests of raw values, so the swap
+    exposes no source value.
     """
     h = hashlib.sha256(seed + b"|h|" + column.encode("utf-8"))
     for value in sorted(values):
@@ -2552,8 +2557,8 @@ async def _column_violations(
         # constraint — a raw HMAC may legitimately recur across keys, so
         # no global distinctness rule is imposed here. Exact per-copy
         # value law is proven by the keyed pre-state aggregate in
-        # _run_verifier; placement law by the unchanged UNIQUE
-        # constraints at commit.
+        # _run_verifier (a per-column multiset proof; it does not prove
+        # row-level placement of individual values).
         return int(
             await conn.fetchval(
                 f"SELECT count(*) FROM {tbl} "
