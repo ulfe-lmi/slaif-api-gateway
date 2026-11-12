@@ -500,6 +500,21 @@ class Settings(BaseSettings):
     DEMO_SNAPSHOT_RETENTION_SECONDS: int = 3600
     # Finite copy budget enforced on every run (oldest first).
     DEMO_SNAPSHOT_MAX_COPIES: int = 4
+    # Objective 223: bounded file-backed capture of admin-visible
+    # file sources for one private snapshot. These finite caps guard the
+    # in-memory capture phase; per-file acceptance still uses the
+    # product's own per-kind bounds. Default OFF with the snapshot worker.
+    # Hard per-file byte cap for one configured source file.
+    DEMO_SNAPSHOT_FILES_MAX_FILE_BYTES: int = 33554432
+    # Hard aggregate byte cap for the whole file capture of one job.
+    # Default 128 MiB: the demo worker is a bounded sidecar for SME
+    # deployments; raw source bytes are held in memory only per-file
+    # during the capture->sanitize stream, and the aggregate bound keeps
+    # a mis-sized custody from consuming unbounded worker memory.
+    DEMO_SNAPSHOT_FILES_MAX_TOTAL_BYTES: int = 134217728
+    # Hard elapsed-time cap covering capture, sanitization, writes and
+    # the independent read-only verification for one job.
+    DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS: int = 300
 
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 

@@ -64,6 +64,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from slaif_gateway.config import Settings
+from slaif_gateway.services.catalog_refresh import filesystem as catfs
 
 # ---------------------------------------------------------------------------
 # States and safe finite failure codes
@@ -76,6 +77,11 @@ STATE_RAW_UNVERIFIED = "RAW_UNVERIFIED"
 #: verifier passed. Still NOT published: file-backed verification (223)
 #: and browser binding (224) are absent, and no web role may read it.
 STATE_DB_SANITIZED_UNPUBLISHED = "DB_SANITIZED_UNPUBLISHED"
+#: The 222 DB state AND the 223 file-backed capture, typed
+#: sanitization and independent read-only verification all passed.
+#: Still NOT published: browser binding (224) is absent and no web
+#: role may read the copy or its display files.
+STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED = "DB_AND_FILES_VERIFIED_UNPUBLISHED"
 #: The worker is mid-job on this copy.
 STATE_RUNNING = "RUNNING"
 #: The job failed and its partial artifacts were cleaned.
@@ -116,6 +122,14 @@ _MANIFEST_SCHEMA_VERSION = 1
 _FENCE_NAME = ".fence"
 _TARGET_DB_PREFIX = "demo_snap_"
 _DUMP_NAME = "demo.dump"
+_FILES_MANIFEST_NAME = "files_manifest.json"
+#: Bounded acceptance cap for the private files manifest on cleanup.
+_FILES_MANIFEST_MAX_BYTES = 1 * 1024 * 1024
+#: Finite maximum number of flat display leaves per job.
+_FILES_MAX_LEAVES = 4096
+#: Generated flat display-leaf filename grammar (single component;
+#: no slash, dot or dotdot can ever match).
+_FILES_LEAF_NAME_RE = re.compile(r"^f[0-9]{4}-[0-9a-f]{12}$")
 _STDERR_TAIL_BYTES = 64 * 1024
 _READ_CHUNK_BYTES = 1024 * 1024
 _POLL_SECONDS = 0.1
@@ -276,6 +290,12 @@ class SnapshotManifest:
     export_bytes: int = 0
     failure_code: str | None = None
     schema_version: int = _MANIFEST_SCHEMA_VERSION
+    # Objective 223 file stage (absent until the files job records it).
+    files_state: str | None = None
+    files_failure_code: str | None = None
+    files_verified_at: float | None = None
+    files_bytes: int = 0
+    files_count: int = 0
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -289,6 +309,11 @@ class SnapshotManifest:
             "restore_finished_at": self.restore_finished_at,
             "export_bytes": self.export_bytes,
             "failure_code": self.failure_code,
+            "files_state": self.files_state,
+            "files_failure_code": self.files_failure_code,
+            "files_verified_at": self.files_verified_at,
+            "files_bytes": self.files_bytes,
+            "files_count": self.files_count,
         }
 
 
@@ -333,6 +358,41 @@ def _validate_custody_dir(custody_dir: Path) -> None:
             CODE_CUSTODY_UNSAFE,
             "Demo snapshot custody directory must be mode 0700 (owner-only).",
         )
+
+
+def validate_custody_dir(custody_dir: Path) -> None:
+    """Public worker-internal alias of the private custody check.
+
+    Exposed for the 222/223 worker siblings so every demo worker command
+    enforces the identical custody boundary (no symlinks, owner-only
+    0700) with the identical safe error vocabulary.
+    """
+    _validate_custody_dir(custody_dir)
+
+
+def list_job_dirs(custody_dir: Path) -> list[Path]:
+    """Public worker-internal alias (closed job-name law, no symlinks)."""
+    return _list_job_dirs(custody_dir)
+
+
+def read_manifest(job_dir: Path) -> SnapshotManifest | None:
+    """Public worker-internal alias of the private manifest reader."""
+    return _read_manifest(job_dir)
+
+
+def write_manifest(job_dir: Path, manifest: SnapshotManifest) -> None:
+    """Public worker-internal alias of the private manifest writer."""
+    _write_manifest(job_dir, manifest)
+
+
+def acquire_fence(custody_dir: Path) -> int:
+    """Public worker-internal alias of the single-worker flock fence."""
+    return _acquire_fence(custody_dir)
+
+
+def release_fence(fd: int) -> None:
+    """Public worker-internal alias of the fence release."""
+    _release_fence(fd)
 
 
 def _atomic_write_private(path: Path, data: bytes) -> None:
@@ -388,6 +448,19 @@ def _read_manifest(job_dir: Path) -> SnapshotManifest | None:
             ),
             export_bytes=int(payload.get("export_bytes") or 0),
             failure_code=(str(payload["failure_code"]) if payload.get("failure_code") else None),
+            files_state=(str(payload["files_state"]) if payload.get("files_state") else None),
+            files_failure_code=(
+                str(payload["files_failure_code"])
+                if payload.get("files_failure_code")
+                else None
+            ),
+            files_verified_at=(
+                float(payload["files_verified_at"])
+                if payload.get("files_verified_at") is not None
+                else None
+            ),
+            files_bytes=int(payload.get("files_bytes") or 0),
+            files_count=int(payload.get("files_count") or 0),
         )
     except (KeyError, TypeError, ValueError):
         return None
@@ -1038,12 +1111,122 @@ class DemoSnapshotJobResult:
     target_db: str = field(repr=False, default="")
 
 
+def _clean_job_files(job_dir: Path) -> bool:
+    """Exact-leaf, dirfd-anchored cleanup of the 223 ``files/`` subtree.
+
+    Everything is opened through held descriptors: the anchored job-dir
+    handle (every ancestor no-follow), then ``files`` through that held
+    handle, and the private manifest through a bounded anchored read on
+    the held ``files`` fd. No pathname is re-opened after verification.
+    The ``files/`` directory identity measured on the held fd must
+    equal the manifest-recorded identity BEFORE the fd is closed.
+    Cleanup runs only when that manifest records the exact flat leaves
+    the files worker created, and every leaf name must match the
+    generated flat filename grammar before it is handed to the anchored
+    removal helper. Cleanup delegates exact-leaf removal to the catalog
+    filesystem boundary and then PROVES the directory is gone through
+    the same held handle. A missing, unreadable or inconsistent
+    manifest, a tampered identity, a grammar-violating leaf name, or a
+    surviving directory is a cleanup FAILURE: artifacts are retained
+    for operator inspection.
+    """
+    try:
+        job_handle = catfs.open_anchored_handle(job_dir)
+    except catfs.CatalogRefreshSealError:
+        return False
+    try:
+        job_handle.assert_name_binding(str(job_dir))
+        try:
+            files_fd = os.open(
+                "files",
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY,
+                dir_fd=job_handle.dir_fd,
+            )
+        except FileNotFoundError:
+            return True  # absent: nothing owned to clean
+        except OSError:
+            return False
+        try:
+            try:
+                manifest_raw = catfs.anchored_read_fd(
+                    files_fd, _FILES_MANIFEST_NAME, _FILES_MANIFEST_MAX_BYTES
+                )
+                manifest = catfs.strict_json_bytes(
+                    manifest_raw, _FILES_MANIFEST_NAME
+                )
+            except (OSError, catfs.CatalogRefreshSealError):
+                return False
+            if not isinstance(manifest, dict):
+                return False
+            identity = manifest.get("files_dir_identity")
+            leaves = manifest.get("files")
+            if not isinstance(identity, list) or len(identity) != 2:
+                return False
+            if (
+                not isinstance(leaves, list)
+                or len(leaves) > _FILES_MAX_LEAVES
+                or not all(
+                    isinstance(entry, dict) and isinstance(entry.get("leaf"), str)
+                    for entry in leaves
+                )
+            ):
+                return False
+            try:
+                expected_identity = (int(identity[0]), int(identity[1]))
+            except (TypeError, ValueError):
+                return False
+            # The directory identity is measured on the HELD fd and must
+            # match the manifest BEFORE anything is closed or removed.
+            dir_st = os.fstat(files_fd)
+            if (dir_st.st_dev, dir_st.st_ino) != expected_identity:
+                return False
+            created_names = [str(entry["leaf"]) for entry in leaves]
+            if (
+                len(set(created_names)) != len(created_names)
+                or not all(_FILES_LEAF_NAME_RE.fullmatch(name) for name in created_names)
+            ):
+                return False
+        finally:
+            os.close(files_fd)
+        created_names = created_names + [_FILES_MANIFEST_NAME]
+        catfs.cleanup_staged_directory(
+            job_handle.dir_fd, "files", expected_identity, created_names
+        )
+        # Prove absence through the SAME held handle; the helper is
+        # best-effort and a surviving directory is a failed cleanup.
+        try:
+            probe = os.open(
+                "files",
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY,
+                dir_fd=job_handle.dir_fd,
+            )
+        except FileNotFoundError:
+            probe = None
+        except OSError:
+            return False
+        if probe is not None:
+            os.close(probe)
+            return False
+        job_handle.assert_name_binding(str(job_dir))
+        return True
+    except catfs.CatalogRefreshSealError:
+        return False
+    finally:
+        job_handle.close()
+
+
 def _cleanup_artifacts(
     ops: TargetOps,
     job_dir: Path,
     target_db: str,
 ) -> bool:
-    """Remove partial dump and target DB; True when fully clean."""
+    """Remove partial dump and target DB; then the 223 display files.
+
+    Ordering is load-bearing: the 223 display files are removed only
+    AFTER the exact target database removal succeeds, so a failed DB
+    drop keeps the files (and manifest) available for retry.
+    ``True`` only when every step completed.
+    """
     clean = True
     try:
         (job_dir / _DUMP_NAME).unlink()
@@ -1059,6 +1242,8 @@ def _cleanup_artifacts(
     # CLEANUP_FAILED (never labeled clean).
     exists = ops.database_exists(target_db)
     if exists is not False and not ops.drop_database(target_db):
+        clean = False
+    if clean and not _clean_job_files(job_dir):
         clean = False
     return clean
 
@@ -1095,10 +1280,11 @@ def _expire_copies(
 ) -> int:
     """Expire retained copies past retention and enforce the budget.
 
-    Both RAW_UNVERIFIED and DB_SANITIZED_UNPUBLISHED copies count against
-    retention and the finite copy budget: a sanitized-but-unpublished
-    copy is still a private copy holding copy-derived data, and 223/224
-    are the only paths that ever consume it.
+    Every unpublished copy state (RAW_UNVERIFIED, DB_SANITIZED_UNPUBLISHED
+    and DB_AND_FILES_VERIFIED_UNPUBLISHED) counts against retention and
+    the finite copy budget: a sanitized-but-unpublished copy is still a
+    private copy holding copy-derived data, and 224 is the only path
+    that ever consumes it.
     """
     now = time.time() if now is None else now
     copies = []
@@ -1107,6 +1293,7 @@ def _expire_copies(
         if manifest is not None and manifest.state in (
             STATE_RAW_UNVERIFIED,
             STATE_DB_SANITIZED_UNPUBLISHED,
+            STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED,
         ):
             copies.append((manifest.created_at, job_dir, manifest))
     copies.sort(key=lambda item: item[0])

@@ -31,6 +31,10 @@ from slaif_gateway.services.demo_snapshot import (
 from slaif_gateway.services.demo_snapshot_sanitize import (
     sanitize_copies,
 )
+from slaif_gateway.services.demo_snapshot_files import (
+    files_config_from_settings,
+    run_files_job,
+)
 
 app = typer.Typer(help="Bounded private demo PostgreSQL snapshot worker (worker-only)")
 
@@ -164,4 +168,40 @@ def recover(
         else:
             echo_kv(payload)
     except DemoSnapshotError as exc:
+        _fail(exc, json_output=json_output)
+
+
+@app.command("files")
+def files(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the safe result as a JSON object."),
+    ] = False,
+) -> None:
+    """Capture, sanitize and verify every 222 copy's display files (223).
+
+    Idempotent: already file-verified copies are skipped; a failed copy
+    keeps its 222 state with a safe finite files failure code for
+    operator inspection and retry.
+    """
+    try:
+        config = files_config_from_settings(get_settings())
+        result = run_files_job(config, get_settings())
+        payload: dict[str, object] = {
+            "state": result.state,
+            "copies_files_verified": result.copies_files_verified,
+            "copies_failed": result.copies_failed,
+            "elapsed_ms": result.elapsed_ms,
+        }
+        if result.failure_code is not None:
+            payload["code"] = result.failure_code
+        if json_output:
+            from slaif_gateway.cli.common import emit_json
+
+            emit_json(payload)
+        else:
+            echo_kv(payload)
+        if result.state != "FILES_VERIFIED":
+            raise typer.Exit(code=1)
+    except DemoSnapshotError as exc:  # safe fixed vocabulary only
         _fail(exc, json_output=json_output)

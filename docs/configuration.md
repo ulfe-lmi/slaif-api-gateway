@@ -1763,6 +1763,26 @@ restore; failures, cancellation, restarts and expiry never publish or leak
 all output); an incomplete dump is never marked complete; a completed copy
 is `RAW_UNVERIFIED` until stages 222/223/224.
 
+### Demo file stage (objective 223)
+
+The 223 file worker reuses the full 221 configuration above (it is part
+of the same worker; `DEMO_SNAPSHOT_ENABLED=true` and a valid 221 config
+are required). Its OWN bounds are validated feature-locally in the file
+worker path only: malformed optional file-stage values refuse the file
+job with a safe finite code and can never break ordinary gateway startup
+while the demo worker is disabled. The configured file SOURCES are the
+existing operator settings (read-only): `CATALOG_REFRESH_ROOT` +
+`CATALOG_REFRESH_SEAL_KEY` (both or neither), `SLAIF_BRANDING_DIR`,
+`COMPLETION_SERVICE_PROFILE_DIR`, `UPSTREAM_LLM_PROFILES_FILE` — see
+`docs/demo-admin.md` (Demo file-backed snapshot) for the per-source
+display law and fail-closed codes.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `DEMO_SNAPSHOT_FILES_MAX_FILE_BYTES` | `33554432` (32 MiB) | Per-file byte cap for raw admission AND sanitized display bytes (1 MiB–128 MiB). |
+| `DEMO_SNAPSHOT_FILES_MAX_TOTAL_BYTES` | `134217728` (128 MiB) | Aggregate byte cap across all captured files of one copy (64 MiB–4096 MiB); must be at least the per-file cap. |
+| `DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS` | `300` | ONE absolute elapsed deadline per copy covering capture, write and independent verification (10–3600 s). |
+
 ## Production Notes
 
 - Never commit `.env`.
