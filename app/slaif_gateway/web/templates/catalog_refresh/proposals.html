@@ -27,9 +27,9 @@
   </header>
 
   {% if errors.message %}
-  <div class="admin-flash" role="alert"><strong>Refused:</strong> {{ errors.message }}</div>
+  <div class="admin-flash" role="alert"><strong>Refused:</strong> {{ errors.message }}{% if errors.field %} Field: {{ errors.field }}.{% endif %}</div>
   {% endif %}
-  {% if dispatched is not none %}
+  {% if dispatched is defined and dispatched is not none %}
   <div class="admin-flash" role="status">
     <strong>Queued.</strong> {{ dispatch_note }}
     {% if last_job %}
@@ -131,7 +131,7 @@
       <label class="checkbox-row" for="prop-api-models"><input type="checkbox" name="include_api_models" value="on" id="prop-api-models" aria-describedby="prop-api-models-help"> Include API-only models</label>
       <label class="checkbox-row" for="prop-ack-assisted"><input type="checkbox" name="acknowledge_assisted_proposal_risk" value="on" id="prop-ack-assisted" aria-describedby="prop-ack-assisted-help"> I acknowledge the assisted-proposal risk (required for assisted source)</label>
       <p class="help" id="prop-paired-help">Refuses rows where route and pricing cannot be paired-ready; safest for import.</p>
-      <p class="help" id="prop-ordinary-help">Restricts the proposal to the standard ordinary Chat Completions surface.</p>
+      <p class="help" id="prop-ordinary-help">Restricts Chat Completions candidates to ordinary text chat. Responses candidates use their independent stateless text policy.</p>
       <p class="help" id="prop-zero-help">Zero-priced rows are included with an explicit warning instead of being dropped.</p>
       <p class="help" id="prop-deprecated-help">Deprecated upstream models are otherwise excluded.</p>
       <p class="help" id="prop-ambiguous-help">Models whose capabilities cannot be confidently determined are otherwise excluded.</p>
@@ -146,7 +146,7 @@
       </label>
       {% endfor %}
       <label class="checkbox-row" for="prop-all-packages"><input type="checkbox" name="all_packages" value="on" id="prop-all-packages" aria-describedby="prop-all-packages-help"> All packages</label>
-      <p class="help" id="prop-packages-help">Closed set of supported OpenRouter package presets; tick the ones to generate.</p>
+      <p class="help" id="prop-packages-help">OpenRouter packages apply to the OpenRouter portion when scope is OpenRouter or both providers. Leave unselected for OpenAI-only.</p>
       <p class="help" id="prop-all-packages-help">Generate every supported OpenRouter package preset.</p>
     </fieldset>
     <button type="submit">Generate proposal</button>

@@ -635,6 +635,8 @@ def _proposal_params(form: Any) -> tuple[dict[str, Any], str | None]:
         for value in (str(p).strip() for p in form.getlist("package_name"))
         if value in OPENROUTER_PACKAGE_ORDER
     ]
+    if scope == "openai" and (package_names or _is_checked(str(form.get("all_packages")))):
+        return {}, "package_names"
     params: dict[str, Any] = {
         "provider_scope": scope,
         "endpoint_scopes": endpoint_scopes,
@@ -690,7 +692,10 @@ async def catalog_proposals_generate(request: Request) -> Response:
             model_options=None,
             package_presets=OPENROUTER_PACKAGE_ORDER,
             last_job=None,
-            errors={"field": field_error, "message": "One or more bounded proposal fields are invalid."},
+            errors={"field": field_error, "message": (
+                "OpenRouter packages require OpenRouter or both providers; leave packages unselected for OpenAI-only."
+                if field_error == "package_names" else "One or more bounded proposal fields are invalid."
+            )},
         )
     # Secret-persistence guard BEFORE the job record (which persists the
     # raw params) is written: every bounded value is checked with the

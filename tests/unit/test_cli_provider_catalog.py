@@ -268,7 +268,8 @@ def test_provider_catalog_cli_rejects_openai_package_request(tmp_path: Path) -> 
     )
 
     assert result.exit_code != 0
-    assert "implemented only for openrouter" in result.stderr.lower()
+    assert "openrouter packages require provider scope openrouter or all" in result.stderr.lower()
+    assert not any(output_dir.iterdir())
 
 
 # --- FX capture boundary for --currency (non-USD needs ONE configured direct rate) ---

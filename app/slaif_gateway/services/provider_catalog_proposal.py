@@ -7,6 +7,7 @@ existing route/pricing import preview workflows.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import fnmatch
 import hashlib
@@ -65,7 +66,6 @@ from slaif_gateway.services.chat_completion_route_capabilities import (
 )
 from slaif_gateway.services.hosted_tool_policy import is_search_specific_chat_completion_model
 from slaif_gateway.services.key_policy_validation import (
-    IMPLEMENTED_CLIENT_ENDPOINTS,
     RESPONSES_ENDPOINT,
 )
 from slaif_gateway.services.model_route_service import CHAT_COMPLETIONS_ENDPOINT, normalize_endpoint
@@ -75,6 +75,7 @@ from slaif_gateway.services.openai_assisted_catalog import (
     generate_openai_pricing_proposal_text,
     generate_openai_route_proposal_text,
 )
+from slaif_gateway.services.responses_route_capabilities import default_responses_capabilities
 from slaif_gateway.utils.redaction import redact_mapping, redact_text
 
 ProviderName = Literal["openai", "openrouter"]
@@ -1003,7 +1004,7 @@ async def _propose_openrouter(
                 canonical_model_id=_safe_text(row.get("canonical_slug")),
                 display_name=_safe_text(row.get("name")),
                 description=_safe_text(row.get("description")),
-                endpoints=(CHAT_COMPLETIONS_ENDPOINT,),
+                endpoints=_openrouter_endpoints(row),
                 input_modalities=input_modalities,
                 output_modalities=output_modalities,
                 context_length=_safe_int(row.get("context_length")),
@@ -1025,81 +1026,73 @@ async def _propose_openrouter(
                 warnings=model_warnings,
             )
         )
-        route_status = "report-only"
         route_ready = False
-        if "chat_completions" in endpoint_scopes and _openrouter_route_ready(
-            model_id=model_id,
-            output_modalities=output_modalities,
-            warnings=model_warnings,
-        ):
-            route_ready = True
-            route_status = "ready"
-            route_candidates.append(
-                ProviderCatalogRouteCandidate(
-                    requested_model=model_id,
-                    match_type="exact",
-                    endpoint=CHAT_COMPLETIONS_ENDPOINT,
-                    provider=OPENROUTER_PROVIDER,
-                    upstream_model=model_id,
-                    priority=100,
-                    enabled=True,
-                    visible_in_models="deprecated_or_expiring" not in model_warnings
-                    and "hidden_from_models" not in model_warnings,
-                    supports_streaming="text" in output_modalities,
-                    capabilities=_build_chat_capabilities(
+        pricing_ready = False
+        pricing_status = "missing"
+        pricing_warning_codes: tuple[str, ...] = ()
+        supported_endpoints = _openrouter_endpoints(row)
+        for endpoint in _proposal_endpoints(endpoint_scopes):
+            endpoint_warnings = _openrouter_model_warnings(
+                model_id=model_id, supported_parameters=supported_parameters,
+                input_modalities=input_modalities, output_modalities=output_modalities,
+                expiration_date=_safe_text(row.get("expiration_date")),
+                ordinary_chat_only=ordinary_chat_only and endpoint == CHAT_COMPLETIONS_ENDPOINT,
+            )
+            if endpoint not in supported_endpoints:
+                warnings.append(ProviderCatalogWarning(
+                    code="endpoint_support_unconfirmed", provider=OPENROUTER_PROVIDER,
+                    model_id=model_id, endpoint=endpoint, sources=(api_source.url,),
+                    message="The model metadata does not declare support for this selected endpoint.",
+                ))
+                continue
+            if endpoint == RESPONSES_ENDPOINT and (
+                "text" not in input_modalities or set(output_modalities) != {"text"}
+            ):
+                endpoint_warnings = tuple(sorted(set(endpoint_warnings) | {"unsupported_modality"}))
+            endpoint_ready = _openrouter_route_ready(
+                model_id=model_id, output_modalities=output_modalities,
+                warnings=endpoint_warnings,
+            )
+            if endpoint_ready:
+                route_ready = True
+                caps = (
+                    _build_responses_capabilities(
+                        supported_parameters=supported_parameters, supports_streaming=True,
+                        provider=OPENROUTER_PROVIDER,
+                    ) if endpoint == RESPONSES_ENDPOINT else _build_chat_capabilities(
                         supported_parameters=supported_parameters,
-                        input_modalities=input_modalities,
-                        output_modalities=output_modalities,
-                        supports_streaming="text" in output_modalities,
-                        provider=OPENROUTER_PROVIDER,
+                        input_modalities=input_modalities, output_modalities=output_modalities,
+                        supports_streaming="text" in output_modalities, provider=OPENROUTER_PROVIDER,
                         supports_cached_input_usage="input_cache_read" in pricing,
-                    ),
+                    )
+                )
+                route_candidates.append(ProviderCatalogRouteCandidate(
+                    requested_model=model_id, match_type="exact", endpoint=endpoint,
+                    provider=OPENROUTER_PROVIDER, upstream_model=model_id, priority=100,
+                    enabled=True, visible_in_models="deprecated_or_expiring" not in endpoint_warnings
+                    and "hidden_from_models" not in endpoint_warnings,
+                    supports_streaming=True, capabilities=caps,
                     notes=_route_notes(
-                        provider=OPENROUTER_PROVIDER,
-                        model_id=model_id,
-                        confidence=confidence,
+                        provider=OPENROUTER_PROVIDER, model_id=model_id, confidence=confidence,
                         context_length=_safe_int(row.get("context_length")),
                         max_output_tokens=_safe_int(top_provider.get("max_completion_tokens")),
-                        source_urls=(api_source.url, models_source.url),
-                        warnings=model_warnings,
+                        source_urls=(api_source.url, models_source.url), warnings=endpoint_warnings,
                     ),
-                    confidence=confidence,
-                    ready_for_import=True,
-                    warnings=model_warnings,
-                )
+                    confidence=confidence, ready_for_import=True, warnings=endpoint_warnings,
+                ))
+            pricing_row, price_warnings = _openrouter_pricing_candidate(
+                model_id=model_id, pricing=pricing, currency=currency,
+                source_url=api_source.url, source_retrieved_at=api_source.retrieved_at,
+                unit_confirmed=unit_confirmed, confidence=confidence,
+                model_warnings=endpoint_warnings, allow_zero_prices=allow_zero_prices,
             )
-        elif "responses" in endpoint_scopes:
-            warnings.append(
-                ProviderCatalogWarning(
-                    code="future_endpoint",
-                    message=(
-                        "OpenRouter responses route proposals are report-only in this workflow; "
-                        "chat.completions remains the ready import target."
-                    ),
-                    provider=OPENROUTER_PROVIDER,
-                    model_id=model_id,
-                    endpoint=RESPONSES_ENDPOINT,
-                    sources=(api_source.url,),
-                )
-            )
-
-        pricing_row, pricing_warning_codes = _openrouter_pricing_candidate(
-            model_id=model_id,
-            pricing=pricing,
-            currency=currency,
-            source_url=api_source.url,
-            source_retrieved_at=api_source.retrieved_at,
-            unit_confirmed=unit_confirmed,
-            confidence=confidence,
-            model_warnings=model_warnings,
-            allow_zero_prices=allow_zero_prices,
-        )
-        pricing_status = "missing"
-        pricing_ready = False
-        if pricing_row is not None and "chat_completions" in endpoint_scopes:
-            pricing_ready = pricing_row.ready_for_import
-            pricing_status = "ready" if pricing_ready else "report-only"
-            pricing_candidates.append(pricing_row)
+            pricing_warning_codes = tuple(sorted(set(pricing_warning_codes + price_warnings)))
+            if pricing_row is not None:
+                pricing_candidates.append(replace(pricing_row, endpoint=endpoint))
+                pricing_ready = pricing_ready or pricing_row.ready_for_import
+        route_status = "ready" if route_ready else "report-only"
+        if pricing_ready:
+            pricing_status = "ready"
         elif pricing_warning_codes:
             pricing_status = "report-only"
         comparison_rows.append(
@@ -1147,6 +1140,134 @@ async def _propose_openrouter(
         comparison_rows=tuple(comparison_rows),
         warnings=tuple(_dedupe_warning_objects(warnings)),
     )
+
+
+
+async def _openai_markdown_documents(
+    *, client: httpx.AsyncClient, fetched_sources: list[_FetchedSource],
+    warnings: list[ProviderCatalogWarning], include_models: Sequence[str],
+    exclude_models: Sequence[str], max_models: int, ordinary_chat_only: bool,
+    save_source_snapshots: bool, source_dir: Path, now: datetime | None,
+) -> tuple[_FetchedSource, tuple[_OpenAIPricingRecord, ...], dict[str, _OpenAIModelRecord], dict[str, str]]:
+    """Bounded official page-backed fallback; API identity never grants endpoints.
+
+    Reuse the existing strict per-model snapshot parser. Fetch only models
+    with flat Standard pricing and a literal official-index identity, at
+    most 64 pages / four concurrent requests. No aliases or prices are guessed.
+    """
+    from slaif_gateway.services.catalog_refresh.source_evidence import (
+        SnapshotFormatError, parse_openai_model_doc_snapshot,
+        parse_openai_models_docs_snapshot,
+    )
+
+    async def fetch(url: str, kind: str) -> _FetchedSource:
+        source = await _fetch_text_source(
+            client=client, provider=OPENAI_PROVIDER, source_type=kind,
+            url=url, save_snapshot=save_source_snapshots,
+            source_dir=source_dir, now=now,
+        )
+        fetched_sources.append(source)
+        return source
+
+    pricing = await fetch(OPENAI_PRICING_DOCS_URL + ".md", "docs_pricing_markdown")
+    index = await fetch(OPENAI_MODELS_DOCS_URL + ".md", "docs_models_markdown")
+    prices = _parse_openai_pricing_docs(
+        text=pricing.raw_text or "", source_url=pricing.url,
+        source_retrieved_at=pricing.retrieved_at,
+    )
+    # Do not flatten the newer cache-write/context-tier table into token
+    # prices. This flat TSV family cannot represent those dimensions.
+    if re.search(r"\|[^\n]*Short context input", pricing.raw_text or "", re.IGNORECASE):
+        warnings.append(ProviderCatalogWarning(
+            code="contextual_pricing_report_only", provider=OPENAI_PROVIDER,
+            message="Context-dependent/cache-write price tables are outside this flat-price proposal format; only explicit flat Standard rows are eligible.",
+        ))
+    # Validate/index this document for provenance, but do not mistake its
+    # featured-model selection for the complete set of priced models.
+    parse_openai_models_docs_snapshot((index.raw_text or "").encode("utf-8"))
+    candidates = sorted({row.model_id for row in prices})
+    candidates = [m for m in candidates if _model_allowed(
+        m, include_models=include_models, exclude_models=exclude_models
+    )]
+    cap = min(max_models, 64)
+    if len(candidates) > cap:
+        warnings.append(ProviderCatalogWarning(
+            code="model_page_cap_applied", provider=OPENAI_PROVIDER,
+            message=f"Official model-page cap {cap} omitted {len(candidates)-cap} candidates.",
+        ))
+    semaphore = asyncio.Semaphore(4)
+
+    async def page(model_id: str) -> tuple[str, _OpenAIModelRecord | None, str | None]:
+        async with semaphore:
+            try:
+                source = await fetch(
+                    OPENAI_MODELS_DOCS_URL + "/" + model_id + ".md",
+                    "docs_model_" + model_id,
+                )
+                parsed = parse_openai_model_doc_snapshot((source.raw_text or "").encode("utf-8"))[0]
+            except (httpx.HTTPError, SnapshotFormatError):
+                return model_id, None, None
+            if parsed.model != model_id or parsed.text_modality is not True:
+                return model_id, None, None
+            # A text-only projection of a vision-capable model does not grant
+            # image or hosted-tool authority. Explicit multimodal proposals
+            # retain image input behind the existing route capability gates.
+            text = source.raw_text or ""
+            section = ""
+            flags = set()
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    section = stripped.lstrip("#").strip().lower()
+                elif section == "supported features" and stripped.startswith("- "):
+                    feature = stripped[2:].strip()
+                    translated = {"streaming":"streaming", "function_calling":"function calling",
+                                  "structured_outputs":"structured outputs", "logprobs":"logprobs",
+                                  "reasoning":"reasoning"}.get(feature)
+                    if translated:
+                        flags.add(translated)
+                if not ordinary_chat_only and stripped.startswith("- Input modalities:"):
+                    if "image" in {m.strip() for m in stripped.partition(":")[2].split(",")}:
+                        flags.add("image input")
+            endpoint_set = set()
+            section = ""
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#"):
+                    section = stripped.lstrip("#").strip().lower()
+                if section != "endpoints" or not stripped.startswith("|"):
+                    continue
+                cells = [c.strip().strip("`") for c in stripped.strip("|").split("|")]
+                if len(cells) == 3 and cells[2] == "Supported":
+                    endpoint = "/" + cells[1].lstrip("/")
+                    if endpoint in (CHAT_COMPLETIONS_ENDPOINT, RESPONSES_ENDPOINT):
+                        endpoint_set.add(endpoint)
+            if not endpoint_set:
+                return model_id, None, None
+            row_warnings = ("deprecated_or_expiring",) if re.search(
+                r"^Status: Deprecated\s*$", text, flags=re.MULTILINE
+            ) else ()
+            record = _OpenAIModelRecord(
+                model_id=model_id, display_name=model_id, description=None,
+                endpoints=tuple(sorted(endpoint_set)), features=tuple(sorted(flags)),
+                context_length=parsed.context_length, max_output_tokens=parsed.max_output_tokens,
+                knowledge_cutoff=None, warnings=row_warnings,
+            )
+            return model_id, record, source.url
+
+    results = await asyncio.gather(*(page(m) for m in candidates[:cap]))
+    records = {}
+    urls = {}
+    for model_id, record, url in results:
+        if record is not None:
+            records[model_id] = record
+            urls[model_id] = url
+        else:
+            warnings.append(ProviderCatalogWarning(
+                code="model_page_unusable", provider=OPENAI_PROVIDER, model_id=model_id,
+                message="Official model page failed retrieval, identity, format, or text-contract checks.",
+            ))
+    return pricing, prices, records, urls
 
 
 async def _propose_openai(
@@ -1199,6 +1320,22 @@ async def _propose_openai(
         text=_text_from_source(models_source),
         source_url=models_source.url,
     )
+    model_source_urls: dict[str, str] = {}
+    # The current index is navigation, not an endpoint contract. Its
+    # HTML rendering no longer contains the legacy inline model blocks.
+    if not model_records and (
+        "<html" in (models_source.raw_text or "").lower()
+        or re.search(r"(?m)^- \[.+?\]\(/api/docs/models/", models_source.raw_text or "")
+    ):
+        pricing_source, pricing_records, model_records, model_source_urls = (
+            await _openai_markdown_documents(
+                client=client, fetched_sources=fetched_sources, warnings=warnings,
+                include_models=include_models, exclude_models=exclude_models,
+                max_models=max_models, ordinary_chat_only=ordinary_chat_only,
+                save_source_snapshots=save_source_snapshots, source_dir=source_dir, now=now,
+            )
+        )
+
     api_model_ids: set[str] = set()
     if include_api_models or "api" in source_methods:
         api_source = await _fetch_openai_models_api(
@@ -1300,6 +1437,7 @@ async def _propose_openai(
 
     for model_id in eligible_model_ids:
         docs_model = model_records.get(model_id)
+        model_source_url = model_source_urls.get(model_id, models_source.url)
         doc_prices = pricing_by_model.get(model_id, ())
         selected_doc_pricing = _select_openai_text_pricing_record(doc_prices)
         row_warnings = _openai_model_comparison_warnings(
@@ -1309,13 +1447,11 @@ async def _propose_openai(
             api_model_ids=api_model_ids if (include_api_models or "api" in source_methods) else None,
             ordinary_chat_only=ordinary_chat_only,
         )
-        if "chat_completions" in endpoint_scopes and not _is_openai_chat_completions_model_id(model_id):
-            row_warnings = tuple(sorted(set(row_warnings + ("unsupported_modality",))))
         if is_search_specific_chat_completion_model(model_id):
             row_warnings = tuple(sorted(set(row_warnings + ("search_specific_model",))))
         if docs_model is not None:
             confidence = "high" if model_id in api_model_ids and api_model_ids else "medium"
-            endpoints = docs_model.endpoints or (CHAT_COMPLETIONS_ENDPOINT,)
+            endpoints = docs_model.endpoints
             model_candidates.append(
                 ProviderCatalogModelCandidate(
                     provider=OPENAI_PROVIDER,
@@ -1342,7 +1478,7 @@ async def _propose_openai(
                     source_evidence=tuple(
                         value
                         for value in (
-                            models_source.url,
+                            model_source_url,
                             OPENAI_MODELS_API_URL if model_id in api_model_ids else None,
                         )
                         if value is not None
@@ -1353,80 +1489,52 @@ async def _propose_openai(
 
         route_ready = False
         route_status = "missing"
-        if docs_model is not None and "chat_completions" in endpoint_scopes:
+        if docs_model is not None:
             route_status = "report-only"
-            if (
-                CHAT_COMPLETIONS_ENDPOINT in docs_model.endpoints
-                and _is_openai_chat_completions_model_id(model_id)
-                and "search_specific_model" not in row_warnings
-                and "hosted_tool_only" not in row_warnings
-            ):
-                route_confidence: Confidence = (
-                    "high" if (model_id in api_model_ids and api_model_ids) else "medium"
-                )
-                route_rows_match = assisted_route_rows.get((model_id, CHAT_COMPLETIONS_ENDPOINT))
-                route_row_warnings = list(row_warnings)
-                if "assisted" in source_methods and route_rows_match is None:
-                    route_row_warnings.append("model_missing_from_assisted")
-                route_ready = (
-                    "search_specific_model" not in route_row_warnings
-                    and "unsupported_modality" not in route_row_warnings
-                    and "hosted_tool_only" not in route_row_warnings
-                )
-                route_status = "ready" if route_ready else "report-only"
-                route_candidates.append(
-                    ProviderCatalogRouteCandidate(
-                        requested_model=model_id,
-                        match_type="exact",
-                        endpoint=CHAT_COMPLETIONS_ENDPOINT,
-                        provider=OPENAI_PROVIDER,
-                        upstream_model=model_id,
-                        priority=100,
-                        enabled=True,
-                        visible_in_models="deprecated_or_expiring" not in route_row_warnings,
+            for endpoint in _proposal_endpoints(endpoint_scopes):
+                if endpoint not in docs_model.endpoints:
+                    continue
+                endpoint_warnings = list(_openai_model_comparison_warnings(
+                    model_id=model_id, docs_model=docs_model, has_pricing=bool(doc_prices),
+                    api_model_ids=api_model_ids if (include_api_models or "api" in source_methods) else None,
+                    ordinary_chat_only=ordinary_chat_only and endpoint == CHAT_COMPLETIONS_ENDPOINT,
+                ))
+                route_confidence: Confidence = "high" if model_id in api_model_ids else "medium"
+                if "assisted" in source_methods and assisted_route_rows.get((model_id, endpoint)) is None:
+                    endpoint_warnings.append("model_missing_from_assisted")
+                endpoint_ready = not {
+                    "search_specific_model", "unsupported_modality", "hosted_tool_only",
+                    "deprecated_or_expiring",
+                } & set(endpoint_warnings)
+                route_ready = route_ready or endpoint_ready
+                caps = (
+                    _build_responses_capabilities(
+                        supported_parameters=_features_to_parameters(docs_model.features),
                         supports_streaming="streaming" in docs_model.features,
-                        capabilities=_build_chat_capabilities_from_features(
-                            features=docs_model.features,
-                            supports_streaming="streaming" in docs_model.features,
-                            provider=OPENAI_PROVIDER,
-                            supports_cached_input_usage=selected_doc_pricing is not None
-                            and selected_doc_pricing.cached_input_price_per_1m is not None,
-                        ),
-                        notes=_route_notes(
-                            provider=OPENAI_PROVIDER,
-                            model_id=model_id,
-                            confidence=route_confidence,
-                            context_length=docs_model.context_length,
-                            max_output_tokens=docs_model.max_output_tokens,
-                            source_urls=tuple(
-                                value
-                                for value in (
-                                    models_source.url,
-                                    OPENAI_MODELS_API_URL if model_id in api_model_ids else None,
-                                )
-                                if value is not None
-                            ),
-                            warnings=tuple(route_row_warnings),
-                        ),
-                        confidence=route_confidence,
-                        ready_for_import=route_ready,
-                        warnings=tuple(route_row_warnings),
-                    )
-                )
-            if "responses" in endpoint_scopes and RESPONSES_ENDPOINT in IMPLEMENTED_CLIENT_ENDPOINTS:
-                warnings.append(
-                    ProviderCatalogWarning(
-                        code="future_endpoint",
-                        message=(
-                            "OpenAI responses route proposals remain report-only in this workflow; "
-                            "chat.completions stays the ready import target."
-                        ),
                         provider=OPENAI_PROVIDER,
-                        model_id=model_id,
-                        endpoint=RESPONSES_ENDPOINT,
-                        sources=(models_source.url,),
+                    ) if endpoint == RESPONSES_ENDPOINT else _build_chat_capabilities_from_features(
+                        features=docs_model.features,
+                        supports_streaming="streaming" in docs_model.features, provider=OPENAI_PROVIDER,
+                        supports_cached_input_usage=selected_doc_pricing is not None
+                        and selected_doc_pricing.cached_input_price_per_1m is not None,
                     )
                 )
+                route_candidates.append(ProviderCatalogRouteCandidate(
+                    requested_model=model_id, match_type="exact", endpoint=endpoint,
+                    provider=OPENAI_PROVIDER, upstream_model=model_id, priority=100,
+                    enabled=True, visible_in_models="deprecated_or_expiring" not in endpoint_warnings,
+                    supports_streaming="streaming" in docs_model.features, capabilities=caps,
+                    notes=_route_notes(
+                        provider=OPENAI_PROVIDER, model_id=model_id, confidence=route_confidence,
+                        context_length=docs_model.context_length, max_output_tokens=docs_model.max_output_tokens,
+                        source_urls=tuple(x for x in (
+                            model_source_url, OPENAI_MODELS_API_URL if model_id in api_model_ids else None,
+                        ) if x is not None), warnings=tuple(endpoint_warnings),
+                    ),
+                    confidence=route_confidence, ready_for_import=endpoint_ready,
+                    warnings=tuple(endpoint_warnings),
+                ))
+            route_status = "ready" if route_ready else "report-only"
 
         pricing_ready = False
         pricing_status = "missing"
@@ -1437,7 +1545,7 @@ async def _propose_openai(
             endpoint_scopes=endpoint_scopes,
             model_record=docs_model,
             assisted_pricing_rows=assisted_pricing_rows,
-            sources=(pricing_source.url, models_source.url),
+            sources=(pricing_source.url, model_source_url),
             allow_zero_prices=allow_zero_prices,
         )
         if openai_pricing_candidates:
@@ -1481,7 +1589,7 @@ async def _propose_openai(
                         value
                         for value in (
                             pricing_source.url if doc_prices else None,
-                            models_source.url if docs_model else None,
+                            model_source_url if docs_model else None,
                             OPENAI_MODELS_API_URL if model_id in api_model_ids else None,
                         )
                         if value is not None
@@ -1556,8 +1664,8 @@ def _normalize_openrouter_package_names(
         requested = list(OPENROUTER_PACKAGE_ORDER)
     if not requested:
         return ()
-    if provider_scope != OPENROUTER_PROVIDER:
-        raise ValueError("provider catalog package presets are implemented only for openrouter")
+    if provider_scope not in (OPENROUTER_PROVIDER, "all"):
+        raise ValueError("OpenRouter packages require provider scope openrouter or all")
     normalized: list[str] = []
     for value in requested:
         canonical = OPENROUTER_PACKAGE_ALIASES.get(value, value)
@@ -2010,6 +2118,12 @@ def _parse_openai_pricing_docs(
     source_url: str,
     source_retrieved_at: str,
 ) -> tuple[_OpenAIPricingRecord, ...]:
+    standard = re.search(
+        r"^### Standard pricing data[ \t]*$\n(.*?)(?=^### (?:Batch|Flex|Fast) pricing data|\Z)",
+        text, flags=re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    )
+    if standard is not None:
+        text = standard.group(1)
     tables = _extract_tabular_blocks(text)
     records: list[_OpenAIPricingRecord] = []
     for table in tables:
@@ -2028,7 +2142,10 @@ def _parse_openai_pricing_docs(
         for row in table[1:]:
             if len(row) <= model_index:
                 continue
-            model_id = _safe_openai_model_id(row[model_index])
+            cell = row[model_index].strip()
+            model_id = (
+                cell if re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,199}", cell) else None
+            ) if standard is not None else _safe_openai_model_id(cell)
             if model_id is None:
                 first = row[0].lower() if row else ""
                 if first in {"category", "standard", "batch", "priority"}:
@@ -2088,7 +2205,7 @@ def _parse_openai_models_docs(*, text: str, source_url: str) -> dict[str, _OpenA
             model_id=model_id,
             display_name=_safe_text(block.get("display_name")) or model_id,
             description=_safe_text(block.get("description")),
-            endpoints=endpoints or (CHAT_COMPLETIONS_ENDPOINT,),
+            endpoints=endpoints,
             features=features,
             context_length=_safe_int(block.get("context_length")),
             max_output_tokens=_safe_int(block.get("max_output_tokens")),
@@ -2205,13 +2322,12 @@ def _openai_pricing_candidates(
         warning_codes.update(model_record.warnings)
     if is_search_specific_chat_completion_model(model_id):
         warning_codes.add("search_specific_model")
-    if not _is_openai_chat_completions_model_id(model_id):
-        warning_codes.add("unsupported_modality")
-    for endpoint_scope in endpoint_scopes:
-        if endpoint_scope == "responses":
-            warning_codes.add("future_endpoint")
-            continue
-        endpoint = CHAT_COMPLETIONS_ENDPOINT
+    base_warning_codes = set(warning_codes)
+    all_warning_codes = set(warning_codes)
+    for endpoint in _proposal_endpoints(endpoint_scopes):
+        warning_codes = set(base_warning_codes)
+        if model_record is not None and endpoint not in model_record.endpoints:
+            warning_codes.add("unsupported_endpoint")
         assisted = assisted_pricing_rows.get((model_id, endpoint))
         if assisted is not None and _pricing_record_disagrees(selected, assisted):
             warning_codes.add("pricing_disagreement")
@@ -2231,6 +2347,7 @@ def _openai_pricing_candidates(
             "unsupported_modality",
             "unsupported_endpoint",
             "hosted_tool_only",
+            "deprecated_or_expiring",
         } & warning_codes
         if zero_price_detected and not allow_zero_prices:
             ready = False
@@ -2266,7 +2383,8 @@ def _openai_pricing_candidates(
                 warnings=tuple(sorted(warning_codes)),
             )
         )
-    return candidates, sorted(warning_codes)
+        all_warning_codes.update(warning_codes)
+    return candidates, sorted(all_warning_codes)
 
 
 def _select_openai_text_pricing_record(
@@ -2313,6 +2431,42 @@ def _parse_assisted_route_tsv(text: str) -> dict[tuple[str, str], dict[str, str]
             continue
         result[(model, endpoint)] = {str(key): str(value or "") for key, value in row.items()}
     return result
+
+
+def _proposal_endpoints(scopes: Sequence[EndpointScope]) -> tuple[str, ...]:
+    return tuple(CHAT_COMPLETIONS_ENDPOINT if scope == "chat_completions" else RESPONSES_ENDPOINT
+                 for scope in scopes)
+
+
+def _openrouter_endpoints(row: Mapping[str, object]) -> tuple[str, ...]:
+    raw = row.get("endpoints")
+    if raw is None:
+        return (CHAT_COMPLETIONS_ENDPOINT,)
+    if not isinstance(raw, list):
+        return ()
+    mapping = {
+        "/api/v1/chat/completions": CHAT_COMPLETIONS_ENDPOINT,
+        "/v1/chat/completions": CHAT_COMPLETIONS_ENDPOINT,
+        "/api/v1/responses": RESPONSES_ENDPOINT,
+        "/v1/responses": RESPONSES_ENDPOINT,
+    }
+    return tuple(sorted({mapping[value] for value in raw if isinstance(value, str) and value in mapping}))
+
+
+def _build_responses_capabilities(
+    *, supported_parameters: Sequence[str], supports_streaming: bool, provider: ProviderName,
+) -> dict[str, object]:
+    caps = default_responses_capabilities()
+    params = set(supported_parameters)
+    caps.update({
+        "streaming": supports_streaming,
+        "tools": "tools" in params,
+        "function_tools": "tools" in params,
+        "json_mode": "response_format" in params or "structured_outputs" in params,
+        "structured_outputs": "structured_outputs" in params,
+    })
+    return {"responses": {key: value for key, value in caps.items() if value},
+            "provider_catalog_source": provider}
 
 
 def _build_chat_capabilities(
@@ -2585,14 +2739,6 @@ def _safe_openai_model_id(value: object) -> str | None:
     return normalized
 
 
-def _is_openai_chat_completions_model_id(model_id: str) -> bool:
-    return (
-        model_id.startswith("gpt-")
-        or model_id.startswith("chatgpt-")
-        or bool(re.match(r"^o[0-9](?:[a-z0-9.-]*)$", model_id))
-    )
-
-
 def _safe_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
@@ -2859,7 +3005,16 @@ def _select_package_keys(
     include_ambiguous_capabilities: bool,
 ) -> set[tuple[str, str, str]]:
     if package_name == OPENROUTER_RESPONSES_TEXT_PACKAGE:
-        return set()
+        return {
+            key for key in base_keys
+            if routes_by_key[key].endpoint == RESPONSES_ENDPOINT
+            and pricing_by_key[key].endpoint == RESPONSES_ENDPOINT
+            and routes_by_key[key].upstream_model in model_by_id
+            and set(model_by_id[routes_by_key[key].upstream_model].output_modalities) == {"text"}
+            and "text" in model_by_id[routes_by_key[key].upstream_model].input_modalities
+            and not {"search_specific_model", "hosted_tool_only"} & set(routes_by_key[key].warnings)
+            and (include_deprecated or "deprecated_or_expiring" not in routes_by_key[key].warnings)
+        }
 
     selected: set[tuple[str, str, str]] = set()
     for key in base_keys:
@@ -3208,8 +3363,8 @@ def _package_metadata(
         RESPONSES_ENDPOINT,
         (),
         (),
-        "report-only",
-        "separate responses family; zero-row unless current evidence supports import-ready text rows",
+        "reviewed staging",
+        "separate stateless text Responses family; requires explicit endpoint evidence and matching pricing",
     )
 
 

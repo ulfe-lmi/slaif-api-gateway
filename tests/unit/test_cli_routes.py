@@ -306,3 +306,28 @@ def test_routes_import_execute_calls_execution_helper(tmp_path, monkeypatch) -> 
     payload = json.loads(result.stdout)
     assert payload["dry_run"] is False
     assert payload["created_count"] == 1
+
+
+def test_all_invalid_import_preview_keeps_typed_result(monkeypatch):
+    from contextlib import asynccontextmanager
+    from slaif_gateway.services.route_import import route_import_preview_to_dict
+
+    @asynccontextmanager
+    async def fake_session():
+        yield object(), object()
+
+    class NoProviders:
+        def __init__(self, session):
+            pass
+
+        async def list_provider_configs(self, **kwargs):
+            return []
+
+    monkeypatch.setattr(routes_cli, "cli_db_session", fake_session)
+    monkeypatch.setattr(routes_cli, "ProviderConfigsRepository", NoProviders)
+    rows = [{"requested_model": "gpt-test", "match_type": "exact", "provider": "openai"}]
+    result = routes_cli.run_async(routes_cli._preview_route_import(rows=rows))
+    payload = route_import_preview_to_dict(result)
+    assert payload["valid_count"] == 0
+    assert payload["invalid_count"] == 1
+    assert payload["rows"][0]["errors"]
