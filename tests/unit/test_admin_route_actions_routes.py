@@ -553,4 +553,33 @@ def test_gui_codex_checkbox_rejects_non_responses_route_before_write(monkeypatch
         codex_default_output="4096", codex_max_output="8192"))
     assert response.status_code == 400
     assert "exact /v1/responses route" in response.text
-    assert 'name="codex_enabled"' in response.text
+    assert "Enable Codex is available on exact /v1/responses routes" in response.text
+
+
+def test_compact_route_editor_preserves_its_existing_codex_gates(monkeypatch) -> None:
+    import json
+    from slaif_gateway.services.codex_route_access import CODEX_GATES
+
+    caps = {"responses": dict.fromkeys(CODEX_GATES, True)}
+    route = _route_detail(endpoint="/v1/responses/compact", capabilities=caps)
+    _patch_provider_choices(monkeypatch)
+    seen = []
+
+    async def detail(self, route_id):
+        return route
+
+    async def update(self, route_id, **kwargs):
+        seen.append(kwargs)
+        return route
+
+    monkeypatch.setattr("slaif_gateway.services.admin_catalog_dashboard.AdminCatalogDashboardService.get_route_detail", detail)
+    monkeypatch.setattr("slaif_gateway.services.model_route_service.ModelRouteService.update_model_route", update)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+    response = client.get(f"/admin/routes/{route.id}/edit")
+    assert response.status_code == 200
+    assert 'name="codex_access_present"' not in response.text
+    response = client.post(f"/admin/routes/{route.id}/edit", data=_valid_form(
+        endpoint="/v1/responses/compact", capabilities=json.dumps(caps)), follow_redirects=False)
+    assert response.status_code == 303
+    assert seen[0]["capabilities"] == caps

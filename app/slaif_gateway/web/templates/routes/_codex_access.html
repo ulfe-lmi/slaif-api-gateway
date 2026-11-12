@@ -1,5 +1,8 @@
 <section class="action-panel" aria-labelledby="route-codex-heading">
   <h2 id="route-codex-heading">Codex</h2>
+  {% if route_id and form.endpoint != '/v1/responses' %}
+  <p class="field-help">Enable Codex is available on exact /v1/responses routes. Existing compaction and other endpoint settings remain in their capability metadata.</p>
+  {% else %}
   <input type="hidden" name="codex_access_present" value="true">
   <label class="checkbox-row">
     <input type="checkbox" name="codex_enabled" value="true" aria-describedby="route-codex-help" {% if form.codex_enabled %}checked{% endif %}>
@@ -19,4 +22,5 @@
   </div>
   <p class="field-help" id="route-codex-limits-help">Required when enabled: default output ≤ maximum output &lt; context ceiling. Catalog limits are prefilled when available; review them against the model and installation limits. Keep the Codex client's compaction threshold conservative.</p>
   <p class="muted small">Uses the route's existing pricing. Advanced cache and context tariffs, when configured, retain strict accounting. Unchecking restores the settings saved when this control first enabled Codex. No keys are rotated or edited.</p>
+  {% endif %}
 </section>
