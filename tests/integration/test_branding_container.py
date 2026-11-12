@@ -77,6 +77,10 @@ def branding_container(tmp_path_factory) -> Iterator[dict[str, object]]:
             path=str(REPO_ROOT),
             tag=image_tag,
             labels={LABEL_KEY: owner},
+            # The Dockerfile's LAST stage is the optional
+            # demo-snapshot-worker (PGDG apt step); this test builds the
+            # ordinary runtime app image only.
+            target="runtime",
             rm=True,
             pull=False,
         )
