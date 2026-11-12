@@ -498,15 +498,18 @@ for the operator.
 
 Display leaves are written FLAT under the job's private `files/`
 directory (each `0600`, created `O_EXCL` through a held directory
-descriptor; the private files manifest is written LAST, so a torn write
-can never present leaves without their exact-leaf record). Cleanup
-order is load-bearing: the 221 dump unlink and the EXACT target
-database removal happen FIRST; the display files are removed only after
-the target database is confirmed gone, so a failed DB drop keeps the
-files and manifest available for retry. If exact-leaf cleanup cannot be
-completed (foreign entry, identity drift, tampered manifest) the job
-reports `FILES_CLEANUP_FAILED` and retains the artifacts — no broad
-prefix or owner sweep is ever performed.
+descriptor). The private files manifest is written LAST; a torn or
+interrupted write can therefore leave leaves WITHOUT their manifest
+(and no complete job is ever presented in that state — the copy
+stays unverified, exact cleanup refuses, and the artifacts are
+retained for the operator, as described in State machine and failure
+law). Cleanup order is load-bearing: the 221 dump unlink and the EXACT
+target database removal happen FIRST; the display files are removed
+only after the target database is confirmed gone, so a failed DB drop
+keeps the files and manifest available for retry. If exact-leaf
+cleanup cannot be completed (foreign entry, identity drift, tampered
+manifest) the job reports `FILES_CLEANUP_FAILED` and retains the
+artifacts — no broad prefix or owner sweep is ever performed.
 
 Operator procedure (same order as 222): inspect the private custody
 manifest (0600; it retains the private source records, the private id
@@ -515,6 +518,22 @@ maps and the exact file inventory — never display/commit it), retry
 files. The private files manifest and pre-state files are NOT
 public-safe; CLI output, ordinary logs and reports omit raw names, data
 and credentials.
+
+### Two snapshot times (not one instant)
+
+A per-login copy combines TWO snapshots taken at different times: the
+221 PostgreSQL `pg_dump` database snapshot (a consistent dump cut) and
+the later 223 per-source file capture, which reads each configured
+file source during the files run. These two snapshots are NOT
+transactionally simultaneous; a value visible in a file source at the
+223 capture moment is not guaranteed to match the database state at
+the 221 dump moment (or vice versa). Both snapshot times are recorded
+and inspectable in the private custody manifest (the 221
+`capture_started_at`/`capture_finished_at`/`restore_finished_at`
+fields and the 223 `capture_started_at`/`capture_finished_at` fields
+in the private files manifest), so an operator can see exactly when
+each half was taken. Do not describe the combined copy as a
+single-instant snapshot.
 
 ### Target transport boundary (unchanged from 221/222)
 
