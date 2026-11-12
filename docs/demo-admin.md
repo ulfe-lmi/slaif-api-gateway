@@ -254,3 +254,110 @@ directory contents; nothing in the business database is ever touched.
 
 The file-backed capture of objective 223 will have its OWN capture
 timestamp; the snapshot capture interval recorded here is not it.
+
+## Demo database masking and verification (objective 222, worker-only)
+
+Objective 222 adds the THIRD bounded stage: it sanitizes and
+independently verifies the private PostgreSQL raw copy created by
+objective 221 BEFORE any web role can read it. This stage owns the
+complete copied-database field policy and the fictional identity
+mapping. The live source PostgreSQL stays entirely read-only.
+
+### What this stage is NOT
+
+- No demo browser authentication, no login, no `/fakeadmin/*` behavior
+  and NO public demo (objective 224).
+- No file-backed panel capture and no demo web process (objectives
+  223/224).
+- No demo web role is created or granted in this stage; the copy stays
+  readable by the worker target user only.
+- `DB_SANITIZED_UNPUBLISHED` explicitly means the sanitized copy exists
+  but file-backed verification (223) and browser binding (224) are still
+  absent. The demonstration is not usable until 223 AND 224 complete.
+- No migration, no business schema change, no provider/mail calls.
+
+### Target service transport boundary
+
+The sanitizer connects to the target copy database over asyncpg with
+`ssl=False` (mirroring the objective 221 worker). Target PostgreSQL
+traffic must therefore stay on a trusted private loopback or Compose
+network; this stage does NOT support verified remote database TLS. Do
+not point the target endpoint at an untrusted network.
+
+### Masking policy (reviewed, fail-closed)
+
+The sanitizer inventories the ACTUAL restored catalog (every public
+user table, column, SQL type, nullability, extension and the complete
+reviewed constraint set including the 64 FK definitions) and refuses
+closed with `SANITIZE_SCHEMA_UNKNOWN` on any new table/column/type,
+changed type/nullability, or constraint/FK drift — before any
+modification. Row budgets (per table and total) are enforced before any
+value materialization.
+
+Every restored table/column has an explicit reviewed action: preserve
+(`P`, descriptive quantities/times/costs/statuses/route-model-provider
+choices), per-copy remap (`U` UUIDs with FK links preserved, `S`
+string identifiers, `H` bare 64-hex for the CHECK-constrained replay
+HMAC columns), NULL out free text (`N`), fixed fictional values from the
+shipped `app/slaif_gateway/data/demo_identities.json` (`F:`/`FC:`,
+including credential-invalidation dummies), and JSONB reduction (`J0`/`JA`
+to fixed empty shapes, `JU` element-wise UUID remap, `JJ` only for
+reviewed typed shapes that fail closed otherwise). Entity-bound free
+text (owner/institution/cohort/org/team/project/budget/template/admin
+names and emails, including denormalized usage/audit/email snapshots)
+maps to fixed plausible fictional lists with per-copy unique, stable
+assignments that stay consistent across all referencing rows and handle
+more rows than list entries without collisions. The copied database
+cannot authenticate or forward: key hashes, admin credentials/sessions,
+MFA, one-time secrets and provider authority are invalidated, and the
+verifier refuses any PUBLIC CONNECT grant (including the NULL/default
+ACL case).
+
+### Privacy limitation of the masked copy (explicitly accepted)
+
+Masking is NOT irreversible anonymity. Usage quantities, timestamps,
+costs, quota shapes and route/model/provider choices are preserved by
+design so the admin read views stay realistic; the resulting activity
+pattern of a copied account can still be recognizable. The human
+maintainer explicitly accepted this limitation for the bounded demo.
+
+### State machine and failure law
+
+A copy advances from `RAW_UNVERIFIED` to the distinct private state
+`DB_SANITIZED_UNPUBLISHED` only after BOTH a committed deterministic
+sanitizer transaction AND a separate read-only verification (row
+counts, preserved-value checksums, per-column invalidation law, and the
+keyed per-copy remap aggregate for the HMAC columns) pass. A crash,
+rollback, unknown schema, verifier failure, credential error, timeout or
+cleanup failure leaves the copy `RAW_UNVERIFIED` with a safe finite
+code (`SANITIZE_SCHEMA_UNKNOWN`, `SANITIZE_FAILED`,
+`SANITIZE_VERIFY_FAILED`, `UNEXPECTED`) — never interpreted as
+available. Repeated invocation is idempotent: sanitized copies are
+skipped, failed copies are retried safely without re-exposing source
+values, and each fresh copy is seeded by its own private job id so no
+copy can reuse another copy's identity mapping or authority.
+Retention/`expire` now covers sanitized-but-unpublished copies as well.
+
+### Private operator inspect / retry / cleanup
+
+Operate in this order: retry first, then drop the exact recorded
+copies, and only remove custody files last — deleting the manifests
+before `expire`/`recover` would orphan their target databases.
+
+- Inspect: the private custody manifest (0600, outside the repository)
+  plus the private pre-state file record the exact state, failure code
+  and pre-rewrite budget/checksum evidence.
+- Retry: re-run `slaif-gateway demo-snapshot-worker sanitize` (fenced,
+  idempotent).
+- Cleanup: `expire` and `recover` behave as in objective 221 and drop
+  the EXACT recorded copies (never a prefix sweep). Rollback is that
+  exact-copy cleanup followed by removing the custody directory
+  contents. No business database is ever touched, and no raw value
+  appears in CLI output, logs, reports or committed artifacts.
+
+### 223 / 224 prerequisites
+
+Objective 223 (file-backed panel capture/verification) and objective
+224 (browser binding/login) are inert until their own activation and
+MUST complete before any demonstration use; this stage never grants the
+demo web role and never exposes a public URL.
