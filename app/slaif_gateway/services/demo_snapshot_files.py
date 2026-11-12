@@ -49,6 +49,7 @@ Trust boundaries (enforced):
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import decimal
@@ -67,7 +68,11 @@ from pathlib import Path
 
 from slaif_gateway.config import Settings
 from slaif_gateway.services import demo_snapshot as ds
-from slaif_gateway.services.demo_snapshot_sanitize import remap_uuid
+from slaif_gateway.services import demo_snapshot_sanitize as dss
+from slaif_gateway.services.demo_snapshot_sanitize import (
+    demo_profile_id,
+    remap_uuid,
+)
 from slaif_gateway.services.catalog_refresh import filesystem as catfs
 from slaif_gateway.services.catalog_refresh.errors import (
     CatalogRefreshBlockedError,
@@ -2749,9 +2754,11 @@ def capture_completion_profiles(capture: _Capture, seed: bytes) -> None:
                     "The completion profile directory exceeds its count bound."
                 )
         for stem in stems:
-            demo_id = (
-                f"demo-profile-{_hmac_hex64(seed, b'completion-profile|', stem)[:24]}"
-            )
+            # SHARED 222/223 per-copy derivation (demo_profile_id): a
+            # copied route's completion_service.profile uses the exact
+            # same function under the same job seed, so the DB value
+            # links to exactly this fictional choice.
+            demo_id = demo_profile_id(seed, stem)
             demo_ids.append(demo_id)
             private_map[demo_id] = stem
         raw = json.dumps(
@@ -4323,6 +4330,185 @@ def _fail_copy(job_dir: Path, manifest: ds.SnapshotManifest, code: str) -> None:
     ds.write_manifest(job_dir, manifest)
 
 
+def _completion_link_violations(
+    db_profiles: list[str], choices: frozenset[str] | None
+) -> int:
+    """Pure link law for the combined DB/files consistency gate.
+
+    ``choices`` is None when the completion-profile source is
+    unconfigured (no choice leaf exists to link to). Every copied route
+    referencing a completion profile must then link to EXACTLY one
+    captured fictional choice; a missing or inconsistent link is a
+    violation.
+    """
+    if not db_profiles:
+        return 0
+    if choices is None:
+        return len(db_profiles)
+    return sum(1 for profile in db_profiles if profile not in choices)
+
+
+def _verified_choice_ids(job_dir: Path) -> frozenset[str] | None:
+    """Choices derived from the VERIFIED stored completion-choices leaf.
+
+    Publication must prove the actual displayed bytes: the id set comes
+    from the stored leaf under the verified tree (read through the
+    anchored boundary), not from the worker's in-memory capture. Returns
+    None when the source was unconfigured (no choices leaf exists).
+    Any absence, tamper or shape drift is FILES_VERIFY_FAILED.
+    """
+    handle = catfs.open_anchored_handle(job_dir)
+    try:
+        handle.assert_name_binding(str(job_dir))
+        try:
+            files_fd = os.open(
+                FILES_DIR_NAME,
+                os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY,
+                dir_fd=handle.dir_fd,
+            )
+        except OSError:
+            raise ds.DemoSnapshotError(
+                CODE_FILES_VERIFY_FAILED,
+                "The verified files directory is not addressable."
+            ) from None
+        try:
+            manifest_raw = catfs.anchored_read_fd(
+                files_fd, FILES_MANIFEST_NAME, _FILES_MANIFEST_MAX_BYTES
+            )
+            doc = catfs.strict_json_bytes(manifest_raw, FILES_MANIFEST_NAME)
+            if not isinstance(doc, dict) or not isinstance(doc.get("files"), list):
+                raise ds.DemoSnapshotError(
+                    CODE_FILES_VERIFY_FAILED,
+                    "The files manifest shape is inconsistent."
+                )
+            leaf_name: str | None = None
+            for entry in doc["files"]:
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("logical_name") == "profiles/completion-choices.json"
+                ):
+                    leaf_name = entry.get("leaf")
+                    break
+            if leaf_name is None:
+                return None  # unconfigured source: no choices leaf
+            if not isinstance(leaf_name, str):
+                raise ds.DemoSnapshotError(
+                    CODE_FILES_VERIFY_FAILED,
+                    "The completion choices leaf record is inconsistent."
+                )
+            leaf_raw = catfs.anchored_read_fd(
+                files_fd, leaf_name, _COMPLETION_PROFILE_MAX_BYTES
+            )
+            leaf = catfs.strict_json_bytes(leaf_raw, leaf_name)
+            if (
+                not isinstance(leaf, dict)
+                or set(leaf) != {"schema", "kind", "schema_version", "profiles"}
+                or leaf.get("schema_version") != 1
+                or not isinstance(leaf.get("profiles"), list)
+                or len(leaf["profiles"]) > _COMPLETION_PROFILE_MAX_COUNT
+            ):
+                raise ds.DemoSnapshotError(
+                    CODE_FILES_VERIFY_FAILED,
+                    "The completion choices leaf shape is inconsistent."
+                )
+            for profile in leaf["profiles"]:
+                if (
+                    not isinstance(profile, str)
+                    or not _DEMO_PROFILE_ID_RE.fullmatch(profile)
+                ):
+                    raise ds.DemoSnapshotError(
+                        CODE_FILES_VERIFY_FAILED,
+                        "The completion choices leaf carries an unexpected id."
+                    )
+            return frozenset(str(profile) for profile in leaf["profiles"])
+        finally:
+            os.close(files_fd)
+    finally:
+        handle.close()
+
+
+async def _copy_completion_profile_ids(
+    base: ds.DemoSnapshotConfig, target_db: str, timeout: float
+) -> list[str]:
+    """Read-only fetch of the copied completion-service profile ids.
+
+    Bounded: the session statement timeout AND a wait_for ceiling are
+    derived from the caller's remaining copy deadline.
+    """
+    conn = await dss._connect_copy(
+        base,
+        target_db,
+        readonly=True,
+        statement_timeout_ms=int(max(1.0, timeout) * 1000),
+    )
+    try:
+        rows = await asyncio.wait_for(
+            conn.fetch(
+                "SELECT capabilities->'completion_service'->>'profile' AS p "
+                "FROM public.model_routes "
+                "WHERE capabilities->'completion_service' IS NOT NULL "
+                "AND capabilities->'completion_service'->>'profile' IS NOT NULL"
+            ),
+            timeout=timeout,
+        )
+    except Exception:
+        await dss._close_quiet(conn)
+        raise
+    await dss._close_quiet(conn)
+    return [str(row["p"]) for row in rows]
+
+
+def _completion_link_gate(
+    job_dir: Path,
+    base: ds.DemoSnapshotConfig,
+    target_db: str,
+    copy_deadline: float,
+) -> None:
+    """Combined-copy gate BEFORE publication: every completion profile
+    referenced by the copied routes must link to exactly one of the
+    fictional choices in the VERIFIED stored leaf (same per-copy
+    derivation, same job seed). A missing/inconsistent link, an
+    unverifiable leaf, or any check failure raises a finite code, so an
+    unverifiable copy is never published. Read-only and finite: the DB
+    query is bounded by the REMAINING copy deadline and the deadline is
+    re-checked after the query, not only before it."""
+    if time.monotonic() > copy_deadline:
+        raise ds.DemoSnapshotError(
+            CODE_FILES_BUDGET_EXCEEDED,
+            "The files copy exceeded its elapsed bound."
+        )
+    choices = _verified_choice_ids(job_dir)
+    remaining = copy_deadline - time.monotonic()
+    if remaining <= 1.0:
+        raise ds.DemoSnapshotError(
+            CODE_FILES_BUDGET_EXCEEDED,
+            "The files copy exceeded its elapsed bound."
+        )
+    budget = min(remaining - 1.0, 30.0)
+    try:
+        db_profiles = asyncio.run(
+            _copy_completion_profile_ids(base, target_db, budget)
+        )
+    except ds.DemoSnapshotError:
+        raise
+    except Exception:
+        raise ds.DemoSnapshotError(
+            CODE_FILES_VERIFY_FAILED,
+            "The completion profile link check could not be completed."
+        ) from None
+    if time.monotonic() > copy_deadline:
+        raise ds.DemoSnapshotError(
+            CODE_FILES_BUDGET_EXCEEDED,
+            "The files copy exceeded its elapsed bound."
+        )
+    if _completion_link_violations(db_profiles, choices):
+        raise ds.DemoSnapshotError(
+            CODE_FILES_VERIFY_FAILED,
+            "A copied route references a completion profile that does not "
+            "link to the captured demo choices."
+        )
+
+
 def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobResult:
     """Run the bounded files stage over every 222 verified copy.
 
@@ -4335,6 +4521,12 @@ def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobRes
     retained for operator inspection.
     """
     ds.validate_custody_dir(config.custody_dir)
+    # The combined DB/files link gate addresses the exact copied
+    # database, so the 221 worker target configuration must already be
+    # valid (it is: files_config_from_settings requires it). Validate it
+    # BEFORE taking the custody fence so a config-validation failure
+    # cannot leak the fence.
+    base = ds.config_from_settings(settings)
     fence_fd = ds.acquire_fence(config.custody_dir)
     started = time.monotonic()
     verified = 0
@@ -4375,6 +4567,9 @@ def run_files_job(config: FileSnapshotConfig, settings: Settings) -> FilesJobRes
                 _write_files(job_dir, capture)
                 _copy_deadline_check()
                 verify_files(job_dir, manifest, config, copy_deadline)
+                _completion_link_gate(
+                    job_dir, base, manifest.target_db, copy_deadline
+                )
             except ds.DemoSnapshotError as exc:
                 failed += 1
                 cleanup_ok = ds._clean_job_files(job_dir)

@@ -941,7 +941,42 @@ def test_cleanup_refuses_foreign_entry_in_files(tmp_path) -> None:
     assert files.exists()
 
 
-def test_runner_two_copies_get_disjoint_mappings(tmp_path, umask_022) -> None:
+def _fake_copy_profiles_for(
+    job_dirs: tuple[Path, ...], stems: tuple[str, ...]
+):
+    """Unit stub for the gate's read-only copy-DB fetch.
+
+    The fake copied database references exactly the fictional profiles
+    derived under EACH copy's own job seed (the same shared derivation
+    the 222 route transform and the 223 choices projection use).
+    """
+    async def _fetch(base, target_db: str, timeout: float):
+        for job_dir in job_dirs:
+            manifest = ds.read_manifest(job_dir)
+            if manifest.target_db == target_db:
+                return [
+                    dsf.demo_profile_id(manifest.job_id.encode(), stem)
+                    for stem in stems
+                ]
+        raise AssertionError("unknown copy database")
+
+    return _fetch
+
+
+def test_completion_link_violations_law() -> None:
+    # No copied route references a profile: always consistent.
+    assert dsf._completion_link_violations([], None) == 0
+    assert dsf._completion_link_violations([], frozenset({"p1"})) == 0
+    # Route references a profile but no choices were captured: missing
+    # link for every reference.
+    assert dsf._completion_link_violations(["p1", "p2"], None) == 2
+    # Exact fictional choice link: consistent, even with extra choices.
+    assert dsf._completion_link_violations(["p1"], frozenset({"p1", "p2"})) == 0
+    # One inconsistent reference: exactly one violation.
+    assert dsf._completion_link_violations(["p1", "p3"], frozenset({"p1", "p2"})) == 1
+
+
+def test_runner_two_copies_get_disjoint_mappings(tmp_path, umask_022, monkeypatch) -> None:
     prof = tmp_path / "profiles"
     prof.mkdir()
     for stem in ("alpha-profile", "beta-profile"):
@@ -949,6 +984,13 @@ def test_runner_two_copies_get_disjoint_mappings(tmp_path, umask_022) -> None:
     config = _config(tmp_path, completion_profile_dir=prof)
     job_a, _ma = _seeded_job(tmp_path, config)
     job_b, _mb = _seeded_job(tmp_path, config)
+    # Gate stub: each fake copy DB links to its own copy's fictional
+    # choices (positive link proof for the combined gate).
+    monkeypatch.setattr(
+        dsf,
+        "_copy_completion_profile_ids",
+        _fake_copy_profiles_for((job_a, job_b), ("alpha-profile", "beta-profile")),
+    )
     result = dsf.run_files_job(config, _settings())
     assert result.state == "FILES_VERIFIED"
     assert result.copies_files_verified == 2 and result.copies_failed == 0
@@ -975,6 +1017,54 @@ def test_runner_two_copies_get_disjoint_mappings(tmp_path, umask_022) -> None:
     again = dsf.run_files_job(config, _settings())
     assert again.state == "FILES_VERIFIED"
     assert again.copies_files_verified == 0 and again.copies_failed == 0
+
+
+def test_runner_completion_link_mismatch_fails_before_publication(
+    tmp_path, umask_022, monkeypatch
+) -> None:
+    """A copied route referencing a profile that does NOT link to the
+    captured fictional choices must fail the combined job BEFORE
+    publication: finite code, cleanup, no promotion."""
+    prof = tmp_path / "profiles"
+    prof.mkdir()
+    (prof / "alpha-profile.json").write_text("{}")
+    config = _config(tmp_path, completion_profile_dir=prof)
+    job_dir, _manifest = _seeded_job(tmp_path, config)
+    # The fake copy DB still carries the RAW operator profile id (a
+    # tampered/inconsistent copy): it links to nothing captured.
+    async def _raw_profiles(base, target_db, timeout: float):
+        return ["alpha-profile"]
+
+    monkeypatch.setattr(dsf, "_copy_completion_profile_ids", _raw_profiles)
+    result = dsf.run_files_job(config, _settings())
+    assert result.state == "FAILED"
+    assert result.copies_failed == 1 and result.copies_files_verified == 0
+    assert result.failure_code == dsf.CODE_FILES_VERIFY_FAILED
+    after = ds.read_manifest(job_dir)
+    assert after.state == ds.STATE_DB_SANITIZED_UNPUBLISHED
+    assert after.files_state == dsf.FILES_STATE_FAILED
+    assert after.files_failure_code == dsf.CODE_FILES_VERIFY_FAILED
+    assert not (job_dir / dsf.FILES_DIR_NAME).exists()  # cleaned, unpublished
+
+
+def test_runner_completion_link_missing_choices_fails_closed(
+    tmp_path, umask_022, monkeypatch
+) -> None:
+    """A copied route referencing a completion profile while the profile
+    source is UNCONFIGURED (no choices to link to) fails closed."""
+    config = _config(tmp_path)  # no completion_profile_dir
+    job_dir, _manifest = _seeded_job(tmp_path, config)
+
+    async def _raw_profiles(base, target_db, timeout: float):
+        return ["some-profile"]
+
+    monkeypatch.setattr(dsf, "_copy_completion_profile_ids", _raw_profiles)
+    result = dsf.run_files_job(config, _settings())
+    assert result.state == "FAILED"
+    assert result.failure_code == dsf.CODE_FILES_VERIFY_FAILED
+    after = ds.read_manifest(job_dir)
+    assert after.state == ds.STATE_DB_SANITIZED_UNPUBLISHED
+    assert after.files_failure_code == dsf.CODE_FILES_VERIFY_FAILED
 
 
 class _FakeClock:
@@ -1013,6 +1103,24 @@ def test_runner_deadline_lapse_before_promotion_never_publishes(
     assert after.files_state == dsf.FILES_STATE_FAILED
     assert after.files_failure_code == dsf.CODE_FILES_BUDGET_EXCEEDED
     assert not (job_dir / dsf.FILES_DIR_NAME).exists()  # cleaned, unpublished
+
+
+def test_runner_config_validation_failure_does_not_leak_fence(
+    tmp_path, umask_022, monkeypatch
+) -> None:
+    """If the 221 base-config validation raises, the custody fence must not
+    leak: the base config is validated BEFORE the fence is acquired."""
+    config = _config(tmp_path)
+
+    def boom(_s):
+        raise RuntimeError("config validation failed")
+
+    monkeypatch.setattr(dsf.ds, "config_from_settings", boom)
+    with pytest.raises(RuntimeError, match="config validation failed"):
+        dsf.run_files_job(config, _settings())
+    # The fence was never held: a fresh acquire succeeds, then releases.
+    fd = ds.acquire_fence(config.custody_dir)
+    ds.release_fence(fd)
 
 
 def test_leaf_index_uses_four_digit_boundary() -> None:

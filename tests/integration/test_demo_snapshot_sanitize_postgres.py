@@ -79,6 +79,11 @@ _CANARY_IPS = ("192.0.2.77", "192.0.2.88")
 # exact keyed remap of this value, never the raw value itself.
 _CANARY_HEX64 = "a" * 64
 
+# Planted operator completion-profile id (lowercase so the uppercase CN
+# absence scan cannot see it; the exact-per-copy assertions below prove
+# its removal).
+_RC_CANARY_PROFILE = f"canaryprofile-{_RUN_TAG}"
+
 
 def _uid(label: str) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_URL, f"https://slaif.demo.invalid/222/{_RUN_TAG}/{label}")
@@ -259,11 +264,25 @@ async def _seed_canaries(source: dict[str, object]) -> dict[str, uuid.UUID]:
                 "UPDATE gateway_keys SET template_revision_id = $2 WHERE id = $1",
                 ids["key"], ids["tplrev"],
             )
+            # INSTALLED nested capability document (223-b): boolean flags,
+            # numeric limits, a compaction-compatible route reference and
+            # an operator completion-profile selector.
             await conn.execute(
                 "INSERT INTO model_routes (id, requested_model, match_type, endpoint, provider, upstream_model, priority, enabled, visible_in_models, supports_streaming, capabilities, notes, created_at, updated_at) "
                 "VALUES ($1, $2, 'exact', $3, $4, $5, 100, true, true, true, $6, $7, $8, $8)",
                 ids["route"], MODEL_REQ, ENDPOINT, PROVIDER, MODEL_UP,
-                json.dumps({"streaming": True, "tools": False}),
+                json.dumps({
+                    "chat_completions": {"chat_text": True, "chat_streaming": True},
+                    "codex_limits": {
+                        "context_window_tokens": 1050000,
+                        "default_max_output_tokens": 32768,
+                        "max_output_tokens": 128000,
+                    },
+                    "codex_compaction_compatible_route_ids": [str(ids["route"])],
+                    "completion_service": {
+                        "version": 1, "profile": _RC_CANARY_PROFILE,
+                    },
+                }),
                 f"route notes {CN}", _T0,
             )
             await conn.execute(
@@ -1019,6 +1038,30 @@ def test_full_chain_promotes_sanitized_copy(san_env: _Env, custody: Path) -> Non
             assert str(session_row["ip_address"]) in data["fictional_ips"]
             assert session_row["user_agent"] == data["user_agents"][0]
 
+            # RC: the installed nested capability document was transformed
+            # per copy: booleans/numeric limits preserved exactly, the
+            # completion-service profile fictionalized with the SHARED
+            # per-copy derivation, the compaction route id remapped to the
+            # copied route, and the original operator profile id gone.
+            route_row = await conn.fetchrow("SELECT * FROM model_routes")
+            caps = json.loads(route_row["capabilities"])
+            assert caps["chat_completions"] == {
+                "chat_text": True, "chat_streaming": True
+            }
+            assert caps["codex_limits"] == {
+                "context_window_tokens": 1050000,
+                "default_max_output_tokens": 32768,
+                "max_output_tokens": 128000,
+            }
+            assert caps["codex_compaction_compatible_route_ids"] == [
+                str(dsan.remap_uuid(seed, ids["route"]))
+            ]
+            assert caps["completion_service"] == {
+                "version": 1,
+                "profile": dsan.demo_profile_id(seed, _RC_CANARY_PROFILE),
+            }
+            assert _RC_CANARY_PROFILE not in route_row["capabilities"]
+
             # alembic_version untouched (descriptive head marker).
             head = await conn.fetchval("SELECT version_num FROM alembic_version")
             assert head == "0027_demo_admin_accounts"
@@ -1207,8 +1250,9 @@ def test_unknown_schema_refused_before_promotion(san_env: _Env) -> None:
 def test_partial_failure_rolls_back_byte_identical(
     san_env: _Env, custody: Path
 ) -> None:
-    # A JJ column holding an invalid typed shape aborts the sanitizer
-    # transaction. The copy must remain byte-identical (data AND FKs) to
+    # An RC column holding a document that is NOT the installed capability
+    # grammar aborts the sanitizer transaction. The copy must remain
+    # byte-identical (data AND FKs) to
     # the state at the failed attempt, stay RAW_UNVERIFIED with
     # SANITIZE_FAILED, and retry with the same safe refusal.
     env = san_env
@@ -1221,7 +1265,7 @@ def test_partial_failure_rolls_back_byte_identical(
         try:
             await conn.execute(
                 "UPDATE model_routes SET capabilities = $1",
-                json.dumps({"streaming": "yes"}),  # non-bool: invalid JJ
+                json.dumps({"streaming": "yes"}),  # not an installed group
             )
             tables = await _all_public_tables(conn)
             before = await _whole_copy_fingerprint(conn, tables)

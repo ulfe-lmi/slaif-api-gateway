@@ -405,18 +405,38 @@ This stage is implemented and tested, but the demonstration as a whole
 is NOT usable yet:
 
 - Objective 224 (browser binding/login) is still required.
-- KNOWN DB CAPABILITY LIMITATION (same-PR 223-b follow-up): the 222 DB
-  sanitizer's JSONB law for `model_routes.capabilities` accepts only
-  top-level boolean flags, while real route configuration/CLI supports
-  nested blocks (`codex_limits`, `media_input_estimation`,
-  `chat`/`responses`, `completion_service {version, profile}`). A source
-  database containing routes with such nested capabilities FAILS 222 DB
-  sanitization, which blocks the whole chain for that source. The 223
-  FILE stage already carries the typed nested capability blocks (baseline
-  documents), and the same-PR follow-up adds the matching typed,
-  privacy-safe capabilities mapping to the 222 sanitizer before any 224
-  browser binding. Until that lands, do not point the worker at a source
-  whose routes use nested capabilities.
+- ROUTE-CAPABILITY MASKING (objective 223-b): the 222 DB sanitizer now
+  rewrites `model_routes.capabilities` with a route-specific typed
+  transformation (action `RC`) that reuses the installed per-group
+  parsers, so a non-empty nested capability document the normal
+  configuration accepts is representable in the display copy when it uses
+  only the eleven reviewed groups below. Those eleven are: the five
+  boolean blocks
+  (`chat_completions`, `responses`, `audio_endpoints`, `embeddings`,
+  `realtime`), `codex_limits`, `media_input_estimation` and
+  `vllm_chat_video` preserved as reviewed non-identifying
+  booleans/numeric limits/finite codes; `codex_compaction_compatible_route_ids`
+  is remapped entry-for-entry to the copied route ids (list order
+  preserved); `completion_service.profile` is rewritten to the SAME
+  per-copy fictional id the 223 completion-choices leaf uses, so a
+  copied route links to exactly its captured choice; and the
+  `external_tools` `approved_destination_ids` opaque names are remapped
+  per copy (kind preserved). The independent 222 verifier re-proves the
+  stored transformed document, and a combined DB/files gate fails the
+  copy BEFORE publication if a copied completion profile does not link
+  to the captured choices. Documented limit: the three preserved
+  transport groups (`local_coding`, `local_coding_vllm`,
+  `upstream_llm`) carry configuration secrets or operator transport
+  references that cannot be safely projected, so a route using them
+  FAILS 222 closed; unknown groups, unknown flags, wrong types and
+  secret-shaped payloads also fail closed, exactly like the installed
+  configuration law. The ordinary empty `{}` route remains supported.
+  The 222/223 worker validates the capability-document grammar but does
+  NOT run the full route-level `validate_merged_route_candidate` law
+  (which additionally requires a loadable completion profile with
+  matching models), so a synthetic completion-service route in the
+  owned test fixture proves the DB/files link but is not asserted to be
+  a fully route-validated installed candidate.
 
 ### What this stage is NOT
 

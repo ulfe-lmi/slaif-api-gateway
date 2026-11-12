@@ -1029,10 +1029,11 @@ def test_jj_validators_accept_reject() -> None:
     assert dsan._jj_is_valid("gateway_keys", "allowed_endpoints", ok_endpoints)
     assert not dsan._jj_is_valid("gateway_keys", "allowed_endpoints", json.dumps(["chat"]))
 
-    ok_flags = json.dumps({"chat": True, "streaming": False})
-    assert dsan._jj_is_valid("model_routes", "capabilities", ok_flags)
-    assert not dsan._jj_is_valid("model_routes", "capabilities", json.dumps({"chat": "yes"}))
-    assert not dsan._jj_is_valid("model_routes", "capabilities", json.dumps([True]))
+    # model_routes.capabilities is NO LONGER a generic JJ boolean map:
+    # the installed route capability grammar is handled by the RC action
+    # (see the RC tests below).
+    assert dsan.TABLE_POLICY["model_routes"]["capabilities"] == dsan.RC
+    assert ("model_routes", "capabilities") not in dsan._JJ_VALIDATORS
 
     ok_rate = json.dumps({"requests_per_minute": 60, "window_seconds": 60})
     assert dsan._jj_is_valid("key_template_revisions", "rate_limit_policy", ok_rate)
@@ -1044,6 +1045,214 @@ def test_jj_validators_accept_reject() -> None:
     assert not dsan._jj_is_valid("quota_reservations", "external_tool_capabilities", json.dumps(["my secret note"]))
 
     assert not dsan._jj_is_valid("no_such_table", "c", json.dumps([]))
+
+
+# ---------------------------------------------------------------------------
+# RC: installed route capability transform + independent re-proof
+# ---------------------------------------------------------------------------
+
+_RC_SEED = b"rc-seed-a"
+_RC_SEED_B = b"rc-seed-b"
+_RC_ROUTE_A = uuid.UUID("11111111-2222-3333-4444-555555555555")
+_RC_ROUTE_B = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+
+def _rc_full_document() -> dict[str, object]:
+    """A representative INSTALLED nested capability document (real
+    product vocabulary)."""
+    return {
+        "chat_completions": {"chat_text": True, "chat_streaming": True},
+        "responses": {"text": True, "compact": False, "codex_request_envelope": True},
+        "codex_limits": {
+            "context_window_tokens": 1050000,
+            "default_max_output_tokens": 32768,
+            "max_output_tokens": 128000,
+        },
+        "codex_compaction_compatible_route_ids": [
+            str(_RC_ROUTE_A), str(_RC_ROUTE_B),
+        ],
+        "media_input_estimation": {
+            "version": 1, "image_tokens": 50000, "video_tokens": 100000,
+            "video_frames": 8,
+        },
+        "completion_service": {"version": 1, "profile": "my-canary-profile"},
+        "external_tools": {
+            "version": 1,
+            "supported_capabilities": ["provider_remote_mcp"],
+            "approved_destination_ids": ["remote_mcp:canary-dest-one"],
+            "max_provider_tool_calls_per_request": 4,
+            "call_limit_enforced": True,
+            "final_usage_required": True,
+            "final_cost_required": True,
+        },
+        "audio_endpoints": {"audio_speech": True},
+        "embeddings": {"embeddings": True, "embeddings_dimensions": False},
+        "realtime": {"audio": True},
+    }
+
+
+def _rc_copied_route_ids(seed: bytes) -> frozenset[str]:
+    return frozenset(
+        {
+            str(dsan.remap_uuid(seed, _RC_ROUTE_A)),
+            str(dsan.remap_uuid(seed, _RC_ROUTE_B)),
+        }
+    )
+
+
+def test_rc_empty_document_supported() -> None:
+    assert dsan._transform_route_capabilities(json.dumps({}), _RC_SEED) == "{}"
+    assert dsan._verify_route_capabilities("{}", frozenset()) is True
+
+
+def test_rc_representative_nested_document_preserved() -> None:
+    doc = _rc_full_document()
+    out = json.loads(dsan._transform_route_capabilities(json.dumps(doc), _RC_SEED))
+    # Non-identifying booleans/numbers/finite codes are preserved exactly.
+    assert out["chat_completions"] == doc["chat_completions"]
+    assert out["responses"] == doc["responses"]
+    assert out["codex_limits"] == doc["codex_limits"]
+    assert out["media_input_estimation"] == doc["media_input_estimation"]
+    assert out["audio_endpoints"] == doc["audio_endpoints"]
+    assert out["embeddings"] == doc["embeddings"]
+    assert out["realtime"] == doc["realtime"]
+    assert out["external_tools"]["supported_capabilities"] == [
+        "provider_remote_mcp"
+    ]
+    assert out["external_tools"]["max_provider_tool_calls_per_request"] == 4
+
+
+def test_rc_completion_profile_fictionalized_per_copy() -> None:
+    out_a = json.loads(
+        dsan._transform_route_capabilities(json.dumps(_rc_full_document()), _RC_SEED)
+    )
+    out_b = json.loads(
+        dsan._transform_route_capabilities(json.dumps(_rc_full_document()), _RC_SEED_B)
+    )
+    profile_a = out_a["completion_service"]["profile"]
+    profile_b = out_b["completion_service"]["profile"]
+    # Exactly demo-profile-<24 lowercase hex>.
+    assert re.fullmatch(r"demo-profile-[0-9a-f]{24}", profile_a)
+    # SAME per-copy derivation as the 223 completion-choices projection.
+    assert profile_a == dsan.demo_profile_id(_RC_SEED, "my-canary-profile")
+    assert profile_a != profile_b  # per-copy ids differ
+    # The original operator profile id is absent from the transformed bytes.
+    assert "my-canary-profile" not in dsan._transform_route_capabilities(
+        json.dumps(_rc_full_document()), _RC_SEED
+    )
+
+
+def test_rc_compaction_ids_remapped_to_copied_routes() -> None:
+    out = json.loads(
+        dsan._transform_route_capabilities(json.dumps(_rc_full_document()), _RC_SEED)
+    )
+    ids = out["codex_compaction_compatible_route_ids"]
+    # Exact per-copy remap, list meaning (order) preserved.
+    assert ids == [
+        str(dsan.remap_uuid(_RC_SEED, _RC_ROUTE_A)),
+        str(dsan.remap_uuid(_RC_SEED, _RC_ROUTE_B)),
+    ]
+    # Nonempty-list verifier positive: the transformed document re-proves
+    # against the copied route id set.
+    assert dsan._verify_route_capabilities(json.dumps(out), _rc_copied_route_ids(_RC_SEED))
+    # Raw (un-remapped) source ids are NOT in the copied set -> violation.
+    bad = dict(out)
+    bad["codex_compaction_compatible_route_ids"] = [str(_RC_ROUTE_A)]
+    assert not dsan._verify_route_capabilities(json.dumps(bad), _rc_copied_route_ids(_RC_SEED))
+    # An id that is a valid UUID but belongs to no copied route -> violation.
+    bad2 = dict(out)
+    bad2["codex_compaction_compatible_route_ids"] = [str(uuid.uuid4())]
+    assert not dsan._verify_route_capabilities(json.dumps(bad2), _rc_copied_route_ids(_RC_SEED))
+
+
+def test_rc_destination_ids_remapped_per_copy() -> None:
+    out_a = json.loads(
+        dsan._transform_route_capabilities(json.dumps(_rc_full_document()), _RC_SEED)
+    )
+    out_b = json.loads(
+        dsan._transform_route_capabilities(json.dumps(_rc_full_document()), _RC_SEED_B)
+    )
+    dest_a = out_a["external_tools"]["approved_destination_ids"][0]
+    dest_b = out_b["external_tools"]["approved_destination_ids"][0]
+    # Kind preserved; operator opaque name replaced by a per-copy digest.
+    kind, opaque_a = dest_a.split(":", 1)
+    assert kind == "remote_mcp"
+    assert re.fullmatch(r"demo[0-9a-f]{44}", opaque_a)
+    assert dest_a != dest_b
+    assert "canary-dest-one" not in json.dumps(out_a)
+    # Verifier accepts the fictional shape, rejects the raw operator name.
+    assert dsan._verify_route_capabilities(json.dumps(out_a), _rc_copied_route_ids(_RC_SEED))
+    raw = dict(out_a)
+    raw["external_tools"] = dict(out_a["external_tools"])
+    raw["external_tools"]["approved_destination_ids"] = ["remote_mcp:canary-dest-one"]
+    assert not dsan._verify_route_capabilities(json.dumps(raw), _rc_copied_route_ids(_RC_SEED))
+
+
+def test_rc_unknown_or_invalid_shapes_fail_closed() -> None:
+    rejections = [
+        {"local_coding": {"contract_version": "local-coding-v1"}},
+        {"local_coding_vllm": {"contract_version": "vllm-chat-video-v1"}},
+        {"upstream_llm": {"version": 1, "profile": "p", "revision": 1, "sha256": "x" * 64}},
+        {"unknown_group": True},
+        {"chat_completions": {"not_a_known_flag": True}},
+        {"responses": {"text": "yes"}},
+        {"codex_limits": {"context_window_tokens": "x", "default_max_output_tokens": 1, "max_output_tokens": 2}},
+        {"codex_limits": {"context_window_tokens": 100, "default_max_output_tokens": 200, "max_output_tokens": 150}},
+        {"codex_compaction_compatible_route_ids": ["not-a-uuid"]},
+        {"codex_compaction_compatible_route_ids": [str(_RC_ROUTE_A), str(_RC_ROUTE_A)]},
+        {"media_input_estimation": {"version": 2}},
+        {"completion_service": {"version": 2, "profile": "p"}},
+        {"streaming": True, "tools": False},  # legacy flat top-level booleans
+        {"vllm_chat_video": {"version": 1}},  # missing media block
+        {
+            "completion_service": {"version": 1, "profile": "p"},
+            "vllm_chat_video": {"version": 1},
+            "media_input_estimation": {"version": 1, "video_frames": 4, "video_tokens": 50000},
+        },  # installed conflict law
+        # Secret-shaped value in a wrong position fails closed.
+        {"chat_completions": {"chat_text": "Bearer secret-token-value"}},
+    ]
+    for doc in rejections:
+        with pytest.raises(ds.DemoSnapshotError):
+            dsan._transform_route_capabilities(json.dumps(doc), _RC_SEED)
+    with pytest.raises(ds.DemoSnapshotError):
+        dsan._transform_route_capabilities(json.dumps([True]), _RC_SEED)
+    # Oversized documents fail the bounded envelope.
+    big = {"codex_compaction_compatible_route_ids": [str(uuid.uuid4()) for _ in range(33)]}
+    with pytest.raises(ds.DemoSnapshotError):
+        dsan._transform_route_capabilities(json.dumps(big), _RC_SEED)
+
+
+def test_rc_verifier_rejects_tampered_stored_documents() -> None:
+    out = json.loads(
+        dsan._transform_route_capabilities(json.dumps(_rc_full_document()), _RC_SEED)
+    )
+    route_ids = _rc_copied_route_ids(_RC_SEED)
+    # A tampered stored document that restores the RAW profile id fails.
+    bad = dict(out)
+    bad["completion_service"] = {"version": 1, "profile": "my-canary-profile"}
+    assert not dsan._verify_route_capabilities(json.dumps(bad), route_ids)
+    # A tampered document that injects a transport group fails.
+    bad2 = dict(out)
+    bad2["local_coding"] = {"contract_version": "local-coding-v1"}
+    assert not dsan._verify_route_capabilities(json.dumps(bad2), route_ids)
+    # A tampered document that flips a preserved boolean to a non-bool fails.
+    bad3 = dict(out)
+    bad3["realtime"] = {"audio": "yes"}
+    assert not dsan._verify_route_capabilities(json.dumps(bad3), route_ids)
+    # A tampered document that injects vllm_chat_video alongside the
+    # completion selector violates the installed conflict law and fails,
+    # even though each group alone would pass its per-group re-proof.
+    bad4 = dict(out)
+    bad4["vllm_chat_video"] = {"version": 1}
+    assert not dsan._verify_route_capabilities(json.dumps(bad4), route_ids)
+    # Non-JSON stored value fails.
+    assert not dsan._verify_route_capabilities("not json", route_ids)
+
+
+def test_rc_policy_wiring() -> None:
+    assert dsan.TABLE_POLICY["model_routes"]["capabilities"] == dsan.RC
+    assert ("model_routes", "capabilities") not in dsan._JJ_VALIDATORS
 
 
 # ---------------------------------------------------------------------------
@@ -1372,8 +1581,14 @@ def test_convert_value_refuses_wrong_types() -> None:
         dsan._convert_value(dsan.H, 123, seed=seed, data=data, maps=maps,
                             table="codex_replay_references",
                             column="call_id_hmac", row=row, row_index=0)
+    # The installed flat top-level boolean document is NOT the installed
+    # capability grammar: the RC action refuses it fail closed.
     with pytest.raises(ds.DemoSnapshotError):
-        dsan._convert_value(dsan.JJ, json.dumps({"chat": "yes"}), seed=seed,
+        dsan._convert_value(dsan.RC, json.dumps({"chat": True, "streaming": False}),
+                            seed=seed, data=data, maps=maps, table="model_routes",
+                            column="capabilities", row=row, row_index=0)
+    with pytest.raises(ds.DemoSnapshotError):
+        dsan._convert_value(dsan.RC, "not json", seed=seed,
                             data=data, maps=maps, table="model_routes",
                             column="capabilities", row=row, row_index=0)
 

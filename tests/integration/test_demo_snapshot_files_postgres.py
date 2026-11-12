@@ -127,16 +127,23 @@ async def _connect(url: dict[str, object]) -> asyncpg.Connection:
 # chain and a source-invariance fingerprint).
 # ---------------------------------------------------------------------------
 
-_SEED_TABLES: dict[str, str] = {
-    "organizations": "org",
-    "institutions": "inst",
-    "owners": "owner",
-    "model_routes": "route",
-}
+# Run-owned seed rows in FK-safe delete order (referencing before referenced).
+# model_routes holds TWO rows: an ordinary openrouter nested route (``route``)
+# and a synthetic module-provider completion-service route
+# (``route_completion``) carrying the operator completion-profile selector for
+# the 223-b DB/files link proof.
+_SEED_ROWS: list[tuple[str, str]] = [
+    ("model_routes", "route"),
+    ("model_routes", "route_completion"),
+    ("provider_configs", "mprovider"),
+    ("owners", "owner"),
+    ("institutions", "inst"),
+    ("organizations", "org"),
+]
 
 
 async def _seed_canaries(source: dict[str, object]) -> dict[str, uuid.UUID]:
-    ids = {label: _uid(label) for label in _SEED_TABLES.values()}
+    ids = {label: _uid(label) for (_t, label) in _SEED_ROWS}
     conn = await _connect(source)
     try:
         await conn.execute("BEGIN")
@@ -160,13 +167,48 @@ async def _seed_canaries(source: dict[str, object]) -> dict[str, uuid.UUID]:
                 f"canary-owner-{CN}@canary.invalid", ids["inst"],
                 f"canary-external-{CN}", f"owner notes {CN}", _T0,
             )
+            # Synthetic module provider for the completion-service route
+            # (kind='module', max_retries=0, per the installed completion
+            # route law). Mirrors the proven 222 provider_configs INSERT.
+            await conn.execute(
+                "INSERT INTO provider_configs (id, provider, display_name, kind, base_url, api_key_env_var, enabled, timeout_seconds, max_retries, notes, created_at, updated_at, governance_region, retention_policy, training_use, zdr_claimed, tool_destinations, evidence_date, reviewer) "
+                "VALUES ($1, $2, $3, 'module', $4, $5, true, 60, 0, $6, $7, $7, $8, $9, false, false, '[]', $10, $11)",
+                ids["mprovider"], f"canary-module-{_RUN_TAG}",
+                f"CanaryModule {CN}",
+                f"https://canary-module-{_RUN_TAG}.example.invalid/v1",
+                f"CANARY_MODULE_KEY_{_RUN_TAG.upper()}",
+                f"module provider notes {CN}", _T0,
+                f"canary-region-{CN}", f"canary-retention-{CN}",
+                _T0, f"CanaryReviewer {CN}",
+            )
+            # Ordinary openrouter nested route: a normal valid nested
+            # capability document (boolean flags + compaction reference),
+            # WITHOUT a completion-service selector.
             await conn.execute(
                 "INSERT INTO model_routes (id, requested_model, match_type, endpoint, provider, upstream_model, priority, enabled, visible_in_models, supports_streaming, capabilities, notes, created_at, updated_at) "
                 "VALUES ($1, $2, 'exact', $3, $4, $5, 100, true, true, true, $6, $7, $8, $8)",
                 ids["route"], f"canary-model-{CN}", "/v1/chat/completions",
                 "openrouter", f"canary-model-{CN}-up",
-                json.dumps({"streaming": True, "text": True}),
+                json.dumps({
+                    "chat_completions": {"chat_text": True, "chat_streaming": True},
+                    "codex_compaction_compatible_route_ids": [str(ids["route"])],
+                }),
                 f"route notes {CN}", _T0,
+            )
+            # Synthetic module-provider completion-service route: carries the
+            # operator completion-profile selector for the 223-b link proof
+            # (no streaming, per the installed completion-service law).
+            await conn.execute(
+                "INSERT INTO model_routes (id, requested_model, match_type, endpoint, provider, upstream_model, priority, enabled, visible_in_models, supports_streaming, capabilities, notes, created_at, updated_at) "
+                "VALUES ($1, $2, 'exact', $3, $4, $5, 100, true, true, false, $6, $7, $8, $8)",
+                ids["route_completion"], f"canary-cs-{CN}", "/v1/chat/completions",
+                f"canary-module-{_RUN_TAG}", f"canary-cs-{CN}-up",
+                json.dumps({
+                    "completion_service": {
+                        "version": 1, "profile": "alpha-profile-223",
+                    },
+                }),
+                f"completion route notes {CN}", _T0,
             )
         except BaseException:
             await conn.execute("ROLLBACK")
@@ -179,12 +221,12 @@ async def _seed_canaries(source: dict[str, object]) -> dict[str, uuid.UUID]:
 
 async def _delete_seed_rows(source: dict[str, object], ids: dict[str, uuid.UUID]) -> dict[str, int]:
     conn = await _connect(source)
-    leftover: dict[str, int] = {}
+    leftover: dict[tuple[str, str], int] = {}
     try:
         await conn.execute("BEGIN")
-        for table, label in _SEED_TABLES.items():
+        for table, label in _SEED_ROWS:
             cur = await conn.execute(f"DELETE FROM {table} WHERE id = $1", ids[label])
-            leftover[table] = 0 if cur.endswith("1") else 1
+            leftover[(table, label)] = 0 if cur.endswith("1") else 1
         await conn.execute("COMMIT")
     except BaseException:
         await conn.execute("ROLLBACK")
@@ -200,13 +242,13 @@ async def _run_row_fingerprint(
     conn = await _connect(source)
     try:
         parts: list[str] = []
-        for table, label in _SEED_TABLES.items():
+        for table, label in _SEED_ROWS:
             value = await conn.fetchval(
                 f"SELECT string_agg(row_to_json(t)::text, ',' ORDER BY id) "
                 f"FROM {table} t WHERE id = $1",
                 ids[label],
             )
-            parts.append(f"{table}={value}")
+            parts.append(f"{table}:{label}={value}")
         return "\n".join(parts)
     finally:
         await conn.close()
@@ -226,12 +268,29 @@ async def _web_connect_refused(env: "_FilesEnv", db: str) -> str:
         return exc.sqlstate or ""
     except Exception:
         return "unexpected"
+    try:
+        # A successful connect is itself the failure signal (no 42501).
+        return "connected"
     finally:
-        try:
-            await conn.close()  # type: ignore[union-attr]
-        except Exception:
-            pass
-    return "connected"
+        await conn.close()
+
+
+async def _fetch_route_capabilities(
+    target: dict[str, object], db: str, route_id: uuid.UUID
+) -> dict[str, object] | None:
+    """Read the STORED capabilities of one copied route (link proof)."""
+    # Connect to the COPIED database (not the target service's default db).
+    conn = await _connect({**target, "database": db})
+    try:
+        row = await conn.fetchrow(
+            "SELECT capabilities::text AS c FROM public.model_routes WHERE id = $1",
+            route_id,
+        )
+    finally:
+        await conn.close()
+    if row is None:
+        return None
+    return json.loads(row["c"])
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +643,35 @@ def test_files_chain_handoff_and_privacy(files_env: _FilesEnv) -> None:
         assert len(profiles) == 2
         for item in profiles:
             assert re.fullmatch(r"demo-profile-[0-9a-f]{24}", item)
+
+        # --- 223-b: copied completion-service route links to the leaf -----
+        seed = manifest.job_id.encode("utf-8")
+        expected_profile = dsan.demo_profile_id(seed, "alpha-profile-223")
+        assert re.fullmatch(r"demo-profile-[0-9a-f]{24}", expected_profile)
+        # The captured choices leaf carries the copied route's fictional
+        # profile (same per-copy derivation, same job seed).
+        assert expected_profile in profiles
+        assert "alpha-profile-223" not in json.dumps(choices)
+        # The STORED DB value (independent of the worker success flag)
+        # matches the leaf, proving the combined DB/files link on real PG.
+        copied_cs_route = dsan.remap_uuid(seed, env.ids["route_completion"])
+        stored_cs = await _fetch_route_capabilities(
+            env.target, raw_db, copied_cs_route
+        )
+        assert stored_cs is not None, "completion-service route missing from copy"
+        assert stored_cs["completion_service"]["profile"] == expected_profile
+        assert "alpha-profile-223" not in json.dumps(stored_cs)
+        # The ordinary nested route's compaction list is remapped to its
+        # copied id (list meaning preserved); provider slug is preserved.
+        copied_route = dsan.remap_uuid(seed, env.ids["route"])
+        stored_route = await _fetch_route_capabilities(
+            env.target, raw_db, copied_route
+        )
+        assert stored_route is not None, "ordinary nested route missing from copy"
+        assert str(copied_route) in stored_route[
+            "codex_compaction_compatible_route_ids"
+        ]
+        assert stored_route["chat_completions"]["chat_text"] is True
 
         # The private source records may retain the custody-private id
         # map, but the DISPLAY leaves never do (asserted above via the
