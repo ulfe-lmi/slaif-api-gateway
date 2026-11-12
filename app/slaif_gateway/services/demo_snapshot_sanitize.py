@@ -61,6 +61,59 @@ import asyncpg
 
 from slaif_gateway.services import demo_snapshot as ds
 
+# Installed runtime route capability grammar (objective 223-b). The RC
+# transform reuses the product's own strict child parsers so the demo
+# law can never drift from ordinary route admission.
+from slaif_gateway.modules.servers.completion_service.profiles import (
+    PROFILE_KEY as _RC_PROFILE_KEY,
+    profile_id_from_capabilities as _rc_profile_id_from_capabilities,
+)
+from slaif_gateway.modules.servers.vllm_chat_video import (
+    parse_video_frames as _rc_parse_video_frames,
+)
+from slaif_gateway.schemas.provider_route_configuration import (
+    KNOWN_CAPABILITY_GROUPS as _RC_KNOWN_GROUPS,
+    PRESERVED_CONTRACT_GROUPS as _RC_TRANSPORT_GROUPS,
+)
+from slaif_gateway.services.audio_route_capabilities import (
+    AUDIO_ENDPOINT_CAPABILITIES_KEY as _RC_AUDIO_KEY,
+    KNOWN_AUDIO_ENDPOINT_CAPABILITIES as _RC_AUDIO_FLAGS,
+)
+from slaif_gateway.services.chat_completion_route_capabilities import (
+    CHAT_COMPLETIONS_CAPABILITIES_KEY as _RC_CHAT_KEY,
+    validate_chat_completion_capability_block as _rc_validate_chat_block,
+)
+from slaif_gateway.services.embeddings_route_capabilities import (
+    EMBEDDINGS_CAPABILITIES_KEY as _RC_EMBED_KEY,
+    EMBEDDINGS_CAPABILITY_DIMENSIONS as _RC_EMBED_DIM,
+    EMBEDDINGS_CAPABILITY_ENABLED as _RC_EMBED_ON,
+)
+from slaif_gateway.services.external_tool_policy_contract import (
+    DEFAULT_EXTERNAL_TOOL_OPERATOR_CEILINGS as _RC_TOOL_CEILINGS,
+    parse_route_external_tool_policy as _rc_parse_tool_policy,
+)
+from slaif_gateway.services.media_input_estimation import (
+    validate_media_input_estimation_block as _rc_validate_media,
+)
+from slaif_gateway.services.provider_route_configuration import (
+    contains_known_secret_shape as _contains_secret_shape,
+)
+from slaif_gateway.services.realtime_route_capabilities import (
+    REALTIME_CAPABILITIES_KEY as _RC_REALTIME_KEY,
+    REALTIME_CAPABILITY_AUDIO as _RC_RT_AUDIO,
+    REALTIME_CAPABILITY_DIRECT_PROVIDER_EXPOSURE_ACCEPTED as _RC_RT_DPEA,
+    REALTIME_CAPABILITY_TRANSCRIPTION as _RC_RT_TRANSCRIPTION,
+    REALTIME_CAPABILITY_WEBRTC_CLIENT_SECRETS as _RC_RT_WEBRTC,
+)
+from slaif_gateway.services.responses_route_capabilities import (
+    CODEX_COMPACTION_COMPATIBLE_ROUTE_IDS_KEY as _RC_COMPACTION_KEY,
+    CODEX_LIMITS_KEY as _RC_CODEX_LIMITS_KEY,
+    RESPONSES_CAPABILITIES_KEY as _RC_RESPONSES_KEY,
+    parse_codex_compaction_compatible_route_ids as _rc_parse_compaction,
+    parse_codex_route_limits as _rc_parse_codex_limits,
+    validate_responses_capability_block as _rc_validate_responses_block,
+)
+
 # ---------------------------------------------------------------------------
 # Safe finite vocabulary
 # ---------------------------------------------------------------------------
@@ -347,6 +400,13 @@ N = "N"
 J0 = "J0"
 JA = "JA"
 JJ = "JJ"
+# RC   route capabilities: typed per-group transform of the INSTALLED
+#      model_routes.capabilities grammar (booleans/numbers/enums
+#      preserved; completion_service.profile fictionalized per copy;
+#      compaction route UUIDs remapped to the copied route ids).
+#      Transport groups (local_coding/local_coding_vllm/upstream_llm)
+#      fail closed (documented limit).
+RC = "RC"
 JU = "JU"
 IP = "IP"
 UA = "UA"
@@ -719,7 +779,7 @@ TABLE_POLICY: dict[str, dict[str, str]] = {
         "enabled": P,
         "visible_in_models": P,
         "supports_streaming": P,
-        "capabilities": JJ,
+        "capabilities": RC,
         "notes": N,
         "created_at": P,
         "updated_at": P,
@@ -1680,7 +1740,6 @@ def _jj_rate_limits(value: object) -> bool:
 _JJ_VALIDATORS: dict[tuple[str, str], "callable[[object], bool]"] = {
     ("gateway_keys", "allowed_models"): lambda v: _jj_string_list(v, _MODEL_NAME_RE, nonempty=True),
     ("gateway_keys", "allowed_endpoints"): lambda v: _jj_string_list(v, _ENDPOINT_PATH_RE, nonempty=True),
-    ("model_routes", "capabilities"): _jj_bool_flags,
     ("quota_reservations", "external_tool_capabilities"): lambda v: _jj_string_list(v, _DOTTED_CODE_RE, nonempty=True),
     ("key_template_revisions", "allowed_endpoints"): lambda v: _jj_string_list(v, _ENDPOINT_PATH_RE, nonempty=True),
     ("key_template_revisions", "allowed_models"): lambda v: _jj_string_list(v, _MODEL_NAME_RE, nonempty=True),
@@ -1704,6 +1763,302 @@ def _jj_is_valid(table: str, column: str, raw: object) -> bool:
     except ValueError:
         return False
     return validator(parsed)
+
+
+# ---------------------------------------------------------------------------
+# RC: installed route capability transform (objective 223-b)
+#
+# The 222 sanitizer previously preserved model_routes.capabilities as a
+# generic top-level boolean map (JJ). The INSTALLED runtime grammar
+# (schemas.provider_route_configuration.validate_capabilities_document)
+# writes nested typed blocks and may reference an operator completion
+# profile and compaction-compatible route UUIDs. RC reuses the product's
+# own strict child parsers group by group:
+#   - boolean flag groups, codex limits, media estimation, external tool
+#     policy and the native video contract are preserved (non-identifying
+#     booleans/numbers/finite codes only);
+#   - completion_service.profile is rewritten to the shared per-copy
+#     fictional id (demo_profile_id) so a copied route links to exactly
+#     its 223 completion-choice leaf;
+#   - codex_compaction_compatible_route_ids are remapped with the SAME
+#     per-copy UUID law as every other route id (list order kept);
+#   - the preserved transport groups (local_coding, local_coding_vllm,
+#     upstream_llm) fail closed: they carry configuration secrets or
+#     operator transport-profile references that cannot be safely
+#     projected in this stage (documented limit);
+#   - unknown groups, unknown flags, wrong types, oversized documents and
+#     recognized secret shapes fail closed, exactly like the installed
+#     configuration law.
+# ---------------------------------------------------------------------------
+
+_RC_MAX_BYTES = 64 * 1024  # same envelope as the capabilities file contract
+_RC_MAX_GROUPS = len(_RC_KNOWN_GROUPS)
+
+_RC_EMBED_FLAGS = frozenset({_RC_EMBED_ON, _RC_EMBED_DIM})
+_RC_REALTIME_FLAGS = frozenset(
+    {_RC_RT_AUDIO, _RC_RT_WEBRTC, _RC_RT_TRANSCRIPTION, _RC_RT_DPEA}
+)
+
+_DEMO_PROFILE_ID_RE = re.compile(r"^demo-profile-[0-9a-f]{24}$")
+
+
+def demo_profile_id(seed: bytes, profile_id: str) -> str:
+    """Per-copy fictional completion-profile id (SHARED 222/223 law).
+
+    This is the single canonical derivation used by BOTH the 222 route
+    capability transform (completion_service.profile) and the 223
+    completion-choices display projection, so a copied route references
+    exactly the fictional choice captured from the same configured
+    profile directory under the same job seed.
+    """
+    digest = _hmac.new(
+        seed,
+        b"completion-profile|" + profile_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"demo-profile-{digest[:24]}"
+
+
+_RC_DEST_OPAQUE_RE = re.compile(r"^demo[0-9a-f]{44}$")
+
+
+def _rc_destination_id(seed: bytes, destination_id: str) -> str:
+    """Per-copy remap of one reviewed external-tool destination id.
+
+    The KIND prefix (connector|remote_mcp) is preserved so the product's
+    capability/destination kind-match law stays valid in the copy; the
+    operator-chosen opaque name is replaced with a keyed per-copy digest
+    (4 + 44 = 48 characters, the closed grammar's bound).
+    """
+    kind, _opaque = destination_id.split(":", 1)
+    digest = _hmac.new(
+        seed,
+        b"route-destination|" + destination_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{kind}:demo{digest[:44]}"
+
+
+def _rc_reject() -> ds.DemoSnapshotError:
+    return ds.DemoSnapshotError(
+        ds.CODE_SANITIZE_FAILED,
+        "Demo copy route capability document failed its reviewed shape check.",
+    )
+
+
+def _rc_contains_secret_shape(value: object) -> bool:
+    """Recursive known-secret-shape check (reuse of the redaction contract)."""
+    if isinstance(value, str):
+        return _contains_secret_shape(value)
+    if isinstance(value, dict):
+        return any(_rc_contains_secret_shape(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_rc_contains_secret_shape(item) for item in value)
+    return False
+
+
+def _rc_bool_group(raw: object, known: frozenset[str]) -> dict[str, bool]:
+    """Mirror of the installed bool-block law: non-empty, known flags only."""
+    if not isinstance(raw, dict) or not raw:
+        raise _rc_reject()
+    if not set(raw) <= known or any(not isinstance(v, bool) for v in raw.values()):
+        raise _rc_reject()
+    return dict(raw)
+
+
+def _rc_parse_document(value: object) -> dict[str, object]:
+    """Parse one stored capabilities value (asyncpg jsonb text or object)."""
+    if isinstance(value, (str, bytes)):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            raise _rc_reject()
+    else:
+        parsed = value
+    if not isinstance(parsed, dict):
+        raise _rc_reject()
+    return parsed
+
+
+def _transform_route_capabilities(value: object, seed: bytes) -> str:
+    """Sanitize one installed capabilities document (RC action).
+
+    Returns the transformed document as deterministic JSON text (the same
+    binding form the JJ action uses for jsonb columns).
+    """
+    value = _rc_parse_document(value)
+    if len(value) > _RC_MAX_GROUPS:
+        raise _rc_reject()
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        raise _rc_reject() from None
+    if len(encoded) > _RC_MAX_BYTES or _rc_contains_secret_shape(value):
+        raise _rc_reject()
+    # Installed conflict law: the completion-service selector conflicts
+    # with the native video contract (validate_capabilities_document).
+    if _RC_PROFILE_KEY in value and "vllm_chat_video" in value:
+        raise _rc_reject()
+    out: dict[str, object] = {}
+    for group, raw in value.items():
+        if group in _RC_TRANSPORT_GROUPS:
+            # Documented limit: preserved transport blocks are not
+            # projected into the demo copy.
+            raise _rc_reject()
+        if group == _RC_CHAT_KEY:
+            try:
+                out[group] = _rc_validate_chat_block(raw)
+            except Exception:
+                raise _rc_reject() from None
+        elif group == _RC_RESPONSES_KEY:
+            try:
+                out[group] = _rc_validate_responses_block(raw)
+            except Exception:
+                raise _rc_reject() from None
+        elif group == _RC_CODEX_LIMITS_KEY:
+            try:
+                _rc_parse_codex_limits({_RC_CODEX_LIMITS_KEY: raw})
+            except Exception:
+                raise _rc_reject() from None
+            out[group] = dict(raw)  # type: ignore[arg-type]
+        elif group == _RC_COMPACTION_KEY:
+            try:
+                _rc_parse_compaction({_RC_COMPACTION_KEY: raw})
+            except Exception:
+                raise _rc_reject() from None
+            out[group] = [str(remap_uuid(seed, _uuid.UUID(x))) for x in raw]  # type: ignore[union-attr]
+        elif group == "media_input_estimation":
+            try:
+                _rc_validate_media(raw)
+            except Exception:
+                raise _rc_reject() from None
+            out[group] = dict(raw)  # type: ignore[arg-type]
+        elif group == _RC_PROFILE_KEY:
+            try:
+                profile_id = _rc_profile_id_from_capabilities(
+                    {_RC_PROFILE_KEY: raw}
+                )
+            except Exception:
+                raise _rc_reject() from None
+            if profile_id is None:
+                raise _rc_reject()
+            out[group] = {
+                "version": 1,
+                "profile": demo_profile_id(seed, profile_id),
+            }
+        elif group == "external_tools":
+            parsed = _rc_parse_tool_policy(raw, ceilings=_RC_TOOL_CEILINGS)
+            if not parsed.valid or parsed.policy is None:
+                raise _rc_reject()
+            doc_et = dict(raw)  # type: ignore[arg-type]
+            destinations = doc_et.get("approved_destination_ids")
+            if isinstance(destinations, list):
+                # The opaque destination names are operator identifiers:
+                # remap them per copy (kind preserved), never passthrough.
+                doc_et["approved_destination_ids"] = [
+                    _rc_destination_id(seed, d) for d in destinations
+                ]
+            out[group] = doc_et
+        elif group == "vllm_chat_video":
+            try:
+                _rc_parse_video_frames(value)
+            except Exception:
+                raise _rc_reject() from None
+            out[group] = dict(raw)  # type: ignore[arg-type]
+        elif group == _RC_AUDIO_KEY:
+            out[group] = _rc_bool_group(raw, _RC_AUDIO_FLAGS)
+        elif group == _RC_EMBED_KEY:
+            out[group] = _rc_bool_group(raw, _RC_EMBED_FLAGS)
+        elif group == _RC_REALTIME_KEY:
+            out[group] = _rc_bool_group(raw, _RC_REALTIME_FLAGS)
+        else:
+            raise _rc_reject()
+    return json.dumps(out, sort_keys=True)
+
+
+def _verify_route_capabilities(
+    value: object, route_ids: frozenset[str]
+) -> bool:
+    """Independent re-proof of a STORED transformed capabilities document.
+
+    Reuses the installed per-group parsers; the identity fields must
+    follow the FICTIONAL laws: completion_service.profile matches the
+    shared demo-profile id shape, and every compaction route id exists in
+    the copied model_routes set (remapped to copied route ids).
+    """
+    if isinstance(value, (str, bytes)):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return False
+    if not isinstance(value, dict) or len(value) > _RC_MAX_GROUPS:
+        return False
+    # Installed conflict law (mirrors the transformer): the completion
+    # selector conflicts with the native video contract. A tampered stored
+    # document carrying both must fail even though each group alone would
+    # pass its per-group re-proof.
+    if _RC_PROFILE_KEY in value and "vllm_chat_video" in value:
+        return False
+    for group, raw in value.items():
+        try:
+            if group in _RC_TRANSPORT_GROUPS:
+                return False
+            if group == _RC_CHAT_KEY:
+                _rc_validate_chat_block(raw)
+            elif group == _RC_RESPONSES_KEY:
+                _rc_validate_responses_block(raw)
+            elif group == _RC_CODEX_LIMITS_KEY:
+                _rc_parse_codex_limits({_RC_CODEX_LIMITS_KEY: raw})
+            elif group == _RC_COMPACTION_KEY:
+                # parse returns uuid.UUID objects; route_ids are str —
+                # normalize both sides before the membership proof.
+                parsed = _rc_parse_compaction({_RC_COMPACTION_KEY: raw})
+                if not all(str(u) in route_ids for u in parsed):
+                    return False
+            elif group == "media_input_estimation":
+                _rc_validate_media(raw)
+            elif group == _RC_PROFILE_KEY:
+                profile_id = _rc_profile_id_from_capabilities(
+                    {_RC_PROFILE_KEY: raw}
+                )
+                if (
+                    profile_id is None
+                    or not _DEMO_PROFILE_ID_RE.fullmatch(profile_id)
+                ):
+                    return False
+            elif group == "external_tools":
+                parsed = _rc_parse_tool_policy(raw, ceilings=_RC_TOOL_CEILINGS)
+                if not parsed.valid or parsed.policy is None:
+                    return False
+                # Fictional-law re-proof: every stored destination opaque
+                # name must follow the per-copy remap shape (a raw
+                # operator name would not match).
+                destinations = (
+                    raw.get("approved_destination_ids")
+                    if isinstance(raw, dict)
+                    else None
+                )
+                if not isinstance(destinations, list):
+                    return False
+                for d in destinations:
+                    if not isinstance(d, str) or ":" not in d:
+                        return False
+                    _kind, opaque = d.split(":", 1)
+                    if not _RC_DEST_OPAQUE_RE.fullmatch(opaque):
+                        return False
+            elif group == "vllm_chat_video":
+                _rc_parse_video_frames(value)
+            elif group == _RC_AUDIO_KEY:
+                _rc_bool_group(raw, _RC_AUDIO_FLAGS)
+            elif group == _RC_EMBED_KEY:
+                _rc_bool_group(raw, _RC_EMBED_FLAGS)
+            elif group == _RC_REALTIME_KEY:
+                _rc_bool_group(raw, _RC_REALTIME_FLAGS)
+            else:
+                return False
+        except Exception:
+            return False
+    return True
 
 
 _E_ACTIONS = frozenset({
@@ -1817,6 +2172,8 @@ def _validate_policy_invariants() -> None:
         for column, action in columns.items():
             if action == JJ and (table, column) not in _JJ_VALIDATORS:
                 raise RuntimeError(f"no typed JJ validator for {table}.{column}")
+            if action == RC and (table, column) != ("model_routes", "capabilities"):
+                raise RuntimeError("RC is reserved for model_routes.capabilities")
     for table, columns in TABLE_POLICY.items():
         for column, action in columns.items():
             if action in _E_ACTIONS:
@@ -2395,6 +2752,8 @@ def _convert_value(
                 "Demo copy typed JSONB value failed its reviewed shape check.",
             )
         return value
+    if action == RC:
+        return _transform_route_capabilities(value, seed)
     if action == JU:
         return _remap_uuid_array(value, seed)
     if action == IP:
@@ -2615,6 +2974,21 @@ async def _column_violations(
             for row in await conn.fetch(f"SELECT {col} AS v FROM {tbl} WHERE {col} IS NOT NULL")
         ]
         return sum(1 for v in values if not _jj_is_valid(table, column, v))
+    if action == RC:
+        rows = await conn.fetch(
+            f"SELECT {col} AS v FROM {tbl} WHERE {col} IS NOT NULL"
+        )
+        if not rows:
+            return 0
+        # Compaction ids must link to COPIED route ids (remapped), so the
+        # verifier re-proves them against the copied route id set.
+        route_ids = frozenset(
+            str(row["id"])
+            for row in await conn.fetch("SELECT id FROM public.model_routes")
+        )
+        return sum(
+            1 for row in rows if not _verify_route_capabilities(row["v"], route_ids)
+        )
     if action == JU:
         values = [
             row["v"]
@@ -2878,14 +3252,28 @@ def _target_password(config: ds.DemoSnapshotConfig) -> str:
 
 
 async def _connect_copy(
-    config: ds.DemoSnapshotConfig, target_db: str, *, readonly: bool = False
+    config: ds.DemoSnapshotConfig,
+    target_db: str,
+    *,
+    readonly: bool = False,
+    statement_timeout_ms: int | None = None,
 ) -> asyncpg.Connection:
     server_settings = {"TimeZone": "UTC"}
     if readonly:
         server_settings["default_transaction_read_only"] = "on"
     # asyncpg.connect() has no statement_timeout keyword; it is a session
-    # GUC, so it is pinned through server_settings.
-    server_settings["statement_timeout"] = str(_STATEMENT_TIMEOUT_MS)
+    # GUC, so it is pinned through server_settings. Callers with a
+    # tighter finite budget (e.g. the 223 combined link gate) may pass a
+    # bounded override derived from their remaining deadline.
+    if statement_timeout_ms is None:
+        server_settings["statement_timeout"] = str(_STATEMENT_TIMEOUT_MS)
+    elif statement_timeout_ms < 100:
+        raise ds.DemoSnapshotError(
+            ds.CODE_MISCONFIGURED,
+            "The demo copy statement budget is below its finite floor."
+        )
+    else:
+        server_settings["statement_timeout"] = str(statement_timeout_ms)
     return await asyncpg.connect(
         host=config.target_host,
         port=config.target_port,

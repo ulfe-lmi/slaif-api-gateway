@@ -1048,6 +1048,10 @@ slaif-gateway demo-snapshot-worker recover [--json]
 # Sanitize + independently verify every RAW_UNVERIFIED private copy
 # (objective 222); idempotent: sanitized copies are skipped
 slaif-gateway demo-snapshot-worker sanitize [--json]
+
+# Capture, sanitize + independently verify every 222 copy's display
+# files (objective 223); idempotent: file-verified copies are skipped
+slaif-gateway demo-snapshot-worker files [--json]
 ```
 
 Success exits 0 with `state: RAW_UNVERIFIED`; every failure class exits
@@ -1067,6 +1071,20 @@ with a safe finite `code` (`SANITIZE_SCHEMA_UNKNOWN`,
 `FENCE_HELD`, `UNEXPECTED`). Output is the same fixed safe vocabulary
 as the other worker commands: state, code, copy counts, elapsed
 milliseconds — never a database name, DSN, password or row content.
+
+`demo-snapshot-worker files` exits 0 with `state: FILES_VERIFIED`
+(every eligible copy promoted to `DB_AND_FILES_VERIFIED_UNPUBLISHED`)
+and a run with at least one failed copy exits 1 with the safe finite
+aggregate `code` (the safe code of the FIRST failed copy; the exact
+per-copy codes remain in the private custody manifests)
+(`FILES_SOURCE_MISSING`, `FILES_SOURCE_CHANGED`, `FILES_SOURCE_UNSAFE`,
+`FILES_SOURCE_UNSUPPORTED`, `FILES_SOURCE_TOO_LARGE`,
+`FILES_BUDGET_EXCEEDED`, `FILES_WRITE_FAILED`, `FILES_VERIFY_FAILED`,
+`FILES_CLEANUP_FAILED`, plus the shared `SNAPSHOT_DISABLED`,
+`SNAPSHOT_MISCONFIGURED`, `CUSTODY_UNSAFE`, `FENCE_HELD`,
+`UNEXPECTED`). Output is the same fixed safe vocabulary: state, code,
+copy counts, elapsed milliseconds — never a file path outside the
+operator's custody, a database name, or raw content.
 
 ## Codex and diagnostics
 

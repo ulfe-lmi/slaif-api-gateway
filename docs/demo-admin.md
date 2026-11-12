@@ -383,9 +383,194 @@ before `expire`/`recover` would orphan their target databases.
   apply to the private custody files above, which intentionally retain
   them.
 
-### 223 / 224 prerequisites
+### 224 prerequisite
 
-Objective 223 (file-backed panel capture/verification) and objective
-224 (browser binding/login) are inert until their own activation and
-MUST complete before any demonstration use; this stage never grants the
-demo web role and never exposes a public URL.
+Objective 224 (browser binding/login) is inert until its own activation
+and MUST complete before any demonstration use; this stage never grants
+the demo web role and never exposes a public URL. Objective 223
+(file-backed panel capture) is the following stage.
+
+## Demo file-backed snapshot (objective 223, worker-only)
+
+Objective 223 adds the FOURTH bounded stage: it captures the CLOSED set
+of file-backed artifacts the admin GET/download routes can address,
+replaces every identifying or free-text value with a reviewed typed
+display projection, and independently re-verifies the resulting
+display tree BEFORE the copy may advance. The live source — including
+the catalog custody files — stays entirely read-only: the worker never
+creates, modifies or deletes a catalog source file, and no original
+seal/receipt/apply authority is ever copied into a demo artifact.
+
+This stage is implemented and tested, but the demonstration as a whole
+is NOT usable yet:
+
+- Objective 224 (browser binding/login) is still required.
+- ROUTE-CAPABILITY MASKING (objective 223-b): the 222 DB sanitizer now
+  rewrites `model_routes.capabilities` with a route-specific typed
+  transformation (action `RC`) that reuses the installed per-group
+  parsers, so a non-empty nested capability document the normal
+  configuration accepts is representable in the display copy when it uses
+  only the eleven reviewed groups below. Those eleven are: the five
+  boolean blocks
+  (`chat_completions`, `responses`, `audio_endpoints`, `embeddings`,
+  `realtime`), `codex_limits`, `media_input_estimation` and
+  `vllm_chat_video` preserved as reviewed non-identifying
+  booleans/numeric limits/finite codes; `codex_compaction_compatible_route_ids`
+  is remapped entry-for-entry to the copied route ids (list order
+  preserved); `completion_service.profile` is rewritten to the SAME
+  per-copy fictional id the 223 completion-choices leaf uses, so a
+  copied route links to exactly its captured choice; and the
+  `external_tools` `approved_destination_ids` opaque names are remapped
+  per copy (kind preserved). The independent 222 verifier re-proves the
+  stored transformed document, and a combined DB/files gate fails the
+  copy BEFORE publication if a copied completion profile does not link
+  to the captured choices. Documented limit: the three preserved
+  transport groups (`local_coding`, `local_coding_vllm`,
+  `upstream_llm`) carry configuration secrets or operator transport
+  references that cannot be safely projected, so a route using them
+  FAILS 222 closed; unknown groups, unknown flags, wrong types and
+  secret-shaped payloads also fail closed, exactly like the installed
+  configuration law. The ordinary empty `{}` route remains supported.
+  The 222/223 worker validates the capability-document grammar but does
+  NOT run the full route-level `validate_merged_route_candidate` law
+  (which additionally requires a loadable completion profile with
+  matching models), so a synthetic completion-service route in the
+  owned test fixture proves the DB/files link but is not asserted to be
+  a fully route-validated installed candidate.
+
+### What this stage is NOT
+
+- No demo web process, no demo browser authentication, no login, no
+  public demo (objective 224).
+- No generic file-copy/ETL platform: only the closed, admin-addressable
+  source families below, each with an explicit typed display projection.
+  An unknown configured source shape FAILS the job closed; it is never
+  copied through.
+- No new framework, queue or scheduler: one bounded worker invocation
+  over the existing 222 verified copies, under the same custody fence.
+
+### Configured sources and their display projections
+
+Every configured source is read through the held anchored no-follow
+descriptor boundary (identity-rechecked, bounded reads; the worker
+itself never re-opens a checked pathname). One documented exception:
+branding slot selection reuses the EXISTING validated `resolve_slot`
+resolver, which performs its own anchored no-follow open of the
+configured slot path; before trusting the resolved bytes the worker
+re-asserts the name binding of the held branding directory, and the
+candidate PRESENCE itself was already inspected through the held
+directory descriptor (a present non-regular or ambiguous candidate
+fails closed before resolution). A configured source that is missing,
+changed during capture, unsafe (mode/ownership), unreadable or
+unrecognized fails the job with a safe finite code
+(`FILES_SOURCE_MISSING`, `FILES_SOURCE_CHANGED`,
+`FILES_SOURCE_UNSAFE`, `FILES_SOURCE_UNSUPPORTED`,
+`FILES_SOURCE_TOO_LARGE`); unconfigured optional sources simply stay
+unconfigured (recorded as such, neutral display substitutes where the
+admin panel needs one).
+
+| Source (operator setting) | What is captured | Display projection |
+| --- | --- | --- |
+| Catalog custody (`CATALOG_REFRESH_ROOT` + `CATALOG_REFRESH_SEAL_KEY`, both-or-neither) | The seven sealed-run content files of every retained run (authenticated through the existing seal seam), bounded job uploads, the six proposal artifacts, five per-package files (fixed product preset vocabulary) and the admin-visible job records. The seal key, manifest/receipt and locks are NEVER captured. | Typed per-kind projections: IDs remapped per copy (demo run/job/upload ids), free text (notes, progress, error detail, URLs) neutralized, capabilities against the closed catalog vocabulary, row-count maps against the four closed catalog table names, job records against the product's finite family/status vocabularies. |
+| Branding (`SLAIF_BRANDING_DIR`) | The five fixed slots, selected by the existing validated resolution law. | EVERY slot displays the shipped neutral substitute (packaged logo / empty stylesheet); the operator's own CSS/images are recorded privately (name/type) and never copied. A present candidate the resolution law rejects (invalid content, ambiguous dual candidate, non-regular file) fails closed. |
+| Completion profiles (`COMPLETION_SERVICE_PROFILE_DIR`) | Profile ID stems only (`<id>.json`, shared loader law); profile BODIES are never read. | A choice projection with per-copy fictional profile ids; the private custody manifest keeps the private stem map for link consistency. Group/world-writable or unreadable profile files fail closed. |
+| Upstream LLM profiles (`UPSTREAM_LLM_PROFILES_FILE`) | The operator profile document (bounded size). | Typed projection: finite protocol fields preserved, operator profile ids fictionalized per copy, digest recomputed. |
+| Packaged data + `PUBLIC_BASE_URL` | Nothing is copied. | Packaged Codex presets/profile/upstream-LLM defaults are referenced by pinned digests only; the operator `PUBLIC_BASE_URL` is recorded as a PRESENCE MARKER — its value never enters any artifact (stage 224 renders profile downloads against the demo hostname, not the live URL). |
+
+### Resource bounds (worker-enforced, feature-local)
+
+- Per-file byte cap `DEMO_SNAPSHOT_FILES_MAX_FILE_BYTES`
+  (default 32 MiB; 1–128 MiB) and aggregate byte cap
+  `DEMO_SNAPSHOT_FILES_MAX_TOTAL_BYTES` (default 128 MiB; 64 MiB–4 GiB)
+  bound BOTH the raw admission (checked before any parsing) and the
+  sanitized display bytes (checked before retention). Raw bytes are
+  sanitized and discarded per file; only the bounded display leaves are
+  retained.
+- Finite file-count bound (4096 flat leaves per job) and one ABSOLUTE
+  elapsed deadline per copy (`DEMO_SNAPSHOT_FILES_MAX_ELAPSED_SECONDS`,
+  default 300 s) shared by capture, write and verification. An
+  over-budget copy is cleaned and refused — never published.
+- The independent verifier enforces the SAME configured caps (bounded
+  by absolute ceilings) on its re-reads; the untrusted manifest counts
+  can only shrink a read, never raise a cap.
+
+### State machine and failure law
+
+A copy advances from `DB_SANITIZED_UNPUBLISHED` to
+`DB_AND_FILES_VERIFIED_UNPUBLISHED` only after the display tree passes
+the independent read-only verifier (exact flat leaf set under the job's
+`0700` `files/` directory, per-leaf 0600 mode/size/digest/inode
+identity, per-kind display policy re-proved, cumulative caps, deadline
+re-checked before every leaf read and before a clean return). Any
+drift, an unregistered kind, or a malformed manifest entry is
+`FILES_VERIFY_FAILED`. Capture/write/budget failures keep the 222
+state `DB_SANITIZED_UNPUBLISHED` and record `files_state: FAILED` with
+a safe finite code (`FILES_BUDGET_EXCEEDED`, `FILES_WRITE_FAILED`,
+`FILES_VERIFY_FAILED`, `FILES_CLEANUP_FAILED`) for operator inspection
+and retry. Repeated invocation is idempotent: file-verified copies are
+skipped; an interrupted prior attempt is cleaned EXACTLY (manifest-
+recorded flat leaves only, through held directory descriptors, identity
+rechecked, absence proven) before the retry — and a torn write that left
+leaves without their manifest refuses cleanup and RETAINS the artifacts
+for the operator.
+
+### Display files, cleanup order and rollback
+
+Display leaves are written FLAT under the job's private `files/`
+directory (each `0600`, created `O_EXCL` through a held directory
+descriptor). The private files manifest is written LAST; a torn or
+interrupted write can therefore leave leaves WITHOUT their manifest
+(and no complete job is ever presented in that state — the copy
+stays unverified, exact cleanup refuses, and the artifacts are
+retained for the operator, as described in State machine and failure
+law). Cleanup order is load-bearing: the 221 dump unlink and the EXACT
+target database removal happen FIRST; the display files are removed
+only after the target database is confirmed gone, so a failed DB drop
+keeps the files and manifest available for retry. If exact-leaf
+cleanup cannot be completed (foreign entry, identity drift, tampered
+manifest) the job reports `FILES_CLEANUP_FAILED` and retains the
+artifacts — no broad prefix or owner sweep is ever performed.
+
+Operator procedure (same order as 222): inspect the private custody
+manifest (0600; it retains the private source records, the private id
+maps and the exact file inventory — never display/commit it), retry
+`files`, expire/recover the exact copies, and only then remove custody
+files. The private files manifest and pre-state files are NOT
+public-safe; CLI output, ordinary logs and reports omit raw names, data
+and credentials.
+
+### Two snapshot times (not one instant)
+
+A per-login copy combines TWO snapshots taken at different times: the
+221 PostgreSQL `pg_dump` database snapshot (a consistent dump cut) and
+the later 223 per-source file capture, which reads each configured
+file source during the files run. These two snapshots are NOT
+transactionally simultaneous; a value visible in a file source at the
+223 capture moment is not guaranteed to match the database state at
+the 221 dump moment (or vice versa). Both snapshot times are recorded
+and inspectable in the private custody manifest (the 221
+`capture_started_at`/`capture_finished_at`/`restore_finished_at`
+fields and the 223 `capture_started_at`/`capture_finished_at` fields
+in the private files manifest), so an operator can see exactly when
+each half was taken. Do not describe the combined copy as a
+single-instant snapshot.
+
+### Target transport boundary (unchanged from 221/222)
+
+All target PostgreSQL traffic (221 restore, 222 sanitize, 223 state
+checks) uses asyncpg/libpq on a trusted private loopback or Compose
+network with `ssl=False`; this stage does not support verified remote
+database TLS. Do not point the target endpoint at an untrusted network.
+
+### Privacy limitation (explicitly accepted)
+
+As with 222, the demo copy is a bounded realistic substitute, not
+anonymous data: usage quantities, timestamps, costs, route/model/
+provider choices and finite codes are preserved by design so the admin
+read views stay realistic, while identity-bearing values (names,
+emails, URLs, operator free text, seal authority, source code
+revisions) are removed or fictionalized. The activity pattern of a
+copied account can still be recognizable; the human maintainer
+explicitly accepted this limitation for the bounded demo. The file
+artifacts are DISPLAY-ONLY copies: they lose all original seal/apply
+authority and are valid only as rendered panel data for the 224 binding.
