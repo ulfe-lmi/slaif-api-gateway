@@ -72,6 +72,10 @@ from slaif_gateway.config import Settings
 #: A complete private copy. Explicitly NOT published: stages 222/223/224
 #: must verify/project before any web-readable use.
 STATE_RAW_UNVERIFIED = "RAW_UNVERIFIED"
+#: The 222 sanitizer transaction committed AND the independent read-only
+#: verifier passed. Still NOT published: file-backed verification (223)
+#: and browser binding (224) are absent, and no web role may read it.
+STATE_DB_SANITIZED_UNPUBLISHED = "DB_SANITIZED_UNPUBLISHED"
 #: The worker is mid-job on this copy.
 STATE_RUNNING = "RUNNING"
 #: The job failed and its partial artifacts were cleaned.
@@ -96,6 +100,16 @@ CODE_TARGET_RESTORE_CAP_ELAPSED = "TARGET_RESTORE_CAP_ELAPSED"
 CODE_TARGET_NOT_SEPARATE = "TARGET_NOT_SEPARATE"
 CODE_CLEANUP_FAILED = "CLEANUP_FAILED"
 CODE_UNEXPECTED = "UNEXPECTED"
+#: The restored copy's catalog differs from the reviewed field policy
+#: (unknown table/column/type/extension/constraint): fail closed before
+#: any modification.
+CODE_SANITIZE_SCHEMA_UNKNOWN = "SANITIZE_SCHEMA_UNKNOWN"
+#: The sanitizer transaction failed or was not committed; the copy stays
+#: RAW_UNVERIFIED and no promotion occurred.
+CODE_SANITIZE_FAILED = "SANITIZE_FAILED"
+#: The transaction committed but the independent verifier failed; the
+#: copy is NOT promoted (stays RAW_UNVERIFIED, inspectable).
+CODE_SANITIZE_VERIFY_FAILED = "SANITIZE_VERIFY_FAILED"
 
 _MANIFEST_NAME = "manifest.json"
 _MANIFEST_SCHEMA_VERSION = 1
@@ -1079,12 +1093,21 @@ def _expire_copies(
     ops: TargetOps,
     now: float | None = None,
 ) -> int:
-    """Expire RAW_UNVERIFIED copies past retention and enforce the budget."""
+    """Expire retained copies past retention and enforce the budget.
+
+    Both RAW_UNVERIFIED and DB_SANITIZED_UNPUBLISHED copies count against
+    retention and the finite copy budget: a sanitized-but-unpublished
+    copy is still a private copy holding copy-derived data, and 223/224
+    are the only paths that ever consume it.
+    """
     now = time.time() if now is None else now
     copies = []
     for job_dir in _list_job_dirs(config.custody_dir):
         manifest = _read_manifest(job_dir)
-        if manifest is not None and manifest.state == STATE_RAW_UNVERIFIED:
+        if manifest is not None and manifest.state in (
+            STATE_RAW_UNVERIFIED,
+            STATE_DB_SANITIZED_UNPUBLISHED,
+        ):
             copies.append((manifest.created_at, job_dir, manifest))
     copies.sort(key=lambda item: item[0])
 

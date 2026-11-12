@@ -61,6 +61,7 @@ where = ["app"]
 
 [tool.setuptools.package-data]
 slaif_gateway = [
+  "data/*.json",
   "resources/*.json",
   "resources/catalog_refresh/*",
   "modules/clients/profiles/*.json",
