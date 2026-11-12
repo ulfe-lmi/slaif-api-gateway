@@ -183,9 +183,12 @@ resource limits and cleanup ONLY.
   archive path, DSNs and passwords are redacted from all CLI output, logs
   and reports.
 - **Custody.** Job state lives in an operator-owned `0700` directory
-  OUTSIDE the repository and databases; every artifact (manifest, dump,
-  stderr tails) is `0600`. Symlinked or group/world-accessible custody
-  roots are refused. The custody manifest is the durable private record
+  that the setup requires OUTSIDE the repository and databases (an
+  operator requirement — the worker enforces the no-symlink and
+  owner-only `0700` boundary, not repository exclusion); every artifact
+  (manifest, dump, stderr tails) is `0600`. Symlinked or
+  group/world-accessible custody roots are refused. The custody
+  manifest is the durable private record
   that stages 222/223/224 address by `target_db` — deliberately a file,
   not a PostgreSQL table, so the SELECT-only source role can never read or
   influence bookkeeping.
@@ -344,16 +347,30 @@ Operate in this order: retry first, then drop the exact recorded
 copies, and only remove custody files last — deleting the manifests
 before `expire`/`recover` would orphan their target databases.
 
-- Inspect: the private custody manifest (0600, outside the repository)
-  plus the private pre-state file record the exact state, failure code
-  and pre-rewrite budget/checksum evidence.
+- Inspect: the private custody manifest (0600) records the exact state,
+  failure code AND the exact target database name plus the private
+  metadata the later stages and exact-copy cleanup address; the private
+  pre-state file (0600) records the pre-rewrite budget/checksum
+  evidence, including source-derived entity IDs and aggregate checksums
+  the independent verifier needs. The custody directory must be
+  configured OUTSIDE the repository and databases (an operator
+  requirement — the worker enforces the no-symlink and owner-only 0700
+  boundary, not repository exclusion); the custody files are
+  operator-owned `0600` under the existing custody access and retention
+  rules, and the raw dump/copy already exists in private custody. The
+  private files are NOT sanitized and NOT public-safe — they may retain
+  source-derived values — so never move, display, commit or attach
+  them.
 - Retry: re-run `slaif-gateway demo-snapshot-worker sanitize` (fenced,
   idempotent).
 - Cleanup: `expire` and `recover` behave as in objective 221 and drop
   the EXACT recorded copies (never a prefix sweep). Rollback is that
   exact-copy cleanup followed by removing the custody directory
-  contents. No business database is ever touched, and no raw value
-  appears in CLI output, logs, reports or committed artifacts.
+  contents. No business database is ever touched. CLI output, ordinary
+  logs, reports and committed artifacts omit the target database name,
+  secrets and source identifiers; that rendered-output law does not
+  apply to the private custody files above, which intentionally retain
+  them.
 
 ### 223 / 224 prerequisites
 
