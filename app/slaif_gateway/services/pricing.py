@@ -22,6 +22,7 @@ from slaif_gateway.schemas.pricing import (
 )
 from slaif_gateway.schemas.realtime import RealtimePolicyResult
 from slaif_gateway.schemas.routing import RouteResolutionResult
+from slaif_gateway.services.codex_route_access import uses_existing_route_pricing
 from slaif_gateway.services.pricing_errors import (
     AudioOutputPricingNotSupportedError,
     AudioRequestPricingNotSupportedError,
@@ -222,9 +223,18 @@ class PricingService:
         if audio_output_requested and pricing.audio_output_price_per_1m is None:
             raise AudioOutputPricingNotSupportedError(param="audio")
 
-        codex_accounting = bool(getattr(policy, "codex_limits_applied", False))
+        # Explicit GUI access can use the route's existing standard tariff.
+        # A declared advanced tariff always retains strict Codex accounting.
+        codex_limits_applied = bool(getattr(policy, "codex_limits_applied", False))
+        codex_accounting = codex_limits_applied and not (
+            uses_existing_route_pricing(getattr(route, "capabilities", None))
+            and pricing.long_context_threshold_tokens is None
+        )
         input_price = pricing.input_price_per_1m
         output_price = pricing.output_price_per_1m
+        if codex_limits_applied and not codex_accounting:
+            input_price = max(input_price, pricing.cached_input_price_per_1m or input_price)
+            output_price = max(output_price, pricing.reasoning_price_per_1m or output_price)
         if codex_accounting:
             if (
                 pricing.cache_write_input_price_per_1m is None

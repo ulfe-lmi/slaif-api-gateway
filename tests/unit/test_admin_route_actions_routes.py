@@ -509,3 +509,48 @@ def test_model_route_enable_disable_call_service(monkeypatch) -> None:
     assert calls[1]["enabled"] is False
     assert calls[0]["actor_admin_id"] == admin_user.id
     assert calls[1]["actor_admin_id"] == admin_user.id
+
+
+def test_gui_codex_checkbox_validates_then_saves_only_route_with_audit(monkeypatch) -> None:
+    events = []
+    route_id = uuid.uuid4()
+    _patch_provider_choices(monkeypatch)
+
+    async def validate(session, **kwargs):
+        from slaif_gateway.services.provider_route_configuration import validate_merged_route_candidate
+        validate_merged_route_candidate(kwargs["capabilities"], endpoint=kwargs["endpoint"],
+            provider=kwargs["provider"], provider_row=_provider_choice(),
+            requested_model=kwargs["requested_model"], upstream_model=kwargs["upstream_model"],
+            supports_streaming=kwargs["supports_streaming"])
+        events.append("validated")
+
+    async def update(self, route_or_id, **kwargs):
+        events.append(kwargs)
+        return SimpleNamespace(id=route_id)
+
+    monkeypatch.setattr("slaif_gateway.api.admin.validate_route_creation_candidate", validate)
+    monkeypatch.setattr("slaif_gateway.services.model_route_service.ModelRouteService.update_model_route", update)
+    client = TestClient(_app())
+    admin = _login_for_actions(monkeypatch, client)
+    response = client.post(f"/admin/routes/{route_id}/edit", data=_valid_form(
+        endpoint="/v1/responses", capabilities='{"responses":{"text":true,"json_mode":true}}',
+        codex_access_present="true", codex_enabled="true", codex_context="131072",
+        codex_default_output="4096", codex_max_output="8192"), follow_redirects=False)
+    assert response.status_code == 303
+    assert events[0] == "validated"
+    saved = events[1]
+    assert saved["capabilities"]["responses"]["codex_client_tools"] is True
+    assert saved["capabilities"]["responses"]["json_mode"] is True
+    assert saved["actor_admin_id"] == admin.id and saved["reason"] == "routing update"
+
+
+def test_gui_codex_checkbox_rejects_non_responses_route_before_write(monkeypatch) -> None:
+    _patch_provider_choices(monkeypatch)
+    client = TestClient(_app())
+    _login_for_actions(monkeypatch, client)
+    response = client.post(f"/admin/routes/{uuid.uuid4()}/edit", data=_valid_form(
+        codex_access_present="true", codex_enabled="true", codex_context="131072",
+        codex_default_output="4096", codex_max_output="8192"))
+    assert response.status_code == 400
+    assert "exact /v1/responses route" in response.text
+    assert 'name="codex_enabled"' in response.text

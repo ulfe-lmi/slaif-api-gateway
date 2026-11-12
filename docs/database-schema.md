@@ -1781,6 +1781,14 @@ of compatible ordinary/compact route UUIDs in top-level
 `codex_compaction_compatible_route_ids`; compatibility still requires the same
 provider and upstream model and is not a general route relaxation.
 
+The GUI's optional `codex_access` object is independent operator configuration,
+not qualification metadata. It has exactly `version: 1`, `pricing: "existing"`,
+and `previous`, an object containing only prior `codex_limits`, `upstream_llm`,
+`local_coding`, and managed `responses` flags. It records enough state to undo
+the checkbox's changes. It contains no credentials, key policy, tariff values,
+fixture declarations, or inference content. Existing pricing rows remain the
+billing source. See [the GUI Codex workflow](upstream-llm-adapter.md#enable-codex-from-the-dashboard).
+
 An objective-010 Codex route pair may additionally declare exactly one strict
 top-level qualification object inside `model_routes.capabilities`:
 

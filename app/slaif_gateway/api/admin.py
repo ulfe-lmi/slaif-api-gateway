@@ -53,6 +53,9 @@ from slaif_gateway.services.admin_catalog_dashboard import (
     AdminCatalogDashboardService,
     AdminCatalogNotFoundError,
 )
+from slaif_gateway.services.codex_route_access import (
+    codex_access_enabled, codex_access_form_values, configure_codex_access,
+)
 from slaif_gateway.services.codex_qualification import (
     CODEX_RESPONSES_POLICY,
     CodexQualificationResult,
@@ -515,6 +518,7 @@ templates.env.filters["tokm"] = _tokens_million_display_filter
 templates.env.filters["inputnum"] = _input_decimal_display_filter
 templates.env.filters["policysum"] = _policy_summary_display_filter
 templates.env.filters["ratepolicy"] = _rate_limit_policy_display_filter
+templates.env.filters["codex_enabled"] = codex_access_enabled
 
 _QWEN_CODEX_PROFILE_IDS = frozenset(
     {
@@ -5904,6 +5908,11 @@ async def create_admin_route(
     capabilities: str = Form(""),
     notes: str = Form(""),
     reason: str = Form(""),
+    codex_access_present: str = Form(""),
+    codex_enabled: str = Form(""),
+    codex_context: str = Form(""),
+    codex_default_output: str = Form("4096"),
+    codex_max_output: str = Form("8192"),
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
@@ -5928,6 +5937,9 @@ async def create_admin_route(
         capabilities=capabilities,
         notes=notes,
         reason=reason,
+        codex_access_present=codex_access_present, codex_enabled=codex_enabled,
+        codex_context=codex_context, codex_default_output=codex_default_output,
+        codex_max_output=codex_max_output,
     )
     try:
         # 214-a: resolve provider existence with a bounded exact lookup
@@ -5942,7 +5954,7 @@ async def create_admin_route(
             else False
         )
         parsed = _parse_model_route_form(
-            form, provider_exists=provider_exists, require_reason=True
+            form, provider_exists=provider_exists, require_reason=True, settings=settings
         )
         # 210-a: the creation intent (or the legacy checkbox when the
         # field is absent) determines the effective enabled state.
@@ -6108,7 +6120,7 @@ async def edit_admin_route_form(request: Request, route_id: str) -> Response:
     except AdminCatalogNotFoundError:
         return _admin_error_page(request, status_code=404, message="Model route not found.")
 
-    route_form = _route_form_from_detail(route)
+    route_form = _route_form_from_detail(route, settings=settings)
     return _render_route_form(
         request,
         template_name="routes/edit.html",
@@ -6146,6 +6158,11 @@ async def update_admin_route(
     capabilities: str = Form(""),
     notes: str = Form(""),
     reason: str = Form(""),
+    codex_access_present: str = Form(""),
+    codex_enabled: str = Form(""),
+    codex_context: str = Form(""),
+    codex_default_output: str = Form("4096"),
+    codex_max_output: str = Form("8192"),
 ) -> Response:
     settings = _settings(request)
     if not settings.ENABLE_ADMIN_DASHBOARD:
@@ -6174,6 +6191,9 @@ async def update_admin_route(
         capabilities=capabilities,
         notes=notes,
         reason=reason,
+        codex_access_present=codex_access_present, codex_enabled=codex_enabled,
+        codex_context=codex_context, codex_default_output=codex_default_output,
+        codex_max_output=codex_max_output,
     )
     try:
         # 214-a: resolve provider existence with a bounded exact lookup
@@ -6188,7 +6208,7 @@ async def update_admin_route(
             else False
         )
         parsed = _parse_model_route_form(
-            form, provider_exists=provider_exists, require_reason=True
+            form, provider_exists=provider_exists, require_reason=True, settings=settings
         )
     except ValueError as exc:
         return _render_route_form(
@@ -6212,24 +6232,52 @@ async def update_admin_route(
             status_code=400,
         )
 
+    async def save_route(service: ModelRouteService):
+        return await service.update_model_route(
+            parsed_route_id,
+            requested_model=parsed["requested_model"],
+            match_type=parsed["match_type"],
+            endpoint=parsed["endpoint"],
+            provider=parsed["provider"],
+            upstream_model=parsed["upstream_model"],
+            priority=parsed["priority"],
+            enabled=parsed["enabled"],
+            visible_in_models=parsed["visible_in_models"],
+            supports_streaming=parsed["supports_streaming"],
+            capabilities=parsed["capabilities"],
+            notes=parsed["notes"],
+            actor_admin_id=action_context.admin_user.id,
+            reason=parsed["reason"],
+        )
+
     try:
-        async with _admin_model_route_service_scope(request) as service:
-            updated = await service.update_model_route(
-                parsed_route_id,
-                requested_model=parsed["requested_model"],
-                match_type=parsed["match_type"],
-                endpoint=parsed["endpoint"],
-                provider=parsed["provider"],
-                upstream_model=parsed["upstream_model"],
-                priority=parsed["priority"],
-                enabled=parsed["enabled"],
-                visible_in_models=parsed["visible_in_models"],
-                supports_streaming=parsed["supports_streaming"],
-                capabilities=parsed["capabilities"],
-                notes=parsed["notes"],
-                actor_admin_id=action_context.admin_user.id,
-                reason=parsed["reason"],
-            )
+        managed_codex_change = (
+            parsed["capabilities"].get("codex_access") is not None
+            or _parse_route_capabilities(form.get("capabilities")).get("codex_access") is not None
+        )
+        if managed_codex_change:
+            session_factory = get_sessionmaker_from_app(request)
+            async with session_factory() as session:
+                async with session.begin():
+                    await validate_route_creation_candidate(
+                        session,
+                        **{key: parsed[key] for key in (
+                            "requested_model", "match_type", "provider", "upstream_model",
+                            "priority", "visible_in_models", "enabled", "supports_streaming",
+                            "notes", "endpoint", "capabilities",
+                        )},
+                        external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+                        profile_dir=settings.COMPLETION_SERVICE_PROFILE_DIR,
+                    )
+                    service = ModelRouteService(
+                        model_routes_repository=ModelRoutesRepository(session),
+                        audit_repository=AuditRepository(session),
+                        external_tool_ceilings=settings.get_external_tool_operator_ceilings(),
+                    )
+                    updated = await save_route(service)
+        else:
+            async with _admin_model_route_service_scope(request) as service:
+                updated = await save_route(service)
     except RecordNotFoundError:
         return _admin_error_page(request, status_code=404, message="Model route not found.")
     except ValueError:
@@ -11368,10 +11416,11 @@ def _default_route_form() -> dict[str, str]:
         "capabilities": "",
         "notes": "",
         "reason": "",
+        **codex_access_form_values({}),
     }
 
 
-def _route_form_from_detail(route: object) -> dict[str, str]:
+def _route_form_from_detail(route: object, *, settings: Settings | None = None) -> dict[str, str]:
     capabilities = getattr(route, "capabilities", {}) or {}
     return _route_form_from_values(
         requested_model=str(getattr(route, "requested_model")),
@@ -11386,6 +11435,11 @@ def _route_form_from_detail(route: object) -> dict[str, str]:
         capabilities=json.dumps(capabilities, sort_keys=True) if capabilities else "",
         notes=str(getattr(route, "notes") or ""),
         reason="",
+        **codex_access_form_values(
+            capabilities, str(getattr(route, "notes") or ""),
+            absolute_input=settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS if settings else 1050000,
+            absolute_output=settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS if settings else 128000,
+        ),
     )
 
 
@@ -11404,6 +11458,11 @@ def _route_form_from_values(
     capabilities: str,
     notes: str,
     reason: str,
+    codex_access_present: str = "",
+    codex_enabled: str = "",
+    codex_context: str = "",
+    codex_default_output: str = "4096",
+    codex_max_output: str = "8192",
 ) -> dict[str, str]:
     return {
         "creation_intent": creation_intent,
@@ -11419,6 +11478,11 @@ def _route_form_from_values(
         "capabilities": capabilities,
         "notes": notes,
         "reason": reason,
+        "codex_access_present": codex_access_present,
+        "codex_enabled": codex_enabled,
+        "codex_context": codex_context,
+        "codex_default_output": codex_default_output,
+        "codex_max_output": codex_max_output,
     }
 
 
@@ -11450,7 +11514,7 @@ def _parse_route_creation_intent(form: dict[str, str]) -> bool:
     if not intent:  # legacy POST: the existing checkbox wins
         return _is_checked(form.get("enabled"))
     if intent == "automatic":
-        return not (form.get("capabilities") or "").strip()
+        return not (form.get("capabilities") or "").strip() and not _is_checked(form.get("codex_enabled"))
     if intent == "prepare_disabled":
         return False
     if intent == "explicit_enable":
@@ -11465,6 +11529,7 @@ def _parse_model_route_form(
     *,
     provider_exists: bool,
     require_reason: bool,
+    settings: Settings | None = None,
 ) -> dict[str, object]:
     requested_model = _parse_route_text(form.get("requested_model"), field_name="Requested model")
     match_type = (form.get("match_type") or "exact").strip()
@@ -11483,6 +11548,18 @@ def _parse_model_route_form(
     reason = _clean_admin_reason(form.get("reason"))
     if require_reason and reason is None:
         raise ValueError(_ADMIN_STATUS_MESSAGES["model_route_reason_required"][1])
+
+    if _is_checked(form.get("codex_access_present")):
+        capabilities = configure_codex_access(
+            capabilities, enabled=_is_checked(form.get("codex_enabled")),
+            endpoint=endpoint, match_type=match_type,
+            supports_streaming=_is_checked(form.get("supports_streaming")),
+            context=form.get("codex_context", ""),
+            default_output=form.get("codex_default_output", ""),
+            max_output=form.get("codex_max_output", ""),
+            absolute_input=settings.CODEX_ABSOLUTE_MAX_INPUT_TOKENS if settings else 1050000,
+            absolute_output=settings.CODEX_ABSOLUTE_MAX_OUTPUT_TOKENS if settings else 128000,
+        )
 
     return {
         "requested_model": requested_model,

@@ -1,0 +1,22 @@
+<section class="action-panel" aria-labelledby="route-codex-heading">
+  <h2 id="route-codex-heading">Codex</h2>
+  <input type="hidden" name="codex_access_present" value="true">
+  <label class="checkbox-row">
+    <input type="checkbox" name="codex_enabled" value="true" aria-describedby="route-codex-help" {% if form.codex_enabled %}checked{% endif %}>
+    <span>Enable Codex</span>
+  </label>
+  <p class="field-help" id="route-codex-help">Enable this for an exact Responses route whose upstream model supports streaming and tools. New generic transports require an openai_compatible provider. The gateway configures Codex request handling and function-tool translation. Existing keys still need Codex permissions and model access. This setting does not certify upstream compatibility.</p>
+  <div class="form-grid">
+    <label>Context ceiling (tokens)
+      <input type="number" name="codex_context" value="{{ form.codex_context }}" min="2" step="1" aria-describedby="route-codex-limits-help">
+    </label>
+    <label>Default output allowance (tokens)
+      <input type="number" name="codex_default_output" value="{{ form.codex_default_output }}" min="1" step="1" aria-describedby="route-codex-limits-help">
+    </label>
+    <label>Maximum output allowance (tokens)
+      <input type="number" name="codex_max_output" value="{{ form.codex_max_output }}" min="1" step="1" aria-describedby="route-codex-limits-help">
+    </label>
+  </div>
+  <p class="field-help" id="route-codex-limits-help">Required when enabled: default output ≤ maximum output &lt; context ceiling. Catalog limits are prefilled when available; review them against the model and installation limits. Keep the Codex client's compaction threshold conservative.</p>
+  <p class="muted small">Uses the route's existing pricing. Advanced cache and context tariffs, when configured, retain strict accounting. Unchecking restores the settings saved when this control first enabled Codex. No keys are rotated or edited.</p>
+</section>
