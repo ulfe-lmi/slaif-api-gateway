@@ -1118,9 +1118,14 @@ def test_runner_config_validation_failure_does_not_leak_fence(
     monkeypatch.setattr(dsf.ds, "config_from_settings", boom)
     with pytest.raises(RuntimeError, match="config validation failed"):
         dsf.run_files_job(config, _settings())
-    # The fence was never held: a fresh acquire succeeds, then releases.
+    # The fence was never held: a fresh acquire succeeds. Close the
+    # acquired descriptor explicitly and exactly once (even if the
+    # assertion below fails) so the test itself cannot leak it.
     fd = ds.acquire_fence(config.custody_dir)
-    ds.release_fence(fd)
+    try:
+        assert isinstance(fd, int) and fd >= 0
+    finally:
+        ds.release_fence(fd)
 
 
 def test_leaf_index_uses_four_digit_boundary() -> None:

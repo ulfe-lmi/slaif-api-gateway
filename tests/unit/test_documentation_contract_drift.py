@@ -376,6 +376,13 @@ def test_external_tool_policy_contract_consumers_remain_allowlisted() -> (
         # installation ceilings; it performs no policy logic and grants no
         # runtime hosted-tool authority.
         REPO_ROOT / "app/slaif_gateway/api/admin_review_intent.py",
+        # 223-b: the worker-only demo snapshot sanitizer is a read-only
+        # display-copy consumer - it parses copied route metadata to
+        # validate and fictionalize the external_tools block in per-login
+        # demo copies. It grants no runtime external-tool authority,
+        # cannot admit or forward requests, and never changes
+        # key/route permission.
+        REPO_ROOT / "app/slaif_gateway/services/demo_snapshot_sanitize.py",
     }
     for path in (REPO_ROOT / "app/slaif_gateway").rglob("*.py"):
         if path == module_path or path in allowed_consumers:
