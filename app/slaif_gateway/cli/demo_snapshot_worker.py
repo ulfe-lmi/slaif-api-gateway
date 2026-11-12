@@ -28,6 +28,9 @@ from slaif_gateway.services.demo_snapshot import (
     recover_interrupted_jobs,
     run_snapshot_job,
 )
+from slaif_gateway.services.demo_snapshot_sanitize import (
+    sanitize_copies,
+)
 
 app = typer.Typer(help="Bounded private demo PostgreSQL snapshot worker (worker-only)")
 
@@ -98,6 +101,43 @@ def expire(
         else:
             echo_kv(payload)
     except DemoSnapshotError as exc:
+        _fail(exc, json_output=json_output)
+
+
+@app.command("sanitize")
+def sanitize(
+    json_output: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the safe result as a JSON object."),
+    ] = False,
+) -> None:
+    """Sanitize and verify every RAW_UNVERIFIED private copy (stage 222).
+
+    Idempotent: already-sanitized copies are skipped; a failed copy stays
+    RAW_UNVERIFIED with a safe finite code for operator inspection and
+    retry.
+    """
+    try:
+        config = config_from_settings(get_settings())
+        result = sanitize_copies(config)
+        payload: dict[str, object] = {
+            "state": result.state,
+            "copies_sanitized": result.copies_sanitized,
+            "copies_failed": result.copies_failed,
+            "elapsed_ms": result.elapsed_ms,
+            "custody_raw_copies": count_raw_copies(config),
+        }
+        if result.failure_code is not None:
+            payload["code"] = result.failure_code
+        if json_output:
+            from slaif_gateway.cli.common import emit_json
+
+            emit_json(payload)
+        else:
+            echo_kv(payload)
+        if result.state not in ("SANITIZED", "SKIPPED"):
+            raise typer.Exit(code=1)
+    except DemoSnapshotError as exc:  # safe fixed vocabulary only
         _fail(exc, json_output=json_output)
 
 

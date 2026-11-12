@@ -1044,6 +1044,10 @@ slaif-gateway demo-snapshot-worker expire [--json]
 
 # Idempotent cleanup of jobs interrupted by a dead worker
 slaif-gateway demo-snapshot-worker recover [--json]
+
+# Sanitize + independently verify every RAW_UNVERIFIED private copy
+# (objective 222); idempotent: sanitized copies are skipped
+slaif-gateway demo-snapshot-worker sanitize [--json]
 ```
 
 Success exits 0 with `state: RAW_UNVERIFIED`; every failure class exits
@@ -1053,6 +1057,16 @@ Success exits 0 with `state: RAW_UNVERIFIED`; every failure class exits
 `SOURCE_DUMP_CANCELLED`, `TARGET_NOT_SEPARATE`, `TARGET_CREATE_FAILED`,
 `TARGET_RESTORE_FAILED`,
 `TARGET_RESTORE_CAP_ELAPSED`, `CLEANUP_FAILED`, `UNEXPECTED`).
+
+`demo-snapshot-worker sanitize` exits 0 with `state: SANITIZED` (at
+least one copy promoted to `DB_SANITIZED_UNPUBLISHED`) or
+`state: SKIPPED` (nothing eligible); a refused or failed copy exits 1
+with a safe finite `code` (`SANITIZE_SCHEMA_UNKNOWN`,
+`SANITIZE_FAILED`, `SANITIZE_VERIFY_FAILED`, plus the shared
+`SNAPSHOT_DISABLED`, `SNAPSHOT_MISCONFIGURED`, `CUSTODY_UNSAFE`,
+`FENCE_HELD`, `UNEXPECTED`). Output is the same fixed safe vocabulary
+as the other worker commands: state, code, copy counts, elapsed
+milliseconds — never a database name, DSN, password or row content.
 
 ## Codex and diagnostics
 
