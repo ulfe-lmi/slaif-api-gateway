@@ -1025,6 +1025,35 @@ accepted/unconfirmed/failed/unavailable outcomes, safe no-send GET
 recovery) wraps the CLI's existing `email test` operation. The CLI
 commands and their output contracts are unchanged by 215-a.
 
+## Demo snapshot worker (221, worker-only)
+
+Bounded private demo PostgreSQL snapshot custody. Default OFF; every
+`DEMO_SNAPSHOT_*` setting must be explicitly configured (see
+Configuration → Demo Snapshot Worker and `docs/demo-admin.md`). Output is
+a fixed safe vocabulary (state, finite failure code, export bytes,
+elapsed ms, copy count) and never contains a database name, DSN,
+password or row content. The demo is not usable end-to-end until stages
+222/223 (masking/capture) and 224 (login/GUI binding) complete.
+
+```bash
+# One bounded snapshot job (create + dump + restore into a unique raw copy)
+slaif-gateway demo-snapshot-worker run [--json]
+
+# Retention expiry + finite copy budget
+slaif-gateway demo-snapshot-worker expire [--json]
+
+# Idempotent cleanup of jobs interrupted by a dead worker
+slaif-gateway demo-snapshot-worker recover [--json]
+```
+
+Success exits 0 with `state: RAW_UNVERIFIED`; every failure class exits
+1 with a safe finite `code` (`SNAPSHOT_DISABLED`, `SNAPSHOT_MISCONFIGURED`,
+`CUSTODY_UNSAFE`, `FENCE_HELD`, `SOURCE_DUMP_FAILED`,
+`SOURCE_DUMP_CAP_BYTES`, `SOURCE_DUMP_CAP_ELAPSED`,
+`SOURCE_DUMP_CANCELLED`, `TARGET_NOT_SEPARATE`, `TARGET_CREATE_FAILED`,
+`TARGET_RESTORE_FAILED`,
+`TARGET_RESTORE_CAP_ELAPSED`, `CLEANUP_FAILED`, `UNEXPECTED`).
+
 ## Codex and diagnostics
 
 ```text

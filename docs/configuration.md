@@ -1720,6 +1720,49 @@ CLI reference: [cli-reference.md](cli-reference.md) (Codex and diagnostics).
 Verification: [Verification: content-free request-failure diagnostics](
 verification/2026-10-29-cli-request-diagnostics.md).
 
+## Demo Snapshot Worker (default OFF)
+
+Objective 221 worker-only bounded private demo PostgreSQL snapshots.
+Reading these settings never creates a snapshot. Every field must be
+explicitly configured (absolute paths) and `DEMO_SNAPSHOT_ENABLED` must be
+true or the worker refuses with a safe finite code. The normal API image
+and default deployment have no PostgreSQL client tooling; see
+`docs/demo-admin.md` (Demo snapshot worker) for the full trust-boundary
+and operator-setup reference.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `DEMO_SNAPSHOT_ENABLED` | `false` | Master switch for the worker-only snapshot path. |
+| `DEMO_SNAPSHOT_SOURCE_HOST` | empty | Live business PostgreSQL host (read-only source). |
+| `DEMO_SNAPSHOT_SOURCE_PORT` | `5432` | Source port. |
+| `DEMO_SNAPSHOT_SOURCE_DATABASE` | empty | Source business database. |
+| `DEMO_SNAPSHOT_SOURCE_USER` | empty | Dedicated SELECT/USAGE-only source role (never a DML-capable role). |
+| `DEMO_SNAPSHOT_TARGET_HOST` | empty | Separate demo PostgreSQL service host. |
+| `DEMO_SNAPSHOT_TARGET_PORT` | `5432` | Target service port. |
+| `DEMO_SNAPSHOT_TARGET_USER` | empty | Target admin user (worker-only; the only role that can read raw copies). |
+| `DEMO_SNAPSHOT_PGPASSFILE` | empty | Absolute path to a restrictive (0600) pgpass file for the PG client tools; passwords never use argv or logs. |
+| `DEMO_SNAPSHOT_CUSTODY_DIR` | empty | Absolute operator-owned `0700` custody directory outside the repo and databases. |
+| `DEMO_SNAPSHOT_MAX_EXPORT_BYTES` | `268435456` (256 MiB) | Hard per-job export byte cap; the dump is killed before a complete claim can exceed it. |
+| `DEMO_SNAPSHOT_MAX_ELAPSED_SECONDS` | `300` | Hard per-job elapsed-time cap covering create, dump and restore. |
+| `DEMO_SNAPSHOT_RETENTION_SECONDS` | `3600` | Retention window for `RAW_UNVERIFIED` copies before expiry cleanup. |
+| `DEMO_SNAPSHOT_MAX_COPIES` | `4` | Finite copy budget enforced on every run (oldest first). |
+
+Behavioral guarantees: race-safe single-worker cross-process fence (kernel
+`flock`); the dump is limited to the `public` business schema by a positive
+allowlist (plus the two fixed trusted extensions required by migration
+0001), so `demo_control` can never enter the archive; each raw copy is a
+unique new database on the separate target, created closed and opened only
+after `CONNECT` is revoked from `PUBLIC` and granted to the target user;
+the separate-service contract is re-verified before every create (target
+endpoint equal to the source endpoint, or the source database name
+present in the target `pg_database` catalog, or an unverifiable check,
+fails closed with `TARGET_NOT_SEPARATE` before any `CREATE DATABASE`);
+the elapsed cap is one absolute deadline shared by create, dump and
+restore; failures, cancellation, restarts and expiry never publish or leak
+(raw database names, archive paths, DSNs and passwords are redacted from
+all output); an incomplete dump is never marked complete; a completed copy
+is `RAW_UNVERIFIED` until stages 222/223/224.
+
 ## Production Notes
 
 - Never commit `.env`.

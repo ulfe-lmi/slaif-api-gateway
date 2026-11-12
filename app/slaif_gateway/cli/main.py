@@ -19,6 +19,7 @@ from slaif_gateway.cli.configuration import app as configuration_app
 from slaif_gateway.cli.db import app as db_app
 from slaif_gateway.cli.diagnostics import app as diagnostics_app
 from slaif_gateway.cli.demo_admin import app as demo_admin_app
+from slaif_gateway.cli.demo_snapshot_worker import app as demo_snapshot_worker_app
 from slaif_gateway.cli.email import app as email_app
 from slaif_gateway.cli.fx import app as fx_app
 from slaif_gateway.cli.institutions import app as institutions_app
@@ -52,6 +53,7 @@ app.add_typer(owners_app, name="owners")
 app.add_typer(db_app, name="db")
 app.add_typer(diagnostics_app, name="diagnostics")
 app.add_typer(demo_admin_app, name="demo-admin")
+app.add_typer(demo_snapshot_worker_app, name="demo-snapshot-worker")
 app.add_typer(email_app, name="email")
 app.add_typer(keys_app, name="keys")
 app.add_typer(providers_app, name="providers")

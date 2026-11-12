@@ -121,3 +121,136 @@ refusals, transactional late-failure rollback, and safe CLI output).
 There is no new GUI yet, so no browser feature qualification is claimed.
 The full fresh-snapshot/no-op demonstration UX remains a later
 objective and is not silently complete.
+
+## Demo snapshot worker (objective 221, worker-only)
+
+Objective 221 adds the SECOND bounded stage of the fake-admin demonstration:
+a fresh, consistent business-data snapshot of the live PostgreSQL, exported
+with `pg_dump` and restored as a NEW UNIQUE database in a SEPARATE demo
+PostgreSQL service. This stage owns raw snapshot creation, custody,
+resource limits and cleanup ONLY.
+
+### What this stage is NOT
+
+- No demo browser authentication and no `/fakeadmin/login` behavior
+  (objective 224).
+- No data masking and no file-backed panel capture (objectives 222/223).
+- No public demo is available: a completed copy is recorded in the explicit
+  `RAW_UNVERIFIED` custody state that no web reader can mistake for
+  published. The complete demonstration requires 222 + 223 sanitization
+  and verification AND 224 browser binding before any use.
+- No generic job framework, queue or scheduler: one worker invocation per
+  future login, driven by the operator (later: the 224 login flow).
+
+### Trust boundaries
+
+- **Worker-only surface.** There is no API route, admin template or web role
+  that can invoke or read the raw copy. The CLI group
+  `slaif-gateway demo-snapshot-worker` is the ONLY entry point.
+- **Read-only source.** The snapshot connects to the live business database
+  as a dedicated SELECT/USAGE-only role on the business schema. It cannot
+  DML, cannot read `demo_control`, and never receives provider credentials:
+  the PG client tools run with a minimal explicit environment that contains
+  no provider or application variables. The dump is limited to the business
+  `public` schema by a positive allowlist (`pg_dump --schema=public` plus
+  the two fixed approved extensions), so `demo_control` can never enter
+  the archive.
+- **Separate target service.** The raw copy is a new unique database
+  (`demo_snap_<id>`) created on a separate demo PostgreSQL service — never
+  `CREATE DATABASE ... TEMPLATE` against the live source, and never a new
+  server process per demo account. The copy is created CLOSED
+  (`ALLOW_CONNECTIONS = false`); while closed the worker revokes `CONNECT`
+  from `PUBLIC` and grants it only to the configured target user, and only
+  then reopens the database — so there is no window in which a web role can
+  connect. The single dump archive carries the business `public` schema
+  plus the fixed trusted extensions required by migration 0001
+  (`pgcrypto`, `citext`, selected explicitly by name), and is restored
+  into the fresh empty database with `--clean --if-exists`; no broader
+  schema or extension set is ever installed.
+  The worker re-verifies the separate-service contract before EVERY
+  create: if the target host/port is the source endpoint, or a bounded
+  `pg_database` catalog query on the target service reports a database
+  named `DEMO_SNAPSHOT_SOURCE_DATABASE` (or the check cannot be
+  verified), the job fails closed with `TARGET_NOT_SEPARATE` before any
+  `CREATE DATABASE`.
+- **No PG client tooling by default.** The normal API image and default
+  deployment do NOT include `pg_dump`/`pg_restore`/`psql`. Build the
+  optional worker target for them:
+  `docker build --target demo-snapshot-worker .` (pinned PostgreSQL 16
+  clients; prove with `docker run --rm <image> pg_dump --version`).
+- **Secrets.** Source and target passwords come from a restrictive
+  `PGPASSFILE` (0600), never argv or logs. The raw target database name,
+  archive path, DSNs and passwords are redacted from all CLI output, logs
+  and reports.
+- **Custody.** Job state lives in an operator-owned `0700` directory
+  OUTSIDE the repository and databases; every artifact (manifest, dump,
+  stderr tails) is `0600`. Symlinked or group/world-accessible custody
+  roots are refused. The custody manifest is the durable private record
+  that stages 222/223/224 address by `target_db` — deliberately a file,
+  not a PostgreSQL table, so the SELECT-only source role can never read or
+  influence bookkeeping.
+- **Limits.** A finite per-job export byte cap (streamed and counted; the
+  dump is SIGKILLed as a process group before a complete claim can exceed
+  it), an elapsed-time cap that is ONE absolute deadline shared by
+  create, dump and restore (no phase spends a second full budget), a
+  race-safe single-worker cross-process fence (kernel `flock`, released
+  automatically when the worker dies), retention expiry and a finite copy
+  budget. An incomplete dump is never marked complete; every failure leaves
+  a safe finite code and no browser-readable artifact.
+
+### Operator setup (all optional; default OFF)
+
+1. Target service: a separate PostgreSQL 16 instance with a dedicated
+   target user (password in the PGPASSFILE). No business databases.
+2. Source role on the live business database:
+
+   ```sql
+   CREATE ROLE demo_snap_reader LOGIN PASSWORD '<restricted-password>';
+   GRANT USAGE ON SCHEMA public TO demo_snap_reader;
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO demo_snap_reader;
+   -- No grants on demo_control, no DML, no provider credential paths.
+   ```
+
+3. Custody directory: `mkdir -m 0700 /var/lib/slaif/demo-snapshot`
+   (outside the repository, on a bounded volume).
+4. PGPASSFILE (0600), one line per endpoint:
+
+   ```text
+   <source-host>:<source-port>:<source-db>:demo_snap_reader:<restricted-password>
+   <target-host>:<target-port>:*:<target-user>:<target-password>
+   ```
+
+5. Configure every `DEMO_SNAPSHOT_*` setting and set
+   `DEMO_SNAPSHOT_ENABLED=true` (see Configuration → Demo Snapshot
+   Worker). Missing or relative values refuse with a safe
+   `SNAPSHOT_MISCONFIGURED`.
+
+### Running
+
+```bash
+slaif-gateway demo-snapshot-worker run      # one bounded snapshot job
+slaif-gateway demo-snapshot-worker expire   # retention + copy budget
+slaif-gateway demo-snapshot-worker recover  # idempotent dead-worker cleanup
+```
+
+Output is a fixed safe vocabulary: state, finite failure code, export
+bytes, elapsed milliseconds, custody copy count — never a database name,
+DSN, password or row content. A successful run records exactly one
+`RAW_UNVERIFIED` copy.
+
+### Realistic source cost and failure behavior
+
+A snapshot takes one consistent read pass over the business tables
+(`pg_dump` holds its snapshot lock briefly and streams; concurrent writes
+continue). Cost is proportional to business-data size plus compression
+I/O; the byte cap bounds the transfer regardless. Dump or restore errors,
+cap breaches, cancellation, crashes and restarts all: abort before any
+complete claim, record a safe finite code, clean partial files and the
+partial target database (`DROP ... WITH (FORCE)`), and leave the custody
+manifest inspectable. If cleanup itself fails the manifest records
+`CLEANUP_FAILED` (operator-only, inspectable) and `recover` retries
+idempotently. Rollback is `expire`/`recover` plus removing the custody
+directory contents; nothing in the business database is ever touched.
+
+The file-backed capture of objective 223 will have its OWN capture
+timestamp; the snapshot capture interval recorded here is not it.

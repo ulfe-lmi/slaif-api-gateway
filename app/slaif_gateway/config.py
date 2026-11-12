@@ -469,6 +469,38 @@ class Settings(BaseSettings):
     # Bounded best-effort write timeout: 10 .. 1000 ms.
     REQUEST_DIAGNOSTICS_WRITE_TIMEOUT_MS: int = 100
 
+    # -- private demo snapshot worker (objective 221; default OFF) -------
+    # Worker-only pg_dump/pg_restore custody path for the fake-admin demo.
+    # Reading a setting alone never creates a snapshot or any copy. Every
+    # field must be explicitly configured to run; the normal API image and
+    # default deployment have no PostgreSQL client tooling and no demo
+    # access. See docs/demo-admin.md (Demo Snapshot Worker) and
+    # docs/configuration.md.
+    DEMO_SNAPSHOT_ENABLED: bool = False
+    # Live business PostgreSQL the snapshot reads (SELECT-only source role).
+    DEMO_SNAPSHOT_SOURCE_HOST: str = ""
+    DEMO_SNAPSHOT_SOURCE_PORT: int = 5432
+    DEMO_SNAPSHOT_SOURCE_DATABASE: str = ""
+    DEMO_SNAPSHOT_SOURCE_USER: str = ""
+    # Separate demo PostgreSQL service that receives the unique raw copy.
+    DEMO_SNAPSHOT_TARGET_HOST: str = ""
+    DEMO_SNAPSHOT_TARGET_PORT: int = 5432
+    DEMO_SNAPSHOT_TARGET_USER: str = ""
+    # Restrictive secret file (0600) read by the PG client tools. Passwords
+    # are never passed via argv or rendered to logs/output.
+    DEMO_SNAPSHOT_PGPASSFILE: str = ""
+    # Operator-owned 0700 custody directory OUTSIDE the repo and databases.
+    DEMO_SNAPSHOT_CUSTODY_DIR: str = ""
+    # Hard per-job export byte cap; the dump is killed before a complete
+    # claim can exceed it.
+    DEMO_SNAPSHOT_MAX_EXPORT_BYTES: int = 268435456
+    # Hard per-job elapsed-time cap covering create, dump and restore.
+    DEMO_SNAPSHOT_MAX_ELAPSED_SECONDS: int = 300
+    # Retention window for RAW_UNVERIFIED copies before expiry cleanup.
+    DEMO_SNAPSHOT_RETENTION_SECONDS: int = 3600
+    # Finite copy budget enforced on every run (oldest first).
+    DEMO_SNAPSHOT_MAX_COPIES: int = 4
+
     model_config = SettingsConfigDict(env_prefix="", case_sensitive=False)
 
     @model_validator(mode="after")
