@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Ready</title>
+  <link rel="stylesheet" href="/fakeadmin/static/css/admin.css">
+</head>
+<body>
+  <section class="auth-panel" aria-labelledby="ready-heading">
+    <div class="auth-header">
+      <h1 id="ready-heading">Your demo snapshot is ready</h1>
+    </div>
+
+    <p>
+      Your private, identity-masked demo snapshot is ready and this session
+      is active.
+    </p>
+    <p class="form-error" role="note">
+      Copy-backed browsing is <strong>not enabled yet</strong> in this
+      stage: only the entry, login, wait, and session flow are available.
+    </p>
+
+    <form method="post" action="/fakeadmin/logout" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Log out</button>
+    </form>
+  </section>
+</body>
+</html>

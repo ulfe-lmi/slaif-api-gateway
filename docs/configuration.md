@@ -1808,6 +1808,47 @@ logs or errors.
 | `DEMO_WEB_WORKER_CONTROL_USER` | empty | Dedicated worker-only control role (column-limited SELECT on account facts, UPDATE on its own request transitions, column-limited SELECT on session facts — never `token_hash`). |
 | `DEMO_WEB_WORKER_CONTROL_PASSWORD` | empty | Worker role password; never emitted anywhere. |
 
+### Demo web entry (objective 224-c)
+
+The 224-c demo web entry is a purpose-built STANDALONE ASGI process
+(`create_demo_app`) that serves only the `/fakeadmin` entry surface
+(login / wait / ready / logout). It is DEFAULT OFF and is configured
+entirely by its own environment prefix, deliberately separate from the
+gateway `Settings`: nothing here runs unless `DEMO_WEB_ENABLED` is
+true AND the complete control-connection set plus a strong cookie
+secret are present; a misconfigured enabled demo refuses to start with
+a safe finite error, and a malformed optional value (e.g. the port)
+never breaks a default-off startup. The process registers no `/v1` or
+`/admin` routes, holds no owner `DATABASE_URL`, no worker credential,
+no provider credential, no Redis and no catalog seal key, and a web
+request never imports or spawns the privileged snapshot worker (the
+224-b `process-request` CLI is the separate-process handoff). Its only
+database connection is the dedicated demo WEB control role (the
+reviewed 224-a column grants) with an explicit no-TLS `ssl=False`
+stage boundary: the operator must keep the control endpoint on a
+trusted private loopback/Compose network. See `docs/demo-admin.md`
+(Demo web entry) for the entry law, cookies and operator setup.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `DEMO_WEB_ENABLED` | `false` | Master switch for the demo web entry process. |
+| `DEMO_WEB_CONTROL_HOST` | empty | Control PostgreSQL host for the web role (required when enabled). |
+| `DEMO_WEB_CONTROL_PORT` | `5432` | Control PostgreSQL port (required to be a valid port when enabled). |
+| `DEMO_WEB_CONTROL_DATABASE` | empty | Control database name (required when enabled; the operator must grant the web role the 224-a matrix on this database). |
+| `DEMO_WEB_CONTROL_USER` | empty | Dedicated web-only control role (required when enabled). |
+| `DEMO_WEB_CONTROL_PASSWORD` | empty | Web role password; never rendered anywhere (required when enabled). |
+| `DEMO_WEB_COOKIE_SECRET` | empty | Independent cookie-signing secret, at least 32 characters (required when enabled); distinct from every other secret in the deployment. |
+
+Behavioral guarantees: every route 404s when zero fake-admin accounts
+are enabled (no credential or existence oracle); login verifies the
+credential with the precomputed uniform-cost Argon2id path, one
+constant failure message, a bounded attempt window, signed
+double-submit CSRF and finite body/field bounds; the wait surface
+rechecks the live account fence (enabled, credential generation) on
+EVERY poll and issues exactly one session at the verified moment; every
+page revalidates the session on use; logout revokes idempotently and
+clears all demo cookies. Copy-backed browsing is NOT part of 224-c.
+
 ## Production Notes
 
 - Never commit `.env`.

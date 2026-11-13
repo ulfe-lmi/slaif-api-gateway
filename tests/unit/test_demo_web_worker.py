@@ -10,9 +10,10 @@ tests/integration/test_demo_web_worker_postgres.py.
 Covers: feature-local config validation (no value echo, ordinary
 startup unaffected), safe result projections, claim refusal, the
 exact-job pipeline (no global-scan promotion), the worker-held
-re-read + digest proof, handoff refusals, the protected-copy expiry
-and fail-closed admission laws (also in test_demo_snapshot.py), the
-exact 222/223 selectors, and the bounded session-aware cleanup law.
+re-read + digest proof, handoff refusals, the structural verified-
+copy eviction and fail-closed admission laws (also in
+test_demo_snapshot.py), the exact 222/223 selectors, and the bounded
+session-aware cleanup law.
 """
 
 from __future__ import annotations
@@ -116,7 +117,6 @@ class FakeControl:
         handoff_code: str | None = None,
         handoff_error: str | None = None,
         cleanup_refused: tuple[uuid.UUID, ...] = (),
-        protected: frozenset[str] = frozenset(),
         candidates: list[dict[str, object]] | None = None,
     ) -> None:
         self.claims: list[uuid.UUID] = []
@@ -130,7 +130,6 @@ class FakeControl:
         self.handoff_code = handoff_code
         self.handoff_error = handoff_error
         self.cleanup_refused = set(cleanup_refused)
-        self.protected = protected
         self.candidates = candidates if candidates is not None else []
         self.closed = False
         self.sessions = self
@@ -157,11 +156,6 @@ def _install_fake_control(
     monkeypatch: pytest.MonkeyPatch, control: FakeControl
 ) -> None:
     monkeypatch.setattr(dww, "_ControlConnection", lambda _config: control)
-
-    async def _protected(_control):
-        return control.protected
-
-    monkeypatch.setattr(dww, "_protected_job_ids", _protected)
 
     async def _candidate_rows(_control, _limit):
         return [dict(row) for row in control.candidates]
@@ -402,7 +396,7 @@ def test_process_request_happy_path_publishes_exact_binding(
     config, settings, custody, _ = _worker_config(tmp_path)
     job, target = _job_id(7), _target_db(7)
     _make_verified_copies(custody, job, target)
-    control = FakeControl(config, protected=frozenset({"snap-" + "ff" * 16}))
+    control = FakeControl(config)
     _install_fake_control(monkeypatch, control)
     calls = _pipeline_success(monkeypatch, job, target)
     result = asyncio.run(
@@ -410,12 +404,11 @@ def test_process_request_happy_path_publishes_exact_binding(
     )
     assert result.state == "verified_unpublished"
     assert result.failure_code is None
-    # The exact job was selected everywhere; the protected set rode
-    # along to the 221 admission/eviction law.
+    # The exact job was selected everywhere; the worker passes no
+    # protected set (the 221 structural law protects verified copies
+    # itself - the redundant 224-b set was removed in 224-c).
     assert calls["sanitize"] == [job] and calls["files"] == [job]
-    assert calls["snapshot"][0][1].get("protected_job_ids") == frozenset(
-        {"snap-" + "ff" * 16}
-    )
+    assert "protected_job_ids" not in calls["snapshot"][0][1]
     (rid, binding) = control.handoffs[0]
     assert rid == REQUEST_ID
     assert binding.worker_job_id == job
@@ -550,18 +543,26 @@ def test_process_request_leaf_inode_drift_refuses_publication(
     _make_verified_copies(custody, job, target)
     leaf = custody / job / dsf.FILES_DIR_NAME / ("f0001-" + "ab" * 6)
     payload = leaf.read_bytes()
-    leaf.unlink()  # new inode, identical content
-    leaf.write_bytes(payload)
-    os.chmod(leaf, 0o600)
-    control = FakeControl(config)
-    _install_fake_control(monkeypatch, control)
-    _pipeline_success(monkeypatch, job, target)
-    result = asyncio.run(
-        dww.process_request(config, settings, request_id=REQUEST_ID)
-    )
-    assert result.state == "failed"
-    assert result.failure_code == "worker_failed"
-    assert control.handoffs == []
+    # Hold the old leaf open so its inode stays ALLOCATED during the
+    # replacement: the rewritten file then deterministically gets a
+    # DIFFERENT inode (an unlink/rewrite can reuse a freed inode on
+    # some CI filesystems, which would silently flip this negative).
+    old_fd = os.open(leaf, os.O_RDONLY)
+    try:
+        leaf.unlink()  # new inode, identical content
+        leaf.write_bytes(payload)
+        os.chmod(leaf, 0o600)
+        control = FakeControl(config)
+        _install_fake_control(monkeypatch, control)
+        _pipeline_success(monkeypatch, job, target)
+        result = asyncio.run(
+            dww.process_request(config, settings, request_id=REQUEST_ID)
+        )
+        assert result.state == "failed"
+        assert result.failure_code == "worker_failed"
+        assert control.handoffs == []
+    finally:
+        os.close(old_fd)
 
 
 def test_process_request_job_directory_rebind_refuses_publication(
@@ -1099,14 +1100,13 @@ def test_process_request_binds_request_id_into_private_manifest(
     manifest = ds.read_manifest(job_dir)
     assert manifest is not None
     assert manifest.request_id == str(REQUEST_ID)
-    # The 221 stage was invoked with the durable request binding and a
-    # worker-derived protected set (the structural verified-copy law in
-    # _expire_copies protects published copies even if this set is empty).
+    # The 221 stage was invoked with the durable request binding and
+    # NO protected set: the structural verified-copy law in
+    # _expire_copies protects published copies by state (224-c: the
+    # redundant worker-derived set was removed).
     snapshot_kwargs = calls["snapshot"][0][1]
     assert snapshot_kwargs["request_id"] == str(REQUEST_ID)
-    assert isinstance(
-        snapshot_kwargs["protected_job_ids"], frozenset
-    )
+    assert "protected_job_ids" not in snapshot_kwargs
     # And the worker's proof required exactly that association.
     (rid, binding) = control.handoffs[0]
     assert rid == REQUEST_ID and binding.worker_job_id == job

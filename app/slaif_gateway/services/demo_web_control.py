@@ -84,7 +84,6 @@ from slaif_gateway.db.repositories.fake_admin_accounts import (
     FakeAdminAccountFacts,
     FakeAdminAccountsRepository,
 )
-from slaif_gateway.services.demo_snapshot import STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
 
 # --- finite reviewed vocabularies ------------------------------------------------
 
@@ -127,8 +126,12 @@ WORKER_FAILURE_CODES = (FAILURE_WORKER_FAILED, FAILURE_INTERNAL_ERROR)
 
 # The ONLY accepted verified 223 manifest state for a handoff: the 222 DB
 # state AND the 223 file-backed verification both passed (still
-# unpublished). Any other state string is refused.
-VERIFIED_COPY_STATE = STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+# unpublished). Any other state string is refused. The constant is
+# imported LAZILY inside ``record_verified_handoff`` (the worker-only
+# path) so that importing this control service - and therefore the 224-c
+# demo web app, which never calls that method - does not pull the
+# privileged 221/222/223 snapshot worker module chain into the web
+# process (224-c web-path isolation).
 
 # --- bounded lifetimes -------------------------------------------------------------
 
@@ -773,6 +776,49 @@ class DemoWebControlService:
             or session_row
         )
 
+    async def request_facts(
+        self, *, request_id: uuid.UUID
+    ) -> DemoSnapshotRequestProjection | None:
+        """Safe projection read of one request (224-c web wait poll).
+
+        SELECT-only under the web role's grant on
+        ``demo_snapshot_requests``; returns the safe projection
+        (``to_safe_dict`` never emits the worker-owned copy locators)
+        or ``None``. No mutation, no row lock, no state gate: the
+        wait surface owns its own ownership/state/deadline checks on
+        the returned projection.
+        """
+        request = await self._requests.get_request(request_id, read_lock=False)
+        if request is None:
+            return None
+        return self._project_request(request)
+
+    async def session_facts_by_token(
+        self, *, token: str
+    ) -> DemoWebSessionProjection | None:
+        """Resolve the stored session for a raw token (224-c web role).
+
+        The demo session cookie carries ONLY the raw opaque token, so
+        the web app must recover the account binding from the stored
+        hash before it can call ``validate_session``/``revoke_session``
+        (both take ``account_id``). This is a SELECT-only read under the
+        web role's ``SELECT`` grant on ``demo_web_sessions`` - no row
+        lock, no mutation. It returns the safe projection (which
+        includes ``account_id``) or ``None``. It performs NO validation
+        gates: the caller MUST still run ``validate_session`` (or
+        ``revoke_session``) with the resolved account so every gate is
+        rechecked on every use. A blank/absent token resolves to
+        ``None`` without touching the database.
+        """
+        if not token:
+            return None
+        session_row = await self._requests.get_session_by_token_hash(
+            hash_opaque_token(token), read_lock=False
+        )
+        if session_row is None:
+            return None
+        return self._project_session(session_row)
+
     # -- worker role operations --------------------------------------------------
 
     async def claim_request(self, *, request_id: uuid.UUID) -> DemoSnapshotRequestProjection:
@@ -907,7 +953,13 @@ class DemoWebControlService:
                 failure_code=FAILURE_LATE_COMPLETION,
             )
             return self._project_request(request)
-        if binding.manifest_state != VERIFIED_COPY_STATE:
+        # Worker-only lazy import: the web process never reaches this
+        # method, so its snapshot-module chain stays unloaded there.
+        from slaif_gateway.services.demo_snapshot import (
+            STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED,
+        )
+
+        if binding.manifest_state != STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED:
             request = await self._cas_or_conflict(
                 request_id,
                 error_code="web_request_not_claimed",
@@ -1106,3 +1158,20 @@ class DemoWebControlService:
                 ):
                     reaped += 1
         return reaped
+
+
+def __getattr__(name: str) -> object:
+    """Lazy worker-only constant (PEP 562).
+
+    ``VERIFIED_COPY_STATE`` is imported here on first attribute access
+    (tests and the worker CLI path) instead of at module import time, so
+    the web process - which imports this service but never reads the
+    attribute - never loads the privileged snapshot module chain.
+    """
+    if name == "VERIFIED_COPY_STATE":
+        from slaif_gateway.services.demo_snapshot import (
+            STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED,
+        )
+
+        return STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

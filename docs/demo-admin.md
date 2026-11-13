@@ -853,11 +853,21 @@ remove it, and no caller-supplied optional set is relied upon.
 Verified copies still OCCUPY their finite budget slot: they count in
 both the overflow computation and the fail-closed admission check.
 When the budget is full of verified copies, a new copy is refused
-with `SNAPSHOT_BUDGET_FULL` instead of evicting anything. In-flight
-unverified copies named in the worker-derived `protected_job_ids`
-set are additionally never generic-evicted; if the budget cannot be
-met without evicting one, eviction stops short and admission fails
-closed.
+with `SNAPSHOT_BUDGET_FULL` instead of evicting anything.
+
+`CLEANUP_FAILED` copies (a previous removal attempt left surviving
+custody/target artifacts) are subject to the same capacity law:
+they occupy their slot and are never generic-evicted either — only
+the exact recovery path retries their removal — so repeated failed
+cleanups fill the finite budget and admission fails closed instead
+of allowing unbounded surviving artifacts. The exact admission law:
+a new copy is refused when, after adding it, the total (raw +
+sanitized + verified + CLEANUP_FAILED) would exceed the cap and
+evicting every evictable copy (raw/sanitized only) could not bring
+the total back within the cap; otherwise the new copy is admitted
+only when the post-eviction total stays within the cap. No
+caller-supplied protected set participates: the structural
+state-law above is the only eviction protection.
 
 ### Request→job association and recovery
 
@@ -926,3 +936,130 @@ and retained as `cleanup_pending` with the private manifest intact for
 operator inspection (safe aggregate code `cleanup_failed`). Nothing
 here is browser-visible; the demo remains unusable until the later
 224 suffixes.
+
+## Demo web entry (objective 224-c, browser entry only)
+
+Objective 224-c adds the demo's BROWSER ENTRY: a purpose-built
+STANDALONE ASGI application (`slaif_gateway.demo_web.create_demo_app`)
+serving ONLY the `/fakeadmin` entry surface — login, wait, ready and
+logout — on a dedicated demo hostname. It is default OFF, configured
+by its own `DEMO_WEB_*` environment prefix (see Configuration → Demo
+web entry), and is deliberately NOT part of the normal gateway
+process: it registers NO `/v1` or `/admin` routes, holds no owner
+`DATABASE_URL`, no 224-b worker credential, no provider credential, no
+Redis and no catalog seal key. A web request NEVER imports or spawns
+the privileged snapshot worker: the copy is still produced by the
+separate 224-b `demo-snapshot-worker process-request` CLI invocation
+(worker role, its own process) — the browser only ever enters, waits,
+receives one session, and logs out.
+
+**What this stage is and is NOT:**
+
+- Browser ENTRY only. Copy-backed browsing (the demo `/admin` pages
+  over the verified copy) is NOT enabled in 224-c and the ready page
+  says so explicitly. The demo remains unusable beyond this entry
+  surface until the later 224 suffixes.
+- Standalone ASGI factory only. This stage ships NO CLI command and NO
+  Compose service for the entry process: the operator runs
+  `create_demo_app` as a standalone ASGI app (for example a uvicorn
+  factory wrapper) on the dedicated demo host, with the `DEMO_WEB_*`
+  environment set on that process only.
+- The web process's ONLY database connection is the dedicated demo WEB
+  control role (the reviewed 224-a column grants, applied at 224-b)
+  with an EXPLICIT `ssl=False` stage boundary (no TLS is negotiated):
+  the operator MUST keep the control endpoint on a trusted private
+  loopback/Compose network. This stage does not support verified
+  remote DB TLS.
+
+### Entry law
+
+- **Zero enabled accounts → 404 on every demo route** (login, wait,
+  wait status, ready, logout): the demo surface is indistinguishable
+  from an unknown path, so no credential or account-existence oracle
+  exists.
+- **Login**: finite field lengths, a small finite request-body bound
+  enforced on bytes actually received (chunked bodies included) before
+  any parsing, signed double-submit CSRF, a bounded in-process failed
+  attempt window (429 with `Retry-After` beyond it), and a
+  column-scoped credential lookup. Verification is constant-time: a
+  real Argon2id check always runs — against the real hash for a known
+  enabled account, against a precomputed fixed dummy hash (computed
+  once at process startup) for unknown or disabled accounts — and the
+  failure message is one constant "Incorrect username or password."
+  A successful login creates ONE fresh pending snapshot request
+  (224-a) bound to the LIVE credential generation and moves the
+  browser to the wait surface with a short-lived signed pending
+  cookie.
+- **Wait**: the signed pending cookie binds
+  `account:request:generation`. Every poll (page and the JSON
+  `/wait/status`) re-reads the live request facts AND the live account
+  fence: a disabled or deleted account, or a credential reset
+  (generation moved), denies the wait surface immediately, even while
+  other fake admins remain active. `/wait/status` reports only
+  (`waiting` | `ready` | `timed_out` | `failed` | `unavailable`) and
+  NEVER issues a session. Session issuance happens exactly once, in
+  the wait page handler at the verified moment
+  (`verified_unpublished`, unexpired, live fence rechecked): one
+  `create_session` call, the raw opaque token delivered ONCE in the
+  session cookie, then a redirect to the ready page. Terminal states
+  clear the pending cookie.
+- **Ready**: every use revalidates the session (224-a per-use law:
+  not revoked, not expired, bound request still verified-unpublished
+  and unexpired, account still enabled with the SAME generation,
+  active account count nonzero). The page states that copy-backed
+  browsing is not enabled yet and offers logout.
+- **Logout**: signed CSRF; revokes the session idempotently (web-owned
+  `revoked_at` only — the request row is never touched by the web
+  role) and clears ALL demo cookies.
+
+### Demo cookies
+
+All demo cookies are `HttpOnly`, `Secure`, `SameSite=Strict`:
+
+| Cookie | Path | Carries |
+| --- | --- | --- |
+| `slaif_demo_csrf` | `/fakeadmin` | a signed, expiring CSRF token (double-submit with the form field) |
+| `slaif_demo_pending` | `/fakeadmin` | a signed `account:request:generation` binding (short TTL, consumed at issuance) |
+| `slaif_demo_session` | `/` | the raw opaque session token only (its SHA-256 hash is the only stored form) |
+
+The session cookie deliberately uses `Path=/` on the dedicated demo
+hostname (while the pending/CSRF cookies stay strictly `/fakeadmin`):
+the authorized later copy-backed GUI stage will serve demo `/admin`
+pages on that same host and must receive the demo session cookie
+there. This is safe because this process has NO normal `/admin` or
+`/v1` routes, the cookie has a distinct demo-only name, and it is
+deleted with the same path on logout/refusal.
+
+### Operator setup
+
+1. The control database has the 0028 schema (224-a) and the demo WEB
+   role exists with EXACTLY the 224-a web grant matrix (224-b
+   applied it for the worker side; the web role is the same matrix
+   from `web_role_grant_sql`).
+2. At least one ENABLED fake-admin account exists (trusted operator
+   path; the web role can never create or mutate accounts).
+3. Run the standalone demo app on the dedicated demo host with the
+   `DEMO_WEB_*` environment (`DEMO_WEB_ENABLED=true` plus the web
+   role control connection and a strong `DEMO_WEB_COOKIE_SECRET`);
+   see Configuration → Demo web entry.
+4. The 224-b worker (`demo-snapshot-worker process-request` /
+   `cleanup`) runs on its own schedule/invocation with the worker
+   role — nothing in the web process triggers it.
+
+### Evidence
+
+- Unit (fake facade): default-off refusal, config validation, signed
+  token law, zero-active 404s, constant login failures with the
+  precomputed dummy-Argon2 uniform path, CSRF/pending tamper and
+  expiry, the live account fence on every poll (disable, reset,
+  delete), bounded form bodies (oversized 413, wrong content type
+  400), exact one-session issuance, per-use session validation,
+  logout revocation, cookie paths, `/v1`+`/admin` absence, web-path
+  import isolation (no privileged worker module in the web process).
+- Owned PostgreSQL 16 (real restricted web role, real worker-role CLI
+  chain): the full cycle login → request → `process-request` → wait →
+  one session (stored form is the SHA-256 hash only) → ready → logout
+  → worker `cleanup` drops the bound target database and the row
+  reaches `cleaned`; the web role's 42501 boundary (full-row account
+  read, business tables, `state` in INSERT, any request UPDATE);
+  zero-active 404s and re-enable.

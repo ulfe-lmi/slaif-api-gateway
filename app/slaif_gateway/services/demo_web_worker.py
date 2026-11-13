@@ -392,32 +392,6 @@ def _verify_worker_held(
     )
 
 
-# --- protected-copy law (221 eviction/admission boundary) ------------------------
-
-
-_PROTECTED_JOB_IDS_SQL = text(
-    """
-    SELECT DISTINCT r.worker_job_id
-    FROM demo_control.demo_snapshot_requests AS r
-    WHERE r.state = 'verified_unpublished'
-      AND r.worker_job_id IS NOT NULL
-      AND r.expires_at > now()
-    """
-)
-
-
-async def _protected_job_ids(control: _ControlConnection) -> frozenset[str]:
-    """Job ids of published verified copies that must survive the 221
-    expiry/budget pass of this run: every ``verified_unpublished``
-    request that has not expired (a second login may still issue a
-    session on that copy, so it is protected regardless of whether a
-    session row is currently live).
-    """
-    async with control.sessions() as session:
-        result = await session.execute(_PROTECTED_JOB_IDS_SQL)
-        return frozenset(str(v) for v in result.scalars().all())
-
-
 async def _safe_record_failure(
     control: _ControlConnection, request_id: uuid.UUID
 ) -> None:
@@ -433,6 +407,9 @@ async def _safe_record_failure(
                 request_id=request_id, code=FAILURE_WORKER_FAILED
             )
     except Exception:
+        # Deliberate: the guarded failure write is best-effort; the
+        # row stays in its current finite state and the bounded
+        # recovery reap handles it later (224-b law).
         pass
 
 
@@ -452,8 +429,10 @@ async def process_request(
     * The claim is the 224-a atomic guarded transition: exactly one
       concurrent worker can win; a lost, replayed or stale claim is a
       safe ``claim_refused`` result and no pipeline runs.
-    * ONE fresh 221 copy is created; the run's expiry/budget pass and
-      admission never evict a protected published copy (fail-closed).
+    * ONE fresh 221 copy is created; the 221 path's structural law
+      (enforced by the 221 code itself, 224-b) never generic-evicts a
+      verified copy, and admission fails closed when the budget is
+      full of never-evictable copies (verified or CLEANUP_FAILED).
     * 222 and 223 run on THAT job only (exact-job selectors); unrelated
       pre-existing copies are never touched or promoted.
     * Before publication the worker re-reads its OWN private custody
@@ -485,18 +464,17 @@ async def process_request(
                 _elapsed_ms(started),
             )
 
-        # 2) ONE fresh 221 copy (never evicting a protected copy). The
+        # 2) ONE fresh 221 copy (the 221 structural law never generic-
+        # evicts a verified copy). The
         # request identity is durably bound into the private custody
         # manifest BEFORE the target database is created. The 221/222/
         # 223 entry points are SYNCHRONOUS and 222/223 spawn their own
         # ``asyncio.run`` internally, so every stage runs OFF the
         # control loop (worker-only single-task invocation; a stage on
         # the loop would raise and fail the request).
-        protected = await _protected_job_ids(control)
         job = await asyncio.to_thread(
             ds.run_snapshot_job,
             config.snapshot,
-            protected_job_ids=protected,
             request_id=str(request_id),
         )
         if job.state != ds.STATE_RAW_UNVERIFIED or not _WORKER_JOB_ID_RE.fullmatch(
@@ -717,6 +695,9 @@ def _cleanup_bound_artifacts(
                 try:
                     ds._write_manifest(job_dir, manifest)
                 except OSError:
+                    # Deliberate: bookkeeping after an already-failed
+                    # removal is best-effort; the row stays
+                    # cleanup_pending for a safe retry (224-b law).
                     pass
             return False
         if manifest is not None:
@@ -784,6 +765,9 @@ async def recover_and_cleanup(
                     limit=limit
                 )
         except DemoWebControlError:
+            # Deliberate: the bounded reap is best-effort here; the
+            # candidate pass below still runs and a later recovery
+            # invocation reaps again (224-b law).
             pass
         rows = await _candidate_rows(control, limit)
         for row in rows:

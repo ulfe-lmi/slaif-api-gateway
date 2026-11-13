@@ -1350,7 +1350,6 @@ def _expire_copies(
     config: DemoSnapshotConfig,
     ops: TargetOps,
     now: float | None = None,
-    protected_job_ids: frozenset[str] | None = None,
     reserve_slots: int = 0,
 ) -> int:
     """Expire retained copies past retention and enforce the budget.
@@ -1365,7 +1364,7 @@ def _expire_copies(
     ``DB_AND_FILES_VERIFIED_UNPUBLISHED`` copy is NEVER evicted by any
     generic 221 path - retention expiry, copy-capacity overflow, a bare
     CLI ``run``/``expire`` invocation, or a concurrent worker's startup
-    pass - regardless of the protected set and regardless of age. Only
+    pass - regardless of age. Only
     the exact control-owned cleanup path (224-b ``recover_and_cleanup``,
     gated by the request state machine and the live-session law) may
     remove a verified copy. This makes a published (verified-
@@ -1376,12 +1375,13 @@ def _expire_copies(
     COUNT against the finite budget (they occupy their slot until exact
     cleanup); when the budget is full of them, admission fails closed.
 
-    ``protected_job_ids`` (224-b, additional guard for UNVERIFIED
-    in-flight copies): copies whose job id appears in the set are never
-    evicted either. If the budget cannot be met without evicting a
-    protected copy, eviction stops short and the fail-closed
-    admission check in ``run_snapshot_job`` refuses new copies
-    instead.
+    CLEANUP_FAILED capacity (224-c): a job directory in
+    ``CLEANUP_FAILED`` state (a previous removal attempt left surviving
+    custody/target artifacts) OCCUPIES its budget slot and is never
+    generic-evicted either: only the exact recovery path retries its
+    removal. Repeated failed cleanups therefore fill the finite budget
+    and fail-closed admission refuses new copies instead of allowing
+    unbounded surviving artifacts.
 
     ``reserve_slots`` (224-b): the number of NEW copies this caller is
     about to create. The overflow computation leaves that many budget
@@ -1390,10 +1390,10 @@ def _expire_copies(
     past the finite cap. The bare ``expire_copies`` path reserves
     nothing (it creates no copy).
     """
-    protected = protected_job_ids or frozenset()
     now = time.time() if now is None else now
     copies = []
     verified_count = 0
+    blocked_count = 0
     for job_dir in _list_job_dirs(config.custody_dir):
         manifest = _read_manifest(job_dir)
         if manifest is None:
@@ -1405,6 +1405,10 @@ def _expire_copies(
         # reduces the capacity available to evictable copies.
         if manifest.state == STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED:
             verified_count += 1
+        elif manifest.state == STATE_CLEANUP_FAILED:
+            # Surviving artifacts occupy their slot (224-c capacity
+            # law); the exact recovery path owns the retry.
+            blocked_count += 1
         elif manifest.state in (
             STATE_RAW_UNVERIFIED,
             STATE_DB_SANITIZED_UNPUBLISHED,
@@ -1414,25 +1418,23 @@ def _expire_copies(
 
     expired = [
         item for item in copies
-        if item[2].job_id not in protected
-        and (now - item[0]) > config.retention_seconds
+        if (now - item[0]) > config.retention_seconds
     ]
     kept = [item for item in copies if item not in expired]
-    # Capacity overflow: oldest NON-protected copies only. Verified
-    # copies (never evictable) occupy their budget slots, so they
-    # reduce the capacity available here. A protected copy is never
-    # evicted; if evicting every unprotected copy cannot reach the
-    # budget, stop short (admission fails closed instead).
+    # Capacity overflow: oldest evictable (unverified) copies only.
+    # Verified and CLEANUP_FAILED copies (never evictable) occupy
+    # their budget slots, so they reduce the capacity available here;
+    # if evicting every evictable copy cannot reach the budget, stop
+    # short (admission fails closed instead).
     overflow: list[tuple[float, Path, SnapshotManifest]] = []
     evictable_capacity = max(
-        0, config.max_copies - verified_count - reserve_slots
+        0, config.max_copies - verified_count - blocked_count - reserve_slots
     )
     remove_count = max(0, len(kept) - evictable_capacity)
     for item in kept:
         if len(overflow) >= remove_count:
             break
-        if item[2].job_id not in protected:
-            overflow.append(item)
+        overflow.append(item)
 
     removed = 0
     for _created, job_dir, manifest in expired + overflow:
@@ -1450,33 +1452,36 @@ def _expire_copies(
 
 def _copy_budget_refused(
     config: DemoSnapshotConfig,
-    protected_job_ids: frozenset[str],
 ) -> bool:
-    """Fail-closed admission (224-b): refuse a NEW copy rather than evict
-    a protected one - or a verified one (structurally never evictable).
+    """Fail-closed admission (224-b, 224-c capacity law): refuse a NEW
+    copy rather than exceed the finite cap or evict a never-evictable
+    one (verified or CLEANUP_FAILED).
 
     A new copy is refused when, after adding it, the finite copy budget
     would be exceeded AND evicting every eligible (non-protected,
     unverified) copy could not bring the total back within the budget.
     Verified copies count against the budget (they occupy their slot
-    until the exact control-owned cleanup removes them) but can never
-    be evicted. Nothing is created or modified; the check is a pure read
-    of the custody manifests.
+    until the exact control-owned cleanup removes them), and
+    CLEANUP_FAILED copies with surviving artifacts count as well (the
+    exact recovery path owns their removal retry) - neither can ever
+    be evicted. Nothing is created or modified; the check is a pure
+    read of the custody manifests.
     """
     total = 0
     evictable = 0
     for job_dir in _list_job_dirs(config.custody_dir):
         manifest = _read_manifest(job_dir)
-        if manifest is not None and manifest.state in (
+        if manifest is None:
+            continue
+        if manifest.state in (
             STATE_RAW_UNVERIFIED,
             STATE_DB_SANITIZED_UNPUBLISHED,
             STATE_DB_AND_FILES_VERIFIED_UNPUBLISHED,
+            STATE_CLEANUP_FAILED,
         ):
             total += 1
-            if (
-                manifest.state
-                in (STATE_RAW_UNVERIFIED, STATE_DB_SANITIZED_UNPUBLISHED)
-                and manifest.job_id not in protected_job_ids
+            if manifest.state in (
+                STATE_RAW_UNVERIFIED, STATE_DB_SANITIZED_UNPUBLISHED
             ):
                 evictable += 1
     if total + 1 <= config.max_copies:
@@ -1489,7 +1494,6 @@ def run_snapshot_job(
     *,
     cancel_event: threading.Event | None = None,
     ops: TargetOps | None = None,
-    protected_job_ids: frozenset[str] | None = None,
     request_id: str | None = None,
 ) -> DemoSnapshotJobResult:
     """Run ONE bounded snapshot job. The complete custody+export+restore path.
@@ -1498,11 +1502,14 @@ def run_snapshot_job(
     failures; every mid-job failure returns a safe result with a finite
     code and leaves no browser-readable artifact.
 
-    ``protected_job_ids`` (224-b): job ids of published verified copies
-    that must survive this run's expiry/budget pass; when the budget is
-    full of protected copies the new job is refused BEFORE creating
-    anything (fail-closed admission, safe ``SNAPSHOT_BUDGET_FULL``
-    result with no job created).
+    Admission (224-b/224-c): verified copies are structurally never
+    generic-evicted and CLEANUP_FAILED copies with surviving artifacts
+    occupy their slots; when the budget is full of never-evictable
+    copies the new job is refused BEFORE creating anything
+    (fail-closed admission, safe ``SNAPSHOT_BUDGET_FULL`` result with
+    no job created). Otherwise expired/overflow evictable copies are
+    removed first and the new copy is admitted only when the post-
+    eviction total stays within the finite cap.
 
     ``request_id`` (224-b): the bound demo request's identity, recorded
     in the private custody manifest BEFORE the target database is
@@ -1514,7 +1521,6 @@ def run_snapshot_job(
     _validate_custody_dir(config.custody_dir)
     fence_fd = _acquire_fence(config.custody_dir)
     started = time.monotonic()
-    protected = protected_job_ids or frozenset()
     try:
         workdir = config.custody_dir
         secrets = [
@@ -1526,14 +1532,14 @@ def run_snapshot_job(
         _recover_interrupted_jobs(config, ops)
         # Reserve ONE slot for the new copy this run is about to
         # create, so the post-run total can never exceed the finite
-        # cap (verified copies keep their slots; protected in-flight
-        # copies keep theirs; the new run gets its own).
+        # cap (verified and CLEANUP_FAILED copies keep their slots;
+        # the new run gets its own).
         _expire_copies(
-            config, ops, protected_job_ids=protected, reserve_slots=1
+            config, ops, reserve_slots=1
         )
-        if _copy_budget_refused(config, protected):
+        if _copy_budget_refused(config):
             # Fail closed: refuse the new copy instead of evicting a
-            # protected published copy. No job directory is created.
+            # never-evictable copy. No job directory is created.
             return DemoSnapshotJobResult(
                 state=STATE_FAILED,
                 failure_code=CODE_SNAPSHOT_BUDGET_FULL,
@@ -1721,11 +1727,11 @@ def expire_copies(
     config: DemoSnapshotConfig,
     *,
     ops: TargetOps | None = None,
-    protected_job_ids: frozenset[str] | None = None,
 ) -> int:
     """Fenced expiry entry point (CLI ``expire``).
 
-    ``protected_job_ids`` (224-b) are never evicted; see ``_expire_copies``.
+    Verified copies and CLEANUP_FAILED copies with surviving artifacts
+    are structurally never evicted; see ``_expire_copies``.
     """
     _validate_custody_dir(config.custody_dir)
     fence_fd = _acquire_fence(config.custody_dir)
@@ -1734,7 +1740,7 @@ def expire_copies(
         secrets = list(_read_passfile_passwords(config.pgpassfile, config))
         if ops is None:
             ops = _target_ops(config, workdir=workdir, secrets=secrets)
-        return _expire_copies(config, ops, protected_job_ids=protected_job_ids)
+        return _expire_copies(config, ops)
     finally:
         _release_fence(fence_fd)
 

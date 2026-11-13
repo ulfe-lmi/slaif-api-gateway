@@ -1032,8 +1032,10 @@ Bounded private demo PostgreSQL snapshot custody. Default OFF; every
 Configuration → Demo Snapshot Worker and `docs/demo-admin.md`). Output is
 a fixed safe vocabulary (state, finite failure code, export bytes,
 elapsed ms, copy count) and never contains a database name, DSN,
-password or row content. The demo is not usable end-to-end until stages
-222/223 (masking/capture) and 224 (login/GUI binding) complete.
+password or row content. Stages 222/223 (masking/capture), the 224-b
+worker handoff and the 224-c browser entry (standalone `/fakeadmin`
+process) are implemented; the demo is still not usable end-to-end
+until the later 224 suffixes land the copy-backed GUI binding.
 
 ```bash
 # One bounded snapshot job (create + dump + restore into a unique raw copy)
@@ -1528,10 +1530,14 @@ report. Full contract:
 fake-admin tables (see [demo-admin.md](demo-admin.md) and the
 [database schema](database-schema.md), sections 5.26/5.27). This is a
 foundation stage: the default live gateway has NO fake-admin login route,
-`/fakeadmin/login` remains 404, and no HTTP endpoint can create, reset,
-enable, disable, or list fake-admin credentials. The full demonstration
-feature (fresh source snapshots, wait page, identity masking, silent
-no-op actions, logout/expiry cleanup) is a later objective.
+`/fakeadmin/login` remains 404 on the normal gateway, and no HTTP
+endpoint can create, reset, enable, disable, or list fake-admin
+credentials. The demo web entry (objective 224-c) is a SEPARATE
+standalone ASGI process serving `/fakeadmin` on a dedicated demo host
+(see [demo-admin.md](demo-admin.md), Demo web entry) — it is not a
+route of this gateway. The remaining demonstration features (copy-
+backed browsing, identity-masked reads, silent no-op actions) are
+later 224 suffixes.
 
 ```text
 slaif-gateway demo-admin create <username> --reason <1..512 chars>

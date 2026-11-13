@@ -42,6 +42,23 @@ class FakeAdminAccountFacts:
     credential_generation: int
 
 
+@dataclass(frozen=True, slots=True)
+class FakeAdminLoginCredential:
+    """Column-scoped LOGIN projection for the 224-c demo web role.
+
+    Exactly the columns of the web role's reviewed grant (id, username,
+    password_hash, is_enabled, credential_generation). The login lookup
+    NEVER loads the full ORM row: ``created_at``/``updated_at`` are not
+    granted to the web role, so a row-level SELECT would 42501.
+    """
+
+    id: uuid.UUID
+    username: str
+    password_hash: str
+    is_enabled: bool
+    credential_generation: int
+
+
 class FakeAdminAccountsRepository:
     """Encapsulates access for the demo-control fake-admin tables."""
 
@@ -99,6 +116,37 @@ class FakeAdminAccountsRepository:
             statement = statement.with_for_update().execution_options(populate_existing=True)
         result = await self._session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def get_login_credential(
+        self, username: str
+    ) -> FakeAdminLoginCredential | None:
+        """Column-scoped login lookup for the demo web role (224-c).
+
+        The SELECT names EXACTLY the web-granted columns (id, username,
+        password_hash, is_enabled, credential_generation); it never
+        loads the full ORM row (timestamps are not granted to the web
+        role, and a full-row read would 42501 under it). Plain MVCC
+        SELECT - no row lock: the web role cannot row-lock this table
+        (column-SELECT only; the PostgreSQL 16 row-locking law).
+        """
+        statement = select(
+            FakeAdminAccount.id,
+            FakeAdminAccount.username,
+            FakeAdminAccount.password_hash,
+            FakeAdminAccount.is_enabled,
+            FakeAdminAccount.credential_generation,
+        ).where(FakeAdminAccount.username == username)
+        result = await self._session.execute(statement)
+        row = result.first()
+        if row is None:
+            return None
+        return FakeAdminLoginCredential(
+            id=row.id,
+            username=row.username,
+            password_hash=row.password_hash,
+            is_enabled=row.is_enabled,
+            credential_generation=row.credential_generation,
+        )
 
     async def get_account_by_id(
         self, account_id: uuid.UUID, *, for_update: bool = False

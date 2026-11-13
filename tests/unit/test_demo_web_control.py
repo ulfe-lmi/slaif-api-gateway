@@ -645,7 +645,7 @@ def test_session_gates() -> None:
         assert exc.value.code == "web_account_generation_mismatch"
         # disabled account refused
         svc, _, _ = _svc(accounts={ACCOUNT: (True, 0)})
-        verified = await _full_cycle(svc, job=6, target=6)
+        await _full_cycle(svc, job=6, target=6)
         svc._accounts.accounts[ACCOUNT] = (False, 0)  # type: ignore[attr-defined]
         with pytest.raises(DemoWebControlError) as exc:
             await svc.validate_session(account_id=ACCOUNT, token="whatever")
@@ -833,6 +833,8 @@ def test_unknown_state_refused_everywhere() -> None:
             with pytest.raises(DemoWebControlError) as exc:
                 await coro
             assert exc.value.code == "web_unknown_state"
+            # Each refusal must leave the state untouched.
+            assert req.requests[created.id]["state"] == "bogus"
         # untouched
         assert req.requests[created.id]["state"] == "bogus"
 

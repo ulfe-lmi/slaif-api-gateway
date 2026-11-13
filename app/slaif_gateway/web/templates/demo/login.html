@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Login</title>
+  <link rel="stylesheet" href="/fakeadmin/static/css/admin.css">
+</head>
+<body>
+  <section class="auth-panel" aria-labelledby="login-heading">
+    <div class="auth-header">
+      <h1 id="login-heading">Demo Login</h1>
+    </div>
+    <p class="muted small">
+      This demo entry prepares a private, identity-masked snapshot for the
+      signed-in operator. Copy browsing is enabled in a later stage.
+    </p>
+
+    {% if error %}
+    <p class="form-error" role="alert">{{ error }}</p>
+    {% endif %}
+
+    <form method="post" action="/fakeadmin/login" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" autocomplete="username"
+             maxlength="128" required autofocus>
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password"
+             maxlength="128" required>
+
+      <button type="submit">Sign in</button>
+    </form>
+  </section>
+</body>
+</html>
