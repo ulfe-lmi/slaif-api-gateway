@@ -1943,3 +1943,125 @@ suffixes. Objective 225 remains the installed acceptance gate.
   One screenshot is saved to a run-owned /tmp path (never committed
   and not in ordinary application logs) and was visually
   inspected.
+
+## Sanitized display-copy artifact download (objective 224-l)
+
+224-l (same PR #383) lets the authenticated demo visitor DOWNLOAD
+the already-published sanitized catalog artifacts from the 224-k
+index: ONE demo-only handler for the exact
+`GET /admin/operations/catalog/artifact`, admitted through the
+central gate like the index. Each Artifact cell on the index page
+is now a normal hyperlink to that path carrying the exact remapped
+logical name as its bounded `name` query selector; the ordinal
+column and sortable headers are unchanged and no action column is
+added. This is a SANITIZED DISPLAY COPY download only: the body
+carries no original seal and no apply authority, proves nothing
+about live operator state, and is served exclusively as a forced
+file attachment — it is never rendered inline as active content,
+even for an artifact named `REVIEW.html`.
+
+The `name` value is a selector ONLY — never authorization, HMAC,
+replay, apply or source-file authority. Before ANY body query it
+must satisfy the same closed remapped catalog name law as the 224-k
+index (bounded areas, remapped run/job ID shapes, bounded ASCII
+artifact segments, no dot traversal, ≤200 chars); unknown,
+non-catalog, traversal, source-like or overlong values — and
+duplicate/unknown query parameters — get ONE fixed safe 404 with
+no input echo. The leaf is selected by ONE parameterized exact
+`logical_name` lookup (no SQL identifier interpolation, no
+pathname).
+
+The read uses the gate's SAME request-local copy engine
+(`get_sessionmaker_from_app` on `request.state.demo_admin` — the
+only copy binding a demo request may use): one read-only
+transaction that FIRST re-verifies `current_database()` equals the
+session's exact verified copy and `transaction_read_only` is `on`,
+then reads `kind`, `byte_count`, `sha256` and
+`octet_length(body)` (computed by the database, so a corrupt row
+that claims a small size while storing an oversized body is
+refused before any body bytes transfer). Invalid closed
+kind/name/size/hash, or a stored body length that disagrees with
+the claimed count, is ONE fixed safe 503. The existing 32 MiB
+catalog per-file maximum (`DEMO_SNAPSHOT_FILES_MAX_FILE_BYTES`
+default; the worker's bundle cap is tighter) is enforced BEFORE
+any body fetch, and the bytea is fetched by a second parameterized
+query that re-asserts kind, byte count, SHA256 and the cap as bound
+parameters. The fetched body must match the exact byte count AND
+SHA256 or the request is the same fixed safe 503 — an
+incomplete/corrupt artifact is never labeled complete.
+
+A successful download carries `application/octet-stream`, forced
+`Content-Disposition: attachment` with the safe ASCII basename,
+`X-Content-Type-Options: nosniff`,
+`Content-Security-Policy: default-src 'none'` and
+`Cache-Control: private, no-store` (the 404/503 refusals are the
+fixed safe HTML bodies, also `private, no-store`). The stored SHA,
+copy name, DSN,
+credential, source path, raw original, HMAC receipt or server error
+never appears in the public response. The handler never touches
+source public business tables, live operator custody, the catalog
+seal, Redis, the worker filesystem, provider network or provider
+credentials; there is no global cache and no content persistence.
+Every unsafe method on `/admin` (including this path) remains the
+unchanged quiet 204 cut before body parsing and dispatch; all
+deeper catalog GETs and the original custody-backed catalog routes
+are untouched.
+
+### Evidence (224-l)
+
+* Focused unit: the shared closed name law (`_catalog_name_parts`)
+  accepts the four canonical remapped shapes and refuses every
+  unknown/non-catalog/traversal/source-like/overlong selector; the
+  gate admits EXACTLY the artifact path (no session -> demo-entry
+  redirect) and keeps every near-miss (trailing slash, prefix
+  sibling, deeper path) 404; zero-active accounts are 404; every
+  unsafe method is the quiet 204 cut (200 KB garbage body never
+  parsed); missing/empty/duplicate/unknown query parameters and
+  abusive selectors are fixed 404s with no echo and NO copy query;
+  the handler's own in-transaction recheck (wrong database or
+  read-only off) is a fixed 503 with no SQL executed; a missing
+  leaf is 404 after exactly one parameterized metadata lookup;
+  every invalid single-field metadata corruption (uppercase kind,
+  unbounded kind, negative/bool size, claimed or actual length
+  above 32 MiB, non-hex/short/long/non-str/null digest, actual
+  length disagreeing with the claimed count, null metadata) is a
+  fixed 503 in which the body query NEVER runs; a re-fetched row
+  that no longer satisfies the bounded conditions (bound
+  parameters: name, kind, size, digest, cap) or a body whose length
+  or SHA disagrees is a fixed 503 with no bytes served; the
+  positive case is byte-accurate with the full forced-attachment
+  header set and no stored hash/DSN/credential echo; an artifact
+  literally named `REVIEW.html` is still a forced octet-stream
+  attachment; the rendered index links each row to the exact
+  remapped name and the mocked-ASGI follow of that rendered href
+  serves the byte-accurate body.
+* Owned PostgreSQL 16 (real target-only `demo_display.leaves`
+  table, real restricted reader role, two sessions on distinct
+  copies): one TEST-ONLY sanitized `catalog/jobs/<32hex>.json`
+  leaf inserted into copy A through the owned target-owner
+  connection (honest label: this proves transport/binding through
+  the real table and role, NOT 223 source-file capture or
+  sanitization — the configured-file installed workflow remains
+  objective 225). Session A receives the byte-accurate body with
+  `application/octet-stream`, forced attachment, nosniff, locked
+  CSP and `private, no-store`, with the stored digest and copy
+  name never echoed; session B is a fixed safe 404 for the same
+  selector (copy isolation); duplicate/unknown query parameters
+  and a traversal selector are fixed 404s with no echo; corrupting
+  the stored SHA or the claimed byte count in copy A is the fixed
+  safe 503 without any body bytes; the artifact path and a deeper
+  catalog path stay the quiet 204 cut; the synthetic leaf is
+  deleted afterwards and the 404 re-proven, leaving the
+  worker-published state unchanged (the existing public-table
+  invariance counts still hold).
+* Real Chromium: the owned browser fixture has NO configured
+  catalog leaf, so the honest empty index page renders NO download
+  link at all and the exact artifact path is a fixed safe 404 in
+  the real browser; the positive rendered-link transport is proven
+  by the mocked-ASGI follow test above (that limit is stated, not
+  papered over).
+* Direct hosted 224-k CI defect: the stale
+  `test_table_wrappers_are_labeled_and_focusable` wrapper count
+  (51 -> 52) is repaired in this round after verifying the new
+  labeled/focusable catalog table wrapper; the strict wrapper
+  checks are preserved.

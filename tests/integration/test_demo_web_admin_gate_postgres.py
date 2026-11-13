@@ -673,6 +673,156 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                     assert marker not in r_a.text
                     assert marker not in r_b.text
 
+                    # --- 224-l: sanitized display-copy artifact download ---
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts ONE synthetic leaf into copy A's
+                    # worker-published demo_display.leaves through the
+                    # owned target-owner connection. This proves REAL
+                    # transport/binding through the target-only table,
+                    # the restricted reader role and the gate-bound
+                    # session - NOT 223 source-file capture or
+                    # sanitization (the full configured-file installed
+                    # workflow remains objective 225).
+                    import hashlib as _art_hashlib
+
+                    _art_job = "c3" * 16
+                    _art_name = f"catalog/jobs/{_art_job}.json"
+                    _art_body = b'{"demo": "224-l transport leaf"}'
+                    _art_sha = _art_hashlib.sha256(_art_body).hexdigest()
+
+                    def _target_conn():
+                        return asyncpg.connect(**_conn_kwargs(
+                            san_env.target["host"], san_env.target["port"],
+                            san_env.target["user"], san_env.target["password"],
+                            target_a,
+                        ))
+
+                    try:
+                        s = await _target_conn()
+                        await s.execute(
+                            "INSERT INTO demo_display.leaves "
+                            "(logical_name, kind, sha256, byte_count, "
+                            "captured_at, body) "
+                            "VALUES ($1, $2, $3, $4, $5, $6)",
+                            _art_name, "job_record", _art_sha,
+                            len(_art_body), 1750000000.0, _art_body,
+                        )
+                        await s.close()
+                        # Session A: the byte-accurate sanitized display
+                        # copy from its OWN exact copy, forced attachment
+                        # with the full privacy header set.
+                        r = await client_a.get(
+                            "/admin/operations/catalog/artifact",
+                            params={"name": _art_name},
+                        )
+                        assert r.status_code == 200
+                        assert r.content == _art_body
+                        assert r.headers["content-type"] == "application/octet-stream"
+                        assert r.headers["content-disposition"] == (
+                            f'attachment; filename="{_art_job}.json"'
+                        )
+                        assert r.headers["x-content-type-options"] == "nosniff"
+                        assert r.headers["content-security-policy"] == (
+                            "default-src 'none'"
+                        )
+                        assert r.headers["cache-control"] == "private, no-store"
+                        # Stored digest, copy name, DSN or credential
+                        # never appear in the public response.
+                        assert _art_sha.encode() not in r.content
+                        assert target_a.encode() not in r.content
+                        # Session B: the SAME selector against its OWN
+                        # exact copy is a fixed safe 404 (copy
+                        # isolation; no cross-copy read).
+                        r = await client_b.get(
+                            "/admin/operations/catalog/artifact",
+                            params={"name": _art_name},
+                        )
+                        assert r.status_code == 404
+                        assert r.content == b"Not Found"
+                        # Duplicate/unknown query parameters are refused
+                        # with the same fixed 404.
+                        r = await client_a.get(
+                            "/admin/operations/catalog/artifact",
+                            params=[("name", _art_name), ("name", _art_name)],
+                        )
+                        assert r.status_code == 404
+                        r = await client_a.get(
+                            "/admin/operations/catalog/artifact",
+                            params={"name": _art_name, "x": "1"},
+                        )
+                        assert r.status_code == 404
+                        # A traversal/source-like selector is a fixed
+                        # 404 with no echo, even while the leaf exists.
+                        r = await client_a.get(
+                            "/admin/operations/catalog/artifact",
+                            params={"name": f"../{target_a}/leaves"},
+                        )
+                        assert r.status_code == 404
+                        assert target_a not in r.text
+                        # Integrity corruption in copy A: a wrong stored
+                        # SHA is one fixed safe 503, never the body.
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2 "
+                            "WHERE logical_name = $1",
+                            _art_name, "f" * 64,
+                        )
+                        await s.close()
+                        r = await client_a.get(
+                            "/admin/operations/catalog/artifact",
+                            params={"name": _art_name},
+                        )
+                        assert r.status_code == 503
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert _art_body not in r.content
+                        assert "f" * 64 not in r.text
+                        # ...and a wrong claimed byte_count (with a
+                        # matching actual length) is the SAME cut.
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves "
+                            "SET sha256 = $2, byte_count = $3 "
+                            "WHERE logical_name = $1",
+                            _art_name, _art_sha, len(_art_body) + 1,
+                        )
+                        await s.close()
+                        r = await client_a.get(
+                            "/admin/operations/catalog/artifact",
+                            params={"name": _art_name},
+                        )
+                        assert r.status_code == 503
+                        assert _art_body not in r.content
+                        # The exact catalog index path and a deeper
+                        # catalog path are the SAME quiet 204 cut.
+                        for p in (
+                            "/admin/operations/catalog/artifact",
+                            f"/admin/operations/catalog/jobs/{_art_job}/artifact/x",
+                        ):
+                            r = await client_a.post(
+                                p,
+                                params={"name": _art_name},
+                                content=b"x" * 200_000,
+                                headers={"content-type": "text/garbage"},
+                            )
+                            assert r.status_code == 204, p
+                            assert r.content == b""
+                    finally:
+                        # Delete the synthetic leaf; copy A returns to
+                        # the exact worker-published state.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = $1",
+                            _art_name,
+                        )
+                        await s.close()
+                        # Cleanup proven: session A 404s again.
+                        r = await client_a.get(
+                            "/admin/operations/catalog/artifact",
+                            params={"name": _art_name},
+                        )
+                        assert r.status_code == 404
+
                     # --- operational POST families: quiet 204 no-ops -----
                     key_id = await _first_id(san_env, target_b, "gateway_keys")
                     for client in (client_a, client_b):
@@ -1092,6 +1242,20 @@ def test_browser_smoke_demo_copy_pages(
             assert "at most 4,096 entries" in content
             assert "separate, bounded phase" in content
             assert "no original seal or apply authority" in content
+            # 224-l: the owned browser fixture has NO configured
+            # catalog leaf, so the honest empty page renders NO
+            # download link at all (the positive link is proven by the
+            # mocked-ASGI follow test; the configured-file installed
+            # workflow is objective 225).
+            assert 'href="/admin/operations/catalog/artifact' not in content
+            # ...and the exact artifact path is a fixed safe 404 for
+            # any selector in the real browser.
+            r = page.goto(
+                "/admin/operations/catalog/artifact"
+                "?name=catalog/jobs/" + "c3" * 16 + ".json"
+            )
+            assert r is not None and r.status == 404
+            assert r.headers["cache-control"] == "private, no-store"
             assert target not in content
             assert 'href="/admin/operations"' not in content  # still no nav item
             # ephemeral desktop-layout screenshot (run-owned /tmp path;

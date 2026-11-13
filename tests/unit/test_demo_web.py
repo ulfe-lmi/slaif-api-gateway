@@ -2833,6 +2833,18 @@ def test_catalog_index_positive_gated_page(monkeypatch):
             assert "3 captured catalog artifacts" in text
             assert "at most 4,096 entries" in text
             assert "no completeness claim" in text
+            # 224-l: every rendered Artifact cell links the EXACT
+            # remapped logical name (closed charset renders literally
+            # through urlencode) to the one exact demo download path;
+            # no new action column is added.
+            for leaf in (CAT_LEAF_RUN, CAT_LEAF_JOB, CAT_LEAF_PKG):
+                assert (
+                    f'href="/admin/operations/catalog/artifact'
+                    f'?name={leaf["logical_name"]}"'
+                ) in r.text
+            # The forced-download wording is present on the page.
+            assert "forced file download" in text
+            assert "never rendered as active content" in text
             # The bounded-index / separate-phase / no-seal wording.
             assert "separate, bounded phase" in text
             assert "no original seal or apply authority" in text
@@ -2847,6 +2859,60 @@ def test_catalog_index_positive_gated_page(monkeypatch):
         assert len(made) == 1
         assert made[0][1] == COPY_OK
         assert engine.disposed == 1
+
+    asyncio.run(run())
+
+
+def test_catalog_index_download_link_positive_follow(monkeypatch):
+    # 224-l positive LINK proof (mocked ASGI): the rendered index's
+    # actual href, followed by the same session, serves the
+    # byte-accurate sanitized display copy as a forced attachment.
+    import hashlib
+    import re
+    from urllib.parse import unquote_plus, urlsplit
+
+    body = b"sanitized-catalog-refresh-" + b"y" * 4096
+    meta = ("refresh_bundle", len(body), hashlib.sha256(body).hexdigest(), len(body))
+    session = _ArtifactFakeSession([meta], [(body,)], COPY_OK, "on")
+
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        factory, made = _display_factory(
+            leaves=[CAT_LEAF_RUN, CAT_LEAF_JOB, LEAF_TWO]
+        )
+        _patch_sessionmaker(monkeypatch, session)
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 200
+            # The ACTUAL rendered href: the closed name charset renders
+            # literally through urlencode (no percent-escaping occurs).
+            assert (
+                f'href="/admin/operations/catalog/artifact'
+                f'?name={CAT_LEAF_RUN["logical_name"]}"'
+            ) in r.text
+            m = re.search(
+                r'href="(/admin/operations/catalog/artifact\?name=[^"]+)"',
+                r.text,
+            )
+            assert m is not None
+            r2 = await client.get(m.group(1))
+            assert r2.status_code == 200
+            assert r2.content == body
+            assert r2.headers["content-type"] == "application/octet-stream"
+            assert r2.headers["content-disposition"] == (
+                'attachment; filename="catalog-refresh.json"'
+            )
+            assert r2.headers["x-content-type-options"] == "nosniff"
+            assert r2.headers["content-security-policy"] == "default-src 'none'"
+            assert r2.headers["cache-control"] == "private, no-store"
+            # The followed query decodes to the EXACT remapped name.
+            q = urlsplit(m.group(1)).query
+            assert unquote_plus(q) == f"name={CAT_LEAF_RUN['logical_name']}"
+        assert len(made) == 1
 
     asyncio.run(run())
 
@@ -2990,5 +3056,393 @@ def test_dashboard_demo_only_catalog_card():
         demo = await _render(_fake_admin_request("/admin", demo_admin=object()))
         assert f'href="{CATALOG_INDEX_URL}"' in demo
         assert "Catalog snapshot index" in demo
+
+    asyncio.run(run())
+
+
+
+
+# --- 224-l: demo-only sanitized display-copy artifact download ---------------
+
+import hashlib  # noqa: E402
+
+CATALOG_ARTIFACT_URL = "/admin/operations/catalog/artifact"
+
+
+class _ArtifactResult:
+    def __init__(self, rows) -> None:
+        self._rows = rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _ArtifactFakeSession:
+    """One fake request-local copy session: preflight scalars plus the
+    recorded parameterized statements (metadata with octet_length,
+    then the bounded body query). Every executed statement and its
+    bound parameters are logged for the seam assertions."""
+
+    def __init__(self, meta_rows, body_rows, db, ro) -> None:
+        self.meta_rows = meta_rows
+        self.body_rows = body_rows
+        self.db = db
+        self.ro = ro
+        self.executed: list[tuple[str, dict]] = []
+
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def scalar(self, clause):
+        text = str(clause)
+        if "current_database" in text:
+            return self.db
+        return self.ro
+
+    async def execute(self, clause, params=None):
+        text = str(clause)
+        params = dict(params or {})
+        self.executed.append((text, params))
+        if text.lstrip().startswith("SELECT body"):
+            return _ArtifactResult(self.body_rows)
+        return _ArtifactResult(self.meta_rows)
+
+
+def _meta_row(kind="job_record", size=None, sha=None, actual=None, body=None):
+    """A closed, self-consistent metadata tuple; explicit kwargs
+    corrupt exactly ONE field per test case."""
+    if body is None:
+        body = b"payload"
+    if size is None:
+        size = len(body)
+    if actual is None:
+        actual = len(body)
+    if sha is None:
+        sha = hashlib.sha256(body).hexdigest()
+    return (kind, size, sha, actual)
+
+
+def _patch_sessionmaker(monkeypatch, session):
+    # The demo handler reaches the copy ONLY through the gate-bound
+    # request-local seam; substitute a fake carrying the recorded
+    # statements (restored by the fixture).
+    monkeypatch.setattr(
+        dac, "get_sessionmaker_from_app", lambda _req: lambda: session
+    )
+
+
+def _artifact_app(fake, monkeypatch, session):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    _patch_sessionmaker(monkeypatch, session)
+    return _app(fake), fake
+
+
+def test_catalog_artifact_gate_admission_exact_path():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The ONE exact artifact path is ADMITTED (no session ->
+            # entry redirect, same law as the index)...
+            r = await client.get(CATALOG_ARTIFACT_URL)
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # ...and every near-miss stays default-denied 404.
+            for p in (
+                CATALOG_ARTIFACT_URL + "/",        # trailing slash
+                CATALOG_ARTIFACT_URL + "s",        # prefix sibling
+                CATALOG_ARTIFACT_URL + "/extra",   # deeper path
+                "/admin/operations/catalogx/artifact",
+                # the 224-k deeper catalog artifact paths stay denied
+                f"/admin/operations/catalog/runs/{CAT_RUN_ID}/artifact/x",
+                f"/admin/operations/catalog/jobs/{CAT_JOB_ID}/artifact/x",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_zero_active_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            r = await client.get(
+                CATALOG_ARTIFACT_URL, params={"name": f"catalog/jobs/{CAT_JOB_ID}.json"}
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            for method in ("POST", "PUT", "PATCH", "DELETE"):
+                r = await client.request(
+                    method,
+                    CATALOG_ARTIFACT_URL,
+                    params={"name": f"catalog/jobs/{CAT_JOB_ID}.json"},
+                    content=b"x" * 200_000,
+                    headers={"content-type": "text/garbage"},
+                )
+                assert r.status_code == 204, method
+                assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(CATALOG_ARTIFACT_URL, content=b"y" * 200_000)
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_query_seams_refused_without_echo(monkeypatch):
+    # Exactly ONE bounded `name` value and no duplicate/unknown
+    # parameters; unknown, non-catalog, traversal, source-like and
+    # overlong selectors get the fixed safe 404 with NO echo and NO
+    # copy query (the name law runs before any session use).
+    async def run():
+        from types import SimpleNamespace
+
+        from starlette.requests import Request
+
+        app = _app(FakeFacade())
+        demo = SimpleNamespace(target_db=COPY_OK)
+        session = _ArtifactFakeSession([_meta_row()], [(b"payload",)], COPY_OK, "on")
+        _patch_sessionmaker(monkeypatch, session)
+        cases = [
+            b"",                                                # no query
+            b"name=",                                           # empty name
+            b"name=a&name=a",                                   # duplicate
+            b"name=a&x=1",                                      # unknown param
+            b"x=1",                                             # missing name
+            b"name=branding/logo",                              # non-catalog
+            b"name=catalog%2F..%2F..%2Fetc%2Fpasswd",           # traversal
+            b"name=catalog%2Fruns%2F" + b"a1" * 16 + b"%2Fx",   # source-like
+            b"name=" + b"z" * 300,                              # overlong
+        ]
+        for query in cases:
+            scope = {
+                "type": "http",
+                "app": app,
+                "state": {"demo_admin": demo},
+                "query_string": query,
+            }
+            response = await dac.demo_catalog_artifact(Request(scope))
+            assert response.status_code == 404, query
+            assert response.body == b"Not Found"
+        # The name law refused BEFORE any copy query: nothing executed.
+        assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_handler_without_demo_state_404():
+    async def run():
+        app = _app(FakeFacade())
+        request = _bare_request(app)
+        request.scope["query_string"] = (
+            b"name=" + f"catalog/jobs/{CAT_JOB_ID}.json".encode()
+        )
+        response = await dac.demo_catalog_artifact(request)
+        assert response.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_preflight_mismatch_503(monkeypatch):
+    # The handler's OWN in-transaction recheck (independent of the
+    # gate preflight): wrong database or read-only off -> fixed 503
+    # and no metadata/body query runs.
+    async def run():
+        for db, ro in ((COPY_OK, "off"), ("some_other_db", "on")):
+            fake = FakeFacade()
+            fake.worker_target_db = COPY_OK
+            _preflight_case(monkeypatch, COPY_OK, "on")
+            session = _ArtifactFakeSession([], [], db, ro)
+            _patch_sessionmaker(monkeypatch, session)
+            app = _app(fake)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(
+                    CATALOG_ARTIFACT_URL,
+                    params={"name": f"catalog/jobs/{CAT_JOB_ID}.json"},
+                )
+                assert r.status_code == 503, (db, ro)
+                assert r.headers.get("cache-control") == "private, no-store"
+                assert dac._SAFE_ARTIFACT_UNAVAILABLE in r.text
+                assert COPY_OK not in r.text
+                assert "demo_display" not in r.text
+                assert "Traceback" not in r.text
+                assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_metadata_missing_404(monkeypatch):
+    async def run():
+        good = f"catalog/jobs/{CAT_JOB_ID}.json"
+        session = _ArtifactFakeSession([], [], COPY_OK, "on")
+        app, fake = _artifact_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_ARTIFACT_URL, params={"name": good})
+            assert r.status_code == 404
+            assert r.content == b"Not Found"
+        # One parameterized metadata lookup with the EXACT remapped
+        # name (no identifier interpolation), nothing else.
+        assert len(session.executed) == 1
+        text, params = session.executed[0]
+        assert "octet_length(body)" in text
+        assert params == {"name": good}
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_invalid_metadata_fixed_503_no_body_fetch(monkeypatch):
+    # Invalid closed kind/size/hash OR a corrupt actual body length
+    # (claimed byte_count small, stored body oversized/different) is
+    # one fixed safe 503, and the body query NEVER runs. Each case
+    # corrupts exactly ONE otherwise-valid field.
+    good = f"catalog/jobs/{CAT_JOB_ID}.json"
+    cases = [
+        _meta_row(kind="Job_Record"),                  # uppercase kind
+        _meta_row(kind="a" * 65),                      # unbounded kind
+        _meta_row(size=-1, actual=-1),                 # negative size
+        _meta_row(size=True, actual=1),                # bool size
+        _meta_row(size=33 * 1024 * 1024,
+                  actual=33 * 1024 * 1024),            # claimed+actual over cap
+        _meta_row(sha="Z" * 64),                       # non-hex digest
+        _meta_row(sha="ab" * 31),                      # short digest (62)
+        _meta_row(sha="ab" * 33),                      # long digest (66)
+        ("job_record", 7, 123, 7),                     # non-str digest
+        ("job_record", 7, None, 7),                    # null digest
+        _meta_row(actual=8),                           # actual != claimed
+        _meta_row(actual="7"),                         # str actual
+        (None, None, None, None),                      # null metadata
+    ]
+
+    async def run():
+        for meta in cases:
+            session = _ArtifactFakeSession([meta], [(b"payload",)], COPY_OK, "on")
+            app, fake = _artifact_app(FakeFacade(), monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(CATALOG_ARTIFACT_URL, params={"name": good})
+                assert r.status_code == 503, meta
+                assert r.headers.get("cache-control") == "private, no-store"
+                assert dac._SAFE_ARTIFACT_UNAVAILABLE in r.text
+                assert "payload" not in r.text
+                # Metadata query only: the body query never ran.
+                assert len(session.executed) == 1, meta
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_body_refusal_on_mismatch_or_absence(monkeypatch):
+    good = f"catalog/jobs/{CAT_JOB_ID}.json"
+    body = b"the-sanitized-bytes"
+    meta = _meta_row(body=body)
+
+    async def run():
+        # Re-fetched row no longer satisfies the bounded conditions:
+        # no body rows -> fixed 503.
+        session = _ArtifactFakeSession([meta], [], COPY_OK, "on")
+        app, fake = _artifact_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_ARTIFACT_URL, params={"name": good})
+            assert r.status_code == 503
+            assert dac._SAFE_ARTIFACT_UNAVAILABLE in r.text
+        # The bounded body query re-asserts kind/size/digest/cap as
+        # BOUND parameters (no identifier interpolation).
+        assert len(session.executed) == 2
+        text, params = session.executed[1]
+        assert text.lstrip().startswith("SELECT body")
+        assert params == {
+            "name": good,
+            "kind": meta[0],
+            "size": len(body),
+            "digest": meta[2],
+            "cap": dac._MAX_ARTIFACT_BYTES,
+        }
+        # Fetched body whose length or SHA disagrees: fixed 503, no
+        # bytes served.
+        for bad_body in (b"the-sanitized-bytez", b"the-sanitized-bytesX"):
+            session = _ArtifactFakeSession([meta], [(bad_body,)], COPY_OK, "on")
+            app, fake = _artifact_app(FakeFacade(), monkeypatch, session)
+            async with _client(app) as client:
+                await _verified_session_client(fake, client)
+                r = await client.get(CATALOG_ARTIFACT_URL, params={"name": good})
+                assert r.status_code == 503, bad_body
+                assert r.headers.get("cache-control") == "private, no-store"
+                assert dac._SAFE_ARTIFACT_UNAVAILABLE in r.text
+                assert bad_body not in r.content
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_positive_forced_attachment(monkeypatch):
+    body = b'{"demo": "sanitized display copy"}' * 100
+    meta = _meta_row(kind="job_record", body=body)
+    good = f"catalog/jobs/{CAT_JOB_ID}.json"
+
+    async def run():
+        session = _ArtifactFakeSession([meta], [(body,)], COPY_OK, "on")
+        app, fake = _artifact_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_ARTIFACT_URL, params={"name": good})
+            assert r.status_code == 200
+            # Byte-accurate sanitized body (the ONLY body source).
+            assert r.content == body
+            # Forced attachment + nosniff + locked CSP + no-store.
+            assert r.headers["content-type"] == "application/octet-stream"
+            assert r.headers["content-disposition"] == (
+                f'attachment; filename="{CAT_JOB_ID}.json"'
+            )
+            assert r.headers["x-content-type-options"] == "nosniff"
+            assert r.headers["content-security-policy"] == "default-src 'none'"
+            assert r.headers["cache-control"] == "private, no-store"
+            # No stored hash, DSN, credential or source path echoes.
+            assert meta[2] not in r.text
+            assert COPY_OK not in r.text
+            assert "unit-test-copy-password" not in r.text
+
+    asyncio.run(run())
+
+
+def test_catalog_artifact_html_name_still_forced_attachment(monkeypatch):
+    # Even an artifact literally named REVIEW.html is served as a
+    # forced octet-stream attachment, never inline active content.
+    body = b"<html><body><script>alert(1)</script></body></html>"
+    name = f"catalog/runs/{CAT_RUN_ID}/REVIEW.html"
+    meta = _meta_row(kind="review_html", body=body)
+
+    async def run():
+        session = _ArtifactFakeSession([meta], [(body,)], COPY_OK, "on")
+        app, fake = _artifact_app(FakeFacade(), monkeypatch, session)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_ARTIFACT_URL, params={"name": name})
+            assert r.status_code == 200
+            assert r.headers["content-type"] == "application/octet-stream"
+            assert r.headers["content-disposition"] == (
+                'attachment; filename="REVIEW.html"'
+            )
+            assert r.headers["x-content-type-options"] == "nosniff"
+            assert r.headers["content-security-policy"] == "default-src 'none'"
+            assert r.headers["cache-control"] == "private, no-store"
+            assert r.content == body
 
     asyncio.run(run())

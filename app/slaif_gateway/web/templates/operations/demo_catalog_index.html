@@ -14,7 +14,9 @@
         paths, original run/job identifiers, seals, HMAC values and
         secrets are not part of this index and are never shown. These
         display copies carry no original seal or apply authority, and
-        they prove nothing about live operator state.
+        they prove nothing about live operator state. Each artifact
+        name links to its sanitized display copy as a forced file
+        download only (never rendered as active content).
       </p>
       <p class="muted">
         File capture was a separate, bounded phase from the database
@@ -58,7 +60,11 @@
         <td class="row-ordinal">{{ loop.index }}</td>
         <td>{{ row.area }}</td>
         <td><code>{{ row.demo_id }}</code></td>
-        <td><code>{{ row.artifact }}</code></td>
+        <td>
+          <a href="/admin/operations/catalog/artifact?name={{ row.name | urlencode }}">
+            <code>{{ row.artifact }}</code>
+          </a>
+        </td>
         <td>{{ row.kind }}</td>
         <td class="num" data-sort-value="{{ row.byte_count }}">{{ row.byte_count | num }}</td>
         <td class="nowrap" data-sort-value="{{ row.captured_sort }}">{{ row.captured_utc }}</td>

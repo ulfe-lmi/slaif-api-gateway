@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import pytest
 
-from slaif_gateway.api.demo_admin_catalog import _project_catalog_index
+from slaif_gateway.api.demo_admin_catalog import (
+    _catalog_name_parts,
+    _project_catalog_index,
+)
 
 RUN_ID = "demo-run-" + "a1" * 12  # worker _demo_run_id shape (24 hex)
 JOB_ID = "b2" * 16  # worker _demo_job_id shape (32 hex)
@@ -136,3 +139,91 @@ def test_project_rejects_malformed_container_and_leaf():
         _project_catalog_index(
             [_leaf(f"catalog/jobs/{JOB_ID}.json")] * 4097  # above the row bound
         )
+
+
+# --- 224-l: the shared closed name law and the index download selector -------
+
+
+def test_catalog_name_parts_accepts_closed_shapes():
+    # runs: area/run-id/artifact[/...]; uploads|proposals: area/job-id/artifact
+    assert _catalog_name_parts(
+        f"catalog/runs/{RUN_ID}/catalog-refresh.json"
+    ) == ("runs", RUN_ID, ("catalog-refresh.json",))
+    assert _catalog_name_parts(
+        f"catalog/runs/{RUN_ID}/packages/x/y.tsv"
+    ) == ("runs", RUN_ID, ("packages", "x", "y.tsv"))
+    assert _catalog_name_parts(f"catalog/jobs/{JOB_ID}.json") == (
+        "jobs",
+        JOB_ID,
+        (f"{JOB_ID}.json",),
+    )
+    assert _catalog_name_parts(f"catalog/uploads/{JOB_ID}/bundle-{JOB_ID}") == (
+        "uploads",
+        JOB_ID,
+        (f"bundle-{JOB_ID}",),
+    )
+    assert _catalog_name_parts(
+        f"catalog/proposals/{JOB_ID}/packages/openrouter-chat-text/routes-proposal.tsv"
+    ) == (
+        "proposals",
+        JOB_ID,
+        ("packages", "openrouter-chat-text", "routes-proposal.tsv"),
+    )
+
+
+def test_catalog_name_parts_rejects_selector_abuse():
+    # Unknown, non-catalog, traversal, source-like, overlong or
+    # malformed selectors all refuse (the 224-l download handler maps
+    # these to the fixed safe 404 before any body query).
+    for bad in (
+        "",                                     # empty
+        "branding/logo",                        # non-catalog leaf
+        "catalog",                              # missing area
+        "catalog/",                             # empty area
+        "catalog/other/",                       # unknown area
+        "catalog/runs",                         # too shallow
+        "catalog/runs/demo-run-a1/short-hex",   # short run id
+        f"catalog/runs/{JOB_ID}/x.json",        # ORIGINAL run id (source-like)
+        f"catalog/runs/demo-run-{JOB_ID}/x",    # 32 hex, not 24
+        f"catalog/runs/{RUN_ID}",               # missing artifact
+        f"catalog/jobs/{JOB_ID}",               # missing .json
+        f"catalog/jobs/{JOB_ID}.json/extra",    # jobs are exactly 3 parts
+        f"catalog/uploads/{JOB_ID}",            # missing artifact
+        f"catalog/proposals/{JOB_ID}",          # missing artifact
+        "catalog/../../../etc/passwd",          # traversal
+        f"catalog/runs/{RUN_ID}/../secret",     # traversal segment
+        f"catalog/runs/{RUN_ID}/./x",           # dot segment
+        f"catalog/runs/{RUN_ID}/a b/x",         # space not in the closed charset
+        f"catalog/runs/{RUN_ID}/x/y%2Fz",       # encoded slash is not a segment
+        f"catalog/jobs/{JOB_ID[:5]}x.json",     # bad job id
+        f"catalog/runs/{RUN_ID}/" + "z" * 200,  # overlong name
+        123,                                    # not a string
+        None,                                   # not a string
+    ):
+        with pytest.raises(ValueError):
+            _catalog_name_parts(bad)
+
+
+def test_index_rows_carry_exact_bounded_selector():
+    # Every projected row carries the FULL remapped logical name as its
+    # download selector: closed charset, no raw source reference, and
+    # exactly the value the template URL-encodes into ?name=...
+    leaves = [
+        _leaf(f"catalog/runs/{RUN_ID}/catalog-refresh.json"),
+        _leaf(f"catalog/jobs/{JOB_ID}.json"),
+        _leaf(f"catalog/proposals/{JOB_ID}/packages/openrouter-chat-text/routes-proposal.tsv"),
+        _leaf("branding/logo", "branding"),  # skipped, never a row
+    ]
+    rows = _project_catalog_index(leaves)
+    assert [r["name"] for r in rows] == [
+        f"catalog/runs/{RUN_ID}/catalog-refresh.json",
+        f"catalog/jobs/{JOB_ID}.json",
+        f"catalog/proposals/{JOB_ID}/packages/openrouter-chat-text/routes-proposal.tsv",
+    ]
+    for row in rows:
+        # The selector re-validates through the ONE shared law; the
+        # ACTUAL Jinja URL encoding of the rendered link is proven by
+        # the ASGI index-render test (224-l), not a self-constructed
+        # encoding here.
+        _catalog_name_parts(row["name"])
+        assert row["name"].startswith("catalog/")
