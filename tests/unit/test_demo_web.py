@@ -2735,8 +2735,11 @@ def test_catalog_index_gate_admission_exact_path():
                 # ADMITTED (exact path) - covered by the 224-n section.
                 # 224-o: /admin/operations/catalog/collect is now
                 # ADMITTED (exact path) - covered by the 224-o section.
-                "/admin/operations/catalog/review",
-                "/admin/operations/catalog/export-baseline",
+                # 224-p: /admin/operations/catalog/review,
+                # /admin/operations/catalog/export-baseline and
+                # /admin/operations/catalog/jobs/ are now ADMITTED
+                # (exact paths) - covered by the 224-p section; their
+                # near misses stay denied there.
                 f"/admin/operations/catalog/runs/{KEY_UUID}/",
                 f"/admin/operations/catalog/runs/{KEY_UUID}/apply-status",
                 f"/admin/operations/catalog/runs/{KEY_UUID}/artifact/x",
@@ -4976,5 +4979,849 @@ def test_index_links_collect_page(monkeypatch):
             r = await client.get(CATALOG_INDEX_URL)
             assert r.status_code == 200
             assert 'href="/admin/operations/catalog/collect"' in r.text
+
+    asyncio.run(run())
+
+
+# --- 224-p: demo-only review/export forms + historical job records ------------
+
+P_SEED = b"224p-unit-seed"
+P_ORIGINAL_JOB_A = "c9" * 16  # ORIGINAL (never displayed)
+P_ORIGINAL_JOB_B = "d9" * 16
+P_JOB_A = _rd_dsf._demo_job_id(P_SEED, P_ORIGINAL_JOB_A)  # 32 hex
+P_JOB_B = _rd_dsf._demo_job_id(P_SEED, P_ORIGINAL_JOB_B)
+P_ORIGINAL_RUN = "e9" * 16  # ORIGINAL run id (never displayed)
+P_RUN = _rd_dsf._demo_run_id(P_SEED, P_ORIGINAL_RUN)  # demo-run-<24hex>
+P_ORIGINAL_UPLOAD = "bundle-" + "f2" * 16
+P_UPLOAD = _rd_dsf._remap_upload_name(P_SEED, P_ORIGINAL_UPLOAD)
+P_REVIEW_URL = "/admin/operations/catalog/review"
+P_EXPORT_URL = "/admin/operations/catalog/export-baseline"
+P_JOBS_URL = "/admin/operations/catalog/jobs/"
+
+
+def _p_original_record(job_id: str, **kw):
+    """A synthetic ORIGINAL custody job record (the 223 sanitizer's
+    input); the POSITIVE fixtures are the sanitizer's OWN output."""
+    base = {
+        "job_id": job_id,
+        "family": "review_supplied",
+        "status": "ready",
+        "progress": "free text never displayed",
+        "dispatch": None,
+        "run_id": P_ORIGINAL_RUN,
+        "artifact_name": P_ORIGINAL_UPLOAD,
+        "cancel_requested": False,
+        "created_at": "2025-06-15T15:00:00+00:00",
+        "updated_at": "2025-06-15T15:06:40+00:00",
+    }
+    base.update(kw)
+    return base
+
+
+def _p_body(job_id: str = P_ORIGINAL_JOB_A, **kw) -> bytes:
+    # The ACTUAL 223 sanitizer output for the synthetic original record.
+    return _rd_dsf._sanitize_job_record(
+        _rd_json.dumps(_p_original_record(job_id, **kw)).encode(), P_SEED
+    )
+
+
+def _p_run_rows(run_id: str, base_captured: float, count: int = 7):
+    """The closed seven worker-published sealed-run content rows for one
+    remapped run (metadata-only fixture bodies, never loaded by the
+    jobs page)."""
+    return [
+        _pn_leaf(
+            f"catalog/runs/{run_id}/{filename}",
+            kind,
+            b"{}",
+            base_captured + index,
+        )
+        for index, (filename, kind) in enumerate(dac._RUN_DETAIL_FILES[:count])
+    ]
+
+
+class _PJobFakeSession(_ArtifactFakeSession):
+    """The 224-p jobs session: the bounded body query serves ONLY the
+    leaf whose logical_name equals the BOUND ``:name`` parameter (a
+    real copy never serves another leaf's body). ``bodies`` maps the
+    stored logical name to its stored bytes."""
+
+    def __init__(self, meta_rows, bodies, db, ro) -> None:
+        super().__init__(meta_rows=meta_rows, body_rows=[], db=db, ro=ro)
+        self.bodies = bodies
+
+    async def execute(self, clause, params=None):
+        text = str(clause)
+        params = dict(params or {})
+        self.executed.append((text, params))
+        if text.lstrip().startswith("SELECT body"):
+            body = self.bodies.get(params.get("name"))
+            return _ArtifactResult([(body,)] if body is not None else [])
+        return _ArtifactResult(self.meta_rows)
+
+
+def _p_app(fake, monkeypatch, session):
+    fake.worker_target_db = COPY_OK
+    _preflight_case(monkeypatch, COPY_OK, "on")
+    _patch_sessionmaker(monkeypatch, session)
+    return _app(fake), fake
+
+
+def test_p_gate_admission_exact_paths():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            # The THREE exact paths are ADMITTED (no session -> entry
+            # redirect, same law as the index)...
+            for p in (P_REVIEW_URL, P_EXPORT_URL, P_JOBS_URL):
+                r = await client.get(p)
+                assert r.status_code == 303, p
+                assert r.headers["location"] == "/fakeadmin/login"
+            # ...and every near miss / subpath stays default-denied.
+            for p in (
+                P_REVIEW_URL + "/",                  # trailing slash
+                P_REVIEW_URL + "s",                  # prefix sibling
+                P_REVIEW_URL + "/submit",            # the POST subpath
+                P_REVIEW_URL + "/extra",             # deeper path
+                P_EXPORT_URL + "/",
+                P_EXPORT_URL + "/submit",
+                "/admin/operations/catalog/export",  # near sibling
+                "/admin/operations/catalog/jobs",    # missing slash
+                "/admin/operations/catalog/jobs/extra",
+                "/admin/operations/catalog/jobs/" + "a" * 32,
+                "/admin/operations/catalogx/review",
+            ):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_p_zero_active_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            _session_cookie(client)
+            for p in (P_REVIEW_URL, P_EXPORT_URL, P_JOBS_URL):
+                r = await client.get(p)
+                assert r.status_code == 404, p
+
+    asyncio.run(run())
+
+
+def test_p_unsafe_methods_quiet_noop_body_not_parsed():
+    async def run():
+        app = _app(FakeFacade())
+        async with _client(app) as client:
+            _session_cookie(client)
+            paths = (
+                P_REVIEW_URL,
+                P_REVIEW_URL + "/submit",
+                P_EXPORT_URL,
+                P_EXPORT_URL + "/submit",
+                P_JOBS_URL,
+                P_JOBS_URL + "a" * 32 + "/cancel",
+                P_JOBS_URL + "a" * 32 + "/remove",
+                P_JOBS_URL + "a" * 32 + "/artifact/x",
+            )
+            for p in paths:
+                for method in ("POST", "PUT", "PATCH", "DELETE"):
+                    # 200 KB garbage body: a 204 proves the body was
+                    # never parsed before the cut.
+                    r = await client.request(
+                        method,
+                        p,
+                        content=b"x" * 200_000,
+                        headers={"content-type": "text/garbage"},
+                    )
+                    assert r.status_code == 204, (p, method)
+                    assert r.content == b""
+        async with _client(app) as anon:
+            r = await anon.post(
+                P_JOBS_URL,
+                content=b"y" * 200_000,
+                headers={"content-type": "text/garbage"},
+            )
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_p_review_export_query_law_404_no_copy_access(monkeypatch):
+    async def run():
+        app = _app(FakeFacade())
+        demo = _PN_NS(target_db=COPY_OK)
+
+        calls: list = []
+
+        def _refusing_sessionmaker(_req):
+            calls.append(_req)
+            raise RuntimeError("no copy query before the query law")
+
+        monkeypatch.setattr(
+            dac, "get_sessionmaker_from_app", _refusing_sessionmaker
+        )
+        for handler, url in (
+            (dac.demo_catalog_review, P_REVIEW_URL),
+            (dac.demo_catalog_export, P_EXPORT_URL),
+        ):
+            # Missing demo state: defensive 404.
+            request = _pn_bare_request(app, {})
+            assert (await handler(request)).status_code == 404, url
+            # Review/export define NO query parameters: ANY
+            # parameter (including a `job` value) refuses BEFORE any
+            # sessionmaker/copy access.
+            for query in ("job=" + P_JOB_A, "x=1", "job="):
+                request = _pn_bare_request(
+                    app, {"demo_admin": demo}, query
+                )
+                assert (await handler(request)).status_code == 404, (url, query)
+        # Proven: no refusal path touched the copy seam.
+        assert calls == []
+
+    asyncio.run(run())
+
+
+def test_p_jobs_query_law_refusals_404(monkeypatch):
+    async def run():
+        app = _app(FakeFacade())
+        demo = _PN_NS(target_db=COPY_OK)
+
+        calls: list = []
+
+        def _refusing_sessionmaker(_req):
+            calls.append(_req)
+            raise RuntimeError("no copy query before the query law")
+
+        monkeypatch.setattr(
+            dac, "get_sessionmaker_from_app", _refusing_sessionmaker
+        )
+        # Missing demo state: defensive 404.
+        request = _pn_bare_request(app, {})
+        assert (await dac.demo_catalog_jobs(request)).status_code == 404
+        # Every structurally invalid selector refuses BEFORE any
+        # sessionmaker/copy access.
+        for query in (
+            "job=" + P_JOB_A + "&job=" + P_JOB_B,  # duplicate param
+            "job=" + P_JOB_A + "&x=1",             # extra param
+            "x=1",                                 # unknown param
+            "job=",                                # empty value
+            "job=" + "a1" * 15,                    # wrong length (30)
+            "job=" + "a1" * 16 + "a1",             # wrong length (34)
+            "job=" + "A1" * 16,                    # uppercase hex
+            "job=" + "g1" * 16,                    # non-hex char
+            "job=" + "a1" * 300,                   # overlong
+        ):
+            request = _pn_bare_request(app, {"demo_admin": demo}, query)
+            assert (
+                await dac.demo_catalog_jobs(request)
+            ).status_code == 404, query
+        # Proven: no structurally invalid path touched the copy seam.
+        assert calls == []
+        # A structurally valid but UNKNOWN canonical id is a fixed 404
+        # AFTER the bounded inventory, with NO body transfer and no
+        # fallback to another record.
+        body_a = _p_body()
+        session = _PJobFakeSession(
+            meta_rows=[
+                _pn_leaf(
+                    f"catalog/jobs/{P_JOB_A}.json", "job_record", body_a,
+                    1750000200.0,
+                ),
+            ],
+            bodies={f"catalog/jobs/{P_JOB_A}.json": body_a},
+            db=COPY_OK,
+            ro="on",
+        )
+        _p_app(FakeFacade(), monkeypatch, session)
+        request = _pn_bare_request(
+            app, {"demo_admin": demo}, "job=" + "f1" * 16
+        )
+        response = await dac.demo_catalog_jobs(request)
+        assert response.status_code == 404
+        assert "f1" * 16 not in response.body.decode()
+        assert not any(
+            t.lstrip().startswith("SELECT body") for t, _p in session.executed
+        )
+
+    asyncio.run(run())
+
+
+def test_p_no_sessionmaker_503(monkeypatch):
+    async def run():
+        app = _app(FakeFacade())
+        demo = _PN_NS(target_db=COPY_OK)
+
+        class _RaiseFactory:
+            def __call__(self):
+                raise RuntimeError("no sessionmaker in demo state")
+
+        monkeypatch.setattr(
+            dac, "get_sessionmaker_from_app", lambda _req: _RaiseFactory()
+        )
+        for handler, message in (
+            (dac.demo_catalog_review, dac._SAFE_REVIEW_UNAVAILABLE),
+            (dac.demo_catalog_export, dac._SAFE_EXPORT_UNAVAILABLE),
+            (dac.demo_catalog_jobs, dac._SAFE_JOBS_UNAVAILABLE),
+        ):
+            request = _pn_bare_request(app, {"demo_admin": demo})
+            response = await handler(request)
+            assert response.status_code == 503
+            assert message in response.body.decode()
+
+    asyncio.run(run())
+
+
+def test_p_preflight_mismatch_503(monkeypatch):
+    async def run():
+        for db, ro in ((COPY_OK, "off"), ("some_other_db", "on")):
+            for handler, message in (
+                (dac.demo_catalog_review, dac._SAFE_REVIEW_UNAVAILABLE),
+                (dac.demo_catalog_export, dac._SAFE_EXPORT_UNAVAILABLE),
+                (dac.demo_catalog_jobs, dac._SAFE_JOBS_UNAVAILABLE),
+            ):
+                fake = FakeFacade()
+                session = _PJobFakeSession(
+                    meta_rows=[], bodies={}, db=db, ro=ro
+                )
+                _p_app(fake, monkeypatch, session)
+                request = _pn_bare_request(
+                    _app(FakeFacade()),
+                    {"demo_admin": _PN_NS(target_db=COPY_OK)},
+                )
+                response = await handler(request)
+                assert response.status_code == 503
+                assert message in response.body.decode()
+                # The binding recheck happens BEFORE any copy query.
+                assert not session.executed
+
+    asyncio.run(run())
+
+
+def test_p_jobs_inventory_bound_503_and_limit_param(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        # 4097 distinct job rows: the bound LIMIT must make the page
+        # refuse before any selection or body transfer.
+        rows = [
+            _pn_leaf(
+                f"catalog/jobs/{('%08x' % i) * 4}.json",
+                "job_record",
+                b"{}",
+                1750000000.0 + i,
+            )
+            for i in range(4097)
+        ]
+        session = _PJobFakeSession(
+            meta_rows=rows, bodies={}, db=COPY_OK, ro="on"
+        )
+        _p_app(fake, monkeypatch, session)
+        app = _app(FakeFacade())
+        request = _pn_bare_request(
+            app, {"demo_admin": _PN_NS(target_db=COPY_OK)}
+        )
+        response = await dac.demo_catalog_jobs(request)
+        assert response.status_code == 503
+        # The inventory statement carries the BOUND limit parameter.
+        inventory = [
+            (t, p)
+            for t, p in session.executed
+            if "demo_display.leaves" in t
+            and not t.lstrip().startswith("SELECT body")
+        ]
+        assert len(inventory) == 1
+        stmt, params = inventory[0]
+        assert "LIMIT :limit" in stmt
+        assert params == {"limit": dac._MAX_INDEX_ROWS + 1}
+        assert not any(
+            t.lstrip().startswith("SELECT body") for t, _p in session.executed
+        )
+
+    asyncio.run(run())
+
+
+def test_p_jobs_empty_honest_200(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        # Only NON-jobs leaves: an honest empty job-record list.
+        session = _PJobFakeSession(
+            meta_rows=[
+                _pn_leaf(
+                    f"catalog/proposals/{P_JOB_B}/warnings.json",
+                    "warnings_json",
+                    b"{}",
+                    1750000000.0,
+                ),
+                _pn_leaf(
+                    "branding/logo.svg", "profile_asset", b"{}", 1750000001.0
+                ),
+            ],
+            bodies={},
+            db=COPY_OK,
+            ro="on",
+        )
+        _p_app(fake, monkeypatch, session)
+        async with _client(_app(fake)) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(P_JOBS_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = _norm(r.text)
+            assert "Captured job records (historical, all job families)" in text
+            assert "frozen at capture time" in text
+            assert "No captured job records in this snapshot" in text
+            assert (
+                "This does not establish that live catalog storage was "
+                "unconfigured or that no job ran"
+            ) in text
+            # No copy name echo and NO body transfer (only the bounded
+            # metadata inventory was ever queried).
+            assert COPY_OK not in r.text
+            assert not any(
+                t.lstrip().startswith("SELECT body") for t, _p in session.executed
+            )
+
+    asyncio.run(run())
+
+
+def _p_positive_fixture():
+    """Two captured job records (A newer than B): A carries a remapped
+    run reference (its seven sealed-run content leaves captured) and a
+    remapped upload reference (its upload leaf captured); B has no
+    references. Bodies are the ACTUAL 223 sanitizer output for the
+    synthetic original records."""
+    body_a = _p_body()
+    body_b = _p_body(
+        P_ORIGINAL_JOB_B,
+        family="collect",
+        status="failed",
+        run_id=None,
+        artifact_name=None,
+    )
+    rows = (
+        [
+            _pn_leaf(
+                f"catalog/jobs/{P_JOB_A}.json", "job_record", body_a,
+                1750000200.0,
+            ),
+            _pn_leaf(
+                f"catalog/jobs/{P_JOB_B}.json", "job_record", body_b,
+                1750000100.0,
+            ),
+            _pn_leaf(
+                f"catalog/uploads/{P_JOB_A}/{P_UPLOAD}",
+                "refresh_bundle",
+                b"{}",
+                1750000150.0,
+            ),
+        ]
+        + _p_run_rows(P_RUN, base_captured=1750000000.0)
+        + [
+            _pn_leaf(
+                f"catalog/proposals/{P_JOB_B}/warnings.json",
+                "warnings_json",
+                b"{}",
+                1750000001.0,
+            )
+        ]
+    )
+    bodies = {
+        f"catalog/jobs/{P_JOB_A}.json": body_a,
+        f"catalog/jobs/{P_JOB_B}.json": body_b,
+    }
+    return rows, bodies
+
+
+def test_p_jobs_positive_page(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        rows, bodies = _p_positive_fixture()
+        session = _PJobFakeSession(
+            meta_rows=rows, bodies=bodies, db=COPY_OK, ro="on"
+        )
+        _p_app(fake, monkeypatch, session)
+        async with _client(_app(fake)) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(P_JOBS_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = _norm(r.text)
+            assert "2 shown" in text  # honest count (bound 100 stated)
+            assert "at most the 100 most-recently-captured records" in text
+            # A (newer) is listed BEFORE B and selected by default.
+            assert r.text.index(f">{P_JOB_A}<") < r.text.index(f">{P_JOB_B}<")
+            # The sanitized, typed HISTORICAL fields of A render.
+            assert ">review_supplied<" in r.text
+            assert ">ready<" in r.text
+            assert "2025-06-15T15:00:00+00:00" in r.text
+            assert "2025-06-15T15:06:40+00:00" in r.text
+            # The typed NEUTRAL progress value renders (empty in the
+            # sanitized shape -> the fixed neutralized marker).
+            assert "Progress (sanitized)" in text
+            assert "no progress detail in this sanitized copy" in text
+            assert "none (fixed in this sanitized shape)" in r.text
+            assert "free text never displayed" not in r.text  # neutralized
+            # The VERIFIED references are linked to the exact 224-m
+            # run-detail page and the 224-l forced download (never the
+            # original custody).
+            assert (
+                f'href="/admin/operations/catalog/runs/{P_RUN}/"' in r.text
+            )
+            assert (
+                f'href="/admin/operations/catalog/artifact'
+                f'?name=catalog/uploads/{P_JOB_A}/{P_UPLOAD}"'
+            ) in r.text
+            # No original ID, no copy name.
+            assert P_ORIGINAL_JOB_A not in r.text
+            assert P_ORIGINAL_JOB_B not in r.text
+            assert P_ORIGINAL_RUN not in r.text
+            assert P_ORIGINAL_UPLOAD not in r.text
+            assert COPY_OK not in r.text
+            # The bounded body query ran EXACTLY once (only the
+            # selected record) with the BOUND 1 MiB cap, exact name,
+            # size and digest re-asserts.
+            body_stmts = [
+                (t, p)
+                for t, p in session.executed
+                if t.lstrip().startswith("SELECT body")
+            ]
+            assert len(body_stmts) == 1
+            _stmt, params = body_stmts[0]
+            assert params["name"] == f"catalog/jobs/{P_JOB_A}.json"
+            assert params["cap"] == dac._JOB_RECORD_BYTES
+            assert params["kind"] == "job_record"
+            assert params["size"] == len(bodies[f"catalog/jobs/{P_JOB_A}.json"])
+            assert (
+                params["digest"]
+                == hashlib.sha256(bodies[f"catalog/jobs/{P_JOB_A}.json"]).hexdigest()
+            )
+            # Explicit selection of the OLDER record (B, no
+            # references).
+            r = await client.get(P_JOBS_URL + "?job=" + P_JOB_B)
+            assert r.status_code == 200
+            text = _norm(r.text)
+            assert ">collect<" in text
+            assert ">failed<" in text
+            assert f'value="{P_JOB_A}" selected' not in r.text
+            assert "Run reference:" not in text
+            assert "Upload reference:" not in text
+            # Unknown canonical job: fixed 404, no fallback.
+            r = await client.get(P_JOBS_URL + "?job=" + "e1" * 16)
+            assert r.status_code == 404
+            assert P_JOB_A not in r.text
+            assert P_JOB_B not in r.text
+            # Duplicate / extra query parameters: fixed 404.
+            r = await client.get(P_JOBS_URL + "?job=" + P_JOB_B + "&job=" + P_JOB_B)
+            assert r.status_code == 404
+            r = await client.get(P_JOBS_URL + "?x=1")
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+def test_p_jobs_unverified_references_plain_text(monkeypatch):
+    async def run():
+        # A's run reference has only SIX of the seven content leaves
+        # and its upload leaf is absent: both render as PLAIN TEXT
+        # (not linked) - and a partial run group is NOT a jobs-area
+        # corruption, so the page still renders (200).
+        body_a = _p_body()
+        rows = (
+            [
+                _pn_leaf(
+                    f"catalog/jobs/{P_JOB_A}.json", "job_record", body_a,
+                    1750000200.0,
+                )
+            ]
+            + _p_run_rows(P_RUN, base_captured=1750000000.0, count=6)
+        )
+        fake = FakeFacade()
+        session = _PJobFakeSession(
+            meta_rows=rows, bodies={f"catalog/jobs/{P_JOB_A}.json": body_a},
+            db=COPY_OK,
+            ro="on",
+        )
+        _p_app(fake, monkeypatch, session)
+        async with _client(_app(fake)) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(P_JOBS_URL)
+            assert r.status_code == 200
+            text = _norm(r.text)
+            assert f"<code>{P_RUN}</code>" in r.text
+            assert f"runs/{P_RUN}/\"" not in r.text  # never linked
+            assert "its captured run is not fully present in this copy" in text
+            assert f"<code>{P_UPLOAD}</code>" in r.text
+            assert "artifact?name=" not in r.text  # never linked
+            assert "its captured upload is not present in this copy" in text
+
+    asyncio.run(run())
+
+
+def test_p_jobs_metadata_law_503(monkeypatch):
+    async def run():
+        body_a = _p_body()
+        good_name = f"catalog/jobs/{P_JOB_A}.json"
+        cases = {
+            "wrong kind": [
+                _pn_leaf(good_name, "job_records", body_a, 1750000200.0)
+            ],
+            "over 1 MiB": [
+                _pn_leaf(
+                    good_name, "job_record", b"x" * (1024 * 1024 + 1),
+                    1750000200.0,
+                )
+            ],
+            "noncanonical sha": [
+                (good_name, "job_record", len(body_a), "g" * 64, 1750000200.0)
+            ],
+            "duplicate record": [
+                _pn_leaf(good_name, "job_record", body_a, 1750000200.0),
+                _pn_leaf(good_name, "job_record", body_a, 1750000201.0),
+            ],
+            "unknown jobs-area shape": [
+                _pn_leaf(
+                    "catalog/jobs/notahex.json", "job_record", b"{}",
+                    1750000200.0,
+                )
+            ],
+            "deeper jobs path": [
+                _pn_leaf(
+                    f"catalog/jobs/{P_JOB_A}.json/extra",
+                    "job_record",
+                    b"{}",
+                    1750000200.0,
+                )
+            ],
+            "non-finite capture": [
+                (
+                    good_name,
+                    "job_record",
+                    len(body_a),
+                    hashlib.sha256(body_a).hexdigest(),
+                    float("inf"),
+                )
+            ],
+        }
+        for label, rows in cases.items():
+            fake = FakeFacade()
+            session = _PJobFakeSession(
+                meta_rows=rows, bodies={good_name: body_a},
+                db=COPY_OK,
+                ro="on",
+            )
+            _p_app(fake, monkeypatch, session)
+            app = _app(FakeFacade())
+            request = _pn_bare_request(
+                app, {"demo_admin": _PN_NS(target_db=COPY_OK)}
+            )
+            response = await dac.demo_catalog_jobs(request)
+            assert response.status_code == 503, label
+            assert (
+                dac._SAFE_JOBS_UNAVAILABLE in response.body.decode()
+            ), label
+            # Fixed safe refusal: nothing from the corrupt row echoes.
+            assert "g" * 64 not in response.body.decode(), label
+            assert "notahex" not in response.body.decode(), label
+
+    asyncio.run(run())
+def test_p_jobs_bound_100(monkeypatch):
+    async def run():
+        # 101 captured records (100 fillers + the sanitizer-remapped
+        # newest record P_JOB_A): exactly 100 render, the OLDEST
+        # filler is dropped.
+        body_a = _p_body()
+        rows = [
+            _pn_leaf(
+                f"catalog/jobs/{('%08x' % i) * 4}.json", "job_record", b"{}",
+                1750000000.0 + i,
+            )
+            for i in range(1, 101)
+        ]
+        rows.append(
+            _pn_leaf(
+                f"catalog/jobs/{P_JOB_A}.json", "job_record", body_a,
+                1750000101.0,  # newest: the default selection
+            )
+        )
+        oldest_id = ("00000001" * 4)  # filler i=1, the oldest
+        fake = FakeFacade()
+        session = _PJobFakeSession(
+            meta_rows=rows,
+            bodies={f"catalog/jobs/{P_JOB_A}.json": body_a},
+            db=COPY_OK,
+            ro="on",
+        )
+        _p_app(fake, monkeypatch, session)
+        async with _client(_app(fake)) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(P_JOBS_URL)
+            assert r.status_code == 200
+            text = _norm(r.text)
+            assert "100 shown" in text
+            assert oldest_id not in r.text  # oldest dropped
+            assert f'>{P_JOB_A}<' in r.text
+
+    asyncio.run(run())
+def test_p_jobs_body_mismatch_503(monkeypatch):
+    async def run():
+        good_name = f"catalog/jobs/{P_JOB_A}.json"
+        body_a = _p_body()
+        meta_a = _pn_leaf(good_name, "job_record", body_a, 1750000200.0)
+        # A typed record with an unknown family vocabulary: its
+        # metadata is self-consistent, so the bounded fetch SUCCEEDS
+        # and the 223 typed re-proof itself must refuse it.
+        unknown_family = _rd_json.dumps(
+            {
+                "schema_version": "demo-display-1",
+                "kind": "catalog_job_record",
+                "job_id": P_JOB_A,
+                "family": "unknown_family",
+                "status": "ready",
+                "progress": "",
+                "dispatch": None,
+                "run_id": None,
+                "artifact_name": None,
+                "error_code": None,
+                "cancel_requested": False,
+                "created_at": "2025-06-15T15:00:00+00:00",
+                "updated_at": "2025-06-15T15:06:40+00:00",
+            }
+        ).encode()
+        cases = {
+            # Stored body no longer matches the stored SHA/size.
+            "sha/size mismatch": (meta_a, b"corrupted"),
+            # The stored record belongs to ANOTHER job id (its size/
+            # SHA also differ from A's stored metadata: the digest
+            # re-proof refuses before the job-id law is even reached).
+            "foreign job id": (
+                meta_a,
+                _p_body(P_ORIGINAL_JOB_B, run_id=None, artifact_name=None),
+            ),
+            # Typed re-proof refusal at the validator layer.
+            "unknown family": (
+                _pn_leaf(good_name, "job_record", unknown_family, 1750000200.0),
+                unknown_family,
+            ),
+            # No stored body at all (absent row).
+            "absent row": (meta_a, None),
+        }
+        for label, (meta, stored) in cases.items():
+            fake = FakeFacade()
+            session = _PJobFakeSession(
+                meta_rows=[meta],
+                bodies={good_name: stored} if stored is not None else {},
+                db=COPY_OK,
+                ro="on",
+            )
+            _p_app(fake, monkeypatch, session)
+            app = _app(FakeFacade())
+            request = _pn_bare_request(
+                app, {"demo_admin": _PN_NS(target_db=COPY_OK)}
+            )
+            response = await dac.demo_catalog_jobs(request)
+            assert response.status_code == 503, label
+            body = response.body.decode()
+            assert dac._SAFE_JOBS_UNAVAILABLE in body, label
+            # No raw echo of the stored (corrupt) body or record.
+            if stored is not None:
+                assert stored.decode("utf-8", "ignore") not in body, label
+            assert P_ORIGINAL_JOB_B not in body, label
+
+    asyncio.run(run())
+def test_p_review_page_200_illustrative(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        session = _PJobFakeSession(
+            meta_rows=[], bodies={}, db=COPY_OK, ro="on"
+        )
+        _p_app(fake, monkeypatch, session)
+        async with _client(_app(fake)) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(P_REVIEW_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = _norm(r.text)
+            assert "ILLUSTRATIVE demo-only form" in text
+            assert "no bundle is sealed or reviewed" in text
+            assert "NOT available to this copy" in text
+            # The baseline help carries the NARROW demo wording: the
+            # illustrative control reads no live DATABASE_URL, and the
+            # normal "used lazily" wording never renders in demo.
+            assert "no live DATABASE_URL is read" in text
+            assert "used lazily" not in r.text
+            # The familiar form controls render (demo-labeled).
+            assert 'name="bundle"' in r.text
+            assert 'name="baseline"' in r.text
+            assert 'id="review-first-install"' in r.text
+            # The form links the captured historical job-record page.
+            assert f'href="{P_JOBS_URL}"' in r.text
+            # The NORMAL custody-backed last-job section and its links
+            # never render; no job status is claimed.
+            assert "Last review job" not in text
+            assert "Refresh status" not in text
+            assert "Job status unavailable" not in text
+            # No copy name echo; NO copy query ran (the read-only
+            # transaction carried the binding recheck scalars only).
+            assert COPY_OK not in r.text
+            assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_p_export_page_200_illustrative(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        session = _PJobFakeSession(
+            meta_rows=[], bodies={}, db=COPY_OK, ro="on"
+        )
+        _p_app(fake, monkeypatch, session)
+        async with _client(_app(fake)) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(P_EXPORT_URL)
+            assert r.status_code == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            text = _norm(r.text)
+            assert "ILLUSTRATIVE demo-only form" in text
+            assert "no baseline is exported" in text
+            assert "Export baseline" in text  # the familiar action
+            # NO live-configuration claim: the normal "Database
+            # target: configured/not configured" wording never
+            # renders in demo.
+            assert "Database target" not in r.text
+            assert "not configured" not in r.text
+            assert "Live setup (DATABASE_URL) is NOT available to this demo copy" in text
+            # The form links the captured historical job-record page.
+            assert f'href="{P_JOBS_URL}"' in r.text
+            # The NORMAL custody-backed last-job section never renders.
+            assert "Last export job" not in text
+            assert COPY_OK not in r.text
+            assert session.executed == []
+
+    asyncio.run(run())
+
+
+def test_index_links_224p_pages(monkeypatch):
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        _preflight_case(monkeypatch, COPY_OK, "on")
+        factory, _made = _display_factory(leaves=[])
+        app = _app(fake, display_reader_factory=factory)
+        async with _client(app) as client:
+            _session_cookie(client)
+            await _verified_session_client(fake, client)
+            r = await client.get(CATALOG_INDEX_URL)
+            assert r.status_code == 200
+            assert f'href="{P_REVIEW_URL}"' in r.text
+            assert f'href="{P_EXPORT_URL}"' in r.text
+            assert f'href="{P_JOBS_URL}"' in r.text
 
     asyncio.run(run())

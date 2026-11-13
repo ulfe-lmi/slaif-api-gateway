@@ -167,8 +167,10 @@ ADMITTED_REPORTING_PATHS = (
 # 224-m adds the ONE canonical sanitized run-detail shape
 # (demo-run- + 24 lowercase hex, required trailing slash); 224-n
 # adds the ONE exact captured-proposals page; 224-o adds the ONE
-# exact collect page. All use the same gate law and the same
-# request-local copy binding.
+# exact collect page; 224-p adds the three exact review /
+# export-baseline / job-record pages (the jobs path has its
+# REQUIRED trailing slash). All use the same gate law and the
+# same request-local copy binding.
 ADMITTED_CATALOG_INDEX_PATH = "/admin/operations/catalog/"
 ADMITTED_CATALOG_ARTIFACT_PATH = "/admin/operations/catalog/artifact"
 # 224-n: the ONE exact captured-proposals page (no trailing slash;
@@ -177,6 +179,15 @@ ADMITTED_CATALOG_PROPOSALS_PATH = "/admin/operations/catalog/proposals"
 # 224-o: the ONE exact collect page (no trailing slash; every
 # near miss / subpath stays default-denied 404).
 ADMITTED_CATALOG_COLLECT_PATH = "/admin/operations/catalog/collect"
+# 224-p: the three exact historical/illustrative catalog pages.
+# review and export-baseline take NO trailing slash; the jobs
+# page REQUIRES its trailing slash - every near miss, subpath
+# (including every submit/cancel/remove POST path) and source ID
+# stays default-denied 404, and every unsafe method remains the
+# unchanged pre-body quiet 204 cut.
+ADMITTED_CATALOG_REVIEW_PATH = "/admin/operations/catalog/review"
+ADMITTED_CATALOG_EXPORT_PATH = "/admin/operations/catalog/export-baseline"
+ADMITTED_CATALOG_JOBS_PATH = "/admin/operations/catalog/jobs/"
 # 224-m: the exact canonical run-detail shape; near misses and
 # noncanonical/source IDs are never admitted.
 _CATALOG_RUN_DETAIL_RE = re.compile(
@@ -297,6 +308,9 @@ def _is_admitted_path(path: str) -> bool:
         or path == ADMITTED_CATALOG_ARTIFACT_PATH
         or path == ADMITTED_CATALOG_PROPOSALS_PATH
         or path == ADMITTED_CATALOG_COLLECT_PATH
+        or path == ADMITTED_CATALOG_REVIEW_PATH
+        or path == ADMITTED_CATALOG_EXPORT_PATH
+        or path == ADMITTED_CATALOG_JOBS_PATH
     ):
         return True
     if _CATALOG_RUN_DETAIL_RE.fullmatch(path) is not None:

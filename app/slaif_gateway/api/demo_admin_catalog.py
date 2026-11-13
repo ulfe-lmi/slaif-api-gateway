@@ -123,6 +123,20 @@ _MAX_RUN_GROUPS = 100  # at most the 100 most-recently-captured runs
 _SAFE_COLLECT_UNAVAILABLE = (
     "The catalog collect page is unavailable for this demo session."
 )
+# 224-p: the demo-only review/export form pages and the bounded
+# historical job-record page law. The worker's closed 1 MiB
+# job-record ceiling (metadata AND body, cap-before-body).
+_MAX_JOB_GROUPS = 100  # at most the 100 most-recently-captured records
+_JOB_RECORD_BYTES = dsf._JOB_RECORD_MAX_BYTES  # 1 MiB
+_SAFE_JOBS_UNAVAILABLE = (
+    "The catalog job records page is unavailable for this demo session."
+)
+_SAFE_REVIEW_UNAVAILABLE = (
+    "The catalog review page is unavailable for this demo session."
+)
+_SAFE_EXPORT_UNAVAILABLE = (
+    "The catalog export page is unavailable for this demo session."
+)
 
 
 def _proposals_not_found() -> Response:
@@ -139,6 +153,30 @@ def _collect_not_found() -> Response:
 
 def _collect_unavailable() -> Response:
     return _safe_unavailable(_SAFE_COLLECT_UNAVAILABLE)
+
+
+def _jobs_not_found() -> Response:
+    return _safe_not_found()
+
+
+def _jobs_unavailable() -> Response:
+    return _safe_unavailable(_SAFE_JOBS_UNAVAILABLE)
+
+
+def _review_not_found() -> Response:
+    return _safe_not_found()
+
+
+def _review_unavailable() -> Response:
+    return _safe_unavailable(_SAFE_REVIEW_UNAVAILABLE)
+
+
+def _export_not_found() -> Response:
+    return _safe_not_found()
+
+
+def _export_unavailable() -> Response:
+    return _safe_unavailable(_SAFE_EXPORT_UNAVAILABLE)
 
 
 def _project_complete_run_groups(rows: Any) -> list[dict[str, object]]:
@@ -473,16 +511,23 @@ def _run_detail_unavailable() -> Response:
 
 
 async def _fetch_bounded_body(
-    session: Any, name: str, kind: str, byte_count: int, stored_sha: str
+    session: Any,
+    name: str,
+    kind: str,
+    byte_count: int,
+    stored_sha: str,
+    cap: int = _MAX_ARTIFACT_BYTES,
 ) -> bytes | None:
     """The ONE bounded body fetch shared by 224-l/224-m.
 
     Re-asserts kind, byte count, SHA256 and the 32 MiB cap as BOUND
-    parameters in a second parameterized query (no identifier
-    interpolation), then re-verifies the exact length and SHA256 of the
-    fetched bytes. Any mismatch or absent row yields ``None`` (the
-    caller answers with its fixed safe 503); an incomplete/corrupt
-    artifact is never returned.
+    parameters (the caller's metadata-validated per-file ``cap`` -
+    default the 32 MiB catalog maximum, 224-p the worker's 1 MiB
+    job-record ceiling) in a second parameterized query (no
+    identifier interpolation), then re-verifies the exact length and
+    SHA256 of the fetched bytes. Any mismatch or absent row yields
+    ``None`` (the caller answers with its fixed safe 503); an
+    incomplete/corrupt artifact is never returned.
     """
     body_row = (
         await session.execute(
@@ -496,7 +541,7 @@ async def _fetch_bounded_body(
             ),
             {
                 "name": name,
-                "cap": _MAX_ARTIFACT_BYTES,
+                "cap": cap,
                 "size": byte_count,
                 "digest": stored_sha,
                 "kind": kind,
@@ -1164,6 +1209,440 @@ async def demo_catalog_collect(request: Request) -> Response:
             "demo_admin": True,
             "demo_run_groups": run_groups,
             "demo_run_bound": _MAX_RUN_GROUPS,
+        },
+        status_code=200,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+# --- 224-p: demo-only review/export form pages + historical job records ---
+
+
+def _closed_leaf_meta(size: Any, stored_sha: Any, captured: Any) -> bool:
+    """The closed metadata law for ONE display leaf (shared by the
+    224-p independent reference verification): exact closed kind is
+    checked by the caller; here the bounded size, canonical SHA256 and
+    finite representable capture time."""
+    if (
+        isinstance(size, bool)
+        or not isinstance(size, int)
+        or not 0 <= size <= _MAX_ARTIFACT_BYTES
+        or not isinstance(stored_sha, str)
+        or _SHA256_HEX.fullmatch(stored_sha) is None
+        or isinstance(captured, bool)
+        or not isinstance(captured, (int, float))
+    ):
+        return False
+    captured_float = float(captured)
+    if not math.isfinite(captured_float) or not 0 <= captured_float < _MAX_CAPTURE_AT:
+        return False
+    try:
+        datetime.fromtimestamp(captured_float, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return False
+    return True
+
+
+def _project_job_records(rows: Any) -> list[dict[str, object]]:
+    """Project the closed ``catalog/jobs/<remapped-32hex>.json`` leaves
+    into bounded HISTORICAL job-record entries (every job family).
+
+    Every jobs-area row must satisfy the SAME closed remapped name law
+    as the 224-k index PLUS the exact worker-published ``job_record``
+    kind, the worker's 1 MiB job-record ceiling, a canonical SHA256
+    and a finite representable capture time. A duplicate record or any
+    other jobs-area shape is a corrupt display index: ``ValueError``
+    (the caller answers with the fixed safe 503, never a silent
+    omission). The other display areas (runs/proposals/uploads) and
+    the non-catalog leaves share the table and are skipped, exactly as
+    in the 224-k projection. The result is sorted most-recently-
+    captured first; the caller applies the 100-entry bound.
+    """
+    seen: set[str] = set()
+    entries: list[dict[str, object]] = []
+    for row in rows:
+        name, kind, size, stored_sha, captured = row
+        if not isinstance(name, str) or not name.startswith("catalog/"):
+            continue
+        try:
+            area, demo_id, _parts = _catalog_name_parts(name)
+        except ValueError:
+            raise ValueError("invalid display index") from None
+        if area != "jobs":
+            continue
+        if (
+            not isinstance(kind, str)
+            or kind != dsf.KIND_JOB_RECORD
+            or not isinstance(stored_sha, str)
+            or _SHA256_HEX.fullmatch(stored_sha) is None
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or not 0 <= size <= _JOB_RECORD_BYTES
+        ):
+            raise ValueError("invalid job record metadata")
+        if not _closed_leaf_meta(size, stored_sha, captured):
+            raise ValueError("invalid capture time")
+        captured_float = float(captured)
+        dt = datetime.fromtimestamp(captured_float, tz=UTC)
+        if demo_id in seen:
+            raise ValueError("duplicate job record")
+        seen.add(demo_id)
+        entries.append(
+            {
+                "job_id": demo_id,
+                "kind": kind,
+                "byte_count": size,
+                "stored_sha": stored_sha,
+                "captured_utc": dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                "captured_sort": dt.isoformat(),
+            }
+        )
+    entries.sort(key=lambda e: (str(e["captured_sort"]), str(e["job_id"])), reverse=True)
+    return entries
+
+
+def _job_reference_verified(
+    rows: Any, job_id: str, run_id: Any, artifact_name: Any
+) -> tuple[bool, bool]:
+    """Independently verify, from the SAME bounded metadata inventory
+    (never a body transfer), whether the selected record's remapped
+    run / upload references have their captured target-only leaves.
+
+    A run reference is verified only when ALL seven worker-published
+    run content leaves exist with their exact kinds and closed
+    metadata (so the exact 224-m run-detail page could render it); an
+    upload reference is verified only when the exact
+    ``catalog/uploads/<job>/<name>`` leaf exists with the expected
+    closed kind and closed metadata (so the 224-l forced download is
+    addressable). Anything else must render as plain text only.
+    """
+    run_ok = False
+    if isinstance(run_id, str) and _RUN_ID.fullmatch(run_id) is not None:
+        expected = {
+            f"catalog/runs/{run_id}/{filename}": kind
+            for filename, kind in _RUN_DETAIL_FILES
+        }
+        verified: set[str] = set()
+        for row in rows:
+            name = row[0]
+            if not isinstance(name, str) or name not in expected:
+                continue
+            if row[1] == expected[name] and _closed_leaf_meta(row[2], row[3], row[4]):
+                verified.add(name)
+        run_ok = verified == set(expected)
+    artifact_ok = False
+    if isinstance(artifact_name, str):
+        prefix, _, _suffix = artifact_name.partition("-")
+        expected_kind = dsf._UPLOAD_KINDS.get(prefix)
+        if expected_kind is not None:
+            target = f"catalog/uploads/{job_id}/{artifact_name}"
+            for row in rows:
+                if (
+                    row[0] == target
+                    and row[1] == expected_kind
+                    and _closed_leaf_meta(row[2], row[3], row[4])
+                ):
+                    artifact_ok = True
+                    break
+    return run_ok, artifact_ok
+
+
+def _demo_form_context(demo: Any, **extra: Any) -> dict[str, object]:
+    """The ONE shared demo form context: the FAMILIAR form renders with
+    no operational effect - ``last_job``/``dispatched`` stay None so
+    the NORMAL custody-backed last-job/status sections and their links
+    never render, and ``demo_admin`` enables the narrow demo branches.
+    Live setup, source custody and every job resolver are never
+    evaluated for this copy."""
+    context: dict[str, object] = {
+        "admin": demo.session_context.admin_user,
+        "csrf_token": demo.csrf_token,
+        "setup": {"state": "ready"},
+        "errors": {},
+        "dispatched": None,
+        "dispatch_note": None,
+        "last_job": None,
+        "job_refusal": None,
+        "demo_admin": True,
+    }
+    context.update(extra)
+    return context
+
+
+async def _demo_copy_recheck(session_factory: Any, target_db: str) -> bool:
+    """One SELECT-only/read-only transaction on the gate's SAME
+    request-local copy engine with the independent
+    ``current_database()`` / ``transaction_read_only`` recheck (the
+    224-p form pages open it for the recheck alone)."""
+    try:
+        async with session_factory() as session, session.begin():
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            return current == target_db and read_only == "on"
+    except Exception:
+        return False
+
+
+@router.get("/review", response_class=HTMLResponse)
+async def demo_catalog_review(request: Request) -> Response:
+    """224-p: ONE illustrative review page (exact path, gate-admitted).
+
+    The familiar review form (bundle/baseline file inputs and the
+    first-install checkbox, with their help) renders as an
+    ILLUSTRATIVE demo-only form: submitting has NO effect (no bundle
+    is sealed or reviewed, no baseline is imported, no provider or
+    research is called), live setup (DATABASE_URL) and operator source
+    custody are NOT available to this copy and are never inferred, and
+    the form links the captured HISTORICAL job-record page. The
+    normal custody-backed review handler, template behavior and
+    routes are unchanged; the gate's quiet 204 cut ends every unsafe
+    method (including ``/review/submit``) before any body is parsed.
+    One SELECT-only/read-only copy transaction performs the
+    independent binding recheck; any query string refuses with fixed
+    404 BEFORE copy access.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None:
+        return _review_not_found()
+    # Query law: NO query parameters are defined for the demo review
+    # page; ANY parameter refuses safely (fixed 404, no echo).
+    if request.query_params.multi_items():
+        return _review_not_found()
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _review_unavailable()
+    if not await _demo_copy_recheck(session_factory, demo.target_db):
+        return _review_unavailable()
+    response = templates.TemplateResponse(
+        request,
+        "catalog_refresh/review.html",
+        _demo_form_context(demo),
+        status_code=200,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@router.get("/export-baseline", response_class=HTMLResponse)
+async def demo_catalog_export(request: Request) -> Response:
+    """224-p: ONE illustrative export-baseline page (exact path,
+    gate-admitted).
+
+    The familiar export form (its export action description) renders
+    as an ILLUSTRATIVE demo-only form: submitting has NO effect (no
+    baseline is exported, no database is read or written), live setup
+    (DATABASE_URL) is NOT available to this copy and the page never
+    claims a configured or unconfigured database target, and the form
+    links the captured HISTORICAL job-record page. The normal
+    custody-backed export handler, template behavior and routes are
+    unchanged; the gate's quiet 204 cut ends every unsafe method
+    (including ``/export-baseline/submit``) before any body is parsed.
+    One SELECT-only/read-only copy transaction performs the
+    independent binding recheck; any query string refuses with fixed
+    404 BEFORE copy access.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None:
+        return _export_not_found()
+    # Query law: NO query parameters are defined for the demo export
+    # page; ANY parameter refuses safely (fixed 404, no echo).
+    if request.query_params.multi_items():
+        return _export_not_found()
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _export_unavailable()
+    if not await _demo_copy_recheck(session_factory, demo.target_db):
+        return _export_unavailable()
+    response = templates.TemplateResponse(
+        request,
+        "catalog_refresh/export.html",
+        _demo_form_context(demo),
+        status_code=200,
+    )
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@router.get("/jobs/", response_class=HTMLResponse)
+async def demo_catalog_jobs(request: Request) -> Response:
+    """224-p: ONE bounded HISTORICAL job-record page (exact path with
+    its REQUIRED trailing slash, gate-admitted).
+
+    The page lists at most the 100 most-recently-captured
+    ``catalog/jobs/<remapped-32hex>.json`` metadata rows from the
+    target-only display index - covering EVERY captured job family
+    (collect, supplied-bundle review, baseline export, proposals) and
+    never attributed to any one demo form. The read runs in ONE
+    SELECT-only/read-only transaction on the gate's SAME request-local
+    copy engine with the independent ``current_database()`` /
+    ``transaction_read_only`` recheck and a BOUND ``LIMIT :limit``
+    inventory (transferring at most 4,097 metadata rows); no body is
+    transferred while listing. The closed remapped name, exact
+    ``job_record`` kind, 1 MiB metadata ceiling, canonical SHA256,
+    finite representable capture time and duplicate/unknown jobs-area
+    shape are checked before rendering (any violation is the fixed
+    safe 503, never a silent omission).
+
+    The optional selector is ZERO parameters or exactly ONE canonical
+    ``job=<32hex>`` value chosen from the bounded list; duplicates,
+    extra, unknown, missing/overlong or noncanonical values refuse
+    fixed 404 BEFORE body transfer (structurally invalid values
+    before copy access), never falling back to another job. Without a
+    selector the most-recently-captured record is chosen. For ONLY
+    the selected job the sanitized body is fetched from the SAME
+    copy with the 1 MiB cap re-asserted before transfer, exact size +
+    SHA256 re-checks, the existing 223 typed ``job_record``
+    re-proof, and the body job ID required to equal the selected
+    remapped ID. Only the sanitized family, HISTORICAL status (frozen
+    at capture time - not live or actionable), created/updated/
+    captured times, neutral progress, cancel-requested, dispatch and
+    explicit ``error_code=None`` render; a remapped run/upload
+    reference is linked only when its captured target-only leaf is
+    independently verified (otherwise plain text). Corrupt body,
+    mismatched ID/kind/SHA/size or read failure is the fixed safe
+    503 with no raw echo. No original ID, source path or copy DB
+    name ever renders.
+    """
+    demo = getattr(request.state, "demo_admin", None)
+    if demo is None:
+        return _jobs_not_found()
+    # Query law: ZERO parameters, or exactly ONE ``job=<32hex>``
+    # value. Structurally invalid values refuse BEFORE any copy
+    # access (fixed 404, no echo, no fallback to another job).
+    pairs = list(request.query_params.multi_items())
+    job_param: str | None = None
+    if pairs:
+        if len(pairs) != 1 or pairs[0][0] != "job":
+            return _jobs_not_found()
+        candidate = pairs[0][1]
+        if (
+            not candidate
+            or len(candidate) > _MAX_NAME_LEN
+            or _JOB_ID.fullmatch(candidate) is None
+        ):
+            return _jobs_not_found()
+        job_param = candidate
+    try:
+        session_factory = get_sessionmaker_from_app(request)
+    except Exception:
+        return _jobs_unavailable()
+    entries: list[dict[str, object]]
+    all_rows: list[Any]
+    try:
+        async with session_factory() as session, session.begin():
+            # Independently re-verify, INSIDE this read-only
+            # transaction, that the engine is bound to this session's
+            # exact copy and the server holds it read-only.
+            current = await session.scalar(text("SELECT current_database()"))
+            read_only = await session.scalar(text("SHOW transaction_read_only"))
+            if current != demo.target_db or read_only != "on":
+                return _jobs_unavailable()
+            # Bounded METADATA inventory (no body transfer while
+            # listing): the LIMIT is a BOUND parameter, so even a
+            # corrupt copy can never transfer more than the existing
+            # 4096-row display bound plus one.
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT logical_name, kind, byte_count, sha256, "
+                        "captured_at FROM demo_display.leaves "
+                        "LIMIT :limit"
+                    ),
+                    {"limit": _MAX_INDEX_ROWS + 1},
+                )
+            ).all()
+            if (
+                not isinstance(rows, (list, tuple))
+                or len(rows) > _MAX_INDEX_ROWS
+            ):
+                return _jobs_unavailable()
+            all_rows = list(rows)
+            entries = _project_job_records(all_rows)
+            selected: dict[str, object] | None
+            shown = entries[:_MAX_JOB_GROUPS]
+            if job_param is not None:
+                # An explicit value must match a bounded-list record
+                # EXACTLY (no fallback, no body transfer on a miss).
+                matches = [e for e in shown if e["job_id"] == job_param]
+                if not matches:
+                    return _jobs_not_found()
+                selected = matches[0]
+            else:
+                selected = shown[0] if shown else None
+            job_detail: dict[str, object] | None = None
+            if selected is not None:
+                # Metadata-first: the 1 MiB ceiling was already
+                # enforced on the metadata; the shared fetch then
+                # re-asserts cap/size/SHA/kind as BOUND parameters
+                # BEFORE any body transfer, and re-verifies the exact
+                # length + SHA256 of the fetched bytes.
+                body = await _fetch_bounded_body(
+                    session,
+                    f"catalog/jobs/{selected['job_id']}.json",
+                    str(selected["kind"]),
+                    int(selected["byte_count"]),
+                    str(selected["stored_sha"]),
+                    cap=_JOB_RECORD_BYTES,
+                )
+                if body is None:
+                    return _jobs_unavailable()
+                # Re-prove the worker's exact typed job-record shape
+                # (existing 223 validator), then require the body job
+                # ID to equal the selected remapped ID and the finite
+                # family/status vocabularies.
+                dsf._verify_json_policy(dsf.KIND_JOB_RECORD, body)
+                doc = json.loads(body.decode("utf-8"))
+                if (
+                    doc.get("job_id") != selected["job_id"]
+                    or doc.get("family") not in dsf._JOB_FAMILY_VOCAB
+                    or doc.get("status") not in dsf._JOB_STATUS_VOCAB
+                ):
+                    return _jobs_unavailable()
+                run_ok, artifact_ok = _job_reference_verified(
+                    all_rows,
+                    str(selected["job_id"]),
+                    doc.get("run_id"),
+                    doc.get("artifact_name"),
+                )
+                artifact_name = doc.get("artifact_name")
+                job_detail = {
+                    "family": doc["family"],
+                    "status": doc["status"],
+                    "created_at": doc["created_at"],
+                    "updated_at": doc["updated_at"],
+                    "progress": doc.get("progress") or "",
+                    "cancel_requested": bool(doc.get("cancel_requested")),
+                    "dispatch": doc.get("dispatch"),
+                    "run_id": doc.get("run_id"),
+                    "run_verified": run_ok,
+                    "artifact_name": artifact_name,
+                    "artifact_verified": artifact_ok,
+                    "artifact_download_name": (
+                        f"catalog/uploads/{selected['job_id']}/{artifact_name}"
+                        if artifact_ok
+                        else None
+                    ),
+                    "captured_utc": selected["captured_utc"],
+                }
+    except Exception:
+        # Driver, connection, statement or projection failure: one
+        # fixed safe refusal. Cancellation is a BaseException and is
+        # not swallowed.
+        return _jobs_unavailable()
+
+    response = templates.TemplateResponse(
+        request,
+        "operations/demo_catalog_jobs.html",
+        {
+            "admin": demo.session_context.admin_user,
+            "csrf_token": demo.csrf_token,
+            "demo_job_entries": shown,
+            "demo_job_bound": _MAX_JOB_GROUPS,
+            "demo_selected": selected,
+            "demo_job_detail": job_detail,
         },
         status_code=200,
     )

@@ -2422,3 +2422,169 @@ original run ID, DSN, credential or copy name ever renders.
   page is proven by owned-PG transport and mocked-ASGI coverage;
   the configured-file installed browser workflow remains objective
   225).
+
+## Review / export / job-record pages (objective 224-p)
+
+224-p (same PR #383) opens THREE more existing catalog GUI paths as
+demo-only exact GETs in the existing demo catalog router, admitted in
+the central gate by exact path only: `/admin/operations/catalog/review`,
+`/admin/operations/catalog/export-baseline` (both take NO trailing
+slash) and `/admin/operations/catalog/jobs/` (REQUIRED trailing
+slash). Near misses, source IDs and subpaths (including every
+`/submit`, cancel/remove and upload POST path) stay 404; every unsafe
+`/admin` method remains the unchanged pre-body quiet 204 cut (no body
+is ever parsed, no provider, source, file, DML, accounting or mail
+effect). The normal custody-backed review/export handlers, template
+behavior and routes are unchanged; the demo catalog index header links
+the three pages with concise labels (no new top-nav item).
+
+The review and export pages reuse their familiar controls and help as
+clearly ILLUSTRATIVE demo-only forms: review keeps the bundle/baseline
+file inputs and first-install checkbox; export keeps its export action
+description. Submitting has NO effect (no bundle is sealed or
+reviewed, no baseline is exported, no provider or research is called)
+and no request body is ever parsed by the demo gate. Live setup
+(DATABASE_URL) and operator source custody are NOT available to this
+copy and are never inferred: the export page's normal "Database
+target: configured / not configured" line is suppressed by its narrow
+`{% if demo_admin %}` template branch (which renders a fixed
+"NOT available to this demo copy" line instead), and neither page
+claims a live configuration or renders the NORMAL custody-backed
+`last_job` sections or their links as live (the demo context passes
+`last_job=None`, so those branches never render). Both forms link the
+captured historical job-record page. `_setup_context`, `_settings`, a
+live job resolver, the normal review/export handlers, provider/research
+runners and original file paths are never called. Each form page opens
+ONE SELECT-only/read-only copy transaction carrying the independent
+`current_database() == demo.target_db` / `transaction_read_only = on`
+recheck; ANY query string on these two pages refuses with fixed 404
+BEFORE copy access.
+
+The job-record page (`/jobs/`) lists at most the 100
+most-recently-captured `catalog/jobs/<remapped-32hex>.json` metadata
+rows from the target-only `demo_display.leaves`, covering EVERY
+captured job family (collect, supplied-bundle review, baseline export,
+proposals) — the generic history is NOT attributed to any one demo
+form and must not be read as exclusively review or export jobs. The
+read runs in ONE read-only transaction on the gate's SAME
+request-local copy engine with the independent recheck and a BOUND
+`LIMIT :limit` inventory (transferring at most 4,097 metadata rows,
+refusing when reached); no body is transferred while listing. The
+closed remapped name, exact `job_record` kind, <=1 MiB metadata size,
+canonical SHA256, finite representable capture time and
+duplicate/unknown jobs-area shape are checked before rendering (any
+violation is the fixed safe 503, never silently omitted). The count
+and the 100 bound are stated truthfully on the page; an empty list
+does not prove live catalog storage was unconfigured or that no job
+ran. The selector accepts ZERO parameters or exactly ONE canonical
+`job=<remapped-32hex>` value chosen from the bounded list; duplicates,
+extra, unknown, missing/overlong or noncanonical values refuse fixed
+404 BEFORE body transfer (structurally invalid values before copy
+access), never falling back to another job; without a selector the
+most-recently-captured record is chosen.
+
+For ONLY the selected job, the sanitized body is fetched from the
+SAME copy after metadata validation, with the 1 MiB cap re-asserted as
+a bound parameter before transfer, exact size + SHA256 re-checks, the
+existing 223 typed `job_record` re-proof, and the body job ID required
+to equal the selected remapped ID (finite family/status vocabulary).
+Only the sanitized family, HISTORICAL status (labeled frozen at
+capture time, not live or actionable), created/updated/captured times,
+neutral (neutralized) progress, cancel-requested, dispatch and
+explicit `error_code=None` render. A remapped run reference is linked
+to the exact 224-m run-detail page, and a remapped upload reference to
+the 224-l forced download, ONLY when the matching captured
+target-only leaf is independently verified from the same bounded
+metadata inventory (all seven sealed-run content leaves with their
+exact kinds, or the exact upload leaf with its expected closed kind
+and closed metadata); otherwise the reference renders as plain text.
+No original ID, source path or copy DB name ever renders. Corrupt
+body, mismatched ID/kind/SHA/size or read failure is the fixed safe
+503 with no raw echo. Every output is `private, no-store` and
+Jinja-escaped. No schema, worker, sanitizer, custody, normal router,
+Compose/Nginx or public endpoint change.
+
+### Evidence (224-p)
+
+* Focused unit (mocked ASGI, no database; all new `test_p_*` tests
+  passed, exit 0): the three exact paths admitted and every near
+  miss/subpath denied (including the missing-slash jobs path);
+  zero-active 404; every unsafe method on the page paths and the
+  submit/cancel/remove/upload subpaths the quiet 204 cut with a
+  200 KB body never parsed; the review/export query law (ANY
+  parameter, including a `job` value) a fixed 404 BEFORE any
+  sessionmaker/copy access (proven by a call-recording refusing
+  sessionmaker with the zero-call assertion); the jobs query law
+  (duplicate/extra/unknown/empty/wrong-length/uppercase/non-hex/
+  overlong) fixed 404 BEFORE copy access, a structurally valid but
+  unknown canonical id fixed 404 AFTER the inventory with no body
+  transfer and no fallback; a gate-admitted page whose demo state
+  lacks a usable sessionmaker a fixed 503 on all three pages; the
+  in-transaction binding recheck (wrong database or read-only off,
+  after the gate passes) a fixed 503 on all three pages with zero
+  copy queries; the inventory bound (a 4097-row result) a fixed 503
+  with the bound `LIMIT :limit` parameter verified on the recorded
+  statement; the honest empty jobs page (no-inference note, no
+  body transfer); the positive page (two ACTUAL 223 sanitizer
+  outputs for synthetic original records): newest-first ordering,
+  default and explicit selection, the sanitized typed fields, the
+  neutralized progress (free text never renders), the explicit
+  `error_code=None`, BOTH independently verified references linked
+  to the exact 224-m/224-l paths, the bound 1 MiB cap/exact
+  name/size/digest parameters verified on the recorded body
+  statement, no original IDs or copy name; unverified references
+  (a six-of-seven captured run, an absent upload leaf) rendered as
+  PLAIN TEXT with the non-inference note while the page still
+  renders; every metadata-law corruption (wrong kind, over 1 MiB,
+  noncanonical SHA, duplicate record, unknown jobs-area shape,
+  deeper jobs path, non-finite capture time) a fixed 503 with no
+  row echo; a 101-record inventory lists exactly 100 with the
+  oldest dropped; every body refusal (stored SHA/size mismatch,
+  foreign job id, unknown family vocabulary at the 223 typed
+  re-proof, absent row) a fixed 503 with no raw body echo; the
+  review/export illustrative pages (familiar controls render, the
+  NORMAL last-job sections and their links never render, no
+  "Database target" claim on export, the jobs-page link present,
+  zero copy queries beyond the recheck); the index header links.
+* Owned PostgreSQL 16 (real target-only `demo_display.leaves`, real
+  restricted reader role, two sessions on distinct copies): after
+  the worker run and its honest empty-index assertions, ONE
+  test-only captured job record plus its captured run's seven
+  sealed-run content leaves and its captured upload leaf are
+  inserted into copy A through the owned target-owner connection.
+  Honest labels: the job record body is the ACTUAL 223 sanitizer
+  output for a synthetic original record (family
+  `review_supplied`, remapped run and upload references); the seven
+  run content bodies and the upload body are `b"{}"` test-only
+  placeholders (the jobs page reads ONLY their metadata, never any
+  run/upload body) — this proves route/reader/inventory
+  transport/binding, NOT 223 source capture, worker publication or
+  sanitization of a real job (the configured-file installed
+  workflow remains objective 225). Proven: session A gets the 200
+  page (the one captured record, sanitized HISTORICAL fields, both
+  verified references linked to the exact 224-m/224-l paths, no
+  original ids or copy name); explicit selection, an unknown
+  canonical job and duplicate/extra query parameters the fixed 404
+  refusals without fallback; session B (its own exact copy) renders
+  the honest empty state (copy isolation); corrupting the stored
+  SHA on the job record is the fixed safe 503 without body echo;
+  the path stays the quiet 204 cut; the nine leaves are deleted
+  afterwards by EXACT names (`ANY($1::text[])`, never a prefix
+  match) and the empty state re-proven.
+* Real Chromium (owned fixture, loopback uvicorn): the fixture has
+  NO configured job records, so the jobs page renders 200 in the
+  real browser with `private, no-store` and the honest empty state
+  (no-inference note), and the review/export pages render their
+  illustrative demo forms with NO live "Database target" claim
+  (stated limit; the positive page is proven by owned-PG transport
+  and mocked-ASGI coverage; the configured-file installed browser
+  workflow remains objective 225).
+
+Documentation correction (224-o explanatory slip): in the 224-o
+report, the suppression of the normal "shown as available / not
+configured" live-DB wording on the collect page was attributed to
+the handler passing `dispatched=None`. That wording is actually
+suppressed by the `{% if demo_admin %}` template branch itself,
+which renders the fixed "NOT available to this copy" line instead
+of the normal "shown as" line. This section states the mechanism
+correctly; it is a documentation correction, not a runtime change.

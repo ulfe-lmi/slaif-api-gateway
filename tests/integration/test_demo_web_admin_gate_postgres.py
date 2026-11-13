@@ -643,7 +643,14 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             # ADMITTED (proven just below); its
                             # subpaths stay denied.
                             "/admin/operations/catalog/collect/submit",
-                            "/admin/operations/catalog/export-baseline",
+                            # 224-p: the exact /review,
+                            # /export-baseline and /jobs/ GETs are now
+                            # ADMITTED (proven just below); their
+                            # near-misses stay denied.
+                            "/admin/operations/catalog/review/submit",
+                            "/admin/operations/catalog/export-baseline/submit",
+                            "/admin/operations/catalog/jobs",  # no slash
+                            "/admin/operations/catalog/jobs/extra",
                             f"/admin/operations/catalog/runs/{uuid.uuid4()}/",
                             f"/admin/operations/catalog/runs/{uuid.uuid4()}/apply-status",
                             f"/admin/operations/catalog/jobs/{'a' * 32}/artifact/x",
@@ -690,6 +697,31 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                     assert r.headers["cache-control"] == "private, no-store"
                     assert (
                         "No captured complete runs in this snapshot"
+                        in " ".join(r.text.split())
+                    )
+
+                    # 224-p: the admitted review/export/jobs pages
+                    # render for this verified session; the
+                    # worker-published fixture carries NO configured
+                    # catalog leaves, so the jobs page is the honest
+                    # empty state (before the 224-p test-only
+                    # insertion further down).
+                    for _pp_page in (
+                        "/admin/operations/catalog/review",
+                        "/admin/operations/catalog/export-baseline",
+                    ):
+                        r = await client.get(_pp_page)
+                        assert r.status_code == 200, _pp_page
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert (
+                            "ILLUSTRATIVE demo-only form"
+                            in " ".join(r.text.split())
+                        ), _pp_page
+                    r = await client.get("/admin/operations/catalog/jobs/")
+                    assert r.status_code == 200
+                    assert r.headers["cache-control"] == "private, no-store"
+                    assert (
+                        "No captured job records in this snapshot"
                         in " ".join(r.text.split())
                     )
 
@@ -1329,6 +1361,194 @@ def test_e2e_admin_gate_two_sessions_distinct_copies(
                             in " ".join(r.text.split())
                         )
 
+                    # --- 224-p: captured job records (jobs page) -------
+                    # TARGET-SIDE INSERTION (honest label): the test
+                    # inserts ONE test-only captured job record plus
+                    # its captured run's seven sealed-run content
+                    # leaves and its captured upload leaf into copy A's
+                    # worker-published demo_display.leaves through the
+                    # owned target-owner connection. The job record
+                    # body is the ACTUAL 223 sanitizer output for a
+                    # synthetic original record (family
+                    # review_supplied, with a remapped run reference
+                    # and a remapped upload reference); the seven run
+                    # content bodies and the upload body are b"{}"
+                    # test-only placeholders (the jobs page reads ONLY
+                    # their metadata, never any run/upload body). This
+                    # proves route/reader/inventory transport/binding
+                    # through the real target-only table, the
+                    # restricted reader role and the gate-bound session
+                    # - NOT 223 source capture, worker publication or
+                    # sanitization of a real job (the configured-file
+                    # installed workflow remains objective 225).
+                    _pp_orig_job = "e8" * 16  # ORIGINAL id (never stored)
+                    _pp_job = _rd_dsf._demo_job_id(b"224p-pg-seed", _pp_orig_job)
+                    _pp_orig_run = "f8" * 16
+                    _pp_run = _rd_dsf._demo_run_id(b"224p-pg-seed", _pp_orig_run)
+                    _pp_orig_upload = "bundle-" + "a8" * 16
+                    _pp_upload = _rd_dsf._remap_upload_name(
+                        b"224p-pg-seed", _pp_orig_upload
+                    )
+                    _pp_record = _rd_dsf._sanitize_job_record(
+                        _rd_json.dumps(
+                            {
+                                "job_id": _pp_orig_job,
+                                "family": "review_supplied",
+                                "status": "ready",
+                                "progress": "free text never displayed",
+                                "dispatch": None,
+                                "run_id": _pp_orig_run,
+                                "artifact_name": _pp_orig_upload,
+                                "cancel_requested": False,
+                                "created_at": "2025-06-15T15:00:00+00:00",
+                                "updated_at": "2025-06-15T15:06:40+00:00",
+                            }
+                        ).encode(),
+                        b"224p-pg-seed",
+                    )
+                    _pp_files = [
+                        (
+                            f"catalog/runs/{_pp_run}/{filename}",
+                            kind,
+                            b"{}",
+                        )
+                        for filename, kind in (
+                            ("catalog-refresh.json", "refresh_bundle"),
+                            ("catalog-baseline.json", "baseline_document"),
+                            ("routes-proposal.tsv", "route_tsv"),
+                            ("pricing-proposal.tsv", "pricing_tsv"),
+                            ("fx-proposal.json", "fx_json"),
+                            ("validation.json", "validation_json"),
+                            ("REVIEW.html", "review_html"),
+                        )
+                    ]
+                    _pp_files.append(
+                        (
+                            f"catalog/uploads/{_pp_job}/{_pp_upload}",
+                            "refresh_bundle",
+                            b"{}",
+                        )
+                    )
+                    _pp_files.append(
+                        (f"catalog/jobs/{_pp_job}.json", "job_record", _pp_record)
+                    )
+                    _pp_url = "/admin/operations/catalog/jobs/"
+                    try:
+                        s = await _target_conn()
+                        for _pp_index, (_pp_name, _pp_kind, _pp_data) in enumerate(
+                            _pp_files
+                        ):
+                            await s.execute(
+                                "INSERT INTO demo_display.leaves "
+                                "(logical_name, kind, sha256, byte_count, "
+                                "captured_at, body) "
+                                "VALUES ($1, $2, $3, $4, $5, $6)",
+                                _pp_name,
+                                _pp_kind,
+                                _art_hashlib.sha256(_pp_data).hexdigest(),
+                                len(_pp_data),
+                                1750000400.0 + _pp_index,
+                                _pp_data,
+                            )
+                        await s.close()
+                        # Session A: the jobs page from its OWN exact
+                        # copy (one captured record, the sanitized
+                        # HISTORICAL fields, BOTH independently
+                        # verified references linked, no original ids
+                        # and no copy name).
+                        r = await client_a.get(_pp_url)
+                        assert r.status_code == 200
+                        assert r.headers["cache-control"] == "private, no-store"
+                        _pp_text = " ".join(r.text.split())
+                        assert "Captured job records (historical, all job families)" in _pp_text
+                        assert "1 shown" in _pp_text
+                        assert ">review_supplied<" in r.text
+                        assert ">ready<" in r.text
+                        assert "2025-06-15T15:00:00+00:00" in r.text
+                        assert "free text never displayed" not in r.text
+                        # The verified references link to the exact
+                        # 224-m run-detail page and the 224-l forced
+                        # download (never the original custody).
+                        assert (
+                            f'href="/admin/operations/catalog/runs/{_pp_run}/"'
+                        ) in r.text
+                        assert (
+                            f'href="/admin/operations/catalog/artifact'
+                            f'?name=catalog/uploads/{_pp_job}/{_pp_upload}"'
+                        ) in r.text
+                        assert _pp_orig_job not in r.text
+                        assert _pp_orig_run not in r.text
+                        assert _pp_orig_upload not in r.text
+                        assert target_a not in r.text
+                        # Explicit selection of the same record.
+                        r = await client_a.get(_pp_url + "?job=" + _pp_job)
+                        assert r.status_code == 200
+                        # Unknown canonical job id: fixed 404, no
+                        # fallback, no echo.
+                        r = await client_a.get(_pp_url + "?job=" + "e7" * 16)
+                        assert r.status_code == 404
+                        assert _pp_job not in r.text
+                        # Duplicate / extra query parameters: 404.
+                        r = await client_a.get(
+                            _pp_url + "?job=" + _pp_job + "&job=" + _pp_job
+                        )
+                        assert r.status_code == 404
+                        r = await client_a.get(_pp_url + "?x=1")
+                        assert r.status_code == 404
+                        # Session B: the SAME page against its OWN
+                        # exact copy (which has NO job leaves) renders
+                        # the honest empty state (copy isolation).
+                        r = await client_b.get(_pp_url)
+                        assert r.status_code == 200
+                        assert (
+                            "No captured job records in this snapshot"
+                            in " ".join(r.text.split())
+                        )
+                        assert _pp_job not in r.text
+                        # Corruption: a wrong stored SHA on the job
+                        # record is the fixed safe 503, no body echo.
+                        s = await _target_conn()
+                        await s.execute(
+                            "UPDATE demo_display.leaves SET sha256 = $2 "
+                            "WHERE logical_name = $1",
+                            f"catalog/jobs/{_pp_job}.json",
+                            "f" * 64,
+                        )
+                        await s.close()
+                        r = await client_a.get(_pp_url)
+                        assert r.status_code == 503
+                        assert r.headers["cache-control"] == "private, no-store"
+                        assert _pp_record not in r.content
+                        # The page path is the SAME quiet 204 cut.
+                        r = await client_a.post(
+                            _pp_url,
+                            content=b"x" * 200_000,
+                            headers={"content-type": "text/garbage"},
+                        )
+                        assert r.status_code == 204
+                        assert r.content == b""
+                    finally:
+                        # Remove EXACTLY the nine test-inserted names
+                        # (exact names, never a prefix match - a
+                        # pre-existing run/job sharing a prefix must
+                        # never be touched); the worker-published
+                        # state returns exactly.
+                        s = await _target_conn()
+                        await s.execute(
+                            "DELETE FROM demo_display.leaves "
+                            "WHERE logical_name = ANY($1::text[])",
+                            [_pp_name for _pp_name, _k, _d in _pp_files],
+                        )
+                        await s.close()
+                        # Cleanup proven: the honest empty state
+                        # returns.
+                        r = await client_a.get(_pp_url)
+                        assert r.status_code == 200
+                        assert (
+                            "No captured job records in this snapshot"
+                            in " ".join(r.text.split())
+                        )
+
                     # --- operational POST families: quiet 204 no-ops -----
                     key_id = await _first_id(san_env, target_b, "gateway_keys")
                     for client in (client_a, client_b):
@@ -1800,6 +2020,31 @@ def test_browser_smoke_demo_copy_pages(
             assert "Sanitized demo snapshot display" in " ".join(_co_page.split())
             assert "No captured complete runs in this snapshot" in " ".join(_co_page.split())
             assert 'name="mode"' in _co_page  # illustrative form
+            # 224-p: the owned browser fixture has NO configured job
+            # records, so the jobs page renders the honest empty state
+            # in the real browser and the review/export pages render
+            # their illustrative demo forms (the positive jobs page is
+            # proven by owned-PG transport + mocked-ASGI unit
+            # coverage; the configured-file installed browser workflow
+            # remains objective 225).
+            r = page.goto("/admin/operations/catalog/jobs/")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _pp_page = page.content()
+            assert "No captured job records in this snapshot" in " ".join(_pp_page.split())
+            assert "This does not establish that live catalog storage was unconfigured or that no job ran" in " ".join(_pp_page.split())
+            r = page.goto("/admin/operations/catalog/review")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _pr_page = page.content()
+            assert "ILLUSTRATIVE demo-only form" in " ".join(_pr_page.split())
+            assert 'name="bundle"' in _pr_page  # illustrative form
+            r = page.goto("/admin/operations/catalog/export-baseline")
+            assert r is not None and r.status == 200
+            assert r.headers["cache-control"] == "private, no-store"
+            _ex_page = page.content()
+            assert "ILLUSTRATIVE demo-only form" in " ".join(_ex_page.split())
+            assert "Database target" not in _ex_page  # no live claim
             assert target not in content
             assert 'href="/admin/operations"' not in content  # still no nav item
             # ephemeral desktop-layout screenshot (run-owned /tmp path;

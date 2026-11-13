@@ -36,6 +36,19 @@
   </div>
   {% endif %}
 
+  {% if demo_admin %}
+  <div class="admin-flash" role="status">
+    <strong>Sanitized demo snapshot display:</strong> the form below
+    is an ILLUSTRATIVE demo-only form — live setup (DATABASE_URL) and
+    operator source custody are NOT available to this copy and are
+    never inferred, and submitting has NO effect (no bundle is sealed
+    or reviewed, no baseline is imported, no provider or research is
+    called). Captured historical job records for every job family are
+    listed <a href="/admin/operations/catalog/jobs/">on the job
+    records page</a>, frozen at capture time (not live or actionable).
+  </div>
+  {% endif %}
+
   {% if setup.state != 'ready' %}
   <div class="admin-flash" role="status">
     <strong>Unavailable:</strong>
@@ -53,7 +66,7 @@
       <div class="field">
         <label for="review-baseline">Exported baseline (optional, at most 32 MiB)</label>
         <input type="file" name="baseline" id="review-baseline" accept="application/json,.json" aria-describedby="review-baseline-help">
-        <p class="help" id="review-baseline-help">Required when the bundle's baseline mode is exported_file; ignored (honestly) for first_install bundles. For db_snapshot bundles the deployment's configured DATABASE_URL is used lazily.</p>
+        <p class="help" id="review-baseline-help">Required when the bundle's baseline mode is exported_file; ignored (honestly) for first_install bundles. {% if demo_admin %}In this demo copy the control is illustrative only: no live DATABASE_URL is read and no baseline is resolved or imported.{% else %}For db_snapshot bundles the deployment's configured DATABASE_URL is used lazily.{% endif %}</p>
       </div>
       <div class="field">
         <label class="checkbox-row" for="review-first-install">
