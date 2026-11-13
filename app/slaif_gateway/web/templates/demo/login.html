@@ -25,11 +25,17 @@
 
       <label for="username">Username</label>
       <input id="username" name="username" type="text" autocomplete="username"
-             maxlength="128" required autofocus>
+             maxlength="128" required autofocus aria-describedby="login-username-help">
+      <p class="muted small" id="login-username-help">
+        Demo operator username for this snapshot session.
+      </p>
 
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password"
-             maxlength="128" required>
+             maxlength="128" required aria-describedby="login-password-help">
+      <p class="muted small" id="login-password-help">
+        Your demo operator password. It is never redisplayed on this page.
+      </p>
 
       <button type="submit">Sign in</button>
     </form>

@@ -486,6 +486,15 @@ class Settings(BaseSettings):
     DEMO_SNAPSHOT_TARGET_HOST: str = ""
     DEMO_SNAPSHOT_TARGET_PORT: int = 5432
     DEMO_SNAPSHOT_TARGET_USER: str = ""
+    # Objective 224-d: closed-name identifier of the operator-created STATIC
+    # target-copy reader login role (its own password, owned by the operator;
+    # nothing here creates roles or grants). The snapshot worker needs ONLY
+    # this name to grant that role access to ONE fully verified disposable
+    # copy after the combined 222+223 proof; the demo web process receives
+    # the reader role's connection separately (DEMO_WEB_COPY_* environment,
+    # standalone app only). Default empty: the worker fails closed (no
+    # grant, no publication) when missing or malformed.
+    DEMO_SNAPSHOT_TARGET_READER_ROLE: str = ""
     # Restrictive secret file (0600) read by the PG client tools. Passwords
     # are never passed via argv or rendered to logs/output.
     DEMO_SNAPSHOT_PGPASSFILE: str = ""

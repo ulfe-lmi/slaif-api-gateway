@@ -173,9 +173,13 @@ class DemoSnapshotRequestProjection:
     """Safe request fields for public-facing output.
 
     ``to_safe_dict`` NEVER emits the private copy locators
-    (``worker_job_id`` / ``worker_target_db``): they are worker-owned
-    custody references that the web role may not see. They remain on the
-    internal dataclass only so the worker control path can bind them.
+    (``worker_job_id`` / ``worker_target_db``): no public-safe output,
+    page, CLI or log ever renders them. They remain on the internal
+    dataclass so the worker control path can bind them, and - since
+    224-d - so the session-bound copy reader can require the closed
+    ``demo_snap_<20hex>`` copy name from the exact verified control
+    row (SELECT under the web role's existing request grant; the
+    reader never accepts any other shape).
     """
 
     id: uuid.UUID

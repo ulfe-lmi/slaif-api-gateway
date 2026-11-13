@@ -19,9 +19,12 @@ happens only when the worker's own re-read of its private custody agrees
 on every identity, state and digest immediately before the handoff.
 
 The control connection uses a SEPARATE explicit worker-role credential
-(never the owner ``DATABASE_URL``); the operator creates the role and
+(never the owner ``DATABASE_URL``); the operator creates the roles and
 applies the reviewed 224-a grant matrix before this path can run.
-Nothing here creates roles or grants implicitly.
+Nothing here creates roles; the ONLY grant this path ever performs is
+the bounded, idempotent, exact-verified-copy target-copy reader
+publication grant (224-d), and it happens only after the combined
+222+223 worker-held proof and before the verified handoff.
 
 Recovery/cleanup is a bounded, schedulable worker invocation: stuck
 pending/claimed rows are reaped (224-a law), failed rows and
@@ -81,6 +84,14 @@ from slaif_gateway.services.demo_web_control import (
 
 CODE_WORKER_MISCONFIGURED = "WEB_WORKER_MISCONFIGURED"
 CODE_WORKER_INTERNAL = "WEB_WORKER_INTERNAL"
+# 224-d: the exact verified copy could not be made readable by the
+# operator's static target-copy reader role (missing role, failed or
+# timed-out grant). The copy is NEVER published in that case.
+CODE_READER_GRANT_FAILED = "WEB_READER_GRANT_FAILED"
+
+# Finite bounded deadline for the publication grant (two small psql
+# invocations plus a role precheck on the trusted private network).
+_READER_GRANT_SECONDS = 30.0
 
 _IDENT_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
@@ -120,6 +131,10 @@ class DemoWebWorkerConfig:
     control_user: str
     snapshot: ds.DemoSnapshotConfig
     files: dsf.FileSnapshotConfig
+    # 224-d: closed-name identifier of the operator-created STATIC
+    # target-copy reader role. The worker grants ONLY this role access
+    # to one fully verified disposable copy; it never creates roles.
+    target_reader_role: str
     control_password: str = field(repr=False, default="")
 
     def _control_engine_url(self) -> str:
@@ -196,6 +211,20 @@ def web_worker_config_from_settings(settings: Settings) -> DemoWebWorkerConfig:
             "The demo web worker control user is not a valid "
             "PostgreSQL identifier.",
         )
+    # 224-d: the static reader role name is required (closed
+    # identifier law); without it the worker fails closed before any
+    # publication grant, and a malformed value can never be
+    # interpolated into a statement.
+    reader_role = _required(
+        "DEMO_SNAPSHOT_TARGET_READER_ROLE",
+        settings.DEMO_SNAPSHOT_TARGET_READER_ROLE,
+    )
+    if not _IDENT_RE.fullmatch(reader_role):
+        raise DemoWebWorkerError(
+            CODE_WORKER_MISCONFIGURED,
+            "The demo target reader role is not a valid PostgreSQL "
+            "identifier.",
+        )
     return DemoWebWorkerConfig(
         control_host=host,
         control_port=port,
@@ -204,6 +233,7 @@ def web_worker_config_from_settings(settings: Settings) -> DemoWebWorkerConfig:
         control_password=settings.DEMO_WEB_WORKER_CONTROL_PASSWORD.strip(),
         snapshot=snapshot,
         files=files,
+        target_reader_role=reader_role,
     )
 
 
@@ -413,6 +443,132 @@ async def _safe_record_failure(
         pass
 
 
+# --- 224-d exact verified-copy reader publication grant --------------------------
+
+
+def _grant_target_reader(config: DemoWebWorkerConfig, target_db: str) -> None:
+    """Publish ONE fully verified disposable copy to the operator's
+    STATIC target-copy reader role (224-d).
+
+    The reader role is operator-provisioned (docs/demo-admin.md):
+    LOGIN, its own password, NO privilege bits, NO role memberships,
+    and distinct from the target-admin user. This path NEVER creates
+    or alters any role.
+
+    Steps, all through the same bounded, credential-masked PG client
+    boundary as the 221 create/drop ops (``PGPASSFILE`` only, finite
+    deadline, no argv passwords):
+
+    1. role law precheck - the exact ``pg_roles``/``pg_auth_members``
+       facts: the role exists, is LOGIN, carries NO
+       SUPERUSER/CREATEDB/CREATEROLE/BYPASSRLS/REPLICATION bit, and
+       has NO role memberships; it must not be the target-admin user.
+       Any deviation fails closed (a SELECT-only reader is the only
+       acceptable reader);
+    2. ONE explicit transaction connected to the EXACT target
+       database performing, atomically:
+       ``GRANT CONNECT ON DATABASE`` (the one copy),
+       ``GRANT USAGE ON SCHEMA public`` and
+       ``GRANT SELECT ON ALL TABLES IN SCHEMA public``.
+       A mid-transaction failure rolls back EVERYTHING - no partial
+       CONNECT can survive a schema-grant refusal.
+
+    The public-table grant is bounded by the 222 fail-closed schema
+    inventory: this copy exists only because 222 sanitized exactly
+    the reviewed closed table set, so ``ALL TABLES IN SCHEMA public``
+    is precisely that reviewed inventory - no other object can be
+    present. The role receives NO source-cluster grant, NO
+    target-admin privilege and NO DML/DDL. The caller runs this only
+    after the combined 222+223 worker-held proof for the exact job,
+    so a raw, DB-only-sanitized, failed, stale-generation, reused or
+    wrong-request copy is never reached. Any refusal, timeout or
+    malformed state raises ``DemoWebWorkerError(CODE_READER_GRANT_FAILED)``
+    and the caller fails the request WITHOUT publishing; the exact
+    request-associated cleanup then drops the bound target database,
+    which removes every grant with it (a failed drop retains the
+    inspectable ``cleanup_pending`` state).
+    """
+    snap = config.snapshot
+    role = config.target_reader_role
+    if not _IDENT_RE.fullmatch(role):
+        raise DemoWebWorkerError(
+            CODE_READER_GRANT_FAILED,
+            "The demo target reader role is not a valid PostgreSQL "
+            "identifier.",
+        )
+    if not _WORKER_TARGET_DB_RE.fullmatch(target_db):
+        raise DemoWebWorkerError(
+            CODE_READER_GRANT_FAILED,
+            "The demo target copy name is not a valid disposable "
+            "database name.",
+        )
+    if role == snap.target_user:
+        raise DemoWebWorkerError(
+            CODE_READER_GRANT_FAILED,
+            "The demo target reader role must not be the "
+            "target-admin user.",
+        )
+    env = ds._pg_env(snap.pgpassfile)
+    secrets = ds._read_passfile_passwords(snap.pgpassfile, snap)
+    workdir = snap.custody_dir
+    deadline = time.monotonic() + _READER_GRANT_SECONDS
+    # 1) Role law precheck: exactly one "1" accepts (exists, LOGIN, no
+    # privilege bit, zero role memberships). The closed identifier
+    # law above makes the literal quote-safe.
+    pre = ds._psql_target_admin(
+        snap,
+        "postgres",
+        "SELECT (r.rolcanlogin "
+        "AND NOT r.rolsuper AND NOT r.rolcreatedb "
+        "AND NOT r.rolcreaterole AND NOT r.rolbypassrls "
+        "AND NOT r.rolreplication "
+        "AND NOT EXISTS ("
+        "SELECT 1 FROM pg_auth_members AS m WHERE m.member = r.oid))::int "
+        "FROM pg_roles AS r WHERE r.rolname = '" + role + "'",
+        env=env,
+        workdir=workdir,
+        deadline=deadline,
+        secrets=secrets,
+        elapsed_code=CODE_READER_GRANT_FAILED,
+        capture_output=True,
+    )
+    if pre.returncode != 0:
+        raise DemoWebWorkerError(
+            CODE_READER_GRANT_FAILED,
+            "The demo target reader role could not be verified.",
+        )
+    if pre.stdout_tail.strip() != "1":
+        raise DemoWebWorkerError(
+            CODE_READER_GRANT_FAILED,
+            "The demo target reader role does not satisfy the "
+            "SELECT-only reader law.",
+        )
+    # 2) ONE explicit transaction ON the exact target database:
+    # CONNECT (that one copy) + USAGE + SELECT. ON_ERROR_STOP aborts
+    # the statement list on any error and the open transaction rolls
+    # back, so a schema-grant failure leaves NO partial CONNECT.
+    grant = ds._psql_target_admin(
+        snap,
+        target_db,
+        "BEGIN; "
+        f'GRANT CONNECT ON DATABASE "{target_db}" TO "{role}"; '
+        f'GRANT USAGE ON SCHEMA public TO "{role}"; '
+        f'GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{role}"; '
+        "COMMIT;",
+        env=env,
+        workdir=workdir,
+        deadline=deadline,
+        secrets=secrets,
+        elapsed_code=CODE_READER_GRANT_FAILED,
+    )
+    if grant.returncode != 0:
+        raise DemoWebWorkerError(
+            CODE_READER_GRANT_FAILED,
+            "The demo copy reader grant transaction could not be "
+            "applied.",
+        )
+
+
 # --- exact per-request worker invocation -------------------------------------------
 
 
@@ -523,16 +679,47 @@ async def process_request(
             return ProcessRequestResult(
                 "failed", FAILURE_WORKER_FAILED, _elapsed_ms(started)
             )
+        # 5b) 224-d publication grant: only NOW - after the combined
+        # 222+223 worker-held proof for the exact job - may the
+        # operator's static reader role be granted CONNECT/SELECT on
+        # this ONE disposable copy, and the grant must be complete
+        # BEFORE the handoff makes the copy browser-authoritative.
+        # Any grant failure fails the request without publishing; the
+        # exact request-associated cleanup drops the bound target
+        # database, which removes every grant with it (a failed drop
+        # retains the inspectable cleanup_pending state).
+        try:
+            await asyncio.to_thread(
+                _grant_target_reader, config, binding.worker_target_db
+            )
+        except DemoWebWorkerError as exc:
+            await _safe_record_failure(control, request_id)
+            return ProcessRequestResult(
+                "failed", exc.code, _elapsed_ms(started)
+            )
         try:
             async with control.sessions.begin() as session:
                 projection = await DemoWebControlService(session).record_verified_handoff(
                     request_id=request_id, binding=binding
                 )
         except DemoWebControlError as exc:
+            # 224-d: the reader grant may already be APPLIED to the
+            # exact copy by the time the handoff CAS refuses (account
+            # fence, lifetime, uniqueness). Mark the request failed
+            # NOW (guarded: claimed -> failed; a no-op if the row
+            # already moved) so the exact request-associated cleanup
+            # drops the bound target database - and with it every
+            # grant - promptly instead of waiting on the claim lease
+            # reap (which remains the bounded backstop).
+            await _safe_record_failure(control, request_id)
             return ProcessRequestResult(
                 "failed", exc.code, _elapsed_ms(started)
             )
         if projection.state != REQUEST_STATE_VERIFIED_UNPUBLISHED:
+            # Same prompt-failure law: a refused handoff projection
+            # (state already moved, e.g. lease reap raced us) must not
+            # leave a granted copy behind a claimed row.
+            await _safe_record_failure(control, request_id)
             return ProcessRequestResult(
                 "failed",
                 projection.failure_code or "state_conflict",

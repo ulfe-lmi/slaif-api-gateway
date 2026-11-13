@@ -766,13 +766,16 @@ can later find the artifacts it owns. Most handoff refusals mark the
 row `failed` themselves (`state_conflict` for a disabled account or
 generation reset, `late_completion` for an expired copy,
 `verification_failed` for a non-verified manifest state). The one
-handoff refusal that does NOT is a copy-uniqueness violation
-(`web_request_copy_reused`): the handoff transaction is aborted
-without committing anything, no failure write is made, and the row
-stays `claimed` until the bounded recovery reap marks it `failed`
-(`late_completion`) at its full lifetime. The same reap also covers a
-control-side refusal of a failure write itself (e.g. a control
-outage mid-pipeline), which likewise leaves the row `claimed`. In
+handoff refusal the CAS itself does NOT mark is a copy-uniqueness
+violation (`web_request_copy_reused`): the handoff transaction is
+aborted without committing anything; since 224-d the worker then
+attempts the guarded `claimed -> failed` mark promptly as well (a
+no-op if the row already moved), and only if THAT write is refused
+(e.g. a control outage) does the row stay `claimed` until the
+bounded recovery reap marks it `failed` (`late_completion`) at its
+full lifetime. The same reap also covers a control-side refusal of a
+failure write itself (e.g. a control outage mid-pipeline), which
+likewise leaves the row `claimed`. In
 every case the recovery path resolves the exact owned job through
 the durable private association. The output never contains a job
 id, target database name, custody path, DSN, password or row
@@ -1073,3 +1076,115 @@ deleted with the same path on logout/refusal.
   reaches `cleaned`; the web role's 42501 boundary (full-row account
   read, business tables, `state` in INSERT, any request UPDATE);
   zero-active 404s and re-enable.
+
+## Demo verified copy reader (objective 224-d, read-only preview)
+
+224-d makes an EXACT fully verified disposable database readable under
+a dedicated target-copy READER role and proves per-session copy
+isolation with one small authenticated read-only preview
+(`/fakeadmin/copy-preview`). It does NOT mount the normal admin
+routers and does NOT claim the demo GUI usable: the next same-PR
+suffix binds the admin GUI behind a server-side mutation gate, and
+later suffixes complete file-backed panels, installed browser
+evidence and final delivery. The demo is still NOT usable for
+company demonstrations at the end of 224-d.
+
+### The static reader role (operator-provisioned; nothing creates it)
+
+The operator creates ONE static login role on the SEPARATE target
+PostgreSQL service, with its own password:
+
+```sql
+-- target service, run by the target admin (operator path). The
+-- password is set through the interactive psql prompt (or the
+-- operator's secret-management step), so it never appears in a
+-- command line, psql history or this document:
+CREATE ROLE slaif_demo_copy_reader LOGIN;
+\password slaif_demo_copy_reader
+```
+
+The role law the worker enforces BEFORE any grant (fail-closed):
+
+* LOGIN role;
+* carries NO `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `BYPASSRLS` or
+  `REPLICATION` bit;
+* has NO role memberships (`pg_auth_members` empty);
+* is NOT the target-admin user.
+
+It starts with NO `CONNECT` on any new raw target database (221's
+closed create + `REVOKE CONNECT FROM PUBLIC` is unchanged). No role or
+grant is created implicitly by an HTTP request.
+
+### Worker-side publication grant (exact verified copy only)
+
+After 222 database sanitation AND 223 file capture/verification finish
+for the exact job, and the 224-b worker-held proof (job, request,
+target identity, combined verified state, exact file tree) passes, the
+`process-request` worker (target-admin boundary, bounded, credential-
+masked, finite 30 s deadline) performs, in ONE explicit transaction on
+the EXACT target database:
+
+1. `GRANT CONNECT ON DATABASE "<the one copy>" TO "<reader role>"`;
+2. `GRANT USAGE ON SCHEMA public TO "<reader role>"`;
+3. `GRANT SELECT ON ALL TABLES IN SCHEMA public TO "<reader role>"`.
+
+A mid-transaction failure rolls back EVERYTHING (no partial CONNECT).
+The grant is idempotent for that exact copy and is bounded by the 222
+fail-closed schema inventory: the copy exists only because 222
+sanitized exactly the reviewed closed table set. The role receives no
+source-cluster grant, no target-admin privilege, no DML/DDL. A raw,
+DB-only-sanitized, failed, stale-generation, reused or wrong-request
+copy is never granted. The grant is complete BEFORE 224-a
+`record_verified_handoff` makes the copy browser-authoritative; if the
+grant or the handoff fails, the copy is NEVER labeled published. On a
+handoff refusal the worker marks the request `failed` promptly
+(guarded `claimed -> failed`; a no-op if the row already moved) so the
+exact request-associated cleanup drops the bound target database — a
+database DROP removes its grants with it (a failed drop retains the
+inspectable `cleanup_pending` state). If a control outage prevented
+even the guarded failure mark, the bounded 224-a claim-lease reap
+remains the backstop that moves the row to `failed` for the same
+cleanup. No schema migration and no general grant framework.
+
+Worker configuration: `DEMO_SNAPSHOT_TARGET_READER_ROLE` (required,
+closed identifier; the worker fails closed without it).
+
+### Web-side session-bound copy reader
+
+The standalone demo web process receives ONLY the reader role's own
+connection (`DEMO_WEB_COPY_HOST/PORT/USER/PASSWORD`), separate from
+its control WEB role, the worker's target-admin passfile, the
+source-export credential, the owner `DATABASE_URL`, Redis and any
+provider secret. On EVERY preview read:
+
+* the 224-a demo session is revalidated (live account/generation
+  fence) and the stored session binding is used authoritatively;
+* the EXACT request is re-read and must be `verified_unpublished` and
+  unexpired, with id AND account matching the session;
+* the closed `demo_snap_<20hex>` target database name is required from
+  the control row (no other shape is ever interpolated);
+* ONE per-request read-only connection (`NullPool`, bounded connect
+  and statement timeouts, explicit no-TLS stage boundary) inside a
+  database-side `READ ONLY` transaction (verified with
+  `transaction_read_only`): `current_database()` must equal the bound
+  name, then the fixed reviewed public-table allowlist is counted;
+* the connection is disposed after use, so logout/cleanup is never
+  held by an idle web pool.
+
+No pathname/custody read from the web process. A stale, disabled,
+revoked, expired, wrong-request or missing copy fails closed with ONE
+safe page note — no target name, DSN or internal error is exposed.
+The preview response is `Cache-Control: no-store`.
+
+### Still-incomplete status and safe rollback
+
+* The preview shows bounded counts only (identity-masked data); it is
+  a proof of the copy binding, not an admin UI. Two concurrent demo
+  sessions read their OWN distinct copies; the control/source business
+  tables are never queried through the reader role.
+* Safe rollback: revoke the reader role's access by dropping the bound
+  target database (the worker `cleanup` path does this on the exact
+  request association) or, while the copy still exists,
+  `REVOKE CONNECT ON DATABASE "<copy>" FROM "<reader role>"` plus
+  `REVOKE USAGE, SELECT` on the schema/tables; the role itself can be
+  dropped by the operator once no demo copy needs it.

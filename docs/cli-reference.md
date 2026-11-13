@@ -1033,9 +1033,13 @@ Configuration → Demo Snapshot Worker and `docs/demo-admin.md`). Output is
 a fixed safe vocabulary (state, finite failure code, export bytes,
 elapsed ms, copy count) and never contains a database name, DSN,
 password or row content. Stages 222/223 (masking/capture), the 224-b
-worker handoff and the 224-c browser entry (standalone `/fakeadmin`
-process) are implemented; the demo is still not usable end-to-end
-until the later 224 suffixes land the copy-backed GUI binding.
+worker handoff (including the 224-d exact verified-copy reader
+publication grant, which the `process-request` command performs
+automatically after the combined 222+223 proof) and the 224-c browser
+entry (standalone `/fakeadmin` process, now with the 224-d read-only
+copy preview) are implemented; the demo is still not usable
+end-to-end until the later 224 suffixes land the copy-backed GUI
+binding. 224-d adds NO new CLI command.
 
 ```bash
 # One bounded snapshot job (create + dump + restore into a unique raw copy)
@@ -1532,12 +1536,14 @@ fake-admin tables (see [demo-admin.md](demo-admin.md) and the
 foundation stage: the default live gateway has NO fake-admin login route,
 `/fakeadmin/login` remains 404 on the normal gateway, and no HTTP
 endpoint can create, reset, enable, disable, or list fake-admin
-credentials. The demo web entry (objective 224-c) is a SEPARATE
+credentials. The demo web entry (objectives 224-c/224-d) is a SEPARATE
 standalone ASGI process serving `/fakeadmin` on a dedicated demo host
-(see [demo-admin.md](demo-admin.md), Demo web entry) — it is not a
-route of this gateway. The remaining demonstration features (copy-
-backed browsing, identity-masked reads, silent no-op actions) are
-later 224 suffixes.
+(see [demo-admin.md](demo-admin.md), Demo web entry and Demo verified
+copy reader) — it is not a route of this gateway. 224-d adds the
+read-only copy preview to that process (bounded counts from the
+session's own verified copy under the SELECT-only reader role); the
+remaining demonstration features (full copy-backed GUI browsing,
+identity-masked reads, silent no-op actions) are later 224 suffixes.
 
 ```text
 slaif-gateway demo-admin create <username> --reason <1..512 chars>

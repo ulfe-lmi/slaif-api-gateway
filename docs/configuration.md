@@ -1740,6 +1740,7 @@ and operator-setup reference.
 | `DEMO_SNAPSHOT_TARGET_HOST` | empty | Separate demo PostgreSQL service host. |
 | `DEMO_SNAPSHOT_TARGET_PORT` | `5432` | Target service port. |
 | `DEMO_SNAPSHOT_TARGET_USER` | empty | Target admin user (worker-only; the only role that can read raw copies). |
+| `DEMO_SNAPSHOT_TARGET_READER_ROLE` | empty | Closed-name identifier of the operator-created STATIC target-copy reader role (224-d). The worker requires it (fail-closed when missing/malformed) and grants ONLY that role `CONNECT`/`USAGE`/`SELECT` on ONE fully verified disposable copy, in one atomic transaction, only after the combined 222+223 proof. Nothing here creates roles; the role must be LOGIN with no privilege bits, no memberships, and must not be the target admin (see `docs/demo-admin.md`, Demo verified copy reader). |
 | `DEMO_SNAPSHOT_PGPASSFILE` | empty | Absolute path to a restrictive (0600) pgpass file for the PG client tools; passwords never use argv or logs. |
 | `DEMO_SNAPSHOT_CUSTODY_DIR` | empty | Absolute operator-owned `0700` custody directory outside the repo and databases. |
 | `DEMO_SNAPSHOT_MAX_EXPORT_BYTES` | `268435456` (256 MiB) | Hard per-job export byte cap; the dump is killed before a complete claim can exceed it. |
@@ -1838,6 +1839,10 @@ trusted private loopback/Compose network. See `docs/demo-admin.md`
 | `DEMO_WEB_CONTROL_USER` | empty | Dedicated web-only control role (required when enabled). |
 | `DEMO_WEB_CONTROL_PASSWORD` | empty | Web role password; never rendered anywhere (required when enabled). |
 | `DEMO_WEB_COOKIE_SECRET` | empty | Independent cookie-signing secret, at least 32 characters (required when enabled); distinct from every other secret in the deployment. |
+| `DEMO_WEB_COPY_HOST` | empty | Target COPY READER connection: the demo PostgreSQL service host (224-d; required when enabled). This is the copy reader role's OWN connection, never the worker's target-admin passfile, the source-export credential, the owner `DATABASE_URL`, Redis or a provider secret. |
+| `DEMO_WEB_COPY_PORT` | `5432` | Copy reader connection port (required to be a valid port when enabled). |
+| `DEMO_WEB_COPY_USER` | empty | The static target-copy reader role (must match the worker's `DEMO_SNAPSHOT_TARGET_READER_ROLE`); required when enabled. |
+| `DEMO_WEB_COPY_PASSWORD` | empty | Copy reader role password; never rendered anywhere (required when enabled). |
 
 Behavioral guarantees: every route 404s when zero fake-admin accounts
 are enabled (no credential or existence oracle); login verifies the
@@ -1847,7 +1852,13 @@ double-submit CSRF and finite body/field bounds; the wait surface
 rechecks the live account fence (enabled, credential generation) on
 EVERY poll and issues exactly one session at the verified moment; every
 page revalidates the session on use; logout revokes idempotently and
-clears all demo cookies. Copy-backed browsing is NOT part of 224-c.
+clears all demo cookies. 224-d adds the read-only copy preview
+(`/fakeadmin/copy-preview`): bounded counts from the session's ONE
+verified copy under the SELECT-only reader role, per-request
+read-only connection (disposed after use, `Cache-Control: no-store`),
+and one safe note for any unreadable/expired/wrong binding — no target
+name, DSN or internal error ever reaches the page. Full copy-backed
+GUI browsing remains a later 224 suffix.
 
 ## Production Notes
 

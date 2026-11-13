@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demo Copy Preview</title>
+  <link rel="stylesheet" href="/fakeadmin/static/css/admin.css">
+  <script src="/fakeadmin/static/js/table-sort.js" defer></script>
+</head>
+<body>
+  <section class="auth-panel" aria-labelledby="preview-heading">
+    <div class="auth-header">
+      <h1 id="preview-heading">Read-only copy preview</h1>
+    </div>
+
+    {% if counts %}
+    <p>
+      Bounded row counts from the copy bound to this session (identity-
+      masked data). This is a read-only proof of your private copy; it is
+      not the live system and no other session can read this copy.
+    </p>
+    <table data-sortable class="data-table">
+      <thead>
+        <tr>
+          <th data-ordinal aria-hidden="true">#</th>
+          <th scope="col">Table</th>
+          <th scope="col">Rows</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for table in tables %}
+        <tr>
+          <td class="row-ordinal">{{ loop.index }}</td>
+          <td>{{ table }}</td>
+          <td>{{ counts[table] }}</td>
+        </tr>
+        {% else %}
+        <tr data-no-sort>
+          <td colspan="3" class="empty-state">No copy table counts are
+            available right now.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="form-error" role="note">
+      Your copy data is not available right now. It is readable only
+      while your verified snapshot is current; please check back from
+      the ready page.
+    </p>
+    {% endif %}
+
+    <p class="form-error" role="note">
+      Full GUI browsing is <strong>not enabled yet</strong> in this
+      stage: only the read-only copy preview is available.
+    </p>
+
+    <p>
+      <a href="/fakeadmin/ready">Back to ready</a>
+    </p>
+
+    <form method="post" action="/fakeadmin/logout" class="form-stack">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button type="submit">Log out</button>
+    </form>
+  </section>
+</body>
+</html>

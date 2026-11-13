@@ -66,6 +66,10 @@ def _config(**overrides) -> DemoWebConfig:
         control_user="slaif_demo_web",
         control_password="unit-test-worker-password",
         cookie_secret=SECRET,
+        copy_host="127.0.0.1",
+        copy_port=5432,
+        copy_user="slaif_demo_copy",
+        copy_password="unit-test-copy-password",
     )
     base.update(overrides)
     return DemoWebConfig(**base)
@@ -213,18 +217,21 @@ class FakeFacade:
         self.issued = 0
         self.revoked = 0
         self.cred_lookups = 0
+        # 224-d knobs: the exact copy binding as stored on the row.
+        self.worker_target_db: str | None = None
+        self.request_account_id = ACC
 
     def _request(self) -> DemoSnapshotRequestProjection:
         """Live projection: state/gen/expiry reflect current facade knobs."""
         now = datetime.now(timezone.utc)
         return DemoSnapshotRequestProjection(
             id=REQ,
-            account_id=ACC,
+            account_id=self.request_account_id,
             credential_generation=self.request_gen,
             state=self.request_state,
             failure_code=None,
             worker_job_id=None,
-            worker_target_db=None,
+            worker_target_db=self.worker_target_db,
             created_at=now,
             deadline_at=now,
             expires_at=now + self.expires_delta,
@@ -321,8 +328,10 @@ class FakeFacade:
         )
 
 
-def _app(fake: FakeFacade):
-    return create_demo_app(_config(), facade=fake)
+def _app(fake: FakeFacade, copy_reader_factory=None):
+    return create_demo_app(
+        _config(), facade=fake, copy_reader_factory=copy_reader_factory
+    )
 
 
 def _client(app) -> AsyncClient:
@@ -344,6 +353,17 @@ async def _login(client: AsyncClient, username: str = "op", password: str = "goo
 def test_create_app_refuses_when_disabled():
     with pytest.raises(DemoWebConfigError):
         create_demo_app(_config(enabled=False), facade=FakeFacade())
+
+
+def test_create_app_refuses_direct_enabled_config_missing_copy_binding():
+    # The SAME fail-closed law for a directly supplied config (not
+    # only from_env): an enabled app cannot start without the
+    # copy-reader binding, whatever the facade.
+    with pytest.raises(DemoWebConfigError) as exc:
+        create_demo_app(
+            _config(copy_host=""), facade=FakeFacade()
+        )
+    assert exc.value.code == "demo_web_misconfigured"
 
 
 def test_demo_app_routes_are_fakeadmin_only():
@@ -514,7 +534,7 @@ def test_login_csrf_mismatch_refused():
         fake = FakeFacade()
         app = _app(fake)
         async with _client(app) as client:
-            r = await client.get("/fakeadmin/login")
+            await client.get("/fakeadmin/login")
             r = await client.post(
                 "/fakeadmin/login",
                 data={"username": "op", "password": "good-pw", "csrf": "forged"},
@@ -534,7 +554,7 @@ def test_login_csrf_expired_refused():
                 SECRET, "csrf", uuid.uuid4().hex, CSRF_TTL_S,
                 now=time.time() - CSRF_TTL_S - 10,
             )
-            r = await client.get("/fakeadmin/login")
+            await client.get("/fakeadmin/login")
             client.cookies["slaif_demo_csrf"] = stale
             r = await client.post(
                 "/fakeadmin/login",
@@ -708,7 +728,7 @@ def test_wait_verified_issues_exactly_one_session():
             assert client.cookies.get("slaif_demo_session") == "unit-token-1"
             assert fake.issued == 1
             # The pending cookie is consumed: a repeat wait cannot reissue.
-            r = await client.get("/fakeadmin/wait")
+            await client.get("/fakeadmin/wait")
             assert fake.issued == 1
             assert "slaif_demo_session" in client.cookies
 
@@ -725,7 +745,7 @@ def test_wait_pending_cookie_bad_signature_refused():
             client.cookies["slaif_demo_pending"] = "forged.signature"
             r = await client.get("/fakeadmin/wait/status")
             assert r.json() == {"state": "unavailable"}
-            r = await client.get("/fakeadmin/wait")
+            await client.get("/fakeadmin/wait")
             assert fake.issued == 0
 
     asyncio.run(run())
@@ -1046,11 +1066,361 @@ def test_logout_without_session_still_clears_and_redirects():
         fake = FakeFacade()
         app = _app(fake)
         async with _client(app) as client:
-            r = await client.get("/fakeadmin/ready")  # 303 to login, no csrf set
+            await client.get("/fakeadmin/ready")  # 303 to login, no csrf set
             r = await client.get("/fakeadmin/login")
             csrf = r.cookies["slaif_demo_csrf"]
             r = await client.post("/fakeadmin/logout", data={"csrf": csrf})
             assert r.status_code == 303
             assert fake.revoked == 0
+
+    asyncio.run(run())
+
+
+# --- 224-d: copy-reader config, reader, and preview route ---------------------
+
+from slaif_gateway.demo_web import (  # noqa: E402
+    COPY_PREVIEW_TABLES,
+    CopyReader,
+    DemoWebError,
+)
+
+COPY_OK = "demo_snap_" + "a1" * 10  # valid closed name (20 hex)
+CANARY_DB = "demo_snap_" + "deadbeef" * 5
+
+
+def test_config_malformed_copy_port_enabled_refuses():
+    with pytest.raises(DemoWebConfigError):
+        DemoWebConfig.from_env(
+            {
+                "DEMO_WEB_ENABLED": "true",
+                "DEMO_WEB_CONTROL_HOST": "127.0.0.1",
+                "DEMO_WEB_CONTROL_PORT": "5432",
+                "DEMO_WEB_CONTROL_DATABASE": "db",
+                "DEMO_WEB_CONTROL_USER": "web",
+                "DEMO_WEB_CONTROL_PASSWORD": "pw",
+                "DEMO_WEB_COOKIE_SECRET": "x" * 40,
+                "DEMO_WEB_COPY_HOST": "127.0.0.1",
+                "DEMO_WEB_COPY_PORT": "not-a-port",
+                "DEMO_WEB_COPY_USER": "reader",
+                "DEMO_WEB_COPY_PASSWORD": "readerpw",
+            }
+        )
+
+
+def test_config_enabled_missing_copy_fields_refuses():
+    # The independent copy-reader connection is required for an
+    # enabled entry; any gap fails closed before any publication.
+    with pytest.raises(DemoWebConfigError):
+        DemoWebConfig.from_env(
+            {
+                "DEMO_WEB_ENABLED": "true",
+                "DEMO_WEB_CONTROL_HOST": "127.0.0.1",
+                "DEMO_WEB_CONTROL_PORT": "5432",
+                "DEMO_WEB_CONTROL_DATABASE": "db",
+                "DEMO_WEB_CONTROL_USER": "web",
+                "DEMO_WEB_CONTROL_PASSWORD": "pw",
+                "DEMO_WEB_COOKIE_SECRET": "x" * 40,
+                "DEMO_WEB_COPY_HOST": "127.0.0.1",
+                "DEMO_WEB_COPY_PORT": "5432",
+                "DEMO_WEB_COPY_USER": "reader",
+                # missing DEMO_WEB_COPY_PASSWORD
+            }
+        )
+
+
+def test_config_off_garbage_copy_values_stay_bootable():
+    # A default-off entry never parses the optional copy values hard.
+    cfg = DemoWebConfig.from_env(
+        {"DEMO_WEB_COPY_PORT": "garbage", "DEMO_WEB_COPY_USER": "x;y"}
+    )
+    assert cfg.enabled is False
+
+
+def test_copy_engine_url_enforces_closed_copy_name_law():
+    cfg = _config(
+        copy_host="127.0.0.1",
+        copy_port=5432,
+        copy_user="reader",
+        copy_password="readerpw",
+    )
+    url = cfg.copy_engine_url(COPY_OK)
+    assert url.startswith("postgresql+asyncpg://reader:")
+    assert url.endswith(f"@127.0.0.1:5432/{COPY_OK}")
+    for bad in ("evil_db", "demo_snap_" + "a" * 19, "demo_snap_" + "A" * 20,
+                "demo_snap_" + "g" * 20, CANARY_DB + "x"):
+        with pytest.raises(DemoWebError) as ei:
+            cfg.copy_engine_url(bad)
+        assert ei.value.code == "copy_binding_unavailable"
+
+
+def test_copy_reader_constructor_refuses_malformed_name():
+    cfg = _config(copy_host="127.0.0.1", copy_user="reader", copy_password="p")
+    with pytest.raises(DemoWebError) as ei:
+        CopyReader(cfg, "demo_snap_" + "a" * 21)
+    assert ei.value.code == "copy_binding_unavailable"
+
+
+def test_copy_reader_close_wraps_dispose_failure_safely():
+    # A raw driver exception from dispose() must never escape the
+    # reader: one safe refusal instead, no detail leaked.
+    class _BoomEngine:
+        def __init__(self) -> None:
+            self.disposed = 0
+
+        async def dispose(self) -> None:
+            self.disposed += 1
+            raise RuntimeError("driver boom postgresql://secret@x/y")
+
+    engine = _BoomEngine()
+    reader = CopyReader(
+        _config(copy_host="h", copy_user="u", copy_password="p"), COPY_OK
+    )
+    reader._engine = engine  # type: ignore[assignment]
+    with pytest.raises(DemoWebError) as ei:
+        asyncio.run(reader.close())
+    assert ei.value.code == "copy_binding_unavailable"
+    assert "boom" not in str(ei.value)
+    assert "secret" not in str(ei.value)
+    assert engine.disposed == 1
+    # A second close is a safe no-op.
+    asyncio.run(reader.close())
+
+
+class FakeCopyReader:
+    """In-memory copy reader standing in for the per-request engine."""
+
+    def __init__(self, counts=None, raise_code=None, name=None):
+        self._counts = counts
+        self._raise_code = raise_code
+        self.name = name
+        self.reads = 0
+        self.closed = 0
+
+    async def read(self):
+        self.reads += 1
+        if self._raise_code is not None:
+            raise DemoWebError(
+                self._raise_code, "The session copy binding is not available."
+            )
+        assert self._counts is not None
+        return dict(self._counts)
+
+    async def close(self):
+        self.closed += 1
+
+
+def _counts_all(n: int = 3) -> dict[str, int]:
+    return {t: n for t in COPY_PREVIEW_TABLES}
+
+
+def _factory(counts=None, raise_code=None):
+    made: list[tuple] = []
+
+    def factory(cfg, target_db):
+        made.append((cfg, target_db))
+        return FakeCopyReader(counts, raise_code, name=target_db)
+
+    return factory, made
+
+
+def test_preview_requires_valid_session():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        app = _app(fake)
+        async with _client(app) as client:
+            # No session cookie at all.
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 303
+            assert r.headers["location"] == "/fakeadmin/login"
+            # A forged (unknown) token: refuse + clear (cookie set with
+            # server-matching domain/path so the delete is observable).
+            client.cookies.set(
+                "slaif_demo_session", "forged", domain="demo.test", path="/"
+            )
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 303
+            assert client.cookies.get("slaif_demo_session") is None
+
+    asyncio.run(run())
+
+
+def test_preview_zero_active_accounts_404():
+    async def run():
+        fake = FakeFacade()
+        fake.active = 0
+        app = _app(fake)
+        async with _client(app) as client:
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 404
+
+    asyncio.run(run())
+
+
+async def _verified_session_client(fake: FakeFacade, client: AsyncClient) -> None:
+    """Give the client a real session for a verified request."""
+    fake.request_state = "verified_unpublished"
+    r = await client.get("/fakeadmin/login")
+    csrf = r.cookies["slaif_demo_csrf"]
+    r = await client.post(
+        "/fakeadmin/login",
+        data={"username": "op", "password": "good-pw", "csrf": csrf},
+    )
+    assert r.status_code == 303
+    # Complete the wait so exactly one session is issued.
+    r = await client.get("/fakeadmin/wait")
+    assert r.status_code == 303
+    assert client.cookies.get("slaif_demo_session") == "unit-token-1"
+
+
+def test_preview_unverified_request_safe_note():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "claimed"  # not verified yet
+        fake.worker_target_db = CANARY_DB
+        factory, made = _factory(counts=_counts_all())
+        app = _app(fake, copy_reader_factory=factory)
+        async with _client(app) as client:
+            client.cookies.set(
+                "slaif_demo_session", "unit-token-1", domain="demo.test", path="/"
+            )
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 200
+            assert "not available right now" in r.text
+            assert CANARY_DB not in r.text
+            assert made == []  # the reader was never constructed
+
+    asyncio.run(run())
+
+
+def test_preview_expired_verified_request_safe_note():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = CANARY_DB
+        fake.expires_delta = timedelta(seconds=-10)
+        factory, made = _factory(counts=_counts_all())
+        app = _app(fake, copy_reader_factory=factory)
+        async with _client(app) as client:
+            # The session itself is issued while the (back-dated)
+            # request still validates as a session; the COPY read must
+            # refuse because the request is expired.
+            client.cookies["slaif_demo_session"] = "unit-token-1"
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 200
+            assert "not available right now" in r.text
+            assert CANARY_DB not in r.text
+            assert made == []
+
+    asyncio.run(run())
+
+
+def test_preview_verified_reads_counts_no_store_no_canary():
+    async def run():
+        fake = FakeFacade()
+        fake.worker_target_db = COPY_OK
+        counts = _counts_all(7)
+        factory, made = _factory(counts=counts)
+        app = _app(fake, copy_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 200
+            assert r.headers.get("cache-control") == "no-store"
+            for table in COPY_PREVIEW_TABLES:
+                assert table in r.text
+            assert "not available right now" not in r.text
+            # The copy name, DSN and credentials NEVER reach the page.
+            assert COPY_OK not in r.text
+            assert "postgresql" not in r.text.lower()
+            assert "readerpw" not in r.text
+            assert "unit-test-worker-password" not in r.text
+            # The factory got the EXACT verified copy name once.
+            assert [m[1] for m in made] == [COPY_OK]
+
+    asyncio.run(run())
+
+
+def test_preview_malformed_control_row_name_safe_note():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = "evil_db; DROP TABLE x"
+        # The REAL default factory: CopyReader's closed-name law runs
+        # inside the route's safe boundary - one safe note, never a
+        # 500 or a raw DemoWebError, and nothing reaches a connection.
+        app = _app(fake)
+        async with _client(app) as client:
+            client.cookies.set(
+                "slaif_demo_session", "unit-token-1", domain="demo.test", path="/"
+            )
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 200
+            assert "not available right now" in r.text
+            assert "evil_db" not in r.text
+
+    asyncio.run(run())
+
+
+def test_preview_reader_failure_safe_note():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        factory, made = _factory(raise_code="copy_binding_unavailable")
+        app = _app(fake, copy_reader_factory=factory)
+        async with _client(app) as client:
+            await _verified_session_client(fake, client)
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 200
+            assert "not available right now" in r.text
+            assert COPY_OK not in r.text
+            assert len(made) == 1
+
+    asyncio.run(run())
+
+
+def test_preview_wrong_account_binding_safe_note():
+    async def run():
+        fake = FakeFacade()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = CANARY_DB
+        # The stored request row belongs to a DIFFERENT account than
+        # the validated session: the exactness check refuses.
+        fake.request_account_id = uuid.uuid4()
+        factory, made = _factory(counts=_counts_all())
+        app = _app(fake, copy_reader_factory=factory)
+        async with _client(app) as client:
+            client.cookies["slaif_demo_session"] = "unit-token-1"
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 200
+            assert "not available right now" in r.text
+            assert CANARY_DB not in r.text
+            assert made == []
+
+    asyncio.run(run())
+
+
+def test_preview_disabled_account_bounces():
+    async def run():
+        class Disabled(FakeFacade):
+            async def validate_session(self, *, account_id, token):
+                # Live fence: the account was disabled mid-session.
+                raise DemoWebControlError("web_account_disabled", "disabled")
+
+        fake = Disabled()
+        fake.request_state = "verified_unpublished"
+        fake.worker_target_db = COPY_OK
+        factory, made = _factory(counts=_counts_all())
+        app = _app(fake, copy_reader_factory=factory)
+        async with _client(app) as client:
+            client.cookies.set(
+                "slaif_demo_session", "unit-token-1", domain="demo.test", path="/"
+            )
+            r = await client.get("/fakeadmin/copy-preview")
+            assert r.status_code == 303
+            assert client.cookies.get("slaif_demo_session") is None
+            assert made == []
 
     asyncio.run(run())

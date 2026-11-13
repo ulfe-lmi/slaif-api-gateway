@@ -35,7 +35,7 @@ import time
 import uuid
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Callable, Protocol
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -45,6 +45,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from slaif_gateway.db.repositories.fake_admin_accounts import (
     FakeAdminAccountsRepository,
@@ -67,6 +68,7 @@ __all__ = [
     "DemoWebConfigError",
     "DemoWebFacade",
     "PgDemoWebFacade",
+    "CopyReader",
     "create_demo_app",
     "make_signed_payload",
     "verify_signed_payload",
@@ -112,6 +114,28 @@ CSRF_TTL_S = 600  # login/logout form token lifetime
 # longer value is refused BEFORE any decode (no allocation blowup).
 SIGNED_TOKEN_MAX_LEN = 512
 
+# 224-d: the closed disposable-copy database name law (the 221
+# worker-generated name); the web process accepts ONLY this shape from
+# the control row and nothing else can be interpolated.
+_COPY_TARGET_DB_RE = re.compile(r"demo_snap_[0-9a-f]{20}")
+
+# The fixed, reviewed public tables the read-only preview may COUNT.
+# Bounded and closed: no table name is ever taken from a request, and
+# the copy itself contains exactly the 222 fail-closed schema
+# inventory, so no other business object exists to reach.
+COPY_PREVIEW_TABLES: tuple[str, ...] = (
+    "owners",
+    "gateway_keys",
+    "provider_configs",
+    "model_routes",
+    "usage_ledger",
+    "audit_log",
+)
+
+# Finite copy-read bounds (one per-request read-only connection).
+_COPY_STATEMENT_TIMEOUT_S = 10.0
+_COPY_CONNECT_TIMEOUT_S = 10.0
+
 
 class DemoWebConfigError(DemoWebError):
     """Configuration is missing/invalid (safe message, no value echo)."""
@@ -134,6 +158,18 @@ class DemoWebConfig:
     control_user: str = ""
     control_password: str = field(repr=False, default="")
     cookie_secret: str = field(repr=False, default="")
+    # 224-d: the independent TARGET COPY READER connection (the
+    # operator-created static reader role's own credential). This is
+    # NEVER the worker's target-admin passfile, the source-export
+    # credential, the owner DATABASE_URL, Redis or a provider secret:
+    # the web process reaches ONLY its session's one verified copy
+    # through this SELECT-only role. Default empty: enabled app
+    # refuses to start (safe misconfiguration) before any publication
+    # can be served.
+    copy_host: str = ""
+    copy_port: int = 5432
+    copy_user: str = ""
+    copy_password: str = field(repr=False, default="")
 
     @classmethod
     def from_env(cls, environ: dict[str, str] | None = None) -> "DemoWebConfig":
@@ -158,10 +194,24 @@ class DemoWebConfig:
                 port = int(port_raw)
             except ValueError:
                 port, port_ok = 0, False
+        copy_port = 5432
+        copy_port_ok = True
+        copy_port_raw = _str("DEMO_WEB_COPY_PORT")
+        if copy_port_raw:
+            try:
+                copy_port = int(copy_port_raw)
+            except ValueError:
+                copy_port, copy_port_ok = 0, False
         if enabled and not port_ok:
             raise DemoWebConfigError(
                 "demo_web_misconfigured",
                 "The demo web entry has an invalid control port "
+                "configuration.",
+            )
+        if enabled and not copy_port_ok:
+            raise DemoWebConfigError(
+                "demo_web_misconfigured",
+                "The demo web entry has an invalid copy-reader port "
                 "configuration.",
             )
         config = cls(
@@ -172,6 +222,10 @@ class DemoWebConfig:
             control_user=_str("DEMO_WEB_CONTROL_USER"),
             control_password=_str("DEMO_WEB_CONTROL_PASSWORD"),
             cookie_secret=_str("DEMO_WEB_COOKIE_SECRET"),
+            copy_host=_str("DEMO_WEB_COPY_HOST"),
+            copy_port=copy_port,
+            copy_user=_str("DEMO_WEB_COPY_USER"),
+            copy_password=_str("DEMO_WEB_COPY_PASSWORD"),
         )
         if config.enabled:
             config._validate_enabled()
@@ -191,6 +245,18 @@ class DemoWebConfig:
             problems.append("password")
         if len(self.cookie_secret) < 32:
             problems.append("cookie-secret")
+        # 224-d: the independent copy-reader connection is required
+        # for an enabled entry (the read-only copy preview is part of
+        # this stage); missing/malformed fails closed before any
+        # publication is served.
+        if not self.copy_host:
+            problems.append("copy-host")
+        if not (1 <= self.copy_port <= 65535):
+            problems.append("copy-port")
+        if _IDENTIFIER_RE.fullmatch(self.copy_user) is None:
+            problems.append("copy-user")
+        if not self.copy_password:
+            problems.append("copy-password")
         if problems:
             raise DemoWebConfigError(
                 "demo_web_misconfigured",
@@ -208,6 +274,30 @@ class DemoWebConfig:
             f"{quote(self.control_password, safe='')}"
             f"@{self.control_host}:{self.control_port}/"
             f"{quote(self.control_database, safe='')}"
+        )
+
+    def copy_engine_url(self, target_db: str) -> str:
+        """Per-request copy-connection DSN for ONE verified copy.
+
+        ``target_db`` must satisfy the closed disposable-copy name
+        law (``demo_snap_<20 hex>``) BEFORE any interpolation; the
+        credential is the copy reader role's own (SELECT-only), and
+        the explicit no-TLS ``ssl=False`` stage boundary matches the
+        control connection (trusted private network only).
+        """
+        from urllib.parse import quote
+
+        if _COPY_TARGET_DB_RE.fullmatch(target_db) is None:
+            raise DemoWebError(
+                "copy_binding_unavailable",
+                "The session copy binding is not available.",
+            )
+        return (
+            "postgresql+asyncpg://"
+            f"{quote(self.copy_user, safe='')}:"
+            f"{quote(self.copy_password, safe='')}"
+            f"@{self.copy_host}:{self.copy_port}/"
+            f"{quote(target_db, safe='')}"
         )
 
 
@@ -423,6 +513,154 @@ class PgDemoWebFacade:
             )
 
 
+# --- 224-d session-bound target-copy reader ---------------------------------------
+
+
+class CopyReader:
+    """Bounded, per-request, SELECT-only reader for ONE session's
+    verified copy (224-d).
+
+    The web process has NO pathname/custody access. It connects to the
+    exact disposable database named by the verified control row (closed
+    ``demo_snap_<20hex>`` law) under the operator's static reader role
+    over the trusted private network, inside ONE per-request engine
+    (``NullPool`` - a fresh connection per checkout, disposed after
+    use, so logout/cleanup is never held by an idle web pool). The
+    connect itself is bounded (asyncpg connect timeout), and every
+    statement runs under a finite ``statement_timeout``.
+
+    The whole preview read is ONE database-side READ ONLY transaction
+    (``conn.begin()`` + ``SET TRANSACTION READ ONLY`` as the first
+    statement of that transaction - a backstop on top of the role's
+    SELECT-only grants):
+
+    1. the transaction is verified read-only
+       (``current_setting('transaction_read_only')`` must be ``on``);
+    2. ``current_database()`` MUST equal the expected copy name - a
+       wrong/stale binding refuses without exposing either name;
+    3. the fixed reviewed table allowlist is COUNTED with strict
+       ``count(*)`` statements. The allowlist is a module constant
+       (never request-derived), and a verified copy always contains
+       the 222 fail-closed schema inventory; a missing table means a
+       malformed copy and fails closed, it is not reported as absent.
+
+    No request-derived or unknown table name, raw row, DSN,
+    credential or error detail ever leaves this object: ``read``
+    returns only the fixed six-table allowlist count mapping (its
+    keys are module constants, never request input), and every
+    failure path raises ``DemoWebError`` with the one safe
+    ``copy_binding_unavailable`` vocabulary.
+    """
+
+    def __init__(self, config: DemoWebConfig, target_db: str) -> None:
+        # Validate BEFORE any allocation/connection: a malformed name
+        # from the control row is a safe refusal, never an interpolation.
+        if _COPY_TARGET_DB_RE.fullmatch(target_db) is None:
+            raise DemoWebError(
+                "copy_binding_unavailable",
+                "The session copy binding is not available.",
+            )
+        self._config = config
+        self._target_db = target_db
+        self._engine: AsyncEngine | None = None
+
+    async def close(self) -> None:
+        # Always attempt disposal; a disposal failure must never leak
+        # a raw driver exception: it is wrapped in the same safe
+        # refusal, so an otherwise successful read surfaces as that
+        # safe refusal, never as a raw detail.
+        if self._engine is not None:
+            engine, self._engine = self._engine, None
+            try:
+                await engine.dispose()
+            except DemoWebError:
+                raise
+            except Exception:
+                raise DemoWebError(
+                    "copy_binding_unavailable",
+                    "The session copy binding is not available.",
+                ) from None
+
+    async def read(self) -> dict[str, int]:
+        """Read the bounded preview counts; every failure is the one
+        safe refusal (no name, DSN or error detail escapes)."""
+        from sqlalchemy import text as _sql_text
+
+        try:
+            self._engine = create_async_engine(
+                self._config.copy_engine_url(self._target_db),
+                poolclass=NullPool,
+                connect_args={
+                    # Explicit stage boundary (trusted private
+                    # network only) plus a bounded connect.
+                    "ssl": False,
+                    "timeout": _COPY_CONNECT_TIMEOUT_S,
+                    "server_settings": {
+                        "statement_timeout": str(
+                            int(_COPY_STATEMENT_TIMEOUT_S * 1000)
+                        )
+                    },
+                },
+            )
+            async with self._engine.connect() as conn:
+                async with conn.begin():
+                    # First statement of this explicit transaction:
+                    # make it READ ONLY, then verify the server agrees.
+                    await conn.exec_driver_sql(
+                        "SET TRANSACTION READ ONLY"
+                    )
+                    mode = (
+                        await conn.exec_driver_sql(
+                            "SELECT current_setting("
+                            "'transaction_read_only')"
+                        )
+                    ).first()
+                    if mode is None or mode[0] != "on":
+                        raise DemoWebError(
+                            "copy_binding_unavailable",
+                            "The session copy binding is not available.",
+                        )
+                    row = (
+                        await conn.exec_driver_sql(
+                            "SELECT current_database()"
+                        )
+                    ).first()
+                    if row is None or row[0] != self._target_db:
+                        raise DemoWebError(
+                            "copy_binding_unavailable",
+                            "The session copy binding is not available.",
+                        )
+                    counts: dict[str, int] = {}
+                    for table in COPY_PREVIEW_TABLES:
+                        # Closed module-constant allowlist (never
+                        # request-derived); the verified copy always
+                        # contains the 222 fail-closed schema
+                        # inventory, so a missing table here is a
+                        # malformed copy and fails closed.
+                        val = (
+                            await conn.execute(
+                                _sql_text(
+                                    "SELECT count(*) FROM "
+                                    f"public.{table}"
+                                )
+                            )
+                        ).scalar_one()
+                        counts[table] = int(val)
+                return counts
+        except DemoWebError:
+            raise
+        except Exception:
+            # Driver, connection, dispose or statement failure: one
+            # generic safe refusal, never a traceback or internal
+            # value.
+            raise DemoWebError(
+                "copy_binding_unavailable",
+                "The session copy binding is not available.",
+            ) from None
+        finally:
+            await self.close()
+
+
 # --- the standalone ASGI entrypoint -----------------------------------------------
 
 
@@ -430,6 +668,7 @@ def create_demo_app(
     config: DemoWebConfig | None = None,
     *,
     facade: DemoWebFacade | None = None,
+    copy_reader_factory: "Callable[[DemoWebConfig, str], CopyReader] | None" = None,
 ) -> FastAPI:
     """Build the standalone demo web ASGI app (224-c).
 
@@ -454,6 +693,10 @@ def create_demo_app(
             "demo_web_not_enabled",
             "The demo web entry is disabled (DEMO_WEB_ENABLED is not true).",
         )
+    # The SAME fail-closed law for a directly supplied enabled config
+    # (from_env already validated; this is idempotent for it): an
+    # enabled app can never start with a missing copy-reader binding.
+    cfg._validate_enabled()
     demo_facade = facade if facade is not None else PgDemoWebFacade(cfg)
     templates = Jinja2Templates(
         directory=str(Path(__file__).resolve().parent / "web" / "templates" / "demo")
@@ -470,6 +713,13 @@ def create_demo_app(
     app.state.demo_config = cfg
     app.state.demo_facade = demo_facade
     app.state.demo_templates = templates
+    # 224-d: per-request copy-reader factory (the purpose-built
+    # reader by default; tests may substitute a fake).
+    app.state.demo_copy_reader_factory = (
+        copy_reader_factory
+        if copy_reader_factory is not None
+        else (lambda cfg, target_db: CopyReader(cfg, target_db))
+    )
 
     static_dir = Path(__file__).resolve().parent / "web" / "static"
     app.mount(

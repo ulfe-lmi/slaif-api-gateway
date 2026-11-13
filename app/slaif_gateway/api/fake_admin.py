@@ -3,8 +3,9 @@
 These routes are mounted ONLY by the standalone demo app
 (``demo_web.create_demo_app``). They implement the bounded entry flow:
 login -> pending wait -> one session at the verified moment -> ready
-page -> logout. Copy-backed browsing is NOT part of this stage and the
-pages say so explicitly.
+page -> read-only copy preview (224-d: bounded counts from the
+session's ONE verified copy) -> logout. Full copy-backed GUI
+browsing is NOT part of this stage and the pages say so explicitly.
 
 Safety law (224-c):
 
@@ -51,11 +52,13 @@ from starlette.concurrency import run_in_threadpool
 
 from slaif_gateway.demo_web import (
     CSRF_TTL_S,
+    COPY_PREVIEW_TABLES,
     LOGIN_ATTEMPT_MAX,
     LOGIN_ATTEMPT_WINDOW_S,
     LOGIN_FIELD_MAX,
     PENDING_TTL_S,
     DemoWebConfig,
+    DemoWebError,
     DemoWebFacade,
     SIGNED_TOKEN_MAX_LEN,
     make_signed_payload,
@@ -79,6 +82,7 @@ PURPOSE_PENDING = "pending"
 LOGIN_URL = "/fakeadmin/login"
 WAIT_URL = "/fakeadmin/wait"
 READY_URL = "/fakeadmin/ready"
+COPY_PREVIEW_URL = "/fakeadmin/copy-preview"
 LOGOUT_URL = "/fakeadmin/logout"
 
 # Constant login failure message (no enumeration, ever).
@@ -537,6 +541,88 @@ async def demo_ready_get(request: Request) -> object:
     response = _templates(request).TemplateResponse(
         request, "ready.html", {"csrf": csrf_token}
     )
+    _set_cookie(response, COOKIE_CSRF, csrf_token, int(CSRF_TTL_S))
+    return response
+
+
+def _copy_readable_now(snap_request) -> bool:
+    """The session's copy is readable ONLY while its EXACT request is
+    verified and unexpired (re-checked on every read; the request's
+    own expiry is the absolute bound)."""
+    from datetime import datetime, timezone
+
+    if snap_request.state != "verified_unpublished":
+        return False
+    if (
+        snap_request.expires_at is not None
+        and datetime.now(timezone.utc) >= snap_request.expires_at
+    ):
+        return False
+    return True
+
+
+@fake_admin_router.get("/copy-preview", name="demo_copy_preview")
+async def demo_copy_preview_get(request: Request) -> object:
+    """224-d read-only copy preview: safe bounded COUNTS from the
+    session's ONE verified copy - a proof of the copy binding, not an
+    admin UI. Fail-closed: no target name, DSN, credential or
+    internal error ever reaches the page; an unreadable copy renders
+    the one safe note instead. The response is ``no-store`` so the
+    browser cache never retains demo facts after logout.
+    """
+    cfg = _config(request)
+    if await _zero_active(request):
+        return _json(404, "Not Found")
+    token = request.cookies.get(COOKIE_SESSION)
+    facade = _facade(request)
+
+    def _bounce() -> RedirectResponse:
+        response = RedirectResponse(LOGIN_URL, status_code=303)
+        _clear_cookie(response, COOKIE_SESSION, path=SESSION_COOKIE_PATH)
+        return response
+
+    if not token:
+        return _bounce()
+    # Stored binding (raw token only; the hash is the stored form)
+    # resolves the account; the full per-use validation (live
+    # account/generation fence) then returns the AUTHORITATIVE
+    # session projection - the same law as the ready page.
+    stored = await facade.session_facts_by_token(token)
+    if stored is None:
+        return _bounce()
+    try:
+        session = await facade.validate_session(
+            account_id=stored.account_id, token=token
+        )
+    except DemoWebControlError:
+        return _bounce()
+    # The EXACT request binding from the control row: it must be the
+    # validated session's own request (id AND account match) and be
+    # verified and unexpired; ONLY its closed demo_snap_<20hex> copy
+    # name is accepted. Construction AND read share one safe-error
+    # boundary: a malformed stored name is a safe refusal, never a
+    # raw error or a DSN.
+    counts: dict[str, int] | None = None
+    snap_request = await facade.get_request(session.request_id)
+    if snap_request is not None and (
+        snap_request.id == session.request_id
+        and snap_request.account_id == session.account_id
+        and _copy_readable_now(snap_request)
+        and snap_request.worker_target_db is not None
+    ):
+        factory = request.app.state.demo_copy_reader_factory
+        try:
+            reader = factory(cfg, snap_request.worker_target_db)
+            counts = await reader.read()
+        except DemoWebError:
+            counts = None  # one safe note; no detail escapes
+    csrf_token = _new_csrf_token(cfg.cookie_secret)
+    response = _templates(request).TemplateResponse(
+        request,
+        "copy_preview.html",
+        {"csrf": csrf_token, "counts": counts, "tables": COPY_PREVIEW_TABLES},
+    )
+    response.headers["Cache-Control"] = "no-store"
     _set_cookie(response, COOKIE_CSRF, csrf_token, int(CSRF_TTL_S))
     return response
 

@@ -66,6 +66,8 @@ from tests.integration.test_demo_web_control_postgres import (
     _session_factory,
 )
 from tests.integration.test_demo_web_worker_postgres import (
+    _READER_PW,
+    _READER_ROLE,
     _request_row,
     _settings_for,
 )
@@ -151,7 +153,7 @@ def webenv(_wenv_base: dict[str, Any]) -> Iterator[dict[str, Any]]:
 # --- helpers -----------------------------------------------------------------------
 
 
-def _web_config(env: dict[str, Any]) -> DemoWebConfig:
+def _web_config(env: dict[str, Any], san: _Env) -> DemoWebConfig:
     parsed = urlparse(str(env["source_url"]))
     return DemoWebConfig(
         enabled=True,
@@ -161,6 +163,14 @@ def _web_config(env: dict[str, Any]) -> DemoWebConfig:
         control_user=str(env["web_role"]),
         control_password=str(env["web_pw"]),
         cookie_secret=f"pg-e2e-cookie-secret-{uuid.uuid4().hex}",
+        # 224-d law: an enabled config must carry the copy-reader
+        # binding. These tests never open a copy connection, so the
+        # binding is the owned target endpoint under the run-owned
+        # reader role (validation-only values here).
+        copy_host=str(san.target["host"]),
+        copy_port=int(san.target["port"]),
+        copy_user=_READER_ROLE,
+        copy_password=_READER_PW,
     )
 
 
@@ -203,6 +213,7 @@ def _worker_cli_env(san: _Env, env: dict[str, Any], custody: Path) -> dict[str, 
             "DEMO_WEB_WORKER_CONTROL_USER": env["worker_role"],
             "DEMO_WEB_WORKER_CONTROL_PASSWORD": env["worker_pw"],
             "COMPLETION_SERVICE_PROFILE_DIR": str(env["profile_dir"]),
+            "DEMO_SNAPSHOT_TARGET_READER_ROLE": env["reader_role"],
         }
     )
     return {str(k): str(v) for k, v in values.items()}
@@ -233,7 +244,7 @@ def test_e2e_web_entry_full_cycle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     env = webenv
-    cfg = _web_config(env)
+    cfg = _web_config(env, san_env)
     # Each web phase gets its OWN facade: an asyncpg engine binds to the
     # event loop it was first used on, and the synchronous worker-CLI
     # steps run in between (separate asyncio.run loops).
@@ -451,10 +462,12 @@ def test_web_role_privilege_boundary(webenv: dict[str, Any]) -> None:
 # --- 3. zero enabled accounts: 404 on every demo route -----------------------------
 
 
-def test_zero_active_404_and_reenable(webenv: dict[str, Any]) -> None:
+def test_zero_active_404_and_reenable(
+    san_env: _Env, webenv: dict[str, Any]
+) -> None:
     env = webenv
     source_url = str(env["source_url"])
-    cfg = _web_config(env)
+    cfg = _web_config(env, san_env)
 
     def _set_enabled(enabled: bool) -> None:
         # Trusted owner path (test-only): no parameter support on the

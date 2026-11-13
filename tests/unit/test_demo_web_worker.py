@@ -56,6 +56,7 @@ def _settings_dict(custody: Path, passfile: Path, **overrides) -> dict[str, obje
         "DEMO_SNAPSHOT_TARGET_HOST": "127.0.0.1",
         "DEMO_SNAPSHOT_TARGET_PORT": 5556,
         "DEMO_SNAPSHOT_TARGET_USER": "snap_target",
+        "DEMO_SNAPSHOT_TARGET_READER_ROLE": "snap_reader_role",
         "DEMO_SNAPSHOT_PGPASSFILE": str(passfile),
         "DEMO_SNAPSHOT_CUSTODY_DIR": str(custody),
         "DEMO_WEB_WORKER_CONTROL_HOST": "127.0.0.1",
@@ -399,11 +400,18 @@ def test_process_request_happy_path_publishes_exact_binding(
     control = FakeControl(config)
     _install_fake_control(monkeypatch, control)
     calls = _pipeline_success(monkeypatch, job, target)
+    grants: list[str] = []
+    monkeypatch.setattr(dww, "_grant_target_reader",
+                        lambda cfg, db: grants.append(db))
     result = asyncio.run(
         dww.process_request(config, settings, request_id=REQUEST_ID)
     )
     assert result.state == "verified_unpublished"
     assert result.failure_code is None
+    # 224-d: the exact verified copy was published to the reader role
+    # exactly once (and the proof preceded it: the grant ran only
+    # because the pipeline succeeded).
+    assert grants == [target]
     # The exact job was selected everywhere; the worker passes no
     # protected set (the 221 structural law protects verified copies
     # itself - the redundant 224-b set was removed in 224-c).
@@ -685,13 +693,26 @@ def test_process_request_handoff_refusal_reports_finite_code(
     )
     _install_fake_control(monkeypatch, control)
     _pipeline_success(monkeypatch, job, target)
+
+    def grant_guard(cfg, db):
+        # 224-d ordering law: the publication grant happens BEFORE any
+        # handoff attempt (the copy is made readable only now, and the
+        # handoff may not precede it).
+        assert db == target
+        assert control.handoffs == []
+
+    monkeypatch.setattr(dww, "_grant_target_reader", grant_guard)
     result = asyncio.run(
         dww.process_request(config, settings, request_id=REQUEST_ID)
     )
     assert result.state == "failed"
     assert result.failure_code == "state_conflict"
-    # The handoff WAS attempted exactly once (the refusal came back).
+    # The handoff WAS attempted exactly once (the refusal came back),
+    # AFTER the guard-proven grant (asserted in-flight above); the
+    # refusal marks the request failed promptly (224-d: the granted
+    # copy must not wait on the claim lease reap for cleanup).
     assert len(control.handoffs) == 1
+    assert control.failures == [(REQUEST_ID, "worker_failed")]
 
 
 def test_process_request_control_error_maps_to_safe_code(
@@ -703,11 +724,15 @@ def test_process_request_control_error_maps_to_safe_code(
     control = FakeControl(config, handoff_error="web_request_not_claimed")
     _install_fake_control(monkeypatch, control)
     _pipeline_success(monkeypatch, job, target)
+    monkeypatch.setattr(dww, "_grant_target_reader", lambda cfg, db: None)
     result = asyncio.run(
         dww.process_request(config, settings, request_id=REQUEST_ID)
     )
     assert result.state == "failed"
     assert result.failure_code == "web_request_not_claimed"
+    # Prompt guarded failure mark (no-op in production if the row
+    # already moved; the fake accepts it).
+    assert control.failures == [(REQUEST_ID, "worker_failed")]
 
 
 def test_process_request_unexpected_exception_safe_internal(
@@ -1092,6 +1117,7 @@ def test_process_request_binds_request_id_into_private_manifest(
     control = FakeControl(config)
     _install_fake_control(monkeypatch, control)
     calls = _pipeline_success(monkeypatch, job, target)
+    monkeypatch.setattr(dww, "_grant_target_reader", lambda cfg, db: None)
     result = asyncio.run(
         dww.process_request(config, settings, request_id=REQUEST_ID)
     )
@@ -1311,3 +1337,141 @@ def test_recover_and_cleanup_unreadable_manifest_retained(
     assert (custody / job / ds._MANIFEST_NAME).read_text(encoding="utf-8") == (
         "{corrupt manifest"
     )
+
+
+# --- 224-d: exact verified-copy reader publication grant ----------------------
+
+READER_ROLE = "snap_reader_role"  # the fixture's configured reader role
+
+
+def _fake_psql(monkeypatch: pytest.MonkeyPatch, outputs=None):
+    """Capture every bounded psql call; scripted per-call (out, rc).
+
+    ``outputs`` is a list of ``(stdout_tail, returncode)`` pairs; when
+    omitted every call succeeds with stdout ``"1"``.
+    """
+    calls: list[tuple[str, str]] = []
+
+    def fake_psql(config, database, sql, **kwargs):
+        calls.append((database, sql))
+        if outputs is None:
+            out, rc = "1", 0
+        else:
+            out, rc = outputs[len(calls) - 1]
+        return ds._CappedRunResult(
+            returncode=rc, stderr_tail="", stdout_tail=out
+        )
+
+    monkeypatch.setattr(ds, "_psql_target_admin", fake_psql)
+    return calls
+
+
+def test_grant_success_single_transaction_exact_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _settings, _custody, _pf = _worker_config(tmp_path)
+    target = _target_db(41)
+    calls = _fake_psql(monkeypatch, outputs=[("1", 0), ("", 0)])
+    dww._grant_target_reader(config, target)
+    assert len(calls) == 2
+    # 1) role-law precheck on the maintenance database.
+    pre_db, pre_sql = calls[0]
+    assert pre_db == "postgres"
+    assert "pg_roles" in pre_sql and "pg_auth_members" in pre_sql
+    assert "rolcanlogin" in pre_sql and "rolsuper" in pre_sql
+    # 2) ONE explicit transaction ON the exact target database:
+    # CONNECT + USAGE + SELECT, atomic (BEGIN ... COMMIT).
+    grant_db, grant_sql = calls[1]
+    assert grant_db == target
+    assert grant_sql.startswith("BEGIN; ")
+    assert grant_sql.endswith("COMMIT;")
+    assert f'GRANT CONNECT ON DATABASE "{target}" TO "{READER_ROLE}"' in grant_sql
+    assert f'GRANT USAGE ON SCHEMA public TO "{READER_ROLE}"' in grant_sql
+    assert f'GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{READER_ROLE}"' in grant_sql
+    # No statement may name the source cluster or any DML/DDL.
+    full = pre_sql + " " + grant_sql
+    for forbidden in ("DELETE", "UPDATE ", "INSERT", "CREATE", "ALTER", "DROP "):
+        assert forbidden not in full
+
+
+def test_grant_missing_role_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config, _settings, _custody, _pf = _worker_config(tmp_path)
+    calls = _fake_psql(monkeypatch, outputs=[("", 0)])  # role absent
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._grant_target_reader(config, _target_db(42))
+    assert ei.value.code == dww.CODE_READER_GRANT_FAILED
+    assert len(calls) == 1  # no grant statement ran
+
+
+def test_grant_privileged_or_member_role_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _settings, _custody, _pf = _worker_config(tmp_path)
+    calls = _fake_psql(monkeypatch, outputs=[("0", 0)])  # law violated
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._grant_target_reader(config, _target_db(43))
+    assert ei.value.code == dww.CODE_READER_GRANT_FAILED
+    assert len(calls) == 1
+
+
+def test_grant_target_admin_reused_refused_before_any_psql(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _settings, _custody, _pf = _worker_config(
+        tmp_path, DEMO_SNAPSHOT_TARGET_READER_ROLE="snap_target"
+    )
+    calls = _fake_psql(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._grant_target_reader(config, _target_db(44))
+    assert ei.value.code == dww.CODE_READER_GRANT_FAILED
+    assert calls == []
+
+
+def test_grant_transaction_failure_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _settings, _custody, _pf = _worker_config(tmp_path)
+    calls = _fake_psql(monkeypatch, outputs=[("1", 0), ("", 1)])
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._grant_target_reader(config, _target_db(45))
+    assert ei.value.code == dww.CODE_READER_GRANT_FAILED
+    assert len(calls) == 2  # precheck ok, grant transaction failed
+
+
+def test_grant_malformed_target_name_refused_before_any_psql(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, _settings, _custody, _pf = _worker_config(tmp_path)
+    calls = _fake_psql(monkeypatch)
+    with pytest.raises(dww.DemoWebWorkerError) as ei:
+        dww._grant_target_reader(config, "evil_db")
+    assert ei.value.code == dww.CODE_READER_GRANT_FAILED
+    assert calls == []
+
+
+def test_process_request_grant_failure_fails_without_publishing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config, settings, custody, _ = _worker_config(tmp_path)
+    job, target = _job_id(47), _target_db(47)
+    _make_verified_copies(custody, job, target)
+    control = FakeControl(config)
+    _install_fake_control(monkeypatch, control)
+    _pipeline_success(monkeypatch, job, target)
+
+    def grant_boom(cfg, db):
+        assert db == target
+        raise dww.DemoWebWorkerError(
+            dww.CODE_READER_GRANT_FAILED, "The demo copy reader grant "
+            "transaction could not be applied."
+        )
+
+    monkeypatch.setattr(dww, "_grant_target_reader", grant_boom)
+    result = asyncio.run(
+        dww.process_request(config, settings, request_id=REQUEST_ID)
+    )
+    assert result.state == "failed"
+    assert result.failure_code == dww.CODE_READER_GRANT_FAILED
+    # NEVER published: no handoff attempt, failure recorded.
+    assert control.handoffs == []
+    assert control.failures == [(REQUEST_ID, "worker_failed")]

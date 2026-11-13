@@ -103,6 +103,8 @@ _WEB_ROLE = f"slaif224b_web_{_RUN_TAG}"
 _WORKER_ROLE = f"slaif224b_worker_{_RUN_TAG}"
 _WEB_PW = f"canary-web-pw-224b-{_RUN_TAG}"
 _WORKER_PW = f"canary-worker-pw-224b-{_RUN_TAG}"
+_READER_ROLE = f"slaif224b_reader_{_RUN_TAG}"
+_READER_PW = f"canary-reader-pw-224b-{_RUN_TAG}"
 
 
 # --- fixtures ----------------------------------------------------------------
@@ -132,7 +134,9 @@ def _wenv_base(
     with exact run-owned teardown. The seeded fake-admin ACCOUNT is
     function-scoped (see ``wenv``) so the worker's GLOBAL recovery/cleanup
     pass only ever sees one test's control rows; the roles are
-    schema-scoped grants and can safely be shared across the module."""
+    schema-scoped grants and can safely be shared across the module.
+    It also creates ONE static, non-privileged reader role on the
+    owned TARGET service (224-d grant step), run-owned."""
     source = san_env.source
     source_url = str(source["url"])
 
@@ -169,6 +173,25 @@ def _wenv_base(
             _WORKER_ROLE
         ):
             await _exec(source_url, stmt)
+        # 224-d: the worker's in-process grant step requires an
+        # EXISTING static reader role on the target service (it never
+        # creates roles). One LOGIN role, no privilege bits, no
+        # memberships; a per-copy CONNECT/USAGE/SELECT bundle is
+        # granted by the worker and removed with each dropped copy.
+        target = san_env.target
+        t = await asyncpg.connect(
+            host=str(target["host"]), port=int(target["port"]),
+            user=str(target["user"]), password=str(target["password"]),
+            database=str(target["database"]),
+        )
+        try:
+            await t.execute(f'DROP ROLE IF EXISTS "{_READER_ROLE}"')
+            await t.execute(
+                f"CREATE ROLE \"{_READER_ROLE}\" LOGIN PASSWORD "
+                f"'{_READER_PW}' NOCREATEDB NOCREATEROLE"
+            )
+        finally:
+            await t.close()
 
     asyncio.run(setup())
     try:
@@ -181,6 +204,7 @@ def _wenv_base(
             "web_pw": _WEB_PW,
             "worker_pw": _WORKER_PW,
             "profile_dir": str(profile_dir),
+            "reader_role": _READER_ROLE,
         }
     finally:
         async def _teardown() -> None:
@@ -220,6 +244,60 @@ def _wenv_base(
                 raise AssertionError(
                     "run-owned roles remain after cleanup: "
                     + ", ".join(r["rolname"] for r in remaining)
+                )
+            target = san_env.target
+            # Teardown ORDER: every retained copy database still carries
+            # the per-copy database-level CONNECT grant (a shared-catalog
+            # dependency), so the reader role cannot be dropped while any
+            # of ITS copies survives. Select EXACTLY the databases that
+            # carry a grant to this module's role (pg_shdepend
+            # refobjid = the role, joined to pg_database), with the
+            # closed demo_snap name grammar as a second gate: no prefix
+            # sweep, no unrelated database is ever dropped. san_env
+            # (this fixture's dependency) tears down AFTER this one, so
+            # any copy the tests retained would otherwise outlive the
+            # role drop attempt.
+            t = await asyncpg.connect(
+                host=str(target["host"]), port=int(target["port"]),
+                user=str(target["user"]), password=str(target["password"]),
+                database=str(target["database"]),
+            )
+            try:
+                # Live-verified catalog shape (PG16): a database-level
+                # CONNECT grant records classid = pg_database,
+                # refclassid = pg_authid, refobjid = the role oid,
+                # objid = the database oid, deptype 'a'.
+                copies = await t.fetch(
+                    "SELECT d.datname FROM pg_shdepend sh "
+                    "JOIN pg_database d ON d.oid = sh.objid "
+                    "WHERE sh.classid = 'pg_database'::regclass "
+                    "AND sh.refclassid = 'pg_authid'::regclass "
+                    "AND sh.refobjid = (SELECT oid FROM pg_roles "
+                    "WHERE rolname = $1) "
+                    "AND d.datname ~ '^demo_snap_[0-9a-f]{20}$'",
+                    _READER_ROLE,
+                )
+                for row in copies:
+                    await t.execute(
+                        "SELECT pg_terminate_backend(pid) FROM "
+                        "pg_stat_activity WHERE datname = $1 "
+                        "AND pid <> pg_backend_pid()",
+                        str(row["datname"]),
+                    )
+                    await t.execute(
+                        f'DROP DATABASE IF EXISTS "{row["datname"]}" '
+                        "WITH (FORCE)"
+                    )
+                await t.execute(f'DROP ROLE IF EXISTS "{_READER_ROLE}"')
+                remaining_reader = await t.fetch(
+                    "SELECT rolname FROM pg_roles WHERE rolname = $1",
+                    _READER_ROLE,
+                )
+            finally:
+                await t.close()
+            if remaining_reader:
+                raise AssertionError(
+                    "run-owned target reader role remains after cleanup"
                 )
 
         try:
@@ -297,6 +375,7 @@ def _worker_settings(
             "DEMO_WEB_WORKER_CONTROL_USER": env["worker_role"],
             "DEMO_WEB_WORKER_CONTROL_PASSWORD": env["worker_pw"],
             "COMPLETION_SERVICE_PROFILE_DIR": str(env["profile_dir"]),
+            "DEMO_SNAPSHOT_TARGET_READER_ROLE": env["reader_role"],
         }
     )
     base.update(overrides)
@@ -909,6 +988,7 @@ def test_cli_process_request_and_cleanup_never_render_canaries(
             # completion-profile source (the 222 seed's completion_service
             # profile), or the CLI's 223 stage refuses FILES_VERIFY_FAILED.
             "COMPLETION_SERVICE_PROFILE_DIR": str(env["profile_dir"]),
+            "DEMO_SNAPSHOT_TARGET_READER_ROLE": env["reader_role"],
         }
     )
     for key, value in values.items():
